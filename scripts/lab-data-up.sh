@@ -85,6 +85,13 @@ unset DB_PASSWORD
 if aws_lab cloudformation describe-stacks --region "$REGION" --stack-name "$STACK_NAME" >/dev/null 2>&1; then
   STACK_STATUS="$(aws_lab cloudformation describe-stacks --region "$REGION" --stack-name "$STACK_NAME" \
     --query 'Stacks[0].StackStatus' --output text)"
+  if [[ "$STACK_STATUS" == CREATE_IN_PROGRESS ]]; then
+    aws_lab cloudformation wait stack-create-complete --region "$REGION" --stack-name "$STACK_NAME"
+    STACK_STATUS="CREATE_COMPLETE"
+  elif [[ "$STACK_STATUS" == UPDATE_IN_PROGRESS ]]; then
+    aws_lab cloudformation wait stack-update-complete --region "$REGION" --stack-name "$STACK_NAME"
+    STACK_STATUS="UPDATE_COMPLETE"
+  fi
   if [[ "$STACK_STATUS" == ROLLBACK_COMPLETE || "$STACK_STATUS" == CREATE_FAILED ]]; then
     aws_lab cloudformation delete-stack --region "$REGION" --stack-name "$STACK_NAME"
     aws_lab cloudformation wait stack-delete-complete --region "$REGION" --stack-name "$STACK_NAME"
@@ -94,10 +101,11 @@ else
   STACK_STATUS=""
 fi
 if [[ -n "$STACK_STATUS" ]]; then
+  UPDATE_OUTPUT=""
   if UPDATE_OUTPUT="$(aws_lab cloudformation update-stack --region "$REGION" --stack-name "$STACK_NAME" \
     --template-body "file://$REPO_ROOT/infra/lab-data-stack.yaml" --parameters "file://$PARAM_FILE" 2>&1)"; then
     aws_lab cloudformation wait stack-update-complete --region "$REGION" --stack-name "$STACK_NAME"
-  elif grep -q 'No updates are to be performed' <<<"$UPDATE_OUTPUT"; then
+  elif grep -q 'No updates are to be performed' <<<"${UPDATE_OUTPUT:-}"; then
     printf 'Stack %s already matches the template.\n' "$STACK_NAME"
   else
     printf '%s\n' "$UPDATE_OUTPUT" >&2
@@ -111,5 +119,31 @@ fi
 
 aws_lab cloudformation describe-stacks --region "$REGION" --stack-name "$STACK_NAME" \
   --query 'Stacks[0].Outputs[].[OutputKey,OutputValue]' --output table
-printf 'Account: %s\nRegion: %s\nDB password saved locally with mode 600 at %s\n' \
-  "$ACCOUNT_ID" "$REGION" "$DB_PASSWORD_FILE"
+
+DB_ENDPOINT="$(aws_lab cloudformation describe-stacks --region "$REGION" --stack-name "$STACK_NAME" \
+  --query 'Stacks[0].Outputs[?OutputKey==`DatabaseEndpoint`].OutputValue|[0]' --output text)"
+DB_PORT="$(aws_lab cloudformation describe-stacks --region "$REGION" --stack-name "$STACK_NAME" \
+  --query 'Stacks[0].Outputs[?OutputKey==`DatabasePort`].OutputValue|[0]' --output text)"
+BUCKET_NAME="$(aws_lab cloudformation describe-stacks --region "$REGION" --stack-name "$STACK_NAME" \
+  --query 'Stacks[0].Outputs[?OutputKey==`BucketName`].OutputValue|[0]' --output text)"
+DATA_ENV="$HOME/.config/star-labs/data.env"
+python3 - "$DATA_ENV" "$DB_ENDPOINT" "$DB_PORT" "$BUCKET_NAME" "$REGION" "$DB_PASSWORD_FILE" <<'PY'
+from pathlib import Path
+from urllib.parse import quote
+import sys
+path, endpoint, port, bucket, region, password_file = sys.argv[1:]
+password = Path(password_file).read_text().strip()
+database_url = f"postgresql://staradmin:{quote(password, safe='')}@{endpoint}:{port}/star_lms?sslmode=require"
+content = f"DATABASE_URL={database_url}\nS3_BUCKET={bucket}\nAWS_REGION={region}\n"
+Path(path).write_text(content)
+Path(path).chmod(0o600)
+PY
+
+SSH_HOST="${LAB_SSH_HOST:-star-labs}"
+if ssh -o BatchMode=yes -o ConnectTimeout=5 "$SSH_HOST" true >/dev/null 2>&1; then
+  ssh "$SSH_HOST" 'mkdir -p "$HOME/.config/star-labs" && chmod 700 "$HOME/.config/star-labs"'
+  scp "$DATA_ENV" "$SSH_HOST:.config/star-labs/data.env"
+  ssh "$SSH_HOST" 'chmod 600 "$HOME/.config/star-labs/data.env"'
+fi
+printf 'Account: %s\nRegion: %s\nDB env file (mode 600): %s\nS3 bucket: %s\n' \
+  "$ACCOUNT_ID" "$REGION" "$DATA_ENV" "$BUCKET_NAME"
