@@ -143,7 +143,7 @@ pub struct FinalGradeResponse {
 ///     GradingSchemeEntry { id: 2, name: "A-".into(), min_score: 0.90, position: 1 },
 ///     GradingSchemeEntry { id: 3, name: "B".into(),  min_score: 0.80, position: 2 },
 /// ];
-/// assert_eq!(compute_letter_grade(92.0, &entries), Some("A".to_string()));
+/// assert_eq!(compute_letter_grade(92.0, &entries), Some("A-".to_string()));
 /// assert_eq!(compute_letter_grade(91.0, &entries), Some("A-".to_string()));
 /// assert_eq!(compute_letter_grade(85.0, &entries), Some("B".to_string()));
 /// ```
@@ -582,9 +582,7 @@ mod tests {
             make_entry(3, "F", 0.0, 2),
         ];
 
-        // In between — picks the higher bracket
-        assert_eq!(compute_letter_grade(92.0, &entries), Some("A".to_string())); // 92 < 94, >= 90 -> A-
-        // Wait: 92 >= 94? No. 92 >= 90? Yes. So A-.
+        // Scores between a boundary and the next higher threshold use the lower bracket.
         assert_eq!(compute_letter_grade(92.0, &entries), Some("A-".to_string()));
         assert_eq!(compute_letter_grade(55.0, &entries), Some("F".to_string()));
         assert_eq!(compute_letter_grade(100.0, &entries), Some("A".to_string()));
