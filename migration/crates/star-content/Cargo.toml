@@ -1,0 +1,11 @@
+[package]
+name = "star-content"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+star-common = { path = "../star-common" }
+star-pages = { path = "../star-pages" }
+star-announcements = { path = "../star-announcements" }
+star-modules = { path = "../star-modules" }
+axum = { workspace = true }

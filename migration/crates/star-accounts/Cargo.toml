@@ -1,0 +1,24 @@
+[package]
+name = "star-accounts"
+version.workspace = true
+edition.workspace = true
+
+[features]
+db-tests = []
+
+[dependencies]
+star-common = { path = "../star-common" }
+star-auth = { path = "../star-auth" }
+axum = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+star-db = { path = "../star-db" }
+tokio = { workspace = true }
+axum-test = { workspace = true }
+tower = { workspace = true }
+http-body-util = "0.1"
+reqwest = { version = "0.12", features = ["blocking", "json"] }

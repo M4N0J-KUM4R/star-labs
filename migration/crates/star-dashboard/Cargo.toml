@@ -1,0 +1,13 @@
+[package]
+name = "star-dashboard"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+star-common = { path = "../star-common" }
+star-auth = { path = "../star-auth" }
+star-assignments = { path = "../star-assignments" }
+axum = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+chrono = { workspace = true }

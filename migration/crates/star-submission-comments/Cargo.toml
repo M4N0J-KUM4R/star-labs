@@ -1,0 +1,17 @@
+[package]
+name = "star-submission-comments"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+star-common = { path = "../star-common" }
+star-auth = { path = "../star-auth" }
+axum = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+tokio = { workspace = true }

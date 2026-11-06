@@ -1,0 +1,17 @@
+[package]
+name = "star-notifications"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+star-common = { path = "../star-common" }
+star-auth = { path = "../star-auth" }
+
+[dev-dependencies]
+reqwest = { version = "0.12", features = ["blocking", "json"] }

@@ -1,0 +1,19 @@
+[package]
+name = "star-courses"
+version.workspace = true
+edition = "2021"
+
+[features]
+db-tests = []
+
+[dependencies]
+star-common = { path = "../star-common" }
+star-auth = { path = "../star-auth" }
+axum = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+reqwest = { workspace = true, features = ["blocking"] }

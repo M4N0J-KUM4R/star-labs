@@ -1,0 +1,1 @@
+-- No-op: announcements + idx created in 0001_core_schema.sql

@@ -1,0 +1,17 @@
+[package]
+name = "star-assignments"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+star-common = { path = "../star-common" }
+star-auth = { path = "../star-auth" }
+axum = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+star-db = { path = "../star-db" }
+tokio = { workspace = true }

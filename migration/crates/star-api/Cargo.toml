@@ -1,0 +1,16 @@
+[package]
+name = "star-api"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+star-common = { path = "../star-common" }
+axum = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tower = { workspace = true }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+serde_urlencoded = "0.7"

@@ -1,0 +1,14 @@
+[package]
+name = "star-common"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+jsonwebtoken = { workspace = true }
+argon2 = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }

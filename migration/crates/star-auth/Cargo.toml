@@ -1,0 +1,23 @@
+[package]
+name = "star-auth"
+version.workspace = true
+edition = "2021"
+
+[dependencies]
+star-common = { path = "../star-common" }
+axum = { workspace = true, features = ["macros"] }
+axum-macros = "0.5"
+axum-core = "0.5"
+http = "1"
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+argon2 = { workspace = true }
+jsonwebtoken = { workspace = true }
+thiserror = { workspace = true }
+axum-test = { workspace = true }
+tokio = { workspace = true }
+[dev-dependencies]
+axum-macros = "0.5"
+star-db = { path = "../star-db" }

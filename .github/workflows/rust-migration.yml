@@ -1,0 +1,46 @@
+name: Rust migration validation
+
+on:
+  push:
+    paths:
+      - 'migration/**'
+      - '.github/workflows/rust-migration.yml'
+  pull_request:
+    paths:
+      - 'migration/**'
+      - '.github/workflows/rust-migration.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: star
+          POSTGRES_PASSWORD: star-test-only
+          POSTGRES_DB: star_lms_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U star -d star_lms_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://star:star-test-only@localhost:5432/star_lms_test
+      STAR_JWT_SECRET: github-actions-test-secret
+    defaults:
+      run:
+        working-directory: migration
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: migration -> target
+      - run: cargo test --workspace

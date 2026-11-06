@@ -1,0 +1,45 @@
+[package]
+name = "star-http"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "star-http"
+path = "src/main.rs"
+
+[dependencies]
+star-common = { path = "../star-common" }
+star-db = { path = "../star-db" }
+star-auth = { path = "../star-auth" }
+star-users = { path = "../star-users" }
+star-courses = { path = "../star-courses" }
+star-assignments = { path = "../star-assignments" }
+star-content = { path = "../star-content" }
+star-pages = { path = "../star-pages" }
+star-modules = { path = "../star-modules" }
+star-announcements = { path = "../star-announcements" }
+star-files = { path = "../star-files" }
+star-enrollments = { path = "../star-enrollments" }
+star-dashboard = { path = "../star-dashboard" }
+star-quizzes = { path = "../star-quizzes" }
+star-assignment-groups = { path = "../star-assignment-groups" }
+star-accounts = { path = "../star-accounts" }
+star-calendar = { path = "../star-calendar" }
+star-conversations = { path = "../star-conversations" }
+star-discussions = { path = "../star-discussions" }
+star-grading-standards = { path = "../star-grading-standards" }
+star-groups = { path = "../star-groups" }
+star-notifications = { path = "../star-notifications" }
+star-outcomes = { path = "../star-outcomes" }
+star-rubrics = { path = "../star-rubrics" }
+star-submission-comments = { path = "../star-submission-comments" }
+axum = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+jsonwebtoken = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
