@@ -15,12 +15,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate shell syntax
-        run: bash -n infra/user-data.sh scripts/lab-up.sh scripts/lab-data-up.sh scripts/lab-deploy.sh scripts/lab-down.sh
+        run: bash -n infra/user-data.sh infra/user-data-migration.sh scripts/lab-up.sh scripts/lab-data-up.sh scripts/lab-deploy.sh scripts/lab-down.sh scripts/lab-workers-up.sh scripts/lab-workers-remote.sh
       - name: Check shell scripts
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck -S warning infra/user-data.sh scripts/lab-up.sh scripts/lab-data-up.sh scripts/lab-deploy.sh scripts/lab-down.sh
+          shellcheck -S warning infra/user-data.sh infra/user-data-migration.sh scripts/lab-up.sh scripts/lab-data-up.sh scripts/lab-deploy.sh scripts/lab-down.sh scripts/lab-workers-up.sh scripts/lab-workers-remote.sh
       - name: Lint CloudFormation
         run: |
           python3 -m pip install --user cfn-lint

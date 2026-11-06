@@ -21,6 +21,20 @@ ssh star-labs
 ```
 
 The instance bootstrap installs the official Hermes CLI and Rust toolchain.
+
+To add one dedicated Hermes worker and one Rust build/migration worker (both
+within the lab's `t3.medium` limit), run:
+
+```sh
+./scripts/lab-workers-up.sh
+ssh star-labs-agents
+ssh star-labs-migration
+```
+
+The launcher uses the base instance's existing lab role, key pair, subnet, and
+SSH-only security group. It reuses already-running named workers and checks the
+nine-instance lab limit before each launch.
+
 Provision private PostgreSQL, a private encrypted S3 bucket, and a short-lived
 CloudWatch log group with:
 

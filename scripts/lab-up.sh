@@ -84,6 +84,7 @@ fi
 
 EXISTING_INSTANCE="$(aws_lab ec2 describe-instances --region "$REGION" \
   --filters Name=tag:Project,Values=star-labs Name=tag:Purpose,Values=learner-lab \
+    Name=tag:Name,Values=star-labs-lab \
     Name=instance-state-name,Values=pending,running \
   --query 'Reservations[0].Instances[0].InstanceId' --output text)"
 if [[ -n "$EXISTING_INSTANCE" && "$EXISTING_INSTANCE" != None ]]; then

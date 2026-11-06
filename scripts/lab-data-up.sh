@@ -26,11 +26,13 @@ VPC_ID="$(aws_lab ec2 describe-vpcs --region "$REGION" --filters Name=isDefault,
 [[ "$VPC_ID" != None && -n "$VPC_ID" ]] || { echo "No default VPC in $REGION" >&2; exit 1; }
 EC2_SG="$(aws_lab ec2 describe-instances --region "$REGION" \
   --filters Name=tag:Project,Values=star-labs Name=tag:Purpose,Values=learner-lab \
+    Name=tag:Name,Values=star-labs-lab \
     Name=instance-state-name,Values=running \
   --query 'Reservations[0].Instances[0].SecurityGroups[0].GroupId' --output text)"
 [[ "$EC2_SG" != None && -n "$EC2_SG" ]] || { echo 'Run scripts/lab-up.sh first.' >&2; exit 1; }
 EC2_ID="$(aws_lab ec2 describe-instances --region "$REGION" \
   --filters Name=tag:Project,Values=star-labs Name=tag:Purpose,Values=learner-lab \
+    Name=tag:Name,Values=star-labs-lab \
     Name=instance-state-name,Values=running \
   --query 'Reservations[0].Instances[0].InstanceId' --output text)"
 

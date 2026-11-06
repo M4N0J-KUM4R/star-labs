@@ -52,7 +52,7 @@ fi
 if aws_lab ec2 describe-key-pairs --region "$REGION" --key-names star-labs-lab >/dev/null 2>&1; then
   aws_lab ec2 delete-key-pair --region "$REGION" --key-name star-labs-lab
 fi
-rm -f "$HOME/.ssh/config.d/star-labs-lab.conf" "$HOME/.ssh/star-labs-lab.pem"
+rm -f "$HOME/.ssh/config.d/star-labs-lab.conf" "$HOME/.ssh/config.d/star-labs-workers.conf" "$HOME/.ssh/star-labs-lab.pem"
 rm -f "$HOME/.config/star-labs/db-password" "$HOME/.config/star-labs/data.env"
 ssh-keygen -R star-labs >/dev/null 2>&1 || true
 printf 'Removed tagged learner lab resources in %s.\n' "$REGION"
