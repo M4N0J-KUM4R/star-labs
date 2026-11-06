@@ -15,17 +15,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Validate shell syntax
-        run: bash -n infra/user-data.sh infra/user-data-migration.sh scripts/lab-up.sh scripts/lab-data-up.sh scripts/lab-deploy.sh scripts/lab-down.sh scripts/lab-workers-up.sh scripts/lab-workers-remote.sh
+        run: bash -n infra/user-data.sh infra/user-data-migration.sh scripts/lab-up.sh scripts/lab-compute-up.sh scripts/lab-data-up.sh scripts/lab-deploy.sh scripts/lab-down.sh scripts/lab-workers-up.sh scripts/lab-workers-remote.sh
       - name: Check shell scripts
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
-          shellcheck -S warning infra/user-data.sh infra/user-data-migration.sh scripts/lab-up.sh scripts/lab-data-up.sh scripts/lab-deploy.sh scripts/lab-down.sh scripts/lab-workers-up.sh scripts/lab-workers-remote.sh
+          shellcheck -S warning infra/user-data.sh infra/user-data-migration.sh scripts/lab-up.sh scripts/lab-compute-up.sh scripts/lab-data-up.sh scripts/lab-deploy.sh scripts/lab-down.sh scripts/lab-workers-up.sh scripts/lab-workers-remote.sh
       - name: Lint CloudFormation
         run: |
           python3 -m pip install --user cfn-lint
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
-          "$HOME/.local/bin/cfn-lint" --non-zero-exit-code error infra/lab-data-stack.yaml
+          "$HOME/.local/bin/cfn-lint" --non-zero-exit-code error infra/lab-data-stack.yaml infra/lab-compute-stack.yaml
       - name: Guard AWS Academy lab resource limits
         run: |
           python3 - <<'PY'
@@ -42,4 +42,10 @@ jobs:
           assert 'StorageType: gp2' in template
           assert 'PubliclyAccessible: false' in template
           assert 'MultiAZ: false' in template
+          compute = Path('infra/lab-compute-stack.yaml').read_text()
+          assert 'InstanceType: t3.medium' in compute
+          assert 'InstanceProfileName' in compute and 'LabInstanceProfile' in compute
+          assert 'hermes-agent.nousresearch.com/install.sh' in compute
+          assert 'VolumeSize: 100' in compute and 'VolumeType: gp3' in compute
+          assert '8766' not in compute and '0.0.0.0/0' not in compute
           PY

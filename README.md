@@ -4,10 +4,10 @@ Incremental Canvas LMS migration from Rails to Rust.
 
 ## Switching to a fresh lab account
 
-The migration source and infrastructure template are versioned here; runtime AWS
+The migration source and infrastructure templates are versioned here; runtime AWS
 credentials, DB passwords, the live database, production data, and provider keys
 are not. The Rust snapshot is under `migration/`; the lab stack template is
-`infra/lab-data-stack.yaml`.
+`infra/lab-compute-stack.yaml` plus `infra/lab-data-stack.yaml`.
 
 1. Start the new AWS Academy lab and configure its temporary CLI credentials
    using the lab portal instructions. Do not paste credentials into this repo.
@@ -22,7 +22,7 @@ are not. The Rust snapshot is under `migration/`; the lab stack template is
 3. Create a fresh base instance, its workers, and data services in the lab region:
 
    ```sh
-   AWS_REGION=us-west-2 ./scripts/lab-up.sh
+   AWS_REGION=us-west-2 ./scripts/lab-compute-up.sh
    ./scripts/lab-workers-up.sh
    AWS_REGION=us-west-2 ./scripts/lab-data-up.sh
    ```
@@ -38,14 +38,19 @@ are not. The Rust snapshot is under `migration/`; the lab stack template is
    ./scripts/lab-deploy.sh
    ```
 
-5. Use `ssh star-lms`, `ssh star-labs-agents`, and
+5. Use `ssh star-lms` (or `ssh star-labs`), `ssh star-labs-agents`, and
    `ssh star-labs-migration` to connect. Verify each endpoint and CI before
    loading any real data. The current RDS contains only synthetic test rows.
 
-The previous lab’s EC2, RDS, and S3 data do not transfer to a new account. This
-repo recreates infrastructure and source; it does not contain a production data
-backup. The current GitHub Actions workflow validates Rust code against a fresh
-PostgreSQL service.
+The compute template installs Hermes and Rust and creates the `t3.medium` host.
+CloudFormation cannot read local files from your workstation. After launch,
+`lab-deploy.sh` sends Hermes configuration, Dahl account/config files, and the
+private Dahl source over SSH with restrictive permissions; it builds and starts
+Dahl bound to loopback. Those files and session credentials are never put in
+template parameters, user data, or S3. The previous lab’s EC2, RDS, and S3 data
+do not transfer to a new account. This repo recreates infrastructure and source;
+it does not contain a production data backup. The current GitHub Actions workflow
+validates Rust code against a fresh PostgreSQL service.
 
 ## Temporary AWS lab bootstrap
 
@@ -61,11 +66,13 @@ Start the lab in AWS Academy, copy its temporary CLI credentials using the
 lab's **AWS Details → AWS CLI** instructions, and run:
 
 ```sh
-AWS_REGION=us-west-2 ./scripts/lab-up.sh
+AWS_REGION=us-west-2 ./scripts/lab-compute-up.sh
 ssh star-labs
 ```
 
-The instance bootstrap installs the official Hermes CLI and Rust toolchain.
+The CloudFormation compute stack installs the official Hermes CLI and Rust
+toolchain, creates a 100 GB encrypted `gp3` root volume, and opens only SSH from
+the operator's `/32`. Dahl's port is not opened in the security group.
 
 To add one dedicated Hermes worker and one Rust build/migration worker (both
 within the lab's `t3.medium` limit), run:
@@ -103,9 +110,9 @@ HERMES_HOME="$HOME/.hermes" \
 ```
 
 The deploy script copies only committed Rust source and transfers Hermes/Dahl
-configuration over SSH with restrictive file modes. It refuses a dirty source
-checkout and never commits provider credentials. The old local checkout is not
-assumed to be canonical; provide a clean, verified source directory.
+configuration over SSH with restrictive file modes. It supports the `migration/`
+subdirectory in this repository. It refuses a dirty checkout and never commits
+provider credentials.
 
 At the end of a lab session, remove its resources with:
 

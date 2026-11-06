@@ -5,6 +5,7 @@ PROFILE="${AWS_PROFILE:-}"
 REGION="${AWS_REGION:-${AWS_DEFAULT_REGION:-$(aws configure get region --profile "${PROFILE:-default}" 2>/dev/null || true)}}"
 REGION="${REGION:-us-west-2}"
 STACK_NAME="${STAR_LABS_STACK_NAME:-star-labs-data}"
+COMPUTE_STACK_NAME="${STAR_LABS_COMPUTE_STACK_NAME:-star-labs-compute}"
 aws_lab() {
   if [[ -n "$PROFILE" ]]; then
     command aws --profile "$PROFILE" "$@"
@@ -29,12 +30,30 @@ fi
 
 INSTANCE_IDS="$(aws_lab ec2 describe-instances --region "$REGION" \
   --filters Name=tag:Project,Values=star-labs Name=tag:Purpose,Values=learner-lab \
+    'Name=tag:Name,Values=star-labs-agents,star-labs-migration' \
     Name=instance-state-name,Values=pending,running,stopping,stopped \
   --query 'Reservations[].Instances[].InstanceId' --output text)"
 if [[ -n "$INSTANCE_IDS" && "$INSTANCE_IDS" != None ]]; then
   read -r -a INSTANCE_ARRAY <<< "$INSTANCE_IDS"
   aws_lab ec2 terminate-instances --region "$REGION" --instance-ids "${INSTANCE_ARRAY[@]}" >/dev/null
   for INSTANCE_ID in "${INSTANCE_ARRAY[@]}"; do
+    aws_lab ec2 wait instance-terminated --region "$REGION" --instance-ids "$INSTANCE_ID"
+  done
+fi
+
+if aws_lab cloudformation describe-stacks --region "$REGION" --stack-name "$COMPUTE_STACK_NAME" >/dev/null 2>&1; then
+  aws_lab cloudformation delete-stack --region "$REGION" --stack-name "$COMPUTE_STACK_NAME"
+  aws_lab cloudformation wait stack-delete-complete --region "$REGION" --stack-name "$COMPUTE_STACK_NAME"
+fi
+
+LEGACY_INSTANCE_IDS="$(aws_lab ec2 describe-instances --region "$REGION" \
+  --filters Name=tag:Project,Values=star-labs Name=tag:Purpose,Values=learner-lab \
+    Name=instance-state-name,Values=pending,running,stopping,stopped \
+  --query 'Reservations[].Instances[].InstanceId' --output text)"
+if [[ -n "$LEGACY_INSTANCE_IDS" && "$LEGACY_INSTANCE_IDS" != None ]]; then
+  read -r -a LEGACY_INSTANCE_ARRAY <<< "$LEGACY_INSTANCE_IDS"
+  aws_lab ec2 terminate-instances --region "$REGION" --instance-ids "${LEGACY_INSTANCE_ARRAY[@]}" >/dev/null
+  for INSTANCE_ID in "${LEGACY_INSTANCE_ARRAY[@]}"; do
     aws_lab ec2 wait instance-terminated --region "$REGION" --instance-ids "$INSTANCE_ID"
   done
 fi

@@ -1,0 +1,106 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Restricted learner-lab compute node. Installs the Hermes CLI and Rust toolchain;
+  local Hermes and Dahl credentials are deployed afterward over SSH.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Default learner-lab VPC.
+  AmiId:
+    Type: AWS::EC2::Image::Id
+    Description: Amazon Linux 2023 AMI from the Quick Start catalog.
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public default subnet in the selected lab VPC.
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Existing lab key pair used for restricted SSH access.
+  SshCidr:
+    Type: String
+    Description: Operator IPv4 address with a /32 mask.
+    AllowedPattern: '^([0-9]{1,3}\.){3}[0-9]{1,3}/32$'
+  InstanceProfileName:
+    Type: String
+    Default: LabInstanceProfile
+    AllowedValues:
+      - LabInstanceProfile
+    Description: Pre-created learner-lab profile; this stack creates no IAM resources.
+
+Resources:
+  StarLabsSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SSH from the operator only; Dahl stays on loopback.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref SshCidr
+      Tags:
+        - Key: Name
+          Value: star-labs-ssh
+        - Key: Project
+          Value: star-labs
+        - Key: Purpose
+          Value: learner-lab
+
+  StarLabsInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: t3.medium
+      KeyName: !Ref KeyName
+      IamInstanceProfile: !Ref InstanceProfileName
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: '0'
+          GroupSet:
+            - !Ref StarLabsSecurityGroup
+          SubnetId: !Ref SubnetId
+      MetadataOptions:
+        HttpEndpoint: enabled
+        HttpTokens: required
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 100
+            VolumeType: gp3
+            Encrypted: true
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -euo pipefail
+          exec > >(tee -a /var/log/star-labs-bootstrap.log) 2>&1
+          dnf install -y git gcc make openssl-devel pkgconfig tar gzip rsync
+          runuser -l ec2-user -c 'curl --proto "=https" --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal'
+          runuser -l ec2-user -c 'curl --proto "=https" --tlsv1.2 -fsSL https://hermes-agent.nousresearch.com/install.sh | bash'
+          install -d -o ec2-user -g ec2-user -m 0750 /home/ec2-user/work
+          install -d -o ec2-user -g ec2-user -m 0700 /home/ec2-user/.hermes /home/ec2-user/.dahl-proxy
+          if ! swapon --show=NAME --noheadings | grep -qx /swapfile; then
+            fallocate -l 2G /swapfile
+            chmod 600 /swapfile
+            mkswap /swapfile
+            swapon /swapfile
+            printf '%s\n' '/swapfile swap swap defaults 0 0' >> /etc/fstab
+          fi
+          touch /var/log/star-labs-bootstrap.complete
+      Tags:
+        - Key: Name
+          Value: star-labs-lab
+        - Key: Project
+          Value: star-labs
+        - Key: Purpose
+          Value: learner-lab
+
+Outputs:
+  InstanceId:
+    Value: !Ref StarLabsInstance
+  PublicIp:
+    Value: !GetAtt StarLabsInstance.PublicIp
+  SecurityGroupId:
+    Value: !GetAtt StarLabsSecurityGroup.GroupId
+  InstanceProfileName:
+    Value: !Ref InstanceProfileName
