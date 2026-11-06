@@ -164,6 +164,10 @@ fn is_admin(auth: &AuthUser) -> bool {
     auth.role == "admin"
 }
 
+fn can_manage_rubrics(is_admin: bool, has_teacher_enrollment: bool) -> bool {
+    is_admin || has_teacher_enrollment
+}
+
 async fn check_enrolled_or_admin(
     pool: &PgPool,
     user_id: i64,
@@ -199,7 +203,7 @@ async fn check_teacher_or_admin(
     .bind(course_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.is_some())
+    Ok(can_manage_rubrics(false, row.is_some()))
 }
 
 // ---------------------------------------------------------------------------
@@ -376,13 +380,14 @@ async fn create_rubric(
 }
 
 /// GET /courses/{courseId}/rubrics  → 200
-/// Excludes deleted rubrics.
+/// Canvas requires manage_rubrics permission to list rubrics; students cannot
+/// enumerate the course rubric catalog through this endpoint.
 async fn list_course_rubrics(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<Vec<Rubric>>, ApiError> {
-    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -412,7 +417,7 @@ async fn get_rubric(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    if !check_enrolled_or_admin(&state.db, auth.id, rubric.course_id, &auth).await? {
+    if !check_teacher_or_admin(&state.db, auth.id, rubric.course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -667,4 +672,16 @@ pub fn router() -> Router<AppState> {
         .route("/rubrics/{id}", delete(delete_rubric))
         .route("/rubrics/{rubricId}/assessments", post(create_assessment))
         .route("/rubrics/{rubricId}/assessments", get(list_assessments))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::can_manage_rubrics;
+
+    #[test]
+    fn only_course_teachers_or_admins_can_manage_rubrics() {
+        assert!(can_manage_rubrics(true, false));
+        assert!(can_manage_rubrics(false, true));
+        assert!(!can_manage_rubrics(false, false));
+    }
 }

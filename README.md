@@ -2,6 +2,51 @@
 
 Incremental Canvas LMS migration from Rails to Rust.
 
+## Switching to a fresh lab account
+
+The migration source and infrastructure template are versioned here; runtime AWS
+credentials, DB passwords, the live database, production data, and provider keys
+are not. The Rust snapshot is under `migration/`; the lab stack template is
+`infra/lab-data-stack.yaml`.
+
+1. Start the new AWS Academy lab and configure its temporary CLI credentials
+   using the lab portal instructions. Do not paste credentials into this repo.
+2. Verify the active identity with `aws sts get-caller-identity`, then clone this
+   repo and enter it:
+
+   ```sh
+   git clone https://github.com/M4N0J-KUM4R/star-labs.git
+   cd star-labs
+   ```
+
+3. Create a fresh base instance, its workers, and data services in the lab region:
+
+   ```sh
+   AWS_REGION=us-west-2 ./scripts/lab-up.sh
+   ./scripts/lab-workers-up.sh
+   AWS_REGION=us-west-2 ./scripts/lab-data-up.sh
+   ```
+
+4. After checking out the Rust source and verifying it, deploy it with the
+   locally held Hermes and Dahl directories (these may contain credentials and
+   must stay out of Git):
+
+   ```sh
+   STAR_LMS_SOURCE_DIR="$PWD/migration" \
+   DAHL_PROXY_DIR="$HOME/projects/dahl-proxy" \
+   HERMES_HOME="$HOME/.hermes" \
+   ./scripts/lab-deploy.sh
+   ```
+
+5. Use `ssh star-lms`, `ssh star-labs-agents`, and
+   `ssh star-labs-migration` to connect. Verify each endpoint and CI before
+   loading any real data. The current RDS contains only synthetic test rows.
+
+The previous lab’s EC2, RDS, and S3 data do not transfer to a new account. This
+repo recreates infrastructure and source; it does not contain a production data
+backup. The current GitHub Actions workflow validates Rust code against a fresh
+PostgreSQL service.
+
 ## Temporary AWS lab bootstrap
 
 This repository includes a repeatable setup for the restricted 3-hour lab. It

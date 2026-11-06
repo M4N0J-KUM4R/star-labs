@@ -2625,6 +2625,7 @@ dependencies = [
  "sqlx",
  "star-auth",
  "star-common",
+ "star-db",
  "tokio",
 ]
 

@@ -51,11 +51,7 @@ fn require_parity_tests() {
 
 fn assert_status(resp: &reqwest::blocking::Response, expected: reqwest::StatusCode) {
     if resp.status() != expected {
-        panic!(
-            "expected {} but got {}",
-            expected,
-            resp.status()
-        );
+        panic!("expected {} but got {}", expected, resp.status());
     }
 }
 
@@ -89,7 +85,12 @@ fn setup_course(client: &Client, base_token: &str) -> (i64, String, String) {
         .send()
         .unwrap();
     let teacher_body: Value = resp.json().unwrap();
-    let teacher_token = teacher_body.get("token").unwrap().as_str().unwrap().to_string();
+    let teacher_token = teacher_body
+        .get("token")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Enroll teacher in course
     let resp = client
@@ -113,7 +114,12 @@ fn setup_course(client: &Client, base_token: &str) -> (i64, String, String) {
         .send()
         .unwrap();
     let student_body: Value = resp.json().unwrap();
-    let student_token = student_body.get("token").unwrap().as_str().unwrap().to_string();
+    let student_token = student_body
+        .get("token")
+        .unwrap()
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Enroll student
     let resp = client
@@ -171,9 +177,15 @@ fn test_create_outcome_group_teacher() {
         .unwrap();
     assert_status(&resp, reqwest::StatusCode::CREATED);
     let group: Value = resp.json().unwrap();
-    assert_eq!(group.get("title").unwrap().as_str().unwrap(), "My Outcome Group");
+    assert_eq!(
+        group.get("title").unwrap().as_str().unwrap(),
+        "My Outcome Group"
+    );
     assert!(group.get("id").unwrap().is_number());
-    println!("PASS: outcome group created with id {}", group.get("id").unwrap());
+    println!(
+        "PASS: outcome group created with id {}",
+        group.get("id").unwrap()
+    );
 }
 
 #[test]
@@ -201,12 +213,18 @@ fn test_create_outcome_teacher() {
         .unwrap();
     assert_status(&resp, reqwest::StatusCode::CREATED);
     let outcome: Value = resp.json().unwrap();
-    assert_eq!(outcome.get("title").unwrap().as_str().unwrap(), "Learn Rust");
+    assert_eq!(
+        outcome.get("title").unwrap().as_str().unwrap(),
+        "Learn Rust"
+    );
     assert_eq!(
         outcome.get("display_name").unwrap().as_str().unwrap(),
         "Rust Proficiency"
     );
-    println!("PASS: outcome created with id {}", outcome.get("id").unwrap());
+    println!(
+        "PASS: outcome created with id {}",
+        outcome.get("id").unwrap()
+    );
 }
 
 #[test]
@@ -258,7 +276,10 @@ fn test_outcome_lifecycle() {
         .unwrap();
     assert_status(&resp, reqwest::StatusCode::CREATED);
     let link: Value = resp.json().unwrap();
-    assert_eq!(link.get("outcome_id").unwrap().as_i64().unwrap(), outcome_id);
+    assert_eq!(
+        link.get("outcome_id").unwrap().as_i64().unwrap(),
+        outcome_id
+    );
     println!("PASS: outcome {} linked to group {}", outcome_id, group_id);
 
     // 4. List outcomes in group (teacher sees it)
@@ -272,7 +293,9 @@ fn test_outcome_lifecycle() {
         .unwrap();
     assert_status(&resp, reqwest::StatusCode::OK);
     let outcomes: Vec<Value> = resp.json().unwrap();
-    assert!(outcomes.iter().any(|o| o.get("id").unwrap().as_i64().unwrap() == outcome_id));
+    assert!(outcomes
+        .iter()
+        .any(|o| o.get("id").unwrap().as_i64().unwrap() == outcome_id));
     println!("PASS: group outcomes list contains the outcome");
 
     // 5. List course outcomes (teacher enrolled)
@@ -313,7 +336,11 @@ fn test_outcome_lifecycle() {
         .send()
         .unwrap();
     // We expect 201 or 404 depending on whether the linked user exists
-    println!("Result response: {} — {}", resp.status(), resp.text().unwrap_or_default());
+    println!(
+        "Result response: {} — {}",
+        resp.status(),
+        resp.text().unwrap_or_default()
+    );
 }
 
 #[test]
@@ -359,6 +386,8 @@ fn test_delete_outcome_group() {
         .send()
         .unwrap();
     let groups: Vec<Value> = resp.json().unwrap();
-    assert!(!groups.iter().any(|g| g.get("id").unwrap().as_i64().unwrap() == group_id));
+    assert!(!groups
+        .iter()
+        .any(|g| g.get("id").unwrap().as_i64().unwrap() == group_id));
     println!("PASS: deleted outcome group no longer appears in listing");
 }

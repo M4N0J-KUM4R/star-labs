@@ -162,12 +162,11 @@ async fn check_teacher_or_admin_for_group(
         return Ok(true);
     }
     // Get the course_id from the group
-    let row: Option<(Option<i64>,)> = sqlx::query_as(
-        "SELECT course_id FROM learning_outcome_groups WHERE id = $1",
-    )
-    .bind(group_id)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT course_id FROM learning_outcome_groups WHERE id = $1")
+            .bind(group_id)
+            .fetch_optional(pool)
+            .await?;
     let (course_id,) = row.ok_or(ApiError::NotFound)?;
     match course_id {
         Some(cid) => check_teacher_or_admin(pool, user_id, cid, auth).await,
@@ -528,8 +527,14 @@ async fn list_outcome_results(
 pub fn router() -> Router<AppState> {
     Router::new()
         // outcome groups
-        .route("/courses/{courseId}/outcome_groups", post(create_outcome_group))
-        .route("/courses/{courseId}/outcome_groups", get(list_outcome_groups))
+        .route(
+            "/courses/{courseId}/outcome_groups",
+            post(create_outcome_group),
+        )
+        .route(
+            "/courses/{courseId}/outcome_groups",
+            get(list_outcome_groups),
+        )
         .route("/outcome_groups/{id}", delete(delete_outcome_group))
         // outcomes
         .route("/courses/{courseId}/outcomes", post(create_outcome))
@@ -546,4 +551,131 @@ pub fn router() -> Router<AppState> {
         // results
         .route("/outcomes/{outcomeId}/results", post(create_outcome_result))
         .route("/outcomes/{outcomeId}/results", get(list_outcome_results))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{check_enrolled_or_admin, check_teacher_or_admin};
+    use star_auth::AuthUser;
+
+    #[tokio::test]
+    async fn only_active_enrollments_grant_course_outcome_permissions() {
+        let Some(database_url) = std::env::var("DATABASE_URL").ok() else {
+            eprintln!("skipping: DATABASE_URL not set");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+            .expect("connect DATABASE_URL");
+        star_db::MIGRATOR.run(&pool).await.expect("run migrations");
+
+        let prefix = format!(
+            "outcomes-authz-{}-{}",
+            std::process::id(),
+            chrono::Utc::now().timestamp_millis()
+        );
+        let course_id: i64 = sqlx::query_scalar(
+            "INSERT INTO courses (name, course_code) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(format!("{prefix} course"))
+        .bind(&prefix)
+        .fetch_one(&pool)
+        .await
+        .expect("seed course");
+
+        async fn seed_user(pool: &sqlx::PgPool, prefix: &str, label: &str) -> i64 {
+            sqlx::query_scalar(
+                "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
+            )
+            .bind(label)
+            .bind(format!("{prefix}-{label}@test.local"))
+            .bind("unused-test-hash")
+            .fetch_one(pool)
+            .await
+            .expect("seed user")
+        }
+
+        async fn enroll(
+            pool: &sqlx::PgPool,
+            user_id: i64,
+            course_id: i64,
+            role: &str,
+            state: &str,
+        ) {
+            sqlx::query(
+                "INSERT INTO enrollments (user_id, course_id, role, workflow_state) VALUES ($1, $2, $3, $4)",
+            )
+            .bind(user_id)
+            .bind(course_id)
+            .bind(role)
+            .bind(state)
+            .execute(pool)
+            .await
+            .expect("seed enrollment");
+        }
+
+        let active_student = seed_user(&pool, &prefix, "active-student").await;
+        let inactive_student = seed_user(&pool, &prefix, "inactive-student").await;
+        let active_teacher = seed_user(&pool, &prefix, "active-teacher").await;
+        let inactive_teacher = seed_user(&pool, &prefix, "inactive-teacher").await;
+        enroll(&pool, active_student, course_id, "student", "active").await;
+        enroll(&pool, inactive_student, course_id, "student", "inactive").await;
+        enroll(&pool, active_teacher, course_id, "teacher", "active").await;
+        enroll(&pool, inactive_teacher, course_id, "teacher", "inactive").await;
+
+        let auth = |id: i64, role: &str| AuthUser {
+            id,
+            role: role.to_string(),
+        };
+        assert!(check_enrolled_or_admin(
+            &pool,
+            active_student,
+            course_id,
+            &auth(active_student, "student")
+        )
+        .await
+        .expect("active student check"));
+        assert!(!check_enrolled_or_admin(
+            &pool,
+            inactive_student,
+            course_id,
+            &auth(inactive_student, "student")
+        )
+        .await
+        .expect("inactive student check"));
+        assert!(check_teacher_or_admin(
+            &pool,
+            active_teacher,
+            course_id,
+            &auth(active_teacher, "teacher")
+        )
+        .await
+        .expect("active teacher check"));
+        assert!(!check_teacher_or_admin(
+            &pool,
+            inactive_teacher,
+            course_id,
+            &auth(inactive_teacher, "teacher")
+        )
+        .await
+        .expect("inactive teacher check"));
+
+        sqlx::query("DELETE FROM courses WHERE id = $1")
+            .bind(course_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup course");
+        sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+            .bind(&[
+                active_student,
+                inactive_student,
+                active_teacher,
+                inactive_teacher,
+            ])
+            .execute(&pool)
+            .await
+            .expect("cleanup users");
+    }
 }
