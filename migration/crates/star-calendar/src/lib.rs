@@ -223,6 +223,14 @@ async fn list_course_calendar_events(
     Ok(Json(rows))
 }
 
+/// Canvas treats an end date before the start date as the start date itself.
+fn normalize_calendar_range(
+    start_date: chrono::NaiveDate,
+    end_date: chrono::NaiveDate,
+) -> (chrono::NaiveDate, chrono::NaiveDate) {
+    (start_date, end_date.max(start_date))
+}
+
 /// GET /calendar_events?start_date=&end_date= — user calendar across enrolled courses.
 /// Returns events within the given date range for all courses the user is enrolled in.
 async fn list_user_calendar_events(
@@ -242,6 +250,8 @@ async fn list_user_calendar_events(
         .as_ref()
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
         .unwrap_or(today);
+
+    let (start_date, end_date) = normalize_calendar_range(start_date, end_date);
 
     // Get list of course IDs the user is enrolled in
     let course_ids: Vec<i64> = sqlx::query_scalar(
@@ -441,4 +451,26 @@ pub fn router() -> Router<AppState> {
         .route("/calendar_events/{id}", get(get_calendar_event))
         .route("/calendar_events/{id}", put(update_calendar_event))
         .route("/calendar_events/{id}", delete(delete_calendar_event))
+}
+
+#[cfg(test)]
+mod date_range_tests {
+    use super::normalize_calendar_range;
+    use chrono::NaiveDate;
+
+    #[test]
+    fn reversed_end_date_is_clamped_to_start_date() {
+        let start = NaiveDate::from_ymd_opt(2012, 1, 8).unwrap();
+        let end = NaiveDate::from_ymd_opt(2012, 1, 7).unwrap();
+
+        assert_eq!(normalize_calendar_range(start, end), (start, start));
+    }
+
+    #[test]
+    fn valid_end_date_is_preserved() {
+        let start = NaiveDate::from_ymd_opt(2012, 1, 7).unwrap();
+        let end = NaiveDate::from_ymd_opt(2012, 1, 8).unwrap();
+
+        assert_eq!(normalize_calendar_range(start, end), (start, end));
+    }
 }

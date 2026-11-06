@@ -1165,7 +1165,7 @@ mod db_tests {
         .unwrap();
 
         let _sub1_id: i64 = sqlx::query_scalar(
-            r#"INSERT INTO submissions (assignment_id, user_id, body, score) VALUES ($1, $2, 'ans', 8.0) RETURNING id"#,
+            r#"INSERT INTO submissions (assignment_id, user_id, body, score) VALUES ($1, $2, 'ans', 8.25) RETURNING id"#,
         )
         .bind(a1_id)
         .bind(student_id)
@@ -1182,9 +1182,9 @@ mod db_tests {
         .await
         .unwrap();
 
-        // Compute grade: 8/10 = 80.0 (only graded count).
+        // Compute grade: 8.25/10 = 82.5 (only graded count; NUMERIC score cast to FLOAT8).
         let sum_score: (f64,) = sqlx::query_as(
-            r#"SELECT COALESCE(SUM(s.score), 0) FROM submissions s JOIN assignments a ON a.id = s.assignment_id WHERE s.user_id = $1 AND s.score IS NOT NULL"#,
+            r#"SELECT COALESCE(SUM(s.score::float8), 0) FROM submissions s JOIN assignments a ON a.id = s.assignment_id WHERE s.user_id = $1 AND s.score IS NOT NULL"#,
         )
         .bind(student_id)
         .fetch_one(&pool)
@@ -1200,7 +1200,7 @@ mod db_tests {
         .unwrap();
 
         let grade_pct = (sum_score.0 / sum_pts.0) * 100.0;
-        assert!((grade_pct - 80.0).abs() < 0.001);
+        assert!((grade_pct - 82.5).abs() < 0.001);
 
         // Clean up.
         let _ = sqlx::query("DELETE FROM submissions WHERE user_id = $1").bind(student_id).execute(&pool).await;

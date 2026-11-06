@@ -49,6 +49,12 @@ pub struct NotificationPolicyRow {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Canvas wraps notification policies in a `notification_preferences` key.
+#[derive(Debug, Serialize)]
+pub struct NotificationPreferencesResponse {
+    pub notification_preferences: Vec<NotificationPolicyRow>,
+}
+
 /// Request payload for updating a notification preference.
 #[derive(Debug, Deserialize)]
 pub struct UpdatePreferenceRequest {
@@ -212,7 +218,7 @@ async fn upsert_preference(
     State(state): State<AppState>,
     auth: AuthUser,
     Json(payload): Json<UpdatePreferenceRequest>,
-) -> Result<Json<NotificationPolicyRow>, ApiError> {
+) -> Result<Json<NotificationPreferencesResponse>, ApiError> {
     // Validate frequency value.
     match payload.frequency.as_str() {
         "immediately" | "daily" | "weekly" | "never" => {}
@@ -239,14 +245,16 @@ async fn upsert_preference(
     .await
     .map_err(ApiError::from)?;
 
-    Ok(Json(row))
+    Ok(Json(NotificationPreferencesResponse {
+        notification_preferences: vec![row],
+    }))
 }
 
 /// GET /users/self/notification_preferences — list all notification preferences for the authed user.
 async fn list_preferences(
     State(state): State<AppState>,
     auth: AuthUser,
-) -> Result<Json<Vec<NotificationPolicyRow>>, ApiError> {
+) -> Result<Json<NotificationPreferencesResponse>, ApiError> {
     let rows: Vec<NotificationPolicyRow> = sqlx::query_as(
         r#"
         SELECT id, user_id, channel, frequency, notification_category, created_at, updated_at
@@ -260,5 +268,37 @@ async fn list_preferences(
     .await
     .map_err(ApiError::from)?;
 
-    Ok(Json(rows))
+    Ok(Json(NotificationPreferencesResponse {
+        notification_preferences: rows,
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{NotificationPolicyRow, NotificationPreferencesResponse};
+    use chrono::{DateTime, Utc};
+
+    #[test]
+    fn preferences_response_uses_canvas_envelope_for_list_and_update() {
+        let timestamp: DateTime<Utc> = DateTime::from_timestamp(0, 0).unwrap();
+        let response = NotificationPreferencesResponse {
+            notification_preferences: vec![NotificationPolicyRow {
+                id: 7,
+                user_id: 11,
+                channel: "email".into(),
+                frequency: "daily".into(),
+                notification_category: "announcement".into(),
+                created_at: timestamp,
+                updated_at: timestamp,
+            }],
+        };
+
+        let json = serde_json::to_value(response).unwrap();
+        assert_eq!(json["notification_preferences"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            json["notification_preferences"][0]["notification_category"],
+            "announcement"
+        );
+        assert_eq!(json["notification_preferences"][0]["frequency"], "daily");
+    }
 }

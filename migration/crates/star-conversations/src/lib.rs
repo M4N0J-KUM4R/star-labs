@@ -72,6 +72,13 @@ pub struct AddMessage {
     pub body: String,
 }
 
+fn validate_recipients(recipients: &[i64]) -> Result<(), ApiError> {
+    if recipients.is_empty() {
+        return Err(ApiError::Validation("recipients cannot be empty".into()));
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Response shapes
 // ---------------------------------------------------------------------------
@@ -151,6 +158,8 @@ async fn create_conversation(
     auth: AuthUser,
     Json(payload): Json<CreateConversation>,
 ) -> Result<(StatusCode, Json<CreatedConversation>), ApiError> {
+    validate_recipients(&payload.recipients)?;
+
     if payload.subject.trim().is_empty() {
         return Err(ApiError::Validation("subject cannot be empty".into()));
     }
@@ -439,4 +448,19 @@ pub fn router() -> Router<AppState> {
         .route("/conversations/{id}", get(get_conversation))
         .route("/conversations/{id}", delete(delete_conversation))
         .route("/conversations/{id}/add_message", post(add_message))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_recipients;
+    use star_common::ApiError;
+
+    #[test]
+    fn creating_conversation_requires_at_least_one_recipient() {
+        assert!(matches!(
+            validate_recipients(&[]),
+            Err(ApiError::Validation(_))
+        ));
+        assert!(validate_recipients(&[42]).is_ok());
+    }
 }

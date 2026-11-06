@@ -74,6 +74,16 @@ fn is_self(auth_id: i64, user_id: i64) -> bool {
     auth_id == user_id
 }
 
+fn pagination_values(page: Option<i64>, per_page: Option<i64>) -> (i64, i64, i64) {
+    let page = page.unwrap_or(1).max(1);
+    let per_page = per_page.unwrap_or(50).clamp(1, 100);
+    // These values come directly from query parameters. Saturation keeps a
+    // request such as `?page=9223372036854775807` from overflowing and
+    // panicking the handler before PostgreSQL can return an empty page.
+    let offset = page.saturating_sub(1).saturating_mul(per_page);
+    (page, per_page, offset)
+}
+
 // --------------------------------------------------------------------------
 // Router
 // --------------------------------------------------------------------------
@@ -103,9 +113,7 @@ async fn list_users(
         return Err(ApiError::Forbidden);
     }
 
-    let page = pag.page.unwrap_or(1).max(1);
-    let per_page = pag.per_page.unwrap_or(50).clamp(1, 100);
-    let offset = (page - 1) * per_page;
+    let (page, per_page, offset) = pagination_values(pag.page, pag.per_page);
 
     let (total,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM users")
         .fetch_one(&state.db)
@@ -290,4 +298,19 @@ async fn delete_user(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pagination_values;
+
+    #[test]
+    fn pagination_clamps_limits_and_handles_extreme_page_numbers() {
+        assert_eq!(pagination_values(None, None), (1, 50, 0));
+        assert_eq!(pagination_values(Some(0), Some(500)), (1, 100, 0));
+        assert_eq!(
+            pagination_values(Some(i64::MAX), Some(100)),
+            (i64::MAX, 100, i64::MAX)
+        );
+    }
 }

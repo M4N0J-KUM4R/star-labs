@@ -218,6 +218,8 @@ pub async fn check_teacher_or_admin(
 
 /// GET /courses — list courses (admin gets all, others get enrolled only)
 /// Paginated: ?page=1&per_page=50, max per_page=100
+const ADMIN_COURSE_COUNT_SQL: &str = "SELECT COUNT(*) FROM courses WHERE workflow_state != 'deleted'";
+
 async fn list_courses(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -227,7 +229,7 @@ async fn list_courses(
 
     if is_admin(&auth) {
         // Admin sees all courses except soft-deleted
-        let (total_row,): (i64,) = sqlx::query_as(r#"SELECT COUNT(*) FROM courses WHERE workflow_state != 'deleted'""#)
+        let (total_row,): (i64,) = sqlx::query_as(ADMIN_COURSE_COUNT_SQL)
             .fetch_one(&state.db)
             .await?;
 
@@ -632,6 +634,14 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn admin_course_count_query_has_valid_sql_string() {
+        assert_eq!(
+            ADMIN_COURSE_COUNT_SQL,
+            "SELECT COUNT(*) FROM courses WHERE workflow_state != 'deleted'"
+        );
+    }
 
     #[test]
     fn test_is_admin_true() {

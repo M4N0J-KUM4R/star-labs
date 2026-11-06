@@ -104,17 +104,19 @@ fn parity_notification_preference_upsert_round_trips() {
     let body: Value = r.json().unwrap();
 
     assert_eq!(
-        body["notification_category"].as_str(),
+        body["notification_preferences"][0]["notification_category"].as_str(),
         Some("announcement"),
         "notification_category must match"
     );
     assert_eq!(
-        body["frequency"].as_str(),
+        body["notification_preferences"][0]["frequency"].as_str(),
         Some("daily"),
         "frequency must match"
     );
 
-    let pref_id = body["id"].as_i64().expect("id must be present");
+    let pref_id = body["notification_preferences"][0]["id"]
+        .as_i64()
+        .expect("id must be present");
 
     // Upsert again — should update, not create a new row.
     let payload2 = serde_json::json!({
@@ -130,12 +132,12 @@ fn parity_notification_preference_upsert_round_trips() {
     assert_eq!(r2.status(), 200, "second upsert should return 200");
     let body2: Value = r2.json().unwrap();
     assert_eq!(
-        body2["id"].as_i64(),
+        body2["notification_preferences"][0]["id"].as_i64(),
         Some(pref_id),
         "id must be same (upsert not insert)"
     );
     assert_eq!(
-        body2["frequency"].as_str(),
+        body2["notification_preferences"][0]["frequency"].as_str(),
         Some("weekly"),
         "frequency must be updated"
     );
@@ -148,7 +150,9 @@ fn parity_notification_preference_upsert_round_trips() {
         .unwrap();
     assert_eq!(r3.status(), 200, "list preferences");
     let list: Value = r3.json().unwrap();
-    let arr = list.as_array().expect("preferences list is array");
+    let arr = list["notification_preferences"]
+        .as_array()
+        .expect("notification_preferences is array");
     let found = arr.iter().find(|p| p["id"].as_i64() == Some(pref_id));
     assert!(
         found.is_some(),

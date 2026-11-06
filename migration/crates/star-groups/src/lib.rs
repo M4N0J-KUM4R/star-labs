@@ -50,6 +50,15 @@ fn default_join_level() -> String {
     "invitation_only".to_string()
 }
 
+/// Canvas derives a new membership's initial state from the group's join level.
+fn membership_initial_workflow_state(join_level: &str) -> &'static str {
+    match join_level {
+        "parent_context_auto_join" => "accepted",
+        "parent_context_request" => "requested",
+        _ => "invited",
+    }
+}
+
 /// Request to update a group.
 #[derive(Debug, Deserialize)]
 pub struct UpdateGroup {
@@ -425,16 +434,16 @@ async fn create_membership(
     Json(payload): Json<CreateMembership>,
 ) -> Result<(StatusCode, Json<MembershipWithUser>), ApiError> {
     // Verify group exists and is not deleted
-    let group: Option<(i64,)> = sqlx::query_as(
-        "SELECT id FROM groups WHERE id = $1 AND workflow_state != 'deleted'",
+    let group: Option<(String,)> = sqlx::query_as(
+        "SELECT join_level FROM groups WHERE id = $1 AND workflow_state != 'deleted'",
     )
     .bind(group_id)
     .fetch_optional(&state.db)
     .await?;
 
-    if group.is_none() {
+    let Some((join_level,)) = group else {
         return Err(ApiError::NotFound);
-    }
+    };
 
     if !is_teacher_in_group(&state.db, auth.id, group_id, &auth).await? {
         return Err(ApiError::Forbidden);
@@ -454,11 +463,12 @@ async fn create_membership(
     let result = sqlx::query(
         r#"
         INSERT INTO group_memberships (group_id, user_id, workflow_state)
-        VALUES ($1, $2, 'accepted')
+        VALUES ($1, $2, $3)
         "#,
     )
     .bind(group_id)
     .bind(payload.user_id)
+    .bind(membership_initial_workflow_state(&join_level))
     .execute(&state.db)
     .await;
 
@@ -491,6 +501,27 @@ async fn create_membership(
     .await?;
 
     Ok((StatusCode::CREATED, Json(membership)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::membership_initial_workflow_state;
+
+    #[test]
+    fn membership_state_follows_group_join_level() {
+        assert_eq!(
+            membership_initial_workflow_state("invitation_only"),
+            "invited"
+        );
+        assert_eq!(
+            membership_initial_workflow_state("parent_context_request"),
+            "requested"
+        );
+        assert_eq!(
+            membership_initial_workflow_state("parent_context_auto_join"),
+            "accepted"
+        );
+    }
 }
 
 /// GET /groups/{groupId}/memberships — list memberships (teacher/admin only)

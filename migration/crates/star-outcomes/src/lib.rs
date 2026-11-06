@@ -125,7 +125,7 @@ async fn check_enrolled_or_admin(
         return Ok(true);
     }
     let row: Option<(i32,)> =
-        sqlx::query_as("SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1")
+        sqlx::query_as("SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND workflow_state = 'active' LIMIT 1")
             .bind(user_id)
             .bind(course_id)
             .fetch_optional(pool)
@@ -143,7 +143,7 @@ async fn check_teacher_or_admin(
         return Ok(true);
     }
     let row: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' LIMIT 1",
+        "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' AND workflow_state = 'active' LIMIT 1",
     )
     .bind(user_id)
     .bind(course_id)
