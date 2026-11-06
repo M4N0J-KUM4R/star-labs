@@ -1,0 +1,20 @@
+[Unit]
+Description=Dahl model proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+WorkingDirectory=/etc/dahl-proxy
+ExecStart=/usr/local/bin/dahl-proxy
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

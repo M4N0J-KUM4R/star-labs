@@ -1,0 +1,45 @@
+name: Bootstrap validation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  shell-and-lab-constraints:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shell syntax
+        run: bash -n infra/user-data.sh scripts/lab-up.sh scripts/lab-data-up.sh scripts/lab-deploy.sh scripts/lab-down.sh
+      - name: Check shell scripts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          shellcheck infra/user-data.sh scripts/lab-up.sh scripts/lab-data-up.sh scripts/lab-deploy.sh scripts/lab-down.sh
+      - name: Lint CloudFormation
+        run: |
+          python3 -m pip install --user cfn-lint
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/cfn-lint" --non-zero-exit-code error infra/lab-data-stack.yaml
+      - name: Guard AWS Academy lab resource limits
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          source = Path('scripts/lab-up.sh').read_text()
+          assert '--instance-type t3.medium' in source
+          assert '"VolumeSize":100' in source
+          assert '"VolumeType":"gp3"' in source
+          assert 'LabInstanceProfile' in source
+          assert '0.0.0.0/0' not in source
+          template = Path('infra/lab-data-stack.yaml').read_text()
+          assert 'DBInstanceClass: db.t3.micro' in template
+          assert 'AllocatedStorage: 20' in template
+          assert 'StorageType: gp2' in template
+          assert 'PubliclyAccessible: false' in template
+          assert 'MultiAZ: false' in template
+          PY

@@ -1,0 +1,155 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Temporary Canvas LMS migration data services for the AWS lab.
+
+Parameters:
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: Default VPC used by the star-labs EC2 instance.
+  Ec2SecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group attached to the migration EC2 instance.
+  Ec2InstanceId:
+    Type: AWS::EC2::Instance::Id
+    Description: Migration EC2 instance to monitor.
+  DbSubnetA:
+    Type: AWS::EC2::Subnet::Id
+    Description: First default subnet in the VPC.
+  DbSubnetB:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second default subnet in a different Availability Zone.
+  DbMasterPassword:
+    Type: String
+    NoEcho: true
+    MinLength: 16
+    MaxLength: 41
+    AllowedPattern: '^[A-Za-z0-9_+=.!#$*-]{16,41}$'
+    ConstraintDescription: Use 16-41 letters, numbers, or _+=.!#$*- characters.
+
+Resources:
+  MigrationFilesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireTemporaryLabObjects
+            Prefix: ''
+            Status: Enabled
+            ExpirationInDays: 3
+      Tags:
+        - Key: Project
+          Value: star-labs
+        - Key: Purpose
+          Value: learner-lab
+
+  DatabaseSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL reachable only from the migration EC2 security group.
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref Ec2SecurityGroupId
+      Tags:
+        - Key: Project
+          Value: star-labs
+        - Key: Purpose
+          Value: learner-lab
+
+  DatabaseSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Private placement for the temporary Canvas PostgreSQL database.
+      SubnetIds:
+        - !Ref DbSubnetA
+        - !Ref DbSubnetB
+      Tags:
+        - Key: Project
+          Value: star-labs
+        - Key: Purpose
+          Value: learner-lab
+
+  CanvasDatabase:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Engine: postgres
+      DBInstanceClass: db.t3.micro
+      DBName: star_lms
+      MasterUsername: staradmin
+      MasterUserPassword: !Ref DbMasterPassword
+      AllocatedStorage: 20
+      StorageType: gp2
+      StorageEncrypted: true
+      PubliclyAccessible: false
+      MultiAZ: false
+      BackupRetentionPeriod: 0
+      AutoMinorVersionUpgrade: true
+      DeletionProtection: false
+      DeleteAutomatedBackups: true
+      VPCSecurityGroups:
+        - !GetAtt DatabaseSecurityGroup.GroupId
+      DBSubnetGroupName: !Ref DatabaseSubnetGroup
+      Tags:
+        - Key: Project
+          Value: star-labs
+        - Key: Purpose
+          Value: learner-lab-dev-test
+
+  MigrationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /star-labs/learner-lab
+      RetentionInDays: 3
+      Tags:
+        - Key: Project
+          Value: star-labs
+        - Key: Purpose
+          Value: learner-lab
+
+  HighCpuAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmDescription: Alert when the temporary migration server sustains high CPU use.
+      Namespace: AWS/EC2
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: InstanceId
+          Value: !Ref Ec2InstanceId
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      DatapointsToAlarm: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+
+Outputs:
+  BucketName:
+    Description: Private bucket for temporary Canvas file migration data.
+    Value: !Ref MigrationFilesBucket
+  DatabaseEndpoint:
+    Description: Private PostgreSQL endpoint, reachable from the migration EC2 instance.
+    Value: !GetAtt CanvasDatabase.Endpoint.Address
+  DatabasePort:
+    Value: !GetAtt CanvasDatabase.Endpoint.Port
+  DatabaseName:
+    Value: star_lms
+  DatabaseSecurityGroupId:
+    Value: !GetAtt DatabaseSecurityGroup.GroupId
+  LogGroupName:
+    Value: !Ref MigrationLogGroup
+  CpuAlarmName:
+    Value: !Ref HighCpuAlarm
