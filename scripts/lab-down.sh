@@ -23,6 +23,10 @@ if aws_lab cloudformation describe-stacks --region "$REGION" --stack-name "$STAC
   aws_lab cloudformation wait stack-delete-complete --region "$REGION" --stack-name "$STACK_NAME"
 fi
 
+if ssh -o BatchMode=yes -o ConnectTimeout=5 star-labs true >/dev/null 2>&1; then
+  ssh star-labs 'rm -f "$HOME/.config/star-labs/data.env"'
+fi
+
 INSTANCE_IDS="$(aws_lab ec2 describe-instances --region "$REGION" \
   --filters Name=tag:Project,Values=star-labs Name=tag:Purpose,Values=learner-lab \
     Name=instance-state-name,Values=pending,running,stopping,stopped \
@@ -49,6 +53,6 @@ if aws_lab ec2 describe-key-pairs --region "$REGION" --key-names star-labs-lab >
   aws_lab ec2 delete-key-pair --region "$REGION" --key-name star-labs-lab
 fi
 rm -f "$HOME/.ssh/config.d/star-labs-lab.conf" "$HOME/.ssh/star-labs-lab.pem"
-rm -f "$HOME/.config/star-labs/db-password"
+rm -f "$HOME/.config/star-labs/db-password" "$HOME/.config/star-labs/data.env"
 ssh-keygen -R star-labs >/dev/null 2>&1 || true
 printf 'Removed tagged learner lab resources in %s.\n' "$REGION"
