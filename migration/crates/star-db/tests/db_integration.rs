@@ -34,13 +34,13 @@ async fn db_pool() -> Option<PgPool> {
     Some(pool)
 }
 
-/// True when the given table exists in the public schema of the connected DB.
+/// True when the given table exists in the current schema of the connected DB.
 async fn table_exists(pool: &PgPool, table: &str) -> bool {
     sqlx::query_scalar::<_, i64>(
         r#"
         SELECT COUNT(*)
         FROM information_schema.tables
-        WHERE table_schema = 'public' AND table_name = $1
+        WHERE table_schema = current_schema() AND table_name = $1
         "#,
     )
     .bind(table)
@@ -222,7 +222,7 @@ async fn core_tables_have_expected_columns() {
                 r#"
                 SELECT COUNT(*)
                 FROM information_schema.columns
-                WHERE table_schema = 'public'
+                WHERE table_schema = current_schema()
                   AND table_name = $1
                   AND column_name = $2
                 "#,
