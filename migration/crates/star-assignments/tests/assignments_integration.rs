@@ -1848,6 +1848,448 @@ async fn gradebook_empty_course_returns_empty_structure() {
 }
 
 // ---------------------------------------------------------------------------
+// Canvas nested route aliases
+// ---------------------------------------------------------------------------
+
+/// Remove volatile fields (row ids, timestamps) so two equivalent responses
+/// can be compared after normalization.
+fn strip_fields(value: &mut Value, fields: &[&str]) {
+    let obj = value.as_object_mut().expect("JSON object response");
+    for field in fields {
+        obj.remove(*field);
+    }
+}
+
+#[tokio::test]
+async fn nested_get_assignment_alias_matches_flat_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let f = seed_fixture(&server, &pool, &prefix, "NestedGet").await;
+
+    let flat = get_ok(
+        &server,
+        &auth(f.student, "student"),
+        &format!("/assignments/{}", f.assignment),
+    )
+    .await;
+    let nested = get_ok(
+        &server,
+        &auth(f.student, "student"),
+        &format!("/courses/{}/assignments/{}", f.course, f.assignment),
+    )
+    .await;
+
+    assert_eq!(nested, flat, "nested GET returns the flat payload");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn nested_update_assignment_alias_matches_flat_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let f = seed_fixture(&server, &pool, &prefix, "NestedUpdate").await;
+    let token = auth(f.teacher, "teacher");
+    let payload = json!({ "title": "Renamed Via Nested", "points_possible": 17.5 });
+
+    let flat_resp = server
+        .put(&format!("/assignments/{}", f.assignment))
+        .add_header(axum::http::header::AUTHORIZATION, token.clone())
+        .json(&payload)
+        .await;
+    assert_eq!(flat_resp.status_code(), 200, "flat: {}", flat_resp.text());
+    let mut flat: Value = flat_resp.json();
+
+    let nested_resp = server
+        .put(&format!(
+            "/courses/{}/assignments/{}",
+            f.course, f.assignment
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, token)
+        .json(&payload)
+        .await;
+    assert_eq!(
+        nested_resp.status_code(),
+        200,
+        "nested: {}",
+        nested_resp.text()
+    );
+    let mut nested: Value = nested_resp.json();
+
+    // Each request stamps its own updated_at, so compare everything else.
+    strip_fields(&mut flat, &["updated_at"]);
+    strip_fields(&mut nested, &["updated_at"]);
+    assert_eq!(nested, flat, "nested PUT returns the flat payload");
+
+    assert_eq!(
+        db_assignment_title(&pool, f.assignment).await,
+        Some("Renamed Via Nested".to_string())
+    );
+    assert_eq!(db_assignment_points(&pool, f.assignment).await, Some(17.5));
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn nested_delete_assignment_alias_matches_flat_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let f = seed_fixture(&server, &pool, &prefix, "NestedDelete").await;
+    let second = api_create_assignment(
+        &server,
+        &auth(f.teacher, "teacher"),
+        f.course,
+        "Nested Delete Second",
+        5.0,
+    )
+    .await;
+    let second_id = second["id"].as_i64().expect("second assignment id");
+    let token = auth(f.teacher, "teacher");
+
+    // Flat DELETE and nested DELETE both answer 204.
+    let flat_resp = server
+        .delete(&format!("/assignments/{}", f.assignment))
+        .add_header(axum::http::header::AUTHORIZATION, token.clone())
+        .await;
+    assert_eq!(flat_resp.status_code(), 204, "flat: {}", flat_resp.text());
+
+    let nested_resp = server
+        .delete(&format!("/courses/{}/assignments/{}", f.course, second_id))
+        .add_header(axum::http::header::AUTHORIZATION, token)
+        .await;
+    assert_eq!(
+        nested_resp.status_code(),
+        204,
+        "nested: {}",
+        nested_resp.text()
+    );
+
+    assert!(db_assignment_title(&pool, f.assignment).await.is_none());
+    assert!(db_assignment_title(&pool, second_id).await.is_none());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn nested_list_submissions_alias_matches_flat_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let f = seed_fixture(&server, &pool, &prefix, "NestedListSubs").await;
+    let second = seed_user(&pool, &prefix, "SecondStudent", "student").await;
+    seed_enrollment(&pool, second, f.course, "student").await;
+
+    api_submit(
+        &server,
+        &auth(f.student, "student"),
+        f.assignment,
+        "first student answer",
+    )
+    .await;
+    api_submit(
+        &server,
+        &auth(second, "student"),
+        f.assignment,
+        "second student answer",
+    )
+    .await;
+
+    let flat = get_ok(
+        &server,
+        &auth(f.teacher, "teacher"),
+        &format!("/assignments/{}/submissions", f.assignment),
+    )
+    .await;
+    let nested = get_ok(
+        &server,
+        &auth(f.teacher, "teacher"),
+        &format!(
+            "/courses/{}/assignments/{}/submissions",
+            f.course, f.assignment
+        ),
+    )
+    .await;
+
+    assert_eq!(nested, flat, "nested list returns the flat payload");
+    assert_eq!(nested.as_array().expect("array response").len(), 2);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn nested_create_submission_alias_matches_flat_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let f = seed_fixture(&server, &pool, &prefix, "NestedSubmit").await;
+    let second = api_create_assignment(
+        &server,
+        &auth(f.teacher, "teacher"),
+        f.course,
+        "Nested Submit Target",
+        10.0,
+    )
+    .await;
+    let second_id = second["id"].as_i64().expect("second assignment id");
+    let token = auth(f.student, "student");
+    let body = "same answer";
+
+    let flat_resp = server
+        .post(&format!("/assignments/{}/submissions", f.assignment))
+        .add_header(axum::http::header::AUTHORIZATION, token.clone())
+        .json(&json!({ "body": body }))
+        .await;
+    assert_eq!(flat_resp.status_code(), 201, "flat: {}", flat_resp.text());
+    let mut flat: Value = flat_resp.json();
+
+    let nested_resp = server
+        .post(&format!(
+            "/courses/{}/assignments/{second_id}/submissions",
+            f.course
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, token)
+        .json(&json!({ "body": body }))
+        .await;
+    assert_eq!(
+        nested_resp.status_code(),
+        201,
+        "nested: {}",
+        nested_resp.text()
+    );
+    let mut nested: Value = nested_resp.json();
+
+    // Both rows live on different assignments, so ids and timestamps differ.
+    let volatile = [
+        "id",
+        "assignment_id",
+        "submitted_at",
+        "created_at",
+        "updated_at",
+    ];
+    strip_fields(&mut flat, &volatile);
+    strip_fields(&mut nested, &volatile);
+    assert_eq!(nested, flat, "nested POST returns the flat payload");
+
+    assert_eq!(
+        db_count_submissions(&pool, f.assignment, f.student).await,
+        1
+    );
+    assert_eq!(db_count_submissions(&pool, second_id, f.student).await, 1);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn nested_self_submission_alias_returns_callers_submission() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let f = seed_fixture(&server, &pool, &prefix, "NestedSelf").await;
+    let second = seed_user(&pool, &prefix, "SecondStudent", "student").await;
+    seed_enrollment(&pool, second, f.course, "student").await;
+
+    api_submit(
+        &server,
+        &auth(f.student, "student"),
+        f.assignment,
+        "first student answer",
+    )
+    .await;
+    api_submit(
+        &server,
+        &auth(second, "student"),
+        f.assignment,
+        "second student answer",
+    )
+    .await;
+
+    let flat = get_ok(
+        &server,
+        &auth(f.student, "student"),
+        &format!("/assignments/{}/submissions/me", f.assignment),
+    )
+    .await;
+    let nested = get_ok(
+        &server,
+        &auth(f.student, "student"),
+        &format!(
+            "/courses/{}/assignments/{}/submissions/self",
+            f.course, f.assignment
+        ),
+    )
+    .await;
+
+    assert_eq!(nested, flat, "self alias returns the flat /me payload");
+    assert_eq!(nested["user_id"], f.student);
+    assert_eq!(nested["body"], "first student answer");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn nested_grade_submission_alias_matches_flat_grade() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let f = seed_fixture(&server, &pool, &prefix, "NestedGrade").await;
+    let sub = api_submit(
+        &server,
+        &auth(f.student, "student"),
+        f.assignment,
+        "my answer",
+    )
+    .await;
+    let submission_id = sub["id"].as_i64().expect("submission id");
+
+    // Same score through both routes: only updated_at may differ.
+    let flat = api_grade(&server, &auth(f.teacher, "teacher"), submission_id, 9.0).await;
+
+    let nested_resp = server
+        .put(&format!(
+            "/courses/{}/assignments/{}/submissions/{}",
+            f.course, f.assignment, f.student
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(f.teacher, "teacher"),
+        )
+        .json(&json!({ "score": 9.0 }))
+        .await;
+    assert_eq!(
+        nested_resp.status_code(),
+        200,
+        "nested: {}",
+        nested_resp.text()
+    );
+    let mut nested: Value = nested_resp.json();
+
+    let mut flat_cmp = flat.clone();
+    strip_fields(&mut flat_cmp, &["updated_at"]);
+    strip_fields(&mut nested, &["updated_at"]);
+    assert_eq!(nested, flat_cmp, "nested grade returns the flat payload");
+
+    assert_eq!(nested["user_id"], f.student);
+    assert_eq!(db_submission_score(&pool, submission_id).await, Some(9.0));
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn nested_aliases_cross_course_are_404() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let f = seed_fixture(&server, &pool, &prefix, "NestedCrossCourse").await;
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let other_course = seed_course(&pool, &prefix, "NestedOtherCourse").await;
+    let token = auth(admin, "admin");
+
+    let nested = format!("/courses/{other_course}/assignments/{}", f.assignment);
+
+    let resp = server
+        .get(&nested)
+        .add_header(axum::http::header::AUTHORIZATION, token.clone())
+        .await;
+    assert_eq!(resp.status_code(), 404, "GET: {}", resp.text());
+
+    let resp = server
+        .put(&nested)
+        .add_header(axum::http::header::AUTHORIZATION, token.clone())
+        .json(&json!({ "title": "Wrong Course" }))
+        .await;
+    assert_eq!(resp.status_code(), 404, "PUT: {}", resp.text());
+
+    let resp = server
+        .delete(&nested)
+        .add_header(axum::http::header::AUTHORIZATION, token.clone())
+        .await;
+    assert_eq!(resp.status_code(), 404, "DELETE: {}", resp.text());
+
+    let resp = server
+        .get(&format!("{nested}/submissions"))
+        .add_header(axum::http::header::AUTHORIZATION, token.clone())
+        .await;
+    assert_eq!(resp.status_code(), 404, "list submissions: {}", resp.text());
+
+    let resp = server
+        .post(&format!("{nested}/submissions"))
+        .add_header(axum::http::header::AUTHORIZATION, token.clone())
+        .json(&json!({ "body": "wrong course answer" }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "create submission: {}",
+        resp.text()
+    );
+
+    let resp = server
+        .get(&format!("{nested}/submissions/self"))
+        .add_header(axum::http::header::AUTHORIZATION, token.clone())
+        .await;
+    assert_eq!(resp.status_code(), 404, "self: {}", resp.text());
+
+    let resp = server
+        .put(&format!("{nested}/submissions/{}", f.student))
+        .add_header(axum::http::header::AUTHORIZATION, token)
+        .json(&json!({ "score": 100.0 }))
+        .await;
+    assert_eq!(resp.status_code(), 404, "grade: {}", resp.text());
+
+    // The cross-course writes changed nothing.
+    assert_eq!(
+        db_assignment_title(&pool, f.assignment).await,
+        Some("Fixture Assignment".to_string())
+    );
+    assert_eq!(
+        db_count_submissions(&pool, f.assignment, f.student).await,
+        0
+    );
+
+    // A missing assignment under the real course is also 404.
+    let missing = format!("/courses/{}/assignments/999999999", f.course);
+    let resp = server
+        .get(&missing)
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "GET missing: {}", resp.text());
+
+    let resp = server
+        .put(&missing)
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "title": "Ghost" }))
+        .await;
+    assert_eq!(resp.status_code(), 404, "PUT missing: {}", resp.text());
+
+    let resp = server
+        .delete(&missing)
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "DELETE missing: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
 // Authentication
 // ---------------------------------------------------------------------------
 
