@@ -5,6 +5,10 @@
 //! - GET    /submissions/{submissionId}/comments → [comments], active only, ordered by created_at
 //! - DELETE /submissions/{submissionId}/comments/{commentId} → 204, soft-delete
 //!
+//! Canvas nested aliases (resolve submission by course/assignment/user):
+//! - GET, POST /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments
+//! - DELETE    /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
+//!
 //! Access control (Canvas-style):
 //! - POST: course teacher/admin OR the submission's own student
 //! - GET:  course teacher/admin OR the submission's own student
@@ -105,6 +109,32 @@ async fn get_submission_owner(pool: &PgPool, submission_id: i64) -> Result<Optio
     Ok(row.map(|r| r.0))
 }
 
+/// Resolve a submission id from Canvas's nested path context
+/// (course, assignment, user). Returns 404 when the submission is missing,
+/// or when its assignment does not belong to the given course.
+async fn resolve_submission_id(
+    pool: &PgPool,
+    course_id: i64,
+    assignment_id: i64,
+    user_id: i64,
+) -> Result<i64, ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT s.id
+        FROM submissions s
+        JOIN assignments a ON a.id = s.assignment_id
+        WHERE s.assignment_id = $1 AND s.user_id = $2 AND a.course_id = $3
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(user_id)
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(|r| r.0).ok_or(ApiError::NotFound)
+}
+
 /// Check if user can view/submit comments on a submission:
 /// - course teacher/admin OR the submission's own student.
 async fn check_can_view_or_comment(
@@ -140,13 +170,13 @@ async fn check_can_view_or_comment(
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// POST /submissions/{submissionId}/comments
+/// Shared create logic for the flat and Canvas-nested routes.
 /// Course teacher/admin OR the submission's own student → 201
-async fn create_comment(
-    State(state): State<AppState>,
-    Path(submission_id): Path<i64>,
+async fn create_comment_for(
+    state: &AppState,
+    submission_id: i64,
     auth: AuthUser,
-    Json(payload): Json<CreateComment>,
+    payload: CreateComment,
 ) -> Result<(StatusCode, Json<SubmissionComment>), ApiError> {
     // Verify the submission exists (404 if not)
     let _course_id = get_course_id_for_submission(&state.db, submission_id)
@@ -178,11 +208,32 @@ async fn create_comment(
     Ok((StatusCode::CREATED, Json(row)))
 }
 
-/// GET /submissions/{submissionId}/comments
-/// Course teacher/admin OR the submission's own student → [comments], active only, ordered by created_at
-async fn list_comments(
+/// POST /submissions/{submissionId}/comments
+async fn create_comment(
     State(state): State<AppState>,
     Path(submission_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CreateComment>,
+) -> Result<(StatusCode, Json<SubmissionComment>), ApiError> {
+    create_comment_for(&state, submission_id, auth, payload).await
+}
+
+/// POST /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments
+async fn create_comment_nested(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<CreateComment>,
+) -> Result<(StatusCode, Json<SubmissionComment>), ApiError> {
+    let submission_id = resolve_submission_id(&state.db, course_id, assignment_id, user_id).await?;
+    create_comment_for(&state, submission_id, auth, payload).await
+}
+
+/// Shared list logic for the flat and Canvas-nested routes.
+/// Course teacher/admin OR the submission's own student → [comments], active only, ordered by created_at
+async fn list_comments_for(
+    state: &AppState,
+    submission_id: i64,
     auth: AuthUser,
 ) -> Result<Json<Vec<SubmissionComment>>, ApiError> {
     // Verify the submission exists (404 if not)
@@ -210,11 +261,31 @@ async fn list_comments(
     Ok(Json(rows))
 }
 
-/// DELETE /submissions/{submissionId}/comments/{commentId}
-/// Author or admin → soft-delete (workflow_state = 'deleted'), 204
-async fn delete_comment(
+/// GET /submissions/{submissionId}/comments
+async fn list_comments(
     State(state): State<AppState>,
-    Path((submission_id, comment_id)): Path<(i64, i64)>,
+    Path(submission_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<SubmissionComment>>, ApiError> {
+    list_comments_for(&state, submission_id, auth).await
+}
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments
+async fn list_comments_nested(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<SubmissionComment>>, ApiError> {
+    let submission_id = resolve_submission_id(&state.db, course_id, assignment_id, user_id).await?;
+    list_comments_for(&state, submission_id, auth).await
+}
+
+/// Shared delete logic for the flat and Canvas-nested routes.
+/// Author or admin → soft-delete (workflow_state = 'deleted'), 204
+async fn delete_comment_for(
+    state: &AppState,
+    submission_id: i64,
+    comment_id: i64,
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
     // Fetch the comment to verify it exists and get its author
@@ -244,6 +315,25 @@ async fn delete_comment(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// DELETE /submissions/{submissionId}/comments/{commentId}
+async fn delete_comment(
+    State(state): State<AppState>,
+    Path((submission_id, comment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    delete_comment_for(&state, submission_id, comment_id, auth).await
+}
+
+/// DELETE /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
+async fn delete_comment_nested(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id, comment_id)): Path<(i64, i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    let submission_id = resolve_submission_id(&state.db, course_id, assignment_id, user_id).await?;
+    delete_comment_for(&state, submission_id, comment_id, auth).await
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -255,5 +345,18 @@ pub fn router() -> Router<AppState> {
         .route(
             "/submissions/{submissionId}/comments/{commentId}",
             delete(delete_comment),
+        )
+        // Canvas nested aliases — resolve submission by course/assignment/user
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments",
+            post(create_comment_nested),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments",
+            get(list_comments_nested),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}",
+            delete(delete_comment_nested),
         )
 }
