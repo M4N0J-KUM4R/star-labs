@@ -1,9 +1,9 @@
 //! Integration tests for star-courses.
 //!
-//! Exercises the real courses router (GET/POST /courses, GET/PUT/DELETE
-//! /courses/{id}, POST/GET /courses/{id}/enrollments, DELETE
-//! /courses/{id}/enrollments/{userId}) through axum-test against a real
-//! Postgres.
+//! Exercises the real courses router (GET/POST /courses, POST
+//! /accounts/{id}/courses, GET/PUT/DELETE /courses/{id}, POST/GET
+//! /courses/{id}/enrollments, DELETE /courses/{id}/enrollments/{userId})
+//! through axum-test against a real Postgres.
 //!
 //! Conventions (mirrors star-enrollments/tests/enrollments_integration.rs):
 //! - Skipped cleanly when DATABASE_URL is not set (prints SKIP and returns).
@@ -119,6 +119,21 @@ async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
     .expect("seed course")
 }
 
+/// Create an account directly in the DB. Returns account id.
+async fn seed_account(pool: &PgPool, prefix: &str, name: &str) -> i64 {
+    sqlx::query_scalar(
+        r#"
+        INSERT INTO accounts (name)
+        VALUES ($1)
+        RETURNING id
+        "#,
+    )
+    .bind(format!("{prefix}-{name}"))
+    .fetch_one(pool)
+    .await
+    .expect("seed account")
+}
+
 /// Give a user a teacher enrollment in a course. Course-scoped teacher
 /// permissions (update course, manage enrollments) require an actual
 /// teacher enrollment, not only a global users.role value.
@@ -156,7 +171,7 @@ fn auth(user_id: i64, role: &str) -> String {
 }
 
 /// Delete every row created by this run (users cascade to enrollments;
-/// courses are hard-deleted by code prefix).
+/// courses are hard-deleted by code prefix, then accounts by name prefix).
 async fn cleanup(pool: &PgPool, prefix: &str) {
     let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1")
         .bind(format!("{prefix}%"))
@@ -164,6 +179,10 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
         .await;
     let _ = sqlx::query("DELETE FROM users WHERE email LIKE $1")
         .bind(format!("{prefix}%@test.local"))
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE name LIKE $1")
+        .bind(format!("{prefix}%"))
         .execute(pool)
         .await;
 }
@@ -420,6 +439,155 @@ async fn create_course_invalid_workflow_state_is_422() {
         "message should name the field: {}",
         resp.text()
     );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn create_course_without_alias_still_works_and_uses_default_account() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let code = format!("{prefix}-DefaultAccountCourse");
+
+    let resp = server
+        .post("/courses")
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "name": "Default Account Course", "course_code": code }))
+        .await;
+
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let id = body["id"].as_i64().expect("course id");
+    assert_eq!(body["course_code"], code);
+
+    // The original route keeps the column default (root account, id 1).
+    let row: (Option<i64>,) = sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        row.0,
+        Some(1),
+        "POST /courses must keep the default account"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// POST /accounts/{id}/courses (Canvas-compatible creation alias)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn create_course_via_account_alias_returns_201_and_sets_account_id() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let account = seed_account(&pool, &prefix, "AliasAccount").await;
+    let code = format!("{prefix}-AliasCourse");
+
+    let resp = server
+        .post(&format!("/accounts/{account}/courses"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "name": "Alias 101",
+            "course_code": code,
+            "description": "created through the account alias"
+        }))
+        .await;
+
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let id = body["id"].as_i64().expect("course id");
+    assert_eq!(body["name"], "Alias 101");
+    assert_eq!(body["course_code"], code);
+    assert_eq!(body["workflow_state"], "available", "default state");
+
+    // The row is owned by the requested account.
+    let row: (Option<i64>,) = sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(row.0, Some(account));
+
+    // Same side effect as POST /courses: creator gets a teacher enrollment.
+    let teacher_rows: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM enrollments WHERE course_id = $1 AND user_id = $2 AND role = 'teacher'",
+    )
+    .bind(id)
+    .bind(teacher)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(teacher_rows.0, 1, "creator must get a teacher enrollment");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn create_course_via_account_alias_missing_account_is_404() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let code = format!("{prefix}-NoSuchAccountCourse");
+
+    let resp = server
+        .post(&format!("/accounts/{}/courses", i64::MAX))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "name": "No Account Course", "course_code": code }))
+        .await;
+
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    // Nothing was created.
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM courses WHERE course_code = $1")
+        .bind(&code)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count.0, 0);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn create_course_via_account_alias_as_student_is_403() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let account = seed_account(&pool, &prefix, "AliasStudentAccount").await;
+    let code = format!("{prefix}-StudentAliasCourse");
+
+    let resp = server
+        .post(&format!("/accounts/{account}/courses"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "name": "Student Alias Course", "course_code": code }))
+        .await;
+
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // Nothing was created.
+    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM courses WHERE course_code = $1")
+        .bind(&code)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count.0, 0);
 
     cleanup(&pool, &prefix).await;
 }
