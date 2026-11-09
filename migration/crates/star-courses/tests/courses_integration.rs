@@ -439,9 +439,11 @@ async fn list_as_admin_sees_all_non_deleted_courses() {
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
 
-    // Three live courses for this run (created via the API as the teacher,
+    // Six live courses for this run (created via the API as the teacher,
     // which also auto-enrolls the creator), plus one soft-deleted course.
-    for name in ["ListA", "ListB", "ListC"] {
+    // Six guarantees page 2 (per_page=2) is full regardless of what other
+    // suites leave in the shared database.
+    for name in ["ListA", "ListB", "ListC", "ListD", "ListE", "ListF"] {
         let resp = server
             .post("/courses")
             .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
@@ -464,8 +466,8 @@ async fn list_as_admin_sees_all_non_deleted_courses() {
     let ours = our_courses(&page, &prefix);
     assert_eq!(
         ours.len(),
-        3,
-        "3 live courses, soft-deleted excluded: {ours:?}"
+        6,
+        "6 live courses, soft-deleted excluded: {ours:?}"
     );
     assert!(
         ours.iter().all(|c| c["workflow_state"] != "deleted"),
