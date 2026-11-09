@@ -2306,6 +2306,8 @@ dependencies = [
  "serde_urlencoded",
  "sqlx",
  "star-common",
+ "star-db",
+ "tokio",
  "tower",
 ]
 
@@ -2387,7 +2389,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "star-db",
  "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]
@@ -2447,7 +2451,9 @@ dependencies = [
 name = "star-db"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "sqlx",
+ "tokio",
 ]
 
 [[package]]
