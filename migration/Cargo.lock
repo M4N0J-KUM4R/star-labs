@@ -2658,6 +2658,7 @@ name = "star-pages"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "axum-test",
  "chrono",
  "reqwest",
  "serde",
@@ -2665,6 +2666,7 @@ dependencies = [
  "sqlx",
  "star-auth",
  "star-common",
+ "star-db",
  "tokio",
 ]
 
