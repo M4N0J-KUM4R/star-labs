@@ -215,6 +215,7 @@ async fn create_module(
 async fn get_module(
     State(state): State<AppState>,
     Path(module_id): Path<i64>,
+    auth: AuthUser,
 ) -> Result<Json<ModuleWithItems>, ApiError> {
     let module: Option<Module> = sqlx::query_as(
         r#"
@@ -227,6 +228,7 @@ async fn get_module(
     .await?;
 
     let module = module.ok_or(ApiError::NotFound)?;
+    require_course_read_access(&state.db, auth.id, module.course_id, &auth).await?;
 
     let items = sqlx::query_as::<_, ModuleItem>(
         r#"SELECT id, module_id, item_type, item_id, position, created_at, updated_at
@@ -381,8 +383,9 @@ async fn delete_module_item(
 async fn list_module_items(
     State(state): State<AppState>,
     Path((course_id, module_id)): Path<(i64, i64)>,
+    auth: AuthUser,
 ) -> Result<Json<Vec<ModuleItem>>, ApiError> {
-    let exists: Option<(i32,)> = sqlx::query_as(
+    let exists: Option<(i64,)> = sqlx::query_as(
         r#"
         SELECT id FROM modules
         WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
@@ -396,6 +399,8 @@ async fn list_module_items(
     if exists.is_none() {
         return Err(ApiError::NotFound);
     }
+
+    require_course_read_access(&state.db, auth.id, course_id, &auth).await?;
 
     let items = sqlx::query_as::<_, ModuleItem>(
         r#"SELECT id, module_id, item_type, item_id, position, created_at, updated_at
