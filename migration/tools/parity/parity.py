@@ -23,6 +23,12 @@ BLOCK_RE = re.compile(r"\bdo\b(?:\s*\|[^|]*\|)?\s*$")
 COND_RE = re.compile(r"^\s*(if|unless|case|begin|while|until)\b")
 END_RE = re.compile(r"^\s*end\b")
 ASSIGN_RE = re.compile(r"^\s*([a-z_][a-z0-9_]*)\s*=\s*\"([^\"]*)\"\s*$")
+COND_ASSIGN_RE = re.compile(
+    r"^\s*([a-z_][a-z0-9_]*)\s*=\s*\(*\s*\(\s*([a-z_][a-z0-9_]*)"
+    r"\s*==\s*\"([^\"]*)\"\s*\)\s*\?\s*([a-z_][a-z0-9_]*)\s*:\s*"
+    r"\"([^\"]*)\"\s*\)*\s*$")
+COND_EQ_RE = re.compile(
+    r"^\s*(if|unless)\s+([a-z_][a-z0-9_]*)\s*==\s*\"([^\"]*)\"\s*$")
 SCOPE_CTRL_RE = re.compile(r"controller:\s*(?::([A-Za-z0-9_]+)|[\"']([A-Za-z0-9_/]+)[\"'])")
 ACTION_RE = re.compile(r"action:\s*(?::([A-Za-z0-9_]+)|[\"']([A-Za-z0-9_]+)[\"'])")
 TO_RE = re.compile(r"to:\s*[\"']([A-Za-z0-9_/]+)#([A-Za-z0-9_]+)[\"']")
@@ -164,6 +170,11 @@ def _expand(text, bindings, variables, depth=0):
         value = bindings.get(expr)
         if value is None:
             value = variables.get(expr)
+        if isinstance(value, dict):
+            if bindings.get(value["var"]) == value["equals"]:
+                value = bindings.get(value["then"])
+            else:
+                value = _expand(value["else"], bindings, variables, depth + 1)
         if value is None:
             return match.group(0)
         return _pluralize(value) if plural else value
@@ -335,9 +346,34 @@ def parse_canvas_routes(routes_file):
                         resource))
                 continue
 
+            conditional = COND_ASSIGN_RE.match(line)
+            if conditional:
+                target, var, equals, then_var, else_template = \
+                    conditional.groups()
+                stack[-1]["variables"][target] = {
+                    "var": var,
+                    "equals": equals,
+                    "then": then_var,
+                    "else": else_template,
+                }
+                i += 1
+                continue
+
             assign = ASSIGN_RE.match(line)
             if assign:
                 stack[-1]["variables"][assign.group(1)] = assign.group(2)
+                i += 1
+                continue
+
+            condition = COND_EQ_RE.match(line)
+            if condition:
+                kind, var, equals = condition.groups()
+                kept = [
+                    binding for binding in stack[-1]["bindings"]
+                    if (binding.get(var) == equals) == (kind == "if")
+                ]
+                stack.append(_frame(indent, None, dict(stack[-1]["variables"]),
+                                    kept))
                 i += 1
                 continue
 
@@ -812,8 +848,12 @@ def render_report(coverage):
         "update/destroy, honoring `only:`, `except:`, `path:`, `controller:`, "
         "and nesting) and `%w[...].each` context loops, which are expanded for "
         "every value.")
-    add("- Interpolations built by conditional expressions or other runtime "
-        "values are left as `{}` and cannot match concrete Rust paths.")
+    add("- Conditional context prefixes assigned from "
+        "`var == \"literal\" ? var : \"...\"` are evaluated per loop binding, "
+        "and `if`/`unless var == \"literal\"` guards filter bindings; this "
+        "expands the `outcome_groups_api` routes to `courses/...`, "
+        "`accounts/...`, and `global/...`. Other runtime interpolations are "
+        "left as `{}` and cannot match concrete Rust paths.")
     add("- UI references are `/api/v1/...` string literals in `ui/`; runtime-built "
         "paths and hard-coded ids that cannot be normalized are missed.")
     add("- Rust paths are matched by `(verb, normalized path)`; axum's "

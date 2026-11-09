@@ -85,6 +85,11 @@
       "pct": 100.0,
       "total": 1
     },
+    "outcome_groups_api": {
+      "implemented": 3,
+      "pct": 7.5,
+      "total": 40
+    },
     "quizzes/quiz_submissions_api": {
       "implemented": 1,
       "pct": 14.3,
@@ -587,6 +592,30 @@
       "verb": "GET"
     },
     {
+      "action": "index",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups",
+      "path": "/api/v1/courses/:course_id/outcome_groups",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "outcomes",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups/{}/outcomes",
+      "path": "/api/v1/courses/:course_id/outcome_groups/:id/outcomes",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "link",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups/{}/outcomes",
+      "path": "/api/v1/courses/:course_id/outcome_groups/:id/outcomes",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
       "action": "context_index",
       "controller": "grading_standards_api",
       "normalized_path": "courses/{}/grading_standards",
@@ -628,7 +657,7 @@
     }
   ],
   "summary": {
-    "canvas_api_routes": 1377,
+    "canvas_api_routes": 1403,
     "canvas_controllers": 222,
     "canvas_models": 688,
     "erb_views": 475,
@@ -639,23 +668,23 @@
     "graphql_mutations_implemented": 0,
     "graphql_types": 170,
     "graphql_types_implemented": 0,
-    "implemented_rest_pct": 4.6,
-    "implemented_rest_routes": 63,
+    "implemented_rest_pct": 4.7,
+    "implemented_rest_routes": 66,
     "js_env_call_sites": 490,
     "js_env_files": 124,
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
-    "star_extras": 68,
+    "star_extras": 65,
     "star_route_calls": 127,
     "star_route_registrations": 130,
     "star_tables": 36,
     "star_unparsed_calls": 0,
     "ui_feature_dirs": 232,
     "ui_feature_dirs_implemented": 0,
-    "ui_referenced_implemented": 45,
+    "ui_referenced_implemented": 46,
     "ui_referenced_pct": 9.1,
-    "ui_referenced_routes": 493
+    "ui_referenced_routes": 503
   },
   "unmatched_star_routes": [
     {
@@ -816,27 +845,6 @@
       "crate": "star-outcomes",
       "normalized_path": "courses/{}/outcome_groups",
       "path": "/courses/{courseId}/outcome_groups",
-      "source": "crates/star-outcomes/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-outcomes",
-      "normalized_path": "courses/{}/outcome_groups",
-      "path": "/courses/{courseId}/outcome_groups",
-      "source": "crates/star-outcomes/src/lib.rs",
-      "verb": "POST"
-    },
-    {
-      "crate": "star-outcomes",
-      "normalized_path": "courses/{}/outcome_groups/{}/outcomes",
-      "path": "/courses/{courseId}/outcome_groups/{groupId}/outcomes",
-      "source": "crates/star-outcomes/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-outcomes",
-      "normalized_path": "courses/{}/outcome_groups/{}/outcomes",
-      "path": "/courses/{courseId}/outcome_groups/{groupId}/outcomes",
       "source": "crates/star-outcomes/src/lib.rs",
       "verb": "POST"
     },

@@ -1,6 +1,6 @@
 {
   "counts": {
-    "api_routes": 1377,
+    "api_routes": 1403,
     "controllers": 222,
     "erb_views": 475,
     "graphql_files": 390,
@@ -7539,112 +7539,320 @@
     {
       "action": "index",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/outcome_groups",
-      "path": "/api/v1/#{prefix}/outcome_groups",
+      "normalized_path": "accounts/{}/outcome_groups",
+      "path": "/api/v1/accounts/:account_id/outcome_groups",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups",
+      "path": "/api/v1/courses/:course_id/outcome_groups",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "link_index",
+      "controller": "outcome_groups_api",
+      "normalized_path": "accounts/{}/outcome_group_links",
+      "path": "/api/v1/accounts/:account_id/outcome_group_links",
       "ui_referenced": false,
       "verb": "GET"
     },
     {
       "action": "link_index",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/outcome_group_links",
-      "path": "/api/v1/#{prefix}/outcome_group_links",
+      "normalized_path": "courses/{}/outcome_group_links",
+      "path": "/api/v1/courses/:course_id/outcome_group_links",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "redirect",
+      "controller": "outcome_groups_api",
+      "normalized_path": "global/root_outcome_group",
+      "path": "/api/v1/global/root_outcome_group",
       "ui_referenced": false,
       "verb": "GET"
     },
     {
       "action": "redirect",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/root_outcome_group",
-      "path": "/api/v1/#{prefix}/root_outcome_group",
+      "normalized_path": "accounts/{}/root_outcome_group",
+      "path": "/api/v1/accounts/:account_id/root_outcome_group",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "redirect",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/root_outcome_group",
+      "path": "/api/v1/courses/:course_id/root_outcome_group",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "account_chain",
+      "controller": "outcome_groups_api",
+      "normalized_path": "global/outcome_groups/account_chain",
+      "path": "/api/v1/global/outcome_groups/account_chain",
       "ui_referenced": false,
       "verb": "GET"
     },
     {
       "action": "account_chain",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/outcome_groups/account_chain",
-      "path": "/api/v1/#{prefix}/outcome_groups/account_chain",
+      "normalized_path": "accounts/{}/outcome_groups/account_chain",
+      "path": "/api/v1/accounts/:account_id/outcome_groups/account_chain",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "account_chain",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups/account_chain",
+      "path": "/api/v1/courses/:course_id/outcome_groups/account_chain",
       "ui_referenced": false,
       "verb": "GET"
     },
     {
       "action": "show",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/outcome_groups/{}",
-      "path": "/api/v1/#{prefix}/outcome_groups/:id",
+      "normalized_path": "global/outcome_groups/{}",
+      "path": "/api/v1/global/outcome_groups/:id",
       "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "outcome_groups_api",
+      "normalized_path": "accounts/{}/outcome_groups/{}",
+      "path": "/api/v1/accounts/:account_id/outcome_groups/:id",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups/{}",
+      "path": "/api/v1/courses/:course_id/outcome_groups/:id",
+      "ui_referenced": true,
       "verb": "GET"
     },
     {
       "action": "update",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/outcome_groups/{}",
-      "path": "/api/v1/#{prefix}/outcome_groups/:id",
+      "normalized_path": "global/outcome_groups/{}",
+      "path": "/api/v1/global/outcome_groups/:id",
       "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "update",
+      "controller": "outcome_groups_api",
+      "normalized_path": "accounts/{}/outcome_groups/{}",
+      "path": "/api/v1/accounts/:account_id/outcome_groups/:id",
+      "ui_referenced": true,
+      "verb": "PUT"
+    },
+    {
+      "action": "update",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups/{}",
+      "path": "/api/v1/courses/:course_id/outcome_groups/:id",
+      "ui_referenced": true,
       "verb": "PUT"
     },
     {
       "action": "destroy",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/outcome_groups/{}",
-      "path": "/api/v1/#{prefix}/outcome_groups/:id",
+      "normalized_path": "global/outcome_groups/{}",
+      "path": "/api/v1/global/outcome_groups/:id",
       "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "destroy",
+      "controller": "outcome_groups_api",
+      "normalized_path": "accounts/{}/outcome_groups/{}",
+      "path": "/api/v1/accounts/:account_id/outcome_groups/:id",
+      "ui_referenced": true,
+      "verb": "DELETE"
+    },
+    {
+      "action": "destroy",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups/{}",
+      "path": "/api/v1/courses/:course_id/outcome_groups/:id",
+      "ui_referenced": true,
       "verb": "DELETE"
     },
     {
       "action": "outcomes",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/outcome_groups/{}/outcomes",
-      "path": "/api/v1/#{prefix}/outcome_groups/:id/outcomes",
+      "normalized_path": "global/outcome_groups/{}/outcomes",
+      "path": "/api/v1/global/outcome_groups/:id/outcomes",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "outcomes",
+      "controller": "outcome_groups_api",
+      "normalized_path": "accounts/{}/outcome_groups/{}/outcomes",
+      "path": "/api/v1/accounts/:account_id/outcome_groups/:id/outcomes",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "outcomes",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups/{}/outcomes",
+      "path": "/api/v1/courses/:course_id/outcome_groups/:id/outcomes",
       "ui_referenced": false,
       "verb": "GET"
     },
     {
       "action": "link",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/outcome_groups/{}/outcomes",
-      "path": "/api/v1/#{prefix}/outcome_groups/:id/outcomes",
+      "normalized_path": "global/outcome_groups/{}/outcomes",
+      "path": "/api/v1/global/outcome_groups/:id/outcomes",
       "ui_referenced": false,
       "verb": "POST"
     },
     {
       "action": "link",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/outcome_groups/{}/outcomes/{}",
-      "path": "/api/v1/#{prefix}/outcome_groups/:id/outcomes/:outcome_id",
+      "normalized_path": "accounts/{}/outcome_groups/{}/outcomes",
+      "path": "/api/v1/accounts/:account_id/outcome_groups/:id/outcomes",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "link",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups/{}/outcomes",
+      "path": "/api/v1/courses/:course_id/outcome_groups/:id/outcomes",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "link",
+      "controller": "outcome_groups_api",
+      "normalized_path": "global/outcome_groups/{}/outcomes/{}",
+      "path": "/api/v1/global/outcome_groups/:id/outcomes/:outcome_id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "link",
+      "controller": "outcome_groups_api",
+      "normalized_path": "accounts/{}/outcome_groups/{}/outcomes/{}",
+      "path": "/api/v1/accounts/:account_id/outcome_groups/:id/outcomes/:outcome_id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "link",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups/{}/outcomes/{}",
+      "path": "/api/v1/courses/:course_id/outcome_groups/:id/outcomes/:outcome_id",
       "ui_referenced": false,
       "verb": "PUT"
     },
     {
       "action": "unlink",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/outcome_groups/{}/outcomes/{}",
-      "path": "/api/v1/#{prefix}/outcome_groups/:id/outcomes/:outcome_id",
+      "normalized_path": "global/outcome_groups/{}/outcomes/{}",
+      "path": "/api/v1/global/outcome_groups/:id/outcomes/:outcome_id",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "unlink",
+      "controller": "outcome_groups_api",
+      "normalized_path": "accounts/{}/outcome_groups/{}/outcomes/{}",
+      "path": "/api/v1/accounts/:account_id/outcome_groups/:id/outcomes/:outcome_id",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "unlink",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups/{}/outcomes/{}",
+      "path": "/api/v1/courses/:course_id/outcome_groups/:id/outcomes/:outcome_id",
       "ui_referenced": false,
       "verb": "DELETE"
     },
     {
       "action": "subgroups",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/outcome_groups/{}/subgroups",
-      "path": "/api/v1/#{prefix}/outcome_groups/:id/subgroups",
+      "normalized_path": "global/outcome_groups/{}/subgroups",
+      "path": "/api/v1/global/outcome_groups/:id/subgroups",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "subgroups",
+      "controller": "outcome_groups_api",
+      "normalized_path": "accounts/{}/outcome_groups/{}/subgroups",
+      "path": "/api/v1/accounts/:account_id/outcome_groups/:id/subgroups",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "subgroups",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups/{}/subgroups",
+      "path": "/api/v1/courses/:course_id/outcome_groups/:id/subgroups",
       "ui_referenced": false,
       "verb": "GET"
     },
     {
       "action": "create",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/outcome_groups/{}/subgroups",
-      "path": "/api/v1/#{prefix}/outcome_groups/:id/subgroups",
+      "normalized_path": "global/outcome_groups/{}/subgroups",
+      "path": "/api/v1/global/outcome_groups/:id/subgroups",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "create",
+      "controller": "outcome_groups_api",
+      "normalized_path": "accounts/{}/outcome_groups/{}/subgroups",
+      "path": "/api/v1/accounts/:account_id/outcome_groups/:id/subgroups",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "create",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups/{}/subgroups",
+      "path": "/api/v1/courses/:course_id/outcome_groups/:id/subgroups",
       "ui_referenced": false,
       "verb": "POST"
     },
     {
       "action": "import",
       "controller": "outcome_groups_api",
-      "normalized_path": "{}/outcome_groups/{}/import",
-      "path": "/api/v1/#{prefix}/outcome_groups/:id/import",
+      "normalized_path": "global/outcome_groups/{}/import",
+      "path": "/api/v1/global/outcome_groups/:id/import",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "import",
+      "controller": "outcome_groups_api",
+      "normalized_path": "accounts/{}/outcome_groups/{}/import",
+      "path": "/api/v1/accounts/:account_id/outcome_groups/:id/import",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "import",
+      "controller": "outcome_groups_api",
+      "normalized_path": "courses/{}/outcome_groups/{}/import",
+      "path": "/api/v1/courses/:course_id/outcome_groups/:id/import",
       "ui_referenced": false,
       "verb": "POST"
     },

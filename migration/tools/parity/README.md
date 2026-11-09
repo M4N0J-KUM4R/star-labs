@@ -57,9 +57,12 @@ still writes `coverage.json` and `report.md` but leaves the baseline untouched.
   nesting. Context loops expand every value with `#{context}`,
   `#{context.pluralize}`, `:#{context}_id`, and `#{path_prefix}`
   substitutions (including the tuple form).
-- Interpolations that come from conditional expressions or other runtime
-  values (for example `prefix = ((context == "global") ? ...)`) are left as
-  `{}` and cannot match concrete Rust paths.
+- Conditional context prefixes of the form
+  `prefix = ((context == "global") ? context : "#{context}s/:#{context}_id")`
+  are evaluated per loop binding, and `if`/`unless context == "literal"` guards
+  filter the bindings. This expands the `outcome_groups_api` routes to
+  `courses/...`, `accounts/...`, and `global/...`. Other runtime interpolations
+  are left as `{}` and cannot match concrete Rust paths.
 - Normalization strips `/api/v1` and collapses `:param`, `{param}`, and
   interpolations to `{}`; UI literals additionally collapse numeric segments.
 - Rust routes are `.route("path", get|post|put|delete|patch(...))` calls in
