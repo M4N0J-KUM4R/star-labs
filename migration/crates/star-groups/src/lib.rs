@@ -202,7 +202,7 @@ async fn create_group(
     }
 
     // Verify course exists
-    let course_exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+    let course_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
         .bind(course_id)
         .fetch_optional(&state.db)
         .await?;
@@ -259,7 +259,7 @@ async fn list_groups(
     auth: AuthUser,
 ) -> Result<Json<Vec<Group>>, ApiError> {
     // Verify course exists
-    let course_exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+    let course_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
         .bind(course_id)
         .fetch_optional(&state.db)
         .await?;
@@ -270,7 +270,7 @@ async fn list_groups(
 
     // Non-admin must be enrolled in the course
     if !is_admin(&auth) {
-        let enrolled: Option<(i64,)> = sqlx::query_as(
+        let enrolled: Option<(i32,)> = sqlx::query_as(
             "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1",
         )
         .bind(auth.id)
@@ -321,7 +321,7 @@ async fn get_group(
     // Check access: if the group belongs to a course, user must be enrolled or admin
     if let Some(course_id) = group.course_id {
         if !is_admin(&auth) {
-            let enrolled: Option<(i64,)> = sqlx::query_as(
+            let enrolled: Option<(i32,)> = sqlx::query_as(
                 "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1",
             )
             .bind(auth.id)
@@ -411,7 +411,7 @@ async fn delete_group(
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
     // Verify group exists
-    let existing: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM groups WHERE id = $1")
+    let existing: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM groups WHERE id = $1")
         .bind(group_id)
         .fetch_optional(&state.db)
         .await?;
@@ -462,7 +462,7 @@ async fn create_membership(
     }
 
     // Verify user exists
-    let user_exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM users WHERE id = $1")
+    let user_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM users WHERE id = $1")
         .bind(payload.user_id)
         .fetch_optional(&state.db)
         .await?;
@@ -521,7 +521,7 @@ async fn list_memberships(
     auth: AuthUser,
 ) -> Result<Json<Vec<MembershipWithUser>>, ApiError> {
     // Verify group exists
-    let group_exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM groups WHERE id = $1")
+    let group_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM groups WHERE id = $1")
         .bind(group_id)
         .fetch_optional(&state.db)
         .await?;
@@ -558,7 +558,7 @@ async fn delete_membership(
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
     // Verify group exists
-    let group_exists: Option<(i64,)> = sqlx::query_as("SELECT 1 FROM groups WHERE id = $1")
+    let group_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM groups WHERE id = $1")
         .bind(group_id)
         .fetch_optional(&state.db)
         .await?;
@@ -572,7 +572,7 @@ async fn delete_membership(
     }
 
     // Verify membership exists and belongs to this group
-    let membership_exists: Option<(i64,)> =
+    let membership_exists: Option<(i32,)> =
         sqlx::query_as("SELECT 1 FROM group_memberships WHERE id = $1 AND group_id = $2")
             .bind(membership_id)
             .bind(group_id)
