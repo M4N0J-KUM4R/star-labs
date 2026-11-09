@@ -256,7 +256,7 @@ fn missing_jwt_secret_fails_fast_nonzero_exit() {
     };
 
     let port = free_port();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_star-http"))
+    let child = Command::new(env!("CARGO_BIN_EXE_star-http"))
         .env("DATABASE_URL", db_url)
         .env_remove("STAR_JWT_SECRET")
         .env("STAR_PORT", port.to_string())

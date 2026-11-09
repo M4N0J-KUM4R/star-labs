@@ -337,7 +337,7 @@ async fn create_assignment_as_teacher_returns_201_and_persists() {
 
     let resp = server
         .post(&format!("/courses/{course}/assignments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({
             "title": "Essay One",
             "description": "Write 500 words",
@@ -389,7 +389,7 @@ async fn create_assignment_as_admin_without_enrollment_succeeds() {
     // Admins bypass the enrollment check entirely.
     let resp = server
         .post(&format!("/courses/{course}/assignments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "title": "Admin Made", "points_possible": 5.0 }))
         .await;
 
@@ -416,7 +416,7 @@ async fn create_assignment_as_enrolled_student_is_403() {
 
     let resp = server
         .post(&format!("/courses/{course}/assignments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "title": "Sneaky", "points_possible": 1.0 }))
         .await;
 
@@ -445,7 +445,7 @@ async fn create_assignment_as_unenrolled_teacher_is_403() {
     // Teacher exists globally but has no enrollment in this course.
     let resp = server
         .post(&format!("/courses/{course}/assignments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "title": "Orphan", "points_possible": 1.0 }))
         .await;
 
@@ -473,7 +473,7 @@ async fn create_assignment_blank_title_is_422() {
     for title in ["   ", ""] {
         let resp = server
             .post(&format!("/courses/{course}/assignments"))
-            .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
             .json(&json!({ "title": title, "points_possible": 1.0 }))
             .await;
         assert_eq!(resp.status_code(), 422, "title {title:?}: {}", resp.text());
@@ -498,7 +498,7 @@ async fn create_assignment_missing_title_field_is_422() {
     // The Json extractor rejects the payload before the handler runs.
     let resp = server
         .post(&format!("/courses/{course}/assignments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "points_possible": 10.0 }))
         .await;
 
@@ -521,7 +521,7 @@ async fn create_assignment_negative_points_is_422() {
 
     let resp = server
         .post(&format!("/courses/{course}/assignments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "title": "Negative", "points_possible": -0.5 }))
         .await;
 
@@ -549,7 +549,7 @@ async fn create_assignment_defaults_points_to_zero_and_omits_nulls() {
 
     let resp = server
         .post(&format!("/courses/{course}/assignments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "title": "Bare" }))
         .await;
 
@@ -640,10 +640,7 @@ async fn list_assignments_as_unenrolled_student_is_403() {
 
     let resp = server
         .get(&format!("/courses/{}/assignments", f.course))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            &auth(outsider, "student"),
-        )
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
 
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -664,14 +661,14 @@ async fn list_missing_course_is_403_for_student_and_empty_for_admin() {
     // No 404 for a missing course: non-enrolled users are simply Forbidden.
     let resp = server
         .get("/courses/999999999/assignments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
     // Admins bypass the check and get an empty list.
     let resp = server
         .get("/courses/999999999/assignments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     assert_eq!(resp.json::<Value>().as_array().unwrap().len(), 0);
@@ -719,7 +716,7 @@ async fn get_assignment_missing_is_404() {
 
     let resp = server
         .get("/assignments/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -739,10 +736,7 @@ async fn get_assignment_as_unenrolled_student_is_403() {
 
     let resp = server
         .get(&format!("/assignments/{}", f.assignment))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            &auth(outsider, "student"),
-        )
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
 
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -767,7 +761,7 @@ async fn update_assignment_merges_partial_payload() {
 
     let created: Value = server
         .post(&format!("/courses/{course}/assignments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({
             "title": "Original Title",
             "description": "Original desc",
@@ -781,7 +775,7 @@ async fn update_assignment_merges_partial_payload() {
     // Update only the title: everything else must be preserved.
     let resp = server
         .put(&format!("/assignments/{assignment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "title": "Renamed" }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -794,7 +788,7 @@ async fn update_assignment_merges_partial_payload() {
     // Update points and description: title and due_at must be preserved.
     let resp = server
         .put(&format!("/assignments/{assignment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "points_possible": 40.5, "description": "Updated desc" }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -808,7 +802,7 @@ async fn update_assignment_merges_partial_payload() {
     // description cannot be cleared through this endpoint.
     let resp = server
         .put(&format!("/assignments/{assignment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "description": null }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -839,7 +833,7 @@ async fn update_assignment_missing_is_404() {
 
     let resp = server
         .put("/assignments/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "title": "Ghost" }))
         .await;
 
@@ -861,7 +855,7 @@ async fn update_assignment_as_student_is_403_and_unchanged() {
         .put(&format!("/assignments/{}", f.assignment))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.student, "student"),
+            auth(f.student, "student"),
         )
         .json(&json!({ "title": "Hacked", "points_possible": 100.0 }))
         .await;
@@ -897,7 +891,7 @@ async fn update_assignment_as_other_course_teacher_is_403() {
         .put(&format!("/assignments/{}", f.assignment))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(other_teacher, "teacher"),
+            auth(other_teacher, "teacher"),
         )
         .json(&json!({ "title": "Not Mine" }))
         .await;
@@ -937,7 +931,7 @@ async fn delete_assignment_as_teacher_is_204_and_cascades_submissions() {
         .delete(&format!("/assignments/{}", f.assignment))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.teacher, "teacher"),
+            auth(f.teacher, "teacher"),
         )
         .await;
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
@@ -957,7 +951,7 @@ async fn delete_assignment_as_teacher_is_204_and_cascades_submissions() {
         .get(&format!("/assignments/{}", f.assignment))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.teacher, "teacher"),
+            auth(f.teacher, "teacher"),
         )
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -976,7 +970,7 @@ async fn delete_assignment_missing_is_404() {
 
     let resp = server
         .delete("/assignments/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
 
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -997,7 +991,7 @@ async fn delete_assignment_as_student_is_403_and_row_remains() {
         .delete(&format!("/assignments/{}", f.assignment))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.student, "student"),
+            auth(f.student, "student"),
         )
         .await;
 
@@ -1028,7 +1022,7 @@ async fn student_submit_returns_201_and_persists() {
         .post(&format!("/assignments/{}/submissions", f.assignment))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.student, "student"),
+            auth(f.student, "student"),
         )
         .json(&json!({ "body": "My answer" }))
         .await;
@@ -1127,7 +1121,7 @@ async fn submit_to_missing_assignment_is_404() {
 
     let resp = server
         .post("/assignments/999999999/submissions")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "body": "answer" }))
         .await;
 
@@ -1148,10 +1142,7 @@ async fn submit_as_unenrolled_student_is_403() {
 
     let resp = server
         .post(&format!("/assignments/{}/submissions", f.assignment))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            &auth(outsider, "student"),
-        )
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .json(&json!({ "body": "sneaky answer" }))
         .await;
 
@@ -1181,7 +1172,7 @@ async fn submit_as_enrolled_teacher_is_allowed() {
         .post(&format!("/assignments/{}/submissions", f.assignment))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.teacher, "teacher"),
+            auth(f.teacher, "teacher"),
         )
         .json(&json!({ "body": "teacher demo submission" }))
         .await;
@@ -1214,7 +1205,7 @@ async fn submit_after_due_date_is_accepted() {
 
     let resp = server
         .post(&format!("/courses/{course}/assignments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({
             "title": "Past Due",
             "points_possible": 10.0,
@@ -1227,7 +1218,7 @@ async fn submit_after_due_date_is_accepted() {
 
     let resp = server
         .post(&format!("/assignments/{assignment_id}/submissions"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "body": "better late than never" }))
         .await;
 
@@ -1303,7 +1294,7 @@ async fn my_submission_without_submission_is_404() {
         .get(&format!("/assignments/{}/submissions/me", f.assignment))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.student, "student"),
+            auth(f.student, "student"),
         )
         .await;
 
@@ -1325,10 +1316,7 @@ async fn my_submission_as_unenrolled_student_is_403() {
 
     let resp = server
         .get(&format!("/assignments/{}/submissions/me", f.assignment))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            &auth(outsider, "student"),
-        )
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
 
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -1347,7 +1335,7 @@ async fn my_submission_missing_assignment_is_404() {
 
     let resp = server
         .get("/assignments/999999999/submissions/me")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
 
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -1425,7 +1413,7 @@ async fn list_submissions_as_student_is_403() {
         .get(&format!("/assignments/{}/submissions", f.assignment))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.student, "student"),
+            auth(f.student, "student"),
         )
         .await;
 
@@ -1445,7 +1433,7 @@ async fn list_submissions_missing_assignment_is_404() {
 
     let resp = server
         .get("/assignments/999999999/submissions")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -1551,7 +1539,7 @@ async fn grade_as_student_is_403_and_score_unchanged() {
         .put(&format!("/submissions/{submission_id}/grade"))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.student, "student"),
+            auth(f.student, "student"),
         )
         .json(&json!({ "score": 100.0 }))
         .await;
@@ -1585,7 +1573,7 @@ async fn grade_as_other_course_teacher_is_403() {
         .put(&format!("/submissions/{submission_id}/grade"))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(other_teacher, "teacher"),
+            auth(other_teacher, "teacher"),
         )
         .json(&json!({ "score": 100.0 }))
         .await;
@@ -1631,7 +1619,7 @@ async fn grade_missing_submission_is_404() {
 
     let resp = server
         .put("/submissions/999999999/grade")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "score": 1.0 }))
         .await;
 
@@ -1791,7 +1779,7 @@ async fn gradebook_points_based_current_grade() {
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let admin_view = server
         .get(&format!("/courses/{course}/gradebook"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(admin_view.status_code(), 200, "body: {}", admin_view.text());
 
@@ -1812,7 +1800,7 @@ async fn gradebook_requires_teacher_or_admin() {
         .get(&format!("/courses/{}/gradebook", f.course))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.student, "student"),
+            auth(f.student, "student"),
         )
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -1823,7 +1811,7 @@ async fn gradebook_requires_teacher_or_admin() {
         .get(&format!("/courses/{}/gradebook", f.course))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(other_teacher, "teacher"),
+            auth(other_teacher, "teacher"),
         )
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());

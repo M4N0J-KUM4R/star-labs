@@ -263,7 +263,7 @@ async fn list_as_non_admin_is_403() {
     for (id, role) in [(teacher, "teacher"), (student, "student")] {
         let resp = server
             .get("/users")
-            .add_header(axum::http::header::AUTHORIZATION, &auth(id, role))
+            .add_header(axum::http::header::AUTHORIZATION, auth(id, role))
             .await;
         assert_eq!(
             resp.status_code(),
@@ -290,7 +290,7 @@ async fn list_uses_db_role_not_token_claim() {
     // account.
     let resp = server
         .get("/users")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "admin"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -372,7 +372,7 @@ async fn self_returns_own_profile_for_each_role() {
         let id = seed_user(&pool, &prefix, name, role).await;
         let resp = server
             .get("/users/self")
-            .add_header(axum::http::header::AUTHORIZATION, &auth(id, role))
+            .add_header(axum::http::header::AUTHORIZATION, auth(id, role))
             .await;
         assert_eq!(resp.status_code(), 200, "{role}: {}", resp.text());
         let body: Value = resp.json();
@@ -403,7 +403,7 @@ async fn get_user_as_admin_returns_full_record() {
 
     let resp = server
         .get(&format!("/users/{dana}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
@@ -427,7 +427,7 @@ async fn get_user_as_self_returns_own_record() {
 
     let resp = server
         .get(&format!("/users/{student}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
@@ -453,7 +453,7 @@ async fn get_user_as_other_non_admin_is_403() {
     for (id, role) in [(other, "student"), (teacher, "teacher")] {
         let resp = server
             .get(&format!("/users/{student}"))
-            .add_header(axum::http::header::AUTHORIZATION, &auth(id, role))
+            .add_header(axum::http::header::AUTHORIZATION, auth(id, role))
             .await;
         assert_eq!(
             resp.status_code(),
@@ -478,7 +478,7 @@ async fn get_missing_user_is_404_for_admin() {
 
     let resp = server
         .get("/users/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
@@ -486,7 +486,7 @@ async fn get_missing_user_is_404_for_admin() {
     // probing for a missing id gets 403, not 404.
     let resp = server
         .get("/users/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -508,7 +508,7 @@ async fn update_self_name_persists_and_echoes() {
 
     let resp = server
         .put(&format!("/users/{student}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "name": "Julia Renamed" }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -544,7 +544,7 @@ async fn update_self_email_changes_email() {
 
     let resp = server
         .put(&format!("/users/{student}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "email": new_email }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -568,7 +568,7 @@ async fn update_self_password_rehashes_credentials() {
 
     let resp = server
         .put(&format!("/users/{student}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "password": "new-strong-pw-42" }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -605,7 +605,7 @@ async fn update_with_empty_body_keeps_values() {
     // valid no-op update.
     let resp = server
         .put(&format!("/users/{student}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({}))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -635,7 +635,7 @@ async fn admin_can_update_another_user() {
 
     let resp = server
         .put(&format!("/users/{student}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "name": "Admin Set Name" }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -665,7 +665,7 @@ async fn non_admin_cannot_update_another_user() {
     for (actor, role) in [(teacher, "teacher"), (other, "student")] {
         let resp = server
             .put(&format!("/users/{student}"))
-            .add_header(axum::http::header::AUTHORIZATION, &auth(actor, role))
+            .add_header(axum::http::header::AUTHORIZATION, auth(actor, role))
             .json(&json!({ "name": "Hacked Name" }))
             .await;
         assert_eq!(
@@ -698,7 +698,7 @@ async fn update_to_taken_email_is_409() {
 
     let resp = server
         .put(&format!("/users/{taker}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(taker, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(taker, "student"))
         .json(&json!({ "email": owner_email }))
         .await;
     assert_eq!(resp.status_code(), 409, "body: {}", resp.text());
@@ -726,7 +726,7 @@ async fn update_missing_user_is_404() {
 
     let resp = server
         .put("/users/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "name": "Ghost Name" }))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -750,7 +750,7 @@ async fn admin_delete_user_removes_row_and_invalidates_token() {
 
     let resp = server
         .delete(&format!("/users/{victim}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
 
@@ -760,7 +760,7 @@ async fn admin_delete_user_removes_row_and_invalidates_token() {
     // A follow-up GET by the admin returns 404.
     let resp = server
         .get(&format!("/users/{victim}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
@@ -768,7 +768,7 @@ async fn admin_delete_user_removes_row_and_invalidates_token() {
     // tokens whose subject no longer exists.
     let resp = server
         .get("/users/self")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(victim, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(victim, "student"))
         .await;
     assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
 
@@ -796,7 +796,7 @@ async fn delete_as_non_admin_is_403() {
     // Deletion is admin-only — even for a user's own account.
     let resp = server
         .delete(&format!("/users/{student}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(
         resp.status_code(),
@@ -808,7 +808,7 @@ async fn delete_as_non_admin_is_403() {
     // A teacher cannot delete someone else either.
     let resp = server
         .delete(&format!("/users/{student}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -829,7 +829,7 @@ async fn delete_missing_user_is_404() {
 
     let resp = server
         .delete("/users/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 

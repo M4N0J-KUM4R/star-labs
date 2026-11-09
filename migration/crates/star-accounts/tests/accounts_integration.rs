@@ -335,7 +335,7 @@ async fn list_accounts_pagination_clamps_out_of_range_params() {
     // per_page is clamped to 100, page floors at 1; both echoed back.
     let resp = server
         .get("/accounts?per_page=500&page=0")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
@@ -350,7 +350,7 @@ async fn list_accounts_pagination_clamps_out_of_range_params() {
     // A tiny page really returns a single row.
     let resp = server
         .get("/accounts?per_page=1&page=1")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
@@ -372,7 +372,7 @@ async fn list_accounts_as_non_admin_is_403() {
     for (user, role) in [(teacher, "teacher"), (student, "student")] {
         let resp = server
             .get("/accounts")
-            .add_header(axum::http::header::AUTHORIZATION, &auth(user, role))
+            .add_header(axum::http::header::AUTHORIZATION, auth(user, role))
             .await;
         assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
     }
@@ -381,7 +381,7 @@ async fn list_accounts_as_non_admin_is_403() {
     // says 'admin' must still be rejected when the user is a teacher.
     let forged_claim = server
         .get("/accounts")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "admin"))
         .await;
     assert_eq!(
         forged_claim.status_code(),
@@ -413,7 +413,7 @@ async fn list_accounts_includes_non_active_workflow_state() {
 
     let resp = server
         .get(&format!("/accounts/{deleted}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
@@ -439,7 +439,7 @@ async fn get_account_as_admin_returns_full_fields() {
 
     let resp = server
         .get(&format!("/accounts/{parent}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
@@ -455,7 +455,7 @@ async fn get_account_as_admin_returns_full_fields() {
 
     let resp = server
         .get(&format!("/accounts/{child}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
@@ -476,7 +476,7 @@ async fn get_account_missing_is_404_for_admin() {
 
     let resp = server
         .get("/accounts/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
@@ -497,7 +497,7 @@ async fn get_account_as_plain_teacher_is_403() {
     for (user, role) in [(teacher, "teacher"), (student, "student")] {
         let resp = server
             .get(&format!("/accounts/{account}"))
-            .add_header(axum::http::header::AUTHORIZATION, &auth(user, role))
+            .add_header(axum::http::header::AUTHORIZATION, auth(user, role))
             .await;
         assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
     }
@@ -543,7 +543,7 @@ async fn get_account_as_account_admin_hits_sqlx_type_bug() {
     for account_id in [parent, child, grandchild] {
         let resp = server
             .get(&format!("/accounts/{account_id}"))
-            .add_header(axum::http::header::AUTHORIZATION, &auth(viewer, "teacher"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(viewer, "teacher"))
             .await;
         assert_eq!(
             resp.status_code(),
@@ -566,14 +566,14 @@ async fn get_account_as_account_admin_hits_sqlx_type_bug() {
     ] {
         let resp = server
             .get(&path)
-            .add_header(axum::http::header::AUTHORIZATION, &auth(viewer, "teacher"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(viewer, "teacher"))
             .await;
         assert_eq!(resp.status_code(), 403, "path {path}: {}", resp.text());
     }
 
     let resp = server
         .get("/accounts")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(viewer, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(viewer, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -582,7 +582,7 @@ async fn get_account_as_account_admin_hits_sqlx_type_bug() {
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let resp = server
         .get("/accounts/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
@@ -613,7 +613,7 @@ async fn get_account_as_account_admin_of_child_cannot_see_parent() {
 
     let resp = server
         .get(&format!("/accounts/{child}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(viewer, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(viewer, "teacher"))
         .await;
     assert_eq!(
         resp.status_code(),
@@ -624,7 +624,7 @@ async fn get_account_as_account_admin_of_child_cannot_see_parent() {
 
     let resp = server
         .get(&format!("/accounts/{parent}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(viewer, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(viewer, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -666,21 +666,21 @@ async fn get_account_parent_chain_walk_stops_after_ten_hops() {
     // Inside the depth budget: the walk reaches the granted row -> 500 (bug).
     let resp = server
         .get(&format!("/accounts/{}", chain[9]))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(viewer, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(viewer, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 500, "body: {}", resp.text());
 
     // One hop beyond the budget: the walk gives up -> 403.
     let resp = server
         .get(&format!("/accounts/{}", chain[10]))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(viewer, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(viewer, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
     // The global admin is never affected by the depth cap.
     let resp = server
         .get(&format!("/accounts/{}", chain[10]))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
 
@@ -711,7 +711,7 @@ async fn create_sub_account_with_existing_parent_hits_sqlx_type_bug() {
 
     let resp = server
         .post(&format!("/accounts/{parent}/sub_accounts"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "name": name }))
         .await;
     assert_eq!(resp.status_code(), 500, "body: {}", resp.text());
@@ -742,7 +742,7 @@ async fn create_sub_account_missing_parent_is_404() {
 
     let resp = server
         .post("/accounts/999999999/sub_accounts")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "name": format!("{prefix}-Orphan") }))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -772,7 +772,7 @@ async fn create_sub_account_blank_name_check_is_shadowed_by_type_bug() {
     for blank in ["", "   "] {
         let resp = server
             .post(&format!("/accounts/{parent}/sub_accounts"))
-            .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
             .json(&json!({ "name": blank }))
             .await;
         assert_eq!(resp.status_code(), 500, "name {blank:?}: {}", resp.text());
@@ -801,7 +801,7 @@ async fn create_sub_account_as_non_admin_is_403() {
     for (user, role) in [(teacher, "teacher"), (student, "student")] {
         let resp = server
             .post(&format!("/accounts/{parent}/sub_accounts"))
-            .add_header(axum::http::header::AUTHORIZATION, &auth(user, role))
+            .add_header(axum::http::header::AUTHORIZATION, auth(user, role))
             .json(&json!({ "name": format!("{prefix}-Forbidden") }))
             .await;
         assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -850,7 +850,7 @@ async fn list_account_courses_includes_subaccount_courses() {
 
     let resp = server
         .get(&format!("/accounts/{account}/courses"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
@@ -894,7 +894,7 @@ async fn list_account_courses_includes_subaccount_courses() {
     // Pagination over the account's own courses.
     let resp = server
         .get(&format!("/accounts/{account}/courses?per_page=1&page=2"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
@@ -919,7 +919,7 @@ async fn list_account_courses_missing_account_returns_empty_200() {
 
     let resp = server
         .get("/accounts/999999999/courses")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
@@ -951,7 +951,7 @@ async fn list_account_courses_as_non_admin_is_403() {
 
     let resp = server
         .get(&format!("/accounts/{account}/courses"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -1010,7 +1010,7 @@ async fn list_account_users_with_existing_account_hits_sqlx_type_bug() {
 
     let resp = server
         .get(&format!("/accounts/{account}/users"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 500, "body: {}", resp.text());
     assert!(
@@ -1038,7 +1038,7 @@ async fn list_account_users_missing_account_is_404() {
 
     let resp = server
         .get("/accounts/999999999/users")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
@@ -1057,7 +1057,7 @@ async fn list_account_users_as_non_admin_is_403() {
 
     let resp = server
         .get(&format!("/accounts/{account}/users"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -1101,7 +1101,7 @@ async fn grant_account_admin_with_existing_rows_hits_sqlx_type_bug() {
     ] {
         let resp = server
             .post(&format!("/accounts/{account}/users/{target}"))
-            .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
             .json(&payload)
             .await;
         assert_eq!(
@@ -1130,7 +1130,7 @@ async fn grant_account_admin_with_existing_rows_hits_sqlx_type_bug() {
     for account_id in [account, child, sibling] {
         let resp = server
             .get(&format!("/accounts/{account_id}"))
-            .add_header(axum::http::header::AUTHORIZATION, &auth(target, "student"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(target, "student"))
             .await;
         assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
     }
@@ -1138,7 +1138,7 @@ async fn grant_account_admin_with_existing_rows_hits_sqlx_type_bug() {
     // The global admin is unaffected and can still read the account.
     let resp = server
         .get(&format!("/accounts/{account}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
 
@@ -1159,7 +1159,7 @@ async fn grant_account_admin_missing_account_or_user_is_404() {
     // trigger and the intended 404 is produced.
     let resp = server
         .post(&format!("/accounts/999999999/users/{target}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({}))
         .await;
     assert_eq!(resp.status_code(), 404, "missing account: {}", resp.text());
@@ -1170,7 +1170,7 @@ async fn grant_account_admin_missing_account_or_user_is_404() {
     let account = seed_account(&pool, &format!("{prefix}-Account"), None, "active").await;
     let resp = server
         .post(&format!("/accounts/{account}/users/999999999"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({}))
         .await;
     assert_eq!(resp.status_code(), 500, "missing user: {}", resp.text());
@@ -1212,7 +1212,7 @@ async fn grant_account_admin_as_non_admin_is_403_even_for_account_admins() {
     for (user, role) in [(account_admin, "teacher"), (student, "student")] {
         let resp = server
             .post(&format!("/accounts/{account}/users/{student}"))
-            .add_header(axum::http::header::AUTHORIZATION, &auth(user, role))
+            .add_header(axum::http::header::AUTHORIZATION, auth(user, role))
             .json(&json!({}))
             .await;
         assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
