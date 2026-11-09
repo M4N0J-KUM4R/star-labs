@@ -319,7 +319,15 @@ async fn update_quiz(
     .fetch_one(&state.db)
     .await?;
 
-    let title = payload.title.unwrap_or(current.title);
+    let title = match payload.title {
+        Some(title) => {
+            if title.trim().is_empty() {
+                return Err(ApiError::Validation("title is required".into()));
+            }
+            title
+        }
+        None => current.title,
+    };
     let description = payload.description.or(current.description);
     let quiz_type = payload.quiz_type.unwrap_or(current.quiz_type);
     if !valid_quiz_type(&quiz_type) {
@@ -410,7 +418,7 @@ async fn start_quiz(
     Path(quiz_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<(StatusCode, Json<QuizSubmission>), ApiError> {
-    // Verify quiz exists and user is enrolled
+    // Verify quiz exists and the caller is a student in its course
     let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM quizzes WHERE id = $1"#)
         .bind(quiz_id)
         .fetch_optional(&state.db)
@@ -418,7 +426,17 @@ async fn start_quiz(
 
     let (course_id,) = row.ok_or(ApiError::NotFound)?;
 
-    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+    // Canvas only lets students take quizzes: an enrollment row with
+    // role='student' is required (admins get no bypass).
+    let enrolled: Option<(i32,)> = sqlx::query_as(
+        r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'student' LIMIT 1"#,
+    )
+    .bind(auth.id)
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    if enrolled.is_none() {
         return Err(ApiError::Forbidden);
     }
 
@@ -489,7 +507,18 @@ async fn list_quiz_submissions(
     Path((course_id, quiz_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<Vec<QuizSubmissionWithUser>>, ApiError> {
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM quizzes WHERE id = $1"#)
+        .bind(quiz_id)
+        .fetch_optional(&state.db)
+        .await?;
+
+    let (quiz_course_id,) = row.ok_or(ApiError::NotFound)?;
+
+    if quiz_course_id != course_id {
+        return Err(ApiError::NotFound);
+    }
+
+    if !check_teacher_or_admin(&state.db, auth.id, quiz_course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 

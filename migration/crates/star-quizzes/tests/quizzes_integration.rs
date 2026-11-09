@@ -10,21 +10,24 @@
 //! - Uses a unique email/course prefix per run + full teardown so it is safe
 //!   to run repeatedly against a shared/dev database.
 //!
-//! Behavior pinned as actually implemented (not idealized):
+//! Behavior pinned as actually implemented:
 //! - Canvas parity quirks: quiz_type is restricted to Canvas' four values
 //!   (assignment | practice | survey | graded_survey); `published` is the
 //!   boolean workflow equivalent; DELETE is a HARD delete (Canvas soft-deletes
 //!   via workflow_state='deleted') so quiz_submissions cascade away.
-//! - POST /quizzes/{id}/start returns 409 Conflict when the user already has
-//!   a (quiz_id, user_id) submission row (UNIQUE constraint backs this up).
-//! - update (PUT) validates quiz_type but NOT the title: a blank title is
-//!   accepted on update, unlike create. An explicit JSON null cannot clear an
-//!   optional field (omitted and null are indistinguishable).
-//! - GET /courses/{courseId}/quizzes/{id}/submissions authorizes purely on
-//!   the PATH course and never checks that the quiz belongs to that course,
-//!   and never 404s on a missing quiz (returns [] for teachers/admins). That
-//!   is an authorization gap in the current implementation; pinned here and
-//!   reported rather than fixed.
+//! - POST /quizzes/{id}/start is students-only: the caller needs an enrollment
+//!   row with role='student' in the quiz's course (teachers and admins without
+//!   a student enrollment get 403). It returns 409 Conflict when the user
+//!   already has a (quiz_id, user_id) submission row (UNIQUE constraint backs
+//!   this up).
+//! - update (PUT) validates quiz_type and requires a non-blank title when one
+//!   is supplied, matching create (blank is rejected; the value is stored as
+//!   supplied). An explicit JSON
+//!   null cannot clear an optional field (omitted and null are
+//!   indistinguishable).
+//! - GET /courses/{courseId}/quizzes/{id}/submissions loads the quiz's own
+//!   course_id first: a missing quiz, or a quiz that is not in the path
+//!   course, is 404; authorization is then checked on the quiz's course.
 
 use axum_test::TestServer;
 use serde_json::{json, Value};
@@ -412,7 +415,7 @@ async fn create_quiz_validates_title_and_quiz_type() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     let token = &auth(teacher, "teacher");
 
-    // Blank titles (the handler trims) are 422 with a title error.
+    // Blank titles are 422 with a title error.
     for title in ["", "   "] {
         let resp = server
             .post(&format!("/courses/{course}/quizzes"))
@@ -736,10 +739,9 @@ async fn update_quiz_merges_partial_payload_and_publishes() {
 }
 
 #[tokio::test]
-async fn update_quiz_validates_quiz_type_and_allows_blank_title() {
-    // Pins actual behavior: PUT validates quiz_type against Canvas' four
-    // values, but unlike POST it does NOT validate the title — a blank
-    // title is accepted by the update path.
+async fn update_quiz_validates_quiz_type_and_rejects_blank_title() {
+    // PUT validates quiz_type against Canvas' four values and, like POST,
+    // requires a non-blank title when a title is supplied.
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -767,21 +769,44 @@ async fn update_quiz_validates_quiz_type_and_allows_blank_title() {
     let body: Value = resp.json();
     assert_eq!(body["quiz_type"], "graded_survey");
 
-    // Blank title is accepted on update (no trim/empty check on this path).
+    // Blank or whitespace-only titles are rejected on update.
+    for title in ["", "   "] {
+        let resp = server
+            .put(&format!("/quizzes/{}", f.quiz))
+            .add_header(axum::http::header::AUTHORIZATION, token)
+            .json(&json!({ "title": title }))
+            .await;
+        assert_eq!(resp.status_code(), 422, "title {title:?}: {}", resp.text());
+        assert!(resp.text().contains("title"), "body mentions title");
+    }
+    assert_eq!(
+        db_quiz_title(&pool, f.quiz).await,
+        Some("Fixture Quiz".to_string()),
+        "title unchanged"
+    );
+
+    // A valid title update is accepted as supplied.
     let resp = server
         .put(&format!("/quizzes/{}", f.quiz))
         .add_header(axum::http::header::AUTHORIZATION, token)
-        .json(&json!({ "title": "   " }))
+        .json(&json!({ "title": "  Renamed Quiz  " }))
         .await;
-    assert_eq!(
-        resp.status_code(),
-        200,
-        "actual behavior: blank title accepted on update: {}",
-        resp.text()
-    );
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
-    assert_eq!(body["title"], "   ");
-    assert_eq!(db_quiz_title(&pool, f.quiz).await, Some("   ".to_string()));
+    assert_eq!(body["title"], "  Renamed Quiz  ");
+    assert_eq!(
+        db_quiz_title(&pool, f.quiz).await,
+        Some("  Renamed Quiz  ".to_string())
+    );
+
+    // Other partial updates still succeed.
+    let resp = server
+        .put(&format!("/quizzes/{}", f.quiz))
+        .add_header(axum::http::header::AUTHORIZATION, token)
+        .json(&json!({ "points_possible": 25.0 }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["points_possible"].as_f64(), Some(25.0));
 
     cleanup(&pool, &prefix).await;
 }
@@ -1014,10 +1039,10 @@ async fn start_quiz_twice_is_409_conflict() {
 }
 
 #[tokio::test]
-async fn start_quiz_missing_404_unenrolled_403_teacher_enrollment_allowed() {
-    // Pins actual behavior: any enrollment row passes the enrolled-or-admin
-    // check, so an enrolled TEACHER may start a quiz too (the check filters
-    // on enrollment existence, not on the enrollment role).
+async fn start_quiz_missing_404_teacher_and_admin_403_student_201() {
+    // Start is students-only: the caller needs an enrollment row with
+    // role='student' in the quiz's course. Teachers and admins without a
+    // student enrollment are forbidden.
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -1025,6 +1050,7 @@ async fn start_quiz_missing_404_unenrolled_403_teacher_enrollment_allowed() {
 
     let f = seed_fixture(&server, &pool, &prefix, "StartAuthz").await;
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
 
     // Missing quiz is 404 (checked before authorization).
     let resp = server
@@ -1044,9 +1070,28 @@ async fn start_quiz_missing_404_unenrolled_403_teacher_enrollment_allowed() {
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
     assert_eq!(db_count_quiz_submissions(&pool, f.quiz, outsider).await, 0);
 
-    // An enrolled teacher is allowed to start.
-    let sub = api_start_quiz(&server, &auth(f.teacher, "teacher"), f.quiz).await;
-    assert_eq!(sub["user_id"], f.teacher);
+    // An enrolled teacher is forbidden: only students take quizzes.
+    let resp = server
+        .post(&format!("/quizzes/{}/start", f.quiz))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(f.teacher, "teacher"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+    assert_eq!(db_count_quiz_submissions(&pool, f.quiz, f.teacher).await, 0);
+
+    // Admins get no bypass: without a student enrollment they are 403 too.
+    let resp = server
+        .post(&format!("/quizzes/{}/start", f.quiz))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+    assert_eq!(db_count_quiz_submissions(&pool, f.quiz, admin).await, 0);
+
+    // An enrolled student still starts the quiz.
+    let sub = api_start_quiz(&server, &auth(f.student, "student"), f.quiz).await;
+    assert_eq!(sub["user_id"], f.student);
 
     cleanup(&pool, &prefix).await;
 }
@@ -1166,14 +1211,10 @@ async fn list_quiz_submissions_teacher_view_newest_first_student_403() {
 }
 
 #[tokio::test]
-async fn list_quiz_submissions_authorizes_on_path_course_only() {
-    // Pins ACTUAL behavior (authorization gap, reported not fixed): the
-    // handler checks teacher-or-admin against the PATH course_id but never
-    // validates that the quiz belongs to that course, and never 404s on a
-    // missing quiz id. So:
-    // - a teacher of an unrelated course can read another course's quiz
-    //   submissions by using their own course id in the path, and
-    // - a missing quiz yields 200 [] instead of 404.
+async fn list_quiz_submissions_404_for_missing_or_wrong_course_quiz() {
+    // The handler loads the quiz's own course_id first: a missing quiz, or a
+    // quiz that is not in the PATH course, is 404. Authorization is then
+    // checked on the quiz's course.
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -1186,41 +1227,55 @@ async fn list_quiz_submissions_authorizes_on_path_course_only() {
     let other_course = seed_course(&pool, &prefix, "OtherCourse").await;
     seed_enrollment(&pool, other_teacher, other_course, "teacher").await;
 
-    // The other course's teacher reads the quiz's submissions through their
-    // own course path — the quiz is in f.course, not other_course.
-    let listed = get_ok(
-        &server,
-        &auth(other_teacher, "teacher"),
-        &format!("/courses/{other_course}/quizzes/{}/submissions", f.quiz),
-    )
-    .await;
-    let arr = listed.as_array().expect("array response");
-    assert_eq!(arr.len(), 1, "cross-course listing succeeds: {arr:?}");
-    assert_eq!(arr[0]["quiz_id"], f.quiz);
-    assert_eq!(arr[0]["user_id"], f.student);
-    assert_eq!(arr[0]["course_id"], Value::Null, "no course leakage in row");
-
-    // Admin gets the same access.
-    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    // The other course's teacher cannot read the quiz's submissions through
+    // their own course path: the quiz is not in that course.
     let resp = server
         .get(&format!(
             "/courses/{other_course}/quizzes/{}/submissions",
             f.quiz
         ))
-        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(other_teacher, "teacher"),
+        )
         .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json::<Value>().as_array().unwrap().len(), 1);
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
-    // A missing quiz id returns 200 [] (no existence check), not 404.
+    // Even with the quiz's real course in the path, a teacher from another
+    // course is forbidden by the quiz-course authorization check.
+    let resp = server
+        .get(&format!(
+            "/courses/{}/quizzes/{}/submissions",
+            f.course, f.quiz
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(other_teacher, "teacher"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // A missing quiz is 404, even for an admin who bypasses authorization.
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let resp = server
         .get(&format!(
             "/courses/{other_course}/quizzes/999999999/submissions"
         ))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json::<Value>().as_array().unwrap().len(), 0);
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    // The correct course's teacher still sees the submissions.
+    let listed = get_ok(
+        &server,
+        &auth(f.teacher, "teacher"),
+        &format!("/courses/{}/quizzes/{}/submissions", f.course, f.quiz),
+    )
+    .await;
+    let arr = listed.as_array().expect("array response");
+    assert_eq!(arr.len(), 1, "one submission: {arr:?}");
+    assert_eq!(arr[0]["quiz_id"], f.quiz);
+    assert_eq!(arr[0]["user_id"], f.student);
 
     cleanup(&pool, &prefix).await;
 }
