@@ -104,6 +104,10 @@ cargo build --release --locked                   # what CI + lab-deploy.sh ship
       already document the intended behavior).
 - [ ] Verify the first GitHub Actions run of `production-build.yml` on the
       pushed `main`.
-- [ ] UI parity (~35%) and analytics (~30%) remain the largest gaps in the
-      overall migration; backend feature/test coverage is effectively done.
+- [ ] UI parity (**0/232** feature dirs, 0/5459 JS/TSX files) and analytics
+      (**0** endpoints) remain the largest gaps; measured REST parity is
+      **63/1377** (4.6%) and GraphQL **0/390** — see
+      [migration/parity/report.md](migration/parity/report.md).
+- [x] Phase 1: parity scoreboard tool and CI baseline
+      ([README](migration/tools/parity/README.md)).
 - [ ] Optional: llvm-cov coverage report in CI, Dependabot, release tagging.

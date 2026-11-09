@@ -1,0 +1,40 @@
+name: Parity scoreboard
+
+on:
+  push:
+    paths:
+      - 'migration/**'
+      - '.github/workflows/parity.yml'
+  pull_request:
+    paths:
+      - 'migration/**'
+      - '.github/workflows/parity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: migration
+    steps:
+      - uses: actions/checkout@v4
+      - name: Generate parity report
+        run: |
+          python3 tools/parity/parity.py report \
+            --manifest parity/canvas_manifest.json \
+            --star-src . \
+            --out parity
+      - name: Publish report summary
+        if: always()
+        run: cat parity/report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload parity report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-report
+          path: migration/parity/
+          if-no-files-found: error
