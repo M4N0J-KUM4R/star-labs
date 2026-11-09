@@ -821,11 +821,11 @@ async fn create_sub_account_as_non_admin_is_403() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn list_account_courses_returns_direct_courses_only() {
-    // Documents actual behavior: the query is a flat `WHERE account_id = $1`.
-    // Courses in sub-accounts are NOT included (the tree traversal in the
-    // handler is dead code), which deviates from Canvas where an account's
-    // course listing spans the whole sub-account tree.
+async fn list_account_courses_includes_subaccount_courses() {
+    // The handler walks the sub-account tree with a depth-guarded BFS and
+    // lists courses of the whole subtree (matching Canvas). Courses of
+    // SIBLING accounts are not included. Ordering is created_at DESC,
+    // id DESC.
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -856,26 +856,29 @@ async fn list_account_courses_returns_direct_courses_only() {
     let body: Value = resp.json();
     assert_eq!(body["page"], 1);
     assert_eq!(body["per_page"], 50);
-    assert_eq!(body["total"], 2, "only the two direct courses: {body}");
+    assert_eq!(body["total"], 3, "direct + sub-account courses: {body}");
 
     let data = body["data"].as_array().expect("data array");
-    assert_eq!(data.len(), 2);
+    assert_eq!(data.len(), 3);
 
     // Ordering is created_at DESC, id DESC: the later insert comes first.
-    assert_eq!(data[0]["id"], newer);
-    assert_eq!(data[0]["name"], "NewerCourse");
-    assert_eq!(data[0]["course_code"], format!("{prefix}-NewerCourse"));
-    assert_eq!(data[0]["description"], "a test course");
-    assert!(data[0]["created_at"].is_string());
-    assert!(data[0]["updated_at"].is_string());
+    assert_eq!(data[0]["id"], sub_course);
+    assert_eq!(data[0]["name"], "SubCourse");
+    assert_eq!(data[0]["course_code"], format!("{prefix}-SubCourse"));
+    assert_eq!(data[1]["id"], newer);
+    assert_eq!(data[1]["name"], "NewerCourse");
+    assert_eq!(data[1]["course_code"], format!("{prefix}-NewerCourse"));
+    assert_eq!(data[1]["description"], "a test course");
+    assert!(data[1]["created_at"].is_string());
+    assert!(data[1]["updated_at"].is_string());
 
-    assert_eq!(data[1]["id"], older);
-    assert_eq!(data[1]["name"], "OlderCourse");
-    assert_eq!(data[1]["course_code"], format!("{prefix}-OlderCourse"));
+    assert_eq!(data[2]["id"], older);
+    assert_eq!(data[2]["name"], "OlderCourse");
+    assert_eq!(data[2]["course_code"], format!("{prefix}-OlderCourse"));
     assert!(
-        data[1].get("description").is_none(),
+        data[2].get("description").is_none(),
         "NULL description is omitted: {}",
-        data[1]
+        data[2]
     );
 
     let listed_ids: Vec<i64> = data.iter().filter_map(|c| c["id"].as_i64()).collect();
@@ -884,8 +887,8 @@ async fn list_account_courses_returns_direct_courses_only() {
         "another account's course must not leak"
     );
     assert!(
-        !listed_ids.contains(&sub_course),
-        "sub-account courses are not included (flat query, documented deviation)"
+        listed_ids.contains(&sub_course),
+        "sub-account courses must be listed (BFS over the account tree)"
     );
 
     // Pagination over the account's own courses.
@@ -896,8 +899,8 @@ async fn list_account_courses_returns_direct_courses_only() {
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
     assert_eq!(body["data"].as_array().map(|d| d.len()), Some(1));
-    assert_eq!(body["data"][0]["id"], older);
-    assert_eq!(body["total"], 2);
+    assert_eq!(body["data"][0]["id"], newer);
+    assert_eq!(body["total"], 3);
 
     cleanup(&pool, &prefix).await;
 }

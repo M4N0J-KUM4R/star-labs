@@ -73,7 +73,8 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
         jwt_secret: JWT_SECRET.to_string(),
     };
 
-    let server = TestServer::new(star_modules::router().with_state(state)).expect("build TestServer");
+    let server =
+        TestServer::new(star_modules::router().with_state(state)).expect("build TestServer");
     let prefix = run_prefix();
     Some((server, pool, prefix))
 }
@@ -220,7 +221,10 @@ async fn create_module_returns_201_with_active_state() {
         resp.text()
     );
     let module: Value = resp.json();
-    assert!(module["id"].as_i64().unwrap_or(0) > 0, "module id: {module}");
+    assert!(
+        module["id"].as_i64().unwrap_or(0) > 0,
+        "module id: {module}"
+    );
     assert_eq!(module["course_id"], course);
     assert_eq!(module["name"], "Week 1");
     assert_eq!(module["position"], 3);
@@ -274,7 +278,10 @@ async fn create_module_allows_teacher_via_enrollment_row() {
 
     let resp = server
         .post(&format!("/courses/{course}/modules"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(course_teacher, "student"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(course_teacher, "student"),
+        )
         .json(&json!({ "name": "By Enrollment" }))
         .await;
     assert_eq!(
@@ -350,7 +357,10 @@ async fn token_role_claim_is_advisory_db_role_wins() {
     let fake_teacher = seed_user(&pool, &prefix, "FakeTeacher", "student").await;
     let resp = server
         .post(&format!("/courses/{course}/modules"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(fake_teacher, "teacher"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(fake_teacher, "teacher"),
+        )
         .json(&json!({ "name": "Sneaky" }))
         .await;
     assert_eq!(
@@ -363,7 +373,10 @@ async fn token_role_claim_is_advisory_db_role_wins() {
     let real_teacher = seed_user(&pool, &prefix, "RealTeacher", "teacher").await;
     let resp = server
         .post(&format!("/courses/{course}/modules"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(real_teacher, "student"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(real_teacher, "student"),
+        )
         .json(&json!({ "name": "Humble" }))
         .await;
     assert_eq!(
@@ -687,7 +700,10 @@ async fn update_module_partial_update_coalesce() {
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let updated: Value = resp.json();
     assert_eq!(updated["name"], "Renamed");
-    assert_eq!(updated["position"], 2, "position untouched by name-only PUT");
+    assert_eq!(
+        updated["position"], 2,
+        "position untouched by name-only PUT"
+    );
 
     // Position only: name must survive.
     let resp = server
@@ -697,7 +713,10 @@ async fn update_module_partial_update_coalesce() {
         .await;
     assert_eq!(resp.status_code(), 200);
     let updated: Value = resp.json();
-    assert_eq!(updated["name"], "Renamed", "name untouched by position-only PUT");
+    assert_eq!(
+        updated["name"], "Renamed",
+        "name untouched by position-only PUT"
+    );
     assert_eq!(updated["position"], 7);
 
     // Empty body: everything survives (both fields COALESCEd).
@@ -706,7 +725,11 @@ async fn update_module_partial_update_coalesce() {
         .add_header(axum::http::header::AUTHORIZATION, auth_header)
         .json(&json!({}))
         .await;
-    assert_eq!(resp.status_code(), 200, "empty PATCH-style body is accepted");
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "empty PATCH-style body is accepted"
+    );
     let updated: Value = resp.json();
     assert_eq!(updated["name"], "Renamed");
     assert_eq!(updated["position"], 7);
@@ -792,24 +815,21 @@ async fn delete_module_is_soft_delete_and_idempotent() {
     assert_eq!(resp.text(), "", "204 has an empty body");
 
     // Row survives as workflow_state='deleted' (Canvas parity soft delete).
-    let (state,): (String,) = sqlx::query_as(
-        "SELECT workflow_state FROM modules WHERE id = $1",
-    )
-    .bind(module)
-    .fetch_one(&pool)
-    .await
-    .expect("module row must still exist after soft delete");
+    let (state,): (String,) = sqlx::query_as("SELECT workflow_state FROM modules WHERE id = $1")
+        .bind(module)
+        .fetch_one(&pool)
+        .await
+        .expect("module row must still exist after soft delete");
     assert_eq!(state, "deleted", "soft delete marks the row, not drops it");
 
     // The item row is NOT removed — soft delete does not cascade.
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM module_items WHERE id = $1 AND module_id = $2",
-    )
-    .bind(item)
-    .bind(module)
-    .fetch_one(&pool)
-    .await
-    .expect("count items");
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM module_items WHERE id = $1 AND module_id = $2")
+            .bind(item)
+            .bind(module)
+            .fetch_one(&pool)
+            .await
+            .expect("count items");
     assert_eq!(count, 1, "module_items survive a module soft delete");
 
     // Re-DELETE returns 204 again: the delete lookup has no
@@ -1046,12 +1066,11 @@ async fn delete_module_item_lifecycle_and_authz() {
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 204, "teacher item delete");
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM module_items WHERE id = $1")
-            .bind(item)
-            .fetch_one(&pool)
-            .await
-            .expect("count item");
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM module_items WHERE id = $1")
+        .bind(item)
+        .fetch_one(&pool)
+        .await
+        .expect("count item");
     assert_eq!(count, 0, "item row is hard-deleted");
 
     // Repeat delete -> 404 (0 rows affected).
@@ -1186,7 +1205,11 @@ async fn full_lifecycle_module_to_items_to_soft_delete() {
     let resp = server
         .get(&format!("/courses/{course}/modules/{module_id}/items"))
         .await;
-    assert_eq!(resp.status_code(), 500, "nested items route hits the pinned decode bug");
+    assert_eq!(
+        resp.status_code(),
+        500,
+        "nested items route hits the pinned decode bug"
+    );
 
     // 6. Teacher repositions the module.
     let resp = server
@@ -1216,12 +1239,11 @@ async fn full_lifecycle_module_to_items_to_soft_delete() {
     let resp = server.get(&format!("/modules/{module_id}")).await;
     assert_eq!(resp.status_code(), 404, "deleted module detail 404s");
 
-    let (state,): (String,) =
-        sqlx::query_as("SELECT workflow_state FROM modules WHERE id = $1")
-            .bind(module_id)
-            .fetch_one(&pool)
-            .await
-            .expect("module row survives soft delete");
+    let (state,): (String,) = sqlx::query_as("SELECT workflow_state FROM modules WHERE id = $1")
+        .bind(module_id)
+        .fetch_one(&pool)
+        .await
+        .expect("module row survives soft delete");
     assert_eq!(state, "deleted");
 
     let item_count: i64 =

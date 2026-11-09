@@ -192,7 +192,7 @@ fn ids(list: &Value) -> Vec<i64> {
 }
 
 /// Find an element by its "id" field in a JSON array.
-fn by_id<'a>(list: &'a Value, id: i64) -> &'a Value {
+fn by_id(list: &Value, id: i64) -> &Value {
     list.as_array()
         .expect("expected a JSON array")
         .iter()
@@ -247,11 +247,20 @@ async fn create_topic_returns_201_with_canonical_shape_and_defaults() {
     assert!(topic["id"].is_i64(), "id must be numeric: {topic}");
     assert_eq!(topic["course_id"], course);
     assert_eq!(topic["title"], format!("{prefix}-Shape-1"));
-    assert!(topic["message"].is_null(), "no message was sent so message must be null");
+    assert!(
+        topic["message"].is_null(),
+        "no message was sent so message must be null"
+    );
     assert_eq!(topic["workflow_state"], "active");
     assert_eq!(topic["discussion_type"], "side_comment");
-    assert!(topic["created_at"].is_string(), "created_at must be an RFC3339 string: {topic}");
-    assert!(topic["updated_at"].is_string(), "updated_at must be an RFC3339 string: {topic}");
+    assert!(
+        topic["created_at"].is_string(),
+        "created_at must be an RFC3339 string: {topic}"
+    );
+    assert!(
+        topic["updated_at"].is_string(),
+        "updated_at must be an RFC3339 string: {topic}"
+    );
 
     // An explicit discussion_type is echoed back.
     let resp = server
@@ -320,7 +329,12 @@ async fn create_topic_rejects_blank_title_and_unknown_type_with_422() {
             .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
             .json(&json!({ "title": bad_title }))
             .await;
-        assert_eq!(resp.status_code(), 422, "title {bad_title:?}; body: {}", resp.text());
+        assert_eq!(
+            resp.status_code(),
+            422,
+            "title {bad_title:?}; body: {}",
+            resp.text()
+        );
         assert_eq!(resp.text(), "validation: title cannot be empty");
     }
 
@@ -445,10 +459,7 @@ async fn list_topics_orders_newest_first_and_excludes_deleted() {
     let list: Value = resp.json();
     assert_eq!(
         ids(&list),
-        vec![
-            t3["id"].as_i64().unwrap(),
-            t1["id"].as_i64().unwrap()
-        ],
+        vec![t3["id"].as_i64().unwrap(), t1["id"].as_i64().unwrap()],
         "list must be newest-first and exclude soft-deleted topics: {list}"
     );
 
@@ -485,7 +496,11 @@ async fn list_topics_honors_pagination_and_clamps_per_page() {
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200);
-    assert_eq!(ids(&resp.json()), vec![t3, t2], "page 1 must hold the two newest");
+    assert_eq!(
+        ids(&resp.json()),
+        vec![t3, t2],
+        "page 1 must hold the two newest"
+    );
 
     // page=2&per_page=2 -> the oldest topic.
     let resp = server
@@ -503,7 +518,11 @@ async fn list_topics_honors_pagination_and_clamps_per_page() {
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200);
-    assert_eq!(ids(&resp.json()), Vec::<i64>::new(), "past-the-end page must be empty");
+    assert_eq!(
+        ids(&resp.json()),
+        Vec::<i64>::new(),
+        "past-the-end page must be empty"
+    );
 
     // QUIRK: per_page is clamped into 1..=50, so per_page=0 behaves as 1.
     let resp = server
@@ -564,7 +583,10 @@ async fn get_topic_returns_topic_for_enrolled_student() {
     assert_eq!(got["title"], format!("{prefix}-GetMe"));
     assert_eq!(got["workflow_state"], "active");
     assert_eq!(got["discussion_type"], "side_comment");
-    assert!(got["message"].is_null(), "no message was sent so message must be null");
+    assert!(
+        got["message"].is_null(),
+        "no message was sent so message must be null"
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -583,15 +605,23 @@ async fn get_topic_of_another_course_is_404() {
     seed_enrollment(&pool, teacher, course_a, "teacher").await;
     seed_enrollment(&pool, student_b, course_b, "student").await;
 
-    let topic_a =
-        create_topic_ok(&server, course_a, &auth(teacher, "teacher"), &format!("{prefix}-InA")).await;
+    let topic_a = create_topic_ok(
+        &server,
+        course_a,
+        &auth(teacher, "teacher"),
+        &format!("{prefix}-InA"),
+    )
+    .await;
     let id_a = topic_a["id"].as_i64().unwrap();
 
     // The student is legitimately enrolled in course B, but the topic belongs
     // to course A -> the (id, course_id) lookup misses -> 404.
     let resp = server
         .get(&format!("/courses/{course_b}/discussion_topics/{id_a}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(student_b, "student"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(student_b, "student"),
+        )
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
     assert_eq!(resp.text(), "not found");
@@ -656,13 +686,7 @@ async fn update_topic_merges_partial_fields() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     let bearer = auth(teacher, "teacher");
 
-    let topic = create_topic_ok(
-        &server,
-        course,
-        &bearer,
-        &format!("{prefix}-Original"),
-    )
-    .await;
+    let topic = create_topic_ok(&server, course, &bearer, &format!("{prefix}-Original")).await;
     let id = topic["id"].as_i64().unwrap();
     let url = format!("/courses/{course}/discussion_topics/{id}");
 
@@ -821,13 +845,12 @@ async fn delete_topic_soft_deletes_hides_from_list_and_is_repeatable() {
     assert_eq!(resp.text(), "", "204 must carry an empty body");
 
     // Soft delete: the row remains, only its workflow_state changes.
-    let state: (String,) = sqlx::query_as(
-        "SELECT workflow_state FROM discussion_topics WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_one(&pool)
-    .await
-    .expect("soft-deleted row must still exist");
+    let state: (String,) =
+        sqlx::query_as("SELECT workflow_state FROM discussion_topics WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("soft-deleted row must still exist");
     assert_eq!(state.0, "deleted");
 
     // QUIRK: deleting an already-deleted topic succeeds again (204) because
@@ -887,7 +910,11 @@ async fn create_entry_enrolled_student_gets_201_shape() {
     assert_eq!(entry["message"], "first!");
     assert_eq!(entry["workflow_state"], "active");
     assert!(entry["created_at"].is_string());
-    assert_eq!(entry["replies"].as_array().map(Vec::len), Some(0), "fresh entry has empty replies");
+    assert_eq!(
+        entry["replies"].as_array().map(Vec::len),
+        Some(0),
+        "fresh entry has empty replies"
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -921,7 +948,10 @@ async fn create_entry_unenrolled_403_cross_course_and_deleted_topic_404() {
     // A user not enrolled in course A is rejected with 403.
     let resp = server
         .post(&entries_a)
-        .add_header(axum::http::header::AUTHORIZATION, auth(student_b, "student"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(student_b, "student"),
+        )
         .json(&json!({ "message": "sneaking in" }))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -933,7 +963,10 @@ async fn create_entry_unenrolled_403_cross_course_and_deleted_topic_404() {
         .post(&format!(
             "/courses/{course_b}/discussion_topics/{topic_a_id}/entries"
         ))
-        .add_header(axum::http::header::AUTHORIZATION, auth(student_b, "student"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(student_b, "student"),
+        )
         .json(&json!({ "message": "wrong door" }))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -944,23 +977,36 @@ async fn create_entry_unenrolled_403_cross_course_and_deleted_topic_404() {
         .get(&format!(
             "/courses/{course_b}/discussion_topics/{topic_a_id}/entries"
         ))
-        .add_header(axum::http::header::AUTHORIZATION, auth(student_b, "student"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(student_b, "student"),
+        )
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
     // After the topic is soft-deleted, both posting and listing entries 404.
     let resp = server
-        .delete(&format!("/courses/{course_a}/discussion_topics/{topic_a_id}"))
+        .delete(&format!(
+            "/courses/{course_a}/discussion_topics/{topic_a_id}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 204);
 
     let resp = server
         .post(&entries_a)
-        .add_header(axum::http::header::AUTHORIZATION, auth(student_a, "student"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(student_a, "student"),
+        )
         .json(&json!({ "message": "too late" }))
         .await;
-    assert_eq!(resp.status_code(), 404, "posting to a deleted topic must 404; body: {}", resp.text());
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "posting to a deleted topic must 404; body: {}",
+        resp.text()
+    );
     assert_eq!(resp.text(), "not found");
 
     cleanup(&pool, &prefix).await;
@@ -995,7 +1041,12 @@ async fn create_entry_rejects_blank_message_and_foreign_or_missing_parent() {
             .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
             .json(&json!({ "message": bad }))
             .await;
-        assert_eq!(resp.status_code(), 422, "message {bad:?}; body: {}", resp.text());
+        assert_eq!(
+            resp.status_code(),
+            422,
+            "message {bad:?}; body: {}",
+            resp.text()
+        );
         assert_eq!(resp.text(), "validation: message cannot be empty");
     }
 
@@ -1110,10 +1161,18 @@ async fn list_entries_returns_two_level_nested_replies() {
 
     // Only top-level entries are returned, with replies nested recursively.
     let top = ids(&list);
-    assert_eq!(top.len(), 2, "grandchild must NOT appear at top level: {list}");
+    assert_eq!(
+        top.len(),
+        2,
+        "grandchild must NOT appear at top level: {list}"
+    );
     let r1 = by_id(&list, root1["id"].as_i64().unwrap());
     assert_eq!(r1["parent_id"], Value::Null);
-    assert_eq!(r1["replies"].as_array().map(Vec::len), Some(1), "one direct reply: {list}");
+    assert_eq!(
+        r1["replies"].as_array().map(Vec::len),
+        Some(1),
+        "one direct reply: {list}"
+    );
     let child = &r1["replies"][0];
     assert_eq!(child["id"], reply1["id"]);
     assert_eq!(child["parent_id"], root1["id"]);
@@ -1127,7 +1186,11 @@ async fn list_entries_returns_two_level_nested_replies() {
 
     // The second root has no replies.
     let r2 = by_id(&list, root2["id"].as_i64().unwrap());
-    assert_eq!(r2["replies"].as_array().map(Vec::len), Some(0), "root two must have empty replies: {list}");
+    assert_eq!(
+        r2["replies"].as_array().map(Vec::len),
+        Some(0),
+        "root two must have empty replies: {list}"
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -1220,7 +1283,11 @@ async fn full_lifecycle_topic_entry_reply_then_soft_delete() {
         ))
         .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
         .await;
-    assert_eq!(resp.status_code(), 404, "entries of a deleted topic must 404");
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "entries of a deleted topic must 404"
+    );
     let resp = server
         .post(&format!(
             "/courses/{course}/discussion_topics/{topic_id}/entries"
@@ -1228,7 +1295,11 @@ async fn full_lifecycle_topic_entry_reply_then_soft_delete() {
         .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
         .json(&json!({ "message": "afterlife" }))
         .await;
-    assert_eq!(resp.status_code(), 404, "posting to a deleted topic must 404");
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "posting to a deleted topic must 404"
+    );
 
     // 8. The topic list no longer shows it.
     let resp = server
