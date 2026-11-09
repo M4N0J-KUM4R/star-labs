@@ -281,6 +281,15 @@ async fn db_count_quiz_submissions(pool: &PgPool, quiz_id: i64, user_id: i64) ->
         .expect("count quiz submissions")
 }
 
+/// Response body without its volatile `updated_at` field, so two equivalent
+/// mutations of the same quiz can be compared.
+fn without_updated_at(mut body: Value) -> Value {
+    if let Some(obj) = body.as_object_mut() {
+        obj.remove("updated_at");
+    }
+    body
+}
+
 // ---------------------------------------------------------------------------
 // POST /courses/{courseId}/quizzes
 // ---------------------------------------------------------------------------
@@ -1276,6 +1285,372 @@ async fn list_quiz_submissions_404_for_missing_or_wrong_course_quiz() {
     assert_eq!(arr.len(), 1, "one submission: {arr:?}");
     assert_eq!(arr[0]["quiz_id"], f.quiz);
     assert_eq!(arr[0]["user_id"], f.student);
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// Canvas nested aliases (/courses/{courseId}/quizzes/{id})
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn nested_quiz_aliases_match_flat_get_put_delete() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let f = seed_fixture(&server, &pool, &prefix, "NestedCrud").await;
+    let teacher_auth = auth(f.teacher, "teacher");
+    let student_auth = auth(f.student, "student");
+    let nested = format!("/courses/{}/quizzes/{}", f.course, f.quiz);
+
+    // GET: the nested alias returns exactly the flat route's body.
+    let flat_get = get_ok(&server, &student_auth, &format!("/quizzes/{}", f.quiz)).await;
+    let nested_get = get_ok(&server, &student_auth, &nested).await;
+    assert_eq!(nested_get, flat_get, "nested GET mirrors flat GET");
+
+    // PUT: the same payload yields the same status/body as the flat route
+    // (the mutation is idempotent, so only updated_at may move).
+    let payload = json!({
+        "title": "Renamed Nested",
+        "published": true,
+        "points_possible": 22.5
+    });
+    let flat_put = server
+        .put(&format!("/quizzes/{}", f.quiz))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .json(&payload)
+        .await;
+    assert_eq!(flat_put.status_code(), 200, "flat PUT: {}", flat_put.text());
+    let flat_body: Value = flat_put.json();
+
+    let nested_put = server
+        .put(&nested)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .json(&payload)
+        .await;
+    assert_eq!(
+        nested_put.status_code(),
+        200,
+        "nested PUT: {}",
+        nested_put.text()
+    );
+    assert_eq!(
+        without_updated_at(nested_put.json()),
+        without_updated_at(flat_body),
+        "nested PUT mirrors flat PUT (updated_at excluded)"
+    );
+    assert_eq!(
+        db_quiz_title(&pool, f.quiz).await,
+        Some("Renamed Nested".to_string())
+    );
+    assert_eq!(db_quiz_published(&pool, f.quiz).await, Some(true));
+
+    // DELETE: both routes answer 204 and remove the row; the alias must not
+    // be a second, somehow different, deletion path.
+    let second = api_create_quiz(&server, &teacher_auth, f.course, "Second Quiz").await;
+    let second_id = second["id"].as_i64().expect("second quiz id");
+
+    let flat_delete = server
+        .delete(&format!("/quizzes/{second_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .await;
+    assert_eq!(
+        flat_delete.status_code(),
+        204,
+        "flat DELETE: {}",
+        flat_delete.text()
+    );
+
+    let nested_delete = server
+        .delete(&nested)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .await;
+    assert_eq!(
+        nested_delete.status_code(),
+        flat_delete.status_code(),
+        "nested DELETE mirrors flat DELETE: {}",
+        nested_delete.text()
+    );
+    assert!(db_quiz_title(&pool, second_id).await.is_none());
+    assert!(db_quiz_title(&pool, f.quiz).await.is_none());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn nested_quiz_aliases_404_for_missing_or_cross_course() {
+    // Nested routes verify quizzes.course_id against the path course before
+    // delegating: a quiz outside that course, or a missing quiz, is 404.
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let f = seed_fixture(&server, &pool, &prefix, "Nested404").await;
+    let other_course = seed_course(&pool, &prefix, "NestedOther").await;
+    let teacher_auth = auth(f.teacher, "teacher");
+    let student_auth = auth(f.student, "student");
+
+    let cross = format!("/courses/{other_course}/quizzes/{}", f.quiz);
+
+    // GET / PUT / DELETE via the wrong course are all 404.
+    let resp = server
+        .get(&cross)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .await;
+    assert_eq!(resp.status_code(), 404, "cross-course GET: {}", resp.text());
+
+    let resp = server
+        .put(&cross)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .json(&json!({ "title": "Nope" }))
+        .await;
+    assert_eq!(resp.status_code(), 404, "cross-course PUT: {}", resp.text());
+
+    let resp = server
+        .delete(&cross)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "cross-course DELETE: {}",
+        resp.text()
+    );
+
+    // Start and singular-submission aliases reject the wrong course too.
+    let resp = server
+        .post(&format!("{cross}/submissions"))
+        .add_header(axum::http::header::AUTHORIZATION, &student_auth)
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "cross-course start alias: {}",
+        resp.text()
+    );
+
+    let resp = server
+        .get(&format!("{cross}/submission"))
+        .add_header(axum::http::header::AUTHORIZATION, &student_auth)
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "cross-course submission alias: {}",
+        resp.text()
+    );
+
+    // The rejected requests left the quiz untouched.
+    assert_eq!(
+        db_quiz_title(&pool, f.quiz).await,
+        Some("Fixture Quiz".to_string())
+    );
+
+    // A missing quiz is 404 for every nested verb, even in its real course.
+    let missing = format!("/courses/{}/quizzes/999999999", f.course);
+    let resp = server
+        .get(&missing)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .await;
+    assert_eq!(resp.status_code(), 404, "missing GET: {}", resp.text());
+
+    let resp = server
+        .put(&missing)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .json(&json!({ "title": "Ghost" }))
+        .await;
+    assert_eq!(resp.status_code(), 404, "missing PUT: {}", resp.text());
+
+    let resp = server
+        .delete(&missing)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .await;
+    assert_eq!(resp.status_code(), 404, "missing DELETE: {}", resp.text());
+
+    let resp = server
+        .post(&format!("{missing}/submissions"))
+        .add_header(axum::http::header::AUTHORIZATION, &student_auth)
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "missing start alias: {}",
+        resp.text()
+    );
+
+    let resp = server
+        .get(&format!("{missing}/submission"))
+        .add_header(axum::http::header::AUTHORIZATION, &student_auth)
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "missing submission alias: {}",
+        resp.text()
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn nested_start_alias_matches_flat_and_enforces_student_only_and_409() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let f = seed_fixture(&server, &pool, &prefix, "NestedStart").await;
+    let student_auth = auth(f.student, "student");
+    let teacher_auth = auth(f.teacher, "teacher");
+
+    // The flat start and the nested start produce the same 201 shape.
+    let second = api_create_quiz(&server, &teacher_auth, f.course, "Flat Start Quiz").await;
+    let second_id = second["id"].as_i64().expect("second quiz id");
+    let flat_start = api_start_quiz(&server, &student_auth, second_id).await;
+
+    let resp = server
+        .post(&format!(
+            "/courses/{}/quizzes/{}/submissions",
+            f.course, f.quiz
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &student_auth)
+        .await;
+    assert_eq!(resp.status_code(), 201, "start alias: {}", resp.text());
+    let started: Value = resp.json();
+    assert_eq!(started["quiz_id"], f.quiz);
+    assert_eq!(started["user_id"], f.student);
+    assert!(started["started_at"].is_string());
+    assert_eq!(
+        started.as_object().unwrap().keys().collect::<Vec<_>>(),
+        flat_start.as_object().unwrap().keys().collect::<Vec<_>>(),
+        "alias response has the flat start shape"
+    );
+    assert_eq!(db_count_quiz_submissions(&pool, f.quiz, f.student).await, 1);
+
+    // Starting again through the alias is still 409 Conflict.
+    let resp = server
+        .post(&format!(
+            "/courses/{}/quizzes/{}/submissions",
+            f.course, f.quiz
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &student_auth)
+        .await;
+    assert_eq!(resp.status_code(), 409, "duplicate start: {}", resp.text());
+    assert!(
+        resp.text().contains("quiz already started"),
+        "conflict body names the reason"
+    );
+    assert_eq!(db_count_quiz_submissions(&pool, f.quiz, f.student).await, 1);
+
+    // Students-only: teachers and admins with no student enrollment are 403.
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    for (label, token) in [
+        ("teacher", teacher_auth.clone()),
+        ("admin", auth(admin, "admin")),
+    ] {
+        let resp = server
+            .post(&format!(
+                "/courses/{}/quizzes/{}/submissions",
+                f.course, second_id
+            ))
+            .add_header(axum::http::header::AUTHORIZATION, &token)
+            .await;
+        assert_eq!(
+            resp.status_code(),
+            403,
+            "{label} start alias: {}",
+            resp.text()
+        );
+    }
+    assert_eq!(
+        db_count_quiz_submissions(&pool, second_id, f.teacher).await,
+        0
+    );
+    assert_eq!(db_count_quiz_submissions(&pool, second_id, admin).await, 0);
+
+    // An unenrolled student is forbidden and nothing is persisted.
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let resp = server
+        .post(&format!(
+            "/courses/{}/quizzes/{}/submissions",
+            f.course, second_id
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "outsider start: {}", resp.text());
+    assert_eq!(
+        db_count_quiz_submissions(&pool, second_id, outsider).await,
+        0
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn nested_singular_submission_alias_returns_callers_submission() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let f = seed_fixture(&server, &pool, &prefix, "NestedMe").await;
+    let second = seed_user(&pool, &prefix, "SecondStudent", "student").await;
+    seed_enrollment(&pool, second, f.course, "student").await;
+    let no_start = seed_user(&pool, &prefix, "NoStart", "student").await;
+    seed_enrollment(&pool, no_start, f.course, "student").await;
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+
+    let sub1 = api_start_quiz(&server, &auth(f.student, "student"), f.quiz).await;
+    let sub2 = api_start_quiz(&server, &auth(second, "student"), f.quiz).await;
+
+    // The singular alias is byte-for-byte the flat "my submission" route.
+    let flat_me = get_ok(
+        &server,
+        &auth(f.student, "student"),
+        &format!("/quizzes/{}/submissions/me", f.quiz),
+    )
+    .await;
+    let nested_me = get_ok(
+        &server,
+        &auth(f.student, "student"),
+        &format!("/courses/{}/quizzes/{}/submission", f.course, f.quiz),
+    )
+    .await;
+    assert_eq!(nested_me, flat_me, "singular alias mirrors submissions/me");
+    assert_eq!(nested_me["id"], sub1["id"]);
+
+    // Each caller sees only their own submission.
+    let mine2 = get_ok(
+        &server,
+        &auth(second, "student"),
+        &format!("/courses/{}/quizzes/{}/submission", f.course, f.quiz),
+    )
+    .await;
+    assert_eq!(mine2["id"], sub2["id"]);
+    assert_eq!(mine2["user_id"], second);
+
+    // Enrolled but never started: 404.
+    let resp = server
+        .get(&format!(
+            "/courses/{}/quizzes/{}/submission",
+            f.course, f.quiz
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(no_start, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "no submission: {}", resp.text());
+
+    // Unenrolled: 403 even though submissions exist.
+    let resp = server
+        .get(&format!(
+            "/courses/{}/quizzes/{}/submission",
+            f.course, f.quiz
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "outsider: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }

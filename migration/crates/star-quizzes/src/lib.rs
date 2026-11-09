@@ -12,6 +12,9 @@
 //!   instead (submissions cascade away with the quiz). Documented difference.
 //! - POST /quizzes/{id}/start is Canvas' "take" alias for beginning a
 //!   quiz_submission; we keep the /start endpoint name.
+//! - Canvas nested aliases live under /courses/{courseId}/quizzes/{id}:
+//!   GET/PUT/DELETE (quiz CRUD), POST .../submissions (start), and
+//!   GET .../submission (singular; the caller's own submission).
 
 use axum::{
     extract::{Path, State},
@@ -159,6 +162,24 @@ async fn check_teacher_or_admin(
     .fetch_optional(pool)
     .await?;
     Ok(row.is_some())
+}
+
+/// Require that `quiz_id` exists and belongs to `course_id`; otherwise 404.
+/// Canvas nested routes treat a quiz outside the path course as not found.
+async fn require_quiz_in_course(
+    pool: &PgPool,
+    quiz_id: i64,
+    course_id: i64,
+) -> Result<(), ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM quizzes WHERE id = $1"#)
+        .bind(quiz_id)
+        .fetch_optional(pool)
+        .await?;
+
+    match row {
+        Some((quiz_course_id,)) if quiz_course_id == course_id => Ok(()),
+        _ => Err(ApiError::NotFound),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -541,6 +562,63 @@ async fn list_quiz_submissions(
 }
 
 // ---------------------------------------------------------------------------
+// Canvas nested aliases (/courses/{courseId}/quizzes/{id})
+// ---------------------------------------------------------------------------
+
+/// GET /courses/{courseId}/quizzes/{id} — alias for GET /quizzes/{id}.
+async fn get_course_quiz(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Quiz>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+    get_quiz(State(state), Path::<i64>(quiz_id), auth).await
+}
+
+/// PUT /courses/{courseId}/quizzes/{id} — alias for PUT /quizzes/{id}.
+async fn update_course_quiz(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateQuiz>,
+) -> Result<Json<Quiz>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+    update_quiz(State(state), Path::<i64>(quiz_id), auth, Json(payload)).await
+}
+
+/// DELETE /courses/{courseId}/quizzes/{id} — alias for DELETE /quizzes/{id}.
+async fn delete_course_quiz(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+    delete_quiz(State(state), Path::<i64>(quiz_id), auth).await
+}
+
+/// POST /courses/{courseId}/quizzes/{id}/submissions — Canvas start alias
+/// (delegates to POST /quizzes/{id}/start).
+async fn start_course_quiz_submission(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<QuizSubmission>), ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+    start_quiz(State(state), Path::<i64>(quiz_id), auth).await
+}
+
+/// GET /courses/{courseId}/quizzes/{id}/submission (singular) — Canvas alias
+/// for GET /quizzes/{id}/submissions/me, returning the caller's submission.
+async fn get_course_my_submission(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<QuizSubmission>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+    get_my_submission(State(state), Path::<i64>(quiz_id), auth).await
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -560,6 +638,21 @@ pub fn router() -> Router<AppState> {
         .route("/quizzes/{id}", delete(delete_quiz))
         .route("/quizzes/{id}/start", post(start_quiz))
         .route("/quizzes/{id}/submissions/me", get(get_my_submission))
+        // Canvas nested aliases (delegate to the flat handlers)
+        .route("/courses/{courseId}/quizzes/{id}", get(get_course_quiz))
+        .route("/courses/{courseId}/quizzes/{id}", put(update_course_quiz))
+        .route(
+            "/courses/{courseId}/quizzes/{id}",
+            delete(delete_course_quiz),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{id}/submissions",
+            post(start_course_quiz_submission),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{id}/submission",
+            get(get_course_my_submission),
+        )
 }
 
 // ---------------------------------------------------------------------------
