@@ -158,7 +158,7 @@ fn is_admin(auth: &AuthUser) -> bool {
 /// Check if the authenticated user is an account admin for the given account.
 /// Queries account_users table. Falls back to false if not found.
 async fn is_account_admin(pool: &PgPool, user_id: i64, account_id: i64) -> Result<bool, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(
+    let row: Option<(i32,)> = sqlx::query_as(
         r#"SELECT 1 FROM account_users WHERE account_id = $1 AND user_id = $2 LIMIT 1"#,
     )
     .bind(account_id)
@@ -303,7 +303,7 @@ async fn create_sub_account(
     }
 
     // Verify parent exists
-    let parent_exists: Option<(i64,)> = sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
+    let parent_exists: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
         .bind(parent_id)
         .fetch_optional(&state.db)
         .await
@@ -420,7 +420,7 @@ async fn list_account_users(
     }
 
     // Verify account exists
-    let account_exists: Option<(i64,)> = sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
+    let account_exists: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
         .bind(account_id)
         .fetch_optional(&state.db)
         .await
@@ -476,7 +476,7 @@ async fn grant_account_admin(
     }
 
     // Verify account exists
-    let account_exists: Option<(i64,)> = sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
+    let account_exists: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
         .bind(account_id)
         .fetch_optional(&state.db)
         .await
@@ -487,7 +487,7 @@ async fn grant_account_admin(
     }
 
     // Verify user exists
-    let user_exists: Option<(i64,)> = sqlx::query_as(r#"SELECT 1 FROM users WHERE id = $1"#)
+    let user_exists: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM users WHERE id = $1"#)
         .bind(user_id)
         .fetch_optional(&state.db)
         .await
