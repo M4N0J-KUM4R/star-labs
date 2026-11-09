@@ -53,5 +53,11 @@ thiserror = "2"
 axum-test = { version = "17.0.0", default-features = false }
 futures = "0.3"
 
+[profile.dev]
+debug = 1
+
+[profile.test]
+debug = 1
+
 [profile.release]
 lto = "thin"
