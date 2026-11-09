@@ -12,5 +12,7 @@ serde_json = { workspace = true }
 tower = { workspace = true }
 
 [dev-dependencies]
+star-db = { path = "../star-db" }
+tokio = { workspace = true }
 tower = { version = "0.5", features = ["util"] }
 serde_urlencoded = "0.7"

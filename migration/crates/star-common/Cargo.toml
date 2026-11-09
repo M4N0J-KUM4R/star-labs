@@ -12,3 +12,7 @@ jsonwebtoken = { workspace = true }
 argon2 = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+star-db = { path = "../star-db" }
+tokio = { workspace = true }
