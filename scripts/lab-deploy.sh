@@ -75,8 +75,20 @@ ssh "$HOST" 'chmod 700 "$HOME/.hermes" "$HOME/.dahl-proxy"; chmod 600 "$HOME/.he
 
 ssh "$HOST" 'source "$HOME/.cargo/env"; export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"; cd "$HOME/work/dahl-proxy"; CARGO_BUILD_JOBS=1 cargo build --release; sudo install -D -m 0755 target/release/dahl-proxy /usr/local/bin/dahl-proxy; sudo install -d -o root -g ec2-user -m 0750 /etc/dahl-proxy; if grep -q "^bind:" config.yaml.private; then sed -E "s/^bind:.*/bind: 127.0.0.1/" config.yaml.private > /tmp/dahl-config.yaml; else { printf "bind: 127.0.0.1\\n"; cat config.yaml.private; } > /tmp/dahl-config.yaml; fi; sudo install -o root -g ec2-user -m 0640 /tmp/dahl-config.yaml /etc/dahl-proxy/config.yaml; rm -f config.yaml.private /tmp/dahl-config.yaml; sudo install -o root -g root -m 0644 /tmp/dahl-proxy.service /etc/systemd/system/dahl-proxy.service; sudo systemctl daemon-reload; sudo systemctl enable --now dahl-proxy; sudo systemctl is-active --quiet dahl-proxy; hermes --version'
 
+# ---------------------------------------------------------------------------
+# star-lms production service: release build + systemd unit.
+# Mirrors the dahl-proxy deployment: release binary to /usr/local/bin,
+# protected env file with the DB URL + JWT secret, systemd enable --now.
+# Runs only when a Rust migration source was deployed (SOURCE_DIR set) and
+# the data stack env file exists on the host.
+# ---------------------------------------------------------------------------
 if [[ -n "$SOURCE_SHA" ]]; then
-  printf 'Deployed committed source %s and started the loopback-only Dahl proxy on %s.\n' "$SOURCE_SHA" "$HOST"
+  scp "$REPO_ROOT/infra/star-lms.service" "$HOST:/tmp/star-lms.service"
+  ssh "$HOST" 'set -euo pipefail; if [ ! -f "$HOME/.config/star-labs/data.env" ]; then echo "star-lms deploy: missing ~/.config/star-labs/data.env (run lab-data-up.sh first); skipping service start." >&2; exit 0; fi; source "$HOME/.cargo/env"; export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"; cd "$HOME/work/canvas-lms"; if [ -f migration/Cargo.toml ]; then cd migration; fi; CARGO_BUILD_JOBS=1 cargo build --release --locked; sudo install -D -m 0755 target/release/star-http /usr/local/bin/star-lms; sudo install -d -o root -g ec2-user -m 0750 /etc/star-lms; if [ ! -f /etc/star-lms/star-lms.env ]; then JWT_SECRET="$(head -c 32 /dev/urandom | base64 | tr -d "\n")"; sudo sh -c "umask 077; { grep -E \"^DATABASE_URL=\" \"$HOME/.config/star-labs/data.env\"; printf \"STAR_JWT_SECRET=%s\\n\" \"$JWT_SECRET\"; } > /etc/star-lms/star-lms.env.tmp && mv /etc/star-lms/star-lms.env.tmp /etc/star-lms/star-lms.env"; unset JWT_SECRET; fi; sudo install -o root -g root -m 0644 /tmp/star-lms.service /etc/systemd/system/star-lms.service; sudo systemctl daemon-reload; sudo systemctl enable --now star-lms; sudo systemctl is-active --quiet star-lms; echo "star-lms service: release build installed and active"'
+fi
+
+if [[ -n "$SOURCE_SHA" ]]; then
+  printf 'Deployed committed source %s and started the loopback-only Dahl proxy and the star-lms release service on %s.\n' "$SOURCE_SHA" "$HOST"
 else
   printf 'Configured Hermes and started the loopback-only Dahl proxy on %s; migration source was skipped.\n' "$HOST"
 fi

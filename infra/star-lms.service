@@ -1,0 +1,25 @@
+[Unit]
+Description=star-lms Rust API (Canvas migration)
+Documentation=https://github.com/M4N0J-KUM4R/star-labs
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ec2-user
+Group=ec2-user
+# Production binary: release build installed by lab-deploy.sh.
+ExecStart=/usr/local/bin/star-lms
+Environment=STAR_PORT=8080
+# DATABASE_URL and STAR_JWT_SECRET come from the protected EnvironmentFile
+# provisioned by lab-deploy.sh; they never appear in the unit or the repo.
+EnvironmentFile=/etc/star-lms/star-lms.env
+Restart=on-failure
+RestartSec=3
+# Hardening: the service needs no write access outside its workdir.
+NoNewPrivileges=true
+ProtectSystem=full
+WorkingDirectory=/home/ec2-user/work/canvas-lms
+
+[Install]
+WantedBy=multi-user.target
