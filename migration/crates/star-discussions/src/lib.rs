@@ -251,7 +251,7 @@ async fn get_topic(
         r#"
         SELECT id, course_id, title, message, workflow_state, discussion_type, created_at, updated_at
         FROM discussion_topics
-        WHERE id = $1 AND course_id = $2
+        WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
         "#,
     )
     .bind(id)
