@@ -327,10 +327,28 @@ async fn list_group_assignments(
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/courses/{courseId}/assignment_groups", post(create_assignment_group))
-        .route("/courses/{courseId}/assignment_groups", get(list_assignment_groups))
-        .route("/courses/{courseId}/assignment_groups/{id}", get(get_assignment_group))
-        .route("/courses/{courseId}/assignment_groups/{id}", put(update_assignment_group))
-        .route("/courses/{courseId}/assignment_groups/{id}", delete(delete_assignment_group))
-        .route("/courses/{courseId}/assignment_groups/{groupId}/assignments", get(list_group_assignments))
+        .route(
+            "/courses/{courseId}/assignment_groups",
+            post(create_assignment_group),
+        )
+        .route(
+            "/courses/{courseId}/assignment_groups",
+            get(list_assignment_groups),
+        )
+        .route(
+            "/courses/{courseId}/assignment_groups/{id}",
+            get(get_assignment_group),
+        )
+        .route(
+            "/courses/{courseId}/assignment_groups/{id}",
+            put(update_assignment_group),
+        )
+        .route(
+            "/courses/{courseId}/assignment_groups/{id}",
+            delete(delete_assignment_group),
+        )
+        .route(
+            "/courses/{courseId}/assignment_groups/{groupId}/assignments",
+            get(list_group_assignments),
+        )
 }

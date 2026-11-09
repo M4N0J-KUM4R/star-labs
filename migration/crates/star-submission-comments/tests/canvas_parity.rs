@@ -23,10 +23,12 @@ fn live() -> Option<reqwest::blocking::Client> {
     if std::env::var("STAR_PARITY_TESTS").ok().as_deref() != Some("1") {
         return None;
     }
-    Some(reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-        .expect("reqwest client"))
+    Some(
+        reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .expect("reqwest client"),
+    )
 }
 
 fn admin_token(client: &reqwest::blocking::Client) -> String {
@@ -79,7 +81,12 @@ fn parity_student_can_comment_on_own_submission() {
         }))
         .send()
         .unwrap();
-    assert!(course.status().is_success(), "create course: {} — {:?}", course.status(), course.text().map(|t| t[..t.len().min(200)].to_string()));
+    assert!(
+        course.status().is_success(),
+        "create course: {} — {:?}",
+        course.status(),
+        course.text().map(|t| t[..t.len().min(200)].to_string())
+    );
     let course_id: i64 = course.json::<Value>().unwrap()["id"].as_i64().unwrap();
 
     // Register + enroll student
@@ -93,7 +100,12 @@ fn parity_student_can_comment_on_own_submission() {
         }))
         .send()
         .unwrap();
-    assert!(student.status().is_success(), "register: {} — {:?}", student.status(), student.text().map(|t| t[..t.len().min(200)].to_string()));
+    assert!(
+        student.status().is_success(),
+        "register: {} — {:?}",
+        student.status(),
+        student.text().map(|t| t[..t.len().min(200)].to_string())
+    );
     let student_id: i64 = student.json::<Value>().unwrap()["id"].as_i64().unwrap();
 
     client
@@ -109,8 +121,16 @@ fn parity_student_can_comment_on_own_submission() {
         .json(&json!({ "email": &student_email, "password": parity_password() }))
         .send()
         .unwrap();
-    assert!(st.status().is_success(), "student login: {} — {:?}", st.status(), st.text().map(|t| t[..t.len().min(200)].to_string()));
-    let student_token: String = st.json::<Value>().unwrap()["token"].as_str().unwrap().to_string();
+    assert!(
+        st.status().is_success(),
+        "student login: {} — {:?}",
+        st.status(),
+        st.text().map(|t| t[..t.len().min(200)].to_string())
+    );
+    let student_token: String = st.json::<Value>().unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Create assignment
     let assignment = client
@@ -119,44 +139,89 @@ fn parity_student_can_comment_on_own_submission() {
         .json(&json!({ "title": "Test Assignment", "points_possible": 10.0 }))
         .send()
         .unwrap();
-    assert!(assignment.status().is_success(), "create assignment: {} — {:?}", assignment.status(), assignment.text().map(|t| t[..t.len().min(200)].to_string()));
+    assert!(
+        assignment.status().is_success(),
+        "create assignment: {} — {:?}",
+        assignment.status(),
+        assignment.text().map(|t| t[..t.len().min(200)].to_string())
+    );
     let assignment_id: i64 = assignment.json::<Value>().unwrap()["id"].as_i64().unwrap();
 
     // Student submits
     let submission = client
-        .post(format!("{BASE}/api/v1/assignments/{assignment_id}/submissions"))
+        .post(format!(
+            "{BASE}/api/v1/assignments/{assignment_id}/submissions"
+        ))
         .header("Authorization", format!("Bearer {student_token}"))
         .json(&json!({ "body": "my work" }))
         .send()
         .unwrap();
-    assert!(submission.status().is_success(), "create submission: {} — {:?}", submission.status(), submission.text().map(|t| t[..t.len().min(200)].to_string()));
+    assert!(
+        submission.status().is_success(),
+        "create submission: {} — {:?}",
+        submission.status(),
+        submission.text().map(|t| t[..t.len().min(200)].to_string())
+    );
     let submission_id: i64 = submission.json::<Value>().unwrap()["id"].as_i64().unwrap();
 
     // Student posts a comment
     let resp = client
-        .post(format!("{BASE}/api/v1/submissions/{submission_id}/comments"))
+        .post(format!(
+            "{BASE}/api/v1/submissions/{submission_id}/comments"
+        ))
         .header("Authorization", format!("Bearer {student_token}"))
         .json(&json!({ "comment": "great work!" }))
         .send()
         .unwrap();
-    assert!(resp.status().is_success(), "student comment: {} — {:?}", resp.status(), resp.text().map(|t| t[..t.len().min(200)].to_string()));
+    assert!(
+        resp.status().is_success(),
+        "student comment: {} — {:?}",
+        resp.status(),
+        resp.text().map(|t| t[..t.len().min(200)].to_string())
+    );
     let comment: Value = resp.json().unwrap();
-    assert_eq!(comment["submission_id"].as_i64(), Some(submission_id), "comment must belong to submission");
-    assert_eq!(comment["author_id"].as_i64(), Some(student_id), "author must be student");
-    assert_eq!(comment["comment"].as_str(), Some("great work!"), "comment text must match");
-    assert_eq!(comment["workflow_state"].as_str(), Some("active"), "new comment must be active");
+    assert_eq!(
+        comment["submission_id"].as_i64(),
+        Some(submission_id),
+        "comment must belong to submission"
+    );
+    assert_eq!(
+        comment["author_id"].as_i64(),
+        Some(student_id),
+        "author must be student"
+    );
+    assert_eq!(
+        comment["comment"].as_str(),
+        Some("great work!"),
+        "comment text must match"
+    );
+    assert_eq!(
+        comment["workflow_state"].as_str(),
+        Some("active"),
+        "new comment must be active"
+    );
     assert!(comment["created_at"].is_string(), "created_at must be set");
     assert!(comment["updated_at"].is_string(), "updated_at must be set");
 
     // Verify it shows in list
     let resp = client
-        .get(format!("{BASE}/api/v1/submissions/{submission_id}/comments"))
+        .get(format!(
+            "{BASE}/api/v1/submissions/{submission_id}/comments"
+        ))
         .header("Authorization", format!("Bearer {student_token}"))
         .send()
         .unwrap();
-    assert!(resp.status().is_success(), "list comments: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "list comments: {}",
+        resp.status()
+    );
     let list: Vec<Value> = resp.json().unwrap();
-    assert!(list.iter().any(|c| c["id"].as_i64() == comment["id"].as_i64()), "newly created comment must appear in list: {list:?}");
+    assert!(
+        list.iter()
+            .any(|c| c["id"].as_i64() == comment["id"].as_i64()),
+        "newly created comment must appear in list: {list:?}"
+    );
 }
 
 #[test]
@@ -207,7 +272,10 @@ fn parity_teacher_can_list_and_delete_comments() {
         .send()
         .unwrap();
     assert!(st.status().is_success());
-    let student_token: String = st.json::<Value>().unwrap()["token"].as_str().unwrap().to_string();
+    let student_token: String = st.json::<Value>().unwrap()["token"]
+        .as_str()
+        .unwrap()
+        .to_string();
 
     // Create assignment + submission
     let assignment = client
@@ -220,49 +288,81 @@ fn parity_teacher_can_list_and_delete_comments() {
     let assignment_id: i64 = assignment.json::<Value>().unwrap()["id"].as_i64().unwrap();
 
     let submission = client
-        .post(format!("{BASE}/api/v1/assignments/{assignment_id}/submissions"))
+        .post(format!(
+            "{BASE}/api/v1/assignments/{assignment_id}/submissions"
+        ))
         .header("Authorization", format!("Bearer {student_token}"))
         .json(&json!({ "body": "submission body" }))
         .send()
         .unwrap();
-    assert!(submission.status().is_success(), "submission: {} — {:?}", submission.status(), submission.text().map(|t| t[..t.len().min(200)].to_string()));
+    assert!(
+        submission.status().is_success(),
+        "submission: {} — {:?}",
+        submission.status(),
+        submission.text().map(|t| t[..t.len().min(200)].to_string())
+    );
     let submission_id: i64 = submission.json::<Value>().unwrap()["id"].as_i64().unwrap();
 
     // Teacher posts a comment
     let resp = client
-        .post(format!("{BASE}/api/v1/submissions/{submission_id}/comments"))
+        .post(format!(
+            "{BASE}/api/v1/submissions/{submission_id}/comments"
+        ))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({ "comment": "needs revision" }))
         .send()
         .unwrap();
-    assert!(resp.status().is_success(), "teacher comment: {} — {:?}", resp.status(), resp.text().map(|t| t[..t.len().min(200)].to_string()));
+    assert!(
+        resp.status().is_success(),
+        "teacher comment: {} — {:?}",
+        resp.status(),
+        resp.text().map(|t| t[..t.len().min(200)].to_string())
+    );
     let comment_id: i64 = resp.json::<Value>().unwrap()["id"].as_i64().unwrap();
 
     // Teacher can list and see it
     let resp = client
-        .get(format!("{BASE}/api/v1/submissions/{submission_id}/comments"))
+        .get(format!(
+            "{BASE}/api/v1/submissions/{submission_id}/comments"
+        ))
         .header("Authorization", format!("Bearer {token}"))
         .send()
         .unwrap();
     assert!(resp.status().is_success());
     let list: Vec<Value> = resp.json().unwrap();
-    assert!(list.iter().any(|c| c["id"].as_i64() == Some(comment_id)), "teacher comment must appear in list: {list:?}");
+    assert!(
+        list.iter().any(|c| c["id"].as_i64() == Some(comment_id)),
+        "teacher comment must appear in list: {list:?}"
+    );
 
     // Author deletes it
     let resp = client
-        .delete(format!("{BASE}/api/v1/submissions/{submission_id}/comments/{comment_id}"))
+        .delete(format!(
+            "{BASE}/api/v1/submissions/{submission_id}/comments/{comment_id}"
+        ))
         .header("Authorization", format!("Bearer {token}"))
         .send()
         .unwrap();
-    assert_eq!(resp.status(), reqwest::StatusCode::NO_CONTENT, "delete must return 204: {} — {:?}", resp.status(), resp.text().map(|t| t[..t.len().min(200)].to_string()));
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::NO_CONTENT,
+        "delete must return 204: {} — {:?}",
+        resp.status(),
+        resp.text().map(|t| t[..t.len().min(200)].to_string())
+    );
 
     // It must vanish
     let resp = client
-        .get(format!("{BASE}/api/v1/submissions/{submission_id}/comments"))
+        .get(format!(
+            "{BASE}/api/v1/submissions/{submission_id}/comments"
+        ))
         .header("Authorization", format!("Bearer {token}"))
         .send()
         .unwrap();
     assert!(resp.status().is_success());
     let list: Vec<Value> = resp.json().unwrap();
-    assert!(!list.iter().any(|c| c["id"].as_i64() == Some(comment_id)), "deleted comment must NOT appear in list: {list:?}");
+    assert!(
+        !list.iter().any(|c| c["id"].as_i64() == Some(comment_id)),
+        "deleted comment must NOT appear in list: {list:?}"
+    );
 }

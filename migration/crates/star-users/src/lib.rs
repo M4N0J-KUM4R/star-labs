@@ -221,14 +221,13 @@ async fn update_user(
     // If email is being changed, check uniqueness.
     let email = payload.email.clone().unwrap_or(existing.email.clone());
     if payload.email.is_some() && email != existing.email {
-        let taken: Option<(i32,)> = sqlx::query_as(
-            "SELECT 1 FROM users WHERE email = $1 AND id != $2",
-        )
-        .bind(&email)
-        .bind(user_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(ApiError::from)?;
+        let taken: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM users WHERE email = $1 AND id != $2")
+                .bind(&email)
+                .bind(user_id)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(ApiError::from)?;
 
         if taken.is_some() {
             return Err(ApiError::Conflict("email already in use".into()));
@@ -239,7 +238,7 @@ async fn update_user(
 
     // Build the update query — handle password_hash separately.
     let updated: UserResponse = if let Some(ref pw) = payload.password {
-        let hash = hash_password(pw).map_err(|e| ApiError::BadRequest(e))?;
+        let hash = hash_password(pw).map_err(ApiError::BadRequest)?;
         sqlx::query_as(
             r#"
             UPDATE users

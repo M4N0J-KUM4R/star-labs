@@ -122,24 +122,22 @@ async fn create_enrollment(
     }
 
     // Verify course exists.
-    let course_exists: Option<(i32,)> =
-        sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
-            .bind(payload.course_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(ApiError::from)?;
+    let course_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+        .bind(payload.course_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
 
     if course_exists.is_none() {
         return Err(ApiError::NotFound);
     }
 
     // Verify user exists.
-    let user_exists: Option<(i32,)> =
-        sqlx::query_as("SELECT 1 FROM users WHERE id = $1")
-            .bind(payload.user_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(ApiError::from)?;
+    let user_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM users WHERE id = $1")
+        .bind(payload.user_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
 
     if user_exists.is_none() {
         return Err(ApiError::NotFound);
@@ -167,9 +165,7 @@ async fn create_enrollment(
 
     match result {
         Ok(_) => {}
-        Err(sqlx::Error::Database(db_err))
-            if db_err.code().as_deref() == Some("23505") =>
-        {
+        Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("23505") => {
             return Err(ApiError::Conflict(format!(
                 "user {} is already enrolled in course {} as {}",
                 payload.user_id, payload.course_id, role
@@ -340,13 +336,12 @@ async fn delete_enrollment(
     let auth_role = auth_role.unwrap_or_else(|| "student".to_string());
 
     // Fetch the enrollment to know which course it's in.
-    let enrollment: Option<(i64, i64)> = sqlx::query_as(
-        "SELECT course_id, user_id FROM enrollments WHERE id = $1",
-    )
-    .bind(enrollment_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(ApiError::from)?;
+    let enrollment: Option<(i64, i64)> =
+        sqlx::query_as("SELECT course_id, user_id FROM enrollments WHERE id = $1")
+            .bind(enrollment_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
 
     let (course_id, _enrolled_user_id) = enrollment.ok_or(ApiError::NotFound)?;
 
@@ -358,12 +353,12 @@ async fn delete_enrollment(
     }
 
     let result = sqlx::query(
-        "UPDATE enrollments SET workflow_state = 'deleted', updated_at = now() WHERE id = $1"
+        "UPDATE enrollments SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
     )
-        .bind(enrollment_id)
-        .execute(&state.db)
-        .await
-        .map_err(ApiError::from)?;
+    .bind(enrollment_id)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
 
     if result.rows_affected() == 0 {
         return Err(ApiError::NotFound);

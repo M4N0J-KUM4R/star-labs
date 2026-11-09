@@ -61,9 +61,9 @@ pub struct ConversationParticipant {
 /// POST /conversations
 #[derive(Debug, Deserialize)]
 pub struct CreateConversation {
-    pub recipients: Vec<i64>,  // user IDs to add as participants
+    pub recipients: Vec<i64>, // user IDs to add as participants
     pub subject: String,
-    pub body: String,          // first message body
+    pub body: String, // first message body
 }
 
 /// POST /conversations/{id}/add_message
@@ -132,7 +132,11 @@ pub struct ConversationDetail {
 // ---------------------------------------------------------------------------
 
 /// Check if a user is an active participant in a conversation.
-async fn is_participant(pool: &PgPool, conversation_id: i64, user_id: i64) -> Result<bool, ApiError> {
+async fn is_participant(
+    pool: &PgPool,
+    conversation_id: i64,
+    user_id: i64,
+) -> Result<bool, ApiError> {
     let row: Option<(i32,)> = sqlx::query_as(
         r#"
         SELECT 1 FROM conversation_participants

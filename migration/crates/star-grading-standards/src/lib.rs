@@ -518,8 +518,14 @@ async fn get_final_grade(
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/courses/{courseId}/grading_standards", post(create_grading_standard))
-        .route("/courses/{courseId}/grading_standards", get(list_grading_standards))
+        .route(
+            "/courses/{courseId}/grading_standards",
+            post(create_grading_standard),
+        )
+        .route(
+            "/courses/{courseId}/grading_standards",
+            get(list_grading_standards),
+        )
         .route("/courses/{courseId}/final_grade", get(get_final_grade))
         .route("/grading_standards/{id}", get(get_grading_standard))
         .route("/grading_standards/{id}", delete(delete_grading_standard))
@@ -586,7 +592,10 @@ mod tests {
         assert_eq!(compute_letter_grade(92.0, &entries), Some("A-".to_string()));
         assert_eq!(compute_letter_grade(55.0, &entries), Some("F".to_string()));
         assert_eq!(compute_letter_grade(100.0, &entries), Some("A".to_string()));
-        assert_eq!(compute_letter_grade(89.9999, &entries), Some("F".to_string())); // 89.99 < 90
+        assert_eq!(
+            compute_letter_grade(89.9999, &entries),
+            Some("F".to_string())
+        ); // 89.99 < 90
     }
 
     #[test]

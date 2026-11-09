@@ -114,7 +114,10 @@ fn test_create_returns_workflow_state_available() {
         course_id(),
         group.id
     );
-    let _ = client.delete(&delete_url).header("Authorization", auth_token()).send();
+    let _ = client
+        .delete(&delete_url)
+        .header("Authorization", auth_token())
+        .send();
 }
 
 /// Test: deleted group vanishes from list.
@@ -128,7 +131,11 @@ fn test_deleted_group_vanishes_from_list() {
 
     let client = http_client();
     let course_id = course_id();
-    let url = format!("{}/api/v1/courses/{}/assignment_groups", api_url(), course_id);
+    let url = format!(
+        "{}/api/v1/courses/{}/assignment_groups",
+        api_url(),
+        course_id
+    );
 
     // Create a group
     let request = CreateAssignmentGroupRequest {
@@ -193,7 +200,11 @@ fn test_group_list_ordered_by_position() {
 
     let client = http_client();
     let course_id = course_id();
-    let url = format!("{}/api/v1/courses/{}/assignment_groups", api_url(), course_id);
+    let url = format!(
+        "{}/api/v1/courses/{}/assignment_groups",
+        api_url(),
+        course_id
+    );
 
     // Create groups with specific positions
     let positions = [3, 1, 2];
@@ -246,6 +257,9 @@ fn test_group_list_ordered_by_position() {
             course_id,
             id
         );
-        let _ = client.delete(&delete_url).header("Authorization", auth_token()).send();
+        let _ = client
+            .delete(&delete_url)
+            .header("Authorization", auth_token())
+            .send();
     }
 }

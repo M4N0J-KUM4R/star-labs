@@ -40,7 +40,7 @@ fn skip_if_no_token() {
 fn get(path: &str) -> Value {
     let token = auth_header().unwrap();
     let resp = client()
-        .get(&format!("{BASE}{path}"))
+        .get(format!("{BASE}{path}"))
         .header("Authorization", &token)
         .send()
         .unwrap();
@@ -50,7 +50,7 @@ fn get(path: &str) -> Value {
 fn post_json(path: &str, body: Value) -> Value {
     let token = auth_header().unwrap();
     let resp = client()
-        .post(&format!("{BASE}{path}"))
+        .post(format!("{BASE}{path}"))
         .header("Authorization", &token)
         .json(&body)
         .send()
@@ -61,7 +61,7 @@ fn post_json(path: &str, body: Value) -> Value {
 fn put_json(path: &str, body: Value) -> reqwest::blocking::Response {
     let token = auth_header().unwrap();
     client()
-        .put(&format!("{BASE}{path}"))
+        .put(format!("{BASE}{path}"))
         .header("Authorization", &token)
         .json(&body)
         .send()
@@ -71,7 +71,7 @@ fn put_json(path: &str, body: Value) -> reqwest::blocking::Response {
 fn delete_(path: &str) -> reqwest::blocking::Response {
     let token = auth_header().unwrap();
     client()
-        .delete(&format!("{BASE}{path}"))
+        .delete(format!("{BASE}{path}"))
         .header("Authorization", &token)
         .send()
         .unwrap()
@@ -93,10 +93,7 @@ fn test_create_calendar_event_round_trip() {
         "description": "Testing round-trip"
     });
 
-    let created: Value = post_json(
-        &format!("/courses/{course_id}/calendar_events"),
-        payload,
-    );
+    let created: Value = post_json(&format!("/courses/{course_id}/calendar_events"), payload);
 
     let returned_start_at = created["start_at"].as_str().unwrap();
     // The API may normalise to a particular format, so compare the date-time part.
@@ -124,16 +121,12 @@ fn test_deleted_event_vanishes_from_course_list() {
         "start_at": "2025-07-01T14:00:00Z"
     });
 
-    let created: Value = post_json(
-        &format!("/courses/{course_id}/calendar_events"),
-        payload,
-    );
+    let created: Value = post_json(&format!("/courses/{course_id}/calendar_events"), payload);
     let id = created["id"].as_i64().unwrap();
 
     // Verify it appears in the course list
-    let list_before: Vec<Value> = serde_json::from_value(
-        get(&format!("/courses/{course_id}/calendar_events"))
-    ).unwrap();
+    let list_before: Vec<Value> =
+        serde_json::from_value(get(&format!("/courses/{course_id}/calendar_events"))).unwrap();
     assert!(
         list_before.iter().any(|e| e["id"].as_i64() == Some(id)),
         "created event {id} should appear in course list before delete"
@@ -141,13 +134,16 @@ fn test_deleted_event_vanishes_from_course_list() {
 
     // Delete it
     let del_resp = delete_(&format!("/calendar_events/{id}"));
-    assert_eq!(del_resp.status().as_u16(), 204,
-        "delete should return 204, got {}", del_resp.status());
+    assert_eq!(
+        del_resp.status().as_u16(),
+        204,
+        "delete should return 204, got {}",
+        del_resp.status()
+    );
 
     // Verify it's gone
-    let list_after: Vec<Value> = serde_json::from_value(
-        get(&format!("/courses/{course_id}/calendar_events"))
-    ).unwrap();
+    let list_after: Vec<Value> =
+        serde_json::from_value(get(&format!("/courses/{course_id}/calendar_events"))).unwrap();
     assert!(
         !list_after.iter().any(|e| e["id"].as_i64() == Some(id)),
         "deleted event {id} should NOT appear in course list after delete"
@@ -166,18 +162,18 @@ fn test_update_calendar_event() {
         "title": "Original Title",
         "start_at": "2025-08-01T09:00:00Z"
     });
-    let created: Value = post_json(
-        &format!("/courses/{course_id}/calendar_events"),
-        payload,
-    );
+    let created: Value = post_json(&format!("/courses/{course_id}/calendar_events"), payload);
     let id = created["id"].as_i64().unwrap();
 
     let updated: Value = serde_json::from_str(
         &put_json(
             &format!("/calendar_events/{id}"),
             serde_json::json!({ "title": "Updated Title" }),
-        ).text().unwrap()
-    ).unwrap();
+        )
+        .text()
+        .unwrap(),
+    )
+    .unwrap();
 
     assert_eq!(updated["title"].as_str().unwrap(), "Updated Title");
     assert_eq!(updated["id"].as_i64().unwrap(), id);
@@ -199,10 +195,7 @@ fn test_get_calendar_event() {
         "start_at": "2025-09-01T12:00:00Z",
         "description": "Testing GET"
     });
-    let created: Value = post_json(
-        &format!("/courses/{course_id}/calendar_events"),
-        payload,
-    );
+    let created: Value = post_json(&format!("/courses/{course_id}/calendar_events"), payload);
     let id = created["id"].as_i64().unwrap();
 
     let fetched: Value = get(&format!("/calendar_events/{id}"));

@@ -67,7 +67,11 @@ async fn create_course(client: &Client, token: &str, name: &str) -> i64 {
         .send()
         .await
         .expect("create course request");
-    assert!(resp.status().is_success(), "create course failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "create course failed: {}",
+        resp.status()
+    );
     let body: Value = resp.json().await.expect("course json");
     body["id"].as_i64().expect("course id")
 }
@@ -88,12 +92,7 @@ async fn parity_created_page_returns_url_slug_matching_title() {
         eprintln!("skipping: live API unreachable");
         return;
     };
-    let course_id = create_course(
-        &client,
-        &token,
-        &format!("Parity Slug {}", uuid_like()),
-    )
-    .await;
+    let course_id = create_course(&client, &token, &format!("Parity Slug {}", uuid_like())).await;
 
     let resp = client
         .post(format!("{}/api/v1/courses/{}/pages", api_base(), course_id))
@@ -102,7 +101,11 @@ async fn parity_created_page_returns_url_slug_matching_title() {
         .send()
         .await
         .expect("create page request");
-    assert!(resp.status().is_success(), "create page failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "create page failed: {}",
+        resp.status()
+    );
     let page: Value = resp.json().await.expect("page json");
 
     // Canvas wiki_page.rb derives the url from the title.
@@ -121,12 +124,7 @@ async fn parity_unpublished_page_echoes_workflow_state() {
         eprintln!("skipping: live API unreachable");
         return;
     };
-    let course_id = create_course(
-        &client,
-        &token,
-        &format!("Parity Unpub {}", uuid_like()),
-    )
-    .await;
+    let course_id = create_course(&client, &token, &format!("Parity Unpub {}", uuid_like())).await;
 
     // Create with workflow_state = unpublished
     let resp = client
@@ -140,7 +138,11 @@ async fn parity_unpublished_page_echoes_workflow_state() {
         .send()
         .await
         .expect("create page request");
-    assert!(resp.status().is_success(), "create page failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "create page failed: {}",
+        resp.status()
+    );
     let page: Value = resp.json().await.expect("page json");
     assert_eq!(
         page["workflow_state"].as_str(),
@@ -155,7 +157,11 @@ async fn parity_unpublished_page_echoes_workflow_state() {
         .send()
         .await
         .expect("list pages request");
-    assert!(resp.status().is_success(), "list pages failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "list pages failed: {}",
+        resp.status()
+    );
     let list: Vec<Value> = resp.json().await.expect("page list json");
     let found = list
         .iter()
@@ -176,7 +182,11 @@ async fn parity_unpublished_page_echoes_workflow_state() {
         .send()
         .await
         .expect("get page request");
-    assert!(resp.status().is_success(), "get page failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "get page failed: {}",
+        resp.status()
+    );
     let detail: Value = resp.json().await.expect("page json");
     assert_eq!(detail["workflow_state"].as_str(), Some("unpublished"));
     assert_eq!(detail["body"].as_str(), Some("draft"));
@@ -189,12 +199,7 @@ async fn parity_page_lookup_by_url_slug() {
         eprintln!("skipping: live API unreachable");
         return;
     };
-    let course_id = create_course(
-        &client,
-        &token,
-        &format!("Parity Lookup {}", uuid_like()),
-    )
-    .await;
+    let course_id = create_course(&client, &token, &format!("Parity Lookup {}", uuid_like())).await;
 
     let resp = client
         .post(format!("{}/api/v1/courses/{}/pages", api_base(), course_id))
@@ -213,7 +218,11 @@ async fn parity_page_lookup_by_url_slug() {
         .send()
         .await
         .expect("get page by slug request");
-    assert!(resp.status().is_success(), "get by slug failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "get by slug failed: {}",
+        resp.status()
+    );
     let by_slug: Value = resp.json().await.expect("page json");
     assert_eq!(by_slug["id"].as_i64(), page["id"].as_i64());
     assert_eq!(by_slug["body"].as_str(), Some("b"));
@@ -226,12 +235,7 @@ async fn parity_deleted_page_excluded_from_list() {
         eprintln!("skipping: live API unreachable");
         return;
     };
-    let course_id = create_course(
-        &client,
-        &token,
-        &format!("Parity Del {}", uuid_like()),
-    )
-    .await;
+    let course_id = create_course(&client, &token, &format!("Parity Del {}", uuid_like())).await;
 
     let resp = client
         .post(format!("{}/api/v1/courses/{}/pages", api_base(), course_id))
@@ -249,7 +253,11 @@ async fn parity_deleted_page_excluded_from_list() {
         .send()
         .await
         .expect("delete page request");
-    assert!(resp.status().is_success(), "delete page failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "delete page failed: {}",
+        resp.status()
+    );
 
     let resp = client
         .get(format!("{}/api/v1/courses/{}/pages", api_base(), course_id))

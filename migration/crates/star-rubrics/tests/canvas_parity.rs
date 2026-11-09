@@ -66,7 +66,11 @@ async fn create_course(client: &Client, token: &str, name: &str) -> i64 {
         .send()
         .await
         .expect("create course request");
-    assert!(resp.status().is_success(), "create course failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "create course failed: {}",
+        resp.status()
+    );
     let body: Value = resp.json().await.expect("course json");
     body["id"].as_i64().expect("course id")
 }
@@ -87,10 +91,19 @@ async fn parity_rubric_create_returns_nested_criteria_and_ratings() {
         eprintln!("skipping: live API unreachable");
         return;
     };
-    let course_id = create_course(&client, &token, &format!("Parity Rubric Nested {}", uuid_like())).await;
+    let course_id = create_course(
+        &client,
+        &token,
+        &format!("Parity Rubric Nested {}", uuid_like()),
+    )
+    .await;
 
     let resp = client
-        .post(format!("{}/api/v1/courses/{}/rubrics", api_base(), course_id))
+        .post(format!(
+            "{}/api/v1/courses/{}/rubrics",
+            api_base(),
+            course_id
+        ))
         .bearer_auth(&token)
         .json(&json!({
             "title": "Project Rubric",
@@ -133,20 +146,26 @@ async fn parity_rubric_create_returns_nested_criteria_and_ratings() {
     assert_eq!(rubric["points_possible"].as_f64(), Some(100.0));
 
     // Verify nested criteria are returned
-    let criteria = rubric["criteria"].as_array().expect("criteria must be an array");
+    let criteria = rubric["criteria"]
+        .as_array()
+        .expect("criteria must be an array");
     assert_eq!(criteria.len(), 2, "must have 2 criteria");
 
     // First criterion has ratings
     let c0 = &criteria[0];
     assert_eq!(c0["description"].as_str(), Some("Content quality"));
     assert_eq!(c0["points"].as_f64(), Some(50.0));
-    let ratings0 = c0["ratings"].as_array().expect("criterion 0 ratings must be an array");
+    let ratings0 = c0["ratings"]
+        .as_array()
+        .expect("criterion 0 ratings must be an array");
     assert_eq!(ratings0.len(), 4, "criterion 0 must have 4 ratings");
 
     // Second criterion has ratings
     let c1 = &criteria[1];
     assert_eq!(c1["description"].as_str(), Some("Presentation"));
-    let ratings1 = c1["ratings"].as_array().expect("criterion 1 ratings must be an array");
+    let ratings1 = c1["ratings"]
+        .as_array()
+        .expect("criterion 1 ratings must be an array");
     assert_eq!(ratings1.len(), 3, "criterion 1 must have 3 ratings");
 }
 
@@ -157,11 +176,20 @@ async fn parity_rubric_assessment_records_and_lists() {
         eprintln!("skipping: live API unreachable");
         return;
     };
-    let course_id = create_course(&client, &token, &format!("Parity Assessment {}", uuid_like())).await;
+    let course_id = create_course(
+        &client,
+        &token,
+        &format!("Parity Assessment {}", uuid_like()),
+    )
+    .await;
 
     // Create an assignment for the submission
     let resp = client
-        .post(format!("{}/api/v1/courses/{}/assignments", api_base(), course_id))
+        .post(format!(
+            "{}/api/v1/courses/{}/assignments",
+            api_base(),
+            course_id
+        ))
         .bearer_auth(&token)
         .json(&json!({
             "title": "Graded Assignment",
@@ -170,13 +198,21 @@ async fn parity_rubric_assessment_records_and_lists() {
         .send()
         .await
         .expect("create assignment request");
-    assert!(resp.status().is_success(), "create assignment failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "create assignment failed: {}",
+        resp.status()
+    );
     let assignment: Value = resp.json().await.expect("assignment json");
     let assignment_id = assignment["id"].as_i64().expect("assignment id");
 
     // Enroll a student to create a submission
     let _student_resp = client
-        .post(format!("{}/api/v1/courses/{}/enrollments", api_base(), course_id))
+        .post(format!(
+            "{}/api/v1/courses/{}/enrollments",
+            api_base(),
+            course_id
+        ))
         .bearer_auth(&token)
         .json(&json!({
             "user_id": 2,  // assume student user id 2 exists
@@ -188,7 +224,11 @@ async fn parity_rubric_assessment_records_and_lists() {
 
     // Create a submission for the assignment
     let sub_resp = match client
-        .post(format!("{}/api/v1/assignments/{}/submissions", api_base(), assignment_id))
+        .post(format!(
+            "{}/api/v1/assignments/{}/submissions",
+            api_base(),
+            assignment_id
+        ))
         .bearer_auth(&token)
         .json(&json!({
             "body": "My submission text"
@@ -212,7 +252,11 @@ async fn parity_rubric_assessment_records_and_lists() {
 
     // Create a rubric
     let rubric_resp = client
-        .post(format!("{}/api/v1/courses/{}/rubrics", api_base(), course_id))
+        .post(format!(
+            "{}/api/v1/courses/{}/rubrics",
+            api_base(),
+            course_id
+        ))
         .bearer_auth(&token)
         .json(&json!({
             "title": "Grading Rubric",
@@ -248,7 +292,9 @@ async fn parity_rubric_assessment_records_and_lists() {
     // Get criterion IDs from the rubric
     let criteria = rubric["criteria"].as_array().expect("criteria array");
     let criterion0_id = criteria[0]["id"].as_i64().expect("criterion 0 id");
-    let rating0_id = criteria[0]["ratings"][0]["id"].as_i64().expect("rating 0 id");
+    let rating0_id = criteria[0]["ratings"][0]["id"]
+        .as_i64()
+        .expect("rating 0 id");
 
     // Create a rubric assessment
     let assessment_resp = client
@@ -279,14 +325,25 @@ async fn parity_rubric_assessment_records_and_lists() {
 
     // List assessments for the rubric
     let list_resp = client
-        .get(format!("{}/api/v1/rubrics/{}/assessments?submission_id={}", api_base(), rubric_id, submission_id))
+        .get(format!(
+            "{}/api/v1/rubrics/{}/assessments?submission_id={}",
+            api_base(),
+            rubric_id,
+            submission_id
+        ))
         .bearer_auth(&token)
         .send()
         .await
         .expect("list assessments request");
-    assert!(list_resp.status().is_success(), "list assessments must succeed");
+    assert!(
+        list_resp.status().is_success(),
+        "list assessments must succeed"
+    );
     let assessments: Vec<Value> = list_resp.json().await.expect("assessments list");
-    assert!(!assessments.is_empty(), "should have at least one assessment");
+    assert!(
+        !assessments.is_empty(),
+        "should have at least one assessment"
+    );
 }
 
 #[tokio::test]
@@ -300,7 +357,11 @@ async fn parity_deleted_rubric_vanishes_from_list() {
 
     // Create a rubric
     let resp = client
-        .post(format!("{}/api/v1/courses/{}/rubrics", api_base(), course_id))
+        .post(format!(
+            "{}/api/v1/courses/{}/rubrics",
+            api_base(),
+            course_id
+        ))
         .bearer_auth(&token)
         .json(&json!({
             "title": "Temp Rubric",
@@ -318,14 +379,21 @@ async fn parity_deleted_rubric_vanishes_from_list() {
 
     // Verify it appears in list
     let list_resp = client
-        .get(format!("{}/api/v1/courses/{}/rubrics", api_base(), course_id))
+        .get(format!(
+            "{}/api/v1/courses/{}/rubrics",
+            api_base(),
+            course_id
+        ))
         .bearer_auth(&token)
         .send()
         .await
         .expect("list rubrics request");
     assert!(list_resp.status().is_success());
     let list: Vec<Value> = list_resp.json().await.expect("rubrics list");
-    assert!(list.iter().any(|r| r["id"].as_i64() == Some(rubric_id)), "rubric must be in list before delete");
+    assert!(
+        list.iter().any(|r| r["id"].as_i64() == Some(rubric_id)),
+        "rubric must be in list before delete"
+    );
 
     // Delete it
     let del_resp = client
@@ -334,18 +402,29 @@ async fn parity_deleted_rubric_vanishes_from_list() {
         .send()
         .await
         .expect("delete rubric request");
-    assert_eq!(del_resp.status(), reqwest::StatusCode::NO_CONTENT, "delete must return 204");
+    assert_eq!(
+        del_resp.status(),
+        reqwest::StatusCode::NO_CONTENT,
+        "delete must return 204"
+    );
 
     // Verify it's gone from the course rubric list
     let list_resp2 = client
-        .get(format!("{}/api/v1/courses/{}/rubrics", api_base(), course_id))
+        .get(format!(
+            "{}/api/v1/courses/{}/rubrics",
+            api_base(),
+            course_id
+        ))
         .bearer_auth(&token)
         .send()
         .await
         .expect("list rubrics after delete");
     assert!(list_resp2.status().is_success());
     let list2: Vec<Value> = list_resp2.json().await.expect("rubrics list after delete");
-    assert!(!list2.iter().any(|r| r["id"].as_i64() == Some(rubric_id)), "deleted rubric must NOT appear in list");
+    assert!(
+        !list2.iter().any(|r| r["id"].as_i64() == Some(rubric_id)),
+        "deleted rubric must NOT appear in list"
+    );
 
     // Verify GET returns 404
     let get_resp = client
@@ -354,5 +433,9 @@ async fn parity_deleted_rubric_vanishes_from_list() {
         .send()
         .await
         .expect("get deleted rubric");
-    assert_eq!(get_resp.status(), reqwest::StatusCode::NOT_FOUND, "deleted rubric GET must return 404");
+    assert_eq!(
+        get_resp.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "deleted rubric GET must return 404"
+    );
 }

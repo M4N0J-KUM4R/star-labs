@@ -67,8 +67,13 @@ impl Client {
             len = payload.len(),
         );
 
-        let mut stream = TcpStream::connect((self.host.as_str(), self.port))
-            .map_err(|e| format!("connect {host}:{port} failed: {e}", host = self.host, port = self.port))?;
+        let mut stream = TcpStream::connect((self.host.as_str(), self.port)).map_err(|e| {
+            format!(
+                "connect {host}:{port} failed: {e}",
+                host = self.host,
+                port = self.port
+            )
+        })?;
         stream
             .set_read_timeout(Some(Duration::from_secs(15)))
             .map_err(|e| e.to_string())?;
@@ -83,9 +88,7 @@ impl Client {
 
         let text = String::from_utf8_lossy(&raw);
         // Status line + headers, then body (split on first blank line).
-        let (head, body_text) = text
-            .split_once("\r\n\r\n")
-            .unwrap_or((text.as_ref(), ""));
+        let (head, body_text) = text.split_once("\r\n\r\n").unwrap_or((text.as_ref(), ""));
         let status_line = head.lines().next().unwrap_or("");
         let status: u16 = status_line
             .split_whitespace()
@@ -95,7 +98,10 @@ impl Client {
 
         // Chunked transfer bodies are reassembled if present (Connection: close
         // means EOF-terminated; handle chunked just in case).
-        let body_text = if head.to_ascii_lowercase().contains("transfer-encoding: chunked") {
+        let body_text = if head
+            .to_ascii_lowercase()
+            .contains("transfer-encoding: chunked")
+        {
             dechunk(body_text)
         } else {
             body_text.to_string()
@@ -107,7 +113,10 @@ impl Client {
             serde_json::from_str(body_text.trim())
                 .map_err(|e| format!("{method} {path}: body parse failed: {e}: {body_text}"))?
         };
-        Ok(Response { status, body: parsed })
+        Ok(Response {
+            status,
+            body: parsed,
+        })
     }
 
     fn get(&self, path: &str) -> Result<Response, String> {
@@ -118,9 +127,8 @@ impl Client {
         self.request("POST", path, Some(body))
     }
 
-    fn login(base: &str, email: &str, password: &str) -> Result<Self, String> {
-        let (host, port, _) =
-            base_url().ok_or_else(|| "STAR_PARITY_URL unset".to_string())?;
+    fn login(_base: &str, email: &str, password: &str) -> Result<Self, String> {
+        let (host, port, _) = base_url().ok_or_else(|| "STAR_PARITY_URL unset".to_string())?;
         let anon = Client {
             host,
             port,
@@ -139,26 +147,19 @@ impl Client {
             .ok_or_else(|| format!("no token in login response: {}", res.body))?
             .to_string();
         let (host, port, _) = base_url().unwrap();
-        Ok(Client {
-            host,
-            port,
-            token,
-        })
+        Ok(Client { host, port, token })
     }
 }
 
 fn dechunk(body: &str) -> String {
     let mut out = String::new();
     let mut rest = body;
-    loop {
-        let Some((size_line, remainder)) = rest.split_once("\r\n") else {
-            break;
-        };
-        let size = match usize::from_str_radix(size_line.trim().split(';').next().unwrap_or("0"), 16)
-        {
-            Ok(s) => s,
-            Err(_) => break,
-        };
+    while let Some((size_line, remainder)) = rest.split_once("\r\n") {
+        let size =
+            match usize::from_str_radix(size_line.trim().split(';').next().unwrap_or("0"), 16) {
+                Ok(s) => s,
+                Err(_) => break,
+            };
         if size == 0 {
             break;
         }
@@ -172,7 +173,6 @@ fn dechunk(body: &str) -> String {
 
 /// Admin user on the live deployment.
 const ADMIN_EMAIL: &str = "admin@star.edu";
-
 
 fn expect_client() -> Client {
     let (host, port, _) = base_url().expect("STAR_PARITY_URL not set");
@@ -322,7 +322,14 @@ fn dashboard_returns_three_sections_with_expected_keys() {
     }
     if let Some(anns) = dash.body["recent_announcements"].as_array() {
         for ann in anns {
-            for key in ["id", "course_id", "course_name", "title", "message", "created_at"] {
+            for key in [
+                "id",
+                "course_id",
+                "course_name",
+                "title",
+                "message",
+                "created_at",
+            ] {
                 assert!(
                     ann.get(key).is_some_and(|v| !v.is_null()),
                     "recent_announcements item missing '{key}': {ann}"

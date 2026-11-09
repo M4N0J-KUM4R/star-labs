@@ -7,11 +7,7 @@
 //!
 //! Uses raw CTE/JOIN queries — no N+1.
 
-use axum::{
-    extract::State,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::State, routing::get, Json, Router};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use star_common::{ApiError, AppState};

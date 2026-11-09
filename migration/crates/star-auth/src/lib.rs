@@ -172,15 +172,16 @@ struct RegisterRequest {
     role: Option<String>,
 }
 
+/// Public because `fetch_user_by_id` returns it to other crates (star-dashboard).
 #[derive(Serialize, sqlx::FromRow)]
-struct UserResponse {
-    id: i64,
-    name: String,
+pub struct UserResponse {
+    pub id: i64,
+    pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sortable_name: Option<String>,
-    email: String,
-    role: String,
-    created_at: chrono::DateTime<chrono::Utc>,
+    pub email: String,
+    pub role: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Deserialize)]

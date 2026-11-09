@@ -13,8 +13,8 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use star_common::{ApiError, AppState};
 
@@ -277,12 +277,10 @@ async fn delete_announcement(
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
     // Fetch course_id for auth check.
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT course_id FROM announcements WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(i64,)> = sqlx::query_as("SELECT course_id FROM announcements WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let course_id = row.ok_or(ApiError::NotFound)?.0;
 
@@ -309,7 +307,10 @@ async fn delete_announcement(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/courses/{courseId}/announcements", get(list_announcements))
-        .route("/courses/{courseId}/announcements", post(create_announcement))
+        .route(
+            "/courses/{courseId}/announcements",
+            post(create_announcement),
+        )
         .route("/announcements/{id}", get(get_announcement))
         .route("/announcements/{id}", put(update_announcement))
         .route("/announcements/{id}", delete(delete_announcement))

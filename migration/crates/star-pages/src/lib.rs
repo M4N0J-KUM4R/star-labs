@@ -149,13 +149,12 @@ async fn user_enrolled_or_admin(
     if is_admin(auth) {
         return Ok(true);
     }
-    let row: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1",
-    )
-    .bind(user_id)
-    .bind(course_id)
-    .fetch_optional(db)
-    .await?;
+    let row: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1")
+            .bind(user_id)
+            .bind(course_id)
+            .fetch_optional(db)
+            .await?;
     Ok(row.is_some())
 }
 
@@ -282,19 +281,15 @@ async fn get_page(
 ) -> Result<Json<PageDetail>, ApiError> {
     // Resolve by numeric id or url slug, excluding soft-deleted pages.
     let row: Option<(i64,)> = if let Ok(numeric_id) = page_id.parse::<i64>() {
-        sqlx::query_as(
-            "SELECT course_id FROM pages WHERE id = $1 AND workflow_state <> 'deleted'",
-        )
-        .bind(numeric_id)
-        .fetch_optional(&state.db)
-        .await?
+        sqlx::query_as("SELECT course_id FROM pages WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(numeric_id)
+            .fetch_optional(&state.db)
+            .await?
     } else {
-        sqlx::query_as(
-            "SELECT course_id FROM pages WHERE url = $1 AND workflow_state <> 'deleted'",
-        )
-        .bind(&page_id)
-        .fetch_optional(&state.db)
-        .await?
+        sqlx::query_as("SELECT course_id FROM pages WHERE url = $1 AND workflow_state <> 'deleted'")
+            .bind(&page_id)
+            .fetch_optional(&state.db)
+            .await?
     };
 
     let (course_id,) = row.ok_or(ApiError::NotFound)?;
@@ -342,19 +337,15 @@ async fn update_page(
 ) -> Result<Json<PageDetail>, ApiError> {
     // Get page to find course_id (soft-deleted pages are not editable)
     let row: Option<(i64,)> = if let Ok(numeric_id) = page_id.parse::<i64>() {
-        sqlx::query_as(
-            "SELECT course_id FROM pages WHERE id = $1 AND workflow_state <> 'deleted'",
-        )
-        .bind(numeric_id)
-        .fetch_optional(&state.db)
-        .await?
+        sqlx::query_as("SELECT course_id FROM pages WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(numeric_id)
+            .fetch_optional(&state.db)
+            .await?
     } else {
-        sqlx::query_as(
-            "SELECT course_id FROM pages WHERE url = $1 AND workflow_state <> 'deleted'",
-        )
-        .bind(&page_id)
-        .fetch_optional(&state.db)
-        .await?
+        sqlx::query_as("SELECT course_id FROM pages WHERE url = $1 AND workflow_state <> 'deleted'")
+            .bind(&page_id)
+            .fetch_optional(&state.db)
+            .await?
     };
 
     let (course_id,) = row.ok_or(ApiError::NotFound)?;
@@ -412,19 +403,15 @@ async fn delete_page(
 ) -> Result<StatusCode, ApiError> {
     // Get page to find course_id
     let row: Option<(i64,)> = if let Ok(numeric_id) = page_id.parse::<i64>() {
-        sqlx::query_as(
-            "SELECT course_id FROM pages WHERE id = $1 AND workflow_state <> 'deleted'",
-        )
-        .bind(numeric_id)
-        .fetch_optional(&state.db)
-        .await?
+        sqlx::query_as("SELECT course_id FROM pages WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(numeric_id)
+            .fetch_optional(&state.db)
+            .await?
     } else {
-        sqlx::query_as(
-            "SELECT course_id FROM pages WHERE url = $1 AND workflow_state <> 'deleted'",
-        )
-        .bind(&page_id)
-        .fetch_optional(&state.db)
-        .await?
+        sqlx::query_as("SELECT course_id FROM pages WHERE url = $1 AND workflow_state <> 'deleted'")
+            .bind(&page_id)
+            .fetch_optional(&state.db)
+            .await?
     };
 
     let (course_id,) = row.ok_or(ApiError::NotFound)?;
@@ -435,12 +422,10 @@ async fn delete_page(
     }
 
     let result = if let Ok(numeric_id) = page_id.parse::<i64>() {
-        sqlx::query(
-            "UPDATE pages SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
-        )
-        .bind(numeric_id)
-        .execute(&state.db)
-        .await?
+        sqlx::query("UPDATE pages SET workflow_state = 'deleted', updated_at = now() WHERE id = $1")
+            .bind(numeric_id)
+            .execute(&state.db)
+            .await?
     } else {
         sqlx::query(
             "UPDATE pages SET workflow_state = 'deleted', updated_at = now() WHERE url = $1",
@@ -455,6 +440,23 @@ async fn delete_page(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
+
+/// Build the pages router.
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/courses/{courseId}/pages",
+            get(list_pages).post(create_page),
+        )
+        .route(
+            "/pages/{id}",
+            get(get_page).put(update_page).delete(delete_page),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -479,7 +481,10 @@ mod tests {
     #[test]
     fn slug_trims_dashes() {
         assert_eq!(generate_url_slug("  Trim -- Me  "), "trim-me");
-        assert_eq!(generate_url_slug("--leading-and-trailing--"), "leading-and-trailing");
+        assert_eq!(
+            generate_url_slug("--leading-and-trailing--"),
+            "leading-and-trailing"
+        );
     }
 
     #[test]
@@ -498,15 +503,4 @@ mod tests {
     fn slug_underscores_are_separators() {
         assert_eq!(generate_url_slug("snake_case_title"), "snake-case-title");
     }
-}
-
-// ---------------------------------------------------------------------------
-// Router
-// ---------------------------------------------------------------------------
-
-/// Build the pages router.
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route("/courses/{courseId}/pages", get(list_pages).post(create_page))
-        .route("/pages/{id}", get(get_page).put(update_page).delete(delete_page))
 }

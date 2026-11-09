@@ -72,7 +72,11 @@ async fn create_course(client: &Client, token: &str, name: &str) -> i64 {
         .send()
         .await
         .expect("create course request");
-    assert!(resp.status().is_success(), "create course failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "create course failed: {}",
+        resp.status()
+    );
     let body: Value = resp.json().await.expect("course json");
     body["id"].as_i64().expect("course id")
 }
@@ -141,10 +145,17 @@ async fn parity_announcement_includes_workflow_state_and_posted_at() {
         .send()
         .await
         .expect("get announcement request");
-    assert!(resp.status().is_success(), "get announcement failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "get announcement failed: {}",
+        resp.status()
+    );
     let detail: Value = resp.json().await.expect("announcement json");
     assert_eq!(detail["workflow_state"].as_str(), Some("active"));
-    assert!(detail["posted_at"].is_string(), "GET must include posted_at: {detail}");
+    assert!(
+        detail["posted_at"].is_string(),
+        "GET must include posted_at: {detail}"
+    );
 }
 
 #[tokio::test]
@@ -154,12 +165,8 @@ async fn parity_deleted_announcement_excluded_from_list() {
         eprintln!("skipping: live API unreachable");
         return;
     };
-    let course_id = create_course(
-        &client,
-        &token,
-        &format!("Parity Ann Del {}", uuid_like()),
-    )
-    .await;
+    let course_id =
+        create_course(&client, &token, &format!("Parity Ann Del {}", uuid_like())).await;
 
     let resp = client
         .post(format!(
@@ -175,7 +182,11 @@ async fn parity_deleted_announcement_excluded_from_list() {
         .send()
         .await
         .expect("create announcement request");
-    assert!(resp.status().is_success(), "create announcement failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "create announcement failed: {}",
+        resp.status()
+    );
     let announcement: Value = resp.json().await.expect("announcement json");
     let id = announcement["id"].as_i64().expect("announcement id");
 
@@ -203,7 +214,11 @@ async fn parity_deleted_announcement_excluded_from_list() {
         .send()
         .await
         .expect("list announcements request");
-    assert!(resp.status().is_success(), "list announcements failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "list announcements failed: {}",
+        resp.status()
+    );
     let list: Vec<Value> = resp.json().await.expect("announcement list json");
     assert!(
         list.iter().all(|a| a["id"].as_i64() != Some(id)),

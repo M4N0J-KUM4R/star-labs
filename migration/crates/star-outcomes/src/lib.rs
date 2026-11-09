@@ -668,7 +668,7 @@ mod tests {
             .await
             .expect("cleanup course");
         sqlx::query("DELETE FROM users WHERE id = ANY($1)")
-            .bind(&[
+            .bind([
                 active_student,
                 inactive_student,
                 active_teacher,

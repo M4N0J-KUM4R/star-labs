@@ -225,7 +225,9 @@ async fn fetch_rubric_with_nested(
     .fetch_optional(pool)
     .await?;
 
-    let Some(rubric) = rubric else { return Ok(None) };
+    let Some(rubric) = rubric else {
+        return Ok(None);
+    };
 
     let criteria: Vec<RubricCriterion> = sqlx::query_as(
         r#"
@@ -431,13 +433,11 @@ async fn update_rubric(
     auth: AuthUser,
     Json(payload): Json<UpdateRubric>,
 ) -> Result<Json<RubricResponse>, ApiError> {
-    let existing: (i64,) = sqlx::query_as(
-        r#"SELECT course_id FROM rubrics WHERE id = $1"#,
-    )
-    .bind(rubric_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(ApiError::NotFound)?;
+    let existing: (i64,) = sqlx::query_as(r#"SELECT course_id FROM rubrics WHERE id = $1"#)
+        .bind(rubric_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
 
     if !check_teacher_or_admin(&state.db, auth.id, existing.0, &auth).await? {
         return Err(ApiError::Forbidden);
@@ -494,12 +494,10 @@ async fn delete_rubric(
     Path(rubric_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        r#"SELECT course_id FROM rubrics WHERE id = $1"#,
-    )
-    .bind(rubric_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM rubrics WHERE id = $1"#)
+        .bind(rubric_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let (course_id,) = row.ok_or(ApiError::NotFound)?;
 
@@ -529,12 +527,11 @@ async fn create_assessment(
     Json(payload): Json<CreateAssessment>,
 ) -> Result<(StatusCode, Json<RubricAssessment>), ApiError> {
     // Verify rubric exists and get course_id
-    let rubric_row: Option<(i64,)> = sqlx::query_as(
-        r#"SELECT course_id FROM rubrics WHERE id = $1"#,
-    )
-    .bind(rubric_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let rubric_row: Option<(i64,)> =
+        sqlx::query_as(r#"SELECT course_id FROM rubrics WHERE id = $1"#)
+            .bind(rubric_id)
+            .fetch_optional(&state.db)
+            .await?;
 
     let (course_id,) = rubric_row.ok_or(ApiError::NotFound)?;
 
@@ -577,12 +574,11 @@ async fn list_assessments(
     auth: AuthUser,
 ) -> Result<Json<Vec<RubricAssessment>>, ApiError> {
     // Verify rubric exists and get course_id
-    let rubric_row: Option<(i64,)> = sqlx::query_as(
-        r#"SELECT course_id FROM rubrics WHERE id = $1"#,
-    )
-    .bind(rubric_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let rubric_row: Option<(i64,)> =
+        sqlx::query_as(r#"SELECT course_id FROM rubrics WHERE id = $1"#)
+            .bind(rubric_id)
+            .fetch_optional(&state.db)
+            .await?;
 
     let (course_id,) = rubric_row.ok_or(ApiError::NotFound)?;
 

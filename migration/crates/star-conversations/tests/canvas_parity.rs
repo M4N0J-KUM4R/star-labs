@@ -16,13 +16,13 @@ fn get_auth(email: &str) -> (String, String) {
 
     // Try to register (ignore if already exists).
     let _ = client
-        .post(&format!("{}/auth/register", API_BASE))
+        .post(format!("{}/auth/register", API_BASE))
         .json(&json!({ "name": email, "email": email, "password": "test123" }))
         .send();
 
     // Login.
     let resp = client
-        .post(&format!("{}/auth/login", API_BASE))
+        .post(format!("{}/auth/login", API_BASE))
         .json(&json!({ "email": email, "password": "test123" }))
         .send()
         .expect("login request failed");
@@ -39,7 +39,7 @@ fn auth_header(token: &str) -> String {
 /// Wait for the service to be ready.
 fn wait_ready() {
     let client = reqwest::blocking::Client::new();
-    for i in 0..30 {
+    for _i in 0..30 {
         if client
             .get("http://127.0.0.1:8080/health")
             .send()
@@ -64,12 +64,12 @@ fn test_parity_create_conversation_returns_participants_and_messages() {
     let client = reqwest::blocking::Client::new();
 
     // Create two users.
-    let (email1, token1) = get_auth("conv_parity_test_1@example.com");
-    let (_email2, token2) = get_auth("conv_parity_test_2@example.com");
+    let (_email1, token1) = get_auth("conv_parity_test_1@example.com");
+    let (_email2, _token2) = get_auth("conv_parity_test_2@example.com");
 
     // User 1 creates a conversation with User 2.
     let resp = client
-        .post(&format!("{}/conversations", API_BASE))
+        .post(format!("{}/conversations", API_BASE))
         .header("Authorization", auth_header(&token1))
         .json(&json!({
             "recipients": [],
@@ -95,7 +95,10 @@ fn test_parity_create_conversation_returns_participants_and_messages() {
     // Should have exactly 1 message.
     let messages = body["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 1, "has one initial message");
-    assert_eq!(messages[0]["body"].as_str().unwrap(), "This is my first message");
+    assert_eq!(
+        messages[0]["body"].as_str().unwrap(),
+        "This is my first message"
+    );
     assert!(messages[0]["author_id"].is_number());
     assert!(messages[0]["created_at"].is_string());
 }
@@ -110,12 +113,12 @@ fn test_parity_add_second_message_append() {
 
     let client = reqwest::blocking::Client::new();
 
-    let (email1, token1) = get_auth("conv_parity_test_msg2@example.com");
-    let (_email2, token2) = get_auth("conv_parity_test_msg2b@example.com");
+    let (_email1, token1) = get_auth("conv_parity_test_msg2@example.com");
+    let (_email2, _token2) = get_auth("conv_parity_test_msg2b@example.com");
 
     // Create conversation.
     let resp = client
-        .post(&format!("{}/conversations", API_BASE))
+        .post(format!("{}/conversations", API_BASE))
         .header("Authorization", auth_header(&token1))
         .json(&json!({
             "recipients": [],
@@ -132,7 +135,10 @@ fn test_parity_add_second_message_append() {
 
     // Add a second message.
     let resp2 = client
-        .post(&format!("{}/conversations/{}/add_message", API_BASE, conv_id))
+        .post(format!(
+            "{}/conversations/{}/add_message",
+            API_BASE, conv_id
+        ))
         .header("Authorization", auth_header(&token1))
         .json(&json!({ "body": "Second message added" }))
         .send()
@@ -145,7 +151,7 @@ fn test_parity_add_second_message_append() {
 
     // Get full conversation and verify both messages present.
     let resp3 = client
-        .get(&format!("{}/conversations/{}", API_BASE, conv_id))
+        .get(format!("{}/conversations/{}", API_BASE, conv_id))
         .header("Authorization", auth_header(&token1))
         .send()
         .expect("get conversation failed");
@@ -153,7 +159,11 @@ fn test_parity_add_second_message_append() {
     assert_eq!(resp3.status().as_u16(), 200);
     let detail: serde_json::Value = resp3.json().expect("detail JSON");
     let messages = detail["messages"].as_array().unwrap();
-    assert_eq!(messages.len(), initial_msg_count + 1, "message was appended");
+    assert_eq!(
+        messages.len(),
+        initial_msg_count + 1,
+        "message was appended"
+    );
 }
 
 #[test]
@@ -166,12 +176,12 @@ fn test_parity_deleted_conversation_hidden_from_list() {
 
     let client = reqwest::blocking::Client::new();
 
-    let (email1, token1) = get_auth("conv_parity_del@example.com");
+    let (_email1, token1) = get_auth("conv_parity_del@example.com");
     let (_email2, _token2) = get_auth("conv_parity_del2@example.com");
 
     // Create a conversation.
     let resp = client
-        .post(&format!("{}/conversations", API_BASE))
+        .post(format!("{}/conversations", API_BASE))
         .header("Authorization", auth_header(&token1))
         .json(&json!({
             "recipients": [],
@@ -186,7 +196,7 @@ fn test_parity_deleted_conversation_hidden_from_list() {
 
     // List conversations - should contain it.
     let resp_list = client
-        .get(&format!("{}/conversations", API_BASE))
+        .get(format!("{}/conversations", API_BASE))
         .header("Authorization", auth_header(&token1))
         .send()
         .expect("list failed");
@@ -195,7 +205,7 @@ fn test_parity_deleted_conversation_hidden_from_list() {
 
     // Delete the conversation for this user.
     let resp_del = client
-        .delete(&format!("{}/conversations/{}", API_BASE, conv_id))
+        .delete(format!("{}/conversations/{}", API_BASE, conv_id))
         .header("Authorization", auth_header(&token1))
         .send()
         .expect("delete failed");
@@ -203,11 +213,15 @@ fn test_parity_deleted_conversation_hidden_from_list() {
 
     // List again - should NOT contain it.
     let resp_list2 = client
-        .get(&format!("{}/conversations", API_BASE))
+        .get(format!("{}/conversations", API_BASE))
         .header("Authorization", auth_header(&token1))
         .send()
         .expect("list 2 failed");
     let list_body2: serde_json::Value = resp_list2.json().expect("list 2 JSON");
     let count_after = list_body2.as_array().unwrap().len();
-    assert_eq!(count_after, count_before - 1, "deleted conversation hidden from list");
+    assert_eq!(
+        count_after,
+        count_before - 1,
+        "deleted conversation hidden from list"
+    );
 }

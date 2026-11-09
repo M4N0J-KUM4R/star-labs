@@ -196,9 +196,19 @@ fn parity_duplicate_active_enrollment_conflicts() {
     let auth = format!("Bearer {token}");
     let url = format!("{BASE}/api/v1/enrollments");
 
-    let first = client.post(&url).header("Authorization", &auth).json(&payload).send().unwrap();
+    let first = client
+        .post(&url)
+        .header("Authorization", &auth)
+        .json(&payload)
+        .send()
+        .unwrap();
     assert_eq!(first.status(), 201);
 
-    let second = client.post(&url).header("Authorization", &auth).json(&payload).send().unwrap();
+    let second = client
+        .post(&url)
+        .header("Authorization", &auth)
+        .json(&payload)
+        .send()
+        .unwrap();
     assert_eq!(second.status(), 409, "duplicate active enrollment -> 409");
 }

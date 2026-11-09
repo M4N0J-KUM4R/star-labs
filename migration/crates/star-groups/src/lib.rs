@@ -146,12 +146,11 @@ async fn is_teacher_in_group(
     }
 
     // Get the group's course_id first
-    let group: Option<(Option<i64>,)> = sqlx::query_as(
-        "SELECT course_id FROM groups WHERE id = $1",
-    )
-    .bind(group_id)
-    .fetch_optional(pool)
-    .await?;
+    let group: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT course_id FROM groups WHERE id = $1")
+            .bind(group_id)
+            .fetch_optional(pool)
+            .await?;
 
     let Some((course_id,)) = group else {
         return Ok(false);
@@ -181,7 +180,10 @@ pub fn router() -> Router<AppState> {
         // Membership routes
         .route("/groups/{groupId}/memberships", post(create_membership))
         .route("/groups/{groupId}/memberships", get(list_memberships))
-        .route("/groups/{groupId}/memberships/{membershipId}", delete(delete_membership))
+        .route(
+            "/groups/{groupId}/memberships/{membershipId}",
+            delete(delete_membership),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -218,8 +220,12 @@ async fn create_group(
         return Err(ApiError::Validation("name is required".into()));
     }
 
-    let join_level = if ["invitation_only", "parent_context_auto_join", "parent_context_request"]
-        .contains(&payload.join_level.as_str())
+    let join_level = if [
+        "invitation_only",
+        "parent_context_auto_join",
+        "parent_context_request",
+    ]
+    .contains(&payload.join_level.as_str())
     {
         payload.join_level.clone()
     } else {
@@ -238,7 +244,7 @@ async fn create_group(
     .bind(&payload.name)
     .bind(&payload.description)
     .bind(&join_level)
-    .bind(&payload.group_category_id)
+    .bind(payload.group_category_id)
     .fetch_one(&state.db)
     .await?;
 
@@ -264,12 +270,13 @@ async fn list_groups(
 
     // Non-admin must be enrolled in the course
     if !is_admin(&auth) {
-        let enrolled: Option<(i64,)> =
-            sqlx::query_as("SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1")
-                .bind(auth.id)
-                .bind(course_id)
-                .fetch_optional(&state.db)
-                .await?;
+        let enrolled: Option<(i64,)> = sqlx::query_as(
+            "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1",
+        )
+        .bind(auth.id)
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?;
 
         if enrolled.is_none() {
             return Err(ApiError::Forbidden);
@@ -314,12 +321,13 @@ async fn get_group(
     // Check access: if the group belongs to a course, user must be enrolled or admin
     if let Some(course_id) = group.course_id {
         if !is_admin(&auth) {
-            let enrolled: Option<(i64,)> =
-                sqlx::query_as("SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1")
-                    .bind(auth.id)
-                    .bind(course_id)
-                    .fetch_optional(&state.db)
-                    .await?;
+            let enrolled: Option<(i64,)> = sqlx::query_as(
+                "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1",
+            )
+            .bind(auth.id)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
 
             if enrolled.is_none() {
                 return Err(ApiError::Forbidden);
@@ -365,8 +373,12 @@ async fn update_group(
     let join_level = payload.join_level.unwrap_or(existing.join_level);
 
     // Validate join_level
-    if !["invitation_only", "parent_context_auto_join", "parent_context_request"]
-        .contains(&join_level.as_str())
+    if ![
+        "invitation_only",
+        "parent_context_auto_join",
+        "parent_context_request",
+    ]
+    .contains(&join_level.as_str())
     {
         return Err(ApiError::Validation(
             "join_level must be 'invitation_only', 'parent_context_auto_join', or 'parent_context_request'".into(),
@@ -474,9 +486,7 @@ async fn create_membership(
 
     match result {
         Ok(_) => {}
-        Err(sqlx::Error::Database(db_err))
-            if db_err.code().as_deref() == Some("23505") =>
-        {
+        Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("23505") => {
             return Err(ApiError::Conflict(format!(
                 "user {} is already a member of group {}",
                 payload.user_id, group_id
@@ -501,27 +511,6 @@ async fn create_membership(
     .await?;
 
     Ok((StatusCode::CREATED, Json(membership)))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::membership_initial_workflow_state;
-
-    #[test]
-    fn membership_state_follows_group_join_level() {
-        assert_eq!(
-            membership_initial_workflow_state("invitation_only"),
-            "invited"
-        );
-        assert_eq!(
-            membership_initial_workflow_state("parent_context_request"),
-            "requested"
-        );
-        assert_eq!(
-            membership_initial_workflow_state("parent_context_auto_join"),
-            "accepted"
-        );
-    }
 }
 
 /// GET /groups/{groupId}/memberships — list memberships (teacher/admin only)
@@ -583,13 +572,12 @@ async fn delete_membership(
     }
 
     // Verify membership exists and belongs to this group
-    let membership_exists: Option<(i64,)> = sqlx::query_as(
-        "SELECT 1 FROM group_memberships WHERE id = $1 AND group_id = $2",
-    )
-    .bind(membership_id)
-    .bind(group_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let membership_exists: Option<(i64,)> =
+        sqlx::query_as("SELECT 1 FROM group_memberships WHERE id = $1 AND group_id = $2")
+            .bind(membership_id)
+            .bind(group_id)
+            .fetch_optional(&state.db)
+            .await?;
 
     if membership_exists.is_none() {
         return Err(ApiError::NotFound);
@@ -607,4 +595,25 @@ async fn delete_membership(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::membership_initial_workflow_state;
+
+    #[test]
+    fn membership_state_follows_group_join_level() {
+        assert_eq!(
+            membership_initial_workflow_state("invitation_only"),
+            "invited"
+        );
+        assert_eq!(
+            membership_initial_workflow_state("parent_context_request"),
+            "requested"
+        );
+        assert_eq!(
+            membership_initial_workflow_state("parent_context_auto_join"),
+            "accepted"
+        );
+    }
 }
