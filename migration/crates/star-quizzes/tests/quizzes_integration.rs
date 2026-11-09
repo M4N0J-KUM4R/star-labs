@@ -21,7 +21,8 @@
 //!   already has a (quiz_id, user_id) submission row (UNIQUE constraint backs
 //!   this up).
 //! - update (PUT) validates quiz_type and requires a non-blank title when one
-//!   is supplied, matching create (the title is trimmed). An explicit JSON
+//!   is supplied, matching create (blank is rejected; the value is stored as
+//!   supplied). An explicit JSON
 //!   null cannot clear an optional field (omitted and null are
 //!   indistinguishable).
 //! - GET /courses/{courseId}/quizzes/{id}/submissions loads the quiz's own
@@ -414,7 +415,7 @@ async fn create_quiz_validates_title_and_quiz_type() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     let token = &auth(teacher, "teacher");
 
-    // Blank titles (the handler trims) are 422 with a title error.
+    // Blank titles are 422 with a title error.
     for title in ["", "   "] {
         let resp = server
             .post(&format!("/courses/{course}/quizzes"))
@@ -784,7 +785,7 @@ async fn update_quiz_validates_quiz_type_and_rejects_blank_title() {
         "title unchanged"
     );
 
-    // A valid title update is trimmed and accepted.
+    // A valid title update is accepted as supplied.
     let resp = server
         .put(&format!("/quizzes/{}", f.quiz))
         .add_header(axum::http::header::AUTHORIZATION, token)
@@ -792,10 +793,10 @@ async fn update_quiz_validates_quiz_type_and_rejects_blank_title() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
-    assert_eq!(body["title"], "Renamed Quiz");
+    assert_eq!(body["title"], "  Renamed Quiz  ");
     assert_eq!(
         db_quiz_title(&pool, f.quiz).await,
-        Some("Renamed Quiz".to_string())
+        Some("  Renamed Quiz  ".to_string())
     );
 
     // Other partial updates still succeed.

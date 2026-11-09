@@ -321,11 +321,10 @@ async fn update_quiz(
 
     let title = match payload.title {
         Some(title) => {
-            let title = title.trim();
-            if title.is_empty() {
+            if title.trim().is_empty() {
                 return Err(ApiError::Validation("title is required".into()));
             }
-            title.to_string()
+            title
         }
         None => current.title,
     };
