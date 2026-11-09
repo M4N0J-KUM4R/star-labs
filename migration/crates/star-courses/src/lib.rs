@@ -290,17 +290,8 @@ async fn list_courses(
     }))
 }
 
-/// POST /courses — create a course (teacher or admin only)
-/// Auto-creates a teacher enrollment for the creator.
-async fn create_course(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Json(payload): Json<CreateCourse>,
-) -> Result<(StatusCode, Json<Course>), ApiError> {
-    if !is_teacher(&auth) {
-        return Err(ApiError::Forbidden);
-    }
-
+/// Validate a create-course payload. Shared by both create routes.
+fn validate_create_course(payload: &CreateCourse) -> Result<(), ApiError> {
     if payload.name.trim().is_empty() {
         return Err(ApiError::Validation("name is required".into()));
     }
@@ -316,22 +307,76 @@ async fn create_course(
         )));
     }
 
-    let course: Course = sqlx::query_as(
-        r#"
-        INSERT INTO courses (name, course_code, description, workflow_state, start_at, end_at, syllabus_body)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, name, course_code, description, workflow_state, start_at, end_at, syllabus_body, created_at, updated_at
-        "#,
-    )
-    .bind(&payload.name)
-    .bind(&payload.course_code)
-    .bind(&payload.description)
-    .bind(&payload.workflow_state)
-    .bind(payload.start_at)
-    .bind(payload.end_at)
-    .bind(&payload.syllabus_body)
-    .fetch_one(&state.db)
-    .await?;
+    Ok(())
+}
+
+/// Create a course and auto-enroll its creator as teacher.
+///
+/// Shared by POST /courses and the account-scoped alias. `account_id` is the
+/// owning account for the alias route; `None` keeps the column default (root
+/// account) exactly as POST /courses always has.
+async fn create_course_record(
+    pool: &PgPool,
+    auth: &AuthUser,
+    payload: CreateCourse,
+    account_id: Option<i64>,
+) -> Result<Course, ApiError> {
+    if !is_teacher(auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    if let Some(account_id) = account_id {
+        let account_exists: Option<(i32,)> =
+            sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
+                .bind(account_id)
+                .fetch_optional(pool)
+                .await?;
+        if account_exists.is_none() {
+            return Err(ApiError::NotFound);
+        }
+    }
+
+    validate_create_course(&payload)?;
+
+    let course: Course = match account_id {
+        Some(account_id) => {
+            sqlx::query_as(
+                r#"
+                INSERT INTO courses (name, course_code, description, workflow_state, start_at, end_at, syllabus_body, account_id)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+                RETURNING id, name, course_code, description, workflow_state, start_at, end_at, syllabus_body, created_at, updated_at
+                "#,
+            )
+            .bind(&payload.name)
+            .bind(&payload.course_code)
+            .bind(&payload.description)
+            .bind(&payload.workflow_state)
+            .bind(payload.start_at)
+            .bind(payload.end_at)
+            .bind(&payload.syllabus_body)
+            .bind(account_id)
+            .fetch_one(pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as(
+                r#"
+                INSERT INTO courses (name, course_code, description, workflow_state, start_at, end_at, syllabus_body)
+                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                RETURNING id, name, course_code, description, workflow_state, start_at, end_at, syllabus_body, created_at, updated_at
+                "#,
+            )
+            .bind(&payload.name)
+            .bind(&payload.course_code)
+            .bind(&payload.description)
+            .bind(&payload.workflow_state)
+            .bind(payload.start_at)
+            .bind(payload.end_at)
+            .bind(&payload.syllabus_body)
+            .fetch_one(pool)
+            .await?
+        }
+    };
 
     // Auto-create teacher enrollment for the creator
     sqlx::query(
@@ -342,9 +387,37 @@ async fn create_course(
     )
     .bind(auth.id)
     .bind(course.id)
-    .execute(&state.db)
+    .execute(pool)
     .await?;
 
+    Ok(course)
+}
+
+/// POST /courses — create a course (teacher or admin only)
+/// Auto-creates a teacher enrollment for the creator.
+async fn create_course(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<CreateCourse>,
+) -> Result<(StatusCode, Json<Course>), ApiError> {
+    let course = create_course_record(&state.db, &auth, payload, None).await?;
+    Ok((StatusCode::CREATED, Json(course)))
+}
+
+/// POST /accounts/{id}/courses — Canvas-compatible account-scoped alias for
+/// course creation. The account must exist (404 otherwise); teacher/admin
+/// authorization and payload validation match POST /courses.
+///
+/// The path parameter is named `id` to match star-accounts'
+/// GET /accounts/{id}/courses: axum's merged router rejects the same route
+/// shape with a different parameter name.
+async fn create_course_in_account(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CreateCourse>,
+) -> Result<(StatusCode, Json<Course>), ApiError> {
+    let course = create_course_record(&state.db, &auth, payload, Some(account_id)).await?;
     Ok((StatusCode::CREATED, Json(course)))
 }
 
@@ -618,6 +691,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/courses", get(list_courses))
         .route("/courses", post(create_course))
+        .route("/accounts/{id}/courses", post(create_course_in_account))
         .route("/courses/{id}", get(get_course))
         .route("/courses/{id}", put(update_course))
         .route("/courses/{id}", delete(delete_course))
