@@ -6,8 +6,8 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 63 | 1377 | 4.6% |
-| REST routes referenced from `ui/` | 45 | 493 | 9.1% |
+| REST API routes | 66 | 1403 | 4.7% |
+| REST routes referenced from `ui/` | 46 | 503 | 9.1% |
 | GraphQL files | 0 | 390 | 0.0% |
 | GraphQL object types | 0 | 170 | 0.0% |
 | GraphQL mutations | 0 | 110 | 0.0% |
@@ -17,13 +17,13 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | js_env files | 0 | 124 | 0.0% |
 | Schema tables (vs 688 Canvas models) | 36 | 688 | n/a |
 
-Implemented REST route count: **63 / 1377** (4.6%).
+Implemented REST route count: **66 / 1403** (4.7%).
 
-Star registrations: 130 route/method pairs from 127 `.route(...)` calls (0 unparsed); 68 have no Canvas match and are listed as extras below.
+Star registrations: 130 route/method pairs from 127 `.route(...)` calls (0 unparsed); 65 have no Canvas match and are listed as extras below.
 
 Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 
-## Controllers with coverage (24)
+## Controllers with coverage (25)
 
 | Controller | Implemented | Total | Coverage |
 |---|---:|---:|---:|
@@ -40,6 +40,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `enrollments_api` | 3 | 14 | 21.4% |
 | `files` | 3 | 26 | 11.5% |
 | `group_memberships` | 3 | 11 | 27.3% |
+| `outcome_groups_api` | 3 | 40 | 7.5% |
 | `context_modules_api` | 2 | 8 | 25.0% |
 | `grading_standards_api` | 2 | 10 | 20.0% |
 | `quizzes/quizzes_api` | 2 | 7 | 28.6% |
@@ -52,7 +53,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `rubrics_api` | 1 | 15 | 6.7% |
 | `sub_accounts` | 1 | 2 | 50.0% |
 
-## Star routes with no Canvas match (68)
+## Star routes with no Canvas match (65)
 
 | Verb | Path | Crate |
 |---|---|---|
@@ -78,10 +79,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | GET | `/courses/{courseId}/final_grade` | `star-grading-standards` |
 | GET | `/courses/{courseId}/gradebook` | `star-assignments` |
 | POST | `/courses/{courseId}/groups` | `star-groups` |
-| GET | `/courses/{courseId}/outcome_groups` | `star-outcomes` |
 | POST | `/courses/{courseId}/outcome_groups` | `star-outcomes` |
-| GET | `/courses/{courseId}/outcome_groups/{groupId}/outcomes` | `star-outcomes` |
-| POST | `/courses/{courseId}/outcome_groups/{groupId}/outcomes` | `star-outcomes` |
 | GET | `/courses/{courseId}/outcomes` | `star-outcomes` |
 | POST | `/courses/{courseId}/outcomes` | `star-outcomes` |
 | GET | `/dashboard` | `star-dashboard` |
@@ -128,7 +126,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 ## Parser scope and limitations
 
 - Canvas routes are verb declarations inside `ApiRouteSet.draw` blocks, plus Rails `resources` declarations (API defaults: index/create/show/update/destroy, honoring `only:`, `except:`, `path:`, `controller:`, and nesting) and `%w[...].each` context loops, which are expanded for every value.
-- Interpolations built by conditional expressions or other runtime values are left as `{}` and cannot match concrete Rust paths.
+- Conditional context prefixes assigned from `var == "literal" ? var : "..."` are evaluated per loop binding, and `if`/`unless var == "literal"` guards filter bindings; this expands the `outcome_groups_api` routes to `courses/...`, `accounts/...`, and `global/...`. Other runtime interpolations are left as `{}` and cannot match concrete Rust paths.
 - UI references are `/api/v1/...` string literals in `ui/`; runtime-built paths and hard-coded ids that cannot be normalized are missed.
 - Rust paths are matched by `(verb, normalized path)`; axum's `nest("/api/v1", ...)` mount is assumed for all crate routers.
 - Extras include deliberate flat-path deviations (for example `/assignments/{id}` where Canvas uses `/courses/{course_id}/assignments/{id}`) and auth/dashboard/health routes Canvas does not expose.
