@@ -247,7 +247,7 @@ async fn create_course_as_teacher_returns_201_echoes_fields_and_persists() {
 
     let resp = server
         .post("/courses")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({
             "name": "Rust 101",
             "course_code": code,
@@ -315,7 +315,7 @@ async fn create_course_as_admin_succeeds() {
 
     let resp = server
         .post("/courses")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "name": "Admin Course", "course_code": format!("{prefix}-AdminCourse") }))
         .await;
 
@@ -337,7 +337,7 @@ async fn create_course_as_student_is_403() {
 
     let resp = server
         .post("/courses")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "name": "Hack 101", "course_code": format!("{prefix}-Hack101") }))
         .await;
 
@@ -365,7 +365,7 @@ async fn create_course_blank_name_is_422() {
 
     let resp = server
         .post("/courses")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "name": "   ", "course_code": format!("{prefix}-NoName") }))
         .await;
 
@@ -385,7 +385,7 @@ async fn create_course_blank_course_code_is_422() {
 
     let resp = server
         .post("/courses")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "name": "Some Course", "course_code": "" }))
         .await;
 
@@ -407,7 +407,7 @@ async fn create_course_invalid_workflow_state_is_422() {
     // those states (documented deviation — see test header).
     let resp = server
         .post("/courses")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({
             "name": "State Course",
             "course_code": format!("{prefix}-StateCourse"),
@@ -439,12 +439,14 @@ async fn list_as_admin_sees_all_non_deleted_courses() {
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
 
-    // Three live courses for this run (created via the API as the teacher,
+    // Six live courses for this run (created via the API as the teacher,
     // which also auto-enrolls the creator), plus one soft-deleted course.
-    for name in ["ListA", "ListB", "ListC"] {
+    // Six guarantees page 2 (per_page=2) is full regardless of what other
+    // suites leave in the shared database.
+    for name in ["ListA", "ListB", "ListC", "ListD", "ListE", "ListF"] {
         let resp = server
             .post("/courses")
-            .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
             .json(&json!({ "name": name, "course_code": format!("{prefix}-{name}") }))
             .await;
         assert_eq!(resp.status_code(), 201, "seed course: {}", resp.text());
@@ -464,8 +466,8 @@ async fn list_as_admin_sees_all_non_deleted_courses() {
     let ours = our_courses(&page, &prefix);
     assert_eq!(
         ours.len(),
-        3,
-        "3 live courses, soft-deleted excluded: {ours:?}"
+        6,
+        "6 live courses, soft-deleted excluded: {ours:?}"
     );
     assert!(
         ours.iter().all(|c| c["workflow_state"] != "deleted"),
@@ -575,7 +577,7 @@ async fn get_course_by_id_for_enrolled_student() {
 
     let resp = server
         .get(&format!("/courses/{course}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
 
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -600,7 +602,7 @@ async fn get_course_by_admin_without_enrollment_succeeds() {
 
     let resp = server
         .get(&format!("/courses/{course}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -621,7 +623,7 @@ async fn get_course_missing_id_is_404() {
 
     let resp = server
         .get("/courses/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -641,7 +643,7 @@ async fn get_course_as_unenrolled_user_is_403() {
 
     let resp = server
         .get(&format!("/courses/{course}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
 
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -677,7 +679,7 @@ async fn update_course_by_course_teacher_changes_fields() {
 
     let resp = server
         .put(&format!("/courses/{course}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({
             "name": "Rust 201",
             "course_code": format!("{prefix}-UpdMe-2"),
@@ -725,7 +727,7 @@ async fn update_course_partial_patch_keeps_other_fields() {
     // Send only one field; everything else must keep its current value.
     let resp = server
         .put(&format!("/courses/{course}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "name": "Only Name Changed" }))
         .await;
 
@@ -761,7 +763,7 @@ async fn update_course_by_admin_succeeds() {
 
     let resp = server
         .put(&format!("/courses/{course}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "workflow_state": "unpublished" }))
         .await;
 
@@ -784,7 +786,7 @@ async fn update_course_by_global_teacher_without_enrollment_is_403() {
 
     let resp = server
         .put(&format!("/courses/{course}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "name": "Hostile Takeover" }))
         .await;
 
@@ -812,7 +814,7 @@ async fn update_course_by_enrolled_student_is_403() {
 
     let resp = server
         .put(&format!("/courses/{course}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "name": "Student Edit" }))
         .await;
 
@@ -832,7 +834,7 @@ async fn update_course_missing_id_is_404() {
 
     let resp = server
         .put("/courses/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "name": "Ghost" }))
         .await;
 
@@ -853,7 +855,7 @@ async fn update_course_invalid_workflow_state_is_422() {
 
     let resp = server
         .put(&format!("/courses/{course}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "workflow_state": "claimed" }))
         .await;
 
@@ -895,7 +897,7 @@ async fn delete_course_by_admin_is_soft_delete() {
 
     let resp = server
         .delete(&format!("/courses/{course}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
@@ -927,7 +929,7 @@ async fn delete_course_by_admin_is_soft_delete() {
     // Deleting again is 404 (the WHERE excludes already-deleted rows).
     let again = server
         .delete(&format!("/courses/{course}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(again.status_code(), 404, "body: {}", again.text());
 
@@ -947,7 +949,7 @@ async fn delete_course_by_teacher_is_403() {
 
     let resp = server
         .delete(&format!("/courses/{course}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
 
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -973,7 +975,7 @@ async fn delete_course_missing_id_is_404() {
 
     let resp = server
         .delete("/courses/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -1010,7 +1012,7 @@ async fn create_enrollment_for_existing_course_is_500_regression() {
 
     let resp = server
         .post(&format!("/courses/{course}/enrollments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "role": "student" }))
         .await;
 
@@ -1056,7 +1058,7 @@ async fn create_enrollment_by_course_teacher_returns_201_with_user_info() {
 
     let resp = server
         .post(&format!("/courses/{course}/enrollments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "role": "student" }))
         .await;
 
@@ -1099,7 +1101,7 @@ async fn create_enrollment_role_defaults_to_student() {
 
     let resp = server
         .post(&format!("/courses/{course}/enrollments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "user_id": student }))
         .await;
 
@@ -1125,7 +1127,7 @@ async fn create_enrollment_invalid_role_is_422() {
     // Only 'student' and 'teacher' are accepted (no TaEnrollment etc.).
     let resp = server
         .post(&format!("/courses/{course}/enrollments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "user_id": student, "role": "TaEnrollment" }))
         .await;
 
@@ -1157,7 +1159,7 @@ async fn create_enrollment_same_role_duplicate_is_409() {
     let payload = json!({ "user_id": student, "role": "student" });
     let first = server
         .post(&format!("/courses/{course}/enrollments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&payload)
         .await;
     assert_eq!(first.status_code(), 201, "first insert: {}", first.text());
@@ -1165,7 +1167,7 @@ async fn create_enrollment_same_role_duplicate_is_409() {
     // Same user + course + role hits the UNIQUE constraint -> 409.
     let second = server
         .post(&format!("/courses/{course}/enrollments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&payload)
         .await;
     assert_eq!(second.status_code(), 409, "body: {}", second.text());
@@ -1173,7 +1175,7 @@ async fn create_enrollment_same_role_duplicate_is_409() {
     // Same user + course with a different role is a distinct row — allowed.
     let other_role = server
         .post(&format!("/courses/{course}/enrollments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "user_id": student, "role": "teacher" }))
         .await;
     assert_eq!(other_role.status_code(), 201, "body: {}", other_role.text());
@@ -1202,7 +1204,7 @@ async fn create_enrollment_missing_course_is_404() {
 
     let resp = server
         .post("/courses/999999999/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "user_id": student, "role": "student" }))
         .await;
 
@@ -1224,7 +1226,7 @@ async fn create_enrollment_missing_user_is_404() {
 
     let resp = server
         .post(&format!("/courses/{course}/enrollments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "user_id": 999999999, "role": "student" }))
         .await;
 
@@ -1248,7 +1250,7 @@ async fn create_enrollment_by_global_teacher_of_other_course_is_403() {
 
     let resp = server
         .post(&format!("/courses/{target}/enrollments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "role": "student" }))
         .await;
 
@@ -1283,7 +1285,7 @@ async fn create_enrollment_by_enrolled_student_is_403() {
 
     let resp = server
         .post(&format!("/courses/{course}/enrollments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "user_id": other, "role": "student" }))
         .await;
 
@@ -1398,7 +1400,7 @@ async fn list_enrollments_by_enrolled_student_is_403() {
 
     let resp = server
         .get(&format!("/courses/{course}/enrollments"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
 
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -1441,7 +1443,7 @@ async fn delete_enrollment_by_course_teacher_hard_deletes_row() {
 
     let resp = server
         .delete(&format!("/courses/{course}/enrollments/{student}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
 
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
@@ -1488,7 +1490,7 @@ async fn delete_enrollment_by_admin_succeeds() {
 
     let resp = server
         .delete(&format!("/courses/{course}/enrollments/{student}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
@@ -1519,7 +1521,7 @@ async fn delete_enrollment_removes_all_role_rows_for_user() {
     // One DELETE removes every (user, course) row regardless of role.
     let resp = server
         .delete(&format!("/courses/{course}/enrollments/{student}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
@@ -1553,7 +1555,7 @@ async fn delete_enrollment_by_enrolled_student_is_403() {
 
     let resp = server
         .delete(&format!("/courses/{course}/enrollments/{student}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
 
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -1583,7 +1585,7 @@ async fn delete_enrollment_missing_user_is_404() {
 
     let resp = server
         .delete(&format!("/courses/{course}/enrollments/999999999"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -1621,7 +1623,7 @@ async fn full_lifecycle_create_update_enroll_unenroll_delete() {
     let code = format!("{prefix}-Lifecycle");
     let resp = server
         .post("/courses")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "name": "Lifecycle 101", "course_code": code, "workflow_state": "unpublished" }))
         .await;
     assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
@@ -1632,7 +1634,7 @@ async fn full_lifecycle_create_update_enroll_unenroll_delete() {
     // 2. Teacher publishes it via PUT.
     let resp = server
         .put(&format!("/courses/{course_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "workflow_state": "available" }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -1643,7 +1645,7 @@ async fn full_lifecycle_create_update_enroll_unenroll_delete() {
     //    SQL: POST .../enrollments is blocked by the INT4 decode bug).
     let resp = server
         .get(&format!("/courses/{course_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -1652,7 +1654,7 @@ async fn full_lifecycle_create_update_enroll_unenroll_delete() {
     // 4. Now the student can read the course and sees it in their list.
     let resp = server
         .get(&format!("/courses/{course_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
 
@@ -1668,7 +1670,7 @@ async fn full_lifecycle_create_update_enroll_unenroll_delete() {
     // 6. Teacher unenrolls the student; enrollment listing shrinks.
     let resp = server
         .delete(&format!("/courses/{course_id}/enrollments/{student}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
 
@@ -1683,7 +1685,7 @@ async fn full_lifecycle_create_update_enroll_unenroll_delete() {
     // 7. Admin soft-deletes the course; it vanishes from lists.
     let resp = server
         .delete(&format!("/courses/{course_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
 
@@ -1704,7 +1706,7 @@ async fn full_lifecycle_create_update_enroll_unenroll_delete() {
 
 #[tokio::test]
 async fn teardown_removes_all_seeded_rows() {
-    let Some((server, pool, prefix)) = setup().await else {
+    let Some((_server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
     };

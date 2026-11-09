@@ -295,7 +295,7 @@ async fn create_quiz_as_teacher_returns_201_and_persists() {
 
     let resp = server
         .post(&format!("/courses/{course}/quizzes"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({
             "title": "Midterm Review",
             "description": "<p>good luck</p>",
@@ -366,7 +366,7 @@ async fn create_quiz_applies_canvas_defaults_and_omits_null_fields() {
 
     let resp = server
         .post(&format!("/courses/{course}/quizzes"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "title": "Bare" }))
         .await;
 
@@ -481,7 +481,7 @@ async fn create_quiz_authz_student_403_unenrolled_teacher_403_admin_ok() {
     // Enrolled students cannot create quizzes.
     let resp = server
         .post(&format!("/courses/{course}/quizzes"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "title": "Sneaky" }))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -491,7 +491,7 @@ async fn create_quiz_authz_student_403_unenrolled_teacher_403_admin_ok() {
         .post(&format!("/courses/{course}/quizzes"))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(unaffiliated, "teacher"),
+            auth(unaffiliated, "teacher"),
         )
         .json(&json!({ "title": "Orphan" }))
         .await;
@@ -500,7 +500,7 @@ async fn create_quiz_authz_student_403_unenrolled_teacher_403_admin_ok() {
     // Admins bypass the enrollment check entirely.
     let resp = server
         .post(&format!("/courses/{course}/quizzes"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "title": "Admin Made" }))
         .await;
     assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
@@ -581,14 +581,14 @@ async fn list_quizzes_missing_course_403_for_student_and_empty_for_admin() {
     // No 404 for a missing course: non-enrolled users are simply Forbidden.
     let resp = server
         .get("/courses/999999999/quizzes")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
     // Admins bypass the check and get an empty list.
     let resp = server
         .get("/courses/999999999/quizzes")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     assert_eq!(resp.json::<Value>().as_array().unwrap().len(), 0);
@@ -596,10 +596,7 @@ async fn list_quizzes_missing_course_403_for_student_and_empty_for_admin() {
     // A student enrolled elsewhere is Forbidden on this course too.
     let resp = server
         .get(&format!("/courses/{course}/quizzes"))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            &auth(outsider, "student"),
-        )
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -638,7 +635,7 @@ async fn get_quiz_fields_for_enrolled_student_missing_404_unenrolled_403() {
         .get("/quizzes/999999999")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.teacher, "teacher"),
+            auth(f.teacher, "teacher"),
         )
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -646,10 +643,7 @@ async fn get_quiz_fields_for_enrolled_student_missing_404_unenrolled_403() {
     // An existing quiz is 403 for a user not enrolled in its course.
     let resp = server
         .get(&format!("/quizzes/{}", f.quiz))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            &auth(outsider, "student"),
-        )
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -809,7 +803,7 @@ async fn update_quiz_missing_404_and_authz_403_unchanged() {
         .put("/quizzes/999999999")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.teacher, "teacher"),
+            auth(f.teacher, "teacher"),
         )
         .json(&json!({ "title": "Ghost" }))
         .await;
@@ -820,7 +814,7 @@ async fn update_quiz_missing_404_and_authz_403_unchanged() {
         .put(&format!("/quizzes/{}", f.quiz))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.student, "student"),
+            auth(f.student, "student"),
         )
         .json(&json!({ "title": "Hacked", "points_possible": 100.0 }))
         .await;
@@ -836,7 +830,7 @@ async fn update_quiz_missing_404_and_authz_403_unchanged() {
         .put(&format!("/quizzes/{}", f.quiz))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(other_teacher, "teacher"),
+            auth(other_teacher, "teacher"),
         )
         .json(&json!({ "title": "Not Mine" }))
         .await;
@@ -872,7 +866,7 @@ async fn delete_quiz_as_teacher_is_204_and_cascades_submissions() {
         .delete(&format!("/quizzes/{}", f.quiz))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.teacher, "teacher"),
+            auth(f.teacher, "teacher"),
         )
         .await;
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
@@ -892,7 +886,7 @@ async fn delete_quiz_as_teacher_is_204_and_cascades_submissions() {
         .get(&format!("/quizzes/{}", f.quiz))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.teacher, "teacher"),
+            auth(f.teacher, "teacher"),
         )
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -914,7 +908,7 @@ async fn delete_quiz_missing_404_and_student_403() {
         .delete("/quizzes/999999999")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.teacher, "teacher"),
+            auth(f.teacher, "teacher"),
         )
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -924,7 +918,7 @@ async fn delete_quiz_missing_404_and_student_403() {
         .delete(&format!("/quizzes/{}", f.quiz))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.student, "student"),
+            auth(f.student, "student"),
         )
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -954,7 +948,7 @@ async fn start_quiz_returns_201_and_persists() {
         .post(&format!("/quizzes/{}/start", f.quiz))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.student, "student"),
+            auth(f.student, "student"),
         )
         .await;
 
@@ -998,7 +992,7 @@ async fn start_quiz_twice_is_409_conflict() {
         .post(&format!("/quizzes/{}/start", f.quiz))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.student, "student"),
+            auth(f.student, "student"),
         )
         .await;
     assert_eq!(resp.status_code(), 409, "body: {}", resp.text());
@@ -1037,7 +1031,7 @@ async fn start_quiz_missing_404_unenrolled_403_teacher_enrollment_allowed() {
         .post("/quizzes/999999999/start")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.student, "student"),
+            auth(f.student, "student"),
         )
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -1045,10 +1039,7 @@ async fn start_quiz_missing_404_unenrolled_403_teacher_enrollment_allowed() {
     // An unenrolled student is 403 and nothing is persisted.
     let resp = server
         .post(&format!("/quizzes/{}/start", f.quiz))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            &auth(outsider, "student"),
-        )
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
     assert_eq!(db_count_quiz_submissions(&pool, f.quiz, outsider).await, 0);
@@ -1104,20 +1095,14 @@ async fn my_submission_returns_own_row_and_404_when_absent() {
     // Enrolled but never started: 404.
     let resp = server
         .get(&format!("/quizzes/{}/submissions/me", f.quiz))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            &auth(no_start, "student"),
-        )
+        .add_header(axum::http::header::AUTHORIZATION, auth(no_start, "student"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
     // Unenrolled: 403 even though submissions exist.
     let resp = server
         .get(&format!("/quizzes/{}/submissions/me", f.quiz))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            &auth(outsider, "student"),
-        )
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -1172,7 +1157,7 @@ async fn list_quiz_submissions_teacher_view_newest_first_student_403() {
         ))
         .add_header(
             axum::http::header::AUTHORIZATION,
-            &auth(f.student, "student"),
+            auth(f.student, "student"),
         )
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -1222,7 +1207,7 @@ async fn list_quiz_submissions_authorizes_on_path_course_only() {
             "/courses/{other_course}/quizzes/{}/submissions",
             f.quiz
         ))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     assert_eq!(resp.json::<Value>().as_array().unwrap().len(), 1);
@@ -1232,7 +1217,7 @@ async fn list_quiz_submissions_authorizes_on_path_course_only() {
         .get(&format!(
             "/courses/{other_course}/quizzes/999999999/submissions"
         ))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     assert_eq!(resp.json::<Value>().as_array().unwrap().len(), 0);

@@ -75,7 +75,7 @@ jobs:
         with:
           workspaces: migration -> target
       - name: Run workspace tests
-        run: cargo test --workspace --exclude star-http -- --include-ignored=false
+        run: cargo test --workspace --exclude star-http
       - name: Verify star-http builds with tests
         run: cargo test -p star-http --no-run
 
