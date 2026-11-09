@@ -18,3 +18,5 @@ tokio = { workspace = true }
 serde_json = { workspace = true }
 tower = { workspace = true, features = ["util"] }
 star-db = { path = "../star-db" }
+axum-test = { workspace = true }
+sqlx = { workspace = true }
