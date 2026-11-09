@@ -21,3 +21,5 @@ tokio = { workspace = true }
 [dev-dependencies]
 axum-macros = "0.5"
 star-db = { path = "../star-db" }
+tokio = { workspace = true }
+axum-test = { workspace = true }
