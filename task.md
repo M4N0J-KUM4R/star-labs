@@ -106,7 +106,7 @@ cargo build --release --locked                   # what CI + lab-deploy.sh ship
       pushed `main`.
 - [ ] UI parity (**0/232** feature dirs, 0/5459 JS/TSX files) and analytics
       (**0** endpoints) remain the largest gaps; measured REST parity is
-      **47/1202** (3.9%) and GraphQL **0/390** — see
+      **63/1377** (4.6%) and GraphQL **0/390** — see
       [migration/parity/report.md](migration/parity/report.md).
 - [x] Phase 1: parity scoreboard tool and CI baseline
       ([README](migration/tools/parity/README.md)).
