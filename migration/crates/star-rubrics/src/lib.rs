@@ -656,6 +656,60 @@ async fn list_assessments(
 }
 
 // ---------------------------------------------------------------------------
+// Canvas nested route aliases
+// ---------------------------------------------------------------------------
+
+/// Ensure `rubric_id` exists and belongs to `course_id`.
+/// Missing and mismatched rubrics both map to 404 so a course-scoped alias
+/// never reveals rubrics from another course.
+async fn verify_rubric_course(
+    pool: &PgPool,
+    course_id: i64,
+    rubric_id: i64,
+) -> Result<(), ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM rubrics WHERE id = $1"#)
+        .bind(rubric_id)
+        .fetch_optional(pool)
+        .await?;
+
+    match row {
+        Some((rubric_course_id,)) if rubric_course_id == course_id => Ok(()),
+        _ => Err(ApiError::NotFound),
+    }
+}
+
+/// GET /courses/{courseId}/rubrics/{id}  → 200 (Canvas nested alias).
+async fn get_course_rubric(
+    State(state): State<AppState>,
+    Path((course_id, rubric_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<RubricResponse>, ApiError> {
+    verify_rubric_course(&state.db, course_id, rubric_id).await?;
+    get_rubric(State(state), Path(rubric_id), auth).await
+}
+
+/// PUT /courses/{courseId}/rubrics/{id}  → 200 (Canvas nested alias).
+async fn update_course_rubric(
+    State(state): State<AppState>,
+    Path((course_id, rubric_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateRubric>,
+) -> Result<Json<RubricResponse>, ApiError> {
+    verify_rubric_course(&state.db, course_id, rubric_id).await?;
+    update_rubric(State(state), Path(rubric_id), auth, Json(payload)).await
+}
+
+/// DELETE /courses/{courseId}/rubrics/{id}  → 204 (Canvas nested alias).
+async fn delete_course_rubric(
+    State(state): State<AppState>,
+    Path((course_id, rubric_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    verify_rubric_course(&state.db, course_id, rubric_id).await?;
+    delete_rubric(State(state), Path(rubric_id), auth).await
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -663,6 +717,15 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/courses/{courseId}/rubrics", post(create_rubric))
         .route("/courses/{courseId}/rubrics", get(list_course_rubrics))
+        .route("/courses/{courseId}/rubrics/{id}", get(get_course_rubric))
+        .route(
+            "/courses/{courseId}/rubrics/{id}",
+            put(update_course_rubric),
+        )
+        .route(
+            "/courses/{courseId}/rubrics/{id}",
+            delete(delete_course_rubric),
+        )
         .route("/rubrics/{id}", get(get_rubric))
         .route("/rubrics/{id}", put(update_rubric))
         .route("/rubrics/{id}", delete(delete_rubric))
