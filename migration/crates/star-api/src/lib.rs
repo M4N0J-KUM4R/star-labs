@@ -268,12 +268,7 @@ mod tests {
         struct Item {
             id: i64,
         }
-        let resp = Paginated::new(
-            vec![Item { id: 1 }, Item { id: 2 }],
-            1,
-            20,
-            50,
-        );
+        let resp = Paginated::new(vec![Item { id: 1 }, Item { id: 2 }], 1, 20, 50);
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains(r#""data":["#));
         assert!(json.contains(r#""pagination":"#));

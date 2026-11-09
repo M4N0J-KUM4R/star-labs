@@ -375,14 +375,19 @@ async fn create_entry(
 
     // If parent_id provided, verify it belongs to the same topic.
     if let Some(parent_id) = payload.parent_id {
-        let parent: Option<(i64,)> =
-            sqlx::query_as("SELECT topic_id FROM discussion_entries WHERE id = $1 AND workflow_state <> 'deleted'")
-                .bind(parent_id)
-                .fetch_optional(&state.db)
-                .await?;
+        let parent: Option<(i64,)> = sqlx::query_as(
+            "SELECT topic_id FROM discussion_entries WHERE id = $1 AND workflow_state <> 'deleted'",
+        )
+        .bind(parent_id)
+        .fetch_optional(&state.db)
+        .await?;
         match parent {
             Some((pt_id,)) if pt_id == topic_id => {}
-            _ => return Err(ApiError::Validation("parent_id must belong to the same topic".into())),
+            _ => {
+                return Err(ApiError::Validation(
+                    "parent_id must belong to the same topic".into(),
+                ))
+            }
         }
     }
 
@@ -460,7 +465,11 @@ async fn list_entries(
         .collect();
 
     // For each top-level entry, build nested replies recursively.
-    fn build_replies(entries: &mut Vec<DiscussionEntry>, children: &HashMap<i64, Vec<usize>>, idx: usize) {
+    fn build_replies(
+        entries: &mut Vec<DiscussionEntry>,
+        children: &HashMap<i64, Vec<usize>>,
+        idx: usize,
+    ) {
         if let Some(child_indices) = children.get(&entries[idx].id) {
             let child_indices = child_indices.clone();
             for child_idx in child_indices {
@@ -491,10 +500,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/courses/{courseId}/discussion_topics", post(create_topic))
         .route("/courses/{courseId}/discussion_topics", get(list_topics))
-        .route(
-            "/courses/{courseId}/discussion_topics/{id}",
-            get(get_topic),
-        )
+        .route("/courses/{courseId}/discussion_topics/{id}", get(get_topic))
         .route(
             "/courses/{courseId}/discussion_topics/{id}",
             put(update_topic),

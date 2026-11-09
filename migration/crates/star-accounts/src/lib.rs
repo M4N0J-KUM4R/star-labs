@@ -197,29 +197,17 @@ async fn can_access_account(
         }
 
         // Move up to parent
-        let parent: Option<(Option<i64>,)> = sqlx::query_as(
-            r#"SELECT parent_account_id FROM accounts WHERE id = $1"#,
-        )
-        .bind(id)
-        .fetch_optional(pool)
-        .await
-        .map_err(ApiError::from)?;
+        let parent: Option<(Option<i64>,)> =
+            sqlx::query_as(r#"SELECT parent_account_id FROM accounts WHERE id = $1"#)
+                .bind(id)
+                .fetch_optional(pool)
+                .await
+                .map_err(ApiError::from)?;
 
         current_id = parent.and_then(|(pid,)| pid);
     }
 
     Ok(false)
-}
-
-/// Check if the user can modify the given account.
-/// Same as can_access_account (admin or account admin).
-async fn can_modify_account(
-    pool: &PgPool,
-    user_id: i64,
-    account_id: i64,
-    auth: &AuthUser,
-) -> Result<bool, ApiError> {
-    can_access_account(pool, user_id, account_id, auth).await
 }
 
 // --------------------------------------------------------------------------
@@ -359,57 +347,55 @@ async fn list_account_courses(
 
     let (page, per_page, offset) = pag.resolve();
 
-    // Collect all account IDs in this account tree
+    // Collect all account IDs in this account tree (BFS, depth-guarded)
     let mut account_ids = vec![account_id];
-    let mut current_id = Some(account_id);
     let mut depth = 0;
+    let mut frontier = vec![account_id];
 
-    while let Some(id) = current_id {
+    while !frontier.is_empty() {
         if depth >= MAX_ACCOUNT_TREE_DEPTH {
+            // Guard against circular reference attacks
             break;
         }
         depth += 1;
 
-        let children: Vec<(i64,)> = sqlx::query_as(
-            r#"SELECT id FROM accounts WHERE parent_account_id = $1"#,
-        )
-        .bind(id)
+        let placeholders = frontier
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let children: Vec<(i64,)> = sqlx::query_as(&format!(
+            r#"SELECT id FROM accounts WHERE parent_account_id IN ({placeholders})"#
+        ))
         .fetch_all(&state.db)
         .await
         .map_err(ApiError::from)?;
 
-        for (child_id,) in children {
-            account_ids.push(child_id);
-            // We'll traverse children in next iterations
-        }
-
-        current_id = None; // Only go one level deep for simplicity, or traverse BFS
-        // Actually, we need to do a proper traversal. Let me fix this:
-        break; // TODO: fix traversal below
+        frontier = children.into_iter().map(|(id,)| id).collect();
+        account_ids.extend(frontier.iter().copied());
     }
 
-    // Simple approach: just query courses directly for this account (which has account_id column)
-    // The courses table has account_id column (added in migration 0024)
-    let (total,): (i64,) = sqlx::query_as(
-        r#"SELECT COUNT(*) FROM courses WHERE account_id = $1"#,
-    )
-    .bind(account_id)
+    let placeholders = account_ids
+        .iter()
+        .map(|id| id.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let (total,): (i64,) = sqlx::query_as(&format!(
+        r#"SELECT COUNT(*) FROM courses WHERE account_id IN ({placeholders})"#
+    ))
     .fetch_one(&state.db)
     .await
     .map_err(ApiError::from)?;
 
-    let courses: Vec<AccountCourse> = sqlx::query_as(
+    let courses: Vec<AccountCourse> = sqlx::query_as(&format!(
         r#"
         SELECT id, name, course_code, description, created_at, updated_at
         FROM courses
-        WHERE account_id = $1
+        WHERE account_id IN ({placeholders})
         ORDER BY created_at DESC, id DESC
-        LIMIT $2 OFFSET $3
+        LIMIT {per_page} OFFSET {offset}
         "#,
-    )
-    .bind(account_id)
-    .bind(per_page)
-    .bind(offset)
+    ))
     .fetch_all(&state.db)
     .await
     .map_err(ApiError::from)?;
@@ -513,9 +499,7 @@ async fn grant_account_admin(
 
     let role = payload.role.as_deref().unwrap_or("admin");
     if role != "admin" {
-        return Err(ApiError::Validation(
-            "role must be 'admin'".into(),
-        ));
+        return Err(ApiError::Validation("role must be 'admin'".into()));
     }
 
     // Upsert: insert or update on conflict
@@ -547,28 +531,43 @@ mod tests {
 
     #[test]
     fn test_pagination_defaults() {
-        let pag = Pagination { page: None, per_page: None };
+        let pag = Pagination {
+            page: None,
+            per_page: None,
+        };
         assert_eq!(pag.resolve(), (1, 50, 0));
     }
 
     #[test]
     fn test_pagination_page2() {
-        let pag = Pagination { page: Some(2), per_page: Some(10) };
+        let pag = Pagination {
+            page: Some(2),
+            per_page: Some(10),
+        };
         assert_eq!(pag.resolve(), (2, 10, 10));
     }
 
     #[test]
     fn test_pagination_clamped() {
-        let pag = Pagination { page: Some(0), per_page: Some(500) };
+        let pag = Pagination {
+            page: Some(0),
+            per_page: Some(500),
+        };
         assert_eq!(pag.resolve(), (1, 100, 0));
     }
 
     #[test]
     fn test_is_admin() {
-        let auth = AuthUser { id: 1, role: "admin".into() };
+        let auth = AuthUser {
+            id: 1,
+            role: "admin".into(),
+        };
         assert!(is_admin(&auth));
 
-        let auth = AuthUser { id: 2, role: "student".into() };
+        let auth = AuthUser {
+            id: 2,
+            role: "student".into(),
+        };
         assert!(!is_admin(&auth));
     }
 }

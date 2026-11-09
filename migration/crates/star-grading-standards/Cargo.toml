@@ -16,4 +16,4 @@ chrono = { workspace = true }
 [dev-dependencies]
 star-db = { path = "../star-db" }
 tokio = { workspace = true }
-reqwest = { version = "0.12", features = ["blocking"] }
+reqwest = { version = "0.12", features = ["blocking", "json"] }

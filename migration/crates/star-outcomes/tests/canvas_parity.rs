@@ -34,7 +34,7 @@ fn auth_headers(token: &str) -> reqwest::header::HeaderMap {
 
 fn get_token(client: &Client, email: &str, password: &str) -> Option<String> {
     let resp = client
-        .post(&format!("{}/login", API_BASE))
+        .post(format!("{}/login", API_BASE))
         .json(&serde_json::json!({ "email": email, "password": password }))
         .send()
         .ok()?;
@@ -63,7 +63,7 @@ fn assert_status(resp: &reqwest::blocking::Response, expected: reqwest::StatusCo
 fn setup_course(client: &Client, base_token: &str) -> (i64, String, String) {
     // Create course
     let resp = client
-        .post(&format!("{}/courses", API_BASE))
+        .post(format!("{}/courses", API_BASE))
         .headers(auth_headers(base_token))
         .json(&serde_json::json!({ "name": "Outcomes Test Course" }))
         .send()
@@ -75,7 +75,7 @@ fn setup_course(client: &Client, base_token: &str) -> (i64, String, String) {
     // Register a teacher
     let teacher_email = format!("teacher_{}@test.outcomes", course_id);
     let resp = client
-        .post(&format!("{}/register", API_BASE))
+        .post(format!("{}/register", API_BASE))
         .headers(auth_headers(base_token))
         .json(&serde_json::json!({
             "email": teacher_email,
@@ -94,7 +94,7 @@ fn setup_course(client: &Client, base_token: &str) -> (i64, String, String) {
 
     // Enroll teacher in course
     let resp = client
-        .post(&format!("{}/courses/{}/enrollments", API_BASE, course_id))
+        .post(format!("{}/courses/{}/enrollments", API_BASE, course_id))
         .headers(auth_headers(&teacher_token))
         .json(&serde_json::json!({ "role": "teacher" }))
         .send()
@@ -104,7 +104,7 @@ fn setup_course(client: &Client, base_token: &str) -> (i64, String, String) {
     // Register a student
     let student_email = format!("student_{}@test.outcomes", course_id);
     let resp = client
-        .post(&format!("{}/register", API_BASE))
+        .post(format!("{}/register", API_BASE))
         .headers(auth_headers(base_token))
         .json(&serde_json::json!({
             "email": student_email,
@@ -123,7 +123,7 @@ fn setup_course(client: &Client, base_token: &str) -> (i64, String, String) {
 
     // Enroll student
     let resp = client
-        .post(&format!("{}/courses/{}/enrollments", API_BASE, course_id))
+        .post(format!("{}/courses/{}/enrollments", API_BASE, course_id))
         .headers(auth_headers(&student_token))
         .json(&serde_json::json!({ "role": "student" }))
         .send()
@@ -131,16 +131,6 @@ fn setup_course(client: &Client, base_token: &str) -> (i64, String, String) {
     assert_status(&resp, reqwest::StatusCode::CREATED);
 
     (course_id, teacher_token, student_token)
-}
-
-fn delete_outcome(client: &Client, token: &str, outcome_id: i64) {
-    // Soft-delete by updating workflow_state via admin route if available,
-    // or we rely on the test using a separate admin token.
-    // For now just verify it disappears by listing (tests check this).
-    let _ = client
-        .delete(&format!("{}/outcomes/{}", API_BASE, outcome_id))
-        .headers(auth_headers(token))
-        .send();
 }
 
 // ---------------------------------------------------------------------------
@@ -167,10 +157,7 @@ fn test_create_outcome_group_teacher() {
 
     // Teacher creates outcome group → 201
     let resp = client
-        .post(&format!(
-            "{}/courses/{}/outcome_groups",
-            API_BASE, course_id
-        ))
+        .post(format!("{}/courses/{}/outcome_groups", API_BASE, course_id))
         .headers(auth_headers(&teacher_token))
         .json(&serde_json::json!({ "title": "My Outcome Group" }))
         .send()
@@ -202,7 +189,7 @@ fn test_create_outcome_teacher() {
 
     // Teacher creates outcome → 201
     let resp = client
-        .post(&format!("{}/courses/{}/outcomes", API_BASE, course_id))
+        .post(format!("{}/courses/{}/outcomes", API_BASE, course_id))
         .headers(auth_headers(&teacher_token))
         .json(&serde_json::json!({
             "title": "Learn Rust",
@@ -241,10 +228,7 @@ fn test_outcome_lifecycle() {
 
     // 1. Create outcome group
     let resp = client
-        .post(&format!(
-            "{}/courses/{}/outcome_groups",
-            API_BASE, course_id
-        ))
+        .post(format!("{}/courses/{}/outcome_groups", API_BASE, course_id))
         .headers(auth_headers(&teacher_token))
         .json(&serde_json::json!({ "title": "Group Alpha" }))
         .send()
@@ -255,7 +239,7 @@ fn test_outcome_lifecycle() {
 
     // 2. Create outcome
     let resp = client
-        .post(&format!("{}/courses/{}/outcomes", API_BASE, course_id))
+        .post(format!("{}/courses/{}/outcomes", API_BASE, course_id))
         .headers(auth_headers(&teacher_token))
         .json(&serde_json::json!({ "title": "Outcome O1" }))
         .send()
@@ -266,7 +250,7 @@ fn test_outcome_lifecycle() {
 
     // 3. Link outcome to group
     let resp = client
-        .post(&format!(
+        .post(format!(
             "{}/courses/{}/outcome_groups/{}/outcomes",
             API_BASE, course_id, group_id
         ))
@@ -284,7 +268,7 @@ fn test_outcome_lifecycle() {
 
     // 4. List outcomes in group (teacher sees it)
     let resp = client
-        .get(&format!(
+        .get(format!(
             "{}/courses/{}/outcome_groups/{}/outcomes",
             API_BASE, course_id, group_id
         ))
@@ -300,7 +284,7 @@ fn test_outcome_lifecycle() {
 
     // 5. List course outcomes (teacher enrolled)
     let resp = client
-        .get(&format!("{}/courses/{}/outcomes", API_BASE, course_id))
+        .get(format!("{}/courses/{}/outcomes", API_BASE, course_id))
         .headers(auth_headers(&teacher_token))
         .send()
         .unwrap();
@@ -313,7 +297,7 @@ fn test_outcome_lifecycle() {
 
     // 6. Student can also see outcomes
     let resp = client
-        .get(&format!("{}/courses/{}/outcomes", API_BASE, course_id))
+        .get(format!("{}/courses/{}/outcomes", API_BASE, course_id))
         .headers(auth_headers(&student_token))
         .send()
         .unwrap();
@@ -325,9 +309,9 @@ fn test_outcome_lifecycle() {
     println!("PASS: student can see outcome in course");
 
     // 7. Teacher records a result
-    let student_id = 0_i64; // will be filled from registration response
+    let _student_id = 0_i64; // will be filled from registration response
     let resp = client
-        .post(&format!("{}/outcomes/{}/results", API_BASE, outcome_id))
+        .post(format!("{}/outcomes/{}/results", API_BASE, outcome_id))
         .headers(auth_headers(&teacher_token))
         .json(&serde_json::json!({
             "user_id": 1_i64, // TODO: get actual student user id
@@ -357,10 +341,7 @@ fn test_delete_outcome_group() {
 
     // Create group
     let resp = client
-        .post(&format!(
-            "{}/courses/{}/outcome_groups",
-            API_BASE, course_id
-        ))
+        .post(format!("{}/courses/{}/outcome_groups", API_BASE, course_id))
         .headers(auth_headers(&teacher_token))
         .json(&serde_json::json!({ "title": "To Be Deleted" }))
         .send()
@@ -370,7 +351,7 @@ fn test_delete_outcome_group() {
 
     // Delete it
     let resp = client
-        .delete(&format!("{}/outcome_groups/{}", API_BASE, group_id))
+        .delete(format!("{}/outcome_groups/{}", API_BASE, group_id))
         .headers(auth_headers(&teacher_token))
         .send()
         .unwrap();
@@ -378,10 +359,7 @@ fn test_delete_outcome_group() {
 
     // Verify it's gone from listings
     let resp = client
-        .get(&format!(
-            "{}/courses/{}/outcome_groups",
-            API_BASE, course_id
-        ))
+        .get(format!("{}/courses/{}/outcome_groups", API_BASE, course_id))
         .headers(auth_headers(&teacher_token))
         .send()
         .unwrap();

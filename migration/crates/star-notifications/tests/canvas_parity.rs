@@ -278,7 +278,11 @@ fn parity_notifications_require_auth() {
         .get(format!("{BASE}/api/v1/users/self/notifications"))
         .send()
         .unwrap();
-    assert_eq!(r.status().as_u16(), 401, "unauthenticated list notifications");
+    assert_eq!(
+        r.status().as_u16(),
+        401,
+        "unauthenticated list notifications"
+    );
 
     let r2 = client
         .get(format!("{BASE}/api/v1/notifications/unread_count"))

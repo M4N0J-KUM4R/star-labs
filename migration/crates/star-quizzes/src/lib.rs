@@ -294,12 +294,10 @@ async fn update_quiz(
     auth: AuthUser,
     Json(payload): Json<UpdateQuiz>,
 ) -> Result<Json<Quiz>, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        r#"SELECT course_id FROM quizzes WHERE id = $1"#,
-    )
-    .bind(quiz_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM quizzes WHERE id = $1"#)
+        .bind(quiz_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let (course_id,) = row.ok_or(ApiError::NotFound)?;
 
@@ -379,12 +377,10 @@ async fn delete_quiz(
     Path(quiz_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        r#"SELECT course_id FROM quizzes WHERE id = $1"#,
-    )
-    .bind(quiz_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM quizzes WHERE id = $1"#)
+        .bind(quiz_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let (course_id,) = row.ok_or(ApiError::NotFound)?;
 
@@ -415,12 +411,10 @@ async fn start_quiz(
     auth: AuthUser,
 ) -> Result<(StatusCode, Json<QuizSubmission>), ApiError> {
     // Verify quiz exists and user is enrolled
-    let row: Option<(i64,)> = sqlx::query_as(
-        r#"SELECT course_id FROM quizzes WHERE id = $1"#,
-    )
-    .bind(quiz_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM quizzes WHERE id = $1"#)
+        .bind(quiz_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let (course_id,) = row.ok_or(ApiError::NotFound)?;
 
@@ -431,13 +425,12 @@ async fn start_quiz(
     // Upsert: INSERT ... ON CONFLICT (quiz_id, user_id) DO NOTHING ... RETURNING
     // We want: if already exists, return Conflict; if new, insert with started_at=now()
     // Check for existing first to return 409 cleanly
-    let existing: Option<(i64,)> = sqlx::query_as(
-        r#"SELECT id FROM quiz_submissions WHERE quiz_id = $1 AND user_id = $2"#,
-    )
-    .bind(quiz_id)
-    .bind(auth.id)
-    .fetch_optional(&state.db)
-    .await?;
+    let existing: Option<(i64,)> =
+        sqlx::query_as(r#"SELECT id FROM quiz_submissions WHERE quiz_id = $1 AND user_id = $2"#)
+            .bind(quiz_id)
+            .bind(auth.id)
+            .fetch_optional(&state.db)
+            .await?;
 
     if existing.is_some() {
         return Err(ApiError::Conflict("quiz already started".into()));
@@ -464,12 +457,10 @@ async fn get_my_submission(
     Path(quiz_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<QuizSubmission>, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        r#"SELECT course_id FROM quizzes WHERE id = $1"#,
-    )
-    .bind(quiz_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM quizzes WHERE id = $1"#)
+        .bind(quiz_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let (course_id,) = row.ok_or(ApiError::NotFound)?;
 

@@ -12,7 +12,7 @@
 //!   6. GET  /courses/{courseId}/final_grade (no grading standard) → letter: null
 
 use reqwest::blocking::{Client, Response};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::env;
 
 const API_BASE: &str = "http://127.0.0.1:8080/api/v1";
@@ -41,18 +41,6 @@ pub struct FinalGradeResponse {
     pub letter: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
-struct CreateGsRequest {
-    title: String,
-    entries: Vec<CreateEntry>,
-}
-
-#[derive(Debug, Serialize)]
-struct CreateEntry {
-    name: String,
-    min_score: f64,
-}
-
 fn client() -> Client {
     reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(15))
@@ -71,7 +59,7 @@ fn auth_header() -> String {
 
 fn do_get(path: &str) -> Response {
     client()
-        .get(&format!("{API_BASE}{path}"))
+        .get(format!("{API_BASE}{path}"))
         .header("Authorization", auth_header())
         .send()
         .unwrap()
@@ -79,7 +67,7 @@ fn do_get(path: &str) -> Response {
 
 fn do_post(path: &str, json: &serde_json::Value) -> Response {
     client()
-        .post(&format!("{API_BASE}{path}"))
+        .post(format!("{API_BASE}{path}"))
         .header("Authorization", auth_header())
         .header("Content-Type", "application/json")
         .json(json)
@@ -89,7 +77,7 @@ fn do_post(path: &str, json: &serde_json::Value) -> Response {
 
 fn do_delete(path: &str) -> Response {
     client()
-        .delete(&format!("{API_BASE}{path}"))
+        .delete(format!("{API_BASE}{path}"))
         .header("Authorization", auth_header())
         .send()
         .unwrap()
@@ -126,11 +114,19 @@ fn test_create_grading_standard_nested_entries() {
     });
 
     let resp = do_post(&format!("/courses/{course_id}/grading_standards"), &payload);
-    assert_eq!(resp.status().as_u16(), 201, "Expected 201, got {}", resp.status());
+    assert_eq!(
+        resp.status().as_u16(),
+        201,
+        "Expected 201, got {}",
+        resp.status()
+    );
 
     let gs: GradingStandardResponse = resp.json().unwrap();
     assert_eq!(gs.title, "Canvas Parity Test Scheme");
-    assert!(gs.grading_scheme.is_some(), "grading_scheme must be present");
+    assert!(
+        gs.grading_scheme.is_some(),
+        "grading_scheme must be present"
+    );
     let entries = gs.grading_scheme.unwrap();
     assert_eq!(entries.len(), 12, "Expected 12 entries");
     assert_eq!(entries[0].name, "A");
@@ -161,7 +157,10 @@ fn test_get_grading_standard_by_id() {
 
     let create_resp = do_post(&format!("/courses/{course_id}/grading_standards"), &payload);
     if create_resp.status().as_u16() != 201 {
-        eprintln!("Skipping: could not create grading standard (status {})", create_resp.status());
+        eprintln!(
+            "Skipping: could not create grading standard (status {})",
+            create_resp.status()
+        );
         return;
     }
     let gs: GradingStandardResponse = create_resp.json().unwrap();
@@ -197,7 +196,10 @@ fn test_delete_grading_standard() {
 
     let create_resp = do_post(&format!("/courses/{course_id}/grading_standards"), &payload);
     if create_resp.status().as_u16() != 201 {
-        eprintln!("Skipping: could not create grading standard (status {})", create_resp.status());
+        eprintln!(
+            "Skipping: could not create grading standard (status {})",
+            create_resp.status()
+        );
         return;
     }
     let gs: GradingStandardResponse = create_resp.json().unwrap();
@@ -207,7 +209,11 @@ fn test_delete_grading_standard() {
     assert_eq!(del_resp.status().as_u16(), 204, "Delete should return 204");
 
     let get_resp = do_get(&format!("/grading_standards/{id}"));
-    assert_eq!(get_resp.status().as_u16(), 404, "Deleted standard should 404");
+    assert_eq!(
+        get_resp.status().as_u16(),
+        404,
+        "Deleted standard should 404"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -233,7 +239,10 @@ fn test_final_grade_letter_computation() {
     let fg: FinalGradeResponse = resp.json().unwrap();
     // We cannot assert on exact letter without known grade data,
     // but we verify the response shape.
-    println!("final_grade response: score={}, letter={:?}", fg.score, fg.letter);
+    println!(
+        "final_grade response: score={}, letter={:?}",
+        fg.score, fg.letter
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -248,10 +257,13 @@ fn test_list_grading_standards_contains_created() {
     }
 
     let course_id = env::var("STAR_PARITY_COURSE_ID").unwrap_or("1".to_string());
-    let title = format!("List Test Scheme {}", std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_secs());
+    let title = format!(
+        "List Test Scheme {}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    );
     let payload = serde_json::json!({
         "title": title,
         "entries": [
@@ -262,7 +274,10 @@ fn test_list_grading_standards_contains_created() {
 
     let create_resp = do_post(&format!("/courses/{course_id}/grading_standards"), &payload);
     if create_resp.status().as_u16() != 201 {
-        eprintln!("Skipping: could not create grading standard (status {})", create_resp.status());
+        eprintln!(
+            "Skipping: could not create grading standard (status {})",
+            create_resp.status()
+        );
         return;
     }
     let created: GradingStandardResponse = create_resp.json().unwrap();

@@ -71,7 +71,11 @@ async fn create_course(client: &Client, token: &str, name: &str) -> i64 {
         .send()
         .await
         .expect("create course request");
-    assert!(resp.status().is_success(), "create course failed: {}", resp.status());
+    assert!(
+        resp.status().is_success(),
+        "create course failed: {}",
+        resp.status()
+    );
     let body: Value = resp.json().await.expect("course json");
     body["id"].as_i64().expect("course id")
 }
@@ -100,7 +104,11 @@ async fn parity_quiz_type_practice_accepted_with_canvas_fields() {
     .await;
 
     let resp = client
-        .post(format!("{}/api/v1/courses/{}/quizzes", api_base(), course_id))
+        .post(format!(
+            "{}/api/v1/courses/{}/quizzes",
+            api_base(),
+            course_id
+        ))
         .bearer_auth(&token)
         .json(&json!({
             "title": "Canvas Parity Practice Quiz",
@@ -142,7 +150,11 @@ async fn parity_quiz_type_bogus_rejected_422() {
     .await;
 
     let resp = client
-        .post(format!("{}/api/v1/courses/{}/quizzes", api_base(), course_id))
+        .post(format!(
+            "{}/api/v1/courses/{}/quizzes",
+            api_base(),
+            course_id
+        ))
         .bearer_auth(&token)
         .json(&json!({
             "title": "Bogus Quiz Type",
@@ -159,7 +171,11 @@ async fn parity_quiz_type_bogus_rejected_422() {
 
     // Update path validates too: create a valid quiz then PUT a bogus type.
     let resp = client
-        .post(format!("{}/api/v1/courses/{}/quizzes", api_base(), course_id))
+        .post(format!(
+            "{}/api/v1/courses/{}/quizzes",
+            api_base(),
+            course_id
+        ))
         .bearer_auth(&token)
         .json(&json!({"title": "Valid Quiz", "quiz_type": "assignment"}))
         .send()

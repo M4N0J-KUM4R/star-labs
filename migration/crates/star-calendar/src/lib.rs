@@ -136,26 +136,6 @@ async fn check_teacher_or_admin(
     Ok(row.is_some())
 }
 
-/// Check if user is enrolled in course OR is the owner (user_id matches) OR admin.
-/// Used for the global calendar_events endpoint.
-async fn check_global_calendar_access(
-    db: &PgPool,
-    user_id: i64,
-    course_id: i64,
-    auth: &AuthUser,
-) -> Result<bool, ApiError> {
-    if is_admin(auth) {
-        return Ok(true);
-    }
-    let row: Option<(i32,)> =
-        sqlx::query_as("SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1")
-            .bind(user_id)
-            .bind(course_id)
-            .fetch_optional(db)
-            .await?;
-    Ok(row.is_some())
-}
-
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -401,12 +381,11 @@ async fn delete_calendar_event(
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
     // Fetch course_id for auth check
-    let row: Option<(Option<i64>,)> = sqlx::query_as(
-        "SELECT course_id FROM calendar_events WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT course_id FROM calendar_events WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
 
     let (course_id,) = row.ok_or(ApiError::NotFound)?;
 

@@ -4,19 +4,8 @@
 
 use axum::{routing::get, Json, Router};
 use sqlx::postgres::PgPoolOptions;
-use star_accounts;
-use star_calendar;
 use star_common::AppState;
-use star_conversations;
-use star_discussions;
-use star_grading_standards;
-use star_groups;
-use star_notifications;
-use star_outcomes;
-use star_rubrics;
-use star_submission_comments;
-use std::{env, net::SocketAddr, sync::Arc};
-use tower::ServiceExt;
+use std::{env, net::SocketAddr};
 use tower_http::trace::TraceLayer;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};

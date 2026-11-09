@@ -160,13 +160,11 @@ async fn delete_notification(
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
     // Verify the notification exists and belongs to the authenticated user.
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT user_id FROM notifications WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(ApiError::from)?;
+    let row: Option<(i64,)> = sqlx::query_as("SELECT user_id FROM notifications WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
 
     let user_id = row.ok_or(ApiError::NotFound)?.0;
 
@@ -294,7 +292,10 @@ mod tests {
         };
 
         let json = serde_json::to_value(response).unwrap();
-        assert_eq!(json["notification_preferences"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            json["notification_preferences"].as_array().unwrap().len(),
+            1
+        );
         assert_eq!(
             json["notification_preferences"][0]["notification_category"],
             "announcement"

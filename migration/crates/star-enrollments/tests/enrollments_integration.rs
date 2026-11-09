@@ -124,10 +124,12 @@ fn auth(user_id: i64, role: &str) -> String {
 
 /// Delete every row created by this run (users cascade to enrollments).
 async fn cleanup(pool: &PgPool, prefix: &str) {
-    let _ = sqlx::query("DELETE FROM enrollments WHERE user_id IN (SELECT id FROM users WHERE email LIKE $1)")
-        .bind(format!("{prefix}%@test.local"))
-        .execute(pool)
-        .await;
+    let _ = sqlx::query(
+        "DELETE FROM enrollments WHERE user_id IN (SELECT id FROM users WHERE email LIKE $1)",
+    )
+    .bind(format!("{prefix}%@test.local"))
+    .execute(pool)
+    .await;
     let _ = sqlx::query("DELETE FROM users WHERE email LIKE $1")
         .bind(format!("{prefix}%@test.local"))
         .execute(pool)
@@ -175,7 +177,7 @@ async fn create_enrollment_as_teacher_returns_201_and_body() {
 
     let resp = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "course_id": course, "role": "student" }))
         .await;
 
@@ -212,7 +214,7 @@ async fn create_enrollment_defaults_role_to_student() {
 
     let resp = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "course_id": course }))
         .await;
 
@@ -236,7 +238,7 @@ async fn create_enrollment_as_admin_succeeds() {
 
     let resp = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "user_id": student, "course_id": course, "role": "teacher" }))
         .await;
 
@@ -261,14 +263,14 @@ async fn create_enrollment_duplicate_is_409() {
     let payload = json!({ "user_id": student, "course_id": course, "role": "student" });
     let first = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&payload)
         .await;
     assert_eq!(first.status_code(), 201, "first insert: {}", first.text());
 
     let second = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&payload)
         .await;
     assert_eq!(second.status_code(), 409, "body: {}", second.text());
@@ -276,7 +278,7 @@ async fn create_enrollment_duplicate_is_409() {
     // Same user+course but different role is a different row — allowed.
     let other_role = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "course_id": course, "role": "teacher" }))
         .await;
     assert_eq!(other_role.status_code(), 201, "body: {}", other_role.text());
@@ -296,7 +298,7 @@ async fn create_enrollment_missing_course_is_404() {
 
     let resp = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "course_id": 999_999_999, "role": "student" }))
         .await;
 
@@ -317,7 +319,7 @@ async fn create_enrollment_missing_user_is_404() {
 
     let resp = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": 999_999_999, "course_id": course, "role": "student" }))
         .await;
 
@@ -339,7 +341,7 @@ async fn create_enrollment_invalid_role_is_422() {
 
     let resp = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "course_id": course, "role": "guardian" }))
         .await;
 
@@ -361,7 +363,7 @@ async fn create_enrollment_as_student_is_403() {
 
     let resp = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "user_id": other, "course_id": course, "role": "student" }))
         .await;
 
@@ -380,7 +382,7 @@ async fn create_enrollment_as_student_is_403() {
 
 #[tokio::test]
 async fn create_enrollment_without_token_is_401() {
-    let Some((server, _pool, prefix)) = setup().await else {
+    let Some((server, _pool, _prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
@@ -411,10 +413,14 @@ async fn list_as_admin_sees_all_and_filters() {
     let c1 = seed_course(&pool, &prefix, "ListCourseA").await;
     let c2 = seed_course(&pool, &prefix, "ListCourseB").await;
 
-    for (u, c, r) in [(t1, c1, "teacher"), (s1, c1, "student"), (s2, c2, "student")] {
+    for (u, c, r) in [
+        (t1, c1, "teacher"),
+        (s1, c1, "student"),
+        (s2, c2, "student"),
+    ] {
         let resp = server
             .post("/enrollments")
-            .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
             .json(&json!({ "user_id": u, "course_id": c, "role": r }))
             .await;
         assert_eq!(resp.status_code(), 201, "seed enroll: {}", resp.text());
@@ -425,12 +431,18 @@ async fn list_as_admin_sees_all_and_filters() {
     let arr = all.as_array().expect("array response");
     let ours: Vec<&Value> = arr
         .iter()
-        .filter(|e| e["email"].as_str().map(|e| e.starts_with(&prefix)).unwrap_or(false))
+        .filter(|e| {
+            e["email"]
+                .as_str()
+                .map(|e| e.starts_with(&prefix))
+                .unwrap_or(false)
+        })
         .collect();
     assert_eq!(ours.len(), 3, "ours: {ours:?}");
 
     // Filter by course.
-    let by_course = list_enrollments(&server, &auth(admin, "admin"), &format!("course_id={c1}")).await;
+    let by_course =
+        list_enrollments(&server, &auth(admin, "admin"), &format!("course_id={c1}")).await;
     let arr = by_course.as_array().unwrap();
     assert_eq!(arr.len(), 2);
     assert!(arr.iter().all(|e| e["course_id"] == c1));
@@ -468,7 +480,7 @@ async fn list_as_teacher_scoped_to_own_courses() {
     ] {
         let resp = server
             .post("/enrollments")
-            .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
             .json(&json!({ "user_id": u, "course_id": c, "role": r }))
             .await;
         assert_eq!(resp.status_code(), 201, "seed enroll: {}", resp.text());
@@ -481,19 +493,33 @@ async fn list_as_teacher_scoped_to_own_courses() {
     assert!(arr.iter().all(|e| e["course_id"] == my_course));
 
     // course_id filter within scope works.
-    let scoped = list_enrollments(&server, &auth(mine, "teacher"), &format!("course_id={my_course}")).await;
+    let scoped = list_enrollments(
+        &server,
+        &auth(mine, "teacher"),
+        &format!("course_id={my_course}"),
+    )
+    .await;
     assert_eq!(scoped.as_array().unwrap().len(), 2);
 
     // course_id filter outside scope is Forbidden.
     let out_of_scope = server
         .get(&format!("/enrollments?course_id={other_course}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(mine, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(mine, "teacher"))
         .await;
-    assert_eq!(out_of_scope.status_code(), 403, "body: {}", out_of_scope.text());
+    assert_eq!(
+        out_of_scope.status_code(),
+        403,
+        "body: {}",
+        out_of_scope.text()
+    );
 
     // user_id filter still constrained to own courses.
     let by_user = list_enrollments(&server, &auth(mine, "teacher"), &format!("user_id={s2}")).await;
-    assert_eq!(by_user.as_array().unwrap().len(), 0, "s2 is in other teacher's course");
+    assert_eq!(
+        by_user.as_array().unwrap().len(),
+        0,
+        "s2 is in other teacher's course"
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -512,10 +538,13 @@ async fn list_as_student_gets_empty_array() {
 
     // Populate the DB so a broken scoping check (e.g. returning everything)
     // would fail the test.
-    for (u, c, r) in [(student, course, "student"), (other_student, course, "student")] {
+    for (u, c, r) in [
+        (student, course, "student"),
+        (other_student, course, "student"),
+    ] {
         let resp = server
             .post("/enrollments")
-            .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
             .json(&json!({ "user_id": u, "course_id": c, "role": r }))
             .await;
         assert_eq!(resp.status_code(), 201, "seed enroll: {}", resp.text());
@@ -556,7 +585,7 @@ async fn delete_by_course_teacher_succeeds() {
 
     let created: Value = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "course_id": course, "role": "student" }))
         .await
         .json();
@@ -565,7 +594,7 @@ async fn delete_by_course_teacher_succeeds() {
 
     let resp = server
         .delete(&format!("/enrollments/{enrollment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
 
@@ -574,10 +603,10 @@ async fn delete_by_course_teacher_succeeds() {
     let count: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM enrollments WHERE id = $1 AND workflow_state != 'deleted'",
     )
-        .bind(enrollment_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+    .bind(enrollment_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
     assert_eq!(count.0, 0);
 
     cleanup(&pool, &prefix).await;
@@ -597,7 +626,7 @@ async fn delete_by_admin_succeeds() {
 
     let created: Value = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "course_id": course, "role": "student" }))
         .await
         .json();
@@ -605,7 +634,7 @@ async fn delete_by_admin_succeeds() {
 
     let resp = server
         .delete(&format!("/enrollments/{enrollment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
 
@@ -620,14 +649,14 @@ async fn delete_by_other_teacher_is_403() {
     };
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
-    let teacher_a = seed_user(&pool, &prefix, "TeacherA", "teacher").await;
+    let _teacher_a = seed_user(&pool, &prefix, "TeacherA", "teacher").await;
     let teacher_b = seed_user(&pool, &prefix, "TeacherB", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let course_a = seed_course(&pool, &prefix, "CourseA").await;
 
     let created: Value = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "user_id": student, "course_id": course_a, "role": "student" }))
         .await
         .json();
@@ -636,7 +665,10 @@ async fn delete_by_other_teacher_is_403() {
     // Teacher B does not teach course A.
     let resp = server
         .delete(&format!("/enrollments/{enrollment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher_b, "teacher"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(teacher_b, "teacher"),
+        )
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -658,14 +690,14 @@ async fn delete_by_student_is_403() {
         return;
     };
 
-    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let _admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let course = seed_course(&pool, &prefix, "StudentDelete").await;
 
     let created: Value = server
         .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "course_id": course, "role": "student" }))
         .await
         .json();
@@ -673,7 +705,7 @@ async fn delete_by_student_is_403() {
 
     let resp = server
         .delete(&format!("/enrollments/{enrollment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -691,7 +723,7 @@ async fn delete_missing_enrollment_is_404() {
 
     let resp = server
         .delete("/enrollments/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
@@ -731,20 +763,22 @@ async fn full_lifecycle_create_list_delete() {
     for s in [s1, s2] {
         let resp = server
             .post("/enrollments")
-            .add_header(axum::http::header::AUTHORIZATION, &auth(teacher, "teacher"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
             .json(&json!({ "user_id": s, "course_id": course, "role": "student" }))
             .await;
         assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
     }
 
     // Teacher lists and sees both.
-    let listed = list_enrollments(&server, &auth(teacher, "teacher"), &format!("course_id={course}")).await;
+    let listed = list_enrollments(
+        &server,
+        &auth(teacher, "teacher"),
+        &format!("course_id={course}"),
+    )
+    .await;
     let arr = listed.as_array().unwrap();
     assert_eq!(arr.len(), 3, "teacher plus two student enrollments");
-    assert_eq!(
-        arr.iter().filter(|e| e["role"] == "student").count(),
-        2
-    );
+    assert_eq!(arr.iter().filter(|e| e["role"] == "student").count(), 2);
     assert!(arr.iter().all(|e| e["course_id"] == course));
 
     // Admin deletes one of them.
@@ -755,12 +789,17 @@ async fn full_lifecycle_create_list_delete() {
         .expect("student enrollment id");
     let resp = server
         .delete(&format!("/enrollments/{enrollment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, &auth(admin, "admin"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 204);
 
     // Listing reflects the deletion.
-    let after = list_enrollments(&server, &auth(teacher, "teacher"), &format!("course_id={course}")).await;
+    let after = list_enrollments(
+        &server,
+        &auth(teacher, "teacher"),
+        &format!("course_id={course}"),
+    )
+    .await;
     let arr = after.as_array().unwrap();
     assert_eq!(arr.len(), 2, "teacher plus one remaining student");
     assert_eq!(arr.iter().filter(|e| e["role"] == "student").count(), 1);

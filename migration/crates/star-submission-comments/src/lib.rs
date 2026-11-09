@@ -96,16 +96,11 @@ async fn get_course_id_for_submission(
 }
 
 /// Fetch the submission owner (user_id) for a given submission.
-async fn get_submission_owner(
-    pool: &PgPool,
-    submission_id: i64,
-) -> Result<Option<i64>, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        r#"SELECT user_id FROM submissions WHERE id = $1"#,
-    )
-    .bind(submission_id)
-    .fetch_optional(pool)
-    .await?;
+async fn get_submission_owner(pool: &PgPool, submission_id: i64) -> Result<Option<i64>, ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT user_id FROM submissions WHERE id = $1"#)
+        .bind(submission_id)
+        .fetch_optional(pool)
+        .await?;
 
     Ok(row.map(|r| r.0))
 }

@@ -183,7 +183,7 @@ async fn check_teacher_or_admin(
 // ---------------------------------------------------------------------------
 
 /// Compute the current grade percentage from scored submissions.
-/// 
+///
 /// Formula: sum(scores) / sum(points_possible) * 100.0
 /// Only includes assignments that have a graded submission (score IS NOT NULL).
 /// Returns None if no graded submissions exist.
@@ -383,12 +383,10 @@ async fn delete_assignment(
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
     // Fetch assignment to get course_id
-    let row: Option<(i64,)> = sqlx::query_as(
-        r#"SELECT course_id FROM assignments WHERE id = $1"#,
-    )
-    .bind(assignment_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM assignments WHERE id = $1"#)
+        .bind(assignment_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let course_id = row.ok_or(ApiError::NotFound)?.0;
 
@@ -422,12 +420,10 @@ async fn create_submission(
     }
 
     // Fetch assignment to get course_id and check enrollment
-    let row: Option<(i64,)> = sqlx::query_as(
-        r#"SELECT course_id FROM assignments WHERE id = $1"#,
-    )
-    .bind(assignment_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM assignments WHERE id = $1"#)
+        .bind(assignment_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let course_id = row.ok_or(ApiError::NotFound)?.0;
 
@@ -461,12 +457,10 @@ async fn list_submissions(
     auth: AuthUser,
 ) -> Result<Json<Vec<SubmissionWithUser>>, ApiError> {
     // Fetch assignment to get course_id
-    let row: Option<(i64,)> = sqlx::query_as(
-        r#"SELECT course_id FROM assignments WHERE id = $1"#,
-    )
-    .bind(assignment_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM assignments WHERE id = $1"#)
+        .bind(assignment_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let course_id = row.ok_or(ApiError::NotFound)?.0;
 
@@ -499,12 +493,10 @@ async fn get_my_submission(
     auth: AuthUser,
 ) -> Result<Json<Submission>, ApiError> {
     // Fetch assignment to get course_id
-    let row: Option<(i64,)> = sqlx::query_as(
-        r#"SELECT course_id FROM assignments WHERE id = $1"#,
-    )
-    .bind(assignment_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM assignments WHERE id = $1"#)
+        .bind(assignment_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let course_id = row.ok_or(ApiError::NotFound)?.0;
 
@@ -686,7 +678,10 @@ async fn gradebook(
 pub fn router() -> Router<AppState> {
     Router::new()
         // Course-level assignment routes
-        .route("/courses/{courseId}/assignments", get(list_course_assignments))
+        .route(
+            "/courses/{courseId}/assignments",
+            get(list_course_assignments),
+        )
         .route("/courses/{courseId}/assignments", post(create_assignment))
         .route("/courses/{courseId}/gradebook", get(gradebook))
         // Assignment-level routes
@@ -1107,10 +1102,22 @@ mod db_tests {
         assert_eq!(graded.score, Some(87.5));
 
         // Clean up.
-        let _ = sqlx::query("DELETE FROM submissions WHERE id = $1").bind(submission_id).execute(&pool).await;
-        let _ = sqlx::query("DELETE FROM assignments WHERE id = $1").bind(assignment_id).execute(&pool).await;
-        let _ = sqlx::query("DELETE FROM courses WHERE id = $1").bind(course_id).execute(&pool).await;
-        let _ = sqlx::query("DELETE FROM users WHERE id = $1").bind(user_id).execute(&pool).await;
+        let _ = sqlx::query("DELETE FROM submissions WHERE id = $1")
+            .bind(submission_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM assignments WHERE id = $1")
+            .bind(assignment_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM courses WHERE id = $1")
+            .bind(course_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await;
     }
 
     #[tokio::test]
@@ -1203,10 +1210,25 @@ mod db_tests {
         assert!((grade_pct - 82.5).abs() < 0.001);
 
         // Clean up.
-        let _ = sqlx::query("DELETE FROM submissions WHERE user_id = $1").bind(student_id).execute(&pool).await;
-        let _ = sqlx::query("DELETE FROM assignments WHERE course_id = $1").bind(course_id).execute(&pool).await;
-        let _ = sqlx::query("DELETE FROM enrollments WHERE user_id = $1").bind(student_id).execute(&pool).await;
-        let _ = sqlx::query("DELETE FROM courses WHERE id = $1").bind(course_id).execute(&pool).await;
-        let _ = sqlx::query("DELETE FROM users WHERE id = $1").bind(student_id).execute(&pool).await;
+        let _ = sqlx::query("DELETE FROM submissions WHERE user_id = $1")
+            .bind(student_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM assignments WHERE course_id = $1")
+            .bind(course_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM enrollments WHERE user_id = $1")
+            .bind(student_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM courses WHERE id = $1")
+            .bind(course_id)
+            .execute(&pool)
+            .await;
+        let _ = sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(student_id)
+            .execute(&pool)
+            .await;
     }
 }

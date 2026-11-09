@@ -218,7 +218,8 @@ pub async fn check_teacher_or_admin(
 
 /// GET /courses — list courses (admin gets all, others get enrolled only)
 /// Paginated: ?page=1&per_page=50, max per_page=100
-const ADMIN_COURSE_COUNT_SQL: &str = "SELECT COUNT(*) FROM courses WHERE workflow_state != 'deleted'";
+const ADMIN_COURSE_COUNT_SQL: &str =
+    "SELECT COUNT(*) FROM courses WHERE workflow_state != 'deleted'";
 
 async fn list_courses(
     State(state): State<AppState>,
@@ -326,8 +327,8 @@ async fn create_course(
     .bind(&payload.course_code)
     .bind(&payload.description)
     .bind(&payload.workflow_state)
-    .bind(&payload.start_at)
-    .bind(&payload.end_at)
+    .bind(payload.start_at)
+    .bind(payload.end_at)
     .bind(&payload.syllabus_body)
     .fetch_one(&state.db)
     .await?;
@@ -428,8 +429,8 @@ async fn update_course(
     .bind(&course_code)
     .bind(&description)
     .bind(&workflow_state)
-    .bind(&start_at)
-    .bind(&end_at)
+    .bind(start_at)
+    .bind(end_at)
     .bind(&syllabus_body)
     .fetch_one(&state.db)
     .await?;
@@ -595,13 +596,11 @@ async fn delete_enrollment(
         return Err(ApiError::Forbidden);
     }
 
-    let result = sqlx::query(
-        r#"DELETE FROM enrollments WHERE course_id = $1 AND user_id = $2"#,
-    )
-    .bind(course_id)
-    .bind(user_id)
-    .execute(&state.db)
-    .await?;
+    let result = sqlx::query(r#"DELETE FROM enrollments WHERE course_id = $1 AND user_id = $2"#)
+        .bind(course_id)
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
 
     if result.rows_affected() == 0 {
         return Err(ApiError::NotFound);
@@ -624,7 +623,10 @@ pub fn router() -> Router<AppState> {
         .route("/courses/{id}", delete(delete_course))
         .route("/courses/{id}/enrollments", post(create_enrollment))
         .route("/courses/{id}/enrollments", get(list_enrollments))
-        .route("/courses/{id}/enrollments/{userId}", delete(delete_enrollment))
+        .route(
+            "/courses/{id}/enrollments/{userId}",
+            delete(delete_enrollment),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -645,85 +647,124 @@ mod tests {
 
     #[test]
     fn test_is_admin_true() {
-        let auth = AuthUser { id: 1, role: "admin".into() };
+        let auth = AuthUser {
+            id: 1,
+            role: "admin".into(),
+        };
         assert!(is_admin(&auth));
         assert!(is_teacher(&auth)); // admin can teach
     }
 
     #[test]
     fn test_is_admin_false() {
-        let auth = AuthUser { id: 1, role: "student".into() };
+        let auth = AuthUser {
+            id: 1,
+            role: "student".into(),
+        };
         assert!(!is_admin(&auth));
         assert!(!is_teacher(&auth));
     }
 
     #[test]
     fn test_is_teacher_true_admin() {
-        let auth = AuthUser { id: 1, role: "admin".into() };
+        let auth = AuthUser {
+            id: 1,
+            role: "admin".into(),
+        };
         // is_teacher returns true for both teacher and admin (has course mgmt rights)
         assert!(is_teacher(&auth));
     }
 
     #[test]
     fn test_is_teacher_true_teacher() {
-        let auth = AuthUser { id: 1, role: "teacher".into() };
+        let auth = AuthUser {
+            id: 1,
+            role: "teacher".into(),
+        };
         assert!(is_teacher(&auth));
         assert!(!is_admin(&auth));
     }
 
     #[test]
     fn test_is_teacher_false_student() {
-        let auth = AuthUser { id: 1, role: "student".into() };
+        let auth = AuthUser {
+            id: 1,
+            role: "student".into(),
+        };
         assert!(!is_teacher(&auth));
         assert!(!is_admin(&auth));
     }
 
     #[test]
     fn test_pagination_defaults() {
-        let pag = Pagination { page: None, per_page: None };
+        let pag = Pagination {
+            page: None,
+            per_page: None,
+        };
         assert_eq!(pag.resolve(), (1, 50, 0));
     }
 
     #[test]
     fn test_pagination_page2_offset() {
-        let pag = Pagination { page: Some(2), per_page: Some(10) };
+        let pag = Pagination {
+            page: Some(2),
+            per_page: Some(10),
+        };
         assert_eq!(pag.resolve(), (2, 10, 10));
     }
 
     #[test]
     fn test_pagination_page_zero_clamped_to_one() {
-        let pag = Pagination { page: Some(0), per_page: Some(10) };
+        let pag = Pagination {
+            page: Some(0),
+            per_page: Some(10),
+        };
         assert_eq!(pag.resolve(), (1, 10, 0));
     }
 
     #[test]
     fn test_pagination_page_negative_clamped_to_one() {
-        let pag = Pagination { page: Some(-3), per_page: Some(10) };
+        let pag = Pagination {
+            page: Some(-3),
+            per_page: Some(10),
+        };
         assert_eq!(pag.resolve(), (1, 10, 0));
     }
 
     #[test]
     fn test_pagination_per_page_clamped_to_100() {
-        let pag = Pagination { page: Some(1), per_page: Some(500) };
+        let pag = Pagination {
+            page: Some(1),
+            per_page: Some(500),
+        };
         assert_eq!(pag.resolve(), (1, 100, 0));
     }
 
     #[test]
     fn test_pagination_per_page_zero_clamped_to_one() {
-        let pag = Pagination { page: Some(1), per_page: Some(0) };
+        let pag = Pagination {
+            page: Some(1),
+            per_page: Some(0),
+        };
         assert_eq!(pag.resolve(), (1, 1, 0));
     }
 
     #[test]
     fn test_pagination_per_page_negative_clamped_to_one() {
-        let pag = Pagination { page: Some(4), per_page: Some(-2) };
+        let pag = Pagination {
+            page: Some(4),
+            per_page: Some(-2),
+        };
         assert_eq!(pag.resolve(), (4, 1, 3));
     }
 
     #[test]
     fn test_pagination_offset_arithmetic() {
         // page=7, per_page=25 -> offset 150
-        let pag = Pagination { page: Some(7), per_page: Some(25) };
+        let pag = Pagination {
+            page: Some(7),
+            per_page: Some(25),
+        };
         assert_eq!(pag.resolve(), (7, 25, 150));
     }
 }
