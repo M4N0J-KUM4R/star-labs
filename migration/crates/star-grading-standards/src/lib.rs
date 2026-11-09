@@ -5,6 +5,8 @@
 //!   GET  /courses/{courseId}/grading_standards — list standards
 //!   GET  /grading_standards/{id}               — get standard + nested entries
 //!   DELETE /grading_standards/{id}              — soft-delete
+//!   GET  /courses/{courseId}/grading_standards/{id}    — course-scoped alias (get)
+//!   DELETE /courses/{courseId}/grading_standards/{id}  — course-scoped alias (delete)
 //!   GET  /courses/{courseId}/final_grade?user_id=N — compute letter grade
 
 use axum::{
@@ -216,6 +218,28 @@ async fn check_enrolled_or_admin(
     Ok(row.is_some())
 }
 
+/// 404 unless the grading standard exists and belongs to `course_id`.
+///
+/// Used by the Canvas v1 nested aliases so a standard can only be reached
+/// through its owning course. Global (course_id IS NULL) standards and
+/// cross-course ids are treated as not found.
+async fn require_standard_in_course(
+    pool: &PgPool,
+    course_id: i64,
+    standard_id: i64,
+) -> Result<(), ApiError> {
+    let row: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT course_id FROM grading_standards WHERE id = $1")
+            .bind(standard_id)
+            .fetch_optional(pool)
+            .await?;
+
+    match row {
+        Some((Some(owner),)) if owner == course_id => Ok(()),
+        _ => Err(ApiError::NotFound),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -422,6 +446,32 @@ async fn delete_grading_standard(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// GET /courses/{courseId}/grading_standards/{id} — Canvas v1 nested alias.
+///
+/// Verifies the standard belongs to the course in the path (mismatch or
+/// missing -> 404), then delegates to the flat handler (including its authz).
+async fn get_course_grading_standard(
+    State(state): State<AppState>,
+    Path((course_id, standard_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<GradingStandardResponse>, ApiError> {
+    require_standard_in_course(&state.db, course_id, standard_id).await?;
+    get_grading_standard(State(state), Path(standard_id), auth).await
+}
+
+/// DELETE /courses/{courseId}/grading_standards/{id} — Canvas v1 nested alias.
+///
+/// Same course-scope check as the GET alias, then delegates to the flat
+/// delete handler (including its authz).
+async fn delete_course_grading_standard(
+    State(state): State<AppState>,
+    Path((course_id, standard_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    require_standard_in_course(&state.db, course_id, standard_id).await?;
+    delete_grading_standard(State(state), Path(standard_id), auth).await
+}
+
 /// GET /courses/{courseId}/final_grade?user_id=N — compute letter grade for user
 ///
 /// Uses the course's active grading standard and computes the weighted grade
@@ -529,6 +579,14 @@ pub fn router() -> Router<AppState> {
         .route("/courses/{courseId}/final_grade", get(get_final_grade))
         .route("/grading_standards/{id}", get(get_grading_standard))
         .route("/grading_standards/{id}", delete(delete_grading_standard))
+        .route(
+            "/courses/{courseId}/grading_standards/{id}",
+            get(get_course_grading_standard),
+        )
+        .route(
+            "/courses/{courseId}/grading_standards/{id}",
+            delete(delete_course_grading_standard),
+        )
 }
 
 // ---------------------------------------------------------------------------
