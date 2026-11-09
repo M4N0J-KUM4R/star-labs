@@ -164,3 +164,90 @@ async fn create_membership_for_existing_group_and_user_succeeds() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// PATCH /groups/{id} — Canvas emits both PATCH and PUT for updates
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn patch_group_updates_like_put() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let group = seed_group(&pool, course, &format!("{prefix}-PatchGroup")).await;
+    sqlx::query("UPDATE groups SET description = 'original desc', join_level = 'parent_context_request' WHERE id = $1")
+        .bind(group)
+        .execute(&pool)
+        .await
+        .expect("seed group fields");
+
+    // PATCH-style partial body: only name changes, like PUT's partial update.
+    let resp = server
+        .patch(&format!("/groups/{group}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "name": "Patched Group" }))
+        .await;
+
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["name"], "Patched Group");
+    assert_eq!(body["description"], "original desc");
+    assert_eq!(body["join_level"], "parent_context_request");
+
+    // Change persisted in the DB, same as PUT.
+    let (name, join_level): (String, String) =
+        sqlx::query_as("SELECT name, join_level FROM groups WHERE id = $1")
+            .bind(group)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch group");
+    assert_eq!(name, "Patched Group");
+    assert_eq!(join_level, "parent_context_request");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn patch_group_requires_teacher_authz() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    sqlx::query("INSERT INTO enrollments (user_id, course_id, role) VALUES ($1, $2, 'student')")
+        .bind(student)
+        .bind(course)
+        .execute(&pool)
+        .await
+        .expect("seed student enrollment");
+    let group = seed_group(&pool, course, &format!("{prefix}-Locked")).await;
+
+    // Existing PUT authz applies to the PATCH alias too.
+    let resp = server
+        .patch(&format!("/groups/{group}"))
+        .json(&json!({ "name": "Anonymous Edit" }))
+        .await;
+    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
+
+    let resp = server
+        .patch(&format!("/groups/{group}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "name": "Student Edit" }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // Rejected patches leave the row untouched.
+    let (name,): (String,) = sqlx::query_as("SELECT name FROM groups WHERE id = $1")
+        .bind(group)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch group");
+    assert_eq!(name, format!("{prefix}-Locked"));
+
+    cleanup(&pool, &prefix).await;
+}

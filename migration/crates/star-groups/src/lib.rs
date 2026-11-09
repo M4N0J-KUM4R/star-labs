@@ -5,7 +5,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -176,6 +176,7 @@ pub fn router() -> Router<AppState> {
         // Direct group routes
         .route("/groups/{id}", get(get_group))
         .route("/groups/{id}", put(update_group))
+        .route("/groups/{id}", patch(update_group))
         .route("/groups/{id}", delete(delete_group))
         // Membership routes
         .route("/groups/{groupId}/memberships", post(create_membership))
@@ -343,7 +344,7 @@ async fn get_group(
     Ok(Json(group))
 }
 
-/// PUT /groups/{id} — update a group (teacher/admin only)
+/// PUT/PATCH /groups/{id} — update a group (teacher/admin only)
 async fn update_group(
     State(state): State<AppState>,
     Path(group_id): Path<i64>,
