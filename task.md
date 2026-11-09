@@ -100,14 +100,16 @@ cargo build --release --locked                   # what CI + lab-deploy.sh ship
 
 ## 7. Open items
 
-- [ ] Fix the four pinned bugs above (small, well-localized fixes; tests
-      already document the intended behavior).
-- [ ] Verify the first GitHub Actions run of `production-build.yml` on the
-      pushed `main`.
+- [x] Fix the four pinned bugs above (done in Phase 0; tests now assert the
+      intended behavior).
+- [x] Verify the first GitHub Actions run of `production-build.yml` on the
+      pushed `main` (green).
+- [x] Nested-route compatibility pass: 30 Canvas-compatible aliases added
+      across eight crates (REST 93/1403, 6.6%).
 - [ ] UI parity (**0/232** feature dirs, 0/5459 JS/TSX files) and analytics
       (**0** endpoints) remain the largest gaps; measured REST parity is
-      **63/1377** (4.6%) and GraphQL **0/390** — see
-      [migration/parity/report.md](migration/parity/report.md).
+      **93/1403** (6.6%), UI-referenced **62/503** (12.3%), GraphQL
+      **0/390** — see [migration/parity/report.md](migration/parity/report.md).
 - [x] Phase 1: parity scoreboard tool and CI baseline
       ([README](migration/tools/parity/README.md)).
 - [ ] Optional: llvm-cov coverage report in CI, Dependabot, release tagging.

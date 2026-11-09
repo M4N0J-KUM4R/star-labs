@@ -15,9 +15,14 @@
       "pct": 80.0,
       "total": 5
     },
+    "assignments": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
     "assignments_api": {
-      "implemented": 3,
-      "pct": 25.0,
+      "implemented": 5,
+      "pct": 41.7,
       "total": 12
     },
     "calendar_events_api": {
@@ -26,13 +31,13 @@
       "total": 15
     },
     "context_module_items_api": {
-      "implemented": 1,
-      "pct": 8.3,
+      "implemented": 3,
+      "pct": 25.0,
       "total": 12
     },
     "context_modules_api": {
-      "implemented": 2,
-      "pct": 25.0,
+      "implemented": 5,
+      "pct": 62.5,
       "total": 8
     },
     "conversations": {
@@ -41,8 +46,8 @@
       "total": 16
     },
     "courses": {
-      "implemented": 5,
-      "pct": 13.2,
+      "implemented": 6,
+      "pct": 15.8,
       "total": 38
     },
     "discussion_topics": {
@@ -66,8 +71,8 @@
       "total": 26
     },
     "grading_standards_api": {
-      "implemented": 2,
-      "pct": 20.0,
+      "implemented": 4,
+      "pct": 40.0,
       "total": 10
     },
     "group_memberships": {
@@ -76,8 +81,8 @@
       "total": 11
     },
     "groups": {
-      "implemented": 4,
-      "pct": 23.5,
+      "implemented": 5,
+      "pct": 29.4,
       "total": 17
     },
     "lti/account_lookup": {
@@ -91,23 +96,23 @@
       "total": 40
     },
     "quizzes/quiz_submissions_api": {
-      "implemented": 1,
-      "pct": 14.3,
+      "implemented": 3,
+      "pct": 42.9,
       "total": 7
     },
     "quizzes/quizzes_api": {
-      "implemented": 2,
-      "pct": 28.6,
+      "implemented": 5,
+      "pct": 71.4,
       "total": 7
     },
     "rubrics": {
-      "implemented": 1,
-      "pct": 33.3,
+      "implemented": 3,
+      "pct": 100.0,
       "total": 3
     },
     "rubrics_api": {
-      "implemented": 1,
-      "pct": 6.7,
+      "implemented": 2,
+      "pct": 13.3,
       "total": 15
     },
     "sub_accounts": {
@@ -115,14 +120,29 @@
       "pct": 50.0,
       "total": 2
     },
+    "submission_comments_api": {
+      "implemented": 1,
+      "pct": 25.0,
+      "total": 4
+    },
+    "submissions": {
+      "implemented": 1,
+      "pct": 50.0,
+      "total": 2
+    },
+    "submissions_api": {
+      "implemented": 2,
+      "pct": 4.5,
+      "total": 44
+    },
     "users": {
       "implemented": 4,
       "pct": 10.3,
       "total": 39
     },
     "wiki_pages_api": {
-      "implemented": 2,
-      "pct": 6.9,
+      "implemented": 5,
+      "pct": 17.2,
       "total": 29
     }
   },
@@ -158,6 +178,14 @@
       "path": "/api/v1/courses/:id",
       "ui_referenced": true,
       "verb": "DELETE"
+    },
+    {
+      "action": "create",
+      "controller": "courses",
+      "normalized_path": "accounts/{}/courses",
+      "path": "/api/v1/accounts/:account_id/courses",
+      "ui_referenced": true,
+      "verb": "POST"
     },
     {
       "action": "api_index",
@@ -216,12 +244,68 @@
       "verb": "GET"
     },
     {
+      "action": "show",
+      "controller": "assignments_api",
+      "normalized_path": "courses/{}/assignments/{}",
+      "path": "/api/v1/courses/:course_id/assignments/:id",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
       "action": "create",
       "controller": "assignments_api",
       "normalized_path": "courses/{}/assignments",
       "path": "/api/v1/courses/:course_id/assignments",
       "ui_referenced": true,
       "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "assignments_api",
+      "normalized_path": "courses/{}/assignments/{}",
+      "path": "/api/v1/courses/:course_id/assignments/:id",
+      "ui_referenced": true,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "assignments",
+      "normalized_path": "courses/{}/assignments/{}",
+      "path": "/api/v1/courses/:course_id/assignments/:id",
+      "ui_referenced": true,
+      "verb": "DELETE"
+    },
+    {
+      "action": "index",
+      "controller": "submissions_api",
+      "normalized_path": "courses/{}/assignments/{}/submissions",
+      "path": "/api/v1/courses/:course_id/assignments/:assignment_id/submissions",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "submissions",
+      "normalized_path": "courses/{}/assignments/{}/submissions",
+      "path": "/api/v1/courses/:course_id/assignments/:assignment_id/submissions",
+      "ui_referenced": true,
+      "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "submissions_api",
+      "normalized_path": "courses/{}/assignments/{}/submissions/{}",
+      "path": "/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id",
+      "ui_referenced": true,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "submission_comments_api",
+      "normalized_path": "courses/{}/assignments/{}/submissions/{}/comments/{}",
+      "path": "/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/comments/:id",
+      "ui_referenced": false,
+      "verb": "DELETE"
     },
     {
       "action": "index",
@@ -469,6 +553,14 @@
       "normalized_path": "groups/{}",
       "path": "/api/v1/groups/:id",
       "ui_referenced": true,
+      "verb": "PATCH"
+    },
+    {
+      "action": "update",
+      "controller": "groups",
+      "normalized_path": "groups/{}",
+      "path": "/api/v1/groups/:id",
+      "ui_referenced": true,
       "verb": "PUT"
     },
     {
@@ -536,12 +628,36 @@
       "verb": "GET"
     },
     {
+      "action": "show",
+      "controller": "wiki_pages_api",
+      "normalized_path": "courses/{}/pages/{}",
+      "path": "/api/v1/courses/:course_id/pages/:url_or_id",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
       "action": "create",
       "controller": "wiki_pages_api",
       "normalized_path": "courses/{}/pages",
       "path": "/api/v1/courses/:course_id/pages",
       "ui_referenced": true,
       "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "wiki_pages_api",
+      "normalized_path": "courses/{}/pages/{}",
+      "path": "/api/v1/courses/:course_id/pages/:url_or_id",
+      "ui_referenced": true,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "wiki_pages_api",
+      "normalized_path": "courses/{}/pages/{}",
+      "path": "/api/v1/courses/:course_id/pages/:url_or_id",
+      "ui_referenced": true,
+      "verb": "DELETE"
     },
     {
       "action": "index",
@@ -552,12 +668,36 @@
       "verb": "GET"
     },
     {
+      "action": "show",
+      "controller": "context_modules_api",
+      "normalized_path": "courses/{}/modules/{}",
+      "path": "/api/v1/courses/:course_id/modules/:id",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
       "action": "create",
       "controller": "context_modules_api",
       "normalized_path": "courses/{}/modules",
       "path": "/api/v1/courses/:course_id/modules",
       "ui_referenced": true,
       "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "context_modules_api",
+      "normalized_path": "courses/{}/modules/{}",
+      "path": "/api/v1/courses/:course_id/modules/:id",
+      "ui_referenced": true,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "context_modules_api",
+      "normalized_path": "courses/{}/modules/{}",
+      "path": "/api/v1/courses/:course_id/modules/:id",
+      "ui_referenced": true,
+      "verb": "DELETE"
     },
     {
       "action": "index",
@@ -568,6 +708,22 @@
       "verb": "GET"
     },
     {
+      "action": "create",
+      "controller": "context_module_items_api",
+      "normalized_path": "courses/{}/modules/{}/items",
+      "path": "/api/v1/courses/:course_id/modules/:module_id/items",
+      "ui_referenced": true,
+      "verb": "POST"
+    },
+    {
+      "action": "destroy",
+      "controller": "context_module_items_api",
+      "normalized_path": "courses/{}/modules/{}/items/{}",
+      "path": "/api/v1/courses/:course_id/modules/:module_id/items/:id",
+      "ui_referenced": true,
+      "verb": "DELETE"
+    },
+    {
       "action": "index",
       "controller": "quizzes/quizzes_api",
       "normalized_path": "courses/{}/quizzes",
@@ -584,12 +740,52 @@
       "verb": "POST"
     },
     {
+      "action": "show",
+      "controller": "quizzes/quizzes_api",
+      "normalized_path": "courses/{}/quizzes/{}",
+      "path": "/api/v1/courses/:course_id/quizzes/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "update",
+      "controller": "quizzes/quizzes_api",
+      "normalized_path": "courses/{}/quizzes/{}",
+      "path": "/api/v1/courses/:course_id/quizzes/:id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "quizzes/quizzes_api",
+      "normalized_path": "courses/{}/quizzes/{}",
+      "path": "/api/v1/courses/:course_id/quizzes/:id",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "submission",
+      "controller": "quizzes/quiz_submissions_api",
+      "normalized_path": "courses/{}/quizzes/{}/submission",
+      "path": "/api/v1/courses/:course_id/quizzes/:quiz_id/submission",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
       "action": "index",
       "controller": "quizzes/quiz_submissions_api",
       "normalized_path": "courses/{}/quizzes/{}/submissions",
       "path": "/api/v1/courses/:course_id/quizzes/:quiz_id/submissions",
       "ui_referenced": false,
       "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "quizzes/quiz_submissions_api",
+      "normalized_path": "courses/{}/quizzes/{}/submissions",
+      "path": "/api/v1/courses/:course_id/quizzes/:quiz_id/submissions",
+      "ui_referenced": false,
+      "verb": "POST"
     },
     {
       "action": "index",
@@ -624,12 +820,28 @@
       "verb": "GET"
     },
     {
+      "action": "context_show",
+      "controller": "grading_standards_api",
+      "normalized_path": "courses/{}/grading_standards/{}",
+      "path": "/api/v1/courses/:course_id/grading_standards/:grading_standard_id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
       "action": "create",
       "controller": "grading_standards_api",
       "normalized_path": "courses/{}/grading_standards",
       "path": "/api/v1/courses/:course_id/grading_standards",
       "ui_referenced": true,
       "verb": "POST"
+    },
+    {
+      "action": "destroy",
+      "controller": "grading_standards_api",
+      "normalized_path": "courses/{}/grading_standards/{}",
+      "path": "/api/v1/courses/:course_id/grading_standards/:grading_standard_id",
+      "ui_referenced": false,
+      "verb": "DELETE"
     },
     {
       "action": "index",
@@ -640,12 +852,36 @@
       "verb": "GET"
     },
     {
+      "action": "show",
+      "controller": "rubrics_api",
+      "normalized_path": "courses/{}/rubrics/{}",
+      "path": "/api/v1/courses/:course_id/rubrics/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
       "action": "create",
       "controller": "rubrics",
       "normalized_path": "courses/{}/rubrics",
       "path": "/api/v1/courses/:course_id/rubrics",
       "ui_referenced": false,
       "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "rubrics",
+      "normalized_path": "courses/{}/rubrics/{}",
+      "path": "/api/v1/courses/:course_id/rubrics/:id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "rubrics",
+      "normalized_path": "courses/{}/rubrics/{}",
+      "path": "/api/v1/courses/:course_id/rubrics/:id",
+      "ui_referenced": false,
+      "verb": "DELETE"
     },
     {
       "action": "show",
@@ -668,22 +904,22 @@
     "graphql_mutations_implemented": 0,
     "graphql_types": 170,
     "graphql_types_implemented": 0,
-    "implemented_rest_pct": 4.7,
-    "implemented_rest_routes": 66,
+    "implemented_rest_pct": 6.6,
+    "implemented_rest_routes": 93,
     "js_env_call_sites": 490,
     "js_env_files": 124,
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
-    "star_extras": 65,
-    "star_route_calls": 127,
-    "star_route_registrations": 130,
+    "star_extras": 68,
+    "star_route_calls": 155,
+    "star_route_registrations": 160,
     "star_tables": 36,
     "star_unparsed_calls": 0,
     "ui_feature_dirs": 232,
     "ui_feature_dirs_implemented": 0,
-    "ui_referenced_implemented": 46,
-    "ui_referenced_pct": 9.1,
+    "ui_referenced_implemented": 62,
+    "ui_referenced_pct": 12.3,
     "ui_referenced_routes": 503
   },
   "unmatched_star_routes": [
@@ -804,6 +1040,27 @@
       "normalized_path": "courses/{}/announcements",
       "path": "/courses/{courseId}/announcements",
       "source": "crates/star-announcements/src/lib.rs",
+      "verb": "POST"
+    },
+    {
+      "crate": "star-assignments",
+      "normalized_path": "courses/{}/assignments/{}/submissions/self",
+      "path": "/courses/{courseId}/assignments/{id}/submissions/self",
+      "source": "crates/star-assignments/src/lib.rs",
+      "verb": "GET"
+    },
+    {
+      "crate": "star-submission-comments",
+      "normalized_path": "courses/{}/assignments/{}/submissions/{}/comments",
+      "path": "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments",
+      "source": "crates/star-submission-comments/src/lib.rs",
+      "verb": "GET"
+    },
+    {
+      "crate": "star-submission-comments",
+      "normalized_path": "courses/{}/assignments/{}/submissions/{}/comments",
+      "path": "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments",
+      "source": "crates/star-submission-comments/src/lib.rs",
       "verb": "POST"
     },
     {

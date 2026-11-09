@@ -6,8 +6,8 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 66 | 1403 | 4.7% |
-| REST routes referenced from `ui/` | 46 | 503 | 9.1% |
+| REST API routes | 93 | 1403 | 6.6% |
+| REST routes referenced from `ui/` | 62 | 503 | 12.3% |
 | GraphQL files | 0 | 390 | 0.0% |
 | GraphQL object types | 0 | 170 | 0.0% |
 | GraphQL mutations | 0 | 110 | 0.0% |
@@ -17,43 +17,47 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | js_env files | 0 | 124 | 0.0% |
 | Schema tables (vs 688 Canvas models) | 36 | 688 | n/a |
 
-Implemented REST route count: **66 / 1403** (4.7%).
+Implemented REST route count: **93 / 1403** (6.6%).
 
-Star registrations: 130 route/method pairs from 127 `.route(...)` calls (0 unparsed); 65 have no Canvas match and are listed as extras below.
+Star registrations: 160 route/method pairs from 155 `.route(...)` calls (0 unparsed); 68 have no Canvas match and are listed as extras below.
 
 Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 
-## Controllers with coverage (25)
+## Controllers with coverage (29)
 
 | Controller | Implemented | Total | Coverage |
 |---|---:|---:|---:|
+| `courses` | 6 | 38 | 15.8% |
+| `assignments_api` | 5 | 12 | 41.7% |
+| `context_modules_api` | 5 | 8 | 62.5% |
 | `conversations` | 5 | 16 | 31.2% |
-| `courses` | 5 | 38 | 13.2% |
+| `groups` | 5 | 17 | 29.4% |
+| `quizzes/quizzes_api` | 5 | 7 | 71.4% |
+| `wiki_pages_api` | 5 | 29 | 17.2% |
 | `assignment_groups_api` | 4 | 5 | 80.0% |
 | `calendar_events_api` | 4 | 15 | 26.7% |
 | `discussion_topics` | 4 | 10 | 40.0% |
-| `groups` | 4 | 17 | 23.5% |
+| `grading_standards_api` | 4 | 10 | 40.0% |
 | `users` | 4 | 39 | 10.3% |
 | `accounts` | 3 | 22 | 13.6% |
-| `assignments_api` | 3 | 12 | 25.0% |
+| `context_module_items_api` | 3 | 12 | 25.0% |
 | `discussion_topics_api` | 3 | 58 | 5.2% |
 | `enrollments_api` | 3 | 14 | 21.4% |
 | `files` | 3 | 26 | 11.5% |
 | `group_memberships` | 3 | 11 | 27.3% |
 | `outcome_groups_api` | 3 | 40 | 7.5% |
-| `context_modules_api` | 2 | 8 | 25.0% |
-| `grading_standards_api` | 2 | 10 | 20.0% |
-| `quizzes/quizzes_api` | 2 | 7 | 28.6% |
-| `wiki_pages_api` | 2 | 29 | 6.9% |
+| `quizzes/quiz_submissions_api` | 3 | 7 | 42.9% |
+| `rubrics` | 3 | 3 | 100.0% |
+| `rubrics_api` | 2 | 15 | 13.3% |
+| `submissions_api` | 2 | 44 | 4.5% |
 | `assignment_groups` | 1 | 1 | 100.0% |
-| `context_module_items_api` | 1 | 12 | 8.3% |
+| `assignments` | 1 | 1 | 100.0% |
 | `lti/account_lookup` | 1 | 1 | 100.0% |
-| `quizzes/quiz_submissions_api` | 1 | 7 | 14.3% |
-| `rubrics` | 1 | 3 | 33.3% |
-| `rubrics_api` | 1 | 15 | 6.7% |
 | `sub_accounts` | 1 | 2 | 50.0% |
+| `submission_comments_api` | 1 | 4 | 25.0% |
+| `submissions` | 1 | 2 | 50.0% |
 
-## Star routes with no Canvas match (65)
+## Star routes with no Canvas match (68)
 
 | Verb | Path | Crate |
 |---|---|---|
@@ -74,6 +78,9 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | POST | `/courses` | `star-courses` |
 | GET | `/courses/{courseId}/announcements` | `star-announcements` |
 | POST | `/courses/{courseId}/announcements` | `star-announcements` |
+| GET | `/courses/{courseId}/assignments/{id}/submissions/self` | `star-assignments` |
+| GET | `/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments` | `star-submission-comments` |
+| POST | `/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments` | `star-submission-comments` |
 | GET | `/courses/{courseId}/calendar_events` | `star-calendar` |
 | POST | `/courses/{courseId}/calendar_events` | `star-calendar` |
 | GET | `/courses/{courseId}/final_grade` | `star-grading-standards` |
