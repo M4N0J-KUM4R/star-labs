@@ -4,9 +4,8 @@
 //! over a real Postgres (migrations run, state seeded directly in the DB) and
 //! pin ACTUAL endpoint behavior, including quirks:
 //!
-//! - `GET .../discussion_topics/{id}` still returns a soft-deleted topic with
-//!   `workflow_state = "deleted"` (the list endpoint and the entries
-//!   endpoints exclude deleted topics).
+//! - `GET .../discussion_topics/{id}` hides soft-deleted topics (404), like
+//!   the list endpoint and the entries endpoints.
 //! - `DELETE .../discussion_topics/{id}` is repeatable: deleting an
 //!   already-deleted topic returns 204 again (the existence check ignores
 //!   workflow_state).
@@ -630,15 +629,13 @@ async fn get_topic_of_another_course_is_404() {
 }
 
 #[tokio::test]
-async fn get_topic_still_returns_soft_deleted_topic() {
+async fn get_topic_of_soft_deleted_topic_is_404() {
     let Some((server, pool, prefix)) = setup().await else {
         eprintln!("SKIP: DATABASE_URL not set");
         return;
     };
 
-    // QUIRK: GET one does not filter workflow_state, so after a soft delete
-    // the single-topic endpoint keeps answering 200 with workflow_state
-    // "deleted" even though the list endpoint hides the topic.
+    // GET one must hide soft-deleted topics just like the list endpoint does.
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let course = seed_course(&pool, &prefix, "GetDeleted").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
@@ -646,26 +643,32 @@ async fn get_topic_still_returns_soft_deleted_topic() {
 
     let topic = create_topic_ok(&server, course, &bearer, &format!("{prefix}-Deleted")).await;
     let id = topic["id"].as_i64().unwrap();
+    let url = format!("/courses/{course}/discussion_topics/{id}");
+
+    // Before the delete the single-topic endpoint answers 200.
+    let resp = server
+        .get(&url)
+        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
 
     let resp = server
-        .delete(&format!("/courses/{course}/discussion_topics/{id}"))
+        .delete(&url)
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 204);
 
     let resp = server
-        .get(&format!("/courses/{course}/discussion_topics/{id}"))
+        .get(&url)
         .add_header(axum::http::header::AUTHORIZATION, bearer)
         .await;
     assert_eq!(
         resp.status_code(),
-        200,
-        "get-one must still return a soft-deleted topic (pinned quirk); body: {}",
+        404,
+        "get-one must hide a soft-deleted topic; body: {}",
         resp.text()
     );
-    let got: Value = resp.json();
-    assert_eq!(got["id"], id);
-    assert_eq!(got["workflow_state"], "deleted");
+    assert_eq!(resp.text(), "not found");
 
     cleanup(&pool, &prefix).await;
 }
@@ -1267,14 +1270,13 @@ async fn full_lifecycle_topic_entry_reply_then_soft_delete() {
         .await;
     assert_eq!(resp.status_code(), 204);
 
-    // 6. Pinned quirk: get-one still returns the deleted topic.
+    // 6. Get-one hides the deleted topic, like the list endpoint.
     let resp = server
         .get(&format!("/courses/{course}/discussion_topics/{topic_id}"))
         .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
         .await;
-    assert_eq!(resp.status_code(), 200);
-    let got: Value = resp.json();
-    assert_eq!(got["workflow_state"], "deleted");
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    assert_eq!(resp.text(), "not found");
 
     // 7. The entries endpoints treat the deleted topic as gone.
     let resp = server
