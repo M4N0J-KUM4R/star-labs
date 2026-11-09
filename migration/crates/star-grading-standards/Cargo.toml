@@ -16,4 +16,5 @@ chrono = { workspace = true }
 [dev-dependencies]
 star-db = { path = "../star-db" }
 tokio = { workspace = true }
+axum-test = { workspace = true }
 reqwest = { version = "0.12", features = ["blocking", "json"] }
