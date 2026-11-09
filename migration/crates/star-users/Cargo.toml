@@ -14,4 +14,7 @@ chrono = { workspace = true }
 argon2 = { workspace = true }
 
 [dev-dependencies]
+star-db = { path = "../star-db" }
+tokio = { workspace = true }
+axum-test = { workspace = true }
 reqwest = { workspace = true, features = ["blocking"] }
