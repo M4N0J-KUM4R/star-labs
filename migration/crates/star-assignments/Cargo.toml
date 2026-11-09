@@ -15,3 +15,4 @@ chrono = { workspace = true }
 [dev-dependencies]
 star-db = { path = "../star-db" }
 tokio = { workspace = true }
+axum-test = { workspace = true }
