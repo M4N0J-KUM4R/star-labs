@@ -141,6 +141,57 @@ async fn require_course_read_access(
 }
 
 // --------------------------------------------------------------------------
+// Nested-route guards
+// --------------------------------------------------------------------------
+
+/// Canvas nested-alias guard: 404 unless the module belongs to the course.
+/// Soft-deleted modules are left to the delegated handler, which either
+/// filters them (item create) or intentionally does not (item delete).
+async fn require_module_in_course(
+    db: &PgPool,
+    course_id: i64,
+    module_id: i64,
+) -> Result<(), ApiError> {
+    let exists: Option<(i32,)> =
+        sqlx::query_as(r#"SELECT 1 FROM modules WHERE id = $1 AND course_id = $2"#)
+            .bind(module_id)
+            .bind(course_id)
+            .fetch_optional(db)
+            .await?;
+
+    if exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(())
+}
+
+/// Canvas nested-alias guard for module detail/update/delete: 404 unless the
+/// module belongs to the course and has not been soft-deleted.
+async fn require_visible_module_in_course(
+    db: &PgPool,
+    course_id: i64,
+    module_id: i64,
+) -> Result<(), ApiError> {
+    let exists: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM modules
+        WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(module_id)
+    .bind(course_id)
+    .fetch_optional(db)
+    .await?;
+
+    if exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(())
+}
+
+// --------------------------------------------------------------------------
 // Handlers
 // --------------------------------------------------------------------------
 
@@ -414,6 +465,80 @@ async fn list_module_items(
 }
 
 // --------------------------------------------------------------------------
+// Canvas nested route aliases
+// --------------------------------------------------------------------------
+
+/// GET /courses/{courseId}/modules/{moduleId} — Canvas v1 alias for GET /modules/{id}.
+async fn get_course_module(
+    State(state): State<AppState>,
+    Path((course_id, module_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<ModuleWithItems>, ApiError> {
+    require_visible_module_in_course(&state.db, course_id, module_id).await?;
+
+    get_module(State(state), Path(module_id), auth).await
+}
+
+/// PUT /courses/{courseId}/modules/{moduleId} — Canvas v1 alias for PUT /modules/{id}.
+async fn update_course_module(
+    State(state): State<AppState>,
+    Path((course_id, module_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<UpdateModule>,
+) -> Result<Json<Module>, ApiError> {
+    require_visible_module_in_course(&state.db, course_id, module_id).await?;
+
+    update_module(State(state), Path(module_id), auth, Json(body)).await
+}
+
+/// DELETE /courses/{courseId}/modules/{moduleId} — Canvas v1 alias for DELETE /modules/{id}.
+async fn delete_course_module(
+    State(state): State<AppState>,
+    Path((course_id, module_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    require_visible_module_in_course(&state.db, course_id, module_id).await?;
+
+    delete_module(State(state), Path(module_id), auth).await
+}
+
+/// POST /courses/{courseId}/modules/{moduleId}/items — Canvas v1 alias for
+/// POST /modules/{id}/items.
+async fn create_course_module_item(
+    State(state): State<AppState>,
+    Path((course_id, module_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<CreateModuleItem>,
+) -> Result<Json<ModuleItem>, ApiError> {
+    require_module_in_course(&state.db, course_id, module_id).await?;
+
+    create_or_update_item(State(state), Path(module_id), auth, Json(body)).await
+}
+
+/// DELETE /courses/{courseId}/modules/{moduleId}/items/{itemId} — Canvas v1 alias
+/// for DELETE /modules/{id}/items/{itemId}.
+async fn delete_course_module_item(
+    State(state): State<AppState>,
+    Path((course_id, module_id, item_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    require_module_in_course(&state.db, course_id, module_id).await?;
+
+    let item: Option<(i32,)> =
+        sqlx::query_as(r#"SELECT 1 FROM module_items WHERE id = $1 AND module_id = $2"#)
+            .bind(item_id)
+            .bind(module_id)
+            .fetch_optional(&state.db)
+            .await?;
+
+    if item.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    delete_module_item(State(state), Path((module_id, item_id)), auth).await
+}
+
+// --------------------------------------------------------------------------
 // Router
 // --------------------------------------------------------------------------
 
@@ -424,6 +549,26 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/modules/{moduleId}/items",
             get(list_module_items),
+        )
+        .route(
+            "/courses/{courseId}/modules/{moduleId}",
+            get(get_course_module),
+        )
+        .route(
+            "/courses/{courseId}/modules/{moduleId}",
+            put(update_course_module),
+        )
+        .route(
+            "/courses/{courseId}/modules/{moduleId}",
+            delete(delete_course_module),
+        )
+        .route(
+            "/courses/{courseId}/modules/{moduleId}/items",
+            post(create_course_module_item),
+        )
+        .route(
+            "/courses/{courseId}/modules/{moduleId}/items/{itemId}",
+            delete(delete_course_module_item),
         )
         .route("/modules/{id}/items", post(create_or_update_item))
         .route("/modules/{id}/items/{itemId}", delete(delete_module_item))

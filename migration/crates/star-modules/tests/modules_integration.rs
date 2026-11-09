@@ -1251,6 +1251,447 @@ async fn list_module_items_returns_seeded_items_with_authz() {
 }
 
 // ---------------------------------------------------------------------------
+// Canvas nested route aliases
+//   GET/PUT/DELETE /courses/{courseId}/modules/{id}
+//   POST /courses/{courseId}/modules/{id}/items
+//   DELETE /courses/{courseId}/modules/{id}/items/{itemId}
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn nested_module_alias_matches_flat_routes() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "AliasCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher", "active").await;
+    let module = seed_module(&pool, course, "Alias Module", 1).await;
+    let item_a = seed_module_item(&pool, module, "page", 501, 1).await;
+    let item_b = seed_module_item(&pool, module, "assignment", 502, 2).await;
+    let auth_header = auth(teacher, "teacher");
+
+    // GET via the nested alias returns exactly the flat response.
+    let alias = server
+        .get(&format!("/courses/{course}/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth_header.clone())
+        .await;
+    assert_eq!(alias.status_code(), 200, "body: {}", alias.text());
+    let alias_body: Value = alias.json();
+
+    let flat = server
+        .get(&format!("/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth_header.clone())
+        .await;
+    assert_eq!(flat.status_code(), 200);
+    let flat_body: Value = flat.json();
+
+    assert_eq!(alias_body, flat_body, "alias GET must mirror flat GET");
+    assert_eq!(alias_body["id"], module);
+    assert_eq!(alias_body["course_id"], course);
+    let items = alias_body["items"].as_array().expect("items array");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["id"], item_a);
+    assert_eq!(items[1]["id"], item_b);
+
+    // PUT via the alias applies the same COALESCE partial update.
+    let resp = server
+        .put(&format!("/courses/{course}/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth_header.clone())
+        .json(&json!({ "name": "Alias Renamed" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let updated: Value = resp.json();
+    assert_eq!(updated["name"], "Alias Renamed");
+    assert_eq!(
+        updated["position"], 1,
+        "name-only alias PUT leaves position alone"
+    );
+    assert_eq!(updated["course_id"], course);
+
+    // DELETE via the alias soft-deletes exactly like the flat route.
+    let resp = server
+        .delete(&format!("/courses/{course}/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth_header)
+        .await;
+    assert_eq!(resp.status_code(), 204, "alias delete");
+    assert_eq!(resp.text(), "", "204 has an empty body");
+
+    let (state,): (String,) = sqlx::query_as("SELECT workflow_state FROM modules WHERE id = $1")
+        .bind(module)
+        .fetch_one(&pool)
+        .await
+        .expect("module row survives alias soft delete");
+    assert_eq!(state, "deleted", "alias DELETE is a soft delete");
+
+    // Deleted modules are invisible through the alias (workflow_state gate).
+    let resp = server
+        .get(&format!("/courses/{course}/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "deleted module alias GET 404s");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn nested_module_alias_404_for_wrong_course_missing_and_deleted() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let course = seed_course(&pool, &prefix, "AliasHomeCourse").await;
+    let other_course = seed_course(&pool, &prefix, "AliasOtherCourse").await;
+    let module = seed_module(&pool, course, "Home Module", 1).await;
+    let foreign_module = seed_module(&pool, other_course, "Foreign Module", 1).await;
+
+    // The module exists, but under another course: every verb 404s for
+    // teachers and admins alike (ownership is checked before authz).
+    let resp = server
+        .get(&format!("/courses/{course}/modules/{foreign_module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "cross-course alias GET");
+    assert_eq!(resp.text(), "not found");
+
+    let resp = server
+        .put(&format!("/courses/{course}/modules/{foreign_module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "name": "Hijacked" }))
+        .await;
+    assert_eq!(resp.status_code(), 404, "cross-course alias PUT");
+    assert_eq!(resp.text(), "not found");
+
+    let resp = server
+        .delete(&format!("/courses/{course}/modules/{foreign_module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "cross-course alias DELETE");
+
+    // Admin role does not bypass the course ownership check.
+    let resp = server
+        .get(&format!("/courses/{course}/modules/{foreign_module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "admin cross-course alias GET");
+
+    // An unauthorized caller also gets 404, not 403: the ownership check
+    // precedes the enrollment check.
+    let resp = server
+        .get(&format!("/courses/{course}/modules/{foreign_module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "outsider cross-course alias GET");
+
+    // The foreign module was not renamed or deleted by the 404'd calls.
+    let (name, state): (String, String) =
+        sqlx::query_as("SELECT name, workflow_state FROM modules WHERE id = $1")
+            .bind(foreign_module)
+            .fetch_one(&pool)
+            .await
+            .expect("foreign module row");
+    assert_eq!(name, "Foreign Module", "cross-course PUT must not write");
+    assert_eq!(state, "active", "cross-course DELETE must not delete");
+
+    // Missing module ids 404 on GET, PUT and DELETE.
+    let resp = server
+        .get(&format!("/courses/{course}/modules/{MISSING_ID}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "missing module alias GET");
+    let resp = server
+        .put(&format!("/courses/{course}/modules/{MISSING_ID}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "name": "Ghost" }))
+        .await;
+    assert_eq!(resp.status_code(), 404, "missing module alias PUT");
+    let resp = server
+        .delete(&format!("/courses/{course}/modules/{MISSING_ID}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "missing module alias DELETE");
+
+    // Soft-deleted modules are hidden from all three alias verbs, including
+    // DELETE (the alias 404s where the flat DELETE is an idempotent 204).
+    let resp = server
+        .delete(&format!("/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 204, "seed soft delete");
+
+    let resp = server
+        .get(&format!("/courses/{course}/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "deleted module alias GET");
+    let resp = server
+        .put(&format!("/courses/{course}/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "name": "Zombie" }))
+        .await;
+    assert_eq!(resp.status_code(), 404, "deleted module alias PUT");
+    let resp = server
+        .delete(&format!("/courses/{course}/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "deleted module alias DELETE 404s (workflow_state gate)"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn nested_item_alias_matches_flat_upsert_and_delete() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "AliasItemCourse").await;
+    let other_course = seed_course(&pool, &prefix, "AliasItemOtherCourse").await;
+    let module = seed_module(&pool, course, "Alias Item Host", 1).await;
+    let other_module = seed_module(&pool, other_course, "Foreign Item Host", 1).await;
+    let foreign_item = seed_module_item(&pool, other_module, "page", 44, 1).await;
+    let auth_header = auth(teacher, "teacher");
+
+    // Alias POST creates the item, same response shape as the flat route.
+    let resp = server
+        .post(&format!("/courses/{course}/modules/{module}/items"))
+        .add_header(axum::http::header::AUTHORIZATION, auth_header.clone())
+        .json(&json!({ "item_type": "page", "item_id": 42, "position": 1 }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "alias item create; body: {}",
+        resp.text()
+    );
+    let created: Value = resp.json();
+    let item_id = created["id"].as_i64().expect("item id");
+    assert_eq!(created["module_id"], module);
+    assert_eq!(created["item_type"], "page");
+    assert_eq!(created["item_id"], 42);
+    assert_eq!(created["position"], 1);
+
+    let resp = server
+        .post(&format!("/modules/{module}/items"))
+        .add_header(axum::http::header::AUTHORIZATION, auth_header.clone())
+        .json(&json!({ "item_type": "page", "item_id": 43, "position": 2 }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "flat item create");
+    let flat_created: Value = resp.json();
+    let mut alias_keys: Vec<&String> = created.as_object().expect("object").keys().collect();
+    let mut flat_keys: Vec<&String> = flat_created.as_object().expect("object").keys().collect();
+    alias_keys.sort();
+    flat_keys.sort();
+    assert_eq!(
+        alias_keys, flat_keys,
+        "alias POST returns the flat route's item shape"
+    );
+
+    // Re-posting through the alias upserts in place, like the flat route.
+    let resp = server
+        .post(&format!("/courses/{course}/modules/{module}/items"))
+        .add_header(axum::http::header::AUTHORIZATION, auth_header.clone())
+        .json(&json!({ "item_type": "page", "item_id": 42, "position": 7 }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "alias item upsert");
+    let updated: Value = resp.json();
+    assert_eq!(updated["id"], item_id, "the upsert reuses the row id");
+    assert_eq!(updated["position"], 7, "position updated in place");
+
+    // A module from another course 404s before any write.
+    let resp = server
+        .post(&format!("/courses/{course}/modules/{other_module}/items"))
+        .add_header(axum::http::header::AUTHORIZATION, auth_header.clone())
+        .json(&json!({ "item_type": "page", "item_id": 42 }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "alias item create requires the module to belong to the course"
+    );
+    assert_eq!(resp.text(), "not found");
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM module_items WHERE module_id = $1")
+        .bind(other_module)
+        .fetch_one(&pool)
+        .await
+        .expect("count foreign items");
+    assert_eq!(count, 1, "the 404'd create must not insert into the module");
+
+    // DELETE alias: an item that belongs to another module 404s.
+    let resp = server
+        .delete(&format!(
+            "/courses/{course}/modules/{module}/items/{foreign_item}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth_header.clone())
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "alias item delete requires the item to belong to the module"
+    );
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM module_items WHERE id = $1")
+        .bind(foreign_item)
+        .fetch_one(&pool)
+        .await
+        .expect("count foreign item");
+    assert_eq!(count, 1, "the mismatched delete must not remove the item");
+
+    // DELETE alias: a module from another course 404s (module ownership).
+    let resp = server
+        .delete(&format!(
+            "/courses/{course}/modules/{other_module}/items/{foreign_item}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth_header.clone())
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "alias item delete requires the module to belong to the course"
+    );
+
+    // Missing item id 404s.
+    let resp = server
+        .delete(&format!(
+            "/courses/{course}/modules/{module}/items/{MISSING_ID}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth_header.clone())
+        .await;
+    assert_eq!(resp.status_code(), 404, "missing item 404s");
+
+    // Correct path deletes the row, and a repeat delete 404s (flat parity).
+    let resp = server
+        .delete(&format!(
+            "/courses/{course}/modules/{module}/items/{item_id}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth_header.clone())
+        .await;
+    assert_eq!(resp.status_code(), 204, "alias item delete");
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM module_items WHERE id = $1")
+        .bind(item_id)
+        .fetch_one(&pool)
+        .await
+        .expect("count deleted item");
+    assert_eq!(count, 0, "item row is hard-deleted");
+
+    let resp = server
+        .delete(&format!(
+            "/courses/{course}/modules/{module}/items/{item_id}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth_header)
+        .await;
+    assert_eq!(resp.status_code(), 404, "repeat alias delete 404s");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn nested_alias_authz_matrix_matches_flat_routes() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let course = seed_course(&pool, &prefix, "AliasAuthzCourse").await;
+    let module = seed_module(&pool, course, "Alias Guarded", 1).await;
+    let item = seed_module_item(&pool, module, "page", 601, 1).await;
+    let outsider_auth = auth(outsider, "student");
+
+    // Anonymous -> 401 on every alias verb (AuthUser extractor wins).
+    let resp = server
+        .get(&format!("/courses/{course}/modules/{module}"))
+        .await;
+    assert_eq!(resp.status_code(), 401, "anonymous alias GET");
+    assert_eq!(resp.text(), "unauthorized");
+
+    let resp = server
+        .put(&format!("/courses/{course}/modules/{module}"))
+        .json(&json!({ "name": "Anon" }))
+        .await;
+    assert_eq!(resp.status_code(), 401, "anonymous alias PUT");
+
+    let resp = server
+        .delete(&format!("/courses/{course}/modules/{module}"))
+        .await;
+    assert_eq!(resp.status_code(), 401, "anonymous alias DELETE");
+
+    let resp = server
+        .post(&format!("/courses/{course}/modules/{module}/items"))
+        .json(&json!({ "item_type": "page", "item_id": 1 }))
+        .await;
+    assert_eq!(resp.status_code(), 401, "anonymous alias item POST");
+
+    let resp = server
+        .delete(&format!("/courses/{course}/modules/{module}/items/{item}"))
+        .await;
+    assert_eq!(resp.status_code(), 401, "anonymous alias item DELETE");
+
+    // Authenticated outsider (no enrollment) -> 403 on every alias verb;
+    // the ownership check passes because the module belongs to the course.
+    let resp = server
+        .get(&format!("/courses/{course}/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, outsider_auth.clone())
+        .await;
+    assert_eq!(resp.status_code(), 403, "outsider alias GET");
+    assert_eq!(resp.text(), "forbidden");
+
+    let resp = server
+        .put(&format!("/courses/{course}/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, outsider_auth.clone())
+        .json(&json!({ "name": "Nope" }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "outsider alias PUT");
+
+    let resp = server
+        .delete(&format!("/courses/{course}/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, outsider_auth.clone())
+        .await;
+    assert_eq!(resp.status_code(), 403, "outsider alias DELETE");
+
+    let resp = server
+        .post(&format!("/courses/{course}/modules/{module}/items"))
+        .add_header(axum::http::header::AUTHORIZATION, outsider_auth.clone())
+        .json(&json!({ "item_type": "page", "item_id": 1 }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "outsider alias item POST");
+
+    let resp = server
+        .delete(&format!("/courses/{course}/modules/{module}/items/{item}"))
+        .add_header(axum::http::header::AUTHORIZATION, outsider_auth)
+        .await;
+    assert_eq!(resp.status_code(), 403, "outsider alias item DELETE");
+
+    // Forbidden writes left no trace.
+    let (name, state): (String, String) =
+        sqlx::query_as("SELECT name, workflow_state FROM modules WHERE id = $1")
+            .bind(module)
+            .fetch_one(&pool)
+            .await
+            .expect("module row");
+    assert_eq!(name, "Alias Guarded", "outsider PUT must not rename");
+    assert_eq!(state, "active", "outsider DELETE must not soft-delete");
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM module_items WHERE module_id = $1")
+        .bind(module)
+        .fetch_one(&pool)
+        .await
+        .expect("count items");
+    assert_eq!(count, 1, "outsider item writes must not change items");
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
 // Full lifecycle: module -> items -> soft delete
 // ---------------------------------------------------------------------------
 
