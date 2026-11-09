@@ -16,4 +16,6 @@ serde_json = { workspace = true }
 chrono = { workspace = true }
 
 [dev-dependencies]
-reqwest = { workspace = true, features = ["blocking"] }
+star-db = { path = "../star-db" }
+tokio = { workspace = true }
+axum-test = { workspace = true }
