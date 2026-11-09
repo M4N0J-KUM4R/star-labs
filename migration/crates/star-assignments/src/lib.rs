@@ -178,6 +178,24 @@ async fn check_teacher_or_admin(
     Ok(row.is_some())
 }
 
+/// Verify that an assignment exists and belongs to the given course.
+/// Canvas nested routes treat a mismatched or missing assignment as 404.
+async fn ensure_assignment_in_course(
+    pool: &PgPool,
+    course_id: i64,
+    assignment_id: i64,
+) -> Result<(), ApiError> {
+    let row: Option<(i32,)> =
+        sqlx::query_as(r#"SELECT 1 FROM assignments WHERE id = $1 AND course_id = $2"#)
+            .bind(assignment_id)
+            .bind(course_id)
+            .fetch_optional(pool)
+            .await?;
+
+    row.ok_or(ApiError::NotFound)?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Grade computation (pure functions — unit tested)
 // ---------------------------------------------------------------------------
@@ -671,6 +689,95 @@ async fn gradebook(
 }
 
 // ---------------------------------------------------------------------------
+// Canvas nested route aliases
+// ---------------------------------------------------------------------------
+
+/// GET /courses/{courseId}/assignments/{id} — flat GET alias.
+async fn course_get_assignment(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Assignment>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    get_assignment(State(state), Path(assignment_id), auth).await
+}
+
+/// PUT /courses/{courseId}/assignments/{id} — flat PUT alias.
+async fn course_update_assignment(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateAssignment>,
+) -> Result<Json<Assignment>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    update_assignment(State(state), Path(assignment_id), auth, Json(payload)).await
+}
+
+/// DELETE /courses/{courseId}/assignments/{id} — flat DELETE alias.
+async fn course_delete_assignment(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    delete_assignment(State(state), Path(assignment_id), auth).await
+}
+
+/// GET /courses/{courseId}/assignments/{id}/submissions — flat list alias.
+async fn course_list_submissions(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<SubmissionWithUser>>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    list_submissions(State(state), Path(assignment_id), auth).await
+}
+
+/// POST /courses/{courseId}/assignments/{id}/submissions — flat submit alias.
+async fn course_create_submission(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<CreateSubmission>,
+) -> Result<(StatusCode, Json<Submission>), ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    create_submission(State(state), Path(assignment_id), auth, Json(payload)).await
+}
+
+/// GET /courses/{courseId}/assignments/{id}/submissions/self — Canvas's
+/// name for the flat `/assignments/{id}/submissions/me` route.
+async fn course_get_my_submission(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Submission>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    get_my_submission(State(state), Path(assignment_id), auth).await
+}
+
+/// PUT /courses/{courseId}/assignments/{assignmentId}/submissions/{userId} —
+/// Canvas's per-user grading route. Resolves the user's submission for the
+/// assignment, then delegates to the flat grade handler.
+async fn course_grade_submission(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<GradeSubmission>,
+) -> Result<Json<Submission>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    let row: Option<(i64,)> =
+        sqlx::query_as(r#"SELECT id FROM submissions WHERE assignment_id = $1 AND user_id = $2"#)
+            .bind(assignment_id)
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?;
+
+    let submission_id = row.ok_or(ApiError::NotFound)?.0;
+    grade_submission(State(state), Path(submission_id), auth, Json(payload)).await
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -693,6 +800,35 @@ pub fn router() -> Router<AppState> {
         .route("/assignments/{id}/submissions/me", get(get_my_submission))
         // Submission-level routes
         .route("/submissions/{id}/grade", put(grade_submission))
+        // Canvas v1 nested aliases (same handlers, course-scoped paths)
+        .route(
+            "/courses/{courseId}/assignments/{id}",
+            get(course_get_assignment),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{id}",
+            put(course_update_assignment),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{id}",
+            delete(course_delete_assignment),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{id}/submissions",
+            get(course_list_submissions),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{id}/submissions",
+            post(course_create_submission),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{id}/submissions/self",
+            get(course_get_my_submission),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}",
+            put(course_grade_submission),
+        )
 }
 
 // ---------------------------------------------------------------------------
