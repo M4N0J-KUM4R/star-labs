@@ -3,6 +3,9 @@
 //! Exposes `pub fn router() -> Router<AppState>` with endpoints:
 //! - GET/POST /courses/{courseId}/pages
 //! - GET/PUT/DELETE /pages/{id}   (id may be numeric id or url slug)
+//! - GET/PUT/DELETE /courses/{courseId}/pages/{id}
+//!   (Canvas v1 aliases for the flat routes; the page must belong to
+//!   {courseId}, otherwise 404)
 //!
 //! Canvas parity notes (wiki_page.rb, wiki_pages_api_controller.rb):
 //! - pages carry `url` (slug derived from title), `workflow_state`
@@ -443,6 +446,69 @@ async fn delete_page(
 }
 
 // ---------------------------------------------------------------------------
+// Canvas v1 nested aliases
+// ---------------------------------------------------------------------------
+
+/// 404 unless `page_ref` (numeric id or url slug) resolves to a non-deleted
+/// page that belongs to `course_id`.
+async fn ensure_page_in_course(
+    db: &PgPool,
+    course_id: i64,
+    page_ref: &str,
+) -> Result<(), ApiError> {
+    let row: Option<(i32,)> = if let Ok(numeric_id) = page_ref.parse::<i64>() {
+        sqlx::query_as(
+            "SELECT 1 FROM pages WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'",
+        )
+        .bind(numeric_id)
+        .bind(course_id)
+        .fetch_optional(db)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT 1 FROM pages WHERE url = $1 AND course_id = $2 AND workflow_state <> 'deleted'",
+        )
+        .bind(page_ref)
+        .bind(course_id)
+        .fetch_optional(db)
+        .await?
+    };
+
+    row.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+/// GET /courses/{courseId}/pages/{id} — Canvas v1 alias for GET /pages/{id}.
+async fn get_course_page(
+    State(state): State<AppState>,
+    Path((course_id, page_id)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<PageDetail>, ApiError> {
+    ensure_page_in_course(&state.db, course_id, &page_id).await?;
+    get_page(State(state), Path(page_id), auth).await
+}
+
+/// PUT /courses/{courseId}/pages/{id} — Canvas v1 alias for PUT /pages/{id}.
+async fn update_course_page(
+    State(state): State<AppState>,
+    Path((course_id, page_id)): Path<(i64, String)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdatePage>,
+) -> Result<Json<PageDetail>, ApiError> {
+    ensure_page_in_course(&state.db, course_id, &page_id).await?;
+    update_page(State(state), Path(page_id), auth, Json(payload)).await
+}
+
+/// DELETE /courses/{courseId}/pages/{id} — Canvas v1 alias for DELETE /pages/{id}.
+async fn delete_course_page(
+    State(state): State<AppState>,
+    Path((course_id, page_id)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    ensure_page_in_course(&state.db, course_id, &page_id).await?;
+    delete_page(State(state), Path(page_id), auth).await
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -456,6 +522,12 @@ pub fn router() -> Router<AppState> {
         .route(
             "/pages/{id}",
             get(get_page).put(update_page).delete(delete_page),
+        )
+        .route(
+            "/courses/{courseId}/pages/{id}",
+            get(get_course_page)
+                .put(update_course_page)
+                .delete(delete_course_page),
         )
 }
 
