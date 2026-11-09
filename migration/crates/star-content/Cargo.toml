@@ -9,3 +9,12 @@ star-pages = { path = "../star-pages" }
 star-announcements = { path = "../star-announcements" }
 star-modules = { path = "../star-modules" }
 axum = { workspace = true }
+
+[dev-dependencies]
+star-db = { path = "../star-db" }
+star-auth = { path = "../star-auth" }
+chrono = { workspace = true }
+tokio = { workspace = true }
+axum-test = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
