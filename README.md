@@ -114,6 +114,15 @@ configuration over SSH with restrictive file modes. It supports the `migration/`
 subdirectory in this repository. It refuses a dirty checkout and never commits
 provider credentials.
 
+When a migration source is deployed and the data stack env file
+(`~/.config/star-labs/data.env`) exists on the host, the same script also
+builds the star-lms API in release mode (`cargo build --release --locked`),
+installs the binary as `/usr/local/bin/star-lms`, provisions
+`/etc/star-lms/star-lms.env` (mode 600, `DATABASE_URL` from the data stack
+plus a generated `STAR_JWT_SECRET`), and enables the `infra/star-lms.service`
+systemd unit (restart-on-failure, hardened). The JWT secret is generated on
+the host and never stored in this repository.
+
 At the end of a lab session, remove its resources with:
 
 ```sh
