@@ -20,14 +20,13 @@
 //!   (student AND teacher) for that user, and hard-deletes rows whose
 //!   workflow_state is 'deleted'.
 //!
-//! KNOWN BUG pinned by these tests (star-courses/src/lib.rs:476 and :486):
-//! POST /courses/{id}/enrollments decodes `SELECT 1` (Postgres INT4) into
-//! (i64,), so whenever the course exists the handler fails with a database
-//! decode error and returns 500 — before role validation, duplicate
-//! handling, or the insert. star-enrollments uses (i32,) for the same
-//! pattern. Until that is fixed, the happy-path enrollment tests seed
-//! enrollments directly in SQL (same as the star-enrollments template) and
-//! one regression test pins the 500.
+//! Former INT4 bug fixed in star-courses/src/lib.rs:477 and :487:
+//! POST /courses/{id}/enrollments used to decode `SELECT 1` (Postgres INT4)
+//! into (i64,), so whenever the course existed the handler failed with a
+//! database decode error and returned 500 — before role validation,
+//! duplicate handling, or the insert. The probes now decode (i32,) like the
+//! rest of the workspace, and `create_enrollment_for_existing_course_*`
+//! guards against the regression.
 
 use axum_test::TestServer;
 use serde_json::{json, Value};
@@ -999,7 +998,7 @@ async fn delete_course_without_token_is_401() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn create_enrollment_for_existing_course_is_500_regression() {
+async fn create_enrollment_for_existing_course_returns_201_and_persists() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -1016,35 +1015,31 @@ async fn create_enrollment_for_existing_course_is_500_regression() {
         .json(&json!({ "user_id": student, "role": "student" }))
         .await;
 
-    // REGRESSION (documented, not fixed): the course-exists probe decodes
-    // `SELECT 1` (Postgres INT4) into (i64,) at star-courses/src/lib.rs:476,
-    // so a decodable row makes the handler fail with a database decode
-    // error -> 500 before role validation, duplicate handling, or INSERT.
-    // The intended 201 contract is covered by the #[ignore]d tests below.
-    assert_eq!(
-        resp.status_code(),
-        500,
-        "INT4/(i64,) decode bug fixed? restore the ignored tests: {}",
-        resp.text()
-    );
+    // REGRESSION: the course-exists probe used to decode `SELECT 1`
+    // (Postgres INT4) into (i64,) at star-courses/src/lib.rs:477, so a
+    // decodable row made the handler fail with a database decode error ->
+    // 500 before role validation, duplicate handling, or INSERT. The probe
+    // now decodes (i32,), so an existing course enrolls normally.
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["role"], "student");
+    assert_eq!(body["user"]["id"], student);
 
-    // Nothing was inserted by the failed request: only the teacher
-    // enrollment seeded above exists for this course.
+    // The created row was persisted.
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM enrollments WHERE course_id = $1")
         .bind(course)
         .fetch_one(&pool)
         .await
         .unwrap();
     assert_eq!(
-        count.0, 1,
-        "the 500 must not insert the student enrollment row"
+        count.0, 2,
+        "the seeded teacher row plus the new student row"
     );
 
     cleanup(&pool, &prefix).await;
 }
 
 #[tokio::test]
-#[ignore = "blocked by INT4/(i64,) decode bug at src/lib.rs:476 (see create_enrollment_for_existing_course_is_500_regression)"]
 async fn create_enrollment_by_course_teacher_returns_201_with_user_info() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
@@ -1088,7 +1083,6 @@ async fn create_enrollment_by_course_teacher_returns_201_with_user_info() {
 }
 
 #[tokio::test]
-#[ignore = "blocked by INT4/(i64,) decode bug at src/lib.rs:476 (see create_enrollment_for_existing_course_is_500_regression)"]
 async fn create_enrollment_role_defaults_to_student() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
@@ -1113,7 +1107,6 @@ async fn create_enrollment_role_defaults_to_student() {
 }
 
 #[tokio::test]
-#[ignore = "blocked by INT4/(i64,) decode bug at src/lib.rs:476 (role validation runs after the broken course-exists probe)"]
 async fn create_enrollment_invalid_role_is_422() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
@@ -1145,7 +1138,6 @@ async fn create_enrollment_invalid_role_is_422() {
 }
 
 #[tokio::test]
-#[ignore = "blocked by INT4/(i64,) decode bug at src/lib.rs:476 (duplicate handling runs after the broken course-exists probe)"]
 async fn create_enrollment_same_role_duplicate_is_409() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
@@ -1214,7 +1206,6 @@ async fn create_enrollment_missing_course_is_404() {
 }
 
 #[tokio::test]
-#[ignore = "blocked by INT4/(i64,) decode bug at src/lib.rs:476 (the course probe 500s before the missing-user 404 can trigger)"]
 async fn create_enrollment_missing_user_is_404() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
@@ -1642,7 +1633,7 @@ async fn full_lifecycle_create_update_enroll_unenroll_delete() {
     assert_eq!(updated["workflow_state"], "available");
 
     // 3. Student cannot see it yet, then the student gets enrolled (direct
-    //    SQL: POST .../enrollments is blocked by the INT4 decode bug).
+    //    SQL: this test pins listing/visibility, not the enroll endpoint).
     let resp = server
         .get(&format!("/courses/{course_id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))

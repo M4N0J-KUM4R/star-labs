@@ -474,7 +474,7 @@ async fn create_enrollment(
     }
 
     // Verify course exists
-    let course_exists: Option<(i64,)> = sqlx::query_as(r#"SELECT 1 FROM courses WHERE id = $1"#)
+    let course_exists: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM courses WHERE id = $1"#)
         .bind(course_id)
         .fetch_optional(&state.db)
         .await?;
@@ -484,7 +484,7 @@ async fn create_enrollment(
     }
 
     // Verify user exists
-    let user_exists: Option<(i64,)> = sqlx::query_as(r#"SELECT 1 FROM users WHERE id = $1"#)
+    let user_exists: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM users WHERE id = $1"#)
         .bind(payload.user_id)
         .fetch_optional(&state.db)
         .await?;
