@@ -50,9 +50,16 @@ still writes `coverage.json` and `report.md` but leaves the baseline untouched.
 
 ## Measurement rules
 
-- Canvas routes are explicit verb declarations inside `ApiRouteSet.draw`
-  blocks. `resources` expansions are not enumerated; dynamic `#{...}` paths are
-  kept as `{}` placeholders and cannot match concrete Rust paths.
+- Canvas routes are verb declarations inside `ApiRouteSet.draw` blocks, plus
+  Rails `resources` declarations and `%w[...].each` context loops. `resources`
+  expands to the API defaults (GET/POST collection, GET member, PATCH/PUT and
+  DELETE member), honoring `only:`/`except:`, `path:`, `controller:`, and
+  nesting. Context loops expand every value with `#{context}`,
+  `#{context.pluralize}`, `:#{context}_id`, and `#{path_prefix}`
+  substitutions (including the tuple form).
+- Interpolations that come from conditional expressions or other runtime
+  values (for example `prefix = ((context == "global") ? ...)`) are left as
+  `{}` and cannot match concrete Rust paths.
 - Normalization strips `/api/v1` and collapses `:param`, `{param}`, and
   interpolations to `{}`; UI literals additionally collapse numeric segments.
 - Rust routes are `.route("path", get|post|put|delete|patch(...))` calls in

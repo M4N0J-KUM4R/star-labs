@@ -28,6 +28,23 @@ ACTION_RE = re.compile(r"action:\s*(?::([A-Za-z0-9_]+)|[\"']([A-Za-z0-9_]+)[\"']
 TO_RE = re.compile(r"to:\s*[\"']([A-Za-z0-9_/]+)#([A-Za-z0-9_]+)[\"']")
 STR_RE = re.compile(r"[\"']([^\"']*)[\"']")
 STAR_METHOD_RE = re.compile(r"\b(get|post|put|delete|patch|head|options)\s*\(")
+EACH_RE = re.compile(r"^\s*(.+?)\.each\s+do\s*\|([^|]*)\|\s*$")
+WORD_ARRAY_RE = re.compile(r"%w\[([^\]]*)\]")
+RESOURCES_RE = re.compile(r"^\s*resources\s+:([a-z_][a-z0-9_]*)\b(.*)$")
+PATH_OPT_RE = re.compile(r"\bpath:\s*[\"']([^\"']*)[\"']")
+ONLY_OPT_RE = re.compile(r"\bonly:\s*(%i\[([^\]]*)\]|\[([^\]]*)\]|:([A-Za-z0-9_]+))")
+EXCEPT_OPT_RE = re.compile(r"\bexcept:\s*(%i\[([^\]]*)\]|\[([^\]]*)\]|:([A-Za-z0-9_]+))")
+INTERP_RE = re.compile(r"#\{([^{}]*)\}")
+
+# Rails' API resource defaults: no new/edit forms.
+RESOURCE_ACTIONS = (
+    ("index", "GET", False),
+    ("create", "POST", False),
+    ("show", "GET", True),
+    ("update", "PATCH", True),
+    ("update", "PUT", True),
+    ("destroy", "DELETE", True),
+)
 JS_ENV_RE = re.compile(r"\bjs_env\b")
 UI_API_RE = re.compile(r"[\"'`](/api/v1/[^\"'`\s]*)")
 
@@ -101,6 +118,164 @@ def _join_statement(lines, index):
     return text, index
 
 
+def _frame(indent, controller=None, variables=None, bindings=None,
+           resource=None):
+    return {
+        "indent": indent,
+        "controller": controller,
+        "variables": variables if variables is not None else {},
+        "bindings": bindings if bindings is not None else [{}],
+        "resource": resource,
+    }
+
+
+def _pluralize(word):
+    """The subset of ActiveSupport pluralization used by context loops."""
+    if word.endswith(("s", "x", "z", "ch", "sh")):
+        return word + "es"
+    if word.endswith("y") and len(word) > 1 and word[-2] not in "aeiou":
+        return word[:-1] + "ies"
+    return word + "s"
+
+
+def _singularize(word):
+    if word.endswith("ies"):
+        return word[:-3] + "y"
+    if word.endswith(("ses", "xes", "zes", "ches", "shes")):
+        return word[:-2]
+    if word.endswith("s"):
+        return word[:-1]
+    return word
+
+
+def _expand(text, bindings, variables, depth=0):
+    """Substitute #{var}, #{var.pluralize}, and chained string variables."""
+    if depth >= 8 or "#{" not in text:
+        return text
+
+    def replace(match):
+        expr = match.group(1).strip()
+        plural = False
+        if expr.endswith(".pluralize"):
+            expr = expr[:-len(".pluralize")]
+            plural = True
+        if not re.match(r"^[a-z_][a-z0-9_]*$", expr):
+            return match.group(0)
+        value = bindings.get(expr)
+        if value is None:
+            value = variables.get(expr)
+        if value is None:
+            return match.group(0)
+        return _pluralize(value) if plural else value
+
+    return _expand(INTERP_RE.sub(replace, text), bindings, variables,
+                   depth + 1)
+
+
+def _parse_each_values(line):
+    """Parse `%w[...].each do |x|` and `[%w[a b], %w[c d]].each do |(x, y)|`."""
+    match = EACH_RE.match(line)
+    if not match:
+        return None
+    receiver = match.group(1).strip()
+    names = [name.strip() for name in
+             match.group(2).replace("(", "").replace(")", "").split(",")]
+    names = [name for name in names if name]
+    if not names:
+        return None
+    if receiver.startswith("%w[") and receiver.endswith("]"):
+        tokens = receiver[3:-1].split()
+        if len(names) != 1 or not tokens:
+            return None
+        return [{names[0]: token} for token in tokens]
+    if receiver.startswith("[") and receiver.endswith("]"):
+        groups = WORD_ARRAY_RE.findall(receiver)
+        if not groups:
+            return None
+        values = []
+        for group in groups:
+            tokens = group.split()
+            if len(tokens) != len(names):
+                return None
+            values.append(dict(zip(names, tokens)))
+        return values
+    return None
+
+
+def _combine_bindings(parent, values):
+    return [dict(binding, **value) for binding in parent for value in values]
+
+
+def _scope_controller(stack):
+    for frame in reversed(stack):
+        if frame["resource"] is None and frame["controller"]:
+            return frame["controller"]
+    return None
+
+
+def _action_set(match):
+    if not match:
+        return None
+    actions = match.group(2) or match.group(3) or match.group(4) or ""
+    return {action.lstrip(":") for action in re.split(r"[\s,]+", actions)
+            if action.strip()}
+
+
+def _build_resource_routes(name, options, stack, prefix):
+    path_match = PATH_OPT_RE.search(options)
+    controller_match = SCOPE_CTRL_RE.search(options)
+    controller = (controller_match.group(1) or controller_match.group(2)) \
+        if controller_match else None
+    if controller is None:
+        controller = _scope_controller(stack) or name
+    only = _action_set(ONLY_OPT_RE.search(options))
+    except_ = _action_set(EXCEPT_OPT_RE.search(options))
+    segment = path_match.group(1) if path_match else name
+
+    parent = None
+    for frame in reversed(stack):
+        if frame["resource"]:
+            parent = frame["resource"]
+            break
+    if parent:
+        collection = parent["nested"] + "/" + segment.lstrip("/")
+    else:
+        collection = segment
+    collection = re.sub(r"/{2,}", "/", collection).strip("/")
+    member = collection + "/:id"
+    resource = {
+        "name": name,
+        "nested": collection + "/:" + _singularize(name) + "_id",
+        "controller": controller,
+    }
+
+    routes = []
+    seen = set()
+    bindings = stack[-1]["bindings"]
+    for action, verb, is_member in RESOURCE_ACTIONS:
+        if only is not None and action not in only:
+            continue
+        if except_ is not None and action in except_:
+            continue
+        for binding in bindings:
+            path = _expand(member if is_member else collection, binding, {})
+            original = path if path.startswith("/") else \
+                prefix.rstrip("/") + "/" + path.lstrip("/")
+            original = re.sub(r"/{2,}", "/", original)
+            key = (verb, original, controller, action)
+            if key in seen:
+                continue
+            seen.add(key)
+            routes.append({
+                "verb": verb,
+                "path": original,
+                "normalized_path": normalize_path(original),
+                "controller": controller,
+                "action": action,
+            })
+    return routes, resource
+
+
 def parse_canvas_routes(routes_file):
     lines = routes_file.read_text(encoding="utf-8", errors="replace").splitlines()
     routes = []
@@ -112,7 +287,7 @@ def parse_canvas_routes(routes_file):
             continue
 
         start_indent = len(lines[i]) - len(lines[i].lstrip())
-        stack = [(start_indent, None, {})]  # (indent, controller, path vars)
+        stack = [_frame(start_indent)]
         i += 1
         while i < len(lines):
             line = lines[i]
@@ -122,7 +297,7 @@ def parse_canvas_routes(routes_file):
             if END_RE.match(line):
                 if indent <= start_indent:
                     break
-                while len(stack) > 1 and stack[-1][0] >= indent:
+                while len(stack) > 1 and stack[-1]["indent"] >= indent:
                     stack.pop()
                 i += 1
                 continue
@@ -138,9 +313,31 @@ def parse_canvas_routes(routes_file):
                     _parse_route_statement(statement, prefix, stack))
                 continue
 
+            loop_values = _parse_each_values(stripped)
+            if loop_values is not None:
+                stack.append(_frame(
+                    indent, None, dict(stack[-1]["variables"]),
+                    _combine_bindings(stack[-1]["bindings"], loop_values)))
+                i += 1
+                continue
+
+            if RESOURCES_RE.match(line):
+                statement, i = _join_statement(lines, i)
+                i += 1
+                match = RESOURCES_RE.match(statement)
+                resource_routes, resource = _build_resource_routes(
+                    match.group(1), match.group(2), stack, prefix)
+                routes.extend(resource_routes)
+                if BLOCK_RE.search(statement):
+                    stack.append(_frame(
+                        indent, resource["controller"],
+                        dict(stack[-1]["variables"]), stack[-1]["bindings"],
+                        resource))
+                continue
+
             assign = ASSIGN_RE.match(line)
             if assign:
-                stack[-1][2][assign.group(1)] = assign.group(2)
+                stack[-1]["variables"][assign.group(1)] = assign.group(2)
                 i += 1
                 continue
 
@@ -149,7 +346,8 @@ def parse_canvas_routes(routes_file):
                 m = SCOPE_CTRL_RE.search(line)
                 if m:
                     ctrl = m.group(1) or m.group(2)
-                stack.append((indent, ctrl, dict(stack[-1][2])))
+                stack.append(_frame(indent, ctrl, dict(stack[-1]["variables"]),
+                                    stack[-1]["bindings"]))
             i += 1
         i += 1
 
@@ -171,11 +369,11 @@ def _parse_route_statement(statement, prefix, stack):
     rest = statement[m.end():].lstrip()
     if rest[:1] in ("\"", "'"):
         sm = STR_RE.match(rest)
-        path = sm.group(1) if sm else None
+        raw_path = sm.group(1) if sm else None
     else:
         var = re.match(r"([A-Za-z_][A-Za-z0-9_]*)(?:\.to_s)?\s*[,)]", rest)
-        path = stack[-1][2].get(var.group(1)) if var else None
-    if not path:
+        raw_path = stack[-1]["variables"].get(var.group(1)) if var else None
+    if not raw_path:
         return []
 
     controller = None
@@ -184,9 +382,9 @@ def _parse_route_statement(statement, prefix, stack):
     if cm:
         controller = cm.group(1) or cm.group(2)
     if controller is None:
-        for _, ctrl, _ in reversed(stack):
-            if ctrl:
-                controller = ctrl
+        for frame in reversed(stack):
+            if frame["controller"]:
+                controller = frame["controller"]
                 break
 
     am = ACTION_RE.search(statement)
@@ -197,22 +395,29 @@ def _parse_route_statement(statement, prefix, stack):
             controller = controller or tm.group(1)
             action = action or tm.group(2)
 
-    if path.startswith("/"):
-        original = path
-    else:
-        original = prefix.rstrip("/") + "/" + path.lstrip("/")
-    original = re.sub(r"/{2,}", "/", original)
-
-    return [
-        {
-            "verb": verb,
-            "path": original,
-            "normalized_path": normalize_path(original),
-            "controller": controller,
-            "action": action,
-        }
-        for verb in verbs
-    ]
+    variables = stack[-1]["variables"]
+    routes = []
+    seen = set()
+    for verb in verbs:
+        for binding in stack[-1]["bindings"]:
+            path = _expand(raw_path, binding, variables)
+            if path.startswith("/"):
+                original = path
+            else:
+                original = prefix.rstrip("/") + "/" + path.lstrip("/")
+            original = re.sub(r"/{2,}", "/", original)
+            key = (verb, original, controller, action)
+            if key in seen:
+                continue
+            seen.add(key)
+            routes.append({
+                "verb": verb,
+                "path": original,
+                "normalized_path": normalize_path(original),
+                "controller": controller,
+                "action": action,
+            })
+    return routes
 
 
 # ---------------------------------------------------------------------------
@@ -438,7 +643,8 @@ def build_manifest(canvas_src):
     counts["ui_api_ref_paths"] = len(ui_refs)
 
     return {
-        "source": "canvas-lms config/routes.rb (ApiRouteSet blocks)",
+        "source": "canvas-lms config/routes.rb (ApiRouteSet blocks; resources "
+                  "and %w context loops expanded)",
         "normalization": "strip /api/v1; :param, {param}, #{...} -> {}",
         "routes": routes,
         "counts": counts,
@@ -601,18 +807,21 @@ def render_report(coverage):
     add("")
     add("## Parser scope and limitations")
     add("")
-    add("- Canvas routes are explicit verb declarations inside `ApiRouteSet.draw` "
-        "blocks; `resources` expansions are not enumerated.")
-    add("- Ruby interpolation (`#{...}`) and dynamic prefixes are normalized to "
-        "`{}` and cannot match concrete Rust paths.")
+    add("- Canvas routes are verb declarations inside `ApiRouteSet.draw` blocks, "
+        "plus Rails `resources` declarations (API defaults: index/create/show/"
+        "update/destroy, honoring `only:`, `except:`, `path:`, `controller:`, "
+        "and nesting) and `%w[...].each` context loops, which are expanded for "
+        "every value.")
+    add("- Interpolations built by conditional expressions or other runtime "
+        "values are left as `{}` and cannot match concrete Rust paths.")
     add("- UI references are `/api/v1/...` string literals in `ui/`; runtime-built "
         "paths and hard-coded ids that cannot be normalized are missed.")
     add("- Rust paths are matched by `(verb, normalized path)`; axum's "
         "`nest(\"/api/v1\", ...)` mount is assumed for all crate routers.")
     add("- Extras include deliberate flat-path deviations (for example "
         "`/assignments/{id}` where Canvas uses "
-        "`/courses/{course_id}/assignments/{id}`) and Canvas routes generated "
-        "by `resources`, which are not enumerated.")
+        "`/courses/{course_id}/assignments/{id}`) and auth/dashboard/health "
+        "routes Canvas does not expose.")
     add("- The schema row counts `CREATE TABLE` statements in `star-db` migrations "
         "(36 authored tables); sqlx adds `_sqlx_migrations`, so a live database "
         "has 37 tables.")
