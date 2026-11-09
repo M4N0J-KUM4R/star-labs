@@ -3,20 +3,11 @@
 //! Exercises the real modules router (star_modules::router()) through
 //! axum-test against a real Postgres, pinning ACTUAL behavior:
 //! - module CRUD via the router (create/list/get/update/soft-delete),
-//! - module items add/list/delete (with the pinned upsert bug, see below),
-//! - read vs. write authorization shapes (401 / 403 / 404),
+//! - module items add/list/delete, including the (module_id, item_type,
+//!   item_id) upsert backed by the unique index from migration 0029,
+//! - read vs. write authorization shapes (401 / 403 / 404) on course
+//!   modules and on the nested module/item reads,
 //! - one full lifecycle test (module -> items -> soft delete).
-//!
-//! KNOWN PRODUCT BUGS (pinned here, NOT fixed):
-//! 1. POST /modules/{id}/items always fails with 500 "database error". The
-//!    handler upserts with `ON CONFLICT (module_id, item_type, item_id)`,
-//!    but the module_items table (star-db migration 0002) has no unique
-//!    constraint on those columns, so Postgres rejects every insert with
-//!    SQLSTATE 42P10. Tests that need existing items seed them via SQL.
-//! 2. GET /courses/{courseId}/modules/{moduleId}/items always fails with
-//!    500 whenever the module exists: its existence probe decodes
-//!    `modules.id` (BIGINT) into an i32, and sqlx rejects the INT8 -> i32
-//!    decode at runtime.
 //!
 //! Conventions (mirrors the rest of the workspace):
 //! - Skipped cleanly when DATABASE_URL is not set (prints SKIP and returns).
@@ -131,9 +122,6 @@ async fn seed_module(pool: &PgPool, course_id: i64, name: &str, position: i32) -
 }
 
 /// Create a module item directly in the DB. Returns item id.
-///
-/// Items are seeded via SQL because the POST /modules/{id}/items endpoint
-/// is broken (see the module-level doc comment on the pinned bugs).
 async fn seed_module_item(
     pool: &PgPool,
     module_id: i64,
@@ -618,13 +606,52 @@ async fn get_module_returns_flattened_module_with_items() {
     let item_a = seed_module_item(&pool, module, "page", 101, 1).await;
     let item_b = seed_module_item(&pool, module, "assignment", 202, 2).await;
 
-    // Quirk: GET /modules/{id} takes NO AuthUser — anonymous callers get
-    // the full module with its items.
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    seed_enrollment(&pool, student, course, "student", "active").await;
+
+    // Anonymous -> 401 from the AuthUser extractor, before any handler work.
     let resp = server.get(&format!("/modules/{module}")).await;
+    assert_eq!(resp.status_code(), 401, "anonymous module detail is 401");
+    assert_eq!(resp.text(), "unauthorized");
+
+    // Authenticated but not enrolled -> 403 (module found, then authz).
+    let resp = server
+        .get(&format!("/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "non-enrolled module detail is 403");
+    assert_eq!(resp.text(), "forbidden");
+
+    // Unauthorized callers still get 404 for a missing module: the lookup
+    // precedes the authz check.
+    let resp = server
+        .get(&format!("/modules/{MISSING_ID}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "missing module 404s even for unauthorized callers (lookup precedes authz)"
+    );
+
+    // Admin (DB role) reads any course without an enrollment.
+    let resp = server
+        .get(&format!("/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "admin reads any module detail");
+
+    // Active enrollment -> 200 with the flattened module and its items.
+    let resp = server
+        .get(&format!("/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
     assert_eq!(
         resp.status_code(),
         200,
-        "module detail is served without authentication (pinned quirk)"
+        "enrolled student reads module detail"
     );
     let detail: Value = resp.json();
 
@@ -669,7 +696,10 @@ async fn get_module_missing_and_deleted_404() {
         .await;
     assert_eq!(resp.status_code(), 204);
 
-    let resp = server.get(&format!("/modules/{module}")).await;
+    let resp = server
+        .get(&format!("/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
     assert_eq!(resp.status_code(), 404, "deleted module 404s on GET");
 
     cleanup(&pool, &prefix).await;
@@ -845,7 +875,10 @@ async fn delete_module_is_soft_delete_and_idempotent() {
     );
 
     // A deleted module is invisible to GET, PUT and item creation...
-    let resp = server.get(&format!("/modules/{module}")).await;
+    let resp = server
+        .get(&format!("/modules/{module}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
     assert_eq!(resp.status_code(), 404);
     let resp = server
         .put(&format!("/modules/{module}"))
@@ -861,7 +894,7 @@ async fn delete_module_is_soft_delete_and_idempotent() {
     assert_eq!(
         resp.status_code(),
         404,
-        "item creation on a deleted module 404s before reaching the broken upsert"
+        "item creation on a deleted module 404s before the upsert"
     );
 
     cleanup(&pool, &prefix).await;
@@ -914,7 +947,7 @@ async fn delete_module_authz_matrix() {
 }
 
 // ---------------------------------------------------------------------------
-// POST /modules/{id}/items — item creation (pinned 500 bug)
+// POST /modules/{id}/items — item creation and upsert
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -965,7 +998,7 @@ async fn create_item_invalid_type_422_validation_precedes_authz() {
 }
 
 #[tokio::test]
-async fn create_item_valid_payload_always_500s_pinned_bug() {
+async fn create_item_valid_payload_upserts_and_repost_updates_position() {
     let Some((server, pool, prefix)) = setup().await else {
         eprintln!("SKIP: DATABASE_URL not set");
         return;
@@ -973,8 +1006,8 @@ async fn create_item_valid_payload_always_500s_pinned_bug() {
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "UpsertBugCourse").await;
-    let module = seed_module(&pool, course, "Broken Upsert", 1).await;
+    let course = seed_course(&pool, &prefix, "UpsertCourse").await;
+    let module = seed_module(&pool, course, "Item Upsert", 1).await;
 
     // Authz still gates first: a student gets 403 before the insert.
     let resp = server
@@ -984,9 +1017,7 @@ async fn create_item_valid_payload_always_500s_pinned_bug() {
         .await;
     assert_eq!(resp.status_code(), 403, "student item creation is 403");
 
-    // PINNED PRODUCT BUG: a teacher with a fully valid payload gets 500,
-    // because the upsert's ON CONFLICT target has no matching unique
-    // constraint (module_items has none on (module_id, item_type, item_id)).
+    // A teacher with a valid payload inserts the item and returns it.
     let resp = server
         .post(&format!("/modules/{module}/items"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
@@ -994,18 +1025,59 @@ async fn create_item_valid_payload_always_500s_pinned_bug() {
         .await;
     assert_eq!(
         resp.status_code(),
-        500,
-        "PINNED BUG: POST /modules/{{id}}/items always 500s (ON CONFLICT without a unique constraint)"
+        200,
+        "valid item creation must succeed; body: {}",
+        resp.text()
     );
-    assert_eq!(resp.text(), "database error");
+    let item: Value = resp.json();
+    let item_row_id = item["id"].as_i64().expect("item id");
+    assert_eq!(item["module_id"], module);
+    assert_eq!(item["item_type"], "page");
+    assert_eq!(item["item_id"], 42);
+    assert_eq!(item["position"], 1);
 
-    // Nothing was inserted.
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM module_items WHERE module_id = $1")
-        .bind(module)
-        .fetch_one(&pool)
-        .await
-        .expect("count items");
-    assert_eq!(count, 0, "the failed upsert must not leave rows behind");
+    // The row is really in the DB.
+    let (row_id, position): (i64, i32) = sqlx::query_as(
+        r#"SELECT id, position FROM module_items
+           WHERE module_id = $1 AND item_type = $2 AND item_id = $3"#,
+    )
+    .bind(module)
+    .bind("page")
+    .bind(42)
+    .fetch_one(&pool)
+    .await
+    .expect("item row must exist after a successful POST");
+    assert_eq!(row_id, item_row_id, "returned id matches the stored row");
+    assert_eq!(position, 1);
+
+    // Re-posting the same (module_id, item_type, item_id) identity updates
+    // the existing row's position instead of inserting a duplicate.
+    let resp = server
+        .post(&format!("/modules/{module}/items"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "item_type": "page", "item_id": 42, "position": 7 }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "re-posting the same item identity must succeed; body: {}",
+        resp.text()
+    );
+    let updated: Value = resp.json();
+    assert_eq!(updated["id"], item_row_id, "the upsert reuses the row id");
+    assert_eq!(updated["position"], 7, "position is updated in place");
+
+    let count: i64 = sqlx::query_scalar(
+        r#"SELECT COUNT(*) FROM module_items
+           WHERE module_id = $1 AND item_type = $2 AND item_id = $3"#,
+    )
+    .bind(module)
+    .bind("page")
+    .bind(42)
+    .fetch_one(&pool)
+    .await
+    .expect("count items");
+    assert_eq!(count, 1, "the re-post must not insert a duplicate row");
 
     cleanup(&pool, &prefix).await;
 }
@@ -1088,7 +1160,7 @@ async fn delete_module_item_lifecycle_and_authz() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn list_module_items_500s_pinned_bug_and_routing() {
+async fn list_module_items_returns_seeded_items_with_authz() {
     let Some((server, pool, prefix)) = setup().await else {
         eprintln!("SKIP: DATABASE_URL not set");
         return;
@@ -1100,25 +1172,42 @@ async fn list_module_items_500s_pinned_bug_and_routing() {
     let first = seed_module_item(&pool, module, "assignment", 22, 1).await;
     let second = seed_module_item(&pool, module, "page", 11, 2).await;
 
-    // PINNED PRODUCT BUG: this endpoint always 500s. Its existence probe
-    // decodes `SELECT id FROM modules ...` into an (i32,) tuple, but
-    // modules.id is BIGINT — sqlx refuses the INT8 -> i32 decode, so any
-    // request whose module EXISTS fails with 500. (The route also takes no
-    // AuthUser, so anonymous callers reach the bug directly.)
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    seed_enrollment(&pool, student, course, "student", "active").await;
+
+    // Anonymous -> 401 from the AuthUser extractor, before any handler work.
     let resp = server
         .get(&format!("/courses/{course}/modules/{module}/items"))
         .await;
+    assert_eq!(resp.status_code(), 401, "anonymous items list is 401");
+    assert_eq!(resp.text(), "unauthorized");
+
+    // Authenticated but not enrolled -> 403.
+    let resp = server
+        .get(&format!("/courses/{course}/modules/{module}/items"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "non-enrolled items list is 403");
+    assert_eq!(resp.text(), "forbidden");
+
+    // Unauthorized callers still get 404 for a missing module: the module
+    // lookup precedes the authz check.
+    let resp = server
+        .get(&format!("/courses/{course}/modules/{MISSING_ID}/items"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
     assert_eq!(
         resp.status_code(),
-        500,
-        "PINNED BUG: GET /courses/{{courseId}}/modules/{{moduleId}}/items 500s on the INT8->i32 decode"
+        404,
+        "missing module 404s even for unauthorized callers (lookup precedes authz)"
     );
-    assert_eq!(resp.text(), "database error");
 
-    // The probe only decodes when a row matches: a module that does not
-    // belong to the course yields 404 without hitting the decode error...
+    // The module must belong to the course in the path.
     let resp = server
         .get(&format!("/courses/{other_course}/modules/{module}/items"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(
         resp.status_code(),
@@ -1126,26 +1215,37 @@ async fn list_module_items_500s_pinned_bug_and_routing() {
         "module must belong to the course in the path"
     );
 
-    // ...and a missing module 404s as well.
+    // Admin (DB role) reads any course without an enrollment.
     let resp = server
-        .get(&format!("/courses/{course}/modules/{MISSING_ID}/items"))
+        .get(&format!("/courses/{course}/modules/{module}/items"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
-    assert_eq!(resp.status_code(), 404);
+    assert_eq!(resp.status_code(), 200, "admin reads any module's items");
 
-    // The item data itself is fine — the direct DB check shows the seeded
-    // ordering the endpoint would return if it worked.
-    let rows: Vec<(i64, i32)> = sqlx::query_as(
-        "SELECT id, position FROM module_items WHERE module_id = $1 ORDER BY position ASC, id ASC",
-    )
-    .bind(module)
-    .fetch_all(&pool)
-    .await
-    .expect("seeded items");
+    // Active enrollment -> 200 with the seeded items in position order.
+    let resp = server
+        .get(&format!("/courses/{course}/modules/{module}/items"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
     assert_eq!(
-        rows,
-        vec![(first, 1), (second, 2)],
-        "seeded items are ordered by position"
+        resp.status_code(),
+        200,
+        "enrolled student reads module items; body: {}",
+        resp.text()
     );
+    let items: Value = resp.json();
+    let rows = items.as_array().expect("items is a JSON array");
+    let ids: Vec<i64> = rows
+        .iter()
+        .map(|item| item["id"].as_i64().expect("item id"))
+        .collect();
+    assert_eq!(
+        ids,
+        vec![first, second],
+        "items ordered by position ASC, id ASC"
+    );
+    assert_eq!(rows[0]["item_type"], "assignment");
+    assert_eq!(rows[1]["item_type"], "page");
 
     cleanup(&pool, &prefix).await;
 }
@@ -1177,7 +1277,7 @@ async fn full_lifecycle_module_to_items_to_soft_delete() {
     let module: Value = resp.json();
     let module_id = module["id"].as_i64().expect("module id");
 
-    // 2. Items are seeded via SQL (the POST items endpoint 500s — pinned bug).
+    // 2. Seed items directly so their identities and order are deterministic.
     let page_item = seed_module_item(&pool, module_id, "page", 9001, 1).await;
     let assignment_item = seed_module_item(&pool, module_id, "assignment", 9002, 2).await;
 
@@ -1191,7 +1291,10 @@ async fn full_lifecycle_module_to_items_to_soft_delete() {
     assert_eq!(ids, vec![module_id]);
 
     // 4. Detail flattens the module and its ordered items.
-    let resp = server.get(&format!("/modules/{module_id}")).await;
+    let resp = server
+        .get(&format!("/modules/{module_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
     assert_eq!(resp.status_code(), 200);
     let detail: Value = resp.json();
     assert_eq!(detail["name"], "Lifecycle Module");
@@ -1200,16 +1303,20 @@ async fn full_lifecycle_module_to_items_to_soft_delete() {
     assert_eq!(items[0]["id"], page_item);
     assert_eq!(items[1]["id"], assignment_item);
 
-    // 5. The nested items route would return the same list, but it 500s on
-    //    the INT8->i32 decode bug (pinned in its dedicated test above).
+    // 5. The nested items route returns the same ordered list.
     let resp = server
         .get(&format!("/courses/{course}/modules/{module_id}/items"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
-    assert_eq!(
-        resp.status_code(),
-        500,
-        "nested items route hits the pinned decode bug"
-    );
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let nested: Value = resp.json();
+    let nested_ids: Vec<i64> = nested
+        .as_array()
+        .expect("items array")
+        .iter()
+        .map(|item| item["id"].as_i64().expect("item id"))
+        .collect();
+    assert_eq!(nested_ids, vec![page_item, assignment_item]);
 
     // 6. Teacher repositions the module.
     let resp = server
@@ -1236,7 +1343,10 @@ async fn full_lifecycle_module_to_items_to_soft_delete() {
     let ids: Vec<i64> = ids_of(resp);
     assert!(!ids.contains(&module_id), "deleted module leaves the list");
 
-    let resp = server.get(&format!("/modules/{module_id}")).await;
+    let resp = server
+        .get(&format!("/modules/{module_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
     assert_eq!(resp.status_code(), 404, "deleted module detail 404s");
 
     let (state,): (String,) = sqlx::query_as("SELECT workflow_state FROM modules WHERE id = $1")

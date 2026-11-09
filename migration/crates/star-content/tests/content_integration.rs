@@ -252,6 +252,8 @@ async fn modules_route_responds_through_merged_router() {
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let course = seed_course(&pool, &prefix, "ModulesCourse").await;
+    // GET /modules/{id} requires course read access: an active enrollment.
+    seed_enrollment(&pool, teacher, course, "teacher").await;
 
     // POST /courses/{courseId}/modules — create (teacher or admin).
     let resp = server
