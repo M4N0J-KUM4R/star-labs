@@ -1,0 +1,11 @@
+# cargo-audit configuration.
+#
+# Cargo.lock records optional dependencies even when no feature enables them.
+# Both ignored advisories are for optional sqlx backend crates that are never
+# compiled here (the workspace builds only the postgres backend), so they carry
+# no runtime exposure and have no compatible upgrade within sqlx 0.8.
+[advisories]
+ignore = [
+    "RUSTSEC-2026-0459", # libsqlite3-sys, optional sqlx sqlite backend
+    "RUSTSEC-2023-0071", # rsa, optional sqlx mysql backend (jsonwebtoken uses ring)
+]

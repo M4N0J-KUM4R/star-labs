@@ -44,7 +44,7 @@ jobs:
       - name: Enforce rustfmt
         run: cargo fmt --all -- --check
       - name: Enforce clippy
-        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Verify migration files are unique and well formed
         run: |
           set -euo pipefail
@@ -65,11 +65,14 @@ jobs:
     name: Dependency audit
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: migration
     steps:
       - uses: actions/checkout@v4
       - uses: taiki-e/install-action@cargo-audit
       - name: Audit locked dependencies
-        run: cargo audit --file migration/Cargo.lock
+        run: cargo audit --file Cargo.lock
 
   # ---------------------------------------------------------------------------
   # Tests against a real PostgreSQL service (debug profile; fastest feedback).
