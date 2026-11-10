@@ -1,11 +1,19 @@
 //! star-notifications — notification feed + notification preferences for star-lms.
 //!
 //! Exposes `pub fn router() -> axum::Router<AppState>`.
+//!
+//! Canvas parity additions (migration 0045):
+//! - GET    /users/self/communication_channels
+//! - POST   /users/self/communication_channels
+//! - DELETE /users/self/communication_channels/{id}
+//! - GET    /users/self/communication_channels/{communicationChannelId}/notification_preferences
+//! - PUT    /users/self/communication_channels/{communicationChannelId}/notification_preferences
+//! - PUT    /users/self/communication_channels/{communicationChannelId}/notification_preferences/{notification}
 
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, put},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -63,6 +71,307 @@ pub struct UpdatePreferenceRequest {
 }
 
 // --------------------------------------------------------------------------
+// Domain types — Communication Channels (Canvas API v1)
+// --------------------------------------------------------------------------
+
+/// A user communication channel, shaped like Canvas' `CommunicationChannel`.
+///
+/// Canvas JSON fields: `id, address, type, position, user_id, workflow_state,
+/// created_at`. `path`/`path_type` are the DB column names Canvas uses.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct CommunicationChannel {
+    pub id: i64,
+    #[sqlx(rename = "path")]
+    pub address: String,
+    #[serde(rename = "type")]
+    #[sqlx(rename = "path_type")]
+    pub channel_type: String,
+    pub position: i32,
+    pub user_id: i64,
+    pub workflow_state: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Canvas' documented `communication_channel[...]` parameter bag.
+#[derive(Debug, Deserialize)]
+pub struct CommunicationChannelFields {
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(rename = "type", default)]
+    pub channel_type: Option<String>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub skip_confirmation: Option<bool>,
+}
+
+/// POST body for creating a communication channel.
+///
+/// Accepts both flat JSON fields and Canvas' nested
+/// `communication_channel: { address, type, token, skip_confirmation }` form.
+#[derive(Debug, Deserialize)]
+pub struct CreateCommunicationChannelRequest {
+    #[serde(default)]
+    pub address: Option<String>,
+    #[serde(rename = "type", default)]
+    pub channel_type: Option<String>,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub skip_confirmation: Option<bool>,
+    #[serde(default)]
+    pub communication_channel: Option<CommunicationChannelFields>,
+}
+
+impl CreateCommunicationChannelRequest {
+    /// Flat fields win over nested Canvas-style fields.
+    fn parts(&self) -> (Option<&str>, Option<&str>, Option<&str>, bool) {
+        let nested = self.communication_channel.as_ref();
+        (
+            self.address
+                .as_deref()
+                .or_else(|| nested.and_then(|n| n.address.as_deref())),
+            self.channel_type
+                .as_deref()
+                .or_else(|| nested.and_then(|n| n.channel_type.as_deref())),
+            self.token
+                .as_deref()
+                .or_else(|| nested.and_then(|n| n.token.as_deref())),
+            self.skip_confirmation.unwrap_or(false)
+                || nested.and_then(|n| n.skip_confirmation).unwrap_or(false),
+        )
+    }
+}
+
+/// A Canvas `NotificationPreference` row (scoped to one communication channel).
+/// Canvas serializes exactly `notification`, `category`, `frequency`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+pub struct NotificationPreference {
+    pub notification: String,
+    pub category: String,
+    pub frequency: String,
+}
+
+/// Canvas wraps channel preferences in a `notification_preferences` key.
+#[derive(Debug, Serialize)]
+pub struct CommunicationChannelPreferencesResponse {
+    pub notification_preferences: Vec<NotificationPreference>,
+}
+
+const CHANNEL_TYPES: [&str; 3] = ["email", "sms", "push"];
+const FREQUENCIES: [&str; 4] = ["immediately", "daily", "weekly", "never"];
+
+/// Lightweight email check mirroring Canvas' EmailAddressValidator intent
+/// (local part and dotted domain, no whitespace).
+fn is_valid_email(value: &str) -> bool {
+    let mut parts = value.split('@');
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(local), Some(domain), None) => {
+            !local.is_empty()
+                && !domain.is_empty()
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+                && !value.chars().any(char::is_whitespace)
+        }
+        _ => false,
+    }
+}
+
+/// Normalize a channel create payload into `(address, type)`.
+/// Errors are 400s, matching Canvas' `render json: @cc.errors, status: :bad_request`.
+fn validate_new_channel(
+    address: Option<&str>,
+    channel_type: Option<&str>,
+    token: Option<&str>,
+) -> Result<(String, String), ApiError> {
+    let channel_type = channel_type
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("communication_channel[type] is required".into()))?;
+    if !CHANNEL_TYPES.contains(&channel_type) {
+        return Err(ApiError::BadRequest(
+            "type must be one of: email, sms, push".into(),
+        ));
+    }
+    if channel_type == "push" {
+        let has_token = token.map(str::trim).is_some_and(|value| !value.is_empty());
+        if !has_token {
+            return Err(ApiError::BadRequest(
+                "communication_channel[token] is required for push channels".into(),
+            ));
+        }
+        // Canvas stores "push" as the path; the device token lives on a
+        // separate notification endpoint table that this schema does not have.
+        return Ok(("push".to_string(), channel_type.to_string()));
+    }
+    let address = address
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("communication_channel[address] is required".into()))?;
+    if channel_type == "email" && !is_valid_email(address) {
+        return Err(ApiError::BadRequest("address is invalid".into()));
+    }
+    Ok((address.to_string(), channel_type.to_string()))
+}
+
+fn validate_frequency(raw: Option<&str>) -> Result<String, ApiError> {
+    let frequency = raw.map(str::trim).unwrap_or_default();
+    if FREQUENCIES.contains(&frequency) {
+        Ok(frequency.to_string())
+    } else {
+        Err(ApiError::Validation(
+            "frequency must be one of: immediately, daily, weekly, never".into(),
+        ))
+    }
+}
+
+fn validate_notification(raw: &str) -> Result<String, ApiError> {
+    let notification = raw.trim().to_ascii_lowercase();
+    let is_slug = !notification.is_empty()
+        && notification
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if is_slug {
+        Ok(notification)
+    } else {
+        Err(ApiError::Validation(
+            "notification must be an underscored name".into(),
+        ))
+    }
+}
+
+/// Best-effort mapping from a Canvas notification name to its category slug
+/// (`new_announcement` -> `announcement`). Canvas keeps this in the Notification
+/// catalog; this schema has no catalog table.
+fn derive_category(notification: &str) -> &'static str {
+    if notification.contains("announcement") {
+        "announcement"
+    } else if notification.contains("discussion") {
+        "discussion"
+    } else if notification.contains("conversation") || notification.contains("message") {
+        "conversation"
+    } else if notification.contains("grade") || notification.contains("submission") {
+        "grading"
+    } else if notification.contains("due_date") || notification.contains("assignment") {
+        "due_date"
+    } else if notification.contains("calendar") || notification.contains("appointment") {
+        "calendar"
+    } else if notification.contains("enrollment") {
+        "registration"
+    } else if notification.contains("account") || notification.contains("report") {
+        "administrative"
+    } else {
+        "other"
+    }
+}
+
+/// Extract the frequency for a single-notification update. Canvas accepts
+/// `notification_preferences[frequency]`, JSON-API array form, or a bare object.
+fn parse_single_frequency(body: &serde_json::Value) -> Result<String, ApiError> {
+    let preference = body.get("notification_preferences").unwrap_or(body);
+    match preference {
+        serde_json::Value::Object(map) => {
+            validate_frequency(map.get("frequency").and_then(|v| v.as_str()))
+        }
+        serde_json::Value::Array(items) => {
+            let first = items.first().ok_or_else(|| {
+                ApiError::Validation("notification_preferences must not be empty".into())
+            })?;
+            parse_single_frequency(first)
+        }
+        serde_json::Value::String(frequency) => validate_frequency(Some(frequency.as_str())),
+        _ => Err(ApiError::Validation(
+            "notification_preferences[frequency] is required".into(),
+        )),
+    }
+}
+
+/// Extract all `(notification, frequency)` pairs from Canvas' `update_all` body.
+///
+/// Supported shapes:
+/// - `{"notification_preferences": {"new_announcement": {"frequency": "daily"}}}`
+/// - `{"notification_preferences": [{"notification": "x", "frequency": "daily"}]}`
+/// - `{"notification_preferences": [["x", "daily"]]}`
+/// - `{"notification_preferences": {"notification": "x", "frequency": "daily"}}`
+fn parse_preference_updates(body: &serde_json::Value) -> Result<Vec<(String, String)>, ApiError> {
+    let preference = body.get("notification_preferences").unwrap_or(body);
+    let mut updates: Vec<(String, String)> = Vec::new();
+    match preference {
+        serde_json::Value::Object(map) if map.contains_key("frequency") => {
+            let notification = map
+                .get("notification")
+                .or_else(|| body.get("notification"))
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ApiError::Validation("notification is required".into()))?;
+            updates.push((
+                validate_notification(notification)?,
+                validate_frequency(map.get("frequency").and_then(|v| v.as_str()))?,
+            ));
+        }
+        serde_json::Value::Object(map) => {
+            for (notification, raw) in map {
+                let frequency = match raw {
+                    serde_json::Value::Object(entry) => {
+                        entry.get("frequency").and_then(|v| v.as_str())
+                    }
+                    serde_json::Value::String(value) => Some(value.as_str()),
+                    _ => None,
+                };
+                updates.push((
+                    validate_notification(notification)?,
+                    validate_frequency(frequency)?,
+                ));
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                match item {
+                    serde_json::Value::Object(map) => {
+                        let notification = map
+                            .get("notification")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| {
+                                ApiError::Validation("notification is required".into())
+                            })?;
+                        updates.push((
+                            validate_notification(notification)?,
+                            validate_frequency(map.get("frequency").and_then(|v| v.as_str()))?,
+                        ));
+                    }
+                    serde_json::Value::Array(pair) => {
+                        let notification =
+                            pair.first().and_then(|v| v.as_str()).ok_or_else(|| {
+                                ApiError::Validation("notification is required".into())
+                            })?;
+                        updates.push((
+                            validate_notification(notification)?,
+                            validate_frequency(pair.get(1).and_then(|v| v.as_str()))?,
+                        ));
+                    }
+                    _ => {
+                        return Err(ApiError::Validation(
+                            "notification_preferences entries must be objects".into(),
+                        ));
+                    }
+                }
+            }
+        }
+        _ => {
+            return Err(ApiError::Validation(
+                "notification_preferences is required".into(),
+            ));
+        }
+    }
+    if updates.is_empty() {
+        return Err(ApiError::Validation(
+            "notification_preferences must not be empty".into(),
+        ));
+    }
+    Ok(updates)
+}
+
+// --------------------------------------------------------------------------
 // Router
 // --------------------------------------------------------------------------
 
@@ -81,6 +390,31 @@ pub fn router() -> Router<AppState> {
         .route(
             "/users/self/notification_preferences",
             put(upsert_preference),
+        )
+        // Communication channels + per-channel notification preferences
+        .route(
+            "/users/self/communication_channels",
+            get(list_communication_channels),
+        )
+        .route(
+            "/users/self/communication_channels",
+            post(create_communication_channel),
+        )
+        .route(
+            "/users/self/communication_channels/{id}",
+            delete(delete_communication_channel),
+        )
+        .route(
+            "/users/self/communication_channels/{communication_channel_id}/notification_preferences",
+            get(list_channel_preferences),
+        )
+        .route(
+            "/users/self/communication_channels/{communication_channel_id}/notification_preferences",
+            put(update_channel_preferences),
+        )
+        .route(
+            "/users/self/communication_channels/{communication_channel_id}/notification_preferences/{notification}",
+            put(update_channel_preference),
         )
 }
 
@@ -271,10 +605,268 @@ async fn list_preferences(
     }))
 }
 
+// --------------------------------------------------------------------------
+// Handlers — Communication Channels
+// --------------------------------------------------------------------------
+
+/// GET /users/self/communication_channels — unretired channels by position.
+async fn list_communication_channels(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<CommunicationChannel>>, ApiError> {
+    let rows: Vec<CommunicationChannel> = sqlx::query_as(
+        r#"
+        SELECT id, path, path_type, position, user_id, workflow_state, created_at
+        FROM communication_channels
+        WHERE user_id = $1 AND workflow_state != 'retired'
+        ORDER BY position ASC, id ASC
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(rows))
+}
+
+/// POST /users/self/communication_channels — create (or reactivate) a channel.
+/// Canvas returns 200 with the channel JSON; duplicates are 400.
+async fn create_communication_channel(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<CreateCommunicationChannelRequest>,
+) -> Result<Json<CommunicationChannel>, ApiError> {
+    let (address, channel_type, token, skip_confirmation) = payload.parts();
+    let (address, channel_type) = validate_new_channel(address, channel_type, token)?;
+
+    // Canvas only lets admins skip confirmation; everyone else is unconfirmed.
+    let workflow_state = if skip_confirmation && auth.role == "admin" {
+        "active"
+    } else {
+        "unconfirmed"
+    };
+
+    let existing: Option<(i64, String)> = sqlx::query_as(
+        r#"
+        SELECT id, workflow_state
+        FROM communication_channels
+        WHERE user_id = $1 AND path_type = $2 AND lower(path) = lower($3)
+        ORDER BY CASE WHEN workflow_state = 'retired' THEN 1 ELSE 0 END, id ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(auth.id)
+    .bind(&channel_type)
+    .bind(&address)
+    .fetch_optional(&state.db)
+    .await?;
+
+    if let Some((id, existing_state)) = existing {
+        if existing_state != "retired" {
+            return Err(ApiError::BadRequest("path: unique!".into()));
+        }
+        // Reactivate a retired channel in place (Canvas' re_activate!).
+        let reactivated: CommunicationChannel = sqlx::query_as(
+            r#"
+            UPDATE communication_channels
+            SET workflow_state = $2, updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, path, path_type, position, user_id, workflow_state, created_at
+            "#,
+        )
+        .bind(id)
+        .bind(workflow_state)
+        .fetch_one(&state.db)
+        .await?;
+        return Ok(Json(reactivated));
+    }
+
+    let position: (i32,) = sqlx::query_as(
+        "SELECT COALESCE(MAX(position) + 1, 0) FROM communication_channels WHERE user_id = $1",
+    )
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let channel: CommunicationChannel = sqlx::query_as(
+        r#"
+        INSERT INTO communication_channels (user_id, path, path_type, position, workflow_state)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, path, path_type, position, user_id, workflow_state, created_at
+        "#,
+    )
+    .bind(auth.id)
+    .bind(&address)
+    .bind(&channel_type)
+    .bind(position.0)
+    .bind(workflow_state)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(channel))
+}
+
+/// DELETE /users/self/communication_channels/{id} — retire a channel.
+/// Canvas returns the retired channel JSON (200), not 204.
+async fn delete_communication_channel(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<i64>,
+) -> Result<Json<CommunicationChannel>, ApiError> {
+    let row: Option<CommunicationChannel> = sqlx::query_as(
+        r#"
+        UPDATE communication_channels
+        SET workflow_state = 'retired', updated_at = NOW()
+        WHERE id = $1 AND user_id = $2 AND workflow_state != 'retired'
+        RETURNING id, path, path_type, position, user_id, workflow_state, created_at
+        "#,
+    )
+    .bind(id)
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    row.map(Json).ok_or(ApiError::NotFound)
+}
+
+// --------------------------------------------------------------------------
+// Handlers — Per-channel notification preferences (Canvas API v1)
+// --------------------------------------------------------------------------
+
+/// Verify the channel belongs to the caller and is not retired.
+async fn owned_channel_exists(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    channel_id: i64,
+) -> Result<(), ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT id FROM communication_channels
+        WHERE id = $1 AND user_id = $2 AND workflow_state != 'retired'
+        "#,
+    )
+    .bind(channel_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+async fn list_preferences_for_channel(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    channel_id: i64,
+) -> Result<Vec<NotificationPreference>, ApiError> {
+    let rows: Vec<NotificationPreference> = sqlx::query_as(
+        r#"
+        SELECT notification, category, frequency
+        FROM notification_preferences
+        WHERE communication_channel_id = $1 AND user_id = $2
+        ORDER BY notification ASC
+        "#,
+    )
+    .bind(channel_id)
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
+async fn upsert_channel_preference(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    channel_id: i64,
+    notification: &str,
+    frequency: &str,
+) -> Result<NotificationPreference, ApiError> {
+    let category = derive_category(notification);
+    let row: NotificationPreference = sqlx::query_as(
+        r#"
+        INSERT INTO notification_preferences
+            (user_id, communication_channel_id, notification, category, frequency)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (communication_channel_id, notification)
+        DO UPDATE SET
+            frequency = EXCLUDED.frequency,
+            category = EXCLUDED.category,
+            updated_at = NOW()
+        RETURNING notification, category, frequency
+        "#,
+    )
+    .bind(user_id)
+    .bind(channel_id)
+    .bind(notification)
+    .bind(category)
+    .bind(frequency)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(row)
+}
+
+/// GET /users/self/communication_channels/{id}/notification_preferences
+async fn list_channel_preferences(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(channel_id): Path<i64>,
+) -> Result<Json<CommunicationChannelPreferencesResponse>, ApiError> {
+    owned_channel_exists(&state.db, auth.id, channel_id).await?;
+    let rows = list_preferences_for_channel(&state.db, auth.id, channel_id).await?;
+    Ok(Json(CommunicationChannelPreferencesResponse {
+        notification_preferences: rows,
+    }))
+}
+
+/// PUT /users/self/communication_channels/{id}/notification_preferences
+/// Canvas' `update_all`: upsert every notification in `notification_preferences`
+/// and return all stored preferences for the channel.
+async fn update_channel_preferences(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(channel_id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<CommunicationChannelPreferencesResponse>, ApiError> {
+    owned_channel_exists(&state.db, auth.id, channel_id).await?;
+    let updates = parse_preference_updates(&body)?;
+    for (notification, frequency) in &updates {
+        upsert_channel_preference(&state.db, auth.id, channel_id, notification, frequency).await?;
+    }
+    let rows = list_preferences_for_channel(&state.db, auth.id, channel_id).await?;
+    Ok(Json(CommunicationChannelPreferencesResponse {
+        notification_preferences: rows,
+    }))
+}
+
+/// PUT /users/self/communication_channels/{id}/notification_preferences/{notification}
+/// Canvas' single-notification update; returns a one-element envelope.
+async fn update_channel_preference(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((channel_id, notification)): Path<(i64, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<CommunicationChannelPreferencesResponse>, ApiError> {
+    owned_channel_exists(&state.db, auth.id, channel_id).await?;
+    let notification = validate_notification(&notification)?;
+    let frequency = parse_single_frequency(&body)?;
+    let row = upsert_channel_preference(&state.db, auth.id, channel_id, &notification, &frequency)
+        .await?;
+
+    Ok(Json(CommunicationChannelPreferencesResponse {
+        notification_preferences: vec![row],
+    }))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{NotificationPolicyRow, NotificationPreferencesResponse};
+    use super::{
+        derive_category, parse_preference_updates, parse_single_frequency, validate_new_channel,
+        CommunicationChannelPreferencesResponse, NotificationPolicyRow, NotificationPreference,
+        NotificationPreferencesResponse,
+    };
     use chrono::{DateTime, Utc};
+    use star_common::ApiError;
 
     #[test]
     fn preferences_response_uses_canvas_envelope_for_list_and_update() {
@@ -301,5 +893,96 @@ mod tests {
             "announcement"
         );
         assert_eq!(json["notification_preferences"][0]["frequency"], "daily");
+    }
+
+    #[test]
+    fn new_channel_validation_matches_canvas_types() {
+        assert_eq!(
+            validate_new_channel(Some("student@example.edu"), Some("email"), None).unwrap(),
+            ("student@example.edu".to_string(), "email".to_string())
+        );
+        assert_eq!(
+            validate_new_channel(Some("+15551234567"), Some("sms"), None).unwrap(),
+            ("+15551234567".to_string(), "sms".to_string())
+        );
+        assert!(matches!(
+            validate_new_channel(Some("not-an-email"), Some("email"), None),
+            Err(ApiError::BadRequest(_))
+        ));
+        assert!(matches!(
+            validate_new_channel(None, Some("push"), None),
+            Err(ApiError::BadRequest(_))
+        ));
+        assert_eq!(
+            validate_new_channel(None, Some("push"), Some("device-token")).unwrap(),
+            ("push".to_string(), "push".to_string())
+        );
+        assert!(matches!(
+            validate_new_channel(Some("a@b.co"), Some("carrier_pigeon"), None),
+            Err(ApiError::BadRequest(_))
+        ));
+    }
+
+    #[test]
+    fn channel_preference_payloads_accept_canvas_shapes() {
+        let single = serde_json::json!({"notification_preferences": {"frequency": "never"}});
+        assert_eq!(parse_single_frequency(&single).unwrap(), "never");
+        let flat = serde_json::json!({"frequency": "daily"});
+        assert_eq!(parse_single_frequency(&flat).unwrap(), "daily");
+
+        let hash = serde_json::json!({"notification_preferences": {
+            "new_announcement": {"frequency": "daily"},
+            "due_date": {"frequency": "weekly"}
+        }});
+        let mut updates = parse_preference_updates(&hash).unwrap();
+        updates.sort();
+        assert_eq!(
+            updates,
+            vec![
+                ("due_date".to_string(), "weekly".to_string()),
+                ("new_announcement".to_string(), "daily".to_string()),
+            ]
+        );
+
+        let pairs = serde_json::json!({
+            "notification_preferences": [["new_announcement", "never"]]
+        });
+        assert_eq!(
+            parse_preference_updates(&pairs).unwrap(),
+            vec![("new_announcement".to_string(), "never".to_string())]
+        );
+
+        let invalid = serde_json::json!({"notification_preferences": {"frequency": "hourly"}});
+        assert!(matches!(
+            parse_single_frequency(&invalid),
+            Err(ApiError::Validation(_))
+        ));
+    }
+
+    #[test]
+    fn channel_preference_json_uses_canvas_fields_only() {
+        assert_eq!(derive_category("new_announcement"), "announcement");
+        assert_eq!(derive_category("new_discussion_entry"), "discussion");
+        assert_eq!(derive_category("due_date"), "due_date");
+        assert_eq!(derive_category("unknown_notification"), "other");
+
+        let response = CommunicationChannelPreferencesResponse {
+            notification_preferences: vec![NotificationPreference {
+                notification: "new_announcement".into(),
+                category: "announcement".into(),
+                frequency: "daily".into(),
+            }],
+        };
+        let json = serde_json::to_value(response).unwrap();
+        assert_eq!(
+            json["notification_preferences"][0]["notification"],
+            "new_announcement"
+        );
+        assert_eq!(
+            json["notification_preferences"][0]["category"],
+            "announcement"
+        );
+        assert_eq!(json["notification_preferences"][0]["frequency"], "daily");
+        assert!(json["notification_preferences"][0].get("id").is_none());
     }
 }
