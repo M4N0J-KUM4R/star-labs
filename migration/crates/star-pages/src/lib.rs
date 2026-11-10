@@ -9,6 +9,7 @@
 //! - GET /courses/{courseId}/pages/{url}/revisions             (page history)
 //! - GET /courses/{courseId}/pages/{url}/revisions/latest      (current version)
 //! - GET /courses/{courseId}/pages/{url}/revisions/{revisionId} (one version)
+//! - GET/PUT /courses/{courseId}/front_page                    (course front page)
 //!
 //! Canvas parity notes (wiki_page.rb, wiki_pages_api_controller.rb):
 //! - pages carry `url` (slug derived from title), `workflow_state`
@@ -23,10 +24,12 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::{IntoResponse, Response},
     routing::get,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::PgPool;
 
 use star_common::{ApiError, AppState};
@@ -79,6 +82,108 @@ pub struct UpdatePage {
     pub body: Option<String>,
     pub workflow_state: Option<String>,
     pub editing_roles: Option<String>,
+}
+
+/// Request body for PUT /courses/{courseId}/front_page.
+///
+/// Mirrors the Canvas `update_front_page` arguments (`wiki_page[title|body|
+/// editing_roles|published]`); `published` is Canvas' boolean form of
+/// `workflow_state` and takes precedence when both are supplied.
+#[derive(Debug, Default, Deserialize)]
+pub struct UpdateFrontPage {
+    pub title: Option<String>,
+    pub body: Option<String>,
+    pub editing_roles: Option<String>,
+    pub workflow_state: Option<String>,
+    pub published: Option<bool>,
+}
+
+impl UpdateFrontPage {
+    /// True when the request carries no page attributes (Canvas `@page.update({})`).
+    fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.body.is_none()
+            && self.editing_roles.is_none()
+            && self.workflow_state.is_none()
+            && self.published.is_none()
+    }
+
+    /// Requested workflow_state, normalized onto this schema's vocabulary
+    /// ('published'/'unpublished'); Canvas calls the published state 'active'.
+    fn requested_workflow_state(&self) -> Option<&'static str> {
+        let requested = match self.published {
+            Some(true) => "published",
+            Some(false) => "unpublished",
+            None => self
+                .workflow_state
+                .as_deref()
+                .map(str::trim)
+                .filter(|state| !state.is_empty())?,
+        };
+        if matches!(requested, "published" | "active") {
+            Some("published")
+        } else {
+            Some("unpublished")
+        }
+    }
+}
+
+/// Front-page page row (Canvas wiki_page_json source, minus the marker).
+#[derive(Debug, sqlx::FromRow)]
+pub struct FrontPageRow {
+    pub id: i64,
+    pub course_id: i64,
+    pub title: String,
+    pub body: Option<String>,
+    pub url: Option<String>,
+    pub workflow_state: String,
+    pub editing_roles: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Canvas `wiki_page_json` subset returned by the front_page endpoints.
+#[derive(Debug, Serialize)]
+pub struct FrontPage {
+    pub id: i64,
+    pub page_id: i64,
+    pub course_id: i64,
+    pub title: String,
+    pub body: Option<String>,
+    pub url: Option<String>,
+    pub workflow_state: String,
+    pub editing_roles: String,
+    pub published: bool,
+    pub hide_from_students: bool,
+    pub front_page: bool,
+    pub html_url: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Canvas `require_wiki_page` body for a course without a front page.
+enum FrontPageError {
+    NoFrontPage,
+    Api(ApiError),
+}
+
+impl From<ApiError> for FrontPageError {
+    fn from(err: ApiError) -> Self {
+        FrontPageError::Api(err)
+    }
+}
+
+impl IntoResponse for FrontPageError {
+    fn into_response(self) -> Response {
+        match self {
+            FrontPageError::NoFrontPage => (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "message": "No front page has been set" })),
+            )
+                .into_response(),
+            FrontPageError::Api(err) => err.into_response(),
+        }
+    }
 }
 
 /// Pagination params.
@@ -316,6 +421,60 @@ async fn user_teacher_of_course(
     .fetch_optional(db)
     .await?;
     Ok(row.is_some())
+}
+
+// ---------------------------------------------------------------------------
+// Front page helpers (Canvas Wiki#front_page / wiki_page_json parity)
+// ---------------------------------------------------------------------------
+
+/// Canvas treats 'active' and 'published' as the same published state.
+fn is_published(workflow_state: &str) -> bool {
+    matches!(workflow_state, "published" | "active")
+}
+
+impl FrontPageRow {
+    fn into_front_page(self) -> FrontPage {
+        let published = is_published(&self.workflow_state);
+        let reference = self.url.clone().unwrap_or_else(|| self.id.to_string());
+        FrontPage {
+            id: self.id,
+            page_id: self.id,
+            course_id: self.course_id,
+            title: self.title,
+            body: self.body,
+            url: self.url,
+            workflow_state: self.workflow_state,
+            editing_roles: self.editing_roles,
+            published,
+            hide_from_students: !published,
+            front_page: true,
+            html_url: format!("/courses/{}/pages/{reference}", self.course_id),
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
+/// Load the live page designated as the course front page.
+///
+/// Canvas resolves the wiki's `front_page_url`; this schema keeps the marker
+/// on the page row (`pages.front_page`, migration 0075). Soft-deleted pages
+/// are ignored, so deleting the front page leaves the course without one.
+async fn load_front_page(db: &PgPool, course_id: i64) -> Result<Option<FrontPageRow>, ApiError> {
+    let row: Option<FrontPageRow> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, title, body, url, workflow_state, editing_roles,
+               created_at, updated_at
+        FROM pages
+        WHERE course_id = $1 AND front_page AND workflow_state <> 'deleted'
+        ORDER BY updated_at DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(course_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row)
 }
 
 // ---------------------------------------------------------------------------
@@ -712,6 +871,197 @@ async fn delete_page(
 }
 
 // ---------------------------------------------------------------------------
+// Front page (Canvas wiki_pages_api_controller#show_front_page / #update_front_page)
+// ---------------------------------------------------------------------------
+
+/// Current live front page id for a course (inside the update transaction).
+async fn front_page_id_in_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    course_id: i64,
+) -> Result<Option<i64>, ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT id FROM pages
+        WHERE course_id = $1 AND front_page AND workflow_state <> 'deleted'
+        LIMIT 1
+        "#,
+    )
+    .bind(course_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(row.map(|(id,)| id))
+}
+
+/// GET /courses/{courseId}/front_page — Canvas `show_front_page` (delegates to
+/// `show`, so the body is included).
+///
+/// Canvas runs `require_wiki_page` before authorization, so a course without a
+/// designated page answers 404 `{"message":"No front page has been set"}` even
+/// for users who could not read the course.
+async fn get_front_page(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<FrontPage>, FrontPageError> {
+    let page = load_front_page(&state.db, course_id)
+        .await?
+        .ok_or(FrontPageError::NoFrontPage)?;
+
+    if !user_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden.into());
+    }
+
+    Ok(Json(page.into_front_page()))
+}
+
+/// PUT /courses/{courseId}/front_page — Canvas `update_front_page`.
+///
+/// Updates the existing front page, or creates one (published, title required)
+/// when the course has none — Canvas builds a new wiki page in that case.
+/// Changing the title regenerates the url slug and appends a revision, exactly
+/// like a regular page update. The front page cannot be unpublished.
+async fn update_front_page(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    payload: Option<Json<UpdateFrontPage>>,
+) -> Result<Json<FrontPage>, FrontPageError> {
+    // Canvas authorizes :update on an existing page, :create for the first one.
+    if !user_teacher_of_course(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden.into());
+    }
+
+    let course: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?;
+    if course.is_none() {
+        return Err(ApiError::NotFound.into());
+    }
+
+    let payload = payload.map(|Json(body)| body).unwrap_or_default();
+
+    // Canvas `cannot_have_unpublished_front_page`: 400 for draft front pages.
+    if payload.requested_workflow_state() == Some("unpublished") {
+        return Err(ApiError::BadRequest("The front page cannot be unpublished".into()).into());
+    }
+
+    let mut tx = state.db.begin().await?;
+    let existing_page = front_page_id_in_tx(&mut tx, course_id).await?;
+
+    // Canvas `unset_front_page!`: move the marker first so the per-course
+    // unique index (idx_pages_course_front_page) never sees two front pages.
+    sqlx::query("UPDATE pages SET front_page = false WHERE course_id = $1 AND front_page")
+        .bind(course_id)
+        .execute(&mut *tx)
+        .await?;
+
+    let page: FrontPageRow = if let Some(page_id) = existing_page {
+        if payload.is_empty() {
+            // Canvas `@page.update({})`: keep the page untouched, just re-mark it.
+            sqlx::query("UPDATE pages SET front_page = true WHERE id = $1")
+                .bind(page_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query_as(
+                r#"
+                SELECT id, course_id, title, body, url, workflow_state, editing_roles,
+                       created_at, updated_at
+                FROM pages WHERE id = $1
+                "#,
+            )
+            .bind(page_id)
+            .fetch_one(&mut *tx)
+            .await?
+        } else {
+            // Canvas regenerates the url slug when the title changes.
+            let new_url = payload.title.as_ref().map(|title| generate_url_slug(title));
+            let row: FrontPageRow = sqlx::query_as(
+                r#"
+                UPDATE pages
+                SET title = COALESCE($1, title),
+                    body = COALESCE($2, body),
+                    url = COALESCE($3, url),
+                    editing_roles = COALESCE($4, editing_roles),
+                    workflow_state = COALESCE($5, workflow_state),
+                    front_page = true,
+                    updated_at = now()
+                WHERE id = $6
+                RETURNING id, course_id, title, body, url, workflow_state, editing_roles,
+                          created_at, updated_at
+                "#,
+            )
+            .bind(&payload.title)
+            .bind(&payload.body)
+            .bind(&new_url)
+            .bind(&payload.editing_roles)
+            .bind(payload.requested_workflow_state())
+            .bind(page_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+            // simply_versioned: the save appends a revision.
+            insert_revision(
+                &mut tx,
+                row.id,
+                auth.id,
+                &row.title,
+                row.body.as_deref(),
+                row.url.as_deref(),
+            )
+            .await?;
+            row
+        }
+    } else {
+        // Canvas `update_front_page` creates the page when none is set; the
+        // wiki page title is required (WikiPage validates title presence).
+        let title = payload
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .ok_or_else(|| ApiError::BadRequest("title is required".into()))?;
+        let url = generate_url_slug(title);
+        let editing_roles = payload
+            .editing_roles
+            .clone()
+            .unwrap_or_else(|| "teachers".to_string());
+
+        let row: FrontPageRow = sqlx::query_as(
+            r#"
+            INSERT INTO pages (course_id, title, body, url, workflow_state, editing_roles, front_page)
+            VALUES ($1, $2, $3, $4, 'published', $5, true)
+            RETURNING id, course_id, title, body, url, workflow_state, editing_roles,
+                      created_at, updated_at
+            "#,
+        )
+        .bind(course_id)
+        .bind(title)
+        .bind(&payload.body)
+        .bind(&url)
+        .bind(&editing_roles)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        // simply_versioned: the creating save is revision 1.
+        insert_revision(
+            &mut tx,
+            row.id,
+            auth.id,
+            &row.title,
+            row.body.as_deref(),
+            row.url.as_deref(),
+        )
+        .await?;
+        row
+    };
+
+    tx.commit().await?;
+
+    Ok(Json(page.into_front_page()))
+}
+
+// ---------------------------------------------------------------------------
 // Canvas v1 nested aliases
 // ---------------------------------------------------------------------------
 
@@ -891,6 +1241,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/pages/{url}/revisions/{revisionId}",
             get(show_revision),
+        )
+        .route(
+            "/courses/{courseId}/front_page",
+            get(get_front_page).put(update_front_page),
         )
 }
 
