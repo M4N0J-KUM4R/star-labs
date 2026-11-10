@@ -537,3 +537,435 @@ async fn rubric_assessment_routes_enforce_canvas_access_policy() {
 
     cleanup(&pool, &prefix).await;
 }
+
+#[tokio::test]
+async fn rubric_association_create_used_locations_and_soft_delete() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let assignment = seed_assignment(&pool, course, "Essay").await;
+    let rubric = seed_rubric(&pool, course, "Essay Rubric").await;
+
+    // Canvas RubricAssociationsController#create returns
+    // { rubric, rubric_association } with a 200.
+    let created = server
+        .post(&format!("/courses/{course}/rubrics/{rubric}/associations"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "rubric_association": {
+                "association_id": assignment,
+                "association_type": "Assignment",
+                "purpose": "grading",
+                "use_for_grading": true
+            }
+        }))
+        .await;
+    assert_eq!(created.status_code(), 200, "body: {}", created.text());
+    let created_body: Value = created.json();
+    let association_id = created_body["rubric_association"]["id"]
+        .as_i64()
+        .expect("association id");
+    let expected_context_code = format!("course_{course}");
+    assert_eq!(created_body["rubric"]["id"].as_i64(), Some(rubric));
+    assert_eq!(
+        created_body["rubric_association"]["rubric_id"].as_i64(),
+        Some(rubric)
+    );
+    assert_eq!(
+        created_body["rubric_association"]["association_id"].as_i64(),
+        Some(assignment)
+    );
+    assert_eq!(
+        created_body["rubric_association"]["association_type"].as_str(),
+        Some("Assignment")
+    );
+    assert_eq!(
+        created_body["rubric_association"]["context_id"].as_i64(),
+        Some(course)
+    );
+    assert_eq!(
+        created_body["rubric_association"]["context_type"].as_str(),
+        Some("Course")
+    );
+    assert_eq!(
+        created_body["rubric_association"]["context_code"].as_str(),
+        Some(expected_context_code.as_str())
+    );
+    assert_eq!(
+        created_body["rubric_association"]["title"].as_str(),
+        Some("Essay")
+    );
+    assert_eq!(
+        created_body["rubric_association"]["use_for_grading"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        created_body["rubric_association"]["bookmarked"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        created_body["rubric_association"]["workflow_state"].as_str(),
+        Some("active")
+    );
+    assert_eq!(
+        created_body["rubric_association"]["association_count"].as_i64(),
+        Some(1)
+    );
+    assert_eq!(
+        created_body["rubric_association"]["rubric_assessments"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
+
+    // used_locations groups by course: id, name, concluded?, assignments.
+    let locations = server
+        .get(&format!(
+            "/courses/{course}/rubrics/{rubric}/used_locations"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(locations.status_code(), 200, "body: {}", locations.text());
+    let locations_body: Value = locations.json();
+    let courses = locations_body.as_array().expect("used locations array");
+    assert_eq!(courses.len(), 1);
+    assert_eq!(courses[0]["id"].as_i64(), Some(course));
+    assert_eq!(courses[0]["name"].as_str(), Some("Course"));
+    // Canvas serializes the `concluded?` method name verbatim.
+    assert_eq!(courses[0]["concluded?"].as_bool(), Some(false));
+    assert_eq!(
+        courses[0]["assignments"][0]["id"].as_i64(),
+        Some(assignment)
+    );
+    assert_eq!(
+        courses[0]["assignments"][0]["title"].as_str(),
+        Some("Essay")
+    );
+
+    // DELETE soft-deletes and returns the association (Canvas shape).
+    let deleted = server
+        .delete(&format!("/rubric_associations/{association_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(deleted.status_code(), 200, "body: {}", deleted.text());
+    let deleted_body: Value = deleted.json();
+    assert_eq!(deleted_body["id"].as_i64(), Some(association_id));
+    assert_eq!(deleted_body["workflow_state"].as_str(), Some("deleted"));
+
+    let (stored_state,): (String,) =
+        sqlx::query_as("SELECT workflow_state FROM rubric_associations WHERE id = $1")
+            .bind(association_id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch association");
+    assert_eq!(stored_state, "deleted");
+
+    // Deleted associations drop out of used_locations and cannot be deleted twice.
+    let empty = server
+        .get(&format!(
+            "/courses/{course}/rubrics/{rubric}/used_locations"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(empty.status_code(), 200);
+    assert_eq!(empty.json::<Value>().as_array().map(Vec::len), Some(0));
+
+    let again = server
+        .delete(&format!("/rubric_associations/{association_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(again.status_code(), 404);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn grading_associations_are_unique_per_assignment_and_repoint_the_rubric() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let assignment = seed_assignment(&pool, course, "Essay").await;
+    let other_assignment = seed_assignment(&pool, course, "Lab").await;
+    let rubric_a = seed_rubric(&pool, course, "Rubric A").await;
+    let rubric_b = seed_rubric(&pool, course, "Rubric B").await;
+
+    let first = server
+        .post(&format!(
+            "/courses/{course}/rubrics/{rubric_a}/associations"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "rubric_association": {
+                "association_id": assignment,
+                "association_type": "Assignment",
+                "purpose": "grading"
+            }
+        }))
+        .await;
+    assert_eq!(first.status_code(), 200, "body: {}", first.text());
+    let first_id = first.json::<Value>()["rubric_association"]["id"]
+        .as_i64()
+        .expect("association id");
+
+    // A grading association is unique per assignment: re-associating re-points
+    // the existing row at the new rubric instead of inserting a second one.
+    let second = server
+        .post(&format!(
+            "/courses/{course}/rubrics/{rubric_b}/associations"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "rubric_association": {
+                "rubric_id": rubric_b,
+                "association_id": assignment,
+                "association_type": "Assignment",
+                "purpose": "grading"
+            }
+        }))
+        .await;
+    assert_eq!(second.status_code(), 200, "body: {}", second.text());
+    let second_body: Value = second.json();
+    assert_eq!(
+        second_body["rubric_association"]["id"].as_i64(),
+        Some(first_id)
+    );
+    assert_eq!(
+        second_body["rubric_association"]["rubric_id"].as_i64(),
+        Some(rubric_b)
+    );
+    assert_eq!(second_body["rubric"]["id"].as_i64(), Some(rubric_b));
+
+    let (active_grading,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM rubric_associations \
+         WHERE association_type = 'Assignment' AND association_id = $1 \
+           AND purpose = 'grading' AND workflow_state <> 'deleted'",
+    )
+    .bind(assignment)
+    .fetch_one(&pool)
+    .await
+    .expect("count grading associations");
+    assert_eq!(active_grading, 1);
+
+    let (count_a,): (i32,) = sqlx::query_as("SELECT association_count FROM rubrics WHERE id = $1")
+        .bind(rubric_a)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch rubric A counters");
+    assert_eq!(count_a, 0);
+    let (count_b,): (i32,) = sqlx::query_as("SELECT association_count FROM rubrics WHERE id = $1")
+        .bind(rubric_b)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch rubric B counters");
+    assert_eq!(count_b, 1);
+
+    // hide_points wins over use_for_grading/hide_score_total (Canvas update).
+    let hidden = server
+        .post(&format!(
+            "/courses/{course}/rubrics/{rubric_b}/associations"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "rubric_association": {
+                "association_id": other_assignment,
+                "association_type": "Assignment",
+                "purpose": "grading",
+                "use_for_grading": true,
+                "hide_score_total": true,
+                "hide_points": true
+            }
+        }))
+        .await;
+    assert_eq!(hidden.status_code(), 200, "body: {}", hidden.text());
+    let hidden_body: Value = hidden.json();
+    assert_eq!(
+        hidden_body["rubric_association"]["hide_points"].as_bool(),
+        Some(true)
+    );
+    assert_eq!(
+        hidden_body["rubric_association"]["use_for_grading"].as_bool(),
+        Some(false)
+    );
+    assert_eq!(
+        hidden_body["rubric_association"]["hide_score_total"].as_bool(),
+        Some(false)
+    );
+
+    // Bookmark associations are not deduplicated.
+    let mut bookmark_ids = Vec::new();
+    for _ in 0..2 {
+        let bookmarked = server
+            .post(&format!(
+                "/courses/{course}/rubrics/{rubric_b}/associations"
+            ))
+            .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+            .json(&json!({
+                "rubric_association": {
+                    "association_id": assignment,
+                    "association_type": "Assignment",
+                    "purpose": "bookmark"
+                }
+            }))
+            .await;
+        assert_eq!(bookmarked.status_code(), 200, "body: {}", bookmarked.text());
+        let body: Value = bookmarked.json();
+        assert_eq!(
+            body["rubric_association"]["bookmarked"].as_bool(),
+            Some(true)
+        );
+        bookmark_ids.push(
+            body["rubric_association"]["id"]
+                .as_i64()
+                .expect("bookmark association id"),
+        );
+    }
+    assert_ne!(bookmark_ids[0], bookmark_ids[1]);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn rubric_association_routes_enforce_canvas_permissions_and_validation() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    let other_course = seed_course(&pool, &prefix, "Other").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let assignment = seed_assignment(&pool, course, "Essay").await;
+    let other_assignment = seed_assignment(&pool, other_course, "Foreign").await;
+    let rubric = seed_rubric(&pool, course, "Essay Rubric").await;
+
+    let association_path = format!("/courses/{course}/rubrics/{rubric}/associations");
+    let locations_path = format!("/courses/{course}/rubrics/{rubric}/used_locations");
+
+    // Students cannot manage associations or inspect used locations.
+    let student_create = server
+        .post(&association_path)
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({
+            "rubric_association": {
+                "association_id": assignment,
+                "association_type": "Assignment",
+                "purpose": "grading"
+            }
+        }))
+        .await;
+    assert_eq!(student_create.status_code(), 403);
+
+    let student_locations = server
+        .get(&locations_path)
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(student_locations.status_code(), 403);
+
+    // A rubric from another course is never reachable through this course.
+    let cross_course = server
+        .post(&format!(
+            "/courses/{other_course}/rubrics/{rubric}/associations"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "rubric_association": {
+                "association_id": assignment,
+                "association_type": "Assignment",
+                "purpose": "grading"
+            }
+        }))
+        .await;
+    assert_eq!(cross_course.status_code(), 404);
+
+    // Association objects must belong to the course context.
+    let foreign_assignment = server
+        .post(&association_path)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "rubric_association": {
+                "association_id": other_assignment,
+                "association_type": "Assignment",
+                "purpose": "grading"
+            }
+        }))
+        .await;
+    assert_eq!(foreign_assignment.status_code(), 404);
+
+    // Canvas association types/purposes are validated.
+    let account_type = server
+        .post(&association_path)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "rubric_association": {
+                "association_id": assignment,
+                "association_type": "Account"
+            }
+        }))
+        .await;
+    assert_eq!(account_type.status_code(), 400);
+
+    let missing_id = server
+        .post(&association_path)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "rubric_association": { "association_type": "Assignment" }
+        }))
+        .await;
+    assert_eq!(missing_id.status_code(), 400);
+
+    let bad_purpose = server
+        .post(&association_path)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "rubric_association": {
+                "association_id": assignment,
+                "association_type": "Assignment",
+                "purpose": "curve"
+            }
+        }))
+        .await;
+    assert_eq!(bad_purpose.status_code(), 422);
+
+    // A valid association can only be deleted by course managers.
+    let created = server
+        .post(&association_path)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "rubric_association": {
+                "association_id": assignment,
+                "association_type": "Assignment",
+                "purpose": "grading"
+            }
+        }))
+        .await;
+    assert_eq!(created.status_code(), 200, "body: {}", created.text());
+    let association_id = created.json::<Value>()["rubric_association"]["id"]
+        .as_i64()
+        .expect("association id");
+
+    let student_delete = server
+        .delete(&format!("/rubric_associations/{association_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(student_delete.status_code(), 403);
+
+    let (stored_state,): (String,) =
+        sqlx::query_as("SELECT workflow_state FROM rubric_associations WHERE id = $1")
+            .bind(association_id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch association");
+    assert_eq!(stored_state, "active");
+
+    cleanup(&pool, &prefix).await;
+}

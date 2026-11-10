@@ -80,6 +80,33 @@ pub struct RubricAssessment {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Canvas rubric association: ties a rubric to a polymorphic association
+/// object (assignment or course) inside a course context.
+///
+/// Added by migration 0071; mirrors Canvas `RubricAssociation`.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct RubricAssociation {
+    pub id: i64,
+    pub rubric_id: i64,
+    pub association_id: i64,
+    pub association_type: String,
+    pub context_id: i64,
+    pub context_type: String,
+    pub context_code: Option<String>,
+    pub title: Option<String>,
+    pub use_for_grading: bool,
+    pub hide_score_total: bool,
+    pub hide_points: bool,
+    pub hide_outcome_results: bool,
+    pub purpose: String,
+    pub bookmarked: bool,
+    pub url: Option<String>,
+    pub summary_data: Option<serde_json::Value>,
+    pub workflow_state: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 // ---------------------------------------------------------------------------
 // Request types
 // ---------------------------------------------------------------------------
@@ -152,6 +179,33 @@ pub struct UpdateAssessment {
     pub workflow_state: Option<String>,
 }
 
+/// Canvas `rubric_association[...]` params for creating an association.
+///
+/// Only the documented Rubrics API arguments are modeled; `association_type`
+/// accepts the Canvas class names `Assignment` and `Course` (account
+/// associations are not reachable from a course-scoped route).
+#[derive(Debug, Default, Deserialize)]
+pub struct AssociationParams {
+    pub rubric_id: Option<i64>,
+    pub association_id: Option<i64>,
+    pub association_type: Option<String>,
+    pub title: Option<String>,
+    pub use_for_grading: Option<bool>,
+    pub hide_score_total: Option<bool>,
+    pub hide_points: Option<bool>,
+    pub hide_outcome_results: Option<bool>,
+    pub purpose: Option<String>,
+    pub bookmarked: Option<bool>,
+    pub url: Option<String>,
+}
+
+/// Body of `POST /courses/{courseId}/rubrics/{rubricId}/associations`.
+#[derive(Debug, Default, Deserialize)]
+pub struct AssociationRequest {
+    #[serde(default)]
+    pub rubric_association: AssociationParams,
+}
+
 // ---------------------------------------------------------------------------
 // Nested response types (criteria + ratings)
 // ---------------------------------------------------------------------------
@@ -186,6 +240,57 @@ pub struct RubricResponse {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub criteria: Vec<CriterionResponse>,
+}
+
+/// Canvas association JSON: the association fields plus its assessments and
+/// the rubric's total `association_count` (merged by
+/// `RubricAssociationsController#update`).
+#[derive(Debug, Serialize)]
+pub struct RubricAssociationResponse {
+    #[serde(flatten)]
+    pub association: RubricAssociation,
+    pub rubric_assessments: Vec<RubricAssessment>,
+    /// Canvas assessment requests are not modeled in star-lms; the key is kept
+    /// so Canvas-shaped clients see an empty collection instead of a missing one.
+    pub assessment_requests: Vec<serde_json::Value>,
+    pub association_count: i64,
+}
+
+/// Response of `POST /courses/{courseId}/rubrics/{rubricId}/associations`.
+#[derive(Debug, Serialize)]
+pub struct AssociationCreateResponse {
+    pub rubric: RubricResponse,
+    pub rubric_association: RubricAssociationResponse,
+}
+
+/// One course with the assignments using a rubric (Canvas `used_locations`).
+///
+/// Canvas serializes the course's `concluded?` method verbatim, so the JSON key
+/// keeps its question mark (see `UsedLocationsModal` in the Canvas UI).
+#[derive(Debug, Serialize)]
+pub struct UsedLocationCourse {
+    pub id: i64,
+    pub name: String,
+    #[serde(rename = "concluded?")]
+    pub concluded: bool,
+    pub assignments: Vec<UsedLocationAssignment>,
+}
+
+/// Assignment entry inside a `used_locations` course.
+#[derive(Debug, Serialize)]
+pub struct UsedLocationAssignment {
+    pub id: i64,
+    pub title: String,
+}
+
+/// Raw row for the `used_locations` join, grouped in Rust by course.
+#[derive(Debug, sqlx::FromRow)]
+struct UsedLocationRow {
+    course_id: i64,
+    course_name: String,
+    concluded: bool,
+    assignment_id: i64,
+    assignment_title: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -1003,6 +1108,393 @@ async fn delete_rubric_assessment(
 }
 
 // ---------------------------------------------------------------------------
+// Rubric associations (Canvas RubricAssociationsController parity)
+// ---------------------------------------------------------------------------
+
+/// Column list for rubric association queries.
+const ASSOCIATION_COLUMNS: &str = "id, rubric_id, association_id, association_type, context_id, \
+     context_type, context_code, title, use_for_grading, hide_score_total, hide_points, \
+     hide_outcome_results, purpose, bookmarked, url, summary_data, workflow_state, created_at, \
+     updated_at";
+
+/// Canvas only supports grading and bookmark association purposes.
+const VALID_ASSOCIATION_PURPOSES: [&str; 2] = ["grading", "bookmark"];
+
+fn is_valid_association_purpose(value: &str) -> bool {
+    VALID_ASSOCIATION_PURPOSES.contains(&value)
+}
+
+/// Whether an association type is reachable from a course-scoped route.
+/// Canvas also allows `Account` associations, but those live in account
+/// contexts; a course-scoped association only accepts assignments and the
+/// course itself.
+fn is_supported_association_type(value: &str) -> bool {
+    matches!(value, "Assignment" | "Course")
+}
+
+/// Resolve the association object's display title (`update_values` in Canvas
+/// falls back to the object's title, then its name) and validate that the
+/// object belongs to `course_id`.
+async fn association_object_title(
+    pool: &PgPool,
+    course_id: i64,
+    association_type: &str,
+    association_id: i64,
+) -> Result<String, ApiError> {
+    match association_type {
+        "Assignment" => {
+            let row: Option<(String,)> =
+                sqlx::query_as("SELECT title FROM assignments WHERE id = $1 AND course_id = $2")
+                    .bind(association_id)
+                    .bind(course_id)
+                    .fetch_optional(pool)
+                    .await?;
+            Ok(row.ok_or(ApiError::NotFound)?.0)
+        }
+        "Course" => {
+            if association_id != course_id {
+                return Err(ApiError::NotFound);
+            }
+            let row: Option<(String,)> = sqlx::query_as("SELECT name FROM courses WHERE id = $1")
+                .bind(association_id)
+                .fetch_optional(pool)
+                .await?;
+            Ok(row.ok_or(ApiError::NotFound)?.0)
+        }
+        other => Err(ApiError::BadRequest(format!(
+            "association_type must be Assignment or Course, got {other}"
+        ))),
+    }
+}
+
+/// Maintain the rubric counters Canvas keeps in `Rubric#update_association_count`:
+/// `association_count` counts active associations and `read_only` flips once
+/// more than one active grading association shares the rubric.
+async fn refresh_rubric_association_counts(pool: &PgPool, rubric_id: i64) -> Result<(), ApiError> {
+    sqlx::query(
+        r#"
+        UPDATE rubrics
+        SET association_count = (
+                SELECT COUNT(*)::int FROM rubric_associations
+                WHERE rubric_id = $1 AND workflow_state <> 'deleted'
+            ),
+            read_only = (
+                SELECT COUNT(*) FROM rubric_associations
+                WHERE rubric_id = $1 AND purpose = 'grading' AND workflow_state <> 'deleted'
+            ) > 1,
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(rubric_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Assessments recorded against one association (Canvas includes them in the
+/// association JSON).
+async fn assessments_for_association(
+    pool: &PgPool,
+    association_id: i64,
+) -> Result<Vec<RubricAssessment>, ApiError> {
+    let sql = format!(
+        "SELECT {ASSESSMENT_COLUMNS} FROM rubric_assessments \
+         WHERE rubric_association_id = $1 ORDER BY created_at ASC"
+    );
+    Ok(sqlx::query_as::<_, RubricAssessment>(&sql)
+        .bind(association_id)
+        .fetch_all(pool)
+        .await?)
+}
+
+/// Create or update a rubric association following Canvas
+/// `RubricAssociation.generate` / `associate_with`:
+///
+/// - `purpose = grading` reuses (and re-points) the single grading
+///   association for the association object.
+/// - `purpose = bookmark` always inserts a new association.
+/// - `hide_points` wins over `use_for_grading` / `hide_score_total`.
+/// - `bookmarked` defaults to true (Canvas sets it when nil).
+async fn upsert_course_association(
+    pool: &PgPool,
+    course_id: i64,
+    rubric_id: i64,
+    payload: AssociationRequest,
+) -> Result<AssociationCreateResponse, ApiError> {
+    let params = payload.rubric_association;
+
+    if params
+        .rubric_id
+        .is_some_and(|body_rubric_id| body_rubric_id != rubric_id)
+    {
+        return Err(ApiError::BadRequest(
+            "rubric_id must match the rubric in the path".into(),
+        ));
+    }
+
+    let association_type = params
+        .association_type
+        .ok_or_else(|| ApiError::BadRequest("association_type is required".into()))?;
+    if !is_supported_association_type(&association_type) {
+        return Err(ApiError::BadRequest(
+            "association_type must be Assignment or Course".into(),
+        ));
+    }
+    let association_id = params
+        .association_id
+        .ok_or_else(|| ApiError::BadRequest("association_id is required".into()))?;
+
+    let purpose = params.purpose.unwrap_or_else(|| "grading".to_string());
+    if !is_valid_association_purpose(&purpose) {
+        return Err(ApiError::Validation(
+            "purpose must be grading or bookmark".into(),
+        ));
+    }
+
+    let default_title =
+        association_object_title(pool, course_id, &association_type, association_id).await?;
+    let title = params.title.unwrap_or(default_title);
+
+    let hide_points = params.hide_points.unwrap_or(false);
+    let use_for_grading = if hide_points {
+        false
+    } else {
+        params.use_for_grading.unwrap_or(false)
+    };
+    let hide_score_total = if hide_points {
+        false
+    } else {
+        params.hide_score_total.unwrap_or(false)
+    };
+    let hide_outcome_results = params.hide_outcome_results.unwrap_or(false);
+    let bookmarked = params.bookmarked.unwrap_or(true) || purpose == "bookmark";
+    let context_code = format!("course_{course_id}");
+
+    // Canvas keeps a single active grading association per association object.
+    let existing_grading: Option<(i64, i64)> = if purpose == "grading" {
+        sqlx::query_as(
+            r#"
+            SELECT id, rubric_id FROM rubric_associations
+            WHERE association_type = $1 AND association_id = $2
+              AND purpose = 'grading' AND workflow_state <> 'deleted'
+            ORDER BY id ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(&association_type)
+        .bind(association_id)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        None
+    };
+
+    let association: RubricAssociation =
+        if let Some((existing_id, previous_rubric_id)) = existing_grading {
+            let sql = format!(
+                "UPDATE rubric_associations SET rubric_id = $2, association_type = $3, \
+                 association_id = $4, context_id = $5, context_type = 'Course', \
+                 context_code = $6, title = $7, use_for_grading = $8, hide_score_total = $9, \
+                 hide_points = $10, hide_outcome_results = $11, purpose = $12, bookmarked = $13, \
+                 url = COALESCE($14, url), updated_at = now() \
+                 WHERE id = $1 RETURNING {ASSOCIATION_COLUMNS}"
+            );
+            let updated = sqlx::query_as::<_, RubricAssociation>(&sql)
+                .bind(existing_id)
+                .bind(rubric_id)
+                .bind(&association_type)
+                .bind(association_id)
+                .bind(course_id)
+                .bind(&context_code)
+                .bind(&title)
+                .bind(use_for_grading)
+                .bind(hide_score_total)
+                .bind(hide_points)
+                .bind(hide_outcome_results)
+                .bind(&purpose)
+                .bind(bookmarked)
+                .bind(params.url)
+                .fetch_one(pool)
+                .await?;
+
+            if previous_rubric_id != rubric_id {
+                refresh_rubric_association_counts(pool, previous_rubric_id).await?;
+            }
+            updated
+        } else {
+            let sql = format!(
+                "INSERT INTO rubric_associations (rubric_id, association_id, association_type, \
+                 context_id, context_type, context_code, title, use_for_grading, \
+                 hide_score_total, hide_points, hide_outcome_results, purpose, bookmarked, url) \
+                 VALUES ($1, $2, $3, $4, 'Course', $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+                 RETURNING {ASSOCIATION_COLUMNS}"
+            );
+            sqlx::query_as::<_, RubricAssociation>(&sql)
+                .bind(rubric_id)
+                .bind(association_id)
+                .bind(&association_type)
+                .bind(course_id)
+                .bind(&context_code)
+                .bind(&title)
+                .bind(use_for_grading)
+                .bind(hide_score_total)
+                .bind(hide_points)
+                .bind(hide_outcome_results)
+                .bind(&purpose)
+                .bind(bookmarked)
+                .bind(params.url)
+                .fetch_one(pool)
+                .await?
+        };
+
+    refresh_rubric_association_counts(pool, rubric_id).await?;
+
+    let rubric = fetch_rubric_with_nested(pool, rubric_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let rubric_assessments = assessments_for_association(pool, association.id).await?;
+    let association_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM rubric_associations \
+         WHERE rubric_id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(rubric_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(AssociationCreateResponse {
+        rubric,
+        rubric_association: RubricAssociationResponse {
+            association,
+            rubric_assessments,
+            assessment_requests: Vec::new(),
+            association_count,
+        },
+    })
+}
+
+/// GET /courses/{courseId}/rubrics/{rubricId}/used_locations  → 200
+///
+/// Canvas `RubricsApiController#used_locations`: the active assignment
+/// associations grouped by course, ordered by course name then assignment
+/// title.
+async fn list_used_locations(
+    State(state): State<AppState>,
+    Path((course_id, rubric_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<UsedLocationCourse>>, ApiError> {
+    verify_rubric_course(&state.db, course_id, rubric_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let rows: Vec<UsedLocationRow> = sqlx::query_as(
+        r#"
+        SELECT c.id AS course_id,
+               c.name AS course_name,
+               (c.workflow_state = 'completed'
+                OR (c.end_at IS NOT NULL AND c.end_at < now())) AS concluded,
+               a.id AS assignment_id,
+               a.title AS assignment_title
+        FROM assignments a
+        JOIN rubric_associations ra
+          ON ra.association_id = a.id
+         AND ra.association_type = 'Assignment'
+         AND ra.workflow_state <> 'deleted'
+        JOIN courses c ON c.id = a.course_id
+        WHERE ra.rubric_id = $1
+          AND c.workflow_state <> 'deleted'
+        ORDER BY c.name ASC, c.id ASC, a.title ASC
+        "#,
+    )
+    .bind(rubric_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut locations: Vec<UsedLocationCourse> = Vec::new();
+    for row in rows {
+        let assignment = UsedLocationAssignment {
+            id: row.assignment_id,
+            title: row.assignment_title,
+        };
+        match locations.last_mut() {
+            Some(course) if course.id == row.course_id => course.assignments.push(assignment),
+            _ => locations.push(UsedLocationCourse {
+                id: row.course_id,
+                name: row.course_name,
+                concluded: row.concluded,
+                assignments: vec![assignment],
+            }),
+        }
+    }
+
+    Ok(Json(locations))
+}
+
+/// POST /courses/{courseId}/rubrics/{rubricId}/associations  → 200
+///
+/// Canvas `RubricAssociationsController#create` renders
+/// `{ rubric, rubric_association }` with a 200.
+async fn create_course_rubric_association(
+    State(state): State<AppState>,
+    Path((course_id, rubric_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<AssociationRequest>,
+) -> Result<Json<AssociationCreateResponse>, ApiError> {
+    verify_rubric_course(&state.db, course_id, rubric_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let response = upsert_course_association(&state.db, course_id, rubric_id, payload).await?;
+    Ok(Json(response))
+}
+
+/// DELETE /rubric_associations/{id}  → 200 with the soft-deleted association.
+///
+/// Mirrors Canvas `RubricAssociationsController#destroy`: the row is
+/// soft-deleted (Canvas::SoftDeletable), the rubric counters are refreshed,
+/// and the association JSON is rendered rather than a 204.
+async fn delete_rubric_association(
+    State(state): State<AppState>,
+    Path(association_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<RubricAssociation>, ApiError> {
+    let existing: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT context_id, rubric_id, workflow_state FROM rubric_associations WHERE id = $1",
+    )
+    .bind(association_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (course_id, rubric_id, workflow_state) = existing.ok_or(ApiError::NotFound)?;
+
+    // Canvas::SoftDeletable hides deleted rows from the context scope.
+    if workflow_state == "deleted" {
+        return Err(ApiError::NotFound);
+    }
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let sql = format!(
+        "UPDATE rubric_associations SET workflow_state = 'deleted', updated_at = now() \
+         WHERE id = $1 RETURNING {ASSOCIATION_COLUMNS}"
+    );
+    let deleted = sqlx::query_as::<_, RubricAssociation>(&sql)
+        .bind(association_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    refresh_rubric_association_counts(&state.db, rubric_id).await?;
+
+    Ok(Json(deleted))
+}
+
+// ---------------------------------------------------------------------------
 // Canvas nested route aliases
 // ---------------------------------------------------------------------------
 
@@ -1089,6 +1581,18 @@ pub fn router() -> Router<AppState> {
         .route("/rubric_assessments/{id}", get(get_rubric_assessment))
         .route("/rubric_assessments/{id}", put(update_rubric_assessment))
         .route("/rubric_assessments/{id}", delete(delete_rubric_assessment))
+        .route(
+            "/courses/{courseId}/rubrics/{rubricId}/used_locations",
+            get(list_used_locations),
+        )
+        .route(
+            "/courses/{courseId}/rubrics/{rubricId}/associations",
+            post(create_course_rubric_association),
+        )
+        .route(
+            "/rubric_associations/{id}",
+            delete(delete_rubric_association),
+        )
 }
 
 #[cfg(test)]
