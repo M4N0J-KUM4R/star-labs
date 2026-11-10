@@ -1807,3 +1807,221 @@ async fn full_lifecycle_module_to_items_to_soft_delete() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// PUT/DELETE /courses/{courseId}/modules/{moduleId}/items/{itemId}/done
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn mark_item_done_upserts_completed_then_delete_sets_incomplete() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "CompletionCourse").await;
+    let module = seed_module(&pool, course, "Completion Module", 1).await;
+    let item = seed_module_item(&pool, module, "page", 701, 1).await;
+    seed_enrollment(&pool, student, course, "student", "active").await;
+
+    let done_url = format!("/courses/{course}/modules/{module}/items/{item}/done");
+
+    // PUT marks the item done and returns the completion resource.
+    let resp = server
+        .put(&done_url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "marking an enrolled user's item done; body: {}",
+        resp.text()
+    );
+    let done: Value = resp.json();
+    let completion_id = done["id"].as_i64().expect("completion id");
+    assert_eq!(done["module_id"], module);
+    assert_eq!(done["item_id"], item);
+    assert_eq!(done["user_id"], student);
+    assert_eq!(done["state"], "completed");
+    assert!(done["created_at"].is_string(), "created_at: {done}");
+    assert!(done["updated_at"].is_string(), "updated_at: {done}");
+
+    // Repeating PUT is idempotent: same row, still completed.
+    let resp = server
+        .put(&done_url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "repeat mark done");
+    let again: Value = resp.json();
+    assert_eq!(
+        again["id"], completion_id,
+        "completion is upserted, not duplicated"
+    );
+    assert_eq!(again["state"], "completed");
+
+    // DELETE flips the same row to incomplete instead of deleting history.
+    let resp = server
+        .delete(&done_url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "mark item not done");
+    let not_done: Value = resp.json();
+    assert_eq!(not_done["id"], completion_id);
+    assert_eq!(not_done["state"], "incomplete");
+
+    let (count, state): (i64, String) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*), MAX(state) FROM module_item_completions
+        WHERE user_id = $1 AND item_id = $2
+        "#,
+    )
+    .bind(student)
+    .bind(item)
+    .fetch_one(&pool)
+    .await
+    .expect("completion row survives mark-not-done");
+    assert_eq!(count, 1, "one completion row per user/item");
+    assert_eq!(state, "incomplete");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn mark_item_done_requires_authentication_and_enrollment() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let course = seed_course(&pool, &prefix, "CompletionAuthzCourse").await;
+    let module = seed_module(&pool, course, "Authz Module", 1).await;
+    let item = seed_module_item(&pool, module, "assignment", 702, 1).await;
+    seed_enrollment(&pool, student, course, "student", "active").await;
+
+    let done_url = format!("/courses/{course}/modules/{module}/items/{item}/done");
+
+    // Anonymous -> 401 (AuthUser extractor).
+    let resp = server.put(&done_url).await;
+    assert_eq!(resp.status_code(), 401, "anonymous PUT .../done");
+
+    let resp = server.delete(&done_url).await;
+    assert_eq!(resp.status_code(), 401, "anonymous DELETE .../done");
+
+    // Active enrollment -> allowed for both verbs.
+    let resp = server
+        .put(&done_url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "enrolled student PUT .../done");
+
+    let resp = server
+        .delete(&done_url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "enrolled student DELETE .../done");
+
+    // No enrollment -> 403, even though the module/item exist.
+    let resp = server
+        .put(&done_url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "unenrolled PUT .../done");
+
+    let resp = server
+        .delete(&done_url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "unenrolled DELETE .../done");
+
+    // The outsider's rejected writes left no completion rows behind.
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM module_item_completions WHERE user_id = $1")
+            .bind(outsider)
+            .fetch_one(&pool)
+            .await
+            .expect("count outsider completions");
+    assert_eq!(count, 0);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn mark_item_done_404s_for_foreign_missing_or_deleted_module_items() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "CompletionScopeCourse").await;
+    let other_course = seed_course(&pool, &prefix, "CompletionOtherCourse").await;
+    let module = seed_module(&pool, course, "Scope Module", 1).await;
+    let other_module = seed_module(&pool, course, "Other Module", 2).await;
+    let other_course_module = seed_module(&pool, other_course, "Foreign Module", 1).await;
+    let item = seed_module_item(&pool, module, "page", 703, 1).await;
+    let other_item = seed_module_item(&pool, other_module, "page", 704, 1).await;
+    seed_enrollment(&pool, student, course, "student", "active").await;
+
+    let deleted_module: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO modules (course_id, name, position, workflow_state)
+        VALUES ($1, 'Deleted Module', 3, 'deleted')
+        RETURNING id
+        "#,
+    )
+    .bind(course)
+    .fetch_one(&pool)
+    .await
+    .expect("seed deleted module");
+    let deleted_item = seed_module_item(&pool, deleted_module, "page", 705, 1).await;
+
+    // Item that belongs to a different module -> 404.
+    let resp = server
+        .put(&format!(
+            "/courses/{course}/modules/{module}/items/{other_item}/done"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "item from another module");
+
+    // Module that belongs to a different course -> 404.
+    let resp = server
+        .put(&format!(
+            "/courses/{course}/modules/{other_course_module}/items/{item}/done"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "module from another course");
+
+    // Soft-deleted module -> 404 (Canvas modules_visible_to excludes it).
+    let resp = server
+        .put(&format!(
+            "/courses/{course}/modules/{deleted_module}/items/{deleted_item}/done"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "soft-deleted module");
+
+    // Missing item id -> 404.
+    let resp = server
+        .put(&format!(
+            "/courses/{course}/modules/{module}/items/{MISSING_ID}/done"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "missing module item");
+
+    // None of the rejected calls recorded a completion.
+    let count: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM module_item_completions WHERE user_id = $1")
+            .bind(student)
+            .fetch_one(&pool)
+            .await
+            .expect("count completions");
+    assert_eq!(count, 0);
+
+    cleanup(&pool, &prefix).await;
+}
