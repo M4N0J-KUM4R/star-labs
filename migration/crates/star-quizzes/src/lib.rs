@@ -1,9 +1,12 @@
-//! star-quizzes: quiz metadata only — NOT a question engine.
+//! star-quizzes: quiz metadata, quiz questions and question groups.
 //!
-//! Handles: quiz CRUD, quiz submission start (upsert), and submission listing.
-//! Question/answer management is out of scope.
+//! Handles: quiz CRUD, quiz submission start (upsert), submission listing,
+//! and Canvas-parity CRUD for quiz questions + question groups (and the
+//! `question_banks` table they can reference).
 //!
-//! Canvas parity notes (app/models/quizzes/quiz.rb):
+//! Canvas parity notes (app/models/quizzes/quiz.rb,
+//! app/controllers/quizzes/quiz_questions_controller.rb,
+//! app/controllers/quizzes/quiz_groups_controller.rb):
 //! - `shuffle_answers` (Canvas field name; our old column was shuffle_questions).
 //! - `quiz_type` is validated to Canvas' four values: assignment, practice,
 //!   survey, graded_survey.
@@ -15,6 +18,15 @@
 //! - Canvas nested aliases live under /courses/{courseId}/quizzes/{id}:
 //!   GET/PUT/DELETE (quiz CRUD), POST .../submissions (start), and
 //!   GET .../submission (singular; the caller's own submission).
+//! - Question routes are teacher/admin-only (Canvas authorizes `:update` even
+//!   for the question index); groups are readable by any enrolled user.
+//!   Question create returns 200, group create 201, deletes 204.
+//! - Group responses keep Canvas' compound shape `{"quiz_groups": [...]}`;
+//!   question responses are plain objects/arrays. Request bodies accept
+//!   Canvas' `question[...]` and `quiz_groups[][...]` wrappers (flat JSON also
+//!   works).
+//! - Deleting a question is Canvas' soft delete (`workflow_state='deleted'`);
+//!   deleting a group destroys its questions.
 
 use axum::{
     extract::{Path, State},
@@ -24,6 +36,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
@@ -116,6 +129,222 @@ pub struct QuizSubmissionWithUser {
     pub started_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+// ---------------------------------------------------------------------------
+// Quiz questions & question groups
+// (Canvas Quizzes::QuizQuestionsController / Quizzes::QuizGroupsController)
+// ---------------------------------------------------------------------------
+
+/// Canvas QuizQuestion shape. `answers` is the raw answers array, stored
+/// serialized in `quiz_questions.answers` (Canvas keeps `question_data` JSON).
+#[derive(Debug, Clone, Serialize)]
+pub struct QuizQuestion {
+    pub id: i64,
+    pub quiz_id: i64,
+    pub quiz_group_id: Option<i64>,
+    pub assessment_question_bank_id: Option<i64>,
+    pub position: i32,
+    pub question_name: String,
+    pub question_type: String,
+    pub question_text: String,
+    pub points_possible: f64,
+    pub correct_comments: Option<String>,
+    pub incorrect_comments: Option<String>,
+    pub neutral_comments: Option<String>,
+    pub answers: Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Canvas QuizGroup shape (API_ALLOWED_QUIZ_GROUP_OUTPUT_FIELDS).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct QuizQuestionGroup {
+    pub id: i64,
+    pub quiz_id: i64,
+    pub name: Option<String>,
+    pub pick_count: i32,
+    pub question_points: Option<f64>,
+    pub assessment_question_bank_id: Option<i64>,
+    pub position: i32,
+}
+
+/// Canvas wraps group responses in `{ "quiz_groups": [...] }`.
+#[derive(Debug, Serialize)]
+pub struct QuizGroupsEnvelope {
+    pub quiz_groups: Vec<QuizQuestionGroup>,
+}
+
+/// Stored row; `answers` is the serialized JSON array.
+#[derive(Debug, sqlx::FromRow)]
+struct QuizQuestionRow {
+    id: i64,
+    quiz_id: i64,
+    quiz_group_id: Option<i64>,
+    assessment_question_bank_id: Option<i64>,
+    position: i32,
+    question_name: String,
+    question_type: String,
+    question_text: String,
+    points_possible: f64,
+    correct_comments: Option<String>,
+    incorrect_comments: Option<String>,
+    neutral_comments: Option<String>,
+    answers: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl QuizQuestionRow {
+    fn into_api(self) -> QuizQuestion {
+        let answers = serde_json::from_str(&self.answers).unwrap_or_else(|_| json!([]));
+        QuizQuestion {
+            id: self.id,
+            quiz_id: self.quiz_id,
+            quiz_group_id: self.quiz_group_id,
+            assessment_question_bank_id: self.assessment_question_bank_id,
+            position: self.position,
+            question_name: self.question_name,
+            question_type: self.question_type,
+            question_text: self.question_text,
+            points_possible: self.points_possible,
+            correct_comments: self.correct_comments,
+            incorrect_comments: self.incorrect_comments,
+            neutral_comments: self.neutral_comments,
+            answers,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+}
+
+/// Canvas question create/update fields (`question[...]`).
+#[derive(Debug, Default, Deserialize)]
+pub struct QuizQuestionInput {
+    pub question_name: Option<String>,
+    pub question_type: Option<String>,
+    pub question_text: Option<String>,
+    pub position: Option<i32>,
+    pub points_possible: Option<f64>,
+    pub correct_comments: Option<String>,
+    pub incorrect_comments: Option<String>,
+    pub neutral_comments: Option<String>,
+    pub answers: Option<Value>,
+    pub quiz_group_id: Option<i64>,
+    pub assessment_question_bank_id: Option<i64>,
+}
+
+/// Canvas group create/update fields (`quiz_groups[][...]`).
+#[derive(Debug, Default, Deserialize)]
+pub struct QuizGroupInput {
+    pub name: Option<String>,
+    pub pick_count: Option<i32>,
+    pub question_points: Option<f64>,
+    pub assessment_question_bank_id: Option<i64>,
+    pub position: Option<i32>,
+}
+
+const QUESTION_COLUMNS: &str =
+    "id, quiz_id, quiz_group_id, assessment_question_bank_id, position, \
+     question_name, question_type, question_text, \
+     points_possible::float8 AS points_possible, \
+     correct_comments, incorrect_comments, neutral_comments, \
+     answers, created_at, updated_at";
+
+const GROUP_COLUMNS: &str = "id, quiz_id, name, pick_count, \
+     question_points::float8 AS question_points, \
+     assessment_question_bank_id, position";
+
+/// Accept either Canvas' wrapped body (`{"question": {...}}`) or a flat object.
+fn question_payload(body: Value) -> Result<QuizQuestionInput, ApiError> {
+    let inner = match body.get("question") {
+        Some(value) if value.is_object() => value.clone(),
+        _ => body.clone(),
+    };
+    serde_json::from_value(inner)
+        .map_err(|e| ApiError::BadRequest(format!("invalid question payload: {e}")))
+}
+
+/// Accept either Canvas' wrapped body (`{"quiz_groups": [{...}]}`) or a flat
+/// object (the first element wins when an array is supplied).
+fn group_payload(body: Value) -> Result<QuizGroupInput, ApiError> {
+    if let Some(groups) = body.get("quiz_groups") {
+        let first = groups
+            .as_array()
+            .and_then(|items| items.first())
+            .cloned()
+            .ok_or_else(|| ApiError::Validation("quiz_groups is required".into()))?;
+        return serde_json::from_value(first)
+            .map_err(|e| ApiError::BadRequest(format!("invalid quiz_groups payload: {e}")));
+    }
+    serde_json::from_value(body.clone())
+        .map_err(|e| ApiError::BadRequest(format!("invalid quiz_groups payload: {e}")))
+}
+
+/// Validate a question bank reference (Canvas' find_bank → 404).
+async fn require_question_bank(pool: &PgPool, bank_id: i64) -> Result<(), ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM question_banks WHERE id = $1")
+        .bind(bank_id)
+        .fetch_optional(pool)
+        .await?;
+    row.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+/// A group id outside the path quiz is not found (Canvas nested find).
+async fn require_group_in_quiz(pool: &PgPool, group_id: i64, quiz_id: i64) -> Result<(), ApiError> {
+    let row: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM quiz_question_groups WHERE id = $1 AND quiz_id = $2")
+            .bind(group_id)
+            .bind(quiz_id)
+            .fetch_optional(pool)
+            .await?;
+    row.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+/// Mirror Canvas positions: group questions append inside their group, root
+/// questions/groups append after the quiz's root entries.
+async fn next_question_position(
+    pool: &PgPool,
+    quiz_id: i64,
+    group_id: Option<i64>,
+) -> Result<i32, ApiError> {
+    if let Some(group_id) = group_id {
+        let (max,): (Option<i32>,) = sqlx::query_as(
+            "SELECT MAX(position) FROM quiz_questions \
+             WHERE quiz_id = $1 AND quiz_group_id = $2 AND workflow_state <> 'deleted'",
+        )
+        .bind(quiz_id)
+        .bind(group_id)
+        .fetch_one(pool)
+        .await?;
+        return Ok(max.unwrap_or(0) + 1);
+    }
+
+    let (max,): (i32,) = sqlx::query_as(
+        r#"
+        SELECT GREATEST(
+            COALESCE((SELECT MAX(position) FROM quiz_questions
+                      WHERE quiz_id = $1 AND quiz_group_id IS NULL
+                        AND workflow_state <> 'deleted'), 0),
+            COALESCE((SELECT MAX(position) FROM quiz_question_groups
+                      WHERE quiz_id = $1), 0)
+        )
+        "#,
+    )
+    .bind(quiz_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(max + 1)
+}
+
+/// Serialize an answers payload, rejecting non-arrays.
+fn answers_json(input: Option<&Value>, current: Option<&str>) -> Result<String, ApiError> {
+    match input {
+        Some(value) if value.is_array() => serde_json::to_string(value)
+            .map_err(|e| ApiError::Validation(format!("invalid answers: {e}"))),
+        Some(_) => Err(ApiError::Validation("answers must be an array".into())),
+        None => Ok(current.unwrap_or("[]").to_string()),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -619,6 +848,420 @@ async fn get_course_my_submission(
 }
 
 // ---------------------------------------------------------------------------
+// Quiz question handlers (Canvas: all question CRUD requires :update)
+// ---------------------------------------------------------------------------
+
+/// GET /courses/{courseId}/quizzes/{quizId}/questions — Canvas list (array).
+async fn list_quiz_questions(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<QuizQuestion>>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let rows: Vec<QuizQuestionRow> = sqlx::query_as(&format!(
+        "SELECT {} FROM quiz_questions
+         WHERE quiz_id = $1 AND workflow_state <> 'deleted'
+         ORDER BY position, id",
+        QUESTION_COLUMNS
+    ))
+    .bind(quiz_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(
+        rows.into_iter().map(QuizQuestionRow::into_api).collect(),
+    ))
+}
+
+/// GET /courses/{courseId}/quizzes/{quizId}/questions/{id}
+async fn get_quiz_question(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id, question_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<QuizQuestion>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let row: Option<QuizQuestionRow> = sqlx::query_as(&format!(
+        "SELECT {} FROM quiz_questions
+         WHERE id = $1 AND quiz_id = $2 AND workflow_state <> 'deleted'",
+        QUESTION_COLUMNS
+    ))
+    .bind(question_id)
+    .bind(quiz_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    Ok(Json(row.ok_or(ApiError::NotFound)?.into_api()))
+}
+
+/// POST /courses/{courseId}/quizzes/{quizId}/questions (Canvas returns 200).
+async fn create_quiz_question(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<Value>,
+) -> Result<Json<QuizQuestion>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let input = question_payload(body)?;
+
+    if let Some(group_id) = input.quiz_group_id {
+        require_group_in_quiz(&state.db, group_id, quiz_id).await?;
+    }
+    if let Some(bank_id) = input.assessment_question_bank_id {
+        require_question_bank(&state.db, bank_id).await?;
+    }
+
+    let answers = answers_json(input.answers.as_ref(), None)?;
+    let position = match input.position {
+        Some(position) => position,
+        None => next_question_position(&state.db, quiz_id, input.quiz_group_id).await?,
+    };
+
+    let row: QuizQuestionRow = sqlx::query_as(&format!(
+        "INSERT INTO quiz_questions
+             (quiz_id, quiz_group_id, assessment_question_bank_id, position,
+              question_name, question_type, question_text, points_possible,
+              correct_comments, incorrect_comments, neutral_comments, answers)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+         RETURNING {}",
+        QUESTION_COLUMNS
+    ))
+    .bind(quiz_id)
+    .bind(input.quiz_group_id)
+    .bind(input.assessment_question_bank_id)
+    .bind(position)
+    .bind(input.question_name.as_deref().unwrap_or("Question"))
+    .bind(
+        input
+            .question_type
+            .as_deref()
+            .unwrap_or("text_only_question"),
+    )
+    .bind(input.question_text.as_deref().unwrap_or(""))
+    .bind(input.points_possible.unwrap_or(0.0))
+    .bind(&input.correct_comments)
+    .bind(&input.incorrect_comments)
+    .bind(&input.neutral_comments)
+    .bind(&answers)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(row.into_api()))
+}
+
+/// PUT /courses/{courseId}/quizzes/{quizId}/questions/{id}
+async fn update_quiz_question(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id, question_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<Value>,
+) -> Result<Json<QuizQuestion>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let input = question_payload(body)?;
+
+    let current: Option<QuizQuestionRow> = sqlx::query_as(&format!(
+        "SELECT {} FROM quiz_questions
+         WHERE id = $1 AND quiz_id = $2 AND workflow_state <> 'deleted'",
+        QUESTION_COLUMNS
+    ))
+    .bind(question_id)
+    .bind(quiz_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let current = current.ok_or(ApiError::NotFound)?;
+
+    if let Some(bank_id) = input.assessment_question_bank_id {
+        require_question_bank(&state.db, bank_id).await?;
+    }
+    let group_id = match input.quiz_group_id {
+        Some(group_id) => {
+            require_group_in_quiz(&state.db, group_id, quiz_id).await?;
+            Some(group_id)
+        }
+        None => current.quiz_group_id,
+    };
+
+    let answers = answers_json(input.answers.as_ref(), Some(&current.answers))?;
+    // Canvas moves a question to the end of the target group when reassigned.
+    let position = if group_id != current.quiz_group_id {
+        next_question_position(&state.db, quiz_id, group_id).await?
+    } else {
+        input.position.unwrap_or(current.position)
+    };
+
+    let question_name = input.question_name.unwrap_or(current.question_name);
+    let question_type = input.question_type.unwrap_or(current.question_type);
+    let question_text = input.question_text.unwrap_or(current.question_text);
+    let points_possible = input.points_possible.unwrap_or(current.points_possible);
+    let correct_comments = input.correct_comments.or(current.correct_comments);
+    let incorrect_comments = input.incorrect_comments.or(current.incorrect_comments);
+    let neutral_comments = input.neutral_comments.or(current.neutral_comments);
+    let bank_id = input
+        .assessment_question_bank_id
+        .or(current.assessment_question_bank_id);
+
+    let row: QuizQuestionRow = sqlx::query_as(&format!(
+        "UPDATE quiz_questions
+         SET quiz_group_id = $2, assessment_question_bank_id = $3, position = $4,
+             question_name = $5, question_type = $6, question_text = $7,
+             points_possible = $8, correct_comments = $9, incorrect_comments = $10,
+             neutral_comments = $11, answers = $12, updated_at = now()
+         WHERE id = $1 AND quiz_id = $13 AND workflow_state <> 'deleted'
+         RETURNING {}",
+        QUESTION_COLUMNS
+    ))
+    .bind(question_id)
+    .bind(group_id)
+    .bind(bank_id)
+    .bind(position)
+    .bind(&question_name)
+    .bind(&question_type)
+    .bind(&question_text)
+    .bind(points_possible)
+    .bind(&correct_comments)
+    .bind(&incorrect_comments)
+    .bind(&neutral_comments)
+    .bind(&answers)
+    .bind(quiz_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(row.into_api()))
+}
+
+/// DELETE /courses/{courseId}/quizzes/{quizId}/questions/{id} → 204
+///
+/// Canvas soft-deletes questions (`workflow_state='deleted'`); mirror that so
+/// the row disappears from every endpoint but is kept for history.
+async fn delete_quiz_question(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id, question_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let result = sqlx::query(
+        "UPDATE quiz_questions
+         SET workflow_state = 'deleted', updated_at = now()
+         WHERE id = $1 AND quiz_id = $2 AND workflow_state <> 'deleted'",
+    )
+    .bind(question_id)
+    .bind(quiz_id)
+    .execute(&state.db)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// Quiz question group handlers
+// (read is enrollment-level; mutations require :update)
+// ---------------------------------------------------------------------------
+
+/// GET /courses/{courseId}/quizzes/{quizId}/groups
+async fn list_quiz_groups(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<QuizGroupsEnvelope>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let quiz_groups: Vec<QuizQuestionGroup> = sqlx::query_as(&format!(
+        "SELECT {} FROM quiz_question_groups WHERE quiz_id = $1 ORDER BY position, id",
+        GROUP_COLUMNS
+    ))
+    .bind(quiz_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(QuizGroupsEnvelope { quiz_groups }))
+}
+
+/// GET /courses/{courseId}/quizzes/{quizId}/groups/{id}
+async fn get_quiz_group(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id, group_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<QuizQuestionGroup>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let group: Option<QuizQuestionGroup> = sqlx::query_as(&format!(
+        "SELECT {} FROM quiz_question_groups WHERE id = $1 AND quiz_id = $2",
+        GROUP_COLUMNS
+    ))
+    .bind(group_id)
+    .bind(quiz_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    Ok(Json(group.ok_or(ApiError::NotFound)?))
+}
+
+/// POST /courses/{courseId}/quizzes/{quizId}/groups → 201, wrapped response.
+async fn create_quiz_group(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<Value>,
+) -> Result<(StatusCode, Json<QuizGroupsEnvelope>), ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let input = group_payload(body)?;
+
+    if let Some(bank_id) = input.assessment_question_bank_id {
+        require_question_bank(&state.db, bank_id).await?;
+    }
+
+    // Canvas appends groups after the quiz's root entries.
+    let position = match input.position {
+        Some(position) => position,
+        None => next_question_position(&state.db, quiz_id, None).await?,
+    };
+
+    let group: QuizQuestionGroup = sqlx::query_as(&format!(
+        "INSERT INTO quiz_question_groups
+             (quiz_id, name, pick_count, question_points,
+              assessment_question_bank_id, position)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING {}",
+        GROUP_COLUMNS
+    ))
+    .bind(quiz_id)
+    .bind(&input.name)
+    .bind(input.pick_count.unwrap_or(0))
+    .bind(input.question_points)
+    .bind(input.assessment_question_bank_id)
+    .bind(position)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(QuizGroupsEnvelope {
+            quiz_groups: vec![group],
+        }),
+    ))
+}
+
+/// PUT /courses/{courseId}/quizzes/{quizId}/groups/{id}
+async fn update_quiz_group(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id, group_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<Value>,
+) -> Result<Json<QuizGroupsEnvelope>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let input = group_payload(body)?;
+
+    let current: Option<QuizQuestionGroup> = sqlx::query_as(&format!(
+        "SELECT {} FROM quiz_question_groups WHERE id = $1 AND quiz_id = $2",
+        GROUP_COLUMNS
+    ))
+    .bind(group_id)
+    .bind(quiz_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let current = current.ok_or(ApiError::NotFound)?;
+
+    // Canvas only permits name/pick_count/question_points on update.
+    let name = input.name.or(current.name);
+    let pick_count = input.pick_count.unwrap_or(current.pick_count);
+    let question_points = input.question_points.or(current.question_points);
+
+    let group: QuizQuestionGroup = sqlx::query_as(&format!(
+        "UPDATE quiz_question_groups
+         SET name = $2, pick_count = $3, question_points = $4, updated_at = now()
+         WHERE id = $1 AND quiz_id = $5
+         RETURNING {}",
+        GROUP_COLUMNS
+    ))
+    .bind(group_id)
+    .bind(&name)
+    .bind(pick_count)
+    .bind(question_points)
+    .bind(quiz_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(QuizGroupsEnvelope {
+        quiz_groups: vec![group],
+    }))
+}
+
+/// DELETE /courses/{courseId}/quizzes/{quizId}/groups/{id} → 204
+///
+/// Canvas destroys the group and its questions; the FK cascade does the same.
+async fn delete_quiz_group(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id, group_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let result = sqlx::query("DELETE FROM quiz_question_groups WHERE id = $1 AND quiz_id = $2")
+        .bind(group_id)
+        .bind(quiz_id)
+        .execute(&state.db)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -652,6 +1295,48 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/quizzes/{id}/submission",
             get(get_course_my_submission),
+        )
+        // Quiz questions CRUD (Canvas quizzes/quiz_questions)
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/questions",
+            get(list_quiz_questions),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/questions",
+            post(create_quiz_question),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/questions/{questionId}",
+            get(get_quiz_question),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/questions/{questionId}",
+            put(update_quiz_question),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/questions/{questionId}",
+            delete(delete_quiz_question),
+        )
+        // Quiz question groups CRUD (Canvas quizzes/quiz_groups)
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/groups",
+            get(list_quiz_groups),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/groups",
+            post(create_quiz_group),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/groups/{groupId}",
+            get(get_quiz_group),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/groups/{groupId}",
+            put(update_quiz_group),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/groups/{groupId}",
+            delete(delete_quiz_group),
         )
 }
 

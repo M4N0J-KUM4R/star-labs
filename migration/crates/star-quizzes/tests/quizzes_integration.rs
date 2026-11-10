@@ -1821,3 +1821,363 @@ async fn unauthenticated_requests_are_401() {
         .await;
     assert_eq!(resp.status_code(), 401, "garbage token: {}", resp.text());
 }
+
+// ---------------------------------------------------------------------------
+// Quiz questions (Canvas quizzes/quiz_questions)
+// ---------------------------------------------------------------------------
+
+/// Current workflow_state of a quiz_questions row.
+async fn db_question_state(pool: &PgPool, question_id: i64) -> Option<String> {
+    sqlx::query_scalar("SELECT workflow_state FROM quiz_questions WHERE id = $1")
+        .bind(question_id)
+        .fetch_optional(pool)
+        .await
+        .expect("fetch question state")
+}
+
+/// Number of quiz_questions rows for a quiz (including soft-deleted rows).
+async fn db_count_questions(pool: &PgPool, quiz_id: i64) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM quiz_questions WHERE quiz_id = $1")
+        .bind(quiz_id)
+        .fetch_one(pool)
+        .await
+        .expect("count questions")
+}
+
+#[tokio::test]
+async fn create_quiz_question_with_canvas_wrapped_payload() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let fx = seed_fixture(&server, &pool, &prefix, "QuestionCreate").await;
+    let teacher_auth = auth(fx.teacher, "teacher");
+
+    // Canvas wraps the question in `question[...]`; the answers array is
+    // echoed back verbatim.
+    let resp = server
+        .post(&format!(
+            "/courses/{}/quizzes/{}/questions",
+            fx.course, fx.quiz
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .json(&json!({
+            "question": {
+                "question_name": "Prime Number Identification",
+                "question_type": "multiple_choice_question",
+                "question_text": "Which of the following is NOT a prime number?",
+                "points_possible": 5,
+                "correct_comments": "That's correct!",
+                "incorrect_comments": "Unfortunately, that IS a prime number.",
+                "answers": [
+                    { "id": 1, "answer_text": "21", "answer_weight": 100 },
+                    { "id": 2, "answer_text": "13", "answer_weight": 0 }
+                ]
+            }
+        }))
+        .await;
+
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "Canvas answers with 200 on question create: {}",
+        resp.text()
+    );
+    let body: Value = resp.json();
+    let question_id = body["id"].as_i64().expect("question id");
+    assert_eq!(body["quiz_id"], fx.quiz);
+    assert_eq!(body["quiz_group_id"], Value::Null);
+    assert_eq!(body["position"], 1, "first question gets position 1");
+    assert_eq!(body["question_type"], "multiple_choice_question");
+    assert_eq!(body["question_name"], "Prime Number Identification");
+    assert_eq!(body["points_possible"], 5.0);
+    assert_eq!(body["answers"].as_array().map(Vec::len), Some(2));
+    assert_eq!(body["answers"][0]["answer_text"], "21");
+
+    // A flat body is also accepted; the second root question appends after
+    // the first one.
+    let resp = server
+        .post(&format!(
+            "/courses/{}/quizzes/{}/questions",
+            fx.course, fx.quiz
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .json(&json!({
+            "question_name": "Essay",
+            "question_type": "essay_question",
+            "question_text": "Explain primorials.",
+            "points_possible": 10
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "flat create: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["position"], 2, "second root question appends");
+    assert_eq!(body["answers"].as_array().map(Vec::len), Some(0));
+
+    // Canvas lists questions as a plain array ordered by position.
+    let list = get_ok(
+        &server,
+        &teacher_auth,
+        &format!("/courses/{}/quizzes/{}/questions", fx.course, fx.quiz),
+    )
+    .await;
+    let items = list.as_array().expect("questions array");
+    assert_eq!(items.len(), 2);
+    assert_eq!(items[0]["id"], question_id);
+    assert_eq!(items[0]["answers"].as_array().map(Vec::len), Some(2));
+
+    let single = get_ok(
+        &server,
+        &teacher_auth,
+        &format!(
+            "/courses/{}/quizzes/{}/questions/{question_id}",
+            fx.course, fx.quiz
+        ),
+    )
+    .await;
+    assert_eq!(single["id"], question_id);
+    assert_eq!(
+        single["question_text"],
+        "Which of the following is NOT a prime number?"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn quiz_question_mutations_require_teacher_and_delete_is_soft() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let fx = seed_fixture(&server, &pool, &prefix, "QuestionPerms").await;
+    let teacher_auth = auth(fx.teacher, "teacher");
+    let student_auth = auth(fx.student, "student");
+    let collection = format!("/courses/{}/quizzes/{}/questions", fx.course, fx.quiz);
+
+    // Canvas requires :update (teacher) even for listing questions.
+    let resp = server
+        .get(&collection)
+        .add_header(axum::http::header::AUTHORIZATION, &student_auth)
+        .await;
+    assert_eq!(resp.status_code(), 403, "student list: {}", resp.text());
+
+    let resp = server
+        .post(&collection)
+        .add_header(axum::http::header::AUTHORIZATION, &student_auth)
+        .json(&json!({ "question_name": "Nope" }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student create: {}", resp.text());
+
+    let resp = server
+        .post(&collection)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .json(&json!({
+            "question": {
+                "question_name": "Original",
+                "question_type": "short_answer_question",
+                "question_text": "Original text"
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "teacher create: {}", resp.text());
+    let created: Value = resp.json();
+    let question_id = created["id"].as_i64().expect("question id");
+    assert_eq!(created["question_name"], "Original");
+    assert_eq!(created["question_text"], "Original text");
+
+    // Partial update keeps untouched fields.
+    let item = format!("{collection}/{question_id}");
+    let resp = server
+        .put(&item)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .json(&json!({
+            "question": { "question_text": "Updated text", "points_possible": 2.5 }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "update: {}", resp.text());
+    let updated: Value = resp.json();
+    assert_eq!(updated["question_name"], "Original");
+    assert_eq!(updated["question_text"], "Updated text");
+    assert_eq!(updated["points_possible"], 2.5);
+
+    // DELETE is Canvas' soft delete; the row survives with workflow_state.
+    let resp = server
+        .delete(&item)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .await;
+    assert_eq!(resp.status_code(), 204, "delete: {}", resp.text());
+    assert_eq!(
+        db_question_state(&pool, question_id).await.as_deref(),
+        Some("deleted")
+    );
+
+    let resp = server
+        .get(&item)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .await;
+    assert_eq!(resp.status_code(), 404, "deleted question is gone");
+
+    let list = get_ok(&server, &teacher_auth, &collection).await;
+    assert_eq!(list.as_array().map(Vec::len), Some(0), "deleted is hidden");
+
+    // A second delete is a 404, not a silent success.
+    let resp = server
+        .delete(&item)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .await;
+    assert_eq!(resp.status_code(), 404, "double delete: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// Quiz question groups (Canvas quizzes/quiz_groups)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn quiz_group_crud_uses_canvas_wrapped_shape() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let fx = seed_fixture(&server, &pool, &prefix, "GroupCrud").await;
+    let teacher_auth = auth(fx.teacher, "teacher");
+    let student_auth = auth(fx.student, "student");
+    let collection = format!("/courses/{}/quizzes/{}/groups", fx.course, fx.quiz);
+
+    // Canvas lets any enrolled user read groups.
+    let list = get_ok(&server, &student_auth, &collection).await;
+    assert_eq!(list["quiz_groups"].as_array().map(Vec::len), Some(0));
+
+    // ... but only teachers create them.
+    let resp = server
+        .post(&collection)
+        .add_header(axum::http::header::AUTHORIZATION, &student_auth)
+        .json(&json!({ "quiz_groups": [{ "name": "Nope" }] }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student create: {}", resp.text());
+
+    let resp = server
+        .post(&collection)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .json(&json!({
+            "quiz_groups": [{
+                "name": "Fraction questions",
+                "pick_count": 3,
+                "question_points": 10
+            }]
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "group create: {}", resp.text());
+    let created: Value = resp.json();
+    let group = &created["quiz_groups"][0];
+    let group_id = group["id"].as_i64().expect("group id");
+    assert_eq!(group["quiz_id"], fx.quiz);
+    assert_eq!(group["name"], "Fraction questions");
+    assert_eq!(group["pick_count"], 3);
+    assert_eq!(group["question_points"], 10.0);
+    assert_eq!(group["position"], 1);
+
+    // Enrolled read returns the wrapped envelope; show returns the object.
+    let list = get_ok(&server, &student_auth, &collection).await;
+    assert_eq!(list["quiz_groups"].as_array().map(Vec::len), Some(1));
+    assert_eq!(list["quiz_groups"][0]["id"], group_id);
+
+    let single = get_ok(&server, &student_auth, &format!("{collection}/{group_id}")).await;
+    assert_eq!(single["id"], group_id);
+
+    // A question assigned to the group positions inside that group.
+    let resp = server
+        .post(&format!(
+            "/courses/{}/quizzes/{}/questions",
+            fx.course, fx.quiz
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .json(&json!({
+            "question": { "question_name": "Grouped", "quiz_group_id": group_id }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "grouped question: {}", resp.text());
+    let question: Value = resp.json();
+    assert_eq!(question["quiz_group_id"], group_id);
+    assert_eq!(question["position"], 1, "positions reset inside a group");
+
+    // Updates are wrapped too and do not clear unsent fields.
+    let resp = server
+        .put(&format!("{collection}/{group_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .json(&json!({ "quiz_groups": [{ "name": "Renamed", "pick_count": 2 }] }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "group update: {}", resp.text());
+    let updated: Value = resp.json();
+    assert_eq!(updated["quiz_groups"][0]["name"], "Renamed");
+    assert_eq!(updated["quiz_groups"][0]["pick_count"], 2);
+    assert_eq!(updated["quiz_groups"][0]["question_points"], 10.0);
+
+    // Deleting the group deletes its questions (Canvas dependent: :destroy).
+    let resp = server
+        .delete(&format!("{collection}/{group_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .await;
+    assert_eq!(resp.status_code(), 204, "group delete: {}", resp.text());
+    assert_eq!(db_count_questions(&pool, fx.quiz).await, 0);
+
+    let resp = server
+        .get(&format!("{collection}/{group_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .await;
+    assert_eq!(resp.status_code(), 404, "group gone");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn quiz_question_nested_lookups_are_404() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let fx = seed_fixture(&server, &pool, &prefix, "QuestionLookups").await;
+    let teacher_auth = auth(fx.teacher, "teacher");
+    let other_course = seed_course(&pool, &prefix, "OtherCourse").await;
+    seed_enrollment(&pool, fx.teacher, other_course, "teacher").await;
+
+    // The quiz is not in the path course: Canvas nested routes 404.
+    let resp = server
+        .get(&format!(
+            "/courses/{other_course}/quizzes/{}/questions",
+            fx.quiz
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .await;
+    assert_eq!(resp.status_code(), 404, "wrong course: {}", resp.text());
+
+    // Unknown group in the question payload is a 404, not a 500.
+    let resp = server
+        .post(&format!(
+            "/courses/{}/quizzes/{}/questions",
+            fx.course, fx.quiz
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .json(&json!({ "question": { "quiz_group_id": 999_999_999i64 } }))
+        .await;
+    assert_eq!(resp.status_code(), 404, "unknown group: {}", resp.text());
+
+    // Unknown question bank is a 404 as well.
+    let resp = server
+        .post(&format!(
+            "/courses/{}/quizzes/{}/questions",
+            fx.course, fx.quiz
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
+        .json(&json!({ "question": { "assessment_question_bank_id": 999_999_999i64 } }))
+        .await;
+    assert_eq!(resp.status_code(), 404, "unknown bank: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
