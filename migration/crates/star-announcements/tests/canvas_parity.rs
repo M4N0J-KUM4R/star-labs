@@ -81,6 +81,52 @@ async fn create_course(client: &Client, token: &str, name: &str) -> i64 {
     body["id"].as_i64().expect("course id")
 }
 
+/// Create an announcement in a course; returns its id.
+async fn create_announcement(client: &Client, token: &str, course_id: i64, title: &str) -> i64 {
+    let resp = client
+        .post(format!(
+            "{}/api/v1/courses/{}/announcements",
+            api_base(),
+            course_id
+        ))
+        .bearer_auth(token)
+        .json(&json!({ "title": title, "message": "<p>read-state parity</p>" }))
+        .send()
+        .await
+        .expect("create announcement request");
+    assert!(
+        resp.status().is_success(),
+        "create announcement failed: {}",
+        resp.status()
+    );
+    let body: Value = resp.json().await.expect("announcement json");
+    body["id"].as_i64().expect("announcement id")
+}
+
+/// Read the caller's unread announcement count for a course.
+async fn unread_count(client: &Client, token: &str, course_id: i64) -> i64 {
+    let resp = client
+        .get(format!(
+            "{}/api/v1/courses/{}/announcements/unread_count",
+            api_base(),
+            course_id
+        ))
+        .bearer_auth(token)
+        .send()
+        .await
+        .expect("unread_count request");
+    assert!(
+        resp.status().is_success(),
+        "unread_count failed: {}",
+        resp.status()
+    );
+    let body: Value = resp.json().await.expect("unread_count json");
+    match body["unread_count"].as_i64() {
+        Some(count) => count,
+        None => panic!("unread_count field missing: {body}"),
+    }
+}
+
 /// Best-effort unique suffix (no uuid crate; nanos are enough).
 fn uuid_like() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -236,5 +282,132 @@ async fn parity_deleted_announcement_excluded_from_list() {
         resp.status(),
         reqwest::StatusCode::NOT_FOUND,
         "soft-deleted announcement should 404"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires STAR_API_BASE/STAR_PARITY_API_URL pointing to a local migration service"]
+async fn parity_announcement_read_unread_round_trip() {
+    let Ok((client, token)) = authed().await else {
+        eprintln!("skipping: live API unreachable");
+        return;
+    };
+    let course_id =
+        create_course(&client, &token, &format!("Parity Ann Read {}", uuid_like())).await;
+
+    let baseline = unread_count(&client, &token, course_id).await;
+    assert_eq!(baseline, 0, "a fresh course has no unread announcements");
+
+    let id = create_announcement(&client, &token, course_id, "Read me").await;
+    assert_eq!(
+        unread_count(&client, &token, course_id).await,
+        baseline + 1,
+        "a new announcement is unread"
+    );
+
+    // Canvas: PUT .../read marks read and returns 204 with an empty body.
+    let resp = client
+        .put(format!(
+            "{}/api/v1/courses/{}/announcements/{}/read",
+            api_base(),
+            course_id,
+            id
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("mark read request");
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::NO_CONTENT,
+        "mark read must return 204"
+    );
+    assert!(
+        resp.bytes().await.expect("mark read body").is_empty(),
+        "mark read must return an empty body"
+    );
+    assert_eq!(
+        unread_count(&client, &token, course_id).await,
+        baseline,
+        "marking read decrements the unread count"
+    );
+
+    // Repeating PUT is a no-op.
+    let resp = client
+        .put(format!(
+            "{}/api/v1/courses/{}/announcements/{}/read",
+            api_base(),
+            course_id,
+            id
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("repeat mark read request");
+    assert_eq!(resp.status(), reqwest::StatusCode::NO_CONTENT);
+    assert_eq!(unread_count(&client, &token, course_id).await, baseline);
+
+    // Canvas: DELETE .../read marks unread again (204, empty body).
+    let resp = client
+        .delete(format!(
+            "{}/api/v1/courses/{}/announcements/{}/read",
+            api_base(),
+            course_id,
+            id
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("mark unread request");
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::NO_CONTENT,
+        "mark unread must return 204"
+    );
+    assert_eq!(
+        unread_count(&client, &token, course_id).await,
+        baseline + 1,
+        "marking unread restores the unread count"
+    );
+}
+
+#[tokio::test]
+#[ignore = "requires STAR_API_BASE/STAR_PARITY_API_URL pointing to a local migration service"]
+async fn parity_announcement_read_is_course_scoped() {
+    let Ok((client, token)) = authed().await else {
+        eprintln!("skipping: live API unreachable");
+        return;
+    };
+    let course_a = create_course(&client, &token, &format!("Parity Ann A {}", uuid_like())).await;
+    let course_b = create_course(&client, &token, &format!("Parity Ann B {}", uuid_like())).await;
+    let id = create_announcement(&client, &token, course_a, "Scoped").await;
+
+    // The announcement is not in course B, so Canvas scopes the request out.
+    let resp = client
+        .put(format!(
+            "{}/api/v1/courses/{}/announcements/{}/read",
+            api_base(),
+            course_b,
+            id
+        ))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("cross-course mark read request");
+    assert_eq!(
+        resp.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "marking read through the wrong course must 404"
+    );
+
+    assert_eq!(
+        unread_count(&client, &token, course_b).await,
+        0,
+        "course B must stay unaffected"
+    );
+    assert_eq!(
+        unread_count(&client, &token, course_a).await,
+        1,
+        "course A's announcement is still unread"
     );
 }

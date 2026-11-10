@@ -6,6 +6,11 @@
 //! - GET    /announcements/{id}                — get one
 //! - PUT    /announcements/{id}               — update (teacher or admin)
 //! - DELETE /announcements/{id}               — soft-delete (teacher or admin)
+//!
+//! Read state (Canvas marks read/unread with an empty 204 response):
+//! - PUT    /courses/{courseId}/announcements/{id}/read      — mark read
+//! - DELETE /courses/{courseId}/announcements/{id}/read      — mark unread
+//! - GET    /courses/{courseId}/announcements/unread_count   — {"unread_count": N}
 
 use axum::{
     extract::{Path, Query, State},
@@ -59,6 +64,13 @@ pub struct UpdateAnnouncement {
 pub struct Pagination {
     pub page: Option<i64>,
     pub per_page: Option<i64>,
+}
+
+/// Unread-count response. Canvas exposes unread counts as
+/// `{"unread_count": N}` (see conversations/unread_count).
+#[derive(Debug, Serialize)]
+pub struct UnreadCount {
+    pub unread_count: i64,
 }
 
 impl Pagination {
@@ -123,6 +135,28 @@ async fn check_teacher_or_admin(
     .await?;
 
     Ok(row.is_some())
+}
+
+/// Ensure the announcement exists, belongs to the course in the path, and has
+/// not been soft-deleted. Canvas scopes announcement read-state changes to the
+/// course, so a mismatch is a 404 (not a 403).
+async fn ensure_announcement_in_course(
+    pool: &PgPool,
+    course_id: i64,
+    announcement_id: i64,
+) -> Result<(), ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT id FROM announcements
+        WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(announcement_id)
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(|_| ()).ok_or(ApiError::NotFound)
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +335,102 @@ async fn delete_announcement(
 }
 
 // ---------------------------------------------------------------------------
+// Read state (Canvas DiscussionTopicRead parity)
+// ---------------------------------------------------------------------------
+
+/// PUT /courses/{courseId}/announcements/{id}/read — mark read for the caller.
+///
+/// Canvas responds 204 No Content with an empty body and treats repeated
+/// calls as a no-op, so the insert is an upsert.
+async fn mark_announcement_read(
+    State(state): State<AppState>,
+    Path((course_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_announcement_in_course(&state.db, course_id, id).await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO announcement_reads (announcement_id, user_id, state)
+        VALUES ($1, $2, 'read')
+        ON CONFLICT (announcement_id, user_id)
+        DO UPDATE SET state = 'read', updated_at = now()
+        "#,
+    )
+    .bind(id)
+    .bind(auth.id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// DELETE /courses/{courseId}/announcements/{id}/read — mark unread.
+///
+/// Canvas clears the read record (204, empty body) and is idempotent.
+async fn mark_announcement_unread(
+    State(state): State<AppState>,
+    Path((course_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_announcement_in_course(&state.db, course_id, id).await?;
+
+    sqlx::query(
+        r#"
+        UPDATE announcement_reads
+        SET state = 'unread', updated_at = now()
+        WHERE announcement_id = $1 AND user_id = $2
+        "#,
+    )
+    .bind(id)
+    .bind(auth.id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /courses/{courseId}/announcements/unread_count — count unread for the caller.
+///
+/// Mirrors Canvas unread counters: every non-deleted announcement in the
+/// course without a `state = 'read'` row for this user counts as unread.
+async fn unread_count(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<UnreadCount>, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let (count,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM announcements a
+        LEFT JOIN announcement_reads ar
+            ON ar.announcement_id = a.id AND ar.user_id = $2
+        WHERE a.course_id = $1
+          AND a.workflow_state <> 'deleted'
+          AND (ar.id IS NULL OR ar.state <> 'read')
+        "#,
+    )
+    .bind(course_id)
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(UnreadCount {
+        unread_count: count,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -311,7 +441,38 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/announcements",
             post(create_announcement),
         )
+        .route(
+            "/courses/{courseId}/announcements/unread_count",
+            get(unread_count),
+        )
+        .route(
+            "/courses/{courseId}/announcements/{id}/read",
+            put(mark_announcement_read),
+        )
+        .route(
+            "/courses/{courseId}/announcements/{id}/read",
+            delete(mark_announcement_unread),
+        )
         .route("/announcements/{id}", get(get_announcement))
         .route("/announcements/{id}", put(update_announcement))
         .route("/announcements/{id}", delete(delete_announcement))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{router, UnreadCount};
+
+    /// Canvas shape for unread counters is `{"unread_count": N}`.
+    #[test]
+    fn unread_count_response_uses_canvas_field() {
+        let json = serde_json::to_value(UnreadCount { unread_count: 3 }).expect("serialize");
+        assert_eq!(json, serde_json::json!({ "unread_count": 3 }));
+    }
+
+    /// `Router::route` panics on conflicting patterns; building the router
+    /// guards the static `unread_count` path against `{id}/read`.
+    #[test]
+    fn router_builds_with_read_state_routes() {
+        let _ = router();
+    }
 }
