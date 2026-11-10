@@ -5,9 +5,10 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, put},
+    routing::{delete, get, post, put},
     Json, Router,
 };
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use sqlx::PgPool;
 use star_auth::{hash_password, AuthUser};
@@ -81,6 +82,187 @@ pub struct UpdateProfileRequest {
     pub avatar_url: Option<String>,
     pub time_zone: Option<String>,
     pub locale: Option<String>,
+}
+
+/// Canvas `BOOLEAN_PREFS` from UsersController#settings. Unset preferences
+/// read as false (`!!user.preferences[pref]`), which is why a user without a
+/// row gets the `Default` all-false value.
+#[derive(Debug, Clone, Default, serde::Serialize, sqlx::FromRow)]
+pub struct UserSettings {
+    pub manual_mark_as_read: bool,
+    pub collapse_global_nav: bool,
+    pub collapse_course_nav: bool,
+    pub hide_dashcard_color_overlays: bool,
+    pub release_notes_badge_disabled: bool,
+    pub comment_library_suggestions_enabled: bool,
+    pub elementary_dashboard_disabled: bool,
+    pub default_to_block_editor: bool,
+    pub widget_dashboard_user_preference: bool,
+    pub widget_dashboard_dark_mode: bool,
+}
+
+/// Partial update body for PUT /users/{userId}/settings. Canvas coerces the
+/// values with `value_to_boolean`, so booleans, numbers and the usual string
+/// forms are accepted; omitted or null fields stay unchanged.
+#[derive(Debug, Default, Deserialize)]
+pub struct UpdateUserSettingsRequest {
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub manual_mark_as_read: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub collapse_global_nav: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub collapse_course_nav: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub hide_dashcard_color_overlays: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub release_notes_badge_disabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub comment_library_suggestions_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub elementary_dashboard_disabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub default_to_block_editor: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub widget_dashboard_user_preference: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub widget_dashboard_dark_mode: Option<bool>,
+}
+
+/// Query params for GET /users/{userId}/settings. Canvas clients send
+/// `include[]=mobile_settings`; a plain `include=` is accepted too.
+#[derive(Debug, Default, Deserialize)]
+pub struct SettingsQuery {
+    #[serde(rename = "include[]")]
+    pub include_bracket: Option<String>,
+    pub include: Option<String>,
+}
+
+impl SettingsQuery {
+    fn wants_mobile_settings(&self) -> bool {
+        [self.include_bracket.as_deref(), self.include.as_deref()]
+            .into_iter()
+            .flatten()
+            .flat_map(|value| value.split(','))
+            .any(|value| value.trim() == "mobile_settings")
+    }
+}
+
+/// Assignment object embedded in a Canvas todo item.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct TodoAssignment {
+    pub id: i64,
+    pub course_id: i64,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    pub points_possible: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One entry of GET /users/self/todo (Canvas lib/api/v1/todo_item.rb).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TodoItem {
+    #[serde(rename = "type")]
+    pub item_type: String,
+    pub context_type: String,
+    pub course_id: i64,
+    pub context_name: String,
+    pub context_short_name: String,
+    pub assignment: TodoAssignment,
+    pub html_url: String,
+    pub ignore: String,
+    pub ignore_permanently: String,
+    /// Grading todos only; Canvas count of submissions still awaiting a score.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs_grading_count: Option<i64>,
+}
+
+/// Raw todo row joining the assignment to its course (and grading count).
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct TodoRow {
+    id: i64,
+    course_id: i64,
+    title: String,
+    description: Option<String>,
+    points_possible: f64,
+    due_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    course_name: String,
+    course_code: String,
+    needs_grading_count: Option<i64>,
+}
+
+impl TodoRow {
+    fn into_item(self, item_type: &str) -> TodoItem {
+        let html_url = if item_type == "grading" {
+            format!(
+                "/courses/{}/gradebook/speed_grader?assignment_id={}",
+                self.course_id, self.id
+            )
+        } else {
+            format!("/courses/{}/assignments/{}#submit", self.course_id, self.id)
+        };
+        TodoItem {
+            item_type: item_type.to_string(),
+            context_type: "Course".to_string(),
+            course_id: self.course_id,
+            context_name: self.course_name,
+            context_short_name: self.course_code,
+            ignore: format!(
+                "/api/v1/users/self/todo/assignment_{}/{item_type}?permanent=0",
+                self.id
+            ),
+            ignore_permanently: format!(
+                "/api/v1/users/self/todo/assignment_{}/{item_type}?permanent=1",
+                self.id
+            ),
+            needs_grading_count: self.needs_grading_count,
+            assignment: TodoAssignment {
+                id: self.id,
+                course_id: self.course_id,
+                title: self.title,
+                description: self.description,
+                points_possible: self.points_possible,
+                due_at: self.due_at,
+                created_at: self.created_at,
+                updated_at: self.updated_at,
+            },
+            html_url,
+        }
+    }
+}
+
+/// Canvas Attachment shape for user-context files (metadata only — no upload
+/// binary handling).
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct UserFileResponse {
+    pub id: i64,
+    pub user_id: i64,
+    pub folder: String,
+    pub folder_id: Option<i64>,
+    pub filename: String,
+    pub display_name: String,
+    pub content_type: String,
+    pub size: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request body for POST /users/{userId}/files. Canvas names the upload
+/// `name`; `filename` is accepted as an alias used elsewhere in this API.
+#[derive(Debug, Deserialize)]
+pub struct CreateUserFileRequest {
+    pub name: Option<String>,
+    pub filename: Option<String>,
+    pub display_name: Option<String>,
+    pub content_type: Option<String>,
+    pub size: Option<i64>,
+    pub folder: Option<String>,
+    pub folder_id: Option<i64>,
 }
 
 // --------------------------------------------------------------------------
@@ -222,6 +404,177 @@ async fn upsert_profile(
 }
 
 // --------------------------------------------------------------------------
+// Settings / todo / user files helpers
+// --------------------------------------------------------------------------
+
+/// Canvas `api_find(User, params[:id])`: the literal "self" resolves to the
+/// caller and anything else must be a numeric id (non-numeric ids are 404).
+fn resolve_path_user(raw: &str, auth_id: i64) -> Result<i64, ApiError> {
+    if raw == "self" {
+        return Ok(auth_id);
+    }
+    raw.parse::<i64>().map_err(|_| ApiError::NotFound)
+}
+
+/// Ensure the addressed user exists. Canvas resolves the user before the
+/// permission check, so a missing id is a 404 even for non-admins.
+async fn ensure_user_exists(pool: &PgPool, user_id: i64) -> Result<(), ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::from)?;
+    if row.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+/// Resolve `{userId}` (including "self") and enforce Canvas' read/manage rule:
+/// users may only touch their own settings, admins may touch anyone's.
+async fn authorize_settings(
+    state: &AppState,
+    auth: &AuthUser,
+    raw_user_id: &str,
+) -> Result<i64, ApiError> {
+    let user_id = resolve_path_user(raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+    if !is_self(auth.id, user_id) && !is_admin(&auth.role) {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(user_id)
+}
+
+/// Canvas `value_to_boolean` (lib/base/canvas/plugin.rb): booleans pass
+/// through, numbers are truthy when non-zero, and the documented string forms
+/// map to true/false. Missing/null values mean "leave unchanged".
+fn deserialize_optional_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| canvas_boolean(&value)))
+}
+
+fn canvas_boolean(value: &serde_json::Value) -> Option<bool> {
+    match value {
+        serde_json::Value::Bool(value) => Some(*value),
+        serde_json::Value::Number(number) => Some(number.as_f64().is_some_and(|n| n != 0.0)),
+        serde_json::Value::String(text) => {
+            // Canvas falls back to `value.to_i != 0`, so unrecognized strings
+            // are false.
+            let text = text.trim().to_ascii_lowercase();
+            Some(matches!(
+                text.as_str(),
+                "yes" | "y" | "true" | "t" | "on" | "1"
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Load a user's settings; a missing row is Canvas' all-false default.
+async fn load_user_settings(pool: &PgPool, user_id: i64) -> Result<UserSettings, ApiError> {
+    let settings: Option<UserSettings> = sqlx::query_as(
+        r#"
+        SELECT manual_mark_as_read,
+               collapse_global_nav,
+               collapse_course_nav,
+               hide_dashcard_color_overlays,
+               release_notes_badge_disabled,
+               comment_library_suggestions_enabled,
+               elementary_dashboard_disabled,
+               default_to_block_editor,
+               widget_dashboard_user_preference,
+               widget_dashboard_dark_mode
+        FROM user_settings
+        WHERE user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(settings.unwrap_or_default())
+}
+
+/// Create or partially update the settings row and return the full result.
+/// Unspecified preferences default to false on insert (Canvas behavior) and
+/// keep their current value on update.
+async fn upsert_user_settings(
+    pool: &PgPool,
+    user_id: i64,
+    payload: &UpdateUserSettingsRequest,
+) -> Result<UserSettings, ApiError> {
+    sqlx::query_as(
+        r#"
+        INSERT INTO user_settings (
+            user_id,
+            manual_mark_as_read,
+            collapse_global_nav,
+            collapse_course_nav,
+            hide_dashcard_color_overlays,
+            release_notes_badge_disabled,
+            comment_library_suggestions_enabled,
+            elementary_dashboard_disabled,
+            default_to_block_editor,
+            widget_dashboard_user_preference,
+            widget_dashboard_dark_mode
+        )
+        VALUES (
+            $1,
+            COALESCE($2, FALSE),
+            COALESCE($3, FALSE),
+            COALESCE($4, FALSE),
+            COALESCE($5, FALSE),
+            COALESCE($6, FALSE),
+            COALESCE($7, FALSE),
+            COALESCE($8, FALSE),
+            COALESCE($9, FALSE),
+            COALESCE($10, FALSE),
+            COALESCE($11, FALSE)
+        )
+        ON CONFLICT (user_id) DO UPDATE SET
+            manual_mark_as_read = COALESCE($2, user_settings.manual_mark_as_read),
+            collapse_global_nav = COALESCE($3, user_settings.collapse_global_nav),
+            collapse_course_nav = COALESCE($4, user_settings.collapse_course_nav),
+            hide_dashcard_color_overlays = COALESCE($5, user_settings.hide_dashcard_color_overlays),
+            release_notes_badge_disabled = COALESCE($6, user_settings.release_notes_badge_disabled),
+            comment_library_suggestions_enabled = COALESCE($7, user_settings.comment_library_suggestions_enabled),
+            elementary_dashboard_disabled = COALESCE($8, user_settings.elementary_dashboard_disabled),
+            default_to_block_editor = COALESCE($9, user_settings.default_to_block_editor),
+            widget_dashboard_user_preference = COALESCE($10, user_settings.widget_dashboard_user_preference),
+            widget_dashboard_dark_mode = COALESCE($11, user_settings.widget_dashboard_dark_mode),
+            updated_at = now()
+        RETURNING manual_mark_as_read,
+                  collapse_global_nav,
+                  collapse_course_nav,
+                  hide_dashcard_color_overlays,
+                  release_notes_badge_disabled,
+                  comment_library_suggestions_enabled,
+                  elementary_dashboard_disabled,
+                  default_to_block_editor,
+                  widget_dashboard_user_preference,
+                  widget_dashboard_dark_mode
+        "#,
+    )
+    .bind(user_id)
+    .bind(payload.manual_mark_as_read)
+    .bind(payload.collapse_global_nav)
+    .bind(payload.collapse_course_nav)
+    .bind(payload.hide_dashcard_color_overlays)
+    .bind(payload.release_notes_badge_disabled)
+    .bind(payload.comment_library_suggestions_enabled)
+    .bind(payload.elementary_dashboard_disabled)
+    .bind(payload.default_to_block_editor)
+    .bind(payload.widget_dashboard_user_preference)
+    .bind(payload.widget_dashboard_dark_mode)
+    .fetch_one(pool)
+    .await
+    .map_err(ApiError::from)
+}
+
+// --------------------------------------------------------------------------
 // Router
 // --------------------------------------------------------------------------
 
@@ -237,6 +590,16 @@ pub fn router() -> Router<AppState> {
         .route("/users/{id}", put(update_user))
         .route("/users/{id}", delete(delete_user))
         .route("/users/{id}/profile", get(get_user_profile))
+        // Canvas users_controller#settings: `self` resolves to the caller.
+        .route(
+            "/users/{userId}/settings",
+            get(get_user_settings).put(update_user_settings),
+        )
+        // Canvas users_controller#todo_items.
+        .route("/users/self/todo", get(self_todo))
+        // Canvas users_controller#create_file (attachment preflight; metadata
+        // only, no upload binary handling).
+        .route("/users/{userId}/files", post(create_user_file))
 }
 
 // --------------------------------------------------------------------------
@@ -472,6 +835,225 @@ async fn delete_user(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /users/{userId}/settings (and /users/self/settings) — the Canvas
+/// boolean preference hash. Readable by the user themselves or an admin.
+async fn get_user_settings(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+    Query(params): Query<SettingsQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
+    let settings = load_user_settings(&state.db, user_id).await?;
+
+    let mut body = serde_json::to_value(&settings).map_err(|e| ApiError::Db(e.to_string()))?;
+    if params.wants_mobile_settings() {
+        // Canvas fills these from DynamicSettings (nil in a stock install)
+        // and the account's usage-metrics setting.
+        if let Some(object) = body.as_object_mut() {
+            object.insert(
+                "pendo_mobile_teacher_api_key".into(),
+                serde_json::Value::Null,
+            );
+            object.insert(
+                "pendo_mobile_parent_api_key".into(),
+                serde_json::Value::Null,
+            );
+            object.insert(
+                "pendo_mobile_student_api_key".into(),
+                serde_json::Value::Null,
+            );
+            object.insert("usage_metrics".into(), serde_json::Value::Bool(false));
+        }
+    }
+
+    Ok(Json(body))
+}
+
+/// PUT /users/{userId}/settings (and /users/self/settings) — partial update of
+/// the Canvas boolean preferences. Writable by the user themselves or an
+/// admin; the response is the full settings hash.
+async fn update_user_settings(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+    Json(payload): Json<UpdateUserSettingsRequest>,
+) -> Result<Json<UserSettings>, ApiError> {
+    let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
+    upsert_user_settings(&state.db, user_id, &payload)
+        .await
+        .map(Json)
+}
+
+/// GET /users/self/todo — Canvas todo list: assignments the caller can grade
+/// (teacher enrollments with ungraded submissions) followed by assignments
+/// they still need to submit (student enrollments, due between four weeks ago
+/// and one week from now, with no submission from the caller).
+async fn self_todo(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<TodoItem>>, ApiError> {
+    let grading: Vec<TodoRow> = sqlx::query_as(
+        r#"
+        SELECT a.id,
+               a.course_id,
+               a.title,
+               a.description,
+               a.points_possible,
+               a.due_at,
+               a.created_at,
+               a.updated_at,
+               c.name AS course_name,
+               c.course_code,
+               COUNT(s.id) AS needs_grading_count
+        FROM assignments a
+        JOIN courses c ON c.id = a.course_id
+        JOIN enrollments e
+          ON e.course_id = a.course_id
+         AND e.user_id = $1
+         AND e.role = 'teacher'
+        JOIN submissions s
+          ON s.assignment_id = a.id
+         AND s.score IS NULL
+        GROUP BY a.id, c.name, c.course_code
+        ORDER BY a.due_at ASC NULLS LAST, a.id
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let submitting: Vec<TodoRow> = sqlx::query_as(
+        r#"
+        SELECT a.id,
+               a.course_id,
+               a.title,
+               a.description,
+               a.points_possible,
+               a.due_at,
+               a.created_at,
+               a.updated_at,
+               c.name AS course_name,
+               c.course_code,
+               NULL::BIGINT AS needs_grading_count
+        FROM assignments a
+        JOIN courses c ON c.id = a.course_id
+        JOIN enrollments e
+          ON e.course_id = a.course_id
+         AND e.user_id = $1
+         AND e.role = 'student'
+        WHERE a.due_at IS NOT NULL
+          AND a.due_at >= now() - interval '4 weeks'
+          AND a.due_at <= now() + interval '1 week'
+          AND NOT EXISTS (
+              SELECT 1 FROM submissions s
+              WHERE s.assignment_id = a.id AND s.user_id = $1
+          )
+        ORDER BY a.due_at ASC, a.id
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let items = grading
+        .into_iter()
+        .map(|row| row.into_item("grading"))
+        .chain(
+            submitting
+                .into_iter()
+                .map(|row| row.into_item("submitting")),
+        )
+        .collect();
+
+    Ok(Json(items))
+}
+
+/// POST /users/{userId}/files — record user-context file metadata (Canvas
+/// attachment preflight, metadata only: no binary upload). The user themself
+/// or an admin may add files; Canvas responds 200 with the attachment JSON.
+async fn create_user_file(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+    Json(payload): Json<CreateUserFileRequest>,
+) -> Result<Json<UserFileResponse>, ApiError> {
+    let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
+
+    // Canvas names the upload `name`; `filename` is the alias used by the rest
+    // of this API.
+    let filename = payload
+        .filename
+        .or(payload.name)
+        .map(|name| name.trim().to_string())
+        .unwrap_or_default();
+    if filename.is_empty() {
+        return Err(ApiError::Validation("filename is required".into()));
+    }
+
+    let display_name = payload
+        .display_name
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| filename.clone());
+    let content_type = payload
+        .content_type
+        .unwrap_or_else(|| "application/octet-stream".into());
+    let size = payload.size.unwrap_or(0).max(0);
+
+    let (folder, folder_id) = if let Some(folder_id) = payload.folder_id {
+        let found: Option<(String, String, i64)> = sqlx::query_as(
+            "SELECT full_name, context_type, context_id FROM folders \
+             WHERE id = $1 AND workflow_state <> 'deleted'",
+        )
+        .bind(folder_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+        let (full_name, context_type, context_id) = found.ok_or(ApiError::NotFound)?;
+        if context_type != "User" || context_id != user_id {
+            return Err(ApiError::Validation(
+                "folder does not belong to this user".into(),
+            ));
+        }
+        (full_name, Some(folder_id))
+    } else {
+        (payload.folder.unwrap_or_else(|| "unfiled".into()), None)
+    };
+
+    let file: UserFileResponse = sqlx::query_as(
+        r#"
+        INSERT INTO user_files
+            (user_id, filename, display_name, content_type, size, folder, folder_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id,
+                  user_id,
+                  folder,
+                  folder_id,
+                  filename,
+                  display_name,
+                  content_type,
+                  size,
+                  created_at,
+                  updated_at
+        "#,
+    )
+    .bind(user_id)
+    .bind(&filename)
+    .bind(&display_name)
+    .bind(&content_type)
+    .bind(size)
+    .bind(&folder)
+    .bind(folder_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(file))
 }
 
 #[cfg(test)]
