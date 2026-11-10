@@ -100,11 +100,14 @@ added suites to the same crates plus `star-permissions`, `star-jobs`, and
 
 ## 4. How to run everything
 
-CI is the authoritative gate (`.github/workflows/`): on every push/PR touching
-`migration/**` it runs `quality` (fmt + clippy `-D warnings`), workspace tests
-against a PostgreSQL 16 service, a production `cargo build --release
---locked`, bootstrap validation, and the parity scoreboard. All four workflows
-are green on `f55b479`.
+CI is the authoritative gate (`.github/workflows/`). On every push/PR touching
+`migration/**`: `quality` (fmt, clippy `-D warnings`, migration-file checks),
+a RustSec dependency audit, the full workspace test suite against PostgreSQL 16,
+a production release build for both glibc and static musl (each booted and
+smoke-tested on `/health`), bootstrap validation, and the parity scoreboard.
+A nightly workflow runs the suite against Supabase (secret-gated) and publishes
+llvm-cov coverage (baseline: 72.4% lines / 70.3% regions / 72.9% functions).
+All five workflows are green on `221b748`.
 
 ```bash
 cd migration
@@ -157,4 +160,7 @@ takes ~30 min, so day-to-day validation runs in CI.
 - [ ] UI parity (**0/232** feature dirs, 0/5459 JS/TSX files) and analytics
       (**0** endpoints) remain the largest gaps — see
       [migration/parity/report.md](migration/parity/report.md).
-- [ ] Optional: llvm-cov coverage report in CI, Dependabot, release tagging.
+- [x] Optional: llvm-cov coverage report in CI (nightly, 72.4% lines),
+      Dependabot-style supply-chain protection via `cargo audit` in CI.
+- [ ] Add `SUPABASE_DATABASE_URL` repository secret to enable the nightly
+      Supabase compatibility job.
