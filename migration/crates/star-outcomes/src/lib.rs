@@ -60,7 +60,7 @@ pub struct CreateOutcome {
 ///
 /// Matches the fields of the Canvas `OutcomeGroup` payload; `url`,
 /// `subgroups_url`, `outcomes_url`, `import_url`, and `can_edit` are added by
-/// [`group_json`].
+/// the `group_json` helper.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct LearningOutcomeGroup {
     pub id: i64,
@@ -421,10 +421,12 @@ async fn update_outcome_group(
     }
     let payload = payload.map(|Json(fields)| fields).unwrap_or_default();
 
-    if let Some(title) = payload.title.as_deref() {
-        if title.trim().is_empty() {
-            return Err(ApiError::Validation("title cannot be blank".into()));
-        }
+    if payload
+        .title
+        .as_deref()
+        .is_some_and(|title| title.trim().is_empty())
+    {
+        return Err(ApiError::Validation("title cannot be blank".into()));
     }
 
     if let Some(parent_id) = payload.parent_outcome_group_id {
