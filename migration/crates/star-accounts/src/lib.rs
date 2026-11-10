@@ -10,6 +10,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use sqlx::PgPool;
 use std::collections::HashMap;
 
@@ -265,6 +266,308 @@ pub struct CreateAccountAdmin {
     pub user_id: i64,
     /// Deprecated Canvas param; only AccountAdmin is representable here.
     pub role: Option<String>,
+}
+
+// --------------------------------------------------------------------------
+// Account settings + hierarchy listings (Phase 3)
+// --------------------------------------------------------------------------
+
+/// Canvas `value_to_boolean` (lib/canvas/plugin.rb): "1", "true", "t", "yes",
+/// "y" and "on" (case-insensitive) are true; everything else is false.
+fn value_to_boolean(raw: Option<&str>) -> bool {
+    matches!(
+        raw.map(|value| value.trim().to_ascii_lowercase())
+            .as_deref(),
+        Some("1" | "true" | "t" | "yes" | "y" | "on")
+    )
+}
+
+/// Query params for GET /accounts/{accountId}/sub_accounts.
+///
+/// Parsed from the raw key/value pairs (`Query<Vec<(String, String)>>`) so
+/// repeated `include[]` params survive, exactly as Rails parses them;
+/// serde_urlencoded's struct decoding rejects repeated keys.
+#[derive(Debug, Default)]
+pub struct SubAccountQuery {
+    /// Canvas `value_to_boolean(params[:recursive])`.
+    pub recursive: bool,
+    /// "name" sorts by name instead of id.
+    pub order_by_name: bool,
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+    /// Normalized `include[]` names. Unknown values are ignored by callers.
+    pub includes: Vec<String>,
+}
+
+impl SubAccountQuery {
+    fn from_pairs(pairs: &[(String, String)]) -> Self {
+        let mut query = SubAccountQuery::default();
+        for (key, value) in pairs {
+            match key.as_str() {
+                "recursive" => query.recursive = value_to_boolean(Some(value)),
+                "order" => query.order_by_name = value.trim() == "name",
+                "page" => query.page = value.trim().parse().ok(),
+                "per_page" => query.per_page = value.trim().parse().ok(),
+                // Canvas sends `include[]=course_count`; `include=a,b` is also
+                // accepted.
+                "include[]" | "include" => {
+                    for part in value.split(',') {
+                        let name = part.trim().to_ascii_lowercase();
+                        if !name.is_empty() && !query.includes.contains(&name) {
+                            query.includes.push(name);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        query
+    }
+
+    fn pagination(&self) -> (i64, i64, i64) {
+        Pagination {
+            page: self.page,
+            per_page: self.per_page,
+        }
+        .resolve()
+    }
+}
+
+/// Minimal account row for hierarchy listings.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct AccountRow {
+    id: i64,
+    name: String,
+    parent_account_id: Option<i64>,
+    workflow_state: String,
+}
+
+const ACCOUNT_ROW_COLUMNS: &str = "id, name, parent_account_id, workflow_state";
+
+/// Canvas `account_json` subset returned by the hierarchy listings:
+/// `id, name, parent_account_id, root_account_id, workflow_state` plus the
+/// requested `course_count` / `sub_account_count` includes. `uuid`,
+/// `default_time_zone` and the storage-quota defaults have no columns in this
+/// schema and are omitted.
+#[derive(Debug, Clone, Serialize)]
+pub struct AccountTreeJson {
+    pub id: i64,
+    pub name: String,
+    pub parent_account_id: Option<i64>,
+    /// Canvas serializes nil for a root account.
+    pub root_account_id: Option<i64>,
+    pub workflow_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub course_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sub_account_count: Option<i64>,
+}
+
+/// Decode a stored settings object; Canvas renders `{}` when nothing is set.
+fn parse_account_settings(raw: &str) -> Map<String, Value> {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Object(map)) => map,
+        _ => Map::new(),
+    }
+}
+
+/// Map each account id to the id of its top-level ancestor. Cycle-safe via
+/// `UNION` de-duplication, mirroring the depth-guarded walks above.
+async fn account_root_ids(pool: &PgPool, ids: &[i64]) -> Result<HashMap<i64, i64>, ApiError> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(i64, i64)> = sqlx::query_as(
+        r#"
+        WITH RECURSIVE chain AS (
+            SELECT id AS start_id, id AS current_id, parent_account_id
+            FROM accounts
+            WHERE id = ANY($1)
+          UNION
+            SELECT c.start_id, a.id, a.parent_account_id
+            FROM accounts a
+            JOIN chain c ON a.id = c.parent_account_id
+        )
+        SELECT start_id, current_id FROM chain WHERE parent_account_id IS NULL
+        "#,
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Course counts per account (Canvas `Course.active`: not deleted).
+async fn account_course_counts(pool: &PgPool, ids: &[i64]) -> Result<HashMap<i64, i64>, ApiError> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(i64, i64)> = sqlx::query_as(
+        r#"
+        SELECT account_id, COUNT(*) AS course_count
+        FROM courses
+        WHERE account_id = ANY($1) AND workflow_state <> 'deleted'
+        GROUP BY account_id
+        "#,
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Direct non-deleted sub-account counts per account.
+async fn account_sub_account_counts(
+    pool: &PgPool,
+    ids: &[i64],
+) -> Result<HashMap<i64, i64>, ApiError> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<(i64, i64)> = sqlx::query_as(
+        r#"
+        SELECT parent_account_id, COUNT(*) AS sub_account_count
+        FROM accounts
+        WHERE parent_account_id = ANY($1) AND workflow_state <> 'deleted'
+        GROUP BY parent_account_id
+        "#,
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(rows.into_iter().collect())
+}
+
+/// Serialize account rows into Canvas account JSON, adding the requested
+/// counts and the computed root account id.
+async fn account_tree_json(
+    pool: &PgPool,
+    rows: Vec<AccountRow>,
+    includes: &[String],
+) -> Result<Vec<AccountTreeJson>, ApiError> {
+    let ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
+    let root_ids = account_root_ids(pool, &ids).await?;
+    let with_course_count = includes.iter().any(|name| name == "course_count");
+    let with_sub_account_count = includes.iter().any(|name| name == "sub_account_count");
+    let course_counts = if with_course_count {
+        account_course_counts(pool, &ids).await?
+    } else {
+        HashMap::new()
+    };
+    let sub_account_counts = if with_sub_account_count {
+        account_sub_account_counts(pool, &ids).await?
+    } else {
+        HashMap::new()
+    };
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let root_account_id = if row.parent_account_id.is_none() {
+                None
+            } else {
+                root_ids.get(&row.id).copied()
+            };
+            AccountTreeJson {
+                id: row.id,
+                name: row.name,
+                parent_account_id: row.parent_account_id,
+                root_account_id,
+                workflow_state: row.workflow_state,
+                course_count: with_course_count
+                    .then(|| course_counts.get(&row.id).copied().unwrap_or(0)),
+                sub_account_count: with_sub_account_count
+                    .then(|| sub_account_counts.get(&row.id).copied().unwrap_or(0)),
+            }
+        })
+        .collect())
+}
+
+/// Accounts the caller can administer (Canvas `User#adminable_accounts`):
+/// global admins administer every account; everyone else administers the
+/// accounts where they hold an `account_users` grant.
+async fn adminable_account_ids(pool: &PgPool, auth: &AuthUser) -> Result<Vec<i64>, ApiError> {
+    if is_admin(auth) {
+        let rows: Vec<(i64,)> = sqlx::query_as(
+            r#"SELECT id FROM accounts WHERE workflow_state <> 'deleted' ORDER BY id ASC"#,
+        )
+        .fetch_all(pool)
+        .await
+        .map_err(ApiError::from)?;
+        return Ok(rows.into_iter().map(|(id,)| id).collect());
+    }
+
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        r#"SELECT account_id FROM account_users WHERE user_id = $1 ORDER BY account_id ASC"#,
+    )
+    .bind(auth.id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// Expand account ids with every non-deleted descendant, deduplicated and
+/// ordered by id (Canvas `Account.active.sub_accounts_recursive`).
+async fn account_subtree_ids(pool: &PgPool, roots: &[i64]) -> Result<Vec<i64>, ApiError> {
+    if roots.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        r#"
+        WITH RECURSIVE tree AS (
+            SELECT id FROM accounts WHERE id = ANY($1) AND workflow_state <> 'deleted'
+          UNION
+            SELECT a.id
+            FROM accounts a
+            JOIN tree ON a.parent_account_id = tree.id
+            WHERE a.workflow_state <> 'deleted'
+        )
+        SELECT id FROM tree ORDER BY id ASC
+        "#,
+    )
+    .bind(roots)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// Load hierarchy rows for a set of account ids (id order).
+async fn account_rows_by_ids(pool: &PgPool, ids: &[i64]) -> Result<Vec<AccountRow>, ApiError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<AccountRow> = sqlx::query_as(&format!(
+        r#"SELECT {ACCOUNT_ROW_COLUMNS} FROM accounts WHERE id = ANY($1) ORDER BY id ASC"#
+    ))
+    .bind(ids)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(rows)
+}
+
+/// Shared body for /manageable_accounts and /course_creation_accounts: the
+/// caller's adminable accounts plus their non-deleted subtrees, paginated.
+async fn adminable_accounts_page(
+    state: &AppState,
+    auth: &AuthUser,
+    pag: &Pagination,
+) -> Result<Vec<AccountTreeJson>, ApiError> {
+    let roots = adminable_account_ids(&state.db, auth).await?;
+    let ids = account_subtree_ids(&state.db, &roots).await?;
+    let rows = account_rows_by_ids(&state.db, &ids).await?;
+    let (_, per_page, offset) = pag.resolve();
+    let page_rows: Vec<AccountRow> = rows
+        .into_iter()
+        .skip(offset.max(0) as usize)
+        .take(per_page as usize)
+        .collect();
+    account_tree_json(&state.db, page_rows, &[]).await
 }
 
 // --------------------------------------------------------------------------
@@ -562,10 +865,24 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/accounts", get(list_accounts))
         .route("/accounts/{id}", get(get_account))
-        .route("/accounts/{id}/sub_accounts", post(create_sub_account))
+        .route(
+            "/accounts/{id}/sub_accounts",
+            get(list_sub_accounts).post(create_sub_account),
+        )
+        .route(
+            "/accounts/{id}/settings",
+            get(get_account_settings).put(update_account_settings),
+        )
         .route("/accounts/{id}/courses", get(list_account_courses))
         .route("/accounts/{id}/users", get(list_account_users))
         .route("/accounts/{id}/users/{userId}", post(grant_account_admin))
+        // Canvas Api::V1::Accounts#manageable_accounts /
+        // #course_creation_accounts
+        .route("/manageable_accounts", get(list_manageable_accounts))
+        .route(
+            "/course_creation_accounts",
+            get(list_course_creation_accounts),
+        )
         // Canvas Api::V1::AccountNotifications
         .route(
             "/accounts/{account_id}/account_notifications",
@@ -1137,6 +1454,167 @@ async fn delete_account_admin(
 }
 
 // --------------------------------------------------------------------------
+// Account settings + hierarchy handlers
+// --------------------------------------------------------------------------
+
+/// GET /accounts/{id}/settings — Canvas `Accounts#show_settings`. Returns the
+/// settings object directly (Canvas renders `settings_hash` without a
+/// wrapper) and `{}` when nothing is set. Requires `manage_account_settings`,
+/// approximated here by the crate's account-admin gate.
+async fn get_account_settings(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let stored: Option<String> =
+        sqlx::query_scalar(r#"SELECT settings::text FROM accounts WHERE id = $1"#)
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+    let stored = stored.ok_or(ApiError::NotFound)?;
+    Ok(Json(Value::Object(parse_account_settings(&stored))))
+}
+
+/// PUT /accounts/{id}/settings — shallow-merge the posted settings object into
+/// `accounts.settings` (Canvas account settings update semantics) and echo the
+/// merged object.
+async fn update_account_settings(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !payload.is_object() {
+        return Err(ApiError::BadRequest(
+            "account settings must be a JSON object".into(),
+        ));
+    }
+
+    let updated: Option<String> = sqlx::query_scalar(
+        r#"
+        UPDATE accounts
+        SET settings = settings || $2::jsonb, updated_at = now()
+        WHERE id = $1
+        RETURNING settings::text
+        "#,
+    )
+    .bind(account_id)
+    .bind(payload.to_string())
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    let updated = updated.ok_or(ApiError::NotFound)?;
+    Ok(Json(Value::Object(parse_account_settings(&updated))))
+}
+
+/// GET /accounts/{id}/sub_accounts — Canvas `Accounts#sub_accounts`: a bare
+/// JSON array of account objects. Direct non-deleted children by default;
+/// `recursive=1` walks the whole non-deleted subtree tier by tier. `order=name`
+/// sorts within each tier by name (id otherwise); `include[]=course_count` and
+/// `include[]=sub_account_count` add the per-account counts.
+async fn list_sub_accounts(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Result<Json<Vec<AccountTreeJson>>, ApiError> {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    let query = SubAccountQuery::from_pairs(&pairs);
+    let sort_key = if query.order_by_name {
+        "name ASC, id ASC"
+    } else {
+        "id ASC"
+    };
+
+    let rows: Vec<AccountRow> = if query.recursive {
+        sqlx::query_as(&format!(
+            r#"
+            WITH RECURSIVE tree AS (
+                SELECT {ACCOUNT_ROW_COLUMNS}, 1 AS depth
+                FROM accounts
+                WHERE parent_account_id = $1 AND workflow_state <> 'deleted'
+              UNION
+                SELECT a.id, a.name, a.parent_account_id, a.workflow_state, tree.depth + 1
+                FROM accounts a
+                JOIN tree ON a.parent_account_id = tree.id
+                WHERE a.workflow_state <> 'deleted'
+            )
+            SELECT id, name, parent_account_id, workflow_state
+            FROM tree
+            ORDER BY depth ASC, {sort_key}
+            "#
+        ))
+        .bind(account_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(ApiError::from)?
+    } else {
+        sqlx::query_as(&format!(
+            r#"
+            SELECT {ACCOUNT_ROW_COLUMNS}
+            FROM accounts
+            WHERE parent_account_id = $1 AND workflow_state <> 'deleted'
+            ORDER BY {sort_key}
+            "#
+        ))
+        .bind(account_id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(ApiError::from)?
+    };
+
+    let (_, per_page, offset) = query.pagination();
+    let page_rows: Vec<AccountRow> = rows
+        .into_iter()
+        .skip(offset.max(0) as usize)
+        .take(per_page as usize)
+        .collect();
+    Ok(Json(
+        account_tree_json(&state.db, page_rows, &query.includes).await?,
+    ))
+}
+
+/// GET /manageable_accounts — Canvas `Accounts#manageable_accounts`: the
+/// caller's adminable accounts plus their non-deleted subtrees, as a bare
+/// array. Canvas also filters on :manage_courses_admin/:create_courses
+/// rights; without a permission engine every adminable account qualifies.
+async fn list_manageable_accounts(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(pag): Query<Pagination>,
+) -> Result<Json<Vec<AccountTreeJson>>, ApiError> {
+    Ok(Json(adminable_accounts_page(&state, &auth, &pag).await?))
+}
+
+/// GET /course_creation_accounts — Canvas `Accounts#course_creation_accounts`:
+/// same adminable-account rule as /manageable_accounts. Students and teachers
+/// without account grants get an empty array, matching Canvas.
+async fn list_course_creation_accounts(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(pag): Query<Pagination>,
+) -> Result<Json<Vec<AccountTreeJson>>, ApiError> {
+    Ok(Json(adminable_accounts_page(&state, &auth, &pag).await?))
+}
+
+// --------------------------------------------------------------------------
 // Unit tests
 // --------------------------------------------------------------------------
 
@@ -1184,5 +1662,59 @@ mod tests {
             role: "student".into(),
         };
         assert!(!is_admin(&auth));
+    }
+
+    #[test]
+    fn test_value_to_boolean() {
+        for raw in ["1", "true", "T", "yes", "on", " y "] {
+            assert!(value_to_boolean(Some(raw)), "{raw:?} should be true");
+        }
+        for raw in ["0", "false", "no", "off", "", "maybe"] {
+            assert!(!value_to_boolean(Some(raw)), "{raw:?} should be false");
+        }
+        assert!(!value_to_boolean(None));
+    }
+
+    #[test]
+    fn test_sub_account_query_includes() {
+        let pairs: Vec<(String, String)> = [
+            ("recursive", "1"),
+            ("order", "name"),
+            ("page", "2"),
+            ("per_page", "10"),
+            ("include[]", "course_count"),
+            ("include", "sub_account_count, Course_Count"),
+            ("ignored", "value"),
+        ]
+        .iter()
+        .map(|(key, value)| (key.to_string(), value.to_string()))
+        .collect();
+        let query = SubAccountQuery::from_pairs(&pairs);
+        assert!(query.recursive);
+        assert!(query.order_by_name);
+        assert_eq!(
+            query.includes,
+            vec!["course_count".to_string(), "sub_account_count".to_string()]
+        );
+        assert_eq!(query.pagination(), (2, 10, 10));
+
+        let default = SubAccountQuery::from_pairs(&[]);
+        assert!(!default.recursive);
+        assert!(!default.order_by_name);
+        assert!(default.includes.is_empty());
+        assert_eq!(default.pagination(), (1, 50, 0));
+    }
+
+    #[test]
+    fn test_parse_account_settings() {
+        let parsed = parse_account_settings(r#"{"microsoft_sync_enabled": true}"#);
+        assert_eq!(
+            parsed.get("microsoft_sync_enabled"),
+            Some(&Value::Bool(true))
+        );
+
+        // Malformed or non-object payloads fall back to an empty object.
+        assert!(parse_account_settings("not json").is_empty());
+        assert!(parse_account_settings("[]").is_empty());
     }
 }
