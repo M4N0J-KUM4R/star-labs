@@ -6,12 +6,19 @@
 //! - GET/PUT/DELETE /courses/{courseId}/pages/{id}
 //!   (Canvas v1 aliases for the flat routes; the page must belong to
 //!   {courseId}, otherwise 404)
+//! - GET /courses/{courseId}/pages/{url}/revisions             (page history)
+//! - GET /courses/{courseId}/pages/{url}/revisions/latest      (current version)
+//! - GET /courses/{courseId}/pages/{url}/revisions/{revisionId} (one version)
 //!
 //! Canvas parity notes (wiki_page.rb, wiki_pages_api_controller.rb):
 //! - pages carry `url` (slug derived from title), `workflow_state`
 //!   ('published'/'unpublished'/'deleted') and `editing_roles`.
 //! - the list endpoint omits `body` (Canvas pages#index returns summaries).
 //! - DELETE soft-deletes: workflow_state = 'deleted'.
+//! - revisions mirror simply_versioned: every page save appends a version with
+//!   a per-page 1-based number, newest first; `show_revision` needs
+//!   `:read_revisions` (teacher/admin) while `/revisions/latest` only needs
+//!   read access (enrolled student/admin). `summary=true` drops content.
 
 use axum::{
     extract::{Path, Query, State},
@@ -83,6 +90,62 @@ pub struct Pagination {
     pub per_page: i64,
 }
 
+/// Query params for a single revision (`?summary=true` drops the content).
+#[derive(Debug, Deserialize)]
+pub struct RevisionQuery {
+    /// Canvas `summary` boolean: true => exclude url/title/body.
+    pub summary: Option<String>,
+}
+
+/// A stored revision row (Canvas SimplyVersioned::Version + editor join).
+#[derive(Debug, sqlx::FromRow)]
+pub struct PageRevisionRow {
+    pub revision_id: i32,
+    pub title: String,
+    pub body: Option<String>,
+    pub url: Option<String>,
+    pub user_id: Option<i64>,
+    pub user_name: Option<String>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Canvas `user_display_json` subset returned as a revision's `edited_by`.
+#[derive(Debug, Serialize)]
+pub struct UserDisplay {
+    pub id: i64,
+    pub anonymous_id: String,
+    pub display_name: String,
+    pub avatar_image_url: Option<String>,
+    pub html_url: String,
+    pub pronouns: Option<String>,
+}
+
+/// Canvas `wiki_page_revisions_json` item: content is omitted in lists.
+#[derive(Debug, Serialize)]
+pub struct RevisionSummary {
+    pub revision_id: i32,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub latest: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edited_by: Option<UserDisplay>,
+}
+
+/// Canvas `wiki_page_revision_json`: content keys omitted for `summary=true`.
+#[derive(Debug, Serialize)]
+pub struct RevisionDetail {
+    pub revision_id: i32,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub latest: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub edited_by: Option<UserDisplay>,
+}
+
 fn default_page() -> i64 {
     1
 }
@@ -135,6 +198,80 @@ pub fn generate_url_slug(title: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// Revision helpers (Canvas simply_versioned + user_display_json parity)
+// ---------------------------------------------------------------------------
+
+/// Canvas `id.to_s(36)` used for `edited_by.anonymous_id`.
+pub fn to_base36(value: i64) -> String {
+    const DIGITS: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    if value == 0 {
+        return "0".to_string();
+    }
+    let mut remaining = value.unsigned_abs();
+    let mut digits = Vec::new();
+    while remaining > 0 {
+        digits.push(DIGITS[(remaining % 36) as usize]);
+        remaining /= 36;
+    }
+    if value < 0 {
+        digits.push(b'-');
+    }
+    digits.reverse();
+    String::from_utf8(digits).expect("base36 alphabet is ASCII")
+}
+
+/// Canvas `Canvas::Plugin.value_to_boolean`: these strings are truthy.
+pub fn parse_canvas_bool(raw: &str) -> bool {
+    matches!(
+        raw.trim().to_ascii_lowercase().as_str(),
+        "yes" | "y" | "true" | "t" | "on" | "1"
+    )
+}
+
+/// Canvas `include_content = !value_to_boolean(params[:summary])`.
+fn include_content(summary: Option<&str>) -> bool {
+    !summary.map(parse_canvas_bool).unwrap_or(false)
+}
+
+impl PageRevisionRow {
+    /// Canvas `user_display_json` for the revision's editor.
+    fn edited_by(&self) -> Option<UserDisplay> {
+        let id = self.user_id?;
+        Some(UserDisplay {
+            id,
+            anonymous_id: to_base36(id),
+            display_name: self.user_name.clone().unwrap_or_default(),
+            avatar_image_url: None,
+            html_url: format!("/users/{id}"),
+            pronouns: None,
+        })
+    }
+
+    /// History item: `revision_id`, `updated_at`, `latest`, `edited_by`.
+    fn summary(&self, latest: i32) -> RevisionSummary {
+        RevisionSummary {
+            revision_id: self.revision_id,
+            updated_at: self.updated_at,
+            latest: self.revision_id == latest,
+            edited_by: self.edited_by(),
+        }
+    }
+
+    /// Detail item; `include_content == false` mirrors `summary=true`.
+    fn detail(&self, latest: i32, include_content: bool) -> RevisionDetail {
+        RevisionDetail {
+            revision_id: self.revision_id,
+            updated_at: self.updated_at,
+            latest: self.revision_id == latest,
+            url: include_content.then(|| self.url.clone()).flatten(),
+            title: include_content.then(|| self.title.clone()),
+            body: include_content.then(|| self.body.clone()).flatten(),
+            edited_by: self.edited_by(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Permission helpers
 // ---------------------------------------------------------------------------
 
@@ -179,6 +316,157 @@ async fn user_teacher_of_course(
     .fetch_optional(db)
     .await?;
     Ok(row.is_some())
+}
+
+// ---------------------------------------------------------------------------
+// Page lookup + revision storage
+// ---------------------------------------------------------------------------
+
+/// Resolve a page reference (numeric id or url slug) to `(id, course_id)`,
+/// excluding soft-deleted pages.
+async fn resolve_page(db: &PgPool, page_ref: &str) -> Result<Option<(i64, i64)>, ApiError> {
+    let row: Option<(i64, i64)> = if let Ok(numeric_id) = page_ref.parse::<i64>() {
+        sqlx::query_as(
+            "SELECT id, course_id FROM pages WHERE id = $1 AND workflow_state <> 'deleted'",
+        )
+        .bind(numeric_id)
+        .fetch_optional(db)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT id, course_id FROM pages WHERE url = $1 AND workflow_state <> 'deleted'",
+        )
+        .bind(page_ref)
+        .fetch_optional(db)
+        .await?
+    };
+    Ok(row)
+}
+
+/// Load the page addressed by `page_ref` (numeric id or url slug) scoped to
+/// `course_id`. Cross-course and soft-deleted pages are 404 (Canvas
+/// `url_or_id` lookup under the addressed context).
+async fn load_page_in_course(
+    db: &PgPool,
+    course_id: i64,
+    page_ref: &str,
+) -> Result<PageDetail, ApiError> {
+    let page: Option<PageDetail> = if let Ok(numeric_id) = page_ref.parse::<i64>() {
+        sqlx::query_as(
+            r#"
+            SELECT id, course_id, title, body, url, workflow_state, editing_roles,
+                   created_at, updated_at
+            FROM pages
+            WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+            "#,
+        )
+        .bind(numeric_id)
+        .bind(course_id)
+        .fetch_optional(db)
+        .await?
+    } else {
+        sqlx::query_as(
+            r#"
+            SELECT id, course_id, title, body, url, workflow_state, editing_roles,
+                   created_at, updated_at
+            FROM pages
+            WHERE url = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+            "#,
+        )
+        .bind(page_ref)
+        .bind(course_id)
+        .fetch_optional(db)
+        .await?
+    };
+    page.ok_or(ApiError::NotFound)
+}
+
+/// Append a revision capturing the page's current state (simply_versioned:
+/// `number = MAX(number) + 1` per page).
+async fn insert_revision(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    page_id: i64,
+    user_id: i64,
+    title: &str,
+    body: Option<&str>,
+    url: Option<&str>,
+) -> Result<i32, ApiError> {
+    let revision_id: i32 = sqlx::query_scalar(
+        r#"
+        INSERT INTO page_revisions (page_id, revision_id, title, body, url, user_id)
+        SELECT $1, COALESCE(MAX(revision_id), 0) + 1, $2, $3, $4, $5
+        FROM page_revisions
+        WHERE page_id = $1
+        RETURNING revision_id
+        "#,
+    )
+    .bind(page_id)
+    .bind(title)
+    .bind(body)
+    .bind(url)
+    .bind(user_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(revision_id)
+}
+
+/// Highest stored revision number for a page (0 when history is empty).
+async fn latest_revision_number(db: &PgPool, page_id: i64) -> Result<i32, ApiError> {
+    let latest: i32 = sqlx::query_scalar(
+        "SELECT COALESCE(MAX(revision_id), 0) FROM page_revisions WHERE page_id = $1",
+    )
+    .bind(page_id)
+    .fetch_one(db)
+    .await?;
+    Ok(latest)
+}
+
+/// Fetch one revision by its per-page number.
+async fn fetch_revision(
+    db: &PgPool,
+    page_id: i64,
+    revision_id: i32,
+) -> Result<Option<PageRevisionRow>, ApiError> {
+    let row: Option<PageRevisionRow> = sqlx::query_as(
+        r#"
+        SELECT r.revision_id, r.title, r.body, r.url, r.user_id,
+               u.name AS user_name, r.updated_at
+        FROM page_revisions r
+        LEFT JOIN users u ON u.id = r.user_id
+        WHERE r.page_id = $1 AND r.revision_id = $2
+        "#,
+    )
+    .bind(page_id)
+    .bind(revision_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row)
+}
+
+/// Paginated history, newest first (Canvas `versions` is `number DESC`).
+async fn fetch_revisions(
+    db: &PgPool,
+    page_id: i64,
+    per_page: i64,
+    offset: i64,
+) -> Result<Vec<PageRevisionRow>, ApiError> {
+    let rows: Vec<PageRevisionRow> = sqlx::query_as(
+        r#"
+        SELECT r.revision_id, r.title, r.body, r.url, r.user_id,
+               u.name AS user_name, r.updated_at
+        FROM page_revisions r
+        LEFT JOIN users u ON u.id = r.user_id
+        WHERE r.page_id = $1
+        ORDER BY r.revision_id DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(page_id)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
 }
 
 // ---------------------------------------------------------------------------
@@ -255,6 +543,8 @@ async fn create_page(
         .clone()
         .unwrap_or_else(|| "teachers".to_string());
 
+    let mut tx = state.db.begin().await?;
+
     let page: PageDetail = sqlx::query_as(
         r#"
         INSERT INTO pages (course_id, title, body, url, workflow_state, editing_roles)
@@ -269,8 +559,21 @@ async fn create_page(
     .bind(&url)
     .bind(&workflow_state)
     .bind(&editing_roles)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await?;
+
+    // simply_versioned: the creating save is revision 1.
+    insert_revision(
+        &mut tx,
+        page.id,
+        auth.id,
+        &page.title,
+        page.body.as_deref(),
+        page.url.as_deref(),
+    )
+    .await?;
+
+    tx.commit().await?;
 
     Ok((StatusCode::CREATED, Json(page)))
 }
@@ -283,50 +586,25 @@ async fn get_page(
     auth: AuthUser,
 ) -> Result<Json<PageDetail>, ApiError> {
     // Resolve by numeric id or url slug, excluding soft-deleted pages.
-    let row: Option<(i64,)> = if let Ok(numeric_id) = page_id.parse::<i64>() {
-        sqlx::query_as("SELECT course_id FROM pages WHERE id = $1 AND workflow_state <> 'deleted'")
-            .bind(numeric_id)
-            .fetch_optional(&state.db)
-            .await?
-    } else {
-        sqlx::query_as("SELECT course_id FROM pages WHERE url = $1 AND workflow_state <> 'deleted'")
-            .bind(&page_id)
-            .fetch_optional(&state.db)
-            .await?
-    };
-
-    let (course_id,) = row.ok_or(ApiError::NotFound)?;
+    let (page_id_num, course_id) = resolve_page(&state.db, &page_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
 
     // Check view access
     if !user_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
-    let page: PageDetail = if let Ok(numeric_id) = page_id.parse::<i64>() {
-        sqlx::query_as(
-            r#"
-            SELECT id, course_id, title, body, url, workflow_state, editing_roles,
-                   created_at, updated_at
-            FROM pages WHERE id = $1 AND workflow_state <> 'deleted'
-            "#,
-        )
-        .bind(numeric_id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or(ApiError::NotFound)?
-    } else {
-        sqlx::query_as(
-            r#"
-            SELECT id, course_id, title, body, url, workflow_state, editing_roles,
-                   created_at, updated_at
-            FROM pages WHERE url = $1 AND workflow_state <> 'deleted'
-            "#,
-        )
-        .bind(&page_id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or(ApiError::NotFound)?
-    };
+    let page: PageDetail = sqlx::query_as(
+        r#"
+        SELECT id, course_id, title, body, url, workflow_state, editing_roles,
+               created_at, updated_at
+        FROM pages WHERE id = $1
+        "#,
+    )
+    .bind(page_id_num)
+    .fetch_one(&state.db)
+    .await?;
 
     Ok(Json(page))
 }
@@ -339,19 +617,9 @@ async fn update_page(
     Json(payload): Json<UpdatePage>,
 ) -> Result<Json<PageDetail>, ApiError> {
     // Get page to find course_id (soft-deleted pages are not editable)
-    let row: Option<(i64,)> = if let Ok(numeric_id) = page_id.parse::<i64>() {
-        sqlx::query_as("SELECT course_id FROM pages WHERE id = $1 AND workflow_state <> 'deleted'")
-            .bind(numeric_id)
-            .fetch_optional(&state.db)
-            .await?
-    } else {
-        sqlx::query_as("SELECT course_id FROM pages WHERE url = $1 AND workflow_state <> 'deleted'")
-            .bind(&page_id)
-            .fetch_optional(&state.db)
-            .await?
-    };
-
-    let (course_id,) = row.ok_or(ApiError::NotFound)?;
+    let (page_id_num, course_id) = resolve_page(&state.db, &page_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
 
     // Check modify access (teacher/admin)
     if !user_teacher_of_course(&state.db, auth.id, course_id, &auth).await? {
@@ -372,6 +640,8 @@ async fn update_page(
     // If the title changed, Canvas regenerates the url slug (wiki_page.rb).
     let new_url = payload.title.as_ref().map(|t| generate_url_slug(t));
 
+    let mut tx = state.db.begin().await?;
+
     let page: PageDetail = sqlx::query_as(
         r#"
         UPDATE pages
@@ -391,9 +661,22 @@ async fn update_page(
     .bind(&new_url)
     .bind(&payload.workflow_state)
     .bind(&payload.editing_roles)
-    .bind(page_id.parse::<i64>().ok())
-    .fetch_one(&state.db)
+    .bind(page_id_num)
+    .fetch_one(&mut *tx)
     .await?;
+
+    // simply_versioned: every update appends a revision of the saved state.
+    insert_revision(
+        &mut tx,
+        page.id,
+        auth.id,
+        &page.title,
+        page.body.as_deref(),
+        page.url.as_deref(),
+    )
+    .await?;
+
+    tx.commit().await?;
 
     Ok(Json(page))
 }
@@ -405,38 +688,21 @@ async fn delete_page(
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
     // Get page to find course_id
-    let row: Option<(i64,)> = if let Ok(numeric_id) = page_id.parse::<i64>() {
-        sqlx::query_as("SELECT course_id FROM pages WHERE id = $1 AND workflow_state <> 'deleted'")
-            .bind(numeric_id)
-            .fetch_optional(&state.db)
-            .await?
-    } else {
-        sqlx::query_as("SELECT course_id FROM pages WHERE url = $1 AND workflow_state <> 'deleted'")
-            .bind(&page_id)
-            .fetch_optional(&state.db)
-            .await?
-    };
-
-    let (course_id,) = row.ok_or(ApiError::NotFound)?;
+    let (page_id_num, course_id) = resolve_page(&state.db, &page_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
 
     // Check modify access (teacher/admin)
     if !user_teacher_of_course(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
-    let result = if let Ok(numeric_id) = page_id.parse::<i64>() {
-        sqlx::query("UPDATE pages SET workflow_state = 'deleted', updated_at = now() WHERE id = $1")
-            .bind(numeric_id)
-            .execute(&state.db)
-            .await?
-    } else {
-        sqlx::query(
-            "UPDATE pages SET workflow_state = 'deleted', updated_at = now() WHERE url = $1",
-        )
-        .bind(&page_id)
-        .execute(&state.db)
-        .await?
-    };
+    let result = sqlx::query(
+        "UPDATE pages SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(page_id_num)
+    .execute(&state.db)
+    .await?;
 
     if result.rows_affected() == 0 {
         return Err(ApiError::NotFound);
@@ -456,25 +722,9 @@ async fn ensure_page_in_course(
     course_id: i64,
     page_ref: &str,
 ) -> Result<(), ApiError> {
-    let row: Option<(i32,)> = if let Ok(numeric_id) = page_ref.parse::<i64>() {
-        sqlx::query_as(
-            "SELECT 1 FROM pages WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'",
-        )
-        .bind(numeric_id)
-        .bind(course_id)
-        .fetch_optional(db)
-        .await?
-    } else {
-        sqlx::query_as(
-            "SELECT 1 FROM pages WHERE url = $1 AND course_id = $2 AND workflow_state <> 'deleted'",
-        )
-        .bind(page_ref)
-        .bind(course_id)
-        .fetch_optional(db)
-        .await?
-    };
-
-    row.map(|_| ()).ok_or(ApiError::NotFound)
+    load_page_in_course(db, course_id, page_ref)
+        .await
+        .map(|_| ())
 }
 
 /// GET /courses/{courseId}/pages/{id} — Canvas v1 alias for GET /pages/{id}.
@@ -509,6 +759,107 @@ async fn delete_course_page(
 }
 
 // ---------------------------------------------------------------------------
+// Page revisions (Canvas wiki_pages_api_controller#revisions / #show_revision)
+// ---------------------------------------------------------------------------
+
+/// GET /courses/{courseId}/pages/{url}/revisions — paginated history, newest
+/// first. Canvas requires `:read_revisions` (i.e. update rights).
+async fn list_revisions(
+    State(state): State<AppState>,
+    Path((course_id, page_ref)): Path<(i64, String)>,
+    Query(pagination): Query<Pagination>,
+    auth: AuthUser,
+) -> Result<Json<Vec<RevisionSummary>>, ApiError> {
+    let page = load_page_in_course(&state.db, course_id, &page_ref).await?;
+
+    if !user_teacher_of_course(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let page_number = pagination.page.max(1);
+    let per_page = pagination.per_page.clamp(1, 100);
+    let offset = (page_number - 1) * per_page;
+
+    let latest = latest_revision_number(&state.db, page.id).await?;
+    let revisions = fetch_revisions(&state.db, page.id, per_page, offset).await?;
+    Ok(Json(
+        revisions.iter().map(|row| row.summary(latest)).collect(),
+    ))
+}
+
+/// GET /courses/{courseId}/pages/{url}/revisions/latest — the current version.
+/// Canvas only requires `:read` here, so enrolled students may call it.
+async fn show_latest_revision(
+    State(state): State<AppState>,
+    Path((course_id, page_ref)): Path<(i64, String)>,
+    Query(query): Query<RevisionQuery>,
+    auth: AuthUser,
+) -> Result<Json<RevisionDetail>, ApiError> {
+    let page = load_page_in_course(&state.db, course_id, &page_ref).await?;
+
+    if !user_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let with_content = include_content(query.summary.as_deref());
+    let latest = latest_revision_number(&state.db, page.id).await?;
+
+    // Pages that predate revision tracking have no stored history: serve their
+    // current state as the (virtual) latest revision instead of erroring.
+    if latest == 0 {
+        let (url, title, body) = if with_content {
+            (
+                page.url.clone(),
+                Some(page.title.clone()),
+                page.body.clone(),
+            )
+        } else {
+            (None, None, None)
+        };
+        return Ok(Json(RevisionDetail {
+            revision_id: 0,
+            updated_at: page.updated_at,
+            latest: true,
+            url,
+            title,
+            body,
+            edited_by: None,
+        }));
+    }
+
+    let revision = fetch_revision(&state.db, page.id, latest)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(revision.detail(latest, with_content)))
+}
+
+/// GET /courses/{courseId}/pages/{url}/revisions/{revisionId} — one version.
+/// Historic versions require `:read_revisions` (teacher/admin).
+async fn show_revision(
+    State(state): State<AppState>,
+    Path((course_id, page_ref, revision_ref)): Path<(i64, String, String)>,
+    Query(query): Query<RevisionQuery>,
+    auth: AuthUser,
+) -> Result<Json<RevisionDetail>, ApiError> {
+    let page = load_page_in_course(&state.db, course_id, &page_ref).await?;
+
+    if !user_teacher_of_course(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas does `params[:revision_id].to_i` then `first!` -> 404.
+    let revision_id = revision_ref
+        .parse::<i32>()
+        .map_err(|_| ApiError::NotFound)?;
+    let with_content = include_content(query.summary.as_deref());
+    let latest = latest_revision_number(&state.db, page.id).await?;
+    let revision = fetch_revision(&state.db, page.id, revision_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(revision.detail(latest, with_content)))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -529,6 +880,18 @@ pub fn router() -> Router<AppState> {
                 .put(update_course_page)
                 .delete(delete_course_page),
         )
+        .route(
+            "/courses/{courseId}/pages/{url}/revisions",
+            get(list_revisions),
+        )
+        .route(
+            "/courses/{courseId}/pages/{url}/revisions/latest",
+            get(show_latest_revision),
+        )
+        .route(
+            "/courses/{courseId}/pages/{url}/revisions/{revisionId}",
+            get(show_revision),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -537,7 +900,21 @@ pub fn router() -> Router<AppState> {
 
 #[cfg(test)]
 mod tests {
-    use super::generate_url_slug;
+    use super::{
+        generate_url_slug, include_content, parse_canvas_bool, to_base36, PageRevisionRow,
+    };
+
+    fn revision_row() -> PageRevisionRow {
+        PageRevisionRow {
+            revision_id: 2,
+            title: "Unit Page".to_string(),
+            body: Some("<p>hello</p>".to_string()),
+            url: Some("unit-page".to_string()),
+            user_id: Some(36),
+            user_name: Some("Pat Teacher".to_string()),
+            updated_at: chrono::Utc::now(),
+        }
+    }
 
     #[test]
     fn slug_basic() {
@@ -574,5 +951,53 @@ mod tests {
     #[test]
     fn slug_underscores_are_separators() {
         assert_eq!(generate_url_slug("snake_case_title"), "snake-case-title");
+    }
+
+    #[test]
+    fn revision_json_and_canvas_helpers_match_canvas() {
+        // History item shape: revision_id, updated_at, latest, edited_by only.
+        let value = serde_json::to_value(revision_row().summary(2)).expect("serialize summary");
+        assert_eq!(value["revision_id"], 2);
+        assert_eq!(value["latest"], true);
+        assert!(value.get("title").is_none());
+        assert!(value.get("body").is_none());
+        assert!(value.get("url").is_none());
+        // edited_by mirrors user_display_json; 36 -> "10" in base36.
+        assert_eq!(value["edited_by"]["id"], 36);
+        assert_eq!(value["edited_by"]["anonymous_id"], "10");
+        assert_eq!(value["edited_by"]["display_name"], "Pat Teacher");
+        assert_eq!(value["edited_by"]["html_url"], "/users/36");
+
+        // Detail keeps content; summary=true (include_content = false) drops it.
+        let full = serde_json::to_value(revision_row().detail(2, true)).expect("serialize full");
+        assert_eq!(full["title"], "Unit Page");
+        assert_eq!(full["body"], "<p>hello</p>");
+        assert_eq!(full["url"], "unit-page");
+
+        let summary =
+            serde_json::to_value(revision_row().detail(2, false)).expect("serialize summary");
+        assert!(summary.get("title").is_none());
+        assert!(summary.get("body").is_none());
+        assert!(summary.get("url").is_none());
+        assert_eq!(summary["edited_by"]["id"], 36);
+        assert!(!revision_row().detail(3, false).latest);
+
+        // anonymous_id base36 and Canvas::Plugin.value_to_boolean parity.
+        assert_eq!(to_base36(0), "0");
+        assert_eq!(to_base36(10), "a");
+        assert_eq!(to_base36(35), "z");
+        assert_eq!(to_base36(36), "10");
+        assert_eq!(to_base36(1295), "zz");
+        assert_eq!(to_base36(1296), "100");
+        for raw in ["1", "t", "T", "true", "TRUE", "yes", "y", "on"] {
+            assert!(parse_canvas_bool(raw), "{raw} should be truthy");
+        }
+        for raw in ["0", "f", "false", "no", "n", "off", ""] {
+            assert!(!parse_canvas_bool(raw), "{raw} should be falsy");
+        }
+        assert!(include_content(None));
+        assert!(include_content(Some("false")));
+        assert!(!include_content(Some("true")));
+        assert!(!include_content(Some("1")));
     }
 }
