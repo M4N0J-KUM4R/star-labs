@@ -28,6 +28,8 @@ members = [
     "crates/star-outcomes",
     "crates/star-rubrics",
     "crates/star-submission-comments",
+    "crates/star-permissions",
+    "crates/star-jobs",
 ]
 
 [workspace.package]
