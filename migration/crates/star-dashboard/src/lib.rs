@@ -257,7 +257,7 @@ async fn fetch_grading_todos(
 ) -> Result<Vec<TodoItem>, ApiError> {
     let rows: Vec<TodoRow> = sqlx::query_as(
         r#"
-        SELECT a.id, a.course_id, a.title, a.description, a.points_possible,
+        SELECT a.id, a.course_id, a.title, a.description, a.points_possible::float8 AS points_possible,
                a.due_at, a.created_at, a.updated_at,
                c.name        AS context_name,
                c.course_code AS context_short_name,
@@ -304,7 +304,7 @@ async fn fetch_submitting_todos(
 ) -> Result<Vec<TodoItem>, ApiError> {
     let rows: Vec<TodoRow> = sqlx::query_as(
         r#"
-        SELECT a.id, a.course_id, a.title, a.description, a.points_possible,
+        SELECT a.id, a.course_id, a.title, a.description, a.points_possible::float8 AS points_possible,
                a.due_at, a.created_at, a.updated_at,
                c.name        AS context_name,
                c.course_code AS context_short_name,
@@ -478,7 +478,7 @@ async fn upcoming_events_handler(
 ) -> Result<Json<Vec<UpcomingEvent>>, ApiError> {
     let assignment_rows: Vec<AssignmentEventRow> = sqlx::query_as(
         r#"
-        SELECT a.id, a.course_id, a.title, a.description, a.points_possible,
+        SELECT a.id, a.course_id, a.title, a.description, a.points_possible::float8 AS points_possible,
                a.due_at, a.created_at, a.updated_at, c.name AS context_name
         FROM assignments a
         JOIN courses c ON c.id = a.course_id
