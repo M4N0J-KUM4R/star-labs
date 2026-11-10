@@ -1,8 +1,9 @@
 //! Integration tests for star-users.
 //!
 //! Exercises the real users router (GET /users, GET /users/self,
-//! GET /users/{id}, PUT /users/{id}, DELETE /users/{id}) through axum-test
-//! against a real Postgres.
+//! GET /users/{id}, PUT /users/{id}, DELETE /users/{id}, plus
+//! GET/PUT /users/self/profile and GET /users/{id}/profile) through
+//! axum-test against a real Postgres.
 //!
 //! Conventions (mirrors the rest of the workspace):
 //! - Skipped cleanly when DATABASE_URL is not set (prints SKIP and returns).
@@ -918,4 +919,171 @@ async fn all_routes_reject_missing_or_invalid_tokens() {
         401
     );
     assert_eq!(server.delete("/users/1").await.status_code(), 401);
+}
+
+// ---------------------------------------------------------------------------
+// GET/PUT /users/self/profile and GET /users/{id}/profile
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn self_profile_returns_canvas_shape_with_defaults() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let student = seed_user(&pool, &prefix, "Alice Student", "student").await;
+
+    let resp = server
+        .get("/users/self/profile")
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+
+    // Canvas Profile shape (identity fields from users, defaults elsewhere).
+    assert_eq!(body["id"], student);
+    assert_eq!(body["name"], "Alice Student");
+    assert_eq!(body["short_name"], "Alice Student");
+    assert_eq!(body["sortable_name"], "Student, Alice");
+    assert_eq!(
+        body["primary_email"],
+        format!("{prefix}-Alice Student@test.local")
+    );
+    assert_eq!(body["time_zone"], "UTC");
+    assert_eq!(body["locale"], "en");
+    assert!(body["title"].is_null());
+    assert!(body["bio"].is_null());
+    assert!(body["avatar_url"].is_null());
+
+    // Reading a profile never creates a row; keeps GET side-effect free.
+    let rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_profiles WHERE user_id = $1")
+        .bind(student)
+        .fetch_one(&pool)
+        .await
+        .expect("count profile rows");
+    assert_eq!(rows, 0);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn update_self_profile_upserts_and_partially_updates() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let student = seed_user(&pool, &prefix, "Bob Student", "student").await;
+
+    let resp = server
+        .put("/users/self/profile")
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({
+            "title": "Lab Instructor",
+            "bio": "Teaching Rust.",
+            "avatar_url": "https://example.test/avatar.png",
+            "time_zone": "America/Denver",
+            "locale": "fr"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["id"], student);
+    assert_eq!(body["title"], "Lab Instructor");
+    assert_eq!(body["bio"], "Teaching Rust.");
+    assert_eq!(body["avatar_url"], "https://example.test/avatar.png");
+    assert_eq!(body["time_zone"], "America/Denver");
+    assert_eq!(body["locale"], "fr");
+    // primary_email still falls back to the users table.
+    assert_eq!(
+        body["primary_email"],
+        format!("{prefix}-Bob Student@test.local")
+    );
+
+    // A later partial update only touches the supplied field.
+    let resp = server
+        .put("/users/self/profile")
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "bio": "" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["bio"], "");
+    assert_eq!(body["title"], "Lab Instructor");
+    assert_eq!(body["time_zone"], "America/Denver");
+    assert_eq!(body["locale"], "fr");
+
+    // And the merged state is persisted.
+    let resp = server
+        .get("/users/self/profile")
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["title"], "Lab Instructor");
+    assert_eq!(body["bio"], "");
+
+    let stored: (String, String) =
+        sqlx::query_as("SELECT time_zone, locale FROM user_profiles WHERE user_id = $1")
+            .bind(student)
+            .fetch_one(&pool)
+            .await
+            .expect("stored profile row");
+    assert_eq!(stored, ("America/Denver".to_string(), "fr".to_string()));
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn user_profile_visibility_is_self_or_admin() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let student = seed_user(&pool, &prefix, "Cara Student", "student").await;
+    let other = seed_user(&pool, &prefix, "Drew Student", "student").await;
+    let teacher = seed_user(&pool, &prefix, "Eli Teacher", "teacher").await;
+
+    // The owner and an admin can read the profile.
+    for (actor, role) in [(student, "student"), (admin, "admin")] {
+        let resp = server
+            .get(&format!("/users/{student}/profile"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(actor, role))
+            .await;
+        assert_eq!(resp.status_code(), 200, "{role}: {}", resp.text());
+        let body: Value = resp.json();
+        assert_eq!(body["id"], student);
+        assert_eq!(body["name"], "Cara Student");
+    }
+
+    // Everyone else is forbidden, matching GET /users/{id}.
+    for (actor, role) in [(other, "student"), (teacher, "teacher")] {
+        let resp = server
+            .get(&format!("/users/{student}/profile"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(actor, role))
+            .await;
+        assert_eq!(resp.status_code(), 403, "{role}: {}", resp.text());
+    }
+
+    // Missing users are 404 for admins; unauthenticated calls are 401.
+    let resp = server
+        .get("/users/999999999/profile")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    assert_eq!(server.get("/users/self/profile").await.status_code(), 401);
+    assert_eq!(
+        server
+            .put("/users/self/profile")
+            .json(&json!({ "title": "x" }))
+            .await
+            .status_code(),
+        401
+    );
+
+    cleanup(&pool, &prefix).await;
 }
