@@ -11,6 +11,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
@@ -1369,6 +1370,639 @@ async fn delete_section(
 }
 
 // ---------------------------------------------------------------------------
+// Course settings (Canvas API v1)
+// ---------------------------------------------------------------------------
+
+/// Default due time Canvas reports when a course has none configured.
+const DEFAULT_DUE_TIME: &str = "23:59:59";
+
+/// Canvas `course_settings_json` (lib/api/v1/course.rb#course_settings_json).
+///
+/// Every key is always emitted, including nulls, matching Canvas. The
+/// `course_settings.settings` document stores this same shape; the struct
+/// level `serde(default)` keeps older/partial documents readable.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CourseSettings {
+    pub allow_final_grade_override: bool,
+    pub allow_student_discussion_topics: bool,
+    pub allow_student_forum_attachments: bool,
+    pub allow_student_discussion_editing: bool,
+    pub allow_student_discussion_reporting: bool,
+    pub allow_student_anonymous_discussion_topics: bool,
+    pub use_default_discussion_settings: bool,
+    pub default_discussion_settings: Value,
+    pub filter_speed_grader_by_student_group: bool,
+    pub grading_standard_enabled: bool,
+    pub grading_standard_id: Option<i64>,
+    pub grade_passback_setting: Option<String>,
+    pub allow_student_organized_groups: bool,
+    pub hide_final_grades: bool,
+    pub hide_distribution_graphs: bool,
+    pub hide_sections_on_course_users_page: bool,
+    pub lock_all_announcements: bool,
+    pub usage_rights_required: bool,
+    pub restrict_student_past_view: bool,
+    pub restrict_student_future_view: bool,
+    pub restrict_quantitative_data: Option<bool>,
+    pub show_announcements_on_home_page: bool,
+    pub home_page_announcement_limit: Option<i64>,
+    pub syllabus_course_summary: bool,
+    pub homeroom_course: bool,
+    pub image_url: Option<String>,
+    pub image_id: Option<i64>,
+    pub image: Option<String>,
+    pub banner_image_url: Option<String>,
+    pub banner_image_id: Option<i64>,
+    pub banner_image: Option<String>,
+    pub course_color: Option<String>,
+    pub friendly_name: Option<String>,
+    pub default_due_time: String,
+    pub conditional_release: bool,
+    pub default_student_gradebook_view: Option<String>,
+}
+
+impl Default for CourseSettings {
+    /// Canvas `Course` column defaults for every setting this LMS models.
+    fn default() -> Self {
+        CourseSettings {
+            allow_final_grade_override: false,
+            allow_student_discussion_topics: true,
+            allow_student_forum_attachments: true,
+            allow_student_discussion_editing: true,
+            allow_student_discussion_reporting: true,
+            allow_student_anonymous_discussion_topics: false,
+            use_default_discussion_settings: true,
+            default_discussion_settings: Value::Object(Map::new()),
+            filter_speed_grader_by_student_group: false,
+            grading_standard_enabled: false,
+            grading_standard_id: None,
+            grade_passback_setting: None,
+            allow_student_organized_groups: true,
+            hide_final_grades: false,
+            hide_distribution_graphs: false,
+            hide_sections_on_course_users_page: false,
+            lock_all_announcements: false,
+            usage_rights_required: false,
+            restrict_student_past_view: false,
+            restrict_student_future_view: false,
+            restrict_quantitative_data: None,
+            show_announcements_on_home_page: false,
+            home_page_announcement_limit: None,
+            syllabus_course_summary: true,
+            homeroom_course: false,
+            image_url: None,
+            image_id: None,
+            image: None,
+            banner_image_url: None,
+            banner_image_id: None,
+            banner_image: None,
+            course_color: None,
+            friendly_name: None,
+            default_due_time: DEFAULT_DUE_TIME.to_string(),
+            conditional_release: false,
+            default_student_gradebook_view: None,
+        }
+    }
+}
+
+/// PUT /courses/{courseId}/settings body: the Canvas-permitted subset that
+/// maps onto `CourseSettings` (`CoursesController#update_settings`).
+#[derive(Debug, Default, Deserialize)]
+pub struct UpdateCourseSettings {
+    pub allow_final_grade_override: Option<bool>,
+    pub allow_student_discussion_topics: Option<bool>,
+    pub allow_student_forum_attachments: Option<bool>,
+    pub allow_student_discussion_editing: Option<bool>,
+    pub allow_student_discussion_reporting: Option<bool>,
+    pub allow_student_anonymous_discussion_topics: Option<bool>,
+    pub use_default_discussion_settings: Option<bool>,
+    pub default_discussion_settings: Option<Value>,
+    pub filter_speed_grader_by_student_group: Option<bool>,
+    pub allow_student_organized_groups: Option<bool>,
+    pub hide_final_grades: Option<bool>,
+    pub hide_distribution_graphs: Option<bool>,
+    pub hide_sections_on_course_users_page: Option<bool>,
+    pub lock_all_announcements: Option<bool>,
+    pub usage_rights_required: Option<bool>,
+    pub restrict_student_past_view: Option<bool>,
+    pub restrict_student_future_view: Option<bool>,
+    pub restrict_quantitative_data: Option<bool>,
+    pub show_announcements_on_home_page: Option<bool>,
+    pub home_page_announcement_limit: Option<i64>,
+    pub syllabus_course_summary: Option<bool>,
+    pub homeroom_course: Option<bool>,
+    pub course_color: Option<String>,
+    pub friendly_name: Option<String>,
+    pub conditional_release: Option<bool>,
+    pub default_due_time: Option<String>,
+    pub default_student_gradebook_view: Option<String>,
+}
+
+impl CourseSettings {
+    /// Apply the provided (non-absent) Canvas update params.
+    ///
+    /// Like the other course PUT routes in this crate, absent/null fields
+    /// keep their current value (nullable settings cannot be cleared).
+    fn apply(&mut self, patch: UpdateCourseSettings) {
+        macro_rules! apply_fields {
+            ($($field:ident),+ $(,)?) => {
+                $(if let Some(value) = patch.$field { self.$field = value; })+
+            };
+        }
+        apply_fields!(
+            allow_final_grade_override,
+            allow_student_discussion_topics,
+            allow_student_forum_attachments,
+            allow_student_discussion_editing,
+            allow_student_discussion_reporting,
+            allow_student_anonymous_discussion_topics,
+            use_default_discussion_settings,
+            filter_speed_grader_by_student_group,
+            allow_student_organized_groups,
+            hide_final_grades,
+            hide_distribution_graphs,
+            hide_sections_on_course_users_page,
+            lock_all_announcements,
+            usage_rights_required,
+            restrict_student_past_view,
+            restrict_student_future_view,
+            show_announcements_on_home_page,
+            syllabus_course_summary,
+            homeroom_course,
+            conditional_release,
+        );
+
+        // Nullable settings keep their update semantics: Some sets, None keeps.
+        if let Some(value) = patch.restrict_quantitative_data {
+            self.restrict_quantitative_data = Some(value);
+        }
+        if let Some(value) = patch.home_page_announcement_limit {
+            self.home_page_announcement_limit = Some(value);
+        }
+        if let Some(value) = patch.course_color {
+            self.course_color = Some(value);
+        }
+        if let Some(value) = patch.friendly_name {
+            self.friendly_name = Some(value);
+        }
+        if let Some(value) = patch.default_student_gradebook_view {
+            self.default_student_gradebook_view = Some(value);
+        }
+        if let Some(value) = patch.default_discussion_settings {
+            if let Some(settings) = sanitize_discussion_settings(value) {
+                self.default_discussion_settings = settings;
+            }
+        }
+        if let Some(value) = patch.default_due_time {
+            self.default_due_time =
+                normalize_due_time(&value).unwrap_or_else(|| DEFAULT_DUE_TIME.to_string());
+        }
+    }
+}
+
+/// Canvas `normalize_due_time` (`DefaultDueTimeHelper`): accept "HH:MM" or
+/// "HH:MM:SS", reject anything out of range/format. Blank and "inherit"
+/// mean unset, which Canvas serializes back as the 23:59:59 default.
+fn normalize_due_time(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() || raw.eq_ignore_ascii_case("inherit") {
+        return None;
+    }
+
+    let parts: Vec<&str> = raw.split(':').collect();
+    if !(2..=3).contains(&parts.len()) {
+        return None;
+    }
+    let mut nums = [0u32; 3];
+    for (idx, part) in parts.iter().enumerate() {
+        nums[idx] = part.parse().ok()?;
+    }
+    let [hour, minute, second] = nums;
+    if hour > 23 || minute > 59 || second > 59 {
+        return None;
+    }
+    Some(format!("{hour:02}:{minute:02}:{second:02}"))
+}
+
+/// Canvas permits a fixed key set for `default_discussion_settings` and only
+/// assigns object params; unknown keys are dropped and non-objects ignored.
+fn sanitize_discussion_settings(value: Value) -> Option<Value> {
+    const ALLOWED: &[&str] = &[
+        "anonymous_state",
+        "disallow_threaded_replies",
+        "require_initial_post",
+        "podcast_enabled",
+        "podcast_has_student_posts",
+        "allow_rating",
+        "only_graders_can_rate",
+        "expanded",
+        "expanded_locked",
+        "sort_order",
+        "sort_order_locked",
+    ];
+
+    match value {
+        Value::Object(map) => {
+            let filtered: Map<String, Value> = map
+                .into_iter()
+                .filter(|(key, _)| ALLOWED.contains(&key.as_str()))
+                .collect();
+            Some(Value::Object(filtered))
+        }
+        _ => None,
+    }
+}
+
+/// Load the effective settings document, falling back to Canvas defaults
+/// when the course has never saved settings (or the document is unreadable).
+async fn load_course_settings(pool: &PgPool, course_id: i64) -> Result<CourseSettings, ApiError> {
+    let row: Option<(String,)> =
+        sqlx::query_as(r#"SELECT settings FROM course_settings WHERE course_id = $1"#)
+            .bind(course_id)
+            .fetch_optional(pool)
+            .await?;
+
+    Ok(row
+        .and_then(|(raw,)| serde_json::from_str::<CourseSettings>(&raw).ok())
+        .unwrap_or_default())
+}
+
+/// Upsert the effective settings document for a course.
+async fn save_course_settings(
+    pool: &PgPool,
+    course_id: i64,
+    settings: &CourseSettings,
+) -> Result<(), ApiError> {
+    let raw = serde_json::to_string(settings).map_err(|e| ApiError::Db(e.to_string()))?;
+    sqlx::query(
+        r#"
+        INSERT INTO course_settings (course_id, settings)
+        VALUES ($1, $2)
+        ON CONFLICT (course_id)
+        DO UPDATE SET settings = EXCLUDED.settings, updated_at = now()
+        "#,
+    )
+    .bind(course_id)
+    .bind(raw)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// GET /courses/{courseId}/settings — Canvas `course_settings_json`
+/// (requires course read; enrolled users or admin).
+async fn get_course_settings(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<CourseSettings>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    Ok(Json(load_course_settings(&state.db, course_id).await?))
+}
+
+/// PUT /courses/{courseId}/settings — partial update of the Canvas-permitted
+/// settings (course teacher or admin; Canvas `update_course_details`).
+async fn update_course_settings(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateCourseSettings>,
+) -> Result<Json<CourseSettings>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let mut settings = load_course_settings(&state.db, course_id).await?;
+    settings.apply(payload);
+    save_course_settings(&state.db, course_id, &settings).await?;
+
+    Ok(Json(settings))
+}
+
+// ---------------------------------------------------------------------------
+// Course roster (Canvas API v1)
+// ---------------------------------------------------------------------------
+
+/// Flat row for the course roster query.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct CourseUserRow {
+    id: i64,
+    name: String,
+    sortable_name: String,
+    email: String,
+    role: String,
+    created_at: DateTime<Utc>,
+}
+
+/// Canvas `user_json` subset returned by the course roster endpoints.
+///
+/// `short_name` mirrors Canvas (`User#short_name` falls back to the full
+/// name); `role` is the user's course enrollment role (this LMS stores one
+/// row per enrollment rather than Canvas enrollment objects).
+#[derive(Debug, Clone, Serialize)]
+pub struct CourseUser {
+    pub id: i64,
+    pub name: String,
+    pub sortable_name: String,
+    pub short_name: String,
+    pub email: String,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+}
+
+impl From<CourseUserRow> for CourseUser {
+    fn from(row: CourseUserRow) -> Self {
+        CourseUser {
+            short_name: row.name.clone(),
+            id: row.id,
+            name: row.name,
+            sortable_name: row.sortable_name,
+            email: row.email,
+            role: row.role,
+            created_at: row.created_at,
+        }
+    }
+}
+
+/// Paginated roster response (repo-wide pagination envelope).
+#[derive(Debug, Clone, Serialize)]
+pub struct PaginatedCourseUsers {
+    pub data: Vec<CourseUser>,
+    pub page: i64,
+    pub per_page: i64,
+    pub total: i64,
+}
+
+/// Query params for GET /courses/{courseId}/users (Canvas subset).
+#[derive(Debug, Default, Deserialize)]
+pub struct CourseUserListQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+    pub search_term: Option<String>,
+}
+
+/// LIKE pattern for the roster `search_term` (Canvas searches name/email).
+fn roster_search_pattern(term: Option<&str>) -> Option<String> {
+    term.map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("%{s}%"))
+}
+
+/// GET /courses/{courseId}/users — course roster (Canvas `users` action).
+async fn list_course_users(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Query(query): Query<CourseUserListQuery>,
+) -> Result<Json<PaginatedCourseUsers>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let (page, per_page, offset) = Pagination {
+        page: query.page,
+        per_page: query.per_page,
+    }
+    .resolve();
+    let search = roster_search_pattern(query.search_term.as_deref());
+
+    let (total,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(DISTINCT u.id)
+        FROM enrollments e
+        JOIN users u ON u.id = e.user_id
+        WHERE e.course_id = $1
+          AND ($2::text IS NULL OR u.name ILIKE $2 OR u.email ILIKE $2)
+        "#,
+    )
+    .bind(course_id)
+    .bind(&search)
+    .fetch_one(&state.db)
+    .await?;
+
+    // One row per user; teacher is preferred when several roles exist.
+    let rows: Vec<CourseUserRow> = sqlx::query_as(
+        r#"
+        SELECT id, name, sortable_name, email, role, created_at
+        FROM (
+            SELECT DISTINCT ON (u.id)
+                   u.id, u.name,
+                   COALESCE(u.sortable_name, u.name) AS sortable_name,
+                   u.email, e.role, u.created_at
+            FROM enrollments e
+            JOIN users u ON u.id = e.user_id
+            WHERE e.course_id = $1
+              AND ($2::text IS NULL OR u.name ILIKE $2 OR u.email ILIKE $2)
+            ORDER BY u.id, (e.role = 'teacher') DESC, e.role
+        ) AS roster
+        ORDER BY sortable_name ASC, id ASC
+        LIMIT $3 OFFSET $4
+        "#,
+    )
+    .bind(course_id)
+    .bind(&search)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(PaginatedCourseUsers {
+        data: rows.into_iter().map(Into::into).collect(),
+        page,
+        per_page,
+        total,
+    }))
+}
+
+/// GET /courses/{courseId}/users/{userId} — single roster user.
+/// 404 when the user is not enrolled in the course (Canvas visible-users
+/// lookup), 403 when the caller cannot read the course.
+async fn get_course_user(
+    State(state): State<AppState>,
+    Path((course_id, user_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<CourseUser>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let row: Option<CourseUserRow> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT ON (u.id)
+               u.id, u.name,
+               COALESCE(u.sortable_name, u.name) AS sortable_name,
+               u.email, e.role, u.created_at
+        FROM enrollments e
+        JOIN users u ON u.id = e.user_id
+        WHERE e.course_id = $1 AND u.id = $2
+        ORDER BY u.id, (e.role = 'teacher') DESC, e.role
+        "#,
+    )
+    .bind(course_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    row.map(|row| Json(row.into())).ok_or(ApiError::NotFound)
+}
+
+// ---------------------------------------------------------------------------
+// Course navigation tabs (Canvas API v1)
+// ---------------------------------------------------------------------------
+
+/// A Canvas navigation tab (`Api::V1::Tab#tab_json`).
+#[derive(Debug, Clone, Serialize)]
+pub struct CourseTab {
+    pub id: String,
+    pub html_url: String,
+    pub full_url: String,
+    pub position: i64,
+    #[serde(skip_serializing_if = "is_false")]
+    pub hidden: bool,
+    pub visibility: String,
+    pub label: String,
+    #[serde(rename = "type")]
+    pub tab_type: String,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Canvas `Course.default_tabs` subset implemented by this LMS, in order.
+/// Entries are (tab id / css_class, label, path suffix under /courses/:id).
+const DEFAULT_COURSE_TABS: &[(&str, &str, &str)] = &[
+    ("home", "Home", ""),
+    ("announcements", "Announcements", "/announcements"),
+    ("assignments", "Assignments", "/assignments"),
+    ("discussions", "Discussions", "/discussion_topics"),
+    ("grades", "Grades", "/grades"),
+    ("people", "People", "/users"),
+    ("pages", "Pages", "/pages"),
+    ("files", "Files", "/files"),
+    ("syllabus", "Syllabus", "/assignments/syllabus"),
+    ("modules", "Modules", "/modules"),
+    ("outcomes", "Outcomes", "/outcomes"),
+    ("quizzes", "Quizzes", "/quizzes"),
+];
+
+/// Settings tab: pinned last, only for course teachers/admins, never hidden.
+const SETTINGS_COURSE_TAB: (&str, &str, &str) = ("settings", "Settings", "/settings");
+
+/// One persisted row from `course_tabs`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct CourseTabConfig {
+    tab_id: String,
+    position: i32,
+    hidden: bool,
+}
+
+/// Merge persisted tab configuration into the defaults the way Canvas does:
+/// Home is pinned first and Settings last, Home/Settings cannot be hidden or
+/// moved, and other tabs are ordered by configured position then default
+/// order.
+fn build_course_tabs(
+    course_id: i64,
+    include_settings: bool,
+    configs: &[CourseTabConfig],
+) -> Vec<CourseTab> {
+    fn tab(course_id: i64, def: (&str, &str, &str), hidden: bool) -> CourseTab {
+        let (id, label, suffix) = def;
+        let html_url = format!("/courses/{course_id}{suffix}");
+        CourseTab {
+            id: id.to_string(),
+            html_url: html_url.clone(),
+            // No absolute host is configured for API responses, so full_url
+            // mirrors html_url (relative), matching other star crates.
+            full_url: html_url,
+            position: 0,
+            hidden,
+            visibility: if hidden || id == "settings" {
+                "admins"
+            } else {
+                "public"
+            }
+            .to_string(),
+            label: label.to_string(),
+            tab_type: "internal".to_string(),
+        }
+    }
+
+    let mut ordered: Vec<(i32, usize, CourseTab)> = Vec::new();
+    for (idx, def) in DEFAULT_COURSE_TABS.iter().enumerate() {
+        let config = configs.iter().find(|config| config.tab_id == def.0);
+        let manageable = def.0 != "home";
+        let position = if manageable {
+            config.map(|c| c.position).unwrap_or(idx as i32 + 1)
+        } else {
+            0
+        };
+        let hidden = manageable && config.map(|c| c.hidden).unwrap_or(false);
+        ordered.push((position, idx, tab(course_id, *def, hidden)));
+    }
+    ordered.sort_by_key(|(position, idx, _)| (*position, *idx));
+
+    let mut tabs: Vec<CourseTab> = ordered.into_iter().map(|(_, _, t)| t).collect();
+    if include_settings {
+        tabs.push(tab(course_id, SETTINGS_COURSE_TAB, false));
+    }
+    for (idx, tab) in tabs.iter_mut().enumerate() {
+        tab.position = idx as i64 + 1;
+    }
+    tabs
+}
+
+/// GET /courses/{courseId}/tabs — Canvas `TabsController#index` (bare array,
+/// positions renumbered 1..n after configuration ordering).
+async fn list_course_tabs(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<CourseTab>>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let include_settings = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+
+    let configs: Vec<CourseTabConfig> = sqlx::query_as(
+        r#"
+        SELECT tab_id, position, hidden
+        FROM course_tabs
+        WHERE course_id = $1
+        ORDER BY position ASC, id ASC
+        "#,
+    )
+    .bind(course_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(build_course_tabs(
+        course_id,
+        include_settings,
+        &configs,
+    )))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -1406,6 +2040,14 @@ pub fn router() -> Router<AppState> {
         .route("/sections/{id}", get(get_section))
         .route("/sections/{id}", put(update_section))
         .route("/sections/{id}", delete(delete_section))
+        // Course settings, roster and navigation tabs (Canvas API v1)
+        .route(
+            "/courses/{courseId}/settings",
+            get(get_course_settings).put(update_course_settings),
+        )
+        .route("/courses/{courseId}/users", get(list_course_users))
+        .route("/courses/{courseId}/users/{userId}", get(get_course_user))
+        .route("/courses/{courseId}/tabs", get(list_course_tabs))
 }
 
 // ---------------------------------------------------------------------------
@@ -1584,6 +2226,106 @@ mod tests {
             .with_timezone(&chrono::Utc);
 
         assert!(validate_date_range(Some(start), Some(end)).is_err());
+    }
+
+    #[test]
+    fn test_course_settings_defaults_and_partial_patch() {
+        let mut settings = CourseSettings::default();
+        assert!(settings.allow_student_discussion_topics);
+        assert!(settings.allow_student_forum_attachments);
+        assert!(settings.allow_student_organized_groups);
+        assert!(!settings.hide_final_grades);
+        assert_eq!(settings.default_due_time, "23:59:59");
+        assert_eq!(settings.default_discussion_settings, serde_json::json!({}));
+
+        settings.apply(UpdateCourseSettings {
+            hide_final_grades: Some(true),
+            allow_student_discussion_topics: Some(false),
+            default_due_time: Some("9:05:00".to_string()),
+            default_discussion_settings: Some(serde_json::json!({
+                "sort_order": "desc",
+                "bogus": true,
+            })),
+            ..Default::default()
+        });
+
+        assert!(settings.hide_final_grades);
+        assert!(!settings.allow_student_discussion_topics);
+        assert!(
+            !settings.hide_distribution_graphs,
+            "fields absent from the patch keep their value"
+        );
+        assert_eq!(settings.default_due_time, "09:05:00");
+        assert_eq!(
+            settings.default_discussion_settings,
+            serde_json::json!({ "sort_order": "desc" }),
+            "unknown discussion settings keys are dropped"
+        );
+    }
+
+    #[test]
+    fn test_normalize_due_time_canvas_rules() {
+        assert_eq!(normalize_due_time("23:59:59"), Some("23:59:59".to_string()));
+        assert_eq!(normalize_due_time("9:05"), Some("09:05:00".to_string()));
+        assert_eq!(normalize_due_time("inherit"), None);
+        assert_eq!(normalize_due_time("  "), None);
+        assert_eq!(normalize_due_time("25:00:00"), None);
+        assert_eq!(normalize_due_time("11:60:00"), None);
+        assert_eq!(normalize_due_time("lunchtime"), None);
+    }
+
+    #[test]
+    fn test_build_course_tabs_pins_home_settings_and_applies_config() {
+        let configs = vec![
+            CourseTabConfig {
+                tab_id: "modules".into(),
+                position: 1,
+                hidden: true,
+            },
+            CourseTabConfig {
+                tab_id: "home".into(),
+                position: 99,
+                hidden: true,
+            },
+            CourseTabConfig {
+                tab_id: "settings".into(),
+                position: 1,
+                hidden: true,
+            },
+        ];
+
+        let student_tabs = build_course_tabs(42, false, &configs);
+        assert_eq!(student_tabs.first().unwrap().id, "home");
+        assert_eq!(student_tabs.first().unwrap().position, 1);
+        assert!(
+            !student_tabs.first().unwrap().hidden,
+            "home cannot be hidden"
+        );
+        assert!(
+            student_tabs.iter().all(|tab| tab.id != "settings"),
+            "students do not get the settings tab"
+        );
+
+        let teacher_tabs = build_course_tabs(42, true, &configs);
+        assert_eq!(teacher_tabs.first().unwrap().id, "home");
+        assert_eq!(teacher_tabs[1].id, "modules", "configured first");
+        assert_eq!(teacher_tabs.last().unwrap().id, "settings");
+        assert_eq!(teacher_tabs.last().unwrap().visibility, "admins");
+        assert_eq!(
+            teacher_tabs.last().unwrap().html_url,
+            "/courses/42/settings"
+        );
+
+        let modules = &teacher_tabs[1];
+        assert!(modules.hidden);
+        assert_eq!(modules.visibility, "admins");
+        assert_eq!(modules.html_url, "/courses/42/modules");
+
+        let positions: Vec<i64> = teacher_tabs.iter().map(|tab| tab.position).collect();
+        assert_eq!(
+            positions,
+            (1..=teacher_tabs.len() as i64).collect::<Vec<_>>()
+        );
     }
 }
 
