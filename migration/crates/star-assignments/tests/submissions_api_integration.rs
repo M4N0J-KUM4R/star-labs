@@ -421,7 +421,7 @@ async fn bulk_mark_read_marks_only_callers_submissions() {
     let resp = server
         .put(&format!("/courses/{course}/submissions/bulk_mark_read"))
         .add_header(axum::http::header::AUTHORIZATION, auth(alice, "student"))
-        .text(&format!("submissionIds[]={alice_sub}"))
+        .text(format!("submissionIds[]={alice_sub}"))
         .await;
     assert_eq!(resp.status_code(), 204, "{}", resp.text());
 
