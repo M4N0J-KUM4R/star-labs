@@ -671,6 +671,82 @@ pub async fn put_role_overrides(
     fetch_context_role_overrides(db, context, context_id).await
 }
 
+
+use axum::{
+    extract::{Path, State},
+    routing::get,
+    Json, Router,
+};
+use star_auth::AuthUser;
+use star_common::AppState;
+
+/// Canvas role-override administration routes.
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/accounts/{accountId}/role_overrides",
+            get(get_account_overrides).put(put_account_overrides),
+        )
+        .route(
+            "/courses/{courseId}/role_overrides",
+            get(get_course_overrides).put(put_course_overrides),
+        )
+}
+
+async fn get_account_overrides(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<RoleOverrideView>>, ApiError> {
+    get_role_overrides(&state.db, auth.id, RoleOverrideContext::Account, account_id)
+        .await
+        .map(Json)
+}
+
+async fn put_account_overrides(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(update): Json<RoleOverridesUpdate>,
+) -> Result<Json<Vec<RoleOverrideView>>, ApiError> {
+    put_role_overrides(
+        &state.db,
+        auth.id,
+        RoleOverrideContext::Account,
+        account_id,
+        &update,
+    )
+    .await
+    .map(Json)
+}
+
+async fn get_course_overrides(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<RoleOverrideView>>, ApiError> {
+    get_role_overrides(&state.db, auth.id, RoleOverrideContext::Course, course_id)
+        .await
+        .map(Json)
+}
+
+async fn put_course_overrides(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Json(update): Json<RoleOverridesUpdate>,
+) -> Result<Json<Vec<RoleOverrideView>>, ApiError> {
+    put_role_overrides(
+        &state.db,
+        auth.id,
+        RoleOverrideContext::Course,
+        course_id,
+        &update,
+    )
+    .await
+    .map(Json)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1008,79 +1084,4 @@ mod tests {
             role_id: Role::Teacher.builtin_role_id(),
         }
     }
-}
-
-use axum::{
-    extract::{Path, State},
-    routing::get,
-    Json, Router,
-};
-use star_auth::AuthUser;
-use star_common::AppState;
-
-/// Canvas role-override administration routes.
-pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/accounts/{accountId}/role_overrides",
-            get(get_account_overrides).put(put_account_overrides),
-        )
-        .route(
-            "/courses/{courseId}/role_overrides",
-            get(get_course_overrides).put(put_course_overrides),
-        )
-}
-
-async fn get_account_overrides(
-    State(state): State<AppState>,
-    Path(account_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<Vec<RoleOverrideView>>, ApiError> {
-    get_role_overrides(&state.db, auth.id, RoleOverrideContext::Account, account_id)
-        .await
-        .map(Json)
-}
-
-async fn put_account_overrides(
-    State(state): State<AppState>,
-    Path(account_id): Path<i64>,
-    auth: AuthUser,
-    Json(update): Json<RoleOverridesUpdate>,
-) -> Result<Json<Vec<RoleOverrideView>>, ApiError> {
-    put_role_overrides(
-        &state.db,
-        auth.id,
-        RoleOverrideContext::Account,
-        account_id,
-        &update,
-    )
-    .await
-    .map(Json)
-}
-
-async fn get_course_overrides(
-    State(state): State<AppState>,
-    Path(course_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<Vec<RoleOverrideView>>, ApiError> {
-    get_role_overrides(&state.db, auth.id, RoleOverrideContext::Course, course_id)
-        .await
-        .map(Json)
-}
-
-async fn put_course_overrides(
-    State(state): State<AppState>,
-    Path(course_id): Path<i64>,
-    auth: AuthUser,
-    Json(update): Json<RoleOverridesUpdate>,
-) -> Result<Json<Vec<RoleOverrideView>>, ApiError> {
-    put_role_overrides(
-        &state.db,
-        auth.id,
-        RoleOverrideContext::Course,
-        course_id,
-        &update,
-    )
-    .await
-    .map(Json)
 }
