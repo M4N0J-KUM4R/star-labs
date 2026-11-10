@@ -93,6 +93,28 @@ async fn seed_rubric(pool: &PgPool, course_id: i64, title: &str) -> i64 {
     .expect("seed rubric")
 }
 
+async fn seed_assignment(pool: &PgPool, course_id: i64, title: &str) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO assignments (course_id, title, points_possible) VALUES ($1, $2, 100.0) RETURNING id",
+    )
+    .bind(course_id)
+    .bind(title)
+    .fetch_one(pool)
+    .await
+    .expect("seed assignment")
+}
+
+async fn seed_submission(pool: &PgPool, assignment_id: i64, user_id: i64) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO submissions (assignment_id, user_id, body) VALUES ($1, $2, 'answer') RETURNING id",
+    )
+    .bind(assignment_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .expect("seed submission")
+}
+
 fn auth(user_id: i64, role: &str) -> String {
     let token = star_auth::create_token(user_id, role, "test-jwt-secret").expect("mint token");
     format!("Bearer {token}")
@@ -294,6 +316,224 @@ async fn nested_aliases_preserve_flat_route_authorization() {
             .expect("fetch rubric");
     assert_eq!(title, "Guarded");
     assert_eq!(workflow_state, "active");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn course_scoped_assessments_create_list_and_read() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    let other_course = seed_course(&pool, &prefix, "Other").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let assignment = seed_assignment(&pool, course, "Essay").await;
+    let submission = seed_submission(&pool, assignment, student).await;
+    let rubric = seed_rubric(&pool, course, "Essay Rubric").await;
+
+    // Course-scoped create accepts the submission-backed assessment payload.
+    let created = server
+        .post(&format!("/courses/{course}/rubrics/{rubric}/assessments"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "submission_id": submission,
+            "score": 85.0,
+            "data": [{ "criterion_id": 1, "rating_id": 2, "points": 85.0 }]
+        }))
+        .await;
+    assert_eq!(created.status_code(), 201, "body: {}", created.text());
+    let created_body: Value = created.json();
+    let assessment_id = created_body["id"].as_i64().expect("assessment id");
+    assert_eq!(created_body["rubric_id"].as_i64(), Some(rubric));
+    assert_eq!(created_body["course_id"].as_i64(), Some(course));
+    assert_eq!(created_body["submission_id"].as_i64(), Some(submission));
+    assert_eq!(created_body["user_id"].as_i64(), Some(student));
+    assert_eq!(created_body["assessor_id"].as_i64(), Some(teacher));
+    assert_eq!(created_body["assessment_type"].as_str(), Some("grading"));
+
+    // Course-scoped list returns it for the teacher.
+    let listed = server
+        .get(&format!("/courses/{course}/rubrics/{rubric}/assessments"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(listed.status_code(), 200, "body: {}", listed.text());
+    let listed_body: Value = listed.json();
+    let rows = listed_body.as_array().expect("assessment list");
+    assert!(rows.iter().any(|r| r["id"].as_i64() == Some(assessment_id)));
+
+    // The assessed student can read the flat route; the teacher can too.
+    for user in [teacher, student] {
+        let role = if user == teacher {
+            "teacher"
+        } else {
+            "student"
+        };
+        let fetched = server
+            .get(&format!("/rubric_assessments/{assessment_id}"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(user, role))
+            .await;
+        assert_eq!(fetched.status_code(), 200, "body: {}", fetched.text());
+        let fetched_body: Value = fetched.json();
+        assert_eq!(fetched_body["id"].as_i64(), Some(assessment_id));
+        assert_eq!(fetched_body["score"].as_f64(), Some(85.0));
+    }
+
+    // Wrong-course nested access is a 404.
+    let wrong_course = server
+        .get(&format!(
+            "/courses/{other_course}/rubrics/{rubric}/assessments"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(wrong_course.status_code(), 404);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn rubric_assessment_update_and_delete_roundtrip() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let assignment = seed_assignment(&pool, course, "Essay").await;
+    let submission = seed_submission(&pool, assignment, student).await;
+    let rubric = seed_rubric(&pool, course, "Essay Rubric").await;
+
+    // Create through the pre-existing flat route.
+    let created = server
+        .post(&format!("/rubrics/{rubric}/assessments"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "submission_id": submission, "score": 70.0, "data": [] }))
+        .await;
+    assert_eq!(created.status_code(), 201, "body: {}", created.text());
+    let assessment_id = created.json::<Value>()["id"]
+        .as_i64()
+        .expect("assessment id");
+
+    // Partial update: score, comments, type.
+    let updated = server
+        .put(&format!("/rubric_assessments/{assessment_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "score": 92.5,
+            "comments": "Strong thesis",
+            "assessment_type": "peer_review"
+        }))
+        .await;
+    assert_eq!(updated.status_code(), 200, "body: {}", updated.text());
+    let updated_body: Value = updated.json();
+    assert_eq!(updated_body["score"].as_f64(), Some(92.5));
+    assert_eq!(updated_body["comments"].as_str(), Some("Strong thesis"));
+    assert_eq!(
+        updated_body["assessment_type"].as_str(),
+        Some("peer_review")
+    );
+
+    // Invalid assessment types are rejected without touching the row.
+    let invalid = server
+        .put(&format!("/rubric_assessments/{assessment_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "assessment_type": "curve" }))
+        .await;
+    assert_eq!(invalid.status_code(), 422);
+
+    // Delete removes the row and returns the deleted assessment (Canvas shape).
+    let deleted = server
+        .delete(&format!("/rubric_assessments/{assessment_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(deleted.status_code(), 200, "body: {}", deleted.text());
+    assert_eq!(deleted.json::<Value>()["id"].as_i64(), Some(assessment_id));
+
+    let gone = server
+        .get(&format!("/rubric_assessments/{assessment_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(gone.status_code(), 404);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn rubric_assessment_routes_enforce_canvas_access_policy() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    seed_enrollment(&pool, outsider, course, "student").await;
+    let assignment = seed_assignment(&pool, course, "Essay").await;
+    let submission = seed_submission(&pool, assignment, student).await;
+    let rubric = seed_rubric(&pool, course, "Essay Rubric").await;
+
+    let created = server
+        .post(&format!("/courses/{course}/rubrics/{rubric}/assessments"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "submission_id": submission, "score": 80.0 }))
+        .await;
+    assert_eq!(created.status_code(), 201, "body: {}", created.text());
+    let assessment_id = created.json::<Value>()["id"]
+        .as_i64()
+        .expect("assessment id");
+
+    // A different enrolled student cannot read or modify someone's assessment.
+    for method in ["get", "put", "delete"] {
+        let request = match method {
+            "get" => server.get(&format!("/rubric_assessments/{assessment_id}")),
+            "put" => server.put(&format!("/rubric_assessments/{assessment_id}")),
+            _ => server.delete(&format!("/rubric_assessments/{assessment_id}")),
+        }
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"));
+        let response = if method == "put" {
+            request.json(&json!({ "score": 100.0 })).await
+        } else {
+            request.await
+        };
+        assert_eq!(
+            response.status_code(),
+            403,
+            "{method} must be forbidden for an unrelated student"
+        );
+    }
+
+    // Students may not create assessments either (existing teacher-only rule).
+    let student_create = server
+        .post(&format!("/courses/{course}/rubrics/{rubric}/assessments"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "submission_id": submission, "score": 100.0 }))
+        .await;
+    assert_eq!(student_create.status_code(), 403);
+
+    // Unauthenticated access is rejected.
+    let anonymous = server
+        .get(&format!("/rubric_assessments/{assessment_id}"))
+        .await;
+    assert_eq!(anonymous.status_code(), 401);
+
+    // The rejected writes left the assessment untouched.
+    let (score,): (Option<f64>,) =
+        sqlx::query_as("SELECT score FROM rubric_assessments WHERE id = $1")
+            .bind(assessment_id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch assessment");
+    assert_eq!(score, Some(80.0));
 
     cleanup(&pool, &prefix).await;
 }
