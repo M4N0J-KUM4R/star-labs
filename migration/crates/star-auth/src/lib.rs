@@ -546,10 +546,14 @@ async fn create_developer_key(
         .redirect_uris
         .map(StringList::into_vec)
         .unwrap_or_default();
-    if let Some(single) = params.redirect_uri.as_deref().map(str::trim) {
-        if !single.is_empty() && !redirect_uris.iter().any(|uri| uri.as_str() == single) {
-            redirect_uris.push(single.to_string());
-        }
+    if let Some(single) = params
+        .redirect_uri
+        .as_deref()
+        .map(str::trim)
+        .filter(|single| !single.is_empty())
+        .filter(|single| !redirect_uris.iter().any(|uri| uri.as_str() == *single))
+    {
+        redirect_uris.push(single.to_string());
     }
     let scopes = params.scopes.map(StringList::into_vec).unwrap_or_default();
     let api_key = generate_opaque_token(32);
