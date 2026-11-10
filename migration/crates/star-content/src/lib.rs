@@ -1,12 +1,19 @@
-//! star-content — thin aggregator crate.
+//! star-content — content domain crate.
 //!
 //! Re-exports and merges routers from the compilable content sub-crates:
 //! - `star_pages::router()`       — `/courses/{courseId}/pages`, `/pages/{id}`
 //! - `star_announcements::router()` — `/courses/{courseId}/announcements`, `/announcements/{id}`
 //! - `star_modules::router()`      — `/courses/{courseId}/modules`, `/modules/{id}`
 //!
+//! and adds the content_exports routes owned by this crate:
+//! - `/courses/{courseId}/content_exports`      — list / create
+//! - `/courses/{courseId}/content_exports/{id}` — Canvas v1 nested show
+//! - `/content_exports/{id}`                    — flat show
+//!
 //! The sub-crates own all handlers and domain logic; this crate only
 //! provides a single merged `Router<AppState>` for inclusion in `star-http`.
+
+pub mod content_exports;
 
 use axum::Router;
 use star_common::AppState;
@@ -17,6 +24,7 @@ pub fn router() -> Router<AppState> {
         .merge(star_pages::router())
         .merge(star_announcements::router())
         .merge(star_modules::router())
+        .merge(content_exports::router())
 }
 
 #[cfg(test)]
