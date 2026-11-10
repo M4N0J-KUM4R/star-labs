@@ -1,8 +1,10 @@
 //! Integration tests for star-auth.
 //!
 //! Exercises the real auth router (POST /auth/register, POST /auth/login,
-//! GET /auth/me, POST /auth/logout) through axum-test against a real
-//! Postgres, plus the public helpers (hash_password/verify_password,
+//! GET /auth/me, POST /auth/logout), the Canvas developer key routes
+//! (GET/POST /developer_keys, DELETE /developer_keys/{id}) and the OAuth2
+//! token endpoint (POST /login/oauth2/token) through axum-test against a
+//! real Postgres, plus the public helpers (hash_password/verify_password,
 //! create_token/verify_token, fetch_user_by_id via GET /auth/me) and the
 //! AuthUser extractor.
 //!
@@ -127,6 +129,13 @@ fn auth(user_id: i64, role: &str) -> String {
 async fn cleanup(pool: &PgPool, prefix: &str) {
     let _ = sqlx::query("DELETE FROM users WHERE email LIKE $1")
         .bind(format!("{prefix}%@test.local"))
+        .execute(pool)
+        .await;
+    // Developer keys (and their access tokens, via ON DELETE CASCADE) are
+    // named with the run prefix; rows whose creating user was just deleted
+    // still need explicit cleanup.
+    let _ = sqlx::query("DELETE FROM developer_keys WHERE name LIKE $1")
+        .bind(format!("{prefix}%"))
         .execute(pool)
         .await;
 }
@@ -667,6 +676,230 @@ async fn me_returns_all_persisted_user_fields() {
     assert_eq!(body["email"], format!("{prefix}-FetchMe@test.local"));
     assert_eq!(body["role"], "teacher");
     assert!(body["created_at"].is_string(), "missing created_at: {body}");
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// Developer keys (GET/POST /developer_keys, DELETE /developer_keys/{id})
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn developer_keys_crud_is_admin_only() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "DevKeyAdmin", "admin").await;
+    let student = seed_user(&pool, &prefix, "DevKeyStudent", "student").await;
+    let name = format!("{prefix}-DevKey");
+
+    // Anonymous: 401. Non-admin: 403 for both list and create.
+    let resp = server.get("/developer_keys").await;
+    assert_eq!(resp.status_code(), 401, "anonymous list: {}", resp.text());
+    let resp = server
+        .get("/developer_keys")
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student list: {}", resp.text());
+    let resp = server
+        .post("/developer_keys")
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "developer_key": { "name": "nope" } }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student create: {}", resp.text());
+
+    // Admin creates a key; response is Canvas-shaped.
+    let resp = server
+        .post("/developer_keys")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "developer_key": {
+                "name": name,
+                "email": "dev@example.com",
+                "scopes": ["url:GET|/api/v1/courses"],
+                "redirect_uris": ["https://example.com/oauth2/callback"],
+                "notes": "created by test"
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "create: {}", resp.text());
+    let created: Value = resp.json();
+    let key_id = created["id"].as_i64().expect("id");
+    let api_key = created["api_key"].as_str().expect("api_key").to_string();
+    assert_eq!(created["name"], name.as_str());
+    assert_eq!(created["workflow_state"], "active");
+    assert_eq!(created["user_id"], admin);
+    // Canvas serializes redirect_uris as a newline-joined string.
+    assert_eq!(
+        created["redirect_uris"],
+        "https://example.com/oauth2/callback"
+    );
+    assert_eq!(created["scopes"][0], "url:GET|/api/v1/courses");
+    assert!(!api_key.is_empty(), "api_key must be generated");
+
+    // The key appears in the admin listing with a token count.
+    let resp = server
+        .get("/developer_keys")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "list: {}", resp.text());
+    let keys: Value = resp.json();
+    let listed = keys
+        .as_array()
+        .expect("list is an array")
+        .iter()
+        .find(|key| key["id"] == key_id)
+        .expect("created key in list");
+    assert_eq!(listed["access_token_count"], 0);
+
+    // Delete is a soft delete; the key leaves the listing and a repeat
+    // delete is 404 (unknown/already deleted).
+    let resp = server
+        .delete(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "delete: {}", resp.text());
+    let deleted: Value = resp.json();
+    assert_eq!(deleted["workflow_state"], "deleted");
+
+    let resp = server
+        .get("/developer_keys")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    let keys: Value = resp.json();
+    assert!(keys
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|key| key["id"] != key_id));
+
+    let resp = server
+        .delete(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "repeat delete: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// OAuth2 token endpoint (POST /login/oauth2/token)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn oauth2_token_client_credentials_and_refresh_rotation() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "OAuthAdmin", "admin").await;
+    let name = format!("{prefix}-OAuthKey");
+
+    let resp = server
+        .post("/developer_keys")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "developer_key": {
+                "name": name,
+                "scopes": ["url:GET|/api/v1/courses"]
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "create key: {}", resp.text());
+    let created: Value = resp.json();
+    let key_id = created["id"].as_i64().expect("key id");
+    let api_key = created["api_key"].as_str().expect("api_key").to_string();
+
+    // Form-encoded client_credentials request, like Canvas OAuth2 clients.
+    let form = format!(
+        "grant_type=client_credentials&client_id={key_id}&client_secret={api_key}\
+         &scope=url%3AGET%7C%2Fapi%2Fv1%2Fcourses"
+    );
+    let resp = server
+        .post("/login/oauth2/token")
+        .text(form)
+        .content_type("application/x-www-form-urlencoded")
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "client_credentials: {}",
+        resp.text()
+    );
+    let token: Value = resp.json();
+    assert_eq!(token["token_type"], "Bearer");
+    assert_eq!(token["expires_in"], 3600);
+    assert_eq!(token["scope"], "url:GET|/api/v1/courses");
+    let access_token = token["access_token"]
+        .as_str()
+        .expect("access_token")
+        .to_string();
+    let refresh_token = token["refresh_token"]
+        .as_str()
+        .expect("refresh_token")
+        .to_string();
+    assert_eq!(access_token.len(), 64);
+    assert_eq!(refresh_token.len(), 64);
+
+    // The token row is persisted for the key.
+    let (stored,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM access_tokens
+         WHERE developer_key_id = $1 AND token = $2 AND workflow_state = 'active'",
+    )
+    .bind(key_id)
+    .bind(&access_token)
+    .fetch_one(&pool)
+    .await
+    .expect("count tokens");
+    assert_eq!(stored, 1);
+
+    // JSON bodies are accepted too; refreshing rotates access and refresh
+    // tokens in place.
+    let resp = server
+        .post("/login/oauth2/token")
+        .json(&json!({
+            "grant_type": "refresh_token",
+            "client_id": key_id.to_string(),
+            "client_secret": api_key,
+            "refresh_token": refresh_token,
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "refresh: {}", resp.text());
+    let refreshed: Value = resp.json();
+    assert_eq!(refreshed["token_type"], "Bearer");
+    let new_access = refreshed["access_token"].as_str().expect("new access");
+    let new_refresh = refreshed["refresh_token"].as_str().expect("new refresh");
+    assert_ne!(new_access, access_token.as_str());
+    assert_ne!(new_refresh, refresh_token.as_str());
+
+    // The consumed refresh token is no longer valid.
+    let form = format!(
+        "grant_type=refresh_token&client_id={key_id}&client_secret={api_key}\
+         &refresh_token={refresh_token}"
+    );
+    let resp = server
+        .post("/login/oauth2/token")
+        .text(form)
+        .content_type("application/x-www-form-urlencoded")
+        .await;
+    assert_eq!(resp.status_code(), 400, "stale refresh: {}", resp.text());
+    let stale_error: Value = resp.json();
+    assert_eq!(stale_error["error"], "invalid_grant");
+
+    // Wrong client secret is an invalid_client, matching Canvas.
+    let form =
+        format!("grant_type=client_credentials&client_id={key_id}&client_secret=wrong-secret");
+    let resp = server
+        .post("/login/oauth2/token")
+        .text(form)
+        .content_type("application/x-www-form-urlencoded")
+        .await;
+    assert_eq!(resp.status_code(), 401, "wrong secret: {}", resp.text());
+    let secret_error: Value = resp.json();
+    assert_eq!(secret_error["error"], "invalid_client");
 
     cleanup(&pool, &prefix).await;
 }
