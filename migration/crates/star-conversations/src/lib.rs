@@ -9,10 +9,14 @@
 //! - GET    /conversations/{id}/participants    — list active participants
 //! - POST   /conversations/{id}/add_recipients  — add users as participants
 //! - PUT    /conversations/{id}/read            — mark conversation read for this user
+//! - GET    /conversations/batches              — running bulk-message batches
+//! - POST   /conversations/{id}/remove_messages — hide messages for this user
+//! - GET    /conversations/unread_count         — unread conversation counter
 
 use axum::{
     extract::{Path, State},
     http::StatusCode,
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -92,6 +96,16 @@ pub struct AddRecipients {
     pub recipients: Vec<i64>, // user IDs to add as participants
 }
 
+/// POST /conversations/{id}/remove_messages
+///
+/// Canvas reads the `remove[]` form array; the JSON equivalent is
+/// `{"remove": [1, 2]}`. A missing argument is a 204 no-op in Canvas.
+#[derive(Debug, Deserialize)]
+pub struct RemoveMessages {
+    #[serde(default)]
+    pub remove: Option<Vec<i64>>,
+}
+
 fn validate_recipients(recipients: &[i64]) -> Result<(), ApiError> {
     if recipients.is_empty() {
         return Err(ApiError::Validation("recipients cannot be empty".into()));
@@ -134,6 +148,52 @@ fn keep_latest_message(messages: &mut Vec<MessageInResponse>) {
     if messages.len() > 1 {
         let latest = messages.split_off(messages.len() - 1);
         *messages = latest;
+    }
+}
+
+/// Normalize `remove[]` message ids: drop non-positive ids and duplicates,
+/// preserving the caller's order. Unknown ids are ignored by the SQL upsert.
+fn message_ids_to_remove(requested: &[i64]) -> Vec<i64> {
+    let mut ids: Vec<i64> = Vec::new();
+    for &id in requested {
+        if id > 0 && !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+/// Canvas ConversationBatch#completion — progress bar fraction in [0, 1].
+///
+/// Mirrors the three branches of the Rails model:
+/// - `sent` is always complete (1.0);
+/// - `created` covers the job-queue wait, approaching the hand-wavy
+///   `job_start_factor = 20 / (recipients + 20)` as minutes elapse;
+/// - every other state (`sending`, `error`) advances linearly with the number
+///   of messages already delivered.
+fn batch_completion(
+    workflow_state: &str,
+    created_at: DateTime<Utc>,
+    now: DateTime<Utc>,
+    recipient_count: i64,
+    sent_count: i64,
+) -> f64 {
+    let recipients = recipient_count.max(0) as f64;
+    let job_start_factor = 20.0 / (recipients + 20.0);
+    match workflow_state {
+        "sent" => 1.0,
+        "created" => {
+            let minutes = (now - created_at).num_seconds().max(0) as f64 / 60.0;
+            job_start_factor * (1.0 - 1.0 / 2f64.powf(minutes))
+        }
+        _ => {
+            if recipients > 0.0 {
+                job_start_factor
+                    + (1.0 - job_start_factor) * (sent_count.max(0) as f64 / recipients)
+            } else {
+                job_start_factor
+            }
+        }
     }
 }
 
@@ -185,6 +245,57 @@ pub struct ConversationDetail {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Conversation batch row joined with its root message
+/// (GET /conversations/batches).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ConversationBatchRow {
+    pub id: i64,
+    pub subject: Option<String>,
+    pub workflow_state: String,
+    pub recipient_ids: Vec<i64>,
+    pub conversation_message_ids: Vec<i64>,
+    pub tags: Vec<String>,
+    pub created_at: DateTime<Utc>,
+    pub root_message_id: i64,
+    pub root_author_id: i64,
+    pub root_body: String,
+    pub root_created_at: DateTime<Utc>,
+}
+
+/// Message nested in a conversation batch response. Mirrors the documented
+/// Canvas message shape with the always-empty Canvas-only fields filled in.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationBatchMessage {
+    pub id: i64,
+    pub created_at: DateTime<Utc>,
+    pub body: String,
+    pub author_id: i64,
+    pub generated: bool,
+    pub media_comment: Option<serde_json::Value>,
+    pub forwarded_messages: Vec<serde_json::Value>,
+    pub attachments: Vec<serde_json::Value>,
+    pub participating_user_ids: Vec<i64>,
+}
+
+/// Canvas conversation_batch_json response shape.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationBatchJson {
+    pub id: i64,
+    pub subject: Option<String>,
+    pub workflow_state: String,
+    pub completion: f64,
+    pub recipient_count: usize,
+    pub tags: Vec<String>,
+    pub message: ConversationBatchMessage,
+}
+
+/// GET /conversations/unread_count — Canvas returns the count as a string for
+/// backwards compatibility.
+#[derive(Debug, Serialize)]
+pub struct UnreadCount {
+    pub unread_count: String,
+}
+
 // ---------------------------------------------------------------------------
 // Permission helpers
 // ---------------------------------------------------------------------------
@@ -210,7 +321,13 @@ async fn is_participant(
 }
 
 /// Load the full Canvas-shaped conversation detail (participants + messages).
-async fn load_conversation_detail(pool: &PgPool, id: i64) -> Result<ConversationDetail, ApiError> {
+/// Messages removed by the viewer are omitted, matching Canvas per-message
+/// visibility.
+async fn load_conversation_detail(
+    pool: &PgPool,
+    id: i64,
+    viewer_id: i64,
+) -> Result<ConversationDetail, ApiError> {
     // Fetch conversation.
     let conv: Option<Conversation> = sqlx::query_as(
         r#"
@@ -238,16 +355,22 @@ async fn load_conversation_detail(pool: &PgPool, id: i64) -> Result<Conversation
 
     let participant_ids: Vec<i64> = participants.into_iter().map(|(uid,)| uid).collect();
 
-    // Fetch all messages (ordered oldest to newest).
+    // Fetch all messages (ordered oldest to newest), excluding messages this
+    // viewer removed from their copy of the thread.
     let messages: Vec<ConversationMessage> = sqlx::query_as(
         r#"
-        SELECT id, conversation_id, author_id, body, created_at
-        FROM conversation_messages
-        WHERE conversation_id = $1
-        ORDER BY created_at ASC, id ASC
+        SELECT cm.id, cm.conversation_id, cm.author_id, cm.body, cm.created_at
+        FROM conversation_messages cm
+        WHERE cm.conversation_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM conversation_message_removals r
+              WHERE r.message_id = cm.id AND r.user_id = $2
+          )
+        ORDER BY cm.created_at ASC, cm.id ASC
         "#,
     )
     .bind(id)
+    .bind(viewer_id)
     .fetch_all(pool)
     .await?;
 
@@ -270,6 +393,47 @@ async fn load_conversation_detail(pool: &PgPool, id: i64) -> Result<Conversation
         created_at: conv.created_at,
         updated_at: conv.updated_at,
     })
+}
+
+/// Build the Canvas conversation_batch_json payload for one row.
+fn conversation_batch_json(row: ConversationBatchRow, now: DateTime<Utc>) -> ConversationBatchJson {
+    let recipient_count = row.recipient_ids.len();
+    let completion = batch_completion(
+        &row.workflow_state,
+        row.created_at,
+        now,
+        recipient_count as i64,
+        row.conversation_message_ids.len() as i64,
+    );
+
+    // Canvas lists everyone who received the root message: the author plus the
+    // batch recipients.
+    let mut participating_user_ids = vec![row.root_author_id];
+    for &user_id in &row.recipient_ids {
+        if !participating_user_ids.contains(&user_id) {
+            participating_user_ids.push(user_id);
+        }
+    }
+
+    ConversationBatchJson {
+        id: row.id,
+        subject: row.subject,
+        workflow_state: row.workflow_state,
+        completion,
+        recipient_count,
+        tags: row.tags,
+        message: ConversationBatchMessage {
+            id: row.root_message_id,
+            created_at: row.root_created_at,
+            body: row.root_body,
+            author_id: row.root_author_id,
+            generated: false,
+            media_comment: None,
+            forwarded_messages: Vec::new(),
+            attachments: Vec::new(),
+            participating_user_ids,
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -384,6 +548,10 @@ async fn list_conversations(
                 SELECT cm.body
                 FROM conversation_messages cm
                 WHERE cm.conversation_id = c.id
+                  AND NOT EXISTS (
+                      SELECT 1 FROM conversation_message_removals r
+                      WHERE r.message_id = cm.id AND r.user_id = $1
+                  )
                 ORDER BY cm.created_at DESC
                 LIMIT 1
             ) AS last_message_preview,
@@ -420,7 +588,9 @@ async fn get_conversation(
         return Err(ApiError::NotFound); // Return NotFound to avoid leaking existence
     }
 
-    Ok(Json(load_conversation_detail(&state.db, id).await?))
+    Ok(Json(
+        load_conversation_detail(&state.db, id, auth.id).await?,
+    ))
 }
 
 /// POST /conversations/{id}/add_message — append a message.
@@ -604,7 +774,7 @@ async fn add_recipients(
         tx.commit().await?;
     }
 
-    let mut detail = load_conversation_detail(&state.db, id).await?;
+    let mut detail = load_conversation_detail(&state.db, id, auth.id).await?;
     keep_latest_message(&mut detail.messages);
     Ok(Json(detail))
 }
@@ -633,7 +803,144 @@ async fn mark_read(
     .execute(&state.db)
     .await?;
 
-    Ok(Json(load_conversation_detail(&state.db, id).await?))
+    Ok(Json(
+        load_conversation_detail(&state.db, id, auth.id).await?,
+    ))
+}
+
+/// GET /conversations/batches — running bulk-message batches for this user.
+/// Canvas lists only in-progress batches (`created`, `sending`), oldest first,
+/// paginated. Responses use Canvas conversation_batch_json fields.
+async fn list_conversation_batches(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<ConversationBatchJson>>, ApiError> {
+    let rows: Vec<ConversationBatchRow> = sqlx::query_as(
+        r#"
+        SELECT
+            cb.id,
+            cb.subject,
+            cb.workflow_state,
+            cb.recipient_ids,
+            cb.conversation_message_ids,
+            cb.tags,
+            cb.created_at,
+            cm.id         AS root_message_id,
+            cm.author_id  AS root_author_id,
+            cm.body       AS root_body,
+            cm.created_at AS root_created_at
+        FROM conversation_batches cb
+        JOIN conversation_messages cm ON cm.id = cb.root_conversation_message_id
+        WHERE cb.user_id = $1
+          AND cb.workflow_state IN ('created', 'sending')
+        ORDER BY cb.id ASC
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let now = Utc::now();
+    let batches = rows
+        .into_iter()
+        .map(|row| conversation_batch_json(row, now))
+        .collect();
+
+    Ok(Json(batches))
+}
+
+/// POST /conversations/{id}/remove_messages — soft-delete messages for THIS
+/// user only (Canvas ConversationParticipant#remove_messages). Unknown and
+/// already-removed message ids are ignored. When no `remove` argument is
+/// supplied Canvas renders nothing, i.e. 204 No Content.
+async fn remove_messages(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    auth: AuthUser,
+    payload: Option<Json<RemoveMessages>>,
+) -> Result<Response, ApiError> {
+    // Verify participant.
+    if !is_participant(&state.db, id, auth.id).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    let requested = payload.as_ref().and_then(|Json(body)| body.remove.as_ref());
+    let Some(requested) = requested else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+
+    let ids = message_ids_to_remove(requested);
+    if !ids.is_empty() {
+        sqlx::query(
+            r#"
+            INSERT INTO conversation_message_removals
+                (conversation_id, message_id, user_id)
+            SELECT $1, cm.id, $2
+            FROM conversation_messages cm
+            WHERE cm.conversation_id = $1
+              AND cm.id = ANY($3::BIGINT[])
+            ON CONFLICT (message_id, user_id) DO NOTHING
+            "#,
+        )
+        .bind(id)
+        .bind(auth.id)
+        .bind(ids.as_slice())
+        .execute(&state.db)
+        .await?;
+
+        // Canvas clears the thread's last-message timestamp once nothing is
+        // left for this user, so the inbox row stops sorting as recent.
+        sqlx::query(
+            r#"
+            UPDATE conversation_participants cp
+            SET last_message_at = NULL
+            WHERE cp.conversation_id = $1
+              AND cp.user_id = $2
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM conversation_messages cm
+                  WHERE cm.conversation_id = $1
+                    AND NOT EXISTS (
+                        SELECT 1 FROM conversation_message_removals r
+                        WHERE r.message_id = cm.id AND r.user_id = $2
+                    )
+              )
+            "#,
+        )
+        .bind(id)
+        .bind(auth.id)
+        .execute(&state.db)
+        .await?;
+    }
+
+    Ok(Json(load_conversation_detail(&state.db, id, auth.id).await?).into_response())
+}
+
+/// GET /conversations/unread_count — number of unread conversations for the
+/// current user. Canvas serializes the value as a string for backwards
+/// compatibility.
+async fn unread_count(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<UnreadCount>, ApiError> {
+    let (count,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)
+        FROM conversations c
+        JOIN conversation_participants cp ON cp.conversation_id = c.id
+        WHERE cp.user_id = $1
+          AND cp.workflow_state = 'active'
+          AND c.workflow_state = 'active'
+          AND cp.read_at IS NULL
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(UnreadCount {
+        unread_count: count.to_string(),
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -644,21 +951,25 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/conversations", post(create_conversation))
         .route("/conversations", get(list_conversations))
+        .route("/conversations/batches", get(list_conversation_batches))
+        .route("/conversations/unread_count", get(unread_count))
         .route("/conversations/{id}", get(get_conversation))
         .route("/conversations/{id}", delete(delete_conversation))
         .route("/conversations/{id}/add_message", post(add_message))
         .route("/conversations/{id}/participants", get(list_participants))
         .route("/conversations/{id}/add_recipients", post(add_recipients))
+        .route("/conversations/{id}/remove_messages", post(remove_messages))
         .route("/conversations/{id}/read", put(mark_read))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        keep_latest_message, recipients_to_add, validate_new_recipients, validate_recipients,
-        MessageInResponse,
+        batch_completion, conversation_batch_json, keep_latest_message, message_ids_to_remove,
+        recipients_to_add, validate_new_recipients, validate_recipients, ConversationBatchRow,
+        MessageInResponse, UnreadCount,
     };
-    use chrono::Utc;
+    use chrono::{Duration, Utc};
     use star_common::ApiError;
 
     #[test]
@@ -707,5 +1018,77 @@ mod tests {
         keep_latest_message(&mut many);
         assert_eq!(many.len(), 1);
         assert_eq!(many[0].body, "latest");
+    }
+
+    #[test]
+    fn conversation_batch_completion_tracks_canvas_progress() {
+        let now = Utc::now();
+
+        // Sent batches are always complete.
+        assert_eq!(batch_completion("sent", now, now, 4, 0), 1.0);
+
+        // Queued batches hold below the job-start factor (20 / (4 + 20)).
+        let job_start_factor = 20.0 / 24.0;
+        assert_eq!(batch_completion("created", now, now, 4, 0), 0.0);
+        let waiting = batch_completion("created", now - Duration::minutes(10), now, 4, 0);
+        assert!(waiting > 0.0 && waiting < job_start_factor);
+
+        // Sending batches advance linearly with delivered messages.
+        let sending = batch_completion("sending", now, now, 4, 2);
+        let expected = job_start_factor + (1.0 - job_start_factor) / 2.0;
+        assert!((sending - expected).abs() < 1e-9);
+
+        // Empty recipient lists must not divide by zero.
+        assert_eq!(batch_completion("sending", now, now, 0, 0), 1.0);
+    }
+
+    #[test]
+    fn conversation_batch_json_has_canvas_fields_and_message_shape() {
+        let now = Utc::now();
+        let row = ConversationBatchRow {
+            id: 1,
+            subject: Some("conversations api example".to_string()),
+            workflow_state: "created".to_string(),
+            recipient_ids: vec![2, 3],
+            conversation_message_ids: vec![10],
+            tags: vec!["inbox".to_string()],
+            created_at: now - Duration::minutes(5),
+            root_message_id: 10,
+            root_author_id: 1,
+            root_body: "quick reminder, no class tomorrow".to_string(),
+            root_created_at: now - Duration::minutes(5),
+        };
+
+        let batch = conversation_batch_json(row, now);
+        assert_eq!(batch.id, 1);
+        assert_eq!(batch.subject.as_deref(), Some("conversations api example"));
+        assert_eq!(batch.workflow_state, "created");
+        assert_eq!(batch.recipient_count, 2);
+        assert_eq!(batch.tags, vec!["inbox".to_string()]);
+        assert!(batch.completion > 0.0 && batch.completion < 1.0);
+
+        assert_eq!(batch.message.id, 10);
+        assert_eq!(batch.message.author_id, 1);
+        assert_eq!(batch.message.body, "quick reminder, no class tomorrow");
+        assert!(!batch.message.generated);
+        assert!(batch.message.media_comment.is_none());
+        assert!(batch.message.forwarded_messages.is_empty());
+        assert!(batch.message.attachments.is_empty());
+        assert_eq!(batch.message.participating_user_ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn unread_count_is_serialized_as_a_string() {
+        let json = serde_json::to_value(UnreadCount {
+            unread_count: 7_i64.to_string(),
+        })
+        .expect("serialize unread count");
+        assert_eq!(json, serde_json::json!({ "unread_count": "7" }));
+    }
+
+    #[test]
+    fn message_ids_to_remove_dedupes_and_drops_invalid_ids() {
+        assert_eq!(message_ids_to_remove(&[3, 0, -1, 3, 7]), vec![3, 7]);
+        assert!(message_ids_to_remove(&[]).is_empty());
     }
 }
