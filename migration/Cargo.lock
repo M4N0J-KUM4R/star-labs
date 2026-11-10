@@ -2344,6 +2344,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-audit"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "star-auth",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
 name = "star-auth"
 version = "0.1.0"
 dependencies = [
@@ -2509,6 +2525,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-features"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "star-auth",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
 name = "star-files"
 version = "0.1.0"
 dependencies = [
@@ -2575,6 +2607,7 @@ dependencies = [
  "star-announcements",
  "star-assignment-groups",
  "star-assignments",
+ "star-audit",
  "star-auth",
  "star-calendar",
  "star-common",
@@ -2585,11 +2618,14 @@ dependencies = [
  "star-db",
  "star-discussions",
  "star-enrollments",
+ "star-features",
  "star-files",
  "star-grading-standards",
  "star-groups",
  "star-jobs",
+ "star-learning-dates",
  "star-lti",
+ "star-media",
  "star-modules",
  "star-notifications",
  "star-outcomes",
@@ -2624,7 +2660,39 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-learning-dates"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "star-auth",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
 name = "star-lti"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "star-auth",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
+name = "star-media"
 version = "0.1.0"
 dependencies = [
  "axum",

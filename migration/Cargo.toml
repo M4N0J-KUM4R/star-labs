@@ -31,6 +31,10 @@ members = [
     "crates/star-permissions",
     "crates/star-jobs",
     "crates/star-lti",
+    "crates/star-features",
+    "crates/star-learning-dates",
+    "crates/star-audit",
+    "crates/star-media",
 ]
 
 [workspace.package]

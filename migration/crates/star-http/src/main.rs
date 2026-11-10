@@ -150,4 +150,8 @@ fn build_api_router() -> Router<AppState> {
         .merge(star_jobs::router())
         .merge(star_lti::router())
         .merge(star_permissions::router())
+        .merge(star_features::router())
+        .merge(star_learning_dates::router())
+        .merge(star_audit::router())
+        .merge(star_media::router())
 }
