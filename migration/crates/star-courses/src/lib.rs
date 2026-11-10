@@ -2003,6 +2003,151 @@ async fn list_course_tabs(
 }
 
 // ---------------------------------------------------------------------------
+// Content shares, activity stream, user courses and ping (Canvas API v1)
+// ---------------------------------------------------------------------------
+
+/// Canvas `users_json` subset returned by `GET /courses/:id/content_share_users`.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ContentShareUser {
+    pub id: i64,
+    pub name: String,
+    pub short_name: String,
+    pub sortable_name: String,
+    pub email: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar_url: Option<String>,
+}
+
+/// Query params for `GET /courses/:id/content_share_users`.
+#[derive(Debug, Default, Deserialize)]
+pub struct ContentShareUserQuery {
+    pub search_term: Option<String>,
+}
+
+/// GET /courses/{courseId}/content_share_users — Canvas
+/// `CoursesController#content_share_users`.
+///
+/// Requires `read_as_admin` (403 otherwise) and a `search_term` (Canvas
+/// `reject!` -> 400). Returns account teachers/admins whose name or email
+/// matches the term, ordered by name (Canvas orders by `users.name`).
+async fn list_content_share_users(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Query(query): Query<ContentShareUserQuery>,
+) -> Result<Json<Vec<ContentShareUser>>, ApiError> {
+    let account_id: Option<(i64,)> =
+        sqlx::query_as(r#"SELECT COALESCE(account_id, 1) FROM courses WHERE id = $1"#)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (account_id,) = account_id.ok_or(ApiError::NotFound)?;
+
+    if !check_account_admin(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let search_term = query
+        .search_term
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("Search term required".into()))?;
+    let pattern = format!("%{search_term}%");
+
+    let users: Vec<ContentShareUser> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT u.id, u.name, u.name AS short_name,
+               COALESCE(u.sortable_name, u.name) AS sortable_name,
+               u.email, p.avatar_url
+        FROM users u
+        LEFT JOIN user_profiles p ON p.user_id = u.id
+        WHERE (u.name ILIKE $2 OR u.email ILIKE $2)
+          AND (
+            EXISTS (
+                SELECT 1 FROM account_users au
+                WHERE au.user_id = u.id AND au.account_id = $1
+            )
+            OR EXISTS (
+                SELECT 1 FROM enrollments e
+                JOIN courses c ON c.id = e.course_id
+                WHERE e.user_id = u.id AND e.role = 'teacher'
+                  AND c.account_id = $1
+            )
+          )
+        ORDER BY u.name ASC
+        LIMIT 50
+        "#,
+    )
+    .bind(account_id)
+    .bind(&pattern)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(users))
+}
+
+/// GET /courses/{courseId}/activity_stream/summary — Canvas
+/// `CoursesController#activity_stream_summary` (`api_render_stream_summary`).
+///
+/// Canvas returns a bare array of `{type, notification_category, count,
+/// unread_count}`. This LMS has no stream-item storage, so the summary is
+/// empty (the Canvas shape for a course with no activity).
+async fn course_activity_stream_summary(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(Vec::new()))
+}
+
+/// GET /users/{userId}/courses — Canvas `CoursesController#user_index`.
+/// Callers may read their own courses; admins may read anyone's.
+async fn list_user_courses(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Course>>, ApiError> {
+    let user_exists: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM users WHERE id = $1"#)
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await?;
+    if user_exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    if auth.id != user_id && !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    let courses: Vec<Course> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT c.id, c.name, c.course_code, c.description, c.workflow_state,
+               c.start_at, c.end_at, c.syllabus_body, c.created_at, c.updated_at
+        FROM courses c
+        JOIN enrollments e ON e.course_id = c.id
+        WHERE e.user_id = $1 AND c.workflow_state != 'deleted'
+        ORDER BY c.created_at DESC, c.id DESC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(courses))
+}
+
+/// POST /courses/{courseId}/ping — Canvas returns `{"success": true}`.
+async fn ping_course(_auth: AuthUser) -> Result<Json<Value>, ApiError> {
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -2048,6 +2193,17 @@ pub fn router() -> Router<AppState> {
         .route("/courses/{courseId}/users", get(list_course_users))
         .route("/courses/{courseId}/users/{userId}", get(get_course_user))
         .route("/courses/{courseId}/tabs", get(list_course_tabs))
+        // Content shares, activity stream, user courses and ping
+        .route(
+            "/courses/{courseId}/content_share_users",
+            get(list_content_share_users),
+        )
+        .route(
+            "/courses/{courseId}/activity_stream/summary",
+            get(course_activity_stream_summary),
+        )
+        .route("/courses/{courseId}/ping", post(ping_course))
+        .route("/users/{userId}/courses", get(list_user_courses))
 }
 
 // ---------------------------------------------------------------------------
