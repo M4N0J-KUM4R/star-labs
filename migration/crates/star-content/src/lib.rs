@@ -10,10 +10,18 @@
 //! - `/courses/{courseId}/content_exports/{id}` — Canvas v1 nested show
 //! - `/content_exports/{id}`                    — flat show
 //!
+//! plus the content_migrations routes (`content_migrations.rs`):
+//! - `/courses/{courseId}/content_migrations`            — list / create
+//! - `/courses/{courseId}/content_migrations/{id}`       — nested show
+//! - `/courses/{courseId}/content_migrations/migrators`  — available migrators
+//! - `/content_migrations/{id}`                          — flat show
+//! - `/content_migrations/migrators`                     — flat migrators
+//!
 //! The sub-crates own all handlers and domain logic; this crate only
 //! provides a single merged `Router<AppState>` for inclusion in `star-http`.
 
 pub mod content_exports;
+pub mod content_migrations;
 
 use axum::Router;
 use star_common::AppState;
@@ -25,6 +33,7 @@ pub fn router() -> Router<AppState> {
         .merge(star_announcements::router())
         .merge(star_modules::router())
         .merge(content_exports::router())
+        .merge(content_migrations::router())
 }
 
 #[cfg(test)]

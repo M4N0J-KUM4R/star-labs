@@ -657,3 +657,390 @@ async fn content_exports_require_read_access_and_404_unknown() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// content_migrations routes (star_content::content_migrations::router())
+// ---------------------------------------------------------------------------
+
+/// Canvas `content_migration_json` fields this workspace exposes.
+fn assert_content_migration_shape(migration: &Value, user: i64) {
+    for field in [
+        "id",
+        "user_id",
+        "workflow_state",
+        "created_at",
+        "started_at",
+        "finished_at",
+        "migration_type",
+        "migration_type_title",
+        "migration_issues_url",
+        "migration_issues_count",
+    ] {
+        assert!(
+            migration.get(field).is_some(),
+            "content migration missing field {field}: {migration}"
+        );
+    }
+    assert_eq!(migration["user_id"].as_i64(), Some(user));
+    assert_eq!(migration["migration_issues_count"], 0);
+    assert!(
+        migration["migration_issues_url"]
+            .as_str()
+            .expect("migration_issues_url is a string")
+            .ends_with("/migration_issues"),
+        "migration_issues_url shape: {migration}"
+    );
+    assert!(
+        migration["created_at"]
+            .as_str()
+            .expect("created_at is a string")
+            .ends_with('Z'),
+        "created_at must be RFC3339 UTC: {migration}"
+    );
+}
+
+#[tokio::test]
+async fn content_migrations_create_list_show_round_trip() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "MigrationTeacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "MigrationCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+
+    // GET .../migrators — Canvas available_migrators for a Course context.
+    let resp = server
+        .get(&format!("/courses/{course}/content_migrations/migrators"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let migrators: Value = resp.json();
+    let migrators = migrators.as_array().expect("migrators is an array");
+    let types: Vec<&str> = migrators
+        .iter()
+        .map(|m| m["type"].as_str().expect("migrator type"))
+        .collect();
+    assert_eq!(
+        types,
+        vec![
+            "canvas_cartridge_importer",
+            "common_cartridge_importer",
+            "course_copy_importer",
+            "moodle_converter",
+            "qti_converter",
+            "zip_file_importer",
+        ]
+    );
+    let copy = migrators
+        .iter()
+        .find(|m| m["type"] == "course_copy_importer")
+        .expect("course copy migrator");
+    assert_eq!(copy["requires_file_upload"], false);
+    assert_eq!(copy["required_settings"].as_array().map(Vec::len), Some(1));
+    assert_eq!(copy["required_settings"][0], "source_course_id");
+
+    // The flat migrators alias returns the same Course list.
+    let resp = server
+        .get("/content_migrations/migrators")
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let flat_migrators: Value = resp.json();
+    assert_eq!(flat_migrators.as_array().map(Vec::len), Some(6));
+
+    // POST .../content_migrations — Canvas returns 200, not 201. Uploads are
+    // metadata-only, so a pre_attachment lands in pre_processing.
+    let resp = server
+        .post(&format!("/courses/{course}/content_migrations"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "migration_type": "common_cartridge_importer",
+            "pre_attachment": { "name": "course.imscc", "size": "1234" }
+        }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "POST content_migrations; body: {}",
+        resp.text()
+    );
+    let migration: Value = resp.json();
+    assert_content_migration_shape(&migration, teacher);
+    assert_eq!(migration["migration_type"], "common_cartridge_importer");
+    assert_eq!(migration["migration_type_title"], "Common Cartridge");
+    assert_eq!(migration["workflow_state"], "pre_processing");
+    assert!(
+        migration["started_at"].is_string(),
+        "pre_processing must record started_at: {migration}"
+    );
+    assert!(migration["finished_at"].is_null());
+    let id = migration["id"].as_i64().expect("migration id");
+
+    // GET .../content_migrations — newest first, includes the migration.
+    let resp = server
+        .get(&format!("/courses/{course}/content_migrations"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let list: Value = resp.json();
+    let migrations = list.as_array().expect("migration list is an array");
+    assert!(
+        migrations.iter().any(|m| m["id"] == migration["id"]),
+        "created migration must appear in the list: {list}"
+    );
+
+    // GET .../content_migrations/{id} — Canvas v1 nested show.
+    let resp = server
+        .get(&format!("/courses/{course}/content_migrations/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let nested: Value = resp.json();
+    assert_eq!(nested["id"], migration["id"]);
+
+    // GET /content_migrations/{id} — flat show alias.
+    let resp = server
+        .get(&format!("/content_migrations/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let flat: Value = resp.json();
+    assert_eq!(flat["id"], migration["id"]);
+    assert_eq!(flat["workflow_state"], "pre_processing");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn content_migrations_validate_create_arguments() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "MigrationValidate", "teacher").await;
+    let source = seed_course(&pool, &prefix, "MigrationSource").await;
+    let course = seed_course(&pool, &prefix, "MigrationTarget").await;
+    seed_enrollment(&pool, teacher, source, "teacher").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+
+    let url = format!("/courses/{course}/content_migrations");
+
+    // Unknown migration_type — Canvas 400 with the translated message.
+    let resp = server
+        .post(&url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "migration_type": "jerk" }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["message"], "Invalid migration_type");
+
+    // File-upload migrator without pre_attachment/file_url/content_export_id.
+    let resp = server
+        .post(&url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "migration_type": "common_cartridge_importer" }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(
+        resp.json::<Value>()["message"],
+        "File upload, file_url, or content_export_id is required"
+    );
+
+    // Course copy without a source course.
+    let resp = server
+        .post(&url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "migration_type": "course_copy_importer" }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(
+        resp.json::<Value>()["message"],
+        "A course copy requires a source course."
+    );
+
+    // Course copy with a readable source queues the migration → running.
+    let resp = server
+        .post(&url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "migration_type": "course_copy_importer",
+            "settings": { "source_course_id": source }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let copy: Value = resp.json();
+    assert_eq!(copy["workflow_state"], "running");
+    assert_eq!(copy["migration_type_title"], "Course Copy");
+    assert_eq!(copy["settings"]["source_course_id"].as_i64(), Some(source));
+    assert_eq!(copy["settings"]["source_course_name"], "MigrationSource");
+    assert_eq!(
+        copy["settings"]["source_course_html_url"],
+        format!("/courses/{source}").as_str()
+    );
+
+    // Selective course copy stops before import → waiting_for_select.
+    let resp = server
+        .post(&url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "migration_type": "course_copy_importer",
+            "selective_import": "1",
+            "settings": { "source_course_id": source }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let selective: Value = resp.json();
+    assert_eq!(selective["workflow_state"], "waiting_for_select");
+
+    // do_not_run keeps the migration in `created` → API pre_processing.
+    let resp = server
+        .post(&url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "migration_type": "course_copy_importer",
+            "do_not_run": true,
+            "settings": { "source_course_id": source }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["workflow_state"], "pre_processing");
+
+    // A .zip import needs an existing destination folder.
+    let resp = server
+        .post(&url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "migration_type": "zip_file_importer",
+            "pre_attachment": { "name": "files.zip" }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(
+        resp.json::<Value>()["message"],
+        "A .zip upload requires a folder to upload to."
+    );
+
+    // A referenced content export must be finished (this workspace never runs
+    // export workers, so a fresh export is incomplete).
+    let resp = server
+        .post(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "export_type": "common_cartridge" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let export: Value = resp.json();
+    let export_id = export["id"].as_i64().expect("export id");
+
+    let resp = server
+        .post(&url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "migration_type": "common_cartridge_importer",
+            "settings": { "content_export_id": export_id }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(
+        resp.json::<Value>()["message"],
+        "content export is incomplete"
+    );
+
+    // shift_dates and remove_dates are mutually exclusive.
+    let resp = server
+        .post(&url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "migration_type": "course_copy_importer",
+            "settings": { "source_course_id": source },
+            "date_shift_options": { "shift_dates": true, "remove_dates": true }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(
+        resp.json::<Value>()["date_shift_options"][0],
+        "cannot specify shift_dates and remove_dates simultaneously"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn content_migrations_require_manage_course_content() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "MigrationAclTeacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "MigrationAclStudent", "student").await;
+    let outsider = seed_user(&pool, &prefix, "MigrationAclOutsider", "student").await;
+    let course = seed_course(&pool, &prefix, "MigrationAclCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    let resp = server
+        .post(&format!("/courses/{course}/content_migrations"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "migration_type": "common_cartridge_importer",
+            "pre_attachment": { "name": "acl.imscc" }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let migration: Value = resp.json();
+    let id = migration["id"].as_i64().expect("migration id");
+
+    // Students cannot manage course content.
+    let resp = server
+        .get(&format!("/courses/{course}/content_migrations"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    let resp = server
+        .post(&format!("/courses/{course}/content_migrations"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "migration_type": "course_copy_importer" }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    let resp = server
+        .get(&format!("/courses/{course}/content_migrations/migrators"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // Non-enrolled users cannot read a migration through the flat alias.
+    let resp = server
+        .get(&format!("/content_migrations/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // Anonymous callers are rejected by the auth extractor.
+    let resp = server
+        .get(&format!("/courses/{course}/content_migrations"))
+        .await;
+    assert_eq!(resp.status_code(), 401);
+    let resp = server.get("/content_migrations/migrators").await;
+    assert_eq!(resp.status_code(), 401);
+    let resp = server.get(&format!("/content_migrations/{id}")).await;
+    assert_eq!(resp.status_code(), 401);
+
+    // Unknown ids are 404.
+    let resp = server
+        .get(&format!("/courses/{course}/content_migrations/999999999"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    let resp = server
+        .get("/content_migrations/999999999")
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
