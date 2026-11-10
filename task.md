@@ -1,13 +1,13 @@
 # star-labs → star-lms Migration Task Board
 
-Master checklist for the migration effort: bring the 28-crate Rust workspace
+Master checklist for the migration effort: bring the 30-crate Rust workspace
 (Canvas LMS parity re-implementation, axum 0.8 + sqlx + PostgreSQL) to full
 integration-test coverage, CI-gated quality, and a production build pipeline.
 
 Repo: <https://github.com/M4N0J-KUM4R/star-labs>
-Last updated: 2026-11-10 — **workspace green (499 passed / 0 failed / 49
-ignored by design); REST parity 167/1403; backend running in the Teradata
-trial environment.**
+Last updated: 2026-11-10 — **workspace green (599 passed / 0 failed / 50
+ignored by design, CI on PostgreSQL 16); REST parity 244/1403; all four CI
+workflows green on `f55b479`.**
 
 ## Current status — 2026-11-10
 
@@ -22,16 +22,20 @@ trial environment.**
   overrides, completions, revisions, read states, categories, outcomes,
   channels, enrollments, rubrics, grading periods, profiles, content exports);
   schema 68 tables; REST 167/1403.
-- Teradata trial: backend running against Supabase; user-space Rust 1.99.1
-  dev environment builds the workspace in ~3m and runs the full suite there.
+- Phase 3 wave (24 branches, migrations 0055–0078): course/account/user
+  settings, jobs v2, outcomes/files/content/calendar/group/module/
+  quiz/discussion/enrollment/rubric/grading-scheme/dashboard/notification/
+  page/conversation/submission-comment extras, role overrides, auth tokens,
+  and LTI registrations. New `star-lti` crate; schema 93 tables; tests
+  599/0/50; REST 244/1403 (17.4%), UI-referenced 149/503 (29.6%).
+- Teradata trial: user-space Rust 1.99.1 dev environment; backend runs against
+  Supabase. CI is the authoritative gate; Teradata is interactive-dev only.
 
 **Pending**
-- Phase 2 remaining: schema/API expansion for the remaining Canvas domains;
-  masquerading/API scopes; asynchronous worker execution.
-- REST: 167/1403 routes (11.9%); UI-referenced 91/503 (18.1%).
+- REST: 244/1403 routes (17.4%); UI-referenced 149/503 (29.6%).
 - GraphQL: 0/390 files (0/170 types, 0/110 mutations).
 - UI: 0/232 feature dirs, 0/5,459 JS/TSX files, 0/124 js_env files.
-- Data migration, analytics, LTI/SIS/uploads/email/live events, cutover.
+- Data migration, analytics, SIS/uploads/email/live events, cutover.
 - Persistent deployment (the current Teradata exposure is a temporary tunnel).
 
 ## 1. Ground rules (established during this migration)
@@ -88,19 +92,31 @@ trial environment.**
 | star-rubrics / conversations / assignment-groups | 3 each | main |
 | star-submission-comments / quizzes-parity / modules-parity / files / announcements | 2 each | main |
 
-**Workspace totals: 499 passed / 0 failed / 49 ignored (canvas_parity
-documentation suites, ignored by design).**
+**Workspace totals: 599 passed / 0 failed / 50 ignored (canvas_parity
+documentation suites, ignored by design), as reported by the CI validation
+run on `f55b479`.** The matrix above is the Phase-1-era baseline; Phase 2/3
+added suites to the same crates plus `star-permissions`, `star-jobs`, and
+`star-lti`.
 
-## 4. How to run everything locally
+## 4. How to run everything
+
+CI is the authoritative gate (`.github/workflows/`): on every push/PR touching
+`migration/**` it runs `quality` (fmt + clippy `-D warnings`), workspace tests
+against a PostgreSQL 16 service, a production `cargo build --release
+--locked`, bootstrap validation, and the parity scoreboard. All four workflows
+are green on `f55b479`.
 
 ```bash
-export DATABASE_URL=postgres://star@127.0.0.1:5433/star_lms_test
 cd migration
 cargo fmt --all -- --check                       # gate 1
 cargo clippy --workspace --all-targets -- -D warnings   # gate 2
-cargo test --workspace                           # gate 3: 499 passed / 0 failed
+cargo test --workspace                           # gate 3: 599 passed / 0 failed
 cargo build --release --locked                   # what CI + lab-deploy.sh ship
 ```
+
+The Teradata trial box (`~/JupyterLabRoot/star-labs-dev`, `./dev.sh`) is kept
+only for interactive debugging: 2 vCPUs means a cold rebuild + full suite
+takes ~30 min, so day-to-day validation runs in CI.
 
 ## 5. Merge log (all done)
 
@@ -132,10 +148,13 @@ cargo build --release --locked                   # what CI + lab-deploy.sh ship
       pushed `main` (green).
 - [x] Nested-route compatibility pass: 30 Canvas-compatible aliases added
       across eight crates (REST 167/1403, 11.9%).
-- [ ] UI parity (**0/232** feature dirs, 0/5459 JS/TSX files) and analytics
-      (**0** endpoints) remain the largest gaps; measured REST parity is
-      **167/1403** (11.9%), UI-referenced **91/503** (18.1%), GraphQL
-      **0/390** — see [migration/parity/report.md](migration/parity/report.md).
 - [x] Phase 1: parity scoreboard tool and CI baseline
       ([README](migration/tools/parity/README.md)).
+- [x] Phase 2 and Phase 3 waves merged: 48 branches total, migrations up to
+      0078, schema 93 tables, 599 tests, all CI workflows green on `f55b479`.
+- [ ] Next parity wave: continue REST (244/1403 → target ~100% of
+      UI-referenced 503), then GraphQL, then Canvas UI and analytics.
+- [ ] UI parity (**0/232** feature dirs, 0/5459 JS/TSX files) and analytics
+      (**0** endpoints) remain the largest gaps — see
+      [migration/parity/report.md](migration/parity/report.md).
 - [ ] Optional: llvm-cov coverage report in CI, Dependabot, release tagging.
