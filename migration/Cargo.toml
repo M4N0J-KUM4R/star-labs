@@ -30,6 +30,7 @@ members = [
     "crates/star-submission-comments",
     "crates/star-permissions",
     "crates/star-jobs",
+    "crates/star-lti",
 ]
 
 [workspace.package]

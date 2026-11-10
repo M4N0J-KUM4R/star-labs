@@ -148,4 +148,5 @@ fn build_api_router() -> Router<AppState> {
         .merge(star_rubrics::router())
         .merge(star_submission_comments::router())
         .merge(star_jobs::router())
+        .merge(star_lti::router())
 }
