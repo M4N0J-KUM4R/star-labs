@@ -365,3 +365,295 @@ async fn all_merged_routes_reject_missing_token_with_401() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// content_exports routes (star_content::content_exports::router())
+// ---------------------------------------------------------------------------
+
+/// Canvas `content_export_json` fields this workspace exposes.
+fn assert_content_export_shape(export: &Value, course: i64, user: i64) {
+    for field in [
+        "id",
+        "course_id",
+        "export_type",
+        "workflow_state",
+        "progress",
+        "user_id",
+        "created_at",
+        "updated_at",
+    ] {
+        assert!(
+            export.get(field).is_some(),
+            "content export missing field {field}: {export}"
+        );
+    }
+    assert_eq!(export["course_id"].as_i64(), Some(course));
+    assert_eq!(export["user_id"].as_i64(), Some(user));
+    assert_eq!(export["workflow_state"], "created");
+    assert_eq!(export["progress"], 0);
+    assert!(
+        export["created_at"]
+            .as_str()
+            .expect("created_at is a string")
+            .ends_with('Z'),
+        "created_at must be RFC3339 UTC: {export}"
+    );
+}
+
+#[tokio::test]
+async fn content_exports_create_list_show_round_trip() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "ExportTeacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "ExportCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+
+    // POST /courses/{courseId}/content_exports — Canvas returns 200, not 201.
+    let resp = server
+        .post(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "export_type": "common_cartridge" }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "POST content_exports; body: {}",
+        resp.text()
+    );
+    let export: Value = resp.json();
+    assert_content_export_shape(&export, course, teacher);
+    assert_eq!(export["export_type"], "common_cartridge");
+    let id = export["id"].as_i64().expect("export id");
+
+    // GET /courses/{courseId}/content_exports — newest first, includes it.
+    let resp = server
+        .get(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "GET content_exports; body: {}",
+        resp.text()
+    );
+    let list: Value = resp.json();
+    let exports = list.as_array().expect("export list is a JSON array");
+    assert!(
+        exports.iter().any(|e| e["id"] == export["id"]),
+        "created export must appear in the list: {list}"
+    );
+
+    // GET /courses/{courseId}/content_exports/{id} — Canvas v1 nested show.
+    let resp = server
+        .get(&format!("/courses/{course}/content_exports/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "nested show; body: {}",
+        resp.text()
+    );
+    let nested: Value = resp.json();
+    assert_eq!(nested["id"], export["id"]);
+
+    // GET /content_exports/{id} — flat show alias.
+    let resp = server
+        .get(&format!("/content_exports/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "flat show; body: {}", resp.text());
+    let flat: Value = resp.json();
+    assert_eq!(flat["id"], export["id"]);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn content_exports_create_validates_export_type() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "ExportValidate", "teacher").await;
+    let course = seed_course(&pool, &prefix, "ExportValidateCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+
+    // Unknown export_type — 400 with Canvas' message body.
+    let resp = server
+        .post(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "export_type": "course_copy" }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["message"], "invalid export_type");
+
+    // Missing export_type — same 400.
+    let resp = server
+        .post(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+
+    // quizzes2 without quiz_id — Canvas rejects with a message.
+    let resp = server
+        .post(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "export_type": "quizzes2" }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["message"], "quiz_id required and must be a valid ID");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn content_exports_visibility_limits_students() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "ExportVisTeacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "ExportVisStudent", "student").await;
+    let course = seed_course(&pool, &prefix, "ExportVisCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    // Teacher starts a common cartridge export.
+    let resp = server
+        .post(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "export_type": "common_cartridge" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // Student cannot see the teacher's export (non_admin scope).
+    let resp = server
+        .get(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let list: Value = resp.json();
+    assert_eq!(
+        list.as_array().map(Vec::len),
+        Some(0),
+        "student must not see course exports: {list}"
+    );
+
+    // Student cannot create a common cartridge export.
+    let resp = server
+        .post(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "export_type": "common_cartridge" }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        403,
+        "student common_cartridge export; body: {}",
+        resp.text()
+    );
+
+    // ... but may create and see their own zip export.
+    let resp = server
+        .post(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "export_type": "zip" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let zip_export: Value = resp.json();
+    assert_eq!(zip_export["export_type"], "zip");
+
+    let resp = server
+        .get(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let list: Value = resp.json();
+    let exports = list.as_array().expect("export list is a JSON array");
+    assert_eq!(exports.len(), 1, "student sees only their zip: {list}");
+    assert_eq!(exports[0]["id"], zip_export["id"]);
+
+    // Teacher sees both exports.
+    let resp = server
+        .get(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let list: Value = resp.json();
+    assert_eq!(
+        list.as_array().map(Vec::len),
+        Some(2),
+        "teacher sees every export: {list}"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn content_exports_require_read_access_and_404_unknown() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "ExportAclTeacher", "teacher").await;
+    let outsider = seed_user(&pool, &prefix, "ExportAclOutsider", "student").await;
+    let course = seed_course(&pool, &prefix, "ExportAclCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+
+    let resp = server
+        .post(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "export_type": "qti" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let export: Value = resp.json();
+    let id = export["id"].as_i64().expect("export id");
+
+    // Non-enrolled user cannot list or read the export.
+    let resp = server
+        .get(&format!("/courses/{course}/content_exports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    let resp = server
+        .get(&format!("/content_exports/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        403,
+        "outsider flat show; body: {}",
+        resp.text()
+    );
+
+    // Anonymous callers are rejected by the auth extractor.
+    let resp = server
+        .get(&format!("/courses/{course}/content_exports"))
+        .await;
+    assert_eq!(resp.status_code(), 401);
+
+    // Unknown ids are 404 (Canvas: "Export does not exist").
+    let resp = server
+        .get("/content_exports/999999999")
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    let resp = server
+        .get(&format!("/courses/{course}/content_exports/999999999"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
