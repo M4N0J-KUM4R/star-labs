@@ -1038,6 +1038,10 @@ async fn update_term_record(
     term: Term,
     payload: TermPayload,
 ) -> Result<Term, ApiError> {
+    // Canvas updates only active terms (deleted ones are 404).
+    if term.workflow_state != "active" {
+        return Err(ApiError::NotFound);
+    }
     if !check_account_admin(pool, auth.id, term.account_id, auth).await? {
         return Err(ApiError::Forbidden);
     }
