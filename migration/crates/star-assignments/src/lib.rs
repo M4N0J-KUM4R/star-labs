@@ -125,6 +125,95 @@ pub struct Gradebook {
     pub rows: Vec<GradebookRow>,
 }
 
+/// Assignment override matching the Canvas API v1 AssignmentOverride shape.
+///
+/// Canvas omits target fields that do not apply to the override's set type, so
+/// the empty/null variants are skipped during serialization.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct AssignmentOverride {
+    pub id: i64,
+    pub assignment_id: i64,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unlock_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lock_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub student_ids: Vec<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub course_section_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_id: Option<i64>,
+    pub workflow_state: String,
+}
+
+/// Request body for creating or updating an assignment override.
+///
+/// Matches Canvas `assignment_override[...]` arguments flattened into JSON.
+#[derive(Debug, Deserialize)]
+pub struct OverrideRequest {
+    pub title: Option<String>,
+    pub due_at: Option<DateTime<Utc>>,
+    pub unlock_at: Option<DateTime<Utc>>,
+    pub lock_at: Option<DateTime<Utc>>,
+    pub student_ids: Option<Vec<i64>>,
+    pub course_section_id: Option<i64>,
+    pub group_id: Option<i64>,
+}
+
+/// The target set an override applies to (Canvas: ADHOC, Group, CourseSection).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum OverrideTarget {
+    Adhoc(Vec<i64>),
+    Section(i64),
+    Group(i64),
+}
+
+impl OverrideTarget {
+    /// Split into the `(student_ids, course_section_id, group_id)` columns.
+    fn into_columns(self) -> (Vec<i64>, Option<i64>, Option<i64>) {
+        match self {
+            OverrideTarget::Adhoc(ids) => (ids, None, None),
+            OverrideTarget::Section(id) => (Vec::new(), Some(id), None),
+            OverrideTarget::Group(id) => (Vec::new(), None, Some(id)),
+        }
+    }
+}
+
+/// Resolve the target set for an override.
+///
+/// Canvas picks the most specific target: student_ids first, then group_id,
+/// then course_section_id. Returns 400 when no target is supplied or the
+/// ad-hoc student list is empty, mirroring Canvas' `bad_request`.
+pub(crate) fn resolve_override_target(
+    student_ids: Option<Vec<i64>>,
+    group_id: Option<i64>,
+    course_section_id: Option<i64>,
+) -> Result<OverrideTarget, ApiError> {
+    if let Some(mut ids) = student_ids {
+        ids.sort_unstable();
+        ids.dedup();
+        if ids.is_empty() || ids.iter().any(|id| *id <= 0) {
+            return Err(ApiError::BadRequest("invalid student_ids".into()));
+        }
+        return Ok(OverrideTarget::Adhoc(ids));
+    }
+
+    if let Some(group_id) = group_id {
+        return Ok(OverrideTarget::Group(group_id));
+    }
+
+    if let Some(course_section_id) = course_section_id {
+        return Ok(OverrideTarget::Section(course_section_id));
+    }
+
+    Err(ApiError::BadRequest(
+        "one of student_ids, group_id, or course_section_id is required".into(),
+    ))
+}
+
 // ---------------------------------------------------------------------------
 // Permission helpers
 // ---------------------------------------------------------------------------
@@ -194,6 +283,159 @@ async fn ensure_assignment_in_course(
 
     row.ok_or(ApiError::NotFound)?;
     Ok(())
+}
+
+/// Validate that every ad-hoc student id belongs to an active student
+/// enrollment in the course. Canvas returns 400 for unknown student ids.
+async fn validate_student_ids(
+    pool: &PgPool,
+    course_id: i64,
+    student_ids: &[i64],
+) -> Result<(), ApiError> {
+    let enrolled: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(DISTINCT user_id) FROM enrollments
+        WHERE course_id = $1 AND user_id = ANY($2)
+          AND role = 'student' AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(course_id)
+    .bind(student_ids)
+    .fetch_one(pool)
+    .await?;
+
+    if enrolled as usize != student_ids.len() {
+        return Err(ApiError::BadRequest("unknown student ids".into()));
+    }
+
+    Ok(())
+}
+
+/// Validate that a group override target is an active group in the course.
+async fn validate_group_in_course(
+    pool: &PgPool,
+    course_id: i64,
+    group_id: i64,
+) -> Result<(), ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM groups
+        WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(group_id)
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.ok_or_else(|| ApiError::BadRequest("group_id is not valid".into()))?;
+    Ok(())
+}
+
+/// Resolve and validate an override target against the course.
+async fn resolve_and_validate_target(
+    pool: &PgPool,
+    course_id: i64,
+    student_ids: Option<Vec<i64>>,
+    group_id: Option<i64>,
+    course_section_id: Option<i64>,
+) -> Result<OverrideTarget, ApiError> {
+    let target = resolve_override_target(student_ids, group_id, course_section_id)?;
+
+    match &target {
+        OverrideTarget::Adhoc(ids) => validate_student_ids(pool, course_id, ids).await?,
+        OverrideTarget::Group(id) => validate_group_in_course(pool, course_id, *id).await?,
+        // Sections belong to the courses/terms workstream; there is no base
+        // table to validate against yet, so only reject impossible ids.
+        OverrideTarget::Section(id) if *id <= 0 => {
+            return Err(ApiError::BadRequest(
+                "course_section_id is not valid".into(),
+            ))
+        }
+        OverrideTarget::Section(_) => {}
+    }
+
+    Ok(target)
+}
+
+/// Fetch a non-deleted override or 404.
+async fn fetch_override(pool: &PgPool, override_id: i64) -> Result<AssignmentOverride, ApiError> {
+    let row: Option<AssignmentOverride> = sqlx::query_as(
+        r#"
+        SELECT id, assignment_id, title, due_at, unlock_at, lock_at,
+               student_ids, course_section_id, group_id, workflow_state
+        FROM assignment_overrides
+        WHERE id = $1 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(override_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.ok_or(ApiError::NotFound)
+}
+
+/// Course that owns the assignment behind an override.
+async fn course_id_for_assignment(pool: &PgPool, assignment_id: i64) -> Result<i64, ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM assignments WHERE id = $1"#)
+        .bind(assignment_id)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(row.ok_or(ApiError::NotFound)?.0)
+}
+
+/// Fetch an override and enforce read (enrolled) or write (teacher/admin)
+/// access on its course. Returns the existing row.
+async fn require_override_access(
+    pool: &PgPool,
+    override_id: i64,
+    auth: &AuthUser,
+    write: bool,
+) -> Result<AssignmentOverride, ApiError> {
+    let existing = fetch_override(pool, override_id).await?;
+    let course_id = course_id_for_assignment(pool, existing.assignment_id).await?;
+
+    let allowed = if write {
+        check_teacher_or_admin(pool, auth.id, course_id, auth).await?
+    } else {
+        check_enrolled_or_admin(pool, auth.id, course_id, auth).await?
+    };
+
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    Ok(existing)
+}
+
+/// Ensure the override belongs to the assignment in the nested Canvas route.
+async fn ensure_override_in_assignment(
+    pool: &PgPool,
+    assignment_id: i64,
+    override_id: i64,
+) -> Result<(), ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM assignment_overrides
+        WHERE id = $1 AND assignment_id = $2 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(override_id)
+    .bind(assignment_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.ok_or(ApiError::NotFound)?;
+    Ok(())
+}
+
+/// Canvas defaults a missing or blank override title to "No Title".
+fn normalize_override_title(title: Option<String>) -> String {
+    title
+        .map(|t| t.trim().to_string())
+        .filter(|t| !t.is_empty())
+        .unwrap_or_else(|| "No Title".to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -778,6 +1020,211 @@ async fn course_grade_submission(
 }
 
 // ---------------------------------------------------------------------------
+// Assignment overrides (Canvas AssignmentOverridesController)
+// ---------------------------------------------------------------------------
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/overrides
+async fn list_assignment_overrides(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<AssignmentOverride>>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let rows: Vec<AssignmentOverride> = sqlx::query_as(
+        r#"
+        SELECT id, assignment_id, title, due_at, unlock_at, lock_at,
+               student_ids, course_section_id, group_id, workflow_state
+        FROM assignment_overrides
+        WHERE assignment_id = $1 AND workflow_state <> 'deleted'
+        ORDER BY id ASC
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(rows))
+}
+
+/// POST /courses/{courseId}/assignments/{assignmentId}/overrides
+async fn create_assignment_override(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<OverrideRequest>,
+) -> Result<(StatusCode, Json<AssignmentOverride>), ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let target = resolve_and_validate_target(
+        &state.db,
+        course_id,
+        payload.student_ids,
+        payload.group_id,
+        payload.course_section_id,
+    )
+    .await?;
+    let (student_ids, course_section_id, group_id) = target.into_columns();
+    let title = normalize_override_title(payload.title);
+
+    let row: AssignmentOverride = sqlx::query_as(
+        r#"
+        INSERT INTO assignment_overrides
+            (assignment_id, title, due_at, unlock_at, lock_at,
+             student_ids, course_section_id, group_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id, assignment_id, title, due_at, unlock_at, lock_at,
+                  student_ids, course_section_id, group_id, workflow_state
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(&title)
+    .bind(payload.due_at)
+    .bind(payload.unlock_at)
+    .bind(payload.lock_at)
+    .bind(&student_ids)
+    .bind(course_section_id)
+    .bind(group_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+/// GET /assignment_overrides/{id}
+async fn get_assignment_override(
+    State(state): State<AppState>,
+    Path(override_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<AssignmentOverride>, ApiError> {
+    let row = require_override_access(&state.db, override_id, &auth, false).await?;
+    Ok(Json(row))
+}
+
+/// PUT /assignment_overrides/{id}
+async fn update_assignment_override(
+    State(state): State<AppState>,
+    Path(override_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<OverrideRequest>,
+) -> Result<Json<AssignmentOverride>, ApiError> {
+    let existing = require_override_access(&state.db, override_id, &auth, true).await?;
+    let course_id = course_id_for_assignment(&state.db, existing.assignment_id).await?;
+
+    // Canvas: target sets of group/section overrides cannot be changed. An
+    // ad-hoc override accepts a new student_ids set; when omitted the
+    // existing targets are kept.
+    let (student_ids, course_section_id, group_id): (Vec<i64>, Option<i64>, Option<i64>) =
+        if existing.student_ids.is_empty() {
+            (Vec::new(), existing.course_section_id, existing.group_id)
+        } else if let Some(ids) = payload.student_ids {
+            resolve_and_validate_target(&state.db, course_id, Some(ids), None, None)
+                .await?
+                .into_columns()
+        } else {
+            (existing.student_ids.clone(), None, None)
+        };
+
+    let title = match payload.title {
+        Some(title) => normalize_override_title(Some(title)),
+        None => existing.title,
+    };
+
+    let updated: AssignmentOverride = sqlx::query_as(
+        r#"
+        UPDATE assignment_overrides
+        SET title = $2, due_at = $3, unlock_at = $4, lock_at = $5,
+            student_ids = $6, course_section_id = $7, group_id = $8,
+            updated_at = now()
+        WHERE id = $1 AND workflow_state <> 'deleted'
+        RETURNING id, assignment_id, title, due_at, unlock_at, lock_at,
+                  student_ids, course_section_id, group_id, workflow_state
+        "#,
+    )
+    .bind(override_id)
+    .bind(&title)
+    .bind(payload.due_at)
+    .bind(payload.unlock_at)
+    .bind(payload.lock_at)
+    .bind(&student_ids)
+    .bind(course_section_id)
+    .bind(group_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(updated))
+}
+
+/// DELETE /assignment_overrides/{id} — Canvas soft-deletes and returns the
+/// former override details with a 200.
+async fn delete_assignment_override(
+    State(state): State<AppState>,
+    Path(override_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<AssignmentOverride>, ApiError> {
+    require_override_access(&state.db, override_id, &auth, true).await?;
+
+    let row: Option<AssignmentOverride> = sqlx::query_as(
+        r#"
+        UPDATE assignment_overrides
+        SET workflow_state = 'deleted', updated_at = now()
+        WHERE id = $1 AND workflow_state <> 'deleted'
+        RETURNING id, assignment_id, title, due_at, unlock_at, lock_at,
+                  student_ids, course_section_id, group_id, workflow_state
+        "#,
+    )
+    .bind(override_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    row.map(Json).ok_or(ApiError::NotFound)
+}
+
+// --- Canvas nested aliases (course + assignment scoped) --------------------
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/overrides/{id}
+async fn course_get_assignment_override(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, override_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<AssignmentOverride>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    ensure_override_in_assignment(&state.db, assignment_id, override_id).await?;
+    get_assignment_override(State(state), Path(override_id), auth).await
+}
+
+/// PUT /courses/{courseId}/assignments/{assignmentId}/overrides/{id}
+async fn course_update_assignment_override(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, override_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<OverrideRequest>,
+) -> Result<Json<AssignmentOverride>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    ensure_override_in_assignment(&state.db, assignment_id, override_id).await?;
+    update_assignment_override(State(state), Path(override_id), auth, Json(payload)).await
+}
+
+/// DELETE /courses/{courseId}/assignments/{assignmentId}/overrides/{id}
+async fn course_delete_assignment_override(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, override_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<AssignmentOverride>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    ensure_override_in_assignment(&state.db, assignment_id, override_id).await?;
+    delete_assignment_override(State(state), Path(override_id), auth).await
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -828,6 +1275,37 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}",
             put(course_grade_submission),
+        )
+        // Assignment overrides — Canvas nested paths
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/overrides",
+            get(list_assignment_overrides),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/overrides",
+            post(create_assignment_override),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/overrides/{id}",
+            get(course_get_assignment_override),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/overrides/{id}",
+            put(course_update_assignment_override),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/overrides/{id}",
+            delete(course_delete_assignment_override),
+        )
+        // Assignment overrides — flat routes
+        .route("/assignment_overrides/{id}", get(get_assignment_override))
+        .route(
+            "/assignment_overrides/{id}",
+            put(update_assignment_override),
+        )
+        .route(
+            "/assignment_overrides/{id}",
+            delete(delete_assignment_override),
         )
 }
 
@@ -946,6 +1424,29 @@ mod tests {
         let (scores, points) = grade_arrays_from_submissions(&assignments, &submissions);
         assert_eq!(points, vec![10.0]);
         assert_eq!(scores, vec![-1.0]);
+    }
+
+    #[test]
+    fn test_resolve_override_target_prefers_students() {
+        // Canvas priority: student_ids > group_id > course_section_id, and
+        // duplicate student ids are collapsed.
+        let target = resolve_override_target(Some(vec![7, 3, 7]), Some(11), Some(22)).unwrap();
+        assert_eq!(target, OverrideTarget::Adhoc(vec![3, 7]));
+    }
+
+    #[test]
+    fn test_resolve_override_target_requires_target() {
+        assert!(resolve_override_target(None, None, None).is_err());
+        assert!(resolve_override_target(Some(vec![]), None, None).is_err());
+
+        assert_eq!(
+            resolve_override_target(None, None, Some(5)).unwrap(),
+            OverrideTarget::Section(5)
+        );
+        assert_eq!(
+            resolve_override_target(None, Some(9), Some(5)).unwrap(),
+            OverrideTarget::Group(9)
+        );
     }
 }
 
