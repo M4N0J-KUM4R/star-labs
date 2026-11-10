@@ -3,7 +3,10 @@
 //! Exercises the real pages router against a real Postgres: the Canvas v1
 //! nested aliases (GET/PUT/DELETE /courses/{courseId}/pages/{id}) must match
 //! the flat /pages/{id} behavior, 404 when the page belongs to another
-//! course, and keep the flat authorization rules.
+//! course, and keep the flat authorization rules. Revision coverage:
+//! GET /courses/{courseId}/pages/{url}/revisions[/latest|/{revisionId}],
+//! revisions appended on create/update, course scoping, and the legacy
+//! no-history fallback for `latest`.
 //!
 //! Skipped cleanly when DATABASE_URL is not set. Run with:
 //! DATABASE_URL=postgres://... cargo test -p star-pages
@@ -301,6 +304,196 @@ async fn alias_authz_matches_flat_routes() {
     assert_eq!(resp.status_code(), 401);
     let resp = server.delete(&alias).await;
     assert_eq!(resp.status_code(), 401);
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// Page revisions (Canvas wiki_pages_api_controller#revisions / #show_revision)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn revisions_are_recorded_on_create_and_update() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "RevisionCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let teacher_bearer = auth(teacher, "teacher");
+
+    // POST creates revision 1, PUTs append revisions 2 and 3.
+    let resp = server
+        .post(&format!("/courses/{course}/pages"))
+        .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
+        .json(&json!({ "title": "History Page", "body": "v1" }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    let page: Value = resp.json();
+    let page_id = page["id"].as_i64().expect("page id");
+    let slug = page["url"].as_str().expect("page url").to_string();
+
+    for body in ["v2", "v3"] {
+        let resp = server
+            .put(&format!("/pages/{page_id}"))
+            .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
+            .json(&json!({ "body": body }))
+            .await;
+        assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    }
+
+    // History is newest first, summaries only, latest flagged.
+    let history_url = format!("/courses/{course}/pages/{slug}/revisions");
+    let resp = server
+        .get(&history_url)
+        .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let history: Value = resp.json();
+    let items = history.as_array().expect("history array");
+    assert_eq!(items.len(), 3, "create + two updates; body: {history}");
+    assert_eq!(items[0]["revision_id"], 3);
+    assert_eq!(items[1]["revision_id"], 2);
+    assert_eq!(items[2]["revision_id"], 1);
+    assert_eq!(items[0]["latest"], true);
+    assert_eq!(items[1]["latest"], false);
+    assert_eq!(items[2]["latest"], false);
+    assert!(items[0].get("body").is_none(), "history omits content");
+    assert_eq!(items[0]["edited_by"]["id"], teacher);
+
+    // One revision by its per-page number; summary=true drops content.
+    let revision_url = format!("/courses/{course}/pages/{slug}/revisions/1");
+    let resp = server
+        .get(&revision_url)
+        .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let first: Value = resp.json();
+    assert_eq!(first["revision_id"], 1);
+    assert_eq!(first["body"], "v1");
+    assert_eq!(first["title"], "History Page");
+    assert_eq!(first["latest"], false);
+
+    let resp = server
+        .get(&format!("{revision_url}?summary=true"))
+        .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let summary: Value = resp.json();
+    assert!(summary.get("title").is_none());
+    assert!(summary.get("body").is_none());
+
+    let resp = server
+        .get(&format!("/courses/{course}/pages/{slug}/revisions/99"))
+        .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    // Students may read the latest revision (Canvas :read) but not history.
+    let resp = server
+        .get(&format!("/courses/{course}/pages/{slug}/revisions/latest"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let latest: Value = resp.json();
+    assert_eq!(latest["revision_id"], 3);
+    assert_eq!(latest["latest"], true);
+    assert_eq!(latest["body"], "v3");
+
+    let resp = server
+        .get(&history_url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn revision_routes_are_course_scoped() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    // The caller teaches BOTH courses, so only course scoping can 404.
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course_a = seed_course(&pool, &prefix, "RevA").await;
+    let course_b = seed_course(&pool, &prefix, "RevB").await;
+    seed_enrollment(&pool, teacher, course_a, "teacher").await;
+    seed_enrollment(&pool, teacher, course_b, "teacher").await;
+    let slug = format!("{prefix}-scoped");
+    seed_page(&pool, course_a, &format!("{prefix}-Scoped"), &slug, "b").await;
+    let bearer = auth(teacher, "teacher");
+
+    for url in [
+        format!("/courses/{course_b}/pages/{slug}/revisions"),
+        format!("/courses/{course_b}/pages/{slug}/revisions/latest"),
+        format!("/courses/{course_b}/pages/{slug}/revisions/1"),
+    ] {
+        let resp = server
+            .get(&url)
+            .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
+            .await;
+        assert_eq!(resp.status_code(), 404, "{url}; body: {}", resp.text());
+        assert_eq!(resp.text(), "not found");
+    }
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn latest_revision_falls_back_to_page_state() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    // Pages seeded outside the API have no stored history.
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "LegacyCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let slug = format!("{prefix}-legacy");
+    seed_page(
+        &pool,
+        course,
+        &format!("{prefix}-Legacy"),
+        &slug,
+        "legacy body",
+    )
+    .await;
+
+    let resp = server
+        .get(&format!("/courses/{course}/pages/{slug}/revisions/latest"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let latest: Value = resp.json();
+    assert_eq!(latest["revision_id"], 0);
+    assert_eq!(latest["latest"], true);
+    assert_eq!(latest["body"], "legacy body");
+
+    let resp = server
+        .get(&format!(
+            "/courses/{course}/pages/{slug}/revisions/latest?summary=true"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let summary: Value = resp.json();
+    assert!(summary.get("body").is_none());
+    assert!(summary.get("title").is_none());
+
+    // History is empty for legacy pages.
+    let resp = server
+        .get(&format!("/courses/{course}/pages/{slug}/revisions"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>(), json!([]));
 
     cleanup(&pool, &prefix).await;
 }
