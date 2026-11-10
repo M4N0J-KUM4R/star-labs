@@ -5,8 +5,8 @@ Master checklist for the migration effort: bring the 28-crate Rust workspace
 integration-test coverage, CI-gated quality, and a production build pipeline.
 
 Repo: <https://github.com/M4N0J-KUM4R/star-labs>
-Last updated: 2026-11-10 — **workspace green (398 passed / 0 failed / 46
-ignored by design); REST parity 93/1403; backend running in the Teradata
+Last updated: 2026-11-10 — **workspace green (499 passed / 0 failed / 49
+ignored by design); REST parity 167/1403; backend running in the Teradata
 trial environment.**
 
 ## Current status — 2026-11-10
@@ -17,13 +17,18 @@ trial environment.**
 - Phase 1: parity scoreboard + CI baseline
   ([report](migration/parity/report.md)).
 - Nested-route compatibility: 30 Canvas-compatible aliases across 8 crates.
+- Phase 2 wave: permissions engine, developer keys/OAuth2, jobs API, and 21
+  Canvas domain slices (terms/sections, files/folders, quizzes/questions,
+  overrides, completions, revisions, read states, categories, outcomes,
+  channels, enrollments, rubrics, grading periods, profiles, content exports);
+  schema 68 tables; REST 167/1403.
 - Teradata trial: backend running against Supabase; user-space Rust 1.99.1
   dev environment builds the workspace in ~3m and runs the full suite there.
 
 **Pending**
-- Phase 2 foundations: permissions engine (RoleOverride/enrollment/account
-  hierarchy), OAuth2/developer keys/masquerading, schema expansion, async jobs.
-- REST: 93/1403 routes (6.6%); UI-referenced 62/503 (12.3%).
+- Phase 2 remaining: schema/API expansion for the remaining Canvas domains;
+  masquerading/API scopes; asynchronous worker execution.
+- REST: 167/1403 routes (11.9%); UI-referenced 91/503 (18.1%).
 - GraphQL: 0/390 files (0/170 types, 0/110 mutations).
 - UI: 0/232 feature dirs, 0/5,459 JS/TSX files, 0/124 js_env files.
 - Data migration, analytics, LTI/SIS/uploads/email/live events, cutover.
@@ -83,7 +88,7 @@ trial environment.**
 | star-rubrics / conversations / assignment-groups | 3 each | main |
 | star-submission-comments / quizzes-parity / modules-parity / files / announcements | 2 each | main |
 
-**Workspace totals: 398 passed / 0 failed / 46 ignored (canvas_parity
+**Workspace totals: 499 passed / 0 failed / 49 ignored (canvas_parity
 documentation suites, ignored by design).**
 
 ## 4. How to run everything locally
@@ -93,7 +98,7 @@ export DATABASE_URL=postgres://star@127.0.0.1:5433/star_lms_test
 cd migration
 cargo fmt --all -- --check                       # gate 1
 cargo clippy --workspace --all-targets -- -D warnings   # gate 2
-cargo test --workspace                           # gate 3: 398 passed / 0 failed
+cargo test --workspace                           # gate 3: 499 passed / 0 failed
 cargo build --release --locked                   # what CI + lab-deploy.sh ship
 ```
 
@@ -126,10 +131,10 @@ cargo build --release --locked                   # what CI + lab-deploy.sh ship
 - [x] Verify the first GitHub Actions run of `production-build.yml` on the
       pushed `main` (green).
 - [x] Nested-route compatibility pass: 30 Canvas-compatible aliases added
-      across eight crates (REST 93/1403, 6.6%).
+      across eight crates (REST 167/1403, 11.9%).
 - [ ] UI parity (**0/232** feature dirs, 0/5459 JS/TSX files) and analytics
       (**0** endpoints) remain the largest gaps; measured REST parity is
-      **93/1403** (6.6%), UI-referenced **62/503** (12.3%), GraphQL
+      **167/1403** (11.9%), UI-referenced **91/503** (18.1%), GraphQL
       **0/390** — see [migration/parity/report.md](migration/parity/report.md).
 - [x] Phase 1: parity scoreboard tool and CI baseline
       ([README](migration/tools/parity/README.md)).

@@ -120,12 +120,7 @@ impl FromStr for Role {
     /// case-insensitively and ignoring separators ("TaEnrollment", "ta",
     /// "Designer_Enrollment").
     fn from_str(raw: &str) -> Result<Self, Self::Err> {
-        let normalized = raw
-            .trim()
-            .to_ascii_lowercase()
-            .replace('_', "")
-            .replace('-', "")
-            .replace(' ', "");
+        let normalized = raw.trim().to_ascii_lowercase().replace(['_', '-', ' '], "");
 
         match normalized.as_str() {
             "student" | "studentenrollment" => Ok(Role::Student),

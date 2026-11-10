@@ -767,6 +767,7 @@ async fn mark_entry_unread(
 /// Canvas coerces a missing `rating` via `params[:rating].to_i`, so an absent
 /// argument behaves like `rating=0`; anything outside 0/1 is a 400 with
 /// `{"message":"Invalid rating given"}`.
+#[allow(clippy::result_large_err)]
 async fn rate_entry(
     State(state): State<AppState>,
     Path((course_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
