@@ -3,7 +3,8 @@
 //! Exposes `pub fn router() -> axum::Router<AppState>`.
 
 use axum::{
-    extract::{Path, State},
+    body::Bytes,
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, patch, post, put},
     Json, Router,
@@ -98,6 +99,79 @@ pub struct MembershipWithUser {
 #[derive(Debug, Deserialize)]
 pub struct CreateMembership {
     pub user_id: i64,
+}
+
+/// Canvas group_membership_json shape returned by POST /groups/{groupId}/users
+/// and POST /groups/{groupId}/invite.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct GroupMembershipJson {
+    pub id: i64,
+    pub group_id: i64,
+    pub user_id: i64,
+    pub workflow_state: String,
+    pub moderator: bool,
+    /// Canvas includes this only on create (include=just_created).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub just_created: Option<bool>,
+}
+
+/// Request body for POST /groups/{groupId}/invite (Canvas `invitees[]`).
+#[derive(Debug, Deserialize)]
+pub struct InviteGroupUsers {
+    #[serde(default)]
+    pub invitees: Vec<String>,
+}
+
+/// Request body for DELETE /groups/{groupId}/users (Canvas `user_ids[]`).
+#[derive(Debug, Default, Deserialize)]
+pub struct BulkRemoveGroupUsers {
+    #[serde(default)]
+    pub user_ids: Vec<i64>,
+}
+
+/// Query params for DELETE /groups/{groupId}/users fallback
+/// (`?user_ids=1,2`).
+#[derive(Debug, Deserialize)]
+pub struct BulkRemoveGroupUsersQuery {
+    pub user_ids: Option<String>,
+}
+
+/// Query params for GET /groups/{groupId}/users.
+#[derive(Debug, Deserialize)]
+pub struct ListGroupUsersQuery {
+    pub search_term: Option<String>,
+}
+
+/// Query params for GET /users/self/groups.
+#[derive(Debug, Deserialize)]
+pub struct SelfGroupsQuery {
+    pub context_type: Option<String>,
+}
+
+/// User row joined with the group membership state (Canvas User shape).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct GroupUser {
+    pub id: i64,
+    pub name: String,
+    pub sortable_name: String,
+    pub email: String,
+    pub role: String,
+    /// State of this user's membership in the group.
+    pub workflow_state: String,
+}
+
+/// Group-scoped file metadata (Canvas File shape; no upload/storage).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct GroupFile {
+    pub id: i64,
+    pub group_id: i64,
+    pub folder: String,
+    pub filename: String,
+    pub display_name: String,
+    pub content_type: String,
+    pub size: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
 }
 
 /// Group category row as stored in Postgres.
@@ -323,6 +397,51 @@ async fn is_teacher_in_group(
     }
 }
 
+/// Fetch the join_level of an existing, non-deleted group.
+async fn fetch_active_group_join_level(
+    pool: &PgPool,
+    group_id: i64,
+) -> Result<Option<String>, ApiError> {
+    let group: Option<(String,)> = sqlx::query_as(
+        "SELECT join_level FROM groups WHERE id = $1 AND workflow_state != 'deleted'",
+    )
+    .bind(group_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(group.map(|(join_level,)| join_level))
+}
+
+/// Canvas group :read: admins, course teachers, or any active member.
+async fn can_read_group(
+    pool: &PgPool,
+    user_id: i64,
+    group_id: i64,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    if is_teacher_in_group(pool, user_id, group_id, auth).await? {
+        return Ok(true);
+    }
+
+    let member: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM group_memberships
+        WHERE group_id = $1 AND user_id = $2 AND workflow_state != 'deleted'
+        LIMIT 1
+        "#,
+    )
+    .bind(group_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(member.is_some())
+}
+
+/// Canvas UserList trims invitee identifiers; emails match case-insensitively.
+fn normalize_invitee(value: &str) -> String {
+    value.trim().to_string()
+}
+
 /// Check if the user may read a course's groups/categories (any enrollment).
 async fn check_course_read_access(
     pool: &PgPool,
@@ -477,6 +596,19 @@ pub fn router() -> Router<AppState> {
             "/groups/{groupId}/memberships/{membershipId}",
             delete(delete_membership),
         )
+        // Canvas groups#users / group_memberships#create/destroy_bulk
+        .route("/groups/{groupId}/users", get(list_group_users))
+        .route("/groups/{groupId}/users", post(add_group_user))
+        .route("/groups/{groupId}/users", delete(bulk_remove_group_users))
+        .route(
+            "/groups/{groupId}/users/{userId}",
+            delete(remove_group_user),
+        )
+        // Canvas groups#invite and group file metadata
+        .route("/groups/{groupId}/invite", post(invite_group_users))
+        .route("/groups/{groupId}/files", get(list_group_files))
+        // Canvas groups#index (current user's active groups)
+        .route("/users/self/groups", get(list_self_groups))
         // Group category routes
         .route(
             "/courses/{courseId}/group_categories",
@@ -904,6 +1036,403 @@ async fn delete_membership(
 }
 
 // ---------------------------------------------------------------------------
+// Canvas group users / invitations / files handlers
+// ---------------------------------------------------------------------------
+
+/// GET /groups/{groupId}/users — list the users in a group (Canvas groups#users).
+/// Includes invited/requested memberships; excludes soft-deleted ones.
+async fn list_group_users(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    Query(query): Query<ListGroupUsersQuery>,
+    auth: AuthUser,
+) -> Result<Json<Vec<GroupUser>>, ApiError> {
+    if fetch_active_group_join_level(&state.db, group_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound);
+    }
+
+    if !can_read_group(&state.db, auth.id, group_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let search_term = query.search_term.and_then(|term| {
+        let term = term.trim().to_string();
+        if term.is_empty() {
+            None
+        } else {
+            Some(term)
+        }
+    });
+    if let Some(term) = search_term.as_deref() {
+        if term.chars().count() < 2 {
+            return Err(ApiError::BadRequest(
+                "search_term must be at least 2 characters".into(),
+            ));
+        }
+    }
+
+    let users: Vec<GroupUser> = sqlx::query_as(
+        r#"
+        SELECT u.id, u.name, COALESCE(u.sortable_name, u.name) AS sortable_name,
+               u.email, u.role, gm.workflow_state
+        FROM group_memberships gm
+        JOIN users u ON u.id = gm.user_id
+        WHERE gm.group_id = $1
+          AND gm.workflow_state != 'deleted'
+          AND (
+              $2::TEXT IS NULL
+              OR u.name ILIKE '%' || $2 || '%'
+              OR u.email ILIKE '%' || $2 || '%'
+          )
+        ORDER BY u.name
+        "#,
+    )
+    .bind(group_id)
+    .bind(search_term)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(users))
+}
+
+/// POST /groups/{groupId}/users — add a user to a group
+/// (Canvas group_memberships#create). Existing memberships are returned as-is.
+async fn add_group_user(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CreateMembership>,
+) -> Result<Json<GroupMembershipJson>, ApiError> {
+    let Some(join_level) = fetch_active_group_join_level(&state.db, group_id).await? else {
+        return Err(ApiError::NotFound);
+    };
+
+    if !is_teacher_in_group(&state.db, auth.id, group_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let user_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM users WHERE id = $1")
+        .bind(payload.user_id)
+        .fetch_optional(&state.db)
+        .await?;
+    if user_exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // `xmax = 0` distinguishes a fresh insert from a conflict update, which
+    // drives Canvas' `just_created` flag. Deleted memberships are revived.
+    let membership: GroupMembershipJson = sqlx::query_as(
+        r#"
+        INSERT INTO group_memberships (group_id, user_id, workflow_state)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (group_id, user_id) DO UPDATE
+          SET workflow_state = CASE
+                WHEN group_memberships.workflow_state = 'deleted'
+                  THEN EXCLUDED.workflow_state
+                ELSE group_memberships.workflow_state
+              END,
+              updated_at = now()
+        RETURNING id, group_id, user_id, workflow_state, moderator,
+                  (xmax = 0) AS just_created
+        "#,
+    )
+    .bind(group_id)
+    .bind(payload.user_id)
+    .bind(membership_initial_workflow_state(&join_level))
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(membership))
+}
+
+/// DELETE /groups/{groupId}/users/{userId} — leave/remove a membership
+/// (Canvas group_memberships#destroy). `userId` may be "self".
+async fn remove_group_user(
+    State(state): State<AppState>,
+    Path((group_id, user_ref)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if fetch_active_group_join_level(&state.db, group_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound);
+    }
+
+    let user_id = if user_ref == "self" {
+        auth.id
+    } else {
+        user_ref
+            .parse::<i64>()
+            .map_err(|_| ApiError::BadRequest("user id must be an integer or 'self'".into()))?
+    };
+
+    let membership: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM group_memberships \
+         WHERE group_id = $1 AND user_id = $2 AND workflow_state != 'deleted'",
+    )
+    .bind(group_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let Some((membership_id,)) = membership else {
+        return Err(ApiError::NotFound);
+    };
+
+    // Members may leave on their own; managing others needs group manage.
+    if user_id != auth.id && !is_teacher_in_group(&state.db, auth.id, group_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    sqlx::query(
+        "UPDATE group_memberships SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(membership_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// DELETE /groups/{groupId}/users — bulk remove memberships
+/// (Canvas group_memberships#destroy_bulk, `user_ids[]`).
+async fn bulk_remove_group_users(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    Query(query): Query<BulkRemoveGroupUsersQuery>,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if fetch_active_group_join_level(&state.db, group_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound);
+    }
+
+    if !is_teacher_in_group(&state.db, auth.id, group_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let payload: BulkRemoveGroupUsers = if body.is_empty() {
+        BulkRemoveGroupUsers::default()
+    } else {
+        serde_json::from_slice(&body)
+            .map_err(|_| ApiError::BadRequest("invalid JSON body".into()))?
+    };
+
+    let mut user_ids = payload.user_ids;
+    if user_ids.is_empty() {
+        if let Some(list) = query.user_ids {
+            user_ids = list
+                .split(',')
+                .filter_map(|value| value.trim().parse::<i64>().ok())
+                .collect();
+        }
+    }
+    if user_ids.is_empty() {
+        return Err(ApiError::BadRequest("user_ids is required".into()));
+    }
+
+    let deleted_user_ids: Vec<i64> = sqlx::query_scalar(
+        r#"
+        UPDATE group_memberships
+        SET workflow_state = 'deleted', updated_at = now()
+        WHERE group_id = $1 AND user_id = ANY($2) AND workflow_state != 'deleted'
+        RETURNING user_id
+        "#,
+    )
+    .bind(group_id)
+    .bind(&user_ids)
+    .fetch_all(&state.db)
+    .await?;
+
+    // Canvas reports memberships the caller could not remove; here that is
+    // any requested user id that had no active membership in the group.
+    let unauthorized_user_ids: Vec<i64> = user_ids
+        .into_iter()
+        .filter(|user_id| !deleted_user_ids.contains(user_id))
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "message": "Bulk delete completed",
+        "deleted_user_ids": deleted_user_ids,
+        "unauthorized_user_ids": unauthorized_user_ids,
+    })))
+}
+
+/// POST /groups/{groupId}/invite — invite users by email or user id
+/// (Canvas groups#invite, `invitees[]`). Matches existing users; unknown
+/// emails are recorded in group_invitations.
+async fn invite_group_users(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<InviteGroupUsers>,
+) -> Result<Json<Vec<GroupMembershipJson>>, ApiError> {
+    if fetch_active_group_join_level(&state.db, group_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound);
+    }
+
+    if !is_teacher_in_group(&state.db, auth.id, group_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let invitees: Vec<String> = payload
+        .invitees
+        .into_iter()
+        .map(|invitee| normalize_invitee(&invitee))
+        .filter(|invitee| !invitee.is_empty())
+        .collect();
+    if invitees.is_empty() {
+        return Err(ApiError::BadRequest("invitees is required".into()));
+    }
+
+    let mut memberships = Vec::new();
+    for invitee in invitees {
+        // Canvas UserList resolves user ids and email addresses.
+        let user: Option<(i64, String)> = if let Ok(user_id) = invitee.parse::<i64>() {
+            sqlx::query_as("SELECT id, email FROM users WHERE id = $1")
+                .bind(user_id)
+                .fetch_optional(&state.db)
+                .await?
+        } else {
+            sqlx::query_as("SELECT id, email FROM users WHERE lower(email) = lower($1)")
+                .bind(&invitee)
+                .fetch_optional(&state.db)
+                .await?
+        };
+
+        let email = match &user {
+            Some((_, email)) => email.clone(),
+            None => invitee.to_lowercase(),
+        };
+        sqlx::query(
+            r#"
+            INSERT INTO group_invitations (group_id, email, user_id, invited_by_id)
+            VALUES ($1, $2, $3, $4)
+            "#,
+        )
+        .bind(group_id)
+        .bind(&email)
+        .bind(user.as_ref().map(|(user_id, _)| *user_id))
+        .bind(auth.id)
+        .execute(&state.db)
+        .await?;
+
+        let Some((user_id, _)) = user else {
+            continue;
+        };
+
+        // Canvas invite_user: invite pending memberships; active ones stay put.
+        let membership: GroupMembershipJson = sqlx::query_as(
+            r#"
+            INSERT INTO group_memberships (group_id, user_id, workflow_state)
+            VALUES ($1, $2, 'invited')
+            ON CONFLICT (group_id, user_id) DO UPDATE
+              SET workflow_state = CASE
+                    WHEN group_memberships.workflow_state = 'deleted' THEN 'invited'
+                    ELSE group_memberships.workflow_state
+                  END,
+                  updated_at = now()
+            RETURNING id, group_id, user_id, workflow_state, moderator,
+                      NULL::BOOLEAN AS just_created
+            "#,
+        )
+        .bind(group_id)
+        .bind(user_id)
+        .fetch_one(&state.db)
+        .await?;
+        memberships.push(membership);
+    }
+
+    Ok(Json(memberships))
+}
+
+/// GET /groups/{groupId}/files — group file metadata (Canvas files#api_index).
+async fn list_group_files(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<GroupFile>>, ApiError> {
+    if fetch_active_group_join_level(&state.db, group_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound);
+    }
+
+    if !can_read_group(&state.db, auth.id, group_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let files: Vec<GroupFile> = sqlx::query_as(
+        r#"
+        SELECT id, group_id, folder, filename,
+               COALESCE(display_name, filename) AS display_name,
+               content_type, size, created_at, updated_at
+        FROM group_files
+        WHERE group_id = $1
+        ORDER BY display_name
+        "#,
+    )
+    .bind(group_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(files))
+}
+
+/// GET /users/self/groups — the caller's active groups (Canvas groups#index).
+async fn list_self_groups(
+    State(state): State<AppState>,
+    Query(query): Query<SelfGroupsQuery>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Group>>, ApiError> {
+    let context_type = match query.context_type.as_deref() {
+        None | Some("") => None,
+        Some("Course") => Some("Course"),
+        Some("Account") => Some("Account"),
+        Some(_) => {
+            return Err(ApiError::BadRequest(
+                "context_type must be 'Course' or 'Account'".into(),
+            ))
+        }
+    };
+
+    let groups: Vec<Group> = sqlx::query_as(
+        r#"
+        SELECT g.id, g.course_id, g.name, g.description, g.workflow_state,
+               g.join_level, g.group_category_id, g.created_at, g.updated_at
+        FROM groups g
+        JOIN group_memberships gm ON gm.group_id = g.id
+        WHERE gm.user_id = $1
+          AND gm.workflow_state != 'deleted'
+          AND g.workflow_state != 'deleted'
+          AND (
+              $2::TEXT IS NULL
+              OR ($2 = 'Course' AND g.course_id IS NOT NULL)
+              OR ($2 = 'Account' AND g.course_id IS NULL)
+          )
+        ORDER BY g.name
+        "#,
+    )
+    .bind(auth.id)
+    .bind(context_type)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(groups))
+}
+
+// ---------------------------------------------------------------------------
 // Group category handlers
 // ---------------------------------------------------------------------------
 
@@ -1257,5 +1786,38 @@ mod tests {
         );
         assert!(validate_group_category_fields("Groups", None, None, Some(1)).is_err());
         assert!(validate_group_category_fields("Groups", Some("enabled"), None, Some(2)).is_ok());
+    }
+
+    #[test]
+    fn invitee_identifiers_are_trimmed() {
+        assert_eq!(
+            normalize_invitee("  leonard@example.com "),
+            "leonard@example.com"
+        );
+        assert_eq!(normalize_invitee("42"), "42");
+        assert_eq!(normalize_invitee("   "), "");
+    }
+
+    #[test]
+    fn membership_json_omits_just_created_when_absent() {
+        let membership = GroupMembershipJson {
+            id: 9,
+            group_id: 3,
+            user_id: 7,
+            workflow_state: "invited".to_string(),
+            moderator: false,
+            just_created: None,
+        };
+        let value = serde_json::to_value(&membership).expect("serialize membership");
+        assert!(value.get("just_created").is_none());
+        assert_eq!(value["workflow_state"], "invited");
+        assert_eq!(value["moderator"], false);
+
+        let created = GroupMembershipJson {
+            just_created: Some(true),
+            ..membership
+        };
+        let value = serde_json::to_value(&created).expect("serialize membership");
+        assert_eq!(value["just_created"], true);
     }
 }
