@@ -921,11 +921,11 @@ async fn write_module_item_update(
     .await?;
 
     if moving {
-        let remaining = module_item_ids(&mut *tx, item.module_id).await?;
-        write_item_positions(&mut *tx, &remaining).await?;
-        place_module_item(&mut *tx, target_module, item.id, update.position).await?;
+        let remaining = module_item_ids(&mut tx, item.module_id).await?;
+        write_item_positions(&mut tx, &remaining).await?;
+        place_module_item(&mut tx, target_module, item.id, update.position).await?;
     } else if update.position.is_some() {
-        place_module_item(&mut *tx, item.module_id, item.id, update.position).await?;
+        place_module_item(&mut tx, item.module_id, item.id, update.position).await?;
     }
 
     tx.commit().await?;
@@ -1044,8 +1044,8 @@ async fn duplicate_item(
     let mut tx = state.db.begin().await?;
 
     // Normalize first so the original's stored position is its 1-based index.
-    let ordered = module_item_ids(&mut *tx, item.module_id).await?;
-    write_item_positions(&mut *tx, &ordered).await?;
+    let ordered = module_item_ids(&mut tx, item.module_id).await?;
+    write_item_positions(&mut tx, &ordered).await?;
     let original_index = ordered.iter().position(|id| *id == item.id).unwrap_or(0);
 
     // The (module_id, item_type, item_id) unique index forbids pointing the
@@ -1104,7 +1104,7 @@ async fn duplicate_item(
     let mut reordered = ordered;
     let insert_at = (original_index + 1).min(reordered.len());
     reordered.insert(insert_at, new_item_id);
-    write_item_positions(&mut *tx, &reordered).await?;
+    write_item_positions(&mut tx, &reordered).await?;
 
     let new_positions: Vec<(i64, i32)> = sqlx::query_as(
         r#"

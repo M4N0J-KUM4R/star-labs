@@ -165,11 +165,18 @@ pub struct FrontPage {
 enum FrontPageError {
     NoFrontPage,
     Api(ApiError),
+    Db(sqlx::Error),
 }
 
 impl From<ApiError> for FrontPageError {
     fn from(err: ApiError) -> Self {
         FrontPageError::Api(err)
+    }
+}
+
+impl From<sqlx::Error> for FrontPageError {
+    fn from(err: sqlx::Error) -> Self {
+        FrontPageError::Db(err)
     }
 }
 
@@ -182,6 +189,7 @@ impl IntoResponse for FrontPageError {
             )
                 .into_response(),
             FrontPageError::Api(err) => err.into_response(),
+            FrontPageError::Db(err) => ApiError::from(err).into_response(),
         }
     }
 }

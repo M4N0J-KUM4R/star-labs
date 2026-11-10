@@ -1395,9 +1395,11 @@ fn parse_appointment_json_timestamp(value: &Value) -> Result<DateTime<Utc>, ApiE
 /// and Rails' hash form `{"0": [start, end], ...}`. A missing end defaults to
 /// the start, and an end before the start is clamped (Canvas
 /// `populate_missing_dates`).
+type AppointmentDateRange = (DateTime<Utc>, DateTime<Utc>);
+
 fn parse_new_appointments(
     value: Option<&Value>,
-) -> Result<Vec<(DateTime<Utc>, DateTime<Utc>)>, ApiError> {
+) -> Result<Vec<AppointmentDateRange>, ApiError> {
     let Some(value) = value else {
         return Ok(Vec::new());
     };
@@ -2113,7 +2115,7 @@ fn render_appointment_group_json(
                 .iter()
                 .filter(|slot| {
                     options.include_past_appointments
-                        || slot.end_at.map_or(true, |end_at| end_at > now)
+                        || slot.end_at.is_none_or(|end_at| end_at > now)
                 })
                 .map(|slot| {
                     let slot_reservations: Vec<&AppointmentReservationRow> = snapshot

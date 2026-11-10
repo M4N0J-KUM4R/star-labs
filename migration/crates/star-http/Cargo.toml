@@ -35,6 +35,7 @@ star-rubrics = { path = "../star-rubrics" }
 star-submission-comments = { path = "../star-submission-comments" }
 star-jobs = { path = "../star-jobs" }
 star-lti = { path = "../star-lti" }
+star-permissions = { path = "../star-permissions" }
 axum = { workspace = true }
 tokio = { workspace = true }
 sqlx = { workspace = true }

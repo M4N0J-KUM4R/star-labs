@@ -2594,6 +2594,7 @@ dependencies = [
  "star-notifications",
  "star-outcomes",
  "star-pages",
+ "star-permissions",
  "star-quizzes",
  "star-rubrics",
  "star-submission-comments",
@@ -2708,9 +2709,11 @@ dependencies = [
 name = "star-permissions"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "chrono",
  "serde",
  "sqlx",
+ "star-auth",
  "star-common",
  "tokio",
 ]

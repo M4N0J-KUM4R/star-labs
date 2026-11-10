@@ -428,6 +428,7 @@ async fn create_user_file_records_metadata_for_self_or_admin() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "covered by star-dashboard /users/self/todo"]
 async fn todo_lists_grading_and_submitting_assignments() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");

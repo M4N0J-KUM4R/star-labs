@@ -595,8 +595,6 @@ pub fn router() -> Router<AppState> {
             "/users/{userId}/settings",
             get(get_user_settings).put(update_user_settings),
         )
-        // Canvas users_controller#todo_items.
-        .route("/users/self/todo", get(self_todo))
         // Canvas users_controller#create_file (attachment preflight; metadata
         // only, no upload binary handling).
         .route("/users/{userId}/files", post(create_user_file))
@@ -891,6 +889,7 @@ async fn update_user_settings(
 /// (teacher enrollments with ungraded submissions) followed by assignments
 /// they still need to submit (student enrollments, due between four weeks ago
 /// and one week from now, with no submission from the caller).
+#[allow(dead_code)]
 async fn self_todo(
     State(state): State<AppState>,
     auth: AuthUser,

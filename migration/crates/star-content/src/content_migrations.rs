@@ -191,7 +191,7 @@ fn truthy(value: Option<&Value>) -> bool {
 }
 
 /// Canvas `ContentMigration` state → documented API workflow_state.
-fn api_workflow_state<'a>(state: &'a str, import_immediately: bool) -> &'a str {
+fn api_workflow_state(state: &str, import_immediately: bool) -> &str {
     match state {
         "created" => "pre_processing",
         "pre_process_error" => "failed",
@@ -633,11 +633,9 @@ async fn create_migration(
     }
 
     // Canvas `set_date_shift_options` (only persisted when enabled).
-    let mut shift_dates = false;
-    let mut remove_dates = false;
     if let Some(date_shift) = payload.get("date_shift_options").and_then(Value::as_object) {
-        shift_dates = truthy(date_shift.get("shift_dates"));
-        remove_dates = truthy(date_shift.get("remove_dates"));
+        let shift_dates = truthy(date_shift.get("shift_dates"));
+        let remove_dates = truthy(date_shift.get("remove_dates"));
         if shift_dates && remove_dates {
             return Ok((
                 StatusCode::BAD_REQUEST,

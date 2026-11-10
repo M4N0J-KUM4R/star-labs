@@ -601,7 +601,7 @@ async fn upcoming_events_handler(
         ));
     }
 
-    events.sort_by(|a, b| a.0.cmp(&b.0));
+    events.sort_by_key(|event| event.0);
     events.truncate(20);
 
     Ok(Json(events.into_iter().map(|(_, event)| event).collect()))

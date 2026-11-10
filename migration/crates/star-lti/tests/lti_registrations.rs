@@ -335,7 +335,7 @@ async fn account_admins_manage_their_account_tree() {
     let outsider = seed_user(&pool, &prefix, "outsider", "student").await;
     let root = seed_account(&pool, &prefix, "root", None).await;
     let child = seed_account(&pool, &prefix, "child", Some(root)).await;
-    seed_account_admin(&pool, &root, account_admin).await;
+    seed_account_admin(&pool, root, account_admin).await;
 
     // An account admin of the root can install in the child account.
     let response = server

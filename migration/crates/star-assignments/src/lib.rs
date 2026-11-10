@@ -151,6 +151,13 @@ pub struct SubmissionAttachment {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(sqlx::FromRow)]
+struct SubmissionAttachmentRow {
+    submission_id: i64,
+    #[sqlx(flatten)]
+    attachment: SubmissionAttachment,
+}
+
 /// Raw submission row used to build a [`CanvasSubmission`].
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct SubmissionRow {
@@ -879,7 +886,7 @@ async fn load_submission_attachments(
         return Ok(attachments);
     }
 
-    let rows: Vec<(i64, SubmissionAttachment)> = sqlx::query_as(
+    let rows: Vec<SubmissionAttachmentRow> = sqlx::query_as(
         r#"
         SELECT submission_id, id, filename, display_name, content_type, size,
                created_at, updated_at
@@ -892,11 +899,11 @@ async fn load_submission_attachments(
     .fetch_all(pool)
     .await?;
 
-    for (submission_id, attachment) in rows {
+    for row in rows {
         attachments
-            .entry(submission_id)
+            .entry(row.submission_id)
             .or_default()
-            .push(attachment);
+            .push(row.attachment);
     }
 
     Ok(attachments)
