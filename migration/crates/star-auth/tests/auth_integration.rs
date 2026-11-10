@@ -2,11 +2,12 @@
 //!
 //! Exercises the real auth router (POST /auth/register, POST /auth/login,
 //! GET /auth/me, POST /auth/logout), the Canvas developer key routes
-//! (GET/POST /developer_keys, DELETE /developer_keys/{id}) and the OAuth2
-//! token endpoint (POST /login/oauth2/token) through axum-test against a
-//! real Postgres, plus the public helpers (hash_password/verify_password,
-//! create_token/verify_token, fetch_user_by_id via GET /auth/me) and the
-//! AuthUser extractor.
+//! (GET/POST /developer_keys, DELETE /developer_keys/{id}), the OAuth2
+//! token endpoint (POST /login/oauth2/token) and the personal access token
+//! routes (GET/POST /tokens, GET/DELETE /tokens/{id}) through axum-test
+//! against a real Postgres, plus the public helpers
+//! (hash_password/verify_password, create_token/verify_token,
+//! fetch_user_by_id via GET /auth/me) and the AuthUser extractor.
 //!
 //! Conventions (mirrors the rest of the workspace):
 //! - DB-backed tests are skipped cleanly when DATABASE_URL is not set
@@ -1024,6 +1025,294 @@ async fn authuser_resolves_role_from_db_and_rejects_deleted_users() {
         .add_header(axum::http::header::AUTHORIZATION, format!("Bearer {stale}"))
         .await;
     assert_eq!(resp.status_code(), 401, "deleted user must be rejected");
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// Personal access tokens (GET/POST /tokens, GET/DELETE /tokens/{id})
+// ---------------------------------------------------------------------------
+
+/// POST /tokens as `user` and return the parsed Canvas `Token` body.
+async fn create_personal_token(server: &TestServer, user: i64, role: &str, body: Value) -> Value {
+    let resp = server
+        .post("/tokens")
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, role))
+        .json(&body)
+        .await;
+    assert_eq!(resp.status_code(), 200, "create token: {}", resp.text());
+    resp.json()
+}
+
+#[tokio::test]
+async fn tokens_create_list_show_and_destroy() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let user = seed_user(&pool, &prefix, "TokenOwner", "student").await;
+
+    // Create: the full token is returned exactly once, in visible_token.
+    let created = create_personal_token(
+        &server,
+        user,
+        "student",
+        json!({
+            "token": {
+                "purpose": "CI integration",
+                "expires_at": "2030-01-02T03:04:05Z",
+                "scopes": ["url:GET|/api/v1/courses", "url:POST|/api/v1/courses"]
+            }
+        }),
+    )
+    .await;
+
+    let id = created["id"].as_i64().expect("token id");
+    assert!(id > 0);
+    assert_eq!(created["user_id"], user);
+    assert_eq!(created["purpose"], "CI integration");
+    assert_eq!(created["workflow_state"], "active");
+    assert_eq!(created["scopes"][0], "url:GET|/api/v1/courses");
+    assert_eq!(created["scopes"][1], "url:POST|/api/v1/courses");
+    assert_eq!(created["app_name"], "User-Generated");
+    assert_eq!(created["remember_access"], false);
+    assert_eq!(created["real_user_id"], Value::Null);
+    assert_eq!(created["last_used_at"], Value::Null);
+    assert_eq!(created["can_manually_regenerate"], true);
+    assert!(
+        created["expires_at"]
+            .as_str()
+            .expect("expires_at")
+            .starts_with("2030-01-02T03:04:05"),
+        "unexpected expires_at: {}",
+        created["expires_at"]
+    );
+
+    let full_token = created["visible_token"]
+        .as_str()
+        .expect("visible_token")
+        .to_string();
+    assert_eq!(full_token.len(), 64, "Canvas token size is 64");
+    assert!(full_token.chars().all(|c| c.is_ascii_hexdigit()));
+    let hint = full_token[..5].to_string();
+
+    // The row is a manually created token: NULL developer key, plaintext
+    // token, 5-character hint.
+    let (stored_token, stored_hint, key_id): (String, Option<String>, Option<i64>) =
+        sqlx::query_as(
+            "SELECT token, token_hint, developer_key_id FROM access_tokens WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .expect("token row");
+    assert_eq!(stored_token, full_token);
+    assert_eq!(stored_hint.as_deref(), Some(hint.as_str()));
+    assert_eq!(key_id, None);
+
+    // List: the token appears with its visible value masked to the hint.
+    let resp = server
+        .get("/tokens")
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "list tokens: {}", resp.text());
+    let listed: Value = resp.json();
+    let listed = listed
+        .as_array()
+        .expect("list is an array")
+        .iter()
+        .find(|token| token["id"] == id)
+        .expect("created token in list");
+    assert_eq!(listed["visible_token"], format!("{hint}..."));
+    assert_eq!(listed["scopes"][0], "url:GET|/api/v1/courses");
+
+    // Show by id and by token_hint both resolve the same token.
+    for key in [id.to_string(), hint.clone()] {
+        let resp = server
+            .get(&format!("/tokens/{key}"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+            .await;
+        assert_eq!(resp.status_code(), 200, "show {key}: {}", resp.text());
+        let shown: Value = resp.json();
+        assert_eq!(shown["id"], id);
+        assert_eq!(shown["visible_token"], format!("{hint}..."));
+    }
+
+    // Delete is a soft delete; the token leaves the list and is 404 after.
+    let resp = server
+        .delete(&format!("/tokens/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "delete: {}", resp.text());
+    let deleted: Value = resp.json();
+    assert_eq!(deleted["workflow_state"], "deleted");
+
+    let (state,): (String,) =
+        sqlx::query_as("SELECT workflow_state FROM access_tokens WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("token row after delete");
+    assert_eq!(state, "deleted");
+
+    let resp = server
+        .get("/tokens")
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .await;
+    let remaining: Value = resp.json();
+    assert!(
+        remaining
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|token| token["id"] != id),
+        "deleted token must not be listed: {remaining}"
+    );
+
+    let resp = server
+        .get(&format!("/tokens/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "show deleted: {}", resp.text());
+    let resp = server
+        .delete(&format!("/tokens/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "repeat delete: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn tokens_require_auth_and_validate_params() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let user = seed_user(&pool, &prefix, "TokenValidation", "student").await;
+
+    // Anonymous requests are rejected.
+    let resp = server.get("/tokens").await;
+    assert_eq!(resp.status_code(), 401, "anonymous list: {}", resp.text());
+    let resp = server
+        .post("/tokens")
+        .json(&json!({ "token": { "purpose": "nope" } }))
+        .await;
+    assert_eq!(resp.status_code(), 401, "anonymous create: {}", resp.text());
+
+    // Missing or blank purpose: Canvas `{"message": ...}` error array, 400.
+    for purpose in [Value::Null, json!("   ")] {
+        let resp = server
+            .post("/tokens")
+            .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+            .json(&json!({ "token": { "purpose": purpose } }))
+            .await;
+        assert_eq!(
+            resp.status_code(),
+            400,
+            "purpose {purpose}: {}",
+            resp.text()
+        );
+        let error: Value = resp.json();
+        assert_eq!(error[0]["message"], "token[purpose] is missing");
+    }
+
+    // Unparseable expiration dates are rejected like Canvas.
+    let resp = server
+        .post("/tokens")
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .json(&json!({
+            "token": { "purpose": "bad date", "expires_at": "next tuesday" }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "bad date: {}", resp.text());
+    let error: Value = resp.json();
+    assert_eq!(error[0]["message"], "Invalid expiration date format");
+
+    // Unknown ids are 404, and validation created no rows.
+    let resp = server
+        .get("/tokens/999999999")
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "unknown token: {}", resp.text());
+    let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM access_tokens WHERE user_id = $1")
+        .bind(user)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn tokens_are_scoped_to_their_owner() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let owner = seed_user(&pool, &prefix, "TokenIsolationOwner", "teacher").await;
+    let other = seed_user(&pool, &prefix, "TokenIsolationOther", "student").await;
+
+    let created = create_personal_token(
+        &server,
+        owner,
+        "teacher",
+        json!({ "token": { "purpose": "owner only" } }),
+    )
+    .await;
+    let id = created["id"].as_i64().expect("token id");
+
+    // Another user cannot see it in their list, read it, or delete it.
+    let resp = server
+        .get("/tokens")
+        .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "other list: {}", resp.text());
+    let other_list: Value = resp.json();
+    assert!(
+        other_list
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|token| token["id"] != id),
+        "another user's token leaked into the list: {other_list}"
+    );
+
+    for method in ["GET", "DELETE"] {
+        let path = format!("/tokens/{id}");
+        let resp = match method {
+            "GET" => {
+                server
+                    .get(&path)
+                    .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+                    .await
+            }
+            _ => {
+                server
+                    .delete(&path)
+                    .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+                    .await
+            }
+        };
+        assert_eq!(
+            resp.status_code(),
+            404,
+            "{method} by another user: {}",
+            resp.text()
+        );
+    }
+
+    // The failed delete left the token active and usable by its owner.
+    let resp = server
+        .get(&format!("/tokens/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "owner show: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["workflow_state"], "active");
 
     cleanup(&pool, &prefix).await;
 }
