@@ -1,4 +1,12 @@
 //! star-modules domain crate — course modules and module items.
+//!
+//! Canvas module item detail routes (migration 0065):
+//! - GET/PUT/DELETE /courses/{courseId}/modules/items/{itemId}
+//! - POST /courses/{courseId}/modules/items/{itemId}/duplicate
+//! - GET/PUT /courses/{courseId}/modules/{moduleId}/items/{itemId}
+//!
+//! The Phase 2 module CRUD, item add/remove and item done routes are kept
+//! unchanged.
 
 use axum::{
     extract::{Path, Query, State},
@@ -8,7 +16,8 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
+use serde_json::{json, Value};
+use sqlx::{PgConnection, PgPool};
 
 use star_common::{ApiError, AppState};
 
@@ -86,6 +95,82 @@ pub struct CreateModuleItem {
 pub struct ListModulesQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+}
+
+/// Mutable module item attributes accepted by the Canvas
+/// `context_module_items_api#update` endpoints (Phase 3, migration 0065).
+#[derive(Debug, Default, Deserialize)]
+pub struct ModuleItemUpdate {
+    pub title: Option<String>,
+    pub indent: Option<i32>,
+    pub position: Option<i32>,
+    pub published: Option<bool>,
+    /// Move the item into another module of the same course.
+    pub module_id: Option<i64>,
+}
+
+impl ModuleItemUpdate {
+    fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.indent.is_none()
+            && self.position.is_none()
+            && self.published.is_none()
+            && self.module_id.is_none()
+    }
+}
+
+/// Canvas request envelope. Both the documented `{"module_item": {...}}`
+/// shape and a flat `{"title": ..., "indent": ...}` body are accepted; flat
+/// fields are the same ones the crate's other module routes take.
+#[derive(Debug, Deserialize)]
+pub struct UpdateModuleItemBody {
+    pub module_item: Option<ModuleItemUpdate>,
+    #[serde(flatten)]
+    pub direct: ModuleItemUpdate,
+}
+
+/// Joined module item used by the Phase 3 detail/update/duplicate routes.
+/// `content_title`/`page_url`/`points_possible`/`due_at` come from the linked
+/// assignment or page so the response can mirror Canvas module_item_json.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ModuleItemDetail {
+    pub id: i64,
+    pub module_id: i64,
+    pub course_id: i64,
+    pub item_type: String,
+    pub item_id: i64,
+    pub position: i32,
+    pub title: Option<String>,
+    pub indent: i32,
+    pub workflow_state: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub content_title: Option<String>,
+    pub page_url: Option<String>,
+    pub points_possible: Option<f64>,
+    pub due_at: Option<DateTime<Utc>>,
+}
+
+/// `include[]=content_details` (Canvas accepts both the bracketed and plain
+/// spellings; only the single-value form is meaningful for one item).
+#[derive(Debug, Default, Deserialize)]
+pub struct ItemDetailQuery {
+    pub include: Option<String>,
+    #[serde(rename = "include[]")]
+    pub include_bracket: Option<String>,
+}
+
+impl ItemDetailQuery {
+    fn wants_content_details(&self) -> bool {
+        [&self.include, &self.include_bracket]
+            .into_iter()
+            .flatten()
+            .any(|value| {
+                value
+                    .split(',')
+                    .any(|include| include.trim() == "content_details")
+            })
+    }
 }
 
 // --------------------------------------------------------------------------
@@ -582,6 +667,504 @@ async fn mark_item_not_done(
 }
 
 // --------------------------------------------------------------------------
+// Module item detail / update / duplicate (Canvas context_module_items_api)
+// --------------------------------------------------------------------------
+
+/// Canvas `Api::API_DATA_TYPE` for the item types this crate stores.
+fn canvas_item_type(item_type: &str) -> &str {
+    match item_type {
+        "page" | "wiki_page" => "Page",
+        "assignment" => "Assignment",
+        "file" | "attachment" => "File",
+        "quiz" => "Quiz",
+        "topic" | "discussion" => "Discussion",
+        "sub_header" | "subheader" => "SubHeader",
+        "external_url" => "ExternalUrl",
+        "external_tool" => "ExternalTool",
+        other => other,
+    }
+}
+
+/// Canvas-style page slug used as a fallback when `pages.url` is unset.
+/// Mirrors star-pages' `generate_url_slug` (lowercase, separators collapse
+/// to a single dash, punctuation is stripped).
+fn page_slug(title: &str) -> String {
+    let mut slug = String::with_capacity(title.len());
+    let mut last_was_dash = true; // suppress leading dashes
+
+    for ch in title.chars() {
+        if ch.is_whitespace() || ch == '-' || ch == '_' {
+            if !last_was_dash {
+                slug.push('-');
+                last_was_dash = true;
+            }
+        } else if ch.is_alphanumeric() {
+            for lower in ch.to_lowercase() {
+                slug.push(lower);
+            }
+            last_was_dash = false;
+        }
+    }
+
+    if slug.ends_with('-') {
+        slug.pop();
+    }
+
+    slug
+}
+
+/// Canvas module_item_json (lib/api/v1/context_module.rb) subset for the
+/// types star-modules supports. Page items expose `page_url` instead of
+/// `content_id`; assignment items expose `content_id` plus the assignment
+/// API url. `content_details` is only emitted for `include[]=content_details`.
+fn module_item_json(item: &ModuleItemDetail, include_content_details: bool) -> Value {
+    let title = item
+        .title
+        .clone()
+        .or_else(|| item.content_title.clone())
+        .unwrap_or_default();
+
+    let mut hash = serde_json::Map::new();
+    hash.insert("id".into(), json!(item.id));
+    hash.insert("position".into(), json!(item.position));
+    hash.insert("title".into(), json!(title));
+    hash.insert("indent".into(), json!(item.indent));
+    hash.insert("type".into(), json!(canvas_item_type(&item.item_type)));
+    hash.insert("module_id".into(), json!(item.module_id));
+    hash.insert(
+        "html_url".into(),
+        json!(format!(
+            "/courses/{}/modules/items/{}",
+            item.course_id, item.id
+        )),
+    );
+
+    match item.item_type.as_str() {
+        "page" | "wiki_page" => {
+            let slug = item.page_url.clone().unwrap_or_else(|| page_slug(&title));
+            hash.insert("page_url".into(), json!(slug));
+            hash.insert(
+                "url".into(),
+                json!(format!("/api/v1/courses/{}/pages/{}", item.course_id, slug)),
+            );
+        }
+        "assignment" => {
+            hash.insert("content_id".into(), json!(item.item_id));
+            hash.insert(
+                "url".into(),
+                json!(format!(
+                    "/api/v1/courses/{}/assignments/{}",
+                    item.course_id, item.item_id
+                )),
+            );
+        }
+        _ => {
+            hash.insert("content_id".into(), json!(item.item_id));
+        }
+    }
+
+    hash.insert("published".into(), json!(item.workflow_state == "active"));
+
+    if include_content_details {
+        let mut details = serde_json::Map::new();
+        if let Some(points_possible) = item.points_possible {
+            details.insert("points_possible".into(), json!(points_possible));
+        }
+        if let Some(due_at) = item.due_at {
+            details.insert("due_at".into(), json!(due_at));
+        }
+        hash.insert("content_details".into(), Value::Object(details));
+    }
+
+    Value::Object(hash)
+}
+
+/// Resolve the item, its owning course, and its linked content. `module_id`
+/// constrains the lookup for the nested Canvas alias. Soft-deleted modules
+/// hide their items (`context_module_tags.not_deleted` parity).
+async fn load_module_item(
+    db: &PgPool,
+    course_id: i64,
+    module_id: Option<i64>,
+    item_id: i64,
+) -> Result<ModuleItemDetail, ApiError> {
+    let item: Option<ModuleItemDetail> = sqlx::query_as(
+        r#"
+        SELECT mi.id, mi.module_id, m.course_id, mi.item_type, mi.item_id,
+               mi.position, mi.title, mi.indent, mi.workflow_state,
+               mi.created_at, mi.updated_at,
+               COALESCE(a.title, p.title) AS content_title,
+               p.url AS page_url,
+               a.points_possible::float8 AS points_possible,
+               a.due_at AS due_at
+        FROM module_items mi
+        JOIN modules m ON m.id = mi.module_id
+        LEFT JOIN assignments a
+               ON mi.item_type = 'assignment' AND a.id = mi.item_id
+        LEFT JOIN pages p
+               ON mi.item_type = 'page' AND p.id = mi.item_id
+        WHERE mi.id = $1
+          AND ($2::bigint IS NULL OR mi.module_id = $2)
+          AND m.course_id = $3
+          AND m.workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(item_id)
+    .bind(module_id)
+    .bind(course_id)
+    .fetch_optional(db)
+    .await?;
+
+    item.ok_or(ApiError::NotFound)
+}
+
+/// Item ids in Canvas list order (position ASC, id ASC).
+async fn module_item_ids(conn: &mut PgConnection, module_id: i64) -> Result<Vec<i64>, ApiError> {
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT id FROM module_items WHERE module_id = $1 ORDER BY position ASC, id ASC",
+    )
+    .bind(module_id)
+    .fetch_all(&mut *conn)
+    .await?;
+
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// Rewrite positions as a contiguous 1-based list, like Canvas ContentTag
+/// `insert_at` does for a module's siblings.
+async fn write_item_positions(conn: &mut PgConnection, ids: &[i64]) -> Result<(), ApiError> {
+    for (index, id) in ids.iter().enumerate() {
+        sqlx::query("UPDATE module_items SET position = $1, updated_at = now() WHERE id = $2")
+            .bind(index as i32 + 1)
+            .bind(id)
+            .execute(&mut *conn)
+            .await?;
+    }
+
+    Ok(())
+}
+
+/// Move `item_id` to the requested 1-based position (Canvas `insert_at`);
+/// a missing position appends the item at the end of the module.
+async fn place_module_item(
+    conn: &mut PgConnection,
+    module_id: i64,
+    item_id: i64,
+    position: Option<i32>,
+) -> Result<(), ApiError> {
+    let mut ids = module_item_ids(&mut *conn, module_id).await?;
+    ids.retain(|id| *id != item_id);
+
+    let index = match position {
+        Some(position) => ((position.max(1) - 1) as usize).min(ids.len()),
+        None => ids.len(),
+    };
+    ids.insert(index, item_id);
+
+    write_item_positions(&mut *conn, &ids).await
+}
+
+fn missing_module_item_parameter() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "message": "missing module item parameter" })),
+    )
+}
+
+fn invalid_module_id() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "message": "invalid module_id" })),
+    )
+}
+
+fn item_cannot_be_duplicated() -> (StatusCode, Json<Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "message": "Item cannot be duplicated" })),
+    )
+}
+
+/// Persist one module item update. Position changes renumber the module's
+/// items (Canvas `insert_at`); moving modules also closes the gap left in the
+/// source module and appends to the target unless a position was given.
+async fn write_module_item_update(
+    db: &PgPool,
+    item: &ModuleItemDetail,
+    update: &ModuleItemUpdate,
+) -> Result<ModuleItemDetail, ApiError> {
+    let target_module = update.module_id.unwrap_or(item.module_id);
+    let moving = target_module != item.module_id;
+    let published_state = update
+        .published
+        .map(|published| if published { "active" } else { "unpublished" });
+
+    let mut tx = db.begin().await?;
+
+    sqlx::query(
+        r#"
+        UPDATE module_items
+        SET title = COALESCE($1::text, title),
+            indent = COALESCE($2::int, indent),
+            workflow_state = COALESCE($3::text, workflow_state),
+            module_id = $4,
+            updated_at = now()
+        WHERE id = $5
+        "#,
+    )
+    .bind(update.title.as_deref())
+    .bind(update.indent)
+    .bind(published_state)
+    .bind(target_module)
+    .bind(item.id)
+    .execute(&mut *tx)
+    .await?;
+
+    if moving {
+        let remaining = module_item_ids(&mut *tx, item.module_id).await?;
+        write_item_positions(&mut *tx, &remaining).await?;
+        place_module_item(&mut *tx, target_module, item.id, update.position).await?;
+    } else if update.position.is_some() {
+        place_module_item(&mut *tx, item.module_id, item.id, update.position).await?;
+    }
+
+    tx.commit().await?;
+
+    load_module_item(db, item.course_id, None, item.id).await
+}
+
+/// Shared body handling for both Canvas update routes. Canvas returns
+/// `{"message": "missing module item parameter"}` (400) when no
+/// `module_item` attributes are present and `{"message": "invalid module_id"}`
+/// when a move targets a module outside the course.
+async fn apply_module_item_update(
+    state: &AppState,
+    course_id: i64,
+    item: ModuleItemDetail,
+    body: UpdateModuleItemBody,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let update = match body.module_item {
+        Some(update) => update,
+        None if !body.direct.is_empty() => body.direct,
+        None => return Ok(missing_module_item_parameter()),
+    };
+
+    if let Some(target_module) = update.module_id {
+        if target_module != item.module_id {
+            let exists: Option<(i32,)> = sqlx::query_as(
+                r#"
+                SELECT 1 FROM modules
+                WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+                "#,
+            )
+            .bind(target_module)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
+
+            if exists.is_none() {
+                return Ok(invalid_module_id());
+            }
+        }
+    }
+
+    let updated = write_module_item_update(&state.db, &item, &update).await?;
+
+    Ok((StatusCode::OK, Json(module_item_json(&updated, false))))
+}
+
+/// GET /courses/{courseId}/modules/items/{itemId}
+///
+/// Canvas show authorizes `:read` on the course before resolving the item, so
+/// unauthorized callers get 403 even for a missing item.
+async fn get_item_detail(
+    State(state): State<AppState>,
+    Path((course_id, item_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Query(params): Query<ItemDetailQuery>,
+) -> Result<Json<Value>, ApiError> {
+    require_course_read_access(&state.db, auth.id, course_id, &auth).await?;
+
+    let item = load_module_item(&state.db, course_id, None, item_id).await?;
+
+    Ok(Json(module_item_json(
+        &item,
+        params.wants_content_details(),
+    )))
+}
+
+/// PUT /courses/{courseId}/modules/items/{itemId}
+///
+/// Canvas update resolves the item (`not_deleted`) before authorizing, then
+/// requires `:update` on the owning module.
+async fn update_item_detail(
+    State(state): State<AppState>,
+    Path((course_id, item_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<UpdateModuleItemBody>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let item = load_module_item(&state.db, course_id, None, item_id).await?;
+    require_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+
+    apply_module_item_update(&state, course_id, item, body).await
+}
+
+/// DELETE /courses/{courseId}/modules/items/{itemId}
+///
+/// Canvas destroy drops the ContentTag (the linked page/assignment survives)
+/// and returns the deleted module item JSON with 200.
+async fn delete_item_detail(
+    State(state): State<AppState>,
+    Path((course_id, item_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let item = load_module_item(&state.db, course_id, None, item_id).await?;
+    require_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+
+    sqlx::query("DELETE FROM module_items WHERE id = $1")
+        .bind(item.id)
+        .execute(&state.db)
+        .await?;
+
+    Ok((StatusCode::OK, Json(module_item_json(&item, false))))
+}
+
+/// POST /courses/{courseId}/modules/items/{itemId}/duplicate
+///
+/// Canvas duplicates the linked assignment/wiki page and inserts a new module
+/// item right after the original (`insert_at(original.position + 1)`).
+async fn duplicate_item(
+    State(state): State<AppState>,
+    Path((course_id, item_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let item = load_module_item(&state.db, course_id, None, item_id).await?;
+    require_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+
+    let mut tx = state.db.begin().await?;
+
+    // Normalize first so the original's stored position is its 1-based index.
+    let ordered = module_item_ids(&mut *tx, item.module_id).await?;
+    write_item_positions(&mut *tx, &ordered).await?;
+    let original_index = ordered.iter().position(|id| *id == item.id).unwrap_or(0);
+
+    // The (module_id, item_type, item_id) unique index forbids pointing the
+    // copy at the original content, so duplicate the content row too.
+    let new_content_id: Option<i64> = match item.item_type.as_str() {
+        "page" => {
+            sqlx::query_scalar::<_, i64>(
+                r#"
+                INSERT INTO pages (course_id, title, body)
+                SELECT course_id, title || ' Copy', body
+                FROM pages WHERE id = $1
+                RETURNING id
+                "#,
+            )
+            .bind(item.item_id)
+            .fetch_optional(&mut *tx)
+            .await?
+        }
+        "assignment" => {
+            sqlx::query_scalar::<_, i64>(
+                r#"
+                INSERT INTO assignments (course_id, title, description, points_possible, due_at)
+                SELECT course_id, title || ' Copy', description, points_possible, due_at
+                FROM assignments WHERE id = $1
+                RETURNING id
+                "#,
+            )
+            .bind(item.item_id)
+            .fetch_optional(&mut *tx)
+            .await?
+        }
+        // Canvas duplicate_able? covers assignments, discussions and pages.
+        _ => None,
+    };
+
+    let Some(new_content_id) = new_content_id else {
+        tx.rollback().await?;
+        return Ok(item_cannot_be_duplicated());
+    };
+
+    let new_item_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO module_items (module_id, item_type, item_id, position, indent)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id
+        "#,
+    )
+    .bind(item.module_id)
+    .bind(&item.item_type)
+    .bind(new_content_id)
+    .bind(ordered.len() as i32 + 1)
+    .bind(item.indent)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    let mut reordered = ordered;
+    let insert_at = (original_index + 1).min(reordered.len());
+    reordered.insert(insert_at, new_item_id);
+    write_item_positions(&mut *tx, &reordered).await?;
+
+    let new_positions: Vec<(i64, i32)> = sqlx::query_as(
+        r#"
+        SELECT id, position FROM module_items
+        WHERE module_id = $1 ORDER BY position ASC, id ASC
+        "#,
+    )
+    .bind(item.module_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    let new_item = load_module_item(&state.db, course_id, None, new_item_id).await?;
+    let mut value = module_item_json(&new_item, true);
+    value["new_positions"] = json!(new_positions
+        .into_iter()
+        .map(|(id, position)| json!({ "id": id, "position": position }))
+        .collect::<Vec<_>>());
+
+    Ok((StatusCode::OK, Json(value)))
+}
+
+/// PUT /courses/{courseId}/modules/{moduleId}/items/{itemId}
+///
+/// Canvas module-scoped update. The item must belong to the module named in
+/// the path (the crate's nested-alias ownership rule).
+async fn update_module_scoped_item(
+    State(state): State<AppState>,
+    Path((course_id, module_id, item_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<UpdateModuleItemBody>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let item = load_module_item(&state.db, course_id, Some(module_id), item_id).await?;
+    require_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+
+    apply_module_item_update(&state, course_id, item, body).await
+}
+
+/// GET /courses/{courseId}/modules/{moduleId}/items/{itemId}
+///
+/// Canvas `context_module_items_api#show` scoped by module (the canonical
+/// documented path); the item must belong to the module in the path.
+async fn get_module_scoped_item(
+    State(state): State<AppState>,
+    Path((course_id, module_id, item_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Query(params): Query<ItemDetailQuery>,
+) -> Result<Json<Value>, ApiError> {
+    require_course_read_access(&state.db, auth.id, course_id, &auth).await?;
+
+    let item = load_module_item(&state.db, course_id, Some(module_id), item_id).await?;
+
+    Ok(Json(module_item_json(
+        &item,
+        params.wants_content_details(),
+    )))
+}
+
+// --------------------------------------------------------------------------
 // Canvas nested route aliases
 // --------------------------------------------------------------------------
 
@@ -694,6 +1277,30 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/modules/{moduleId}/items/{itemId}/done",
             delete(mark_item_not_done),
+        )
+        .route(
+            "/courses/{courseId}/modules/items/{itemId}",
+            get(get_item_detail),
+        )
+        .route(
+            "/courses/{courseId}/modules/items/{itemId}",
+            put(update_item_detail),
+        )
+        .route(
+            "/courses/{courseId}/modules/items/{itemId}",
+            delete(delete_item_detail),
+        )
+        .route(
+            "/courses/{courseId}/modules/items/{itemId}/duplicate",
+            post(duplicate_item),
+        )
+        .route(
+            "/courses/{courseId}/modules/{moduleId}/items/{itemId}",
+            put(update_module_scoped_item),
+        )
+        .route(
+            "/courses/{courseId}/modules/{moduleId}/items/{itemId}",
+            get(get_module_scoped_item),
         )
         .route("/modules/{id}/items", post(create_or_update_item))
         .route("/modules/{id}/items/{itemId}", delete(delete_module_item))
