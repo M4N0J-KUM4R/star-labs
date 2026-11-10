@@ -8,10 +8,16 @@
 //! - DELETE /courses/{courseId}/discussion_topics/{id}     — soft-delete (teacher/admin)
 //! - POST   /courses/{courseId}/discussion_topics/{topicId}/entries  — post entry (enrolled)
 //! - GET    /courses/{courseId}/discussion_topics/{topicId}/entries — list with nested replies
+//! - PUT    /courses/{courseId}/discussion_topics/{topicId}/read    — mark topic read (enrolled)
+//! - DELETE /courses/{courseId}/discussion_topics/{topicId}/read    — mark topic unread (enrolled)
+//! - PUT    /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/read — mark entry read (enrolled)
+//! - DELETE /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/read — mark entry unread (enrolled)
+//! - POST   /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/rating — rate entry 0/1 (enrolled)
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -123,6 +129,44 @@ impl Pagination {
 
     fn limit(&self) -> i64 {
         self.per_page.unwrap_or(20).clamp(1, 50)
+    }
+}
+
+/// Query parameters for the read / unread endpoints (Canvas `forced_read_state`).
+#[derive(Debug, Deserialize, Default)]
+pub struct ReadStateParams {
+    pub forced_read_state: Option<String>,
+}
+
+/// Canvas parses `forced_read_state` leniently, so keep the raw string and
+/// coerce it here rather than failing the request on unusual values.
+fn value_to_boolean(raw: Option<&str>) -> Option<bool> {
+    raw.map(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "true" | "1" | "t" | "yes"
+        )
+    })
+}
+
+/// Query form of the Canvas `rating` argument.
+#[derive(Debug, Deserialize, Default)]
+pub struct RateEntryParams {
+    pub rating: Option<String>,
+}
+
+/// JSON body form of the Canvas `rating` argument.
+#[derive(Debug, Deserialize, Default)]
+pub struct RateEntryBody {
+    #[serde(default)]
+    pub rating: Option<serde_json::Value>,
+}
+
+fn parse_rating(value: &serde_json::Value) -> Option<i64> {
+    match value {
+        serde_json::Value::Number(number) => number.as_i64(),
+        serde_json::Value::String(text) => text.trim().parse::<i64>().ok(),
+        _ => None,
     }
 }
 
@@ -493,6 +537,286 @@ async fn list_entries(
 }
 
 // ---------------------------------------------------------------------------
+// Read state + rating helpers (Canvas discussion_topics_api semantics)
+// ---------------------------------------------------------------------------
+
+/// 404 unless the topic exists, is not soft-deleted, and belongs to the course
+/// in the URL (Canvas `require_topic` + `@context.all_discussion_topics.active`).
+async fn ensure_topic_in_course(
+    pool: &PgPool,
+    course_id: i64,
+    topic_id: i64,
+) -> Result<(), ApiError> {
+    let topic: Option<(i64,)> = sqlx::query_as(
+        "SELECT course_id FROM discussion_topics WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(topic_id)
+    .fetch_optional(pool)
+    .await?;
+    let (topic_course_id,) = topic.ok_or(ApiError::NotFound)?;
+    if topic_course_id != course_id {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+/// Canvas `require_topic` + `require_entry` ordering: a missing/deleted topic or
+/// an entry from another topic is a 404; an unenrolled caller is a 403.
+async fn ensure_entry_in_topic(
+    pool: &PgPool,
+    course_id: i64,
+    topic_id: i64,
+    entry_id: i64,
+    auth: &AuthUser,
+) -> Result<(), ApiError> {
+    ensure_topic_in_course(pool, course_id, topic_id).await?;
+
+    if !check_enrolled_or_admin(pool, auth.id, course_id, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let entry: Option<(i64,)> = sqlx::query_as(
+        "SELECT topic_id FROM discussion_entries WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(entry_id)
+    .fetch_optional(pool)
+    .await?;
+    let (entry_topic_id,) = entry.ok_or(ApiError::NotFound)?;
+    if entry_topic_id != topic_id {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+/// Apply a topic read/unread change. Mirrors Canvas `change_read_state`: the
+/// implicit default state is "unread", and no row is written (and
+/// `forced_read_state` is left untouched) when the requested state already
+/// matches, so marking an unread topic unread is a 204 no-op.
+async fn set_topic_read_state(
+    pool: &PgPool,
+    course_id: i64,
+    topic_id: i64,
+    auth: &AuthUser,
+    new_state: &str,
+    forced: Option<bool>,
+) -> Result<StatusCode, ApiError> {
+    ensure_topic_in_course(pool, course_id, topic_id).await?;
+
+    if !check_enrolled_or_admin(pool, auth.id, course_id, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let current: Option<(String,)> = sqlx::query_as(
+        "SELECT workflow_state FROM discussion_topic_reads WHERE topic_id = $1 AND user_id = $2",
+    )
+    .bind(topic_id)
+    .bind(auth.id)
+    .fetch_optional(pool)
+    .await?;
+    let current_state = current
+        .map(|(state,)| state)
+        .unwrap_or_else(|| "unread".to_string());
+    if current_state == new_state {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO discussion_topic_reads (topic_id, user_id, workflow_state, forced_read_state, read_at)
+        VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'read' THEN now() ELSE NULL END)
+        ON CONFLICT (topic_id, user_id) DO UPDATE
+        SET workflow_state = EXCLUDED.workflow_state,
+            forced_read_state = COALESCE(EXCLUDED.forced_read_state, discussion_topic_reads.forced_read_state),
+            read_at = CASE WHEN EXCLUDED.workflow_state = 'read' THEN now() ELSE discussion_topic_reads.read_at END,
+            updated_at = now()
+        "#,
+    )
+    .bind(topic_id)
+    .bind(auth.id)
+    .bind(new_state)
+    .bind(forced)
+    .execute(pool)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Apply an entry read/unread change (same Canvas no-op semantics as topics).
+async fn set_entry_read_state(
+    pool: &PgPool,
+    course_id: i64,
+    topic_id: i64,
+    entry_id: i64,
+    auth: &AuthUser,
+    new_state: &str,
+    forced: Option<bool>,
+) -> Result<StatusCode, ApiError> {
+    ensure_entry_in_topic(pool, course_id, topic_id, entry_id, auth).await?;
+
+    let current: Option<(String,)> = sqlx::query_as(
+        "SELECT workflow_state FROM discussion_entry_reads WHERE entry_id = $1 AND user_id = $2",
+    )
+    .bind(entry_id)
+    .bind(auth.id)
+    .fetch_optional(pool)
+    .await?;
+    let current_state = current
+        .map(|(state,)| state)
+        .unwrap_or_else(|| "unread".to_string());
+    if current_state == new_state {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO discussion_entry_reads (entry_id, user_id, workflow_state, forced_read_state, read_at)
+        VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'read' THEN now() ELSE NULL END)
+        ON CONFLICT (entry_id, user_id) DO UPDATE
+        SET workflow_state = EXCLUDED.workflow_state,
+            forced_read_state = COALESCE(EXCLUDED.forced_read_state, discussion_entry_reads.forced_read_state),
+            read_at = CASE WHEN EXCLUDED.workflow_state = 'read' THEN now() ELSE discussion_entry_reads.read_at END,
+            updated_at = now()
+        "#,
+    )
+    .bind(entry_id)
+    .bind(auth.id)
+    .bind(new_state)
+    .bind(forced)
+    .execute(pool)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// PUT .../discussion_topics/{topicId}/read — mark the topic read (Canvas: 204).
+async fn mark_topic_read(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    Query(params): Query<ReadStateParams>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_topic_read_state(
+        &state.db,
+        course_id,
+        topic_id,
+        &auth,
+        "read",
+        value_to_boolean(params.forced_read_state.as_deref()),
+    )
+    .await
+}
+
+/// DELETE .../discussion_topics/{topicId}/read — mark the topic unread (Canvas: 204).
+async fn mark_topic_unread(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    Query(params): Query<ReadStateParams>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_topic_read_state(
+        &state.db,
+        course_id,
+        topic_id,
+        &auth,
+        "unread",
+        value_to_boolean(params.forced_read_state.as_deref()),
+    )
+    .await
+}
+
+/// PUT .../entries/{entryId}/read — mark the entry read (Canvas: 204).
+async fn mark_entry_read(
+    State(state): State<AppState>,
+    Path((course_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    Query(params): Query<ReadStateParams>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_entry_read_state(
+        &state.db,
+        course_id,
+        topic_id,
+        entry_id,
+        &auth,
+        "read",
+        value_to_boolean(params.forced_read_state.as_deref()),
+    )
+    .await
+}
+
+/// DELETE .../entries/{entryId}/read — mark the entry unread (Canvas: 204).
+async fn mark_entry_unread(
+    State(state): State<AppState>,
+    Path((course_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    Query(params): Query<ReadStateParams>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_entry_read_state(
+        &state.db,
+        course_id,
+        topic_id,
+        entry_id,
+        &auth,
+        "unread",
+        value_to_boolean(params.forced_read_state.as_deref()),
+    )
+    .await
+}
+
+/// POST .../entries/{entryId}/rating — rate an entry 0 (clear) or 1 (Canvas: 204).
+///
+/// Canvas coerces a missing `rating` via `params[:rating].to_i`, so an absent
+/// argument behaves like `rating=0`; anything outside 0/1 is a 400 with
+/// `{"message":"Invalid rating given"}`.
+async fn rate_entry(
+    State(state): State<AppState>,
+    Path((course_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    Query(params): Query<RateEntryParams>,
+    auth: AuthUser,
+    payload: Option<Json<RateEntryBody>>,
+) -> Result<StatusCode, Response> {
+    ensure_entry_in_topic(&state.db, course_id, topic_id, entry_id, &auth)
+        .await
+        .map_err(|e| e.into_response())?;
+
+    let rating = payload
+        .as_ref()
+        .and_then(|Json(body)| body.rating.as_ref())
+        .and_then(parse_rating)
+        .or_else(|| {
+            params
+                .rating
+                .as_deref()
+                .and_then(|raw| raw.trim().parse::<i64>().ok())
+        })
+        .unwrap_or(0);
+
+    if rating != 0 && rating != 1 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "message": "Invalid rating given" })),
+        )
+            .into_response());
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO discussion_entry_ratings (entry_id, user_id, rating)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (entry_id, user_id) DO UPDATE
+        SET rating = EXCLUDED.rating, updated_at = now()
+        "#,
+    )
+    .bind(entry_id)
+    .bind(auth.id)
+    .bind(rating as i32)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiError::from(e).into_response())?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -516,5 +840,17 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/discussion_topics/{topicId}/entries",
             get(list_entries),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/read",
+            put(mark_topic_read).delete(mark_topic_unread),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/read",
+            put(mark_entry_read).delete(mark_entry_unread),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/rating",
+            post(rate_entry),
         )
 }
