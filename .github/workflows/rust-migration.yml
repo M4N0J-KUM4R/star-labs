@@ -14,9 +14,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:16
@@ -43,4 +48,4 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: migration -> target
-      - run: cargo test --workspace
+      - run: cargo test --workspace --locked --no-fail-fast

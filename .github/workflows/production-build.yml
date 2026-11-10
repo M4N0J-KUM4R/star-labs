@@ -15,6 +15,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -25,6 +29,7 @@ jobs:
   quality:
     name: Format and lint
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: migration
@@ -39,7 +44,32 @@ jobs:
       - name: Enforce rustfmt
         run: cargo fmt --all -- --check
       - name: Enforce clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Verify migration files are unique and well formed
+        run: |
+          set -euo pipefail
+          cd crates/star-db/migrations
+          bad=$(ls -1 | grep -Ev '^[0-9]{4}_[a-z0-9_]+\.sql$' || true)
+          if [ -n "$bad" ]; then
+            echo "::error::unexpected migration filenames:"; echo "$bad"; exit 1
+          fi
+          dups=$(ls -1 | cut -d_ -f1 | sort | uniq -d)
+          if [ -n "$dups" ]; then
+            echo "::error::duplicate migration prefixes:"; echo "$dups"; exit 1
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Dependency vulnerability audit (RustSec advisory database).
+  # ---------------------------------------------------------------------------
+  security:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@cargo-audit
+      - name: Audit locked dependencies
+        run: cargo audit --file migration/Cargo.lock
 
   # ---------------------------------------------------------------------------
   # Tests against a real PostgreSQL service (debug profile; fastest feedback).
@@ -47,6 +77,7 @@ jobs:
   test:
     name: Test (debug, PostgreSQL)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     needs: quality
     services:
       postgres:
@@ -75,37 +106,92 @@ jobs:
         with:
           workspaces: migration -> target
       - name: Run workspace tests
-        run: cargo test --workspace --exclude star-http
+        run: cargo test --workspace --exclude star-http --locked --no-fail-fast
       - name: Verify star-http builds with tests
-        run: cargo test -p star-http --no-run
+        run: cargo test -p star-http --no-run --locked
 
   # ---------------------------------------------------------------------------
-  # Production release build: optimised binary, locked deps, uploaded artifact.
-  # This is the build that lab-deploy.sh reproduces on the lab host.
+  # Production release builds (glibc + static musl) with a boot smoke test.
+  # The glibc binary matches lab-deploy.sh; the musl binary is the portable one.
   # ---------------------------------------------------------------------------
   release-build:
-    name: Release build (production)
+    name: Release build (production, glibc + musl)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: [quality, test]
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: star
+          POSTGRES_PASSWORD: star-test-only
+          POSTGRES_DB: star_lms_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U star -d star_lms_test"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://star:star-test-only@localhost:5432/star_lms_test
+      STAR_JWT_SECRET: github-actions-test-secret
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: migration -> target
-      - name: Build release binary
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+      - name: Build release binary (glibc)
         run: cargo build --release --locked --manifest-path migration/Cargo.toml
+      - name: Build release binary (static musl)
+        run: cargo build --release --locked --target x86_64-unknown-linux-musl --manifest-path migration/Cargo.toml
       - name: Record metadata
         run: |
           printf 'branch=%s\ncommit=%s\ndate=%s\n' \
             "${GITHUB_REF_NAME}" "${GITHUB_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
             > migration/target/release/BUILD_INFO
-      - name: Upload release artifact
+          cp migration/target/release/BUILD_INFO migration/target/x86_64-unknown-linux-musl/release/BUILD_INFO
+          cp migration/target/x86_64-unknown-linux-musl/release/star-http migration/target/x86_64-unknown-linux-musl/release/star-http-musl
+      - name: Smoke test release binaries
+        working-directory: migration
+        run: |
+          set -euo pipefail
+          for bin in target/release/star-http target/x86_64-unknown-linux-musl/release/star-http-musl; do
+            port=$((18080 + RANDOM % 500))
+            STAR_PORT=$port "$bin" &
+            pid=$!
+            ok=
+            for _ in $(seq 1 30); do
+              if curl -fsS "http://127.0.0.1:$port/health" > /dev/null 2>&1; then ok=1; break; fi
+              sleep 1
+            done
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+            if [ -z "$ok" ]; then
+              echo "::error::$bin did not answer /health"; exit 1
+            fi
+            echo "$bin answered /health"
+          done
+      - name: Upload release artifact (glibc)
         uses: actions/upload-artifact@v4
         with:
           name: star-lms-release-${{ github.sha }}
           path: |
             migration/target/release/star-http
             migration/target/release/BUILD_INFO
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload release artifact (musl)
+        uses: actions/upload-artifact@v4
+        with:
+          name: star-lms-release-musl-${{ github.sha }}
+          path: |
+            migration/target/x86_64-unknown-linux-musl/release/star-http-musl
+            migration/target/x86_64-unknown-linux-musl/release/BUILD_INFO
           if-no-files-found: error
           retention-days: 14
