@@ -9,6 +9,10 @@
 //! - GET    /users/self/communication_channels/{communicationChannelId}/notification_preferences
 //! - PUT    /users/self/communication_channels/{communicationChannelId}/notification_preferences
 //! - PUT    /users/self/communication_channels/{communicationChannelId}/notification_preferences/{notification}
+//!
+//! Canvas parity additions (migration 0074):
+//! - GET    /users/{userId}/notification_preferences
+//! - PUT    /users/{userId}/notification_preferences
 
 use axum::{
     extract::{Path, State},
@@ -157,6 +161,9 @@ pub struct NotificationPreference {
 pub struct CommunicationChannelPreferencesResponse {
     pub notification_preferences: Vec<NotificationPreference>,
 }
+
+/// User-level preference lists use the same Canvas envelope as channel ones.
+pub type UserNotificationPreferencesResponse = CommunicationChannelPreferencesResponse;
 
 const CHANNEL_TYPES: [&str; 3] = ["email", "sms", "push"];
 const FREQUENCIES: [&str; 4] = ["immediately", "daily", "weekly", "never"];
@@ -415,6 +422,15 @@ pub fn router() -> Router<AppState> {
         .route(
             "/users/self/communication_channels/{communication_channel_id}/notification_preferences/{notification}",
             put(update_channel_preference),
+        )
+        // User-level notification preferences (Canvas API v1)
+        .route(
+            "/users/{user_id}/notification_preferences",
+            get(list_user_preferences),
+        )
+        .route(
+            "/users/{user_id}/notification_preferences",
+            put(update_user_preferences),
         )
 }
 
@@ -858,15 +874,241 @@ async fn update_channel_preference(
     }))
 }
 
+// --------------------------------------------------------------------------
+// Handlers — User-level notification preferences (Canvas API v1)
+// --------------------------------------------------------------------------
+
+/// Resolve Canvas' `:user_id` path segment. `self` maps to the authenticated
+/// user; anything that is not a positive integer is a 404 (`api_find`).
+fn resolve_user_segment(raw: &str, self_id: i64) -> Result<i64, ApiError> {
+    if raw == "self" {
+        return Ok(self_id);
+    }
+    raw.parse::<i64>()
+        .ok()
+        .filter(|id| *id > 0)
+        .ok_or(ApiError::NotFound)
+}
+
+async fn user_exists(pool: &sqlx::PgPool, user_id: i64) -> Result<(), ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+    row.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+/// Canvas lets authorized viewers (view_statistics) read another user's
+/// preferences, but only the user themselves updates them. This crate has no
+/// view_statistics permission, so reads are self-or-admin and writes are self.
+fn authorize_preferences_read(auth: &AuthUser, target_user_id: i64) -> Result<(), ApiError> {
+    if target_user_id == auth.id || auth.role == "admin" {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+fn authorize_preferences_write(auth: &AuthUser, target_user_id: i64) -> Result<(), ApiError> {
+    if target_user_id == auth.id {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+/// One row per notification, taken from the user's primary (lowest position)
+/// unretired channel. Canvas' `NotificationPreference` model has no channel
+/// reference, so the user-level view collapses per-channel policies.
+async fn list_user_preferences_for(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+) -> Result<Vec<NotificationPreference>, ApiError> {
+    let rows: Vec<NotificationPreference> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT ON (np.notification) np.notification, np.category, np.frequency
+        FROM notification_preferences np
+        JOIN communication_channels cc ON cc.id = np.communication_channel_id
+        WHERE np.user_id = $1 AND cc.workflow_state <> 'retired'
+        ORDER BY np.notification ASC, cc.position ASC, cc.id ASC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
+/// Canvas provisions an email communication channel for every user; this
+/// schema does not, so a preference update first creates the primary email
+/// channel from `users.email` (active, since the address is already verified).
+async fn ensure_unretired_channel(pool: &sqlx::PgPool, user_id: i64) -> Result<(), ApiError> {
+    let existing: Option<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT id FROM communication_channels
+        WHERE user_id = $1 AND workflow_state <> 'retired'
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    if existing.is_some() {
+        return Ok(());
+    }
+
+    let email: (String,) = sqlx::query_as("SELECT email FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO communication_channels (user_id, path, path_type, position, workflow_state)
+        VALUES ($1, $2, 'email', 0, 'active')
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(user_id)
+    .bind(email.0)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// GET /users/{user_id}/notification_preferences — the user's notification
+/// preferences aggregated over every unretired communication channel.
+async fn list_user_preferences(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<UserNotificationPreferencesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_read(&auth, target_user_id)?;
+
+    let rows = list_user_preferences_for(&state.db, target_user_id).await?;
+    Ok(Json(UserNotificationPreferencesResponse {
+        notification_preferences: rows,
+    }))
+}
+
+/// PUT /users/{user_id}/notification_preferences — Canvas' `update_all` body
+/// shapes applied to every unretired communication channel, then the aggregate
+/// preference list is returned.
+async fn update_user_preferences(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<UserNotificationPreferencesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_write(&auth, target_user_id)?;
+
+    let updates = parse_preference_updates(&body)?;
+    ensure_unretired_channel(&state.db, target_user_id).await?;
+
+    let channel_ids: Vec<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT id FROM communication_channels
+        WHERE user_id = $1 AND workflow_state <> 'retired'
+        ORDER BY position ASC, id ASC
+        "#,
+    )
+    .bind(target_user_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    for (channel_id,) in &channel_ids {
+        for (notification, frequency) in &updates {
+            upsert_channel_preference(
+                &state.db,
+                target_user_id,
+                *channel_id,
+                notification,
+                frequency,
+            )
+            .await?;
+        }
+    }
+
+    let rows = list_user_preferences_for(&state.db, target_user_id).await?;
+    Ok(Json(UserNotificationPreferencesResponse {
+        notification_preferences: rows,
+    }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_category, parse_preference_updates, parse_single_frequency, validate_new_channel,
-        CommunicationChannelPreferencesResponse, NotificationPolicyRow, NotificationPreference,
-        NotificationPreferencesResponse,
+        authorize_preferences_read, authorize_preferences_write, derive_category,
+        parse_preference_updates, parse_single_frequency, resolve_user_segment, router,
+        validate_new_channel, CommunicationChannelPreferencesResponse, NotificationPolicyRow,
+        NotificationPreference, NotificationPreferencesResponse,
     };
     use chrono::{DateTime, Utc};
+    use star_auth::AuthUser;
     use star_common::ApiError;
+
+    #[test]
+    fn user_preference_routes_build_without_conflicts() {
+        // Route insertion panics in matchit on conflicting paths; building the
+        // router proves the new /users/{user_id} routes coexist with
+        // /users/self/notification_preferences.
+        let _router = router();
+    }
+
+    #[test]
+    fn user_id_segment_matches_canvas_api_find_semantics() {
+        assert_eq!(resolve_user_segment("self", 9).unwrap(), 9);
+        assert_eq!(resolve_user_segment("42", 9).unwrap(), 42);
+        assert!(matches!(
+            resolve_user_segment("bogus", 9),
+            Err(ApiError::NotFound)
+        ));
+        assert!(matches!(
+            resolve_user_segment("0", 9),
+            Err(ApiError::NotFound)
+        ));
+        assert!(matches!(
+            resolve_user_segment("-3", 9),
+            Err(ApiError::NotFound)
+        ));
+    }
+
+    #[test]
+    fn user_preference_access_is_self_and_admin_read_but_self_only_write() {
+        let student = AuthUser {
+            id: 5,
+            role: "student".into(),
+        };
+        let admin = AuthUser {
+            id: 1,
+            role: "admin".into(),
+        };
+
+        assert!(authorize_preferences_read(&student, 5).is_ok());
+        assert!(authorize_preferences_write(&student, 5).is_ok());
+        assert!(matches!(
+            authorize_preferences_read(&student, 6),
+            Err(ApiError::Forbidden)
+        ));
+        assert!(matches!(
+            authorize_preferences_write(&student, 6),
+            Err(ApiError::Forbidden)
+        ));
+
+        // Canvas only exposes another user's preferences to privileged
+        // viewers; updates stay self-only even for admins.
+        assert!(authorize_preferences_read(&admin, 6).is_ok());
+        assert!(matches!(
+            authorize_preferences_write(&admin, 6),
+            Err(ApiError::Forbidden)
+        ));
+    }
 
     #[test]
     fn preferences_response_uses_canvas_envelope_for_list_and_update() {
