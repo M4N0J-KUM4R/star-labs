@@ -105,6 +105,13 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     .bind(format!("{prefix}%"))
     .execute(pool)
     .await;
+    let _ = sqlx::query(
+        "DELETE FROM group_categories \
+         WHERE course_id IN (SELECT id FROM courses WHERE course_code LIKE $1)",
+    )
+    .bind(format!("{prefix}%"))
+    .execute(pool)
+    .await;
     let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
@@ -248,6 +255,201 @@ async fn patch_group_requires_teacher_authz() {
         .await
         .expect("fetch group");
     assert_eq!(name, format!("{prefix}-Locked"));
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// Group categories — Canvas parity for GET/POST /courses/{courseId}/group_categories,
+// GET/PUT/DELETE /group_categories/{id}, GET /group_categories/{id}/groups
+// ---------------------------------------------------------------------------
+
+async fn seed_category(pool: &PgPool, course_id: i64, name: &str, role: Option<&str>) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO group_categories (course_id, name, role) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(course_id)
+    .bind(name)
+    .bind(role)
+    .fetch_one(pool)
+    .await
+    .expect("seed group category")
+}
+
+async fn seed_group_in_category(
+    pool: &PgPool,
+    course_id: i64,
+    category_id: i64,
+    name: &str,
+) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO groups (course_id, name, group_category_id) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(course_id)
+    .bind(name)
+    .bind(category_id)
+    .fetch_one(pool)
+    .await
+    .expect("seed group in category")
+}
+
+#[tokio::test]
+async fn group_category_crud_returns_canvas_shape() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    sqlx::query("INSERT INTO enrollments (user_id, course_id, role) VALUES ($1, $2, 'student')")
+        .bind(student)
+        .bind(course)
+        .execute(&pool)
+        .await
+        .expect("seed student enrollment");
+
+    // Invalid enum values are rejected like Canvas (400, not 422).
+    let resp = server
+        .post(&format!("/courses/{course}/group_categories"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "name": "Bad", "self_signup": "sometimes" }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+
+    // Create returns the Canvas category shape.
+    let resp = server
+        .post(&format!("/courses/{course}/group_categories"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "name": "Project Groups",
+            "self_signup": "enabled",
+            "group_limit": 3
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let category_id = body["id"].as_i64().expect("category id");
+    assert_eq!(body["name"], "Project Groups");
+    assert_eq!(body["context_type"], "Course");
+    assert_eq!(body["course_id"].as_i64(), Some(course));
+    assert_eq!(body["self_signup"], "enabled");
+    assert_eq!(body["group_limit"].as_i64(), Some(3));
+    assert_eq!(body["protected"], false);
+    assert_eq!(body["allows_multiple_memberships"], false);
+
+    // Canvas index requires manage-groups permission; students are forbidden.
+    let resp = server
+        .get(&format!("/courses/{course}/group_categories"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let list: Value = resp.json();
+    assert_eq!(list.as_array().map(|a| a.len()), Some(1));
+
+    let resp = server
+        .get(&format!("/courses/{course}/group_categories"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // Show is readable by enrolled students and reports is_member.
+    let resp = server
+        .get(&format!("/group_categories/{category_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["is_member"], false);
+    assert_eq!(body["self_signup"], "enabled");
+
+    // Partial update keeps unspecified fields.
+    let resp = server
+        .put(&format!("/group_categories/{category_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "name": "Renamed Groups" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["name"], "Renamed Groups");
+    assert_eq!(body["self_signup"], "enabled");
+    assert_eq!(body["group_limit"].as_i64(), Some(3));
+
+    // create_group_count creates the groups inline (Canvas on create).
+    let resp = server
+        .post(&format!("/courses/{course}/group_categories"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "name": "Teams", "create_group_count": 2 }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let teams_id = body["id"].as_i64().expect("teams category id");
+
+    let resp = server
+        .get(&format!("/group_categories/{teams_id}/groups"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let groups: Value = resp.json();
+    let groups = groups.as_array().expect("groups array");
+    assert_eq!(groups.len(), 2);
+    assert!(groups
+        .iter()
+        .all(|g| g["group_category_id"].as_i64() == Some(teams_id)));
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn delete_group_category_soft_deletes_it_and_protects_builtin_roles() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let category = seed_category(&pool, course, "Project Groups", None).await;
+    let group = seed_group_in_category(&pool, course, category, "Group A").await;
+
+    let resp = server
+        .delete(&format!("/group_categories/{category}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    // Canvas destroy renders the category JSON (200), and destroys its groups.
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["id"].as_i64(), Some(category));
+
+    let (category_state,): (String,) =
+        sqlx::query_as("SELECT workflow_state FROM group_categories WHERE id = $1")
+            .bind(category)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch category");
+    assert_eq!(category_state, "deleted");
+    let (group_state,): (String,) =
+        sqlx::query_as("SELECT workflow_state FROM groups WHERE id = $1")
+            .bind(group)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch group");
+    assert_eq!(group_state, "deleted");
+
+    let resp = server
+        .get(&format!("/group_categories/{category}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    // Protected built-in roles cannot be deleted (Canvas 401 "unauthorized").
+    let protected = seed_category(&pool, course, "Communities", Some("communities")).await;
+    let resp = server
+        .delete(&format!("/group_categories/{protected}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }
