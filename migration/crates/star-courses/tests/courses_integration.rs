@@ -1898,3 +1898,226 @@ async fn teardown_removes_all_seeded_rows() {
             .unwrap();
     assert_eq!(enrollments.0, 0);
 }
+
+// ---------------------------------------------------------------------------
+// Course settings, roster and navigation tabs (Canvas API v1 parity)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn course_settings_defaults_teacher_update_and_student_forbidden() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let course = seed_course(&pool, &prefix, "Settings").await;
+    seed_course_teacher(&pool, teacher, course).await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    // 1. Canvas course_settings_json defaults, readable by any enrolled user.
+    let resp = server
+        .get(&format!("/courses/{course}/settings"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["allow_student_discussion_topics"], true);
+    assert_eq!(body["allow_student_forum_attachments"], true);
+    assert_eq!(body["hide_final_grades"], false);
+    assert_eq!(body["default_due_time"], "23:59:59");
+    assert_eq!(body["default_discussion_settings"], json!({}));
+    assert_eq!(body["grading_standard_id"], Value::Null);
+
+    // 2. Students cannot write settings (Canvas update_course_details).
+    let resp = server
+        .put(&format!("/courses/{course}/settings"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "hide_final_grades": true }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // 3. Teacher partial update returns the merged settings document.
+    let resp = server
+        .put(&format!("/courses/{course}/settings"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "hide_final_grades": true,
+            "allow_student_discussion_topics": false,
+            "default_due_time": "22:15:00",
+            "default_discussion_settings": { "sort_order": "desc", "bogus": true }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["hide_final_grades"], true);
+    assert_eq!(body["allow_student_discussion_topics"], false);
+    assert_eq!(body["default_due_time"], "22:15:00");
+    assert_eq!(
+        body["default_discussion_settings"],
+        json!({ "sort_order": "desc" })
+    );
+    assert_eq!(
+        body["allow_student_organized_groups"], true,
+        "fields absent from the update keep their value"
+    );
+
+    // 4. The update is persisted and visible to other course members.
+    let resp = server
+        .get(&format!("/courses/{course}/settings"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["hide_final_grades"], true);
+    assert_eq!(body["default_due_time"], "22:15:00");
+
+    // 5. Missing course is 404 before the permission check.
+    let resp = server
+        .get("/courses/999999999/settings")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn course_users_lists_and_shows_enrolled_users_only() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let course = seed_course(&pool, &prefix, "Roster").await;
+    seed_course_teacher(&pool, teacher, course).await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    // Roster lists enrolled users with Canvas user fields.
+    let resp = server
+        .get(&format!("/courses/{course}/users"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["total"], 2);
+    let data = body["data"].as_array().expect("data array");
+    let student_row = data
+        .iter()
+        .find(|row| row["id"] == student)
+        .expect("student in roster");
+    assert_eq!(student_row["role"], "student");
+    assert_eq!(student_row["short_name"], "Student");
+    assert_eq!(student_row["email"], format!("{prefix}-Student@test.local"));
+
+    // search_term filters by name/email.
+    let resp = server
+        .get(&format!("/courses/{course}/users?search_term=Student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let data = body["data"].as_array().expect("data array");
+    assert_eq!(data.len(), 1);
+    assert_eq!(data[0]["id"], student);
+
+    // Single user: enrolled peer is visible.
+    let resp = server
+        .get(&format!("/courses/{course}/users/{student}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["id"], student);
+    assert_eq!(body["name"], "Student");
+
+    // A user outside the course is 404 (Canvas visible-users lookup).
+    let resp = server
+        .get(&format!("/courses/{course}/users/{outsider}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    // A non-enrolled user cannot read the roster.
+    let resp = server
+        .get(&format!("/courses/{course}/users"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn course_tabs_teacher_settings_last_and_config_applies() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Tabs").await;
+    seed_course_teacher(&pool, teacher, course).await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    // Teacher view: home pinned first, settings pinned last, positions 1..n.
+    let resp = server
+        .get(&format!("/courses/{course}/tabs"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let tabs: Value = resp.json();
+    let tabs = tabs.as_array().expect("tabs array");
+    assert_eq!(tabs[0]["id"], "home");
+    assert_eq!(tabs[0]["html_url"], format!("/courses/{course}"));
+    assert_eq!(tabs[0]["visibility"], "public");
+    assert_eq!(tabs.last().unwrap()["id"], "settings");
+    assert_eq!(tabs.last().unwrap()["visibility"], "admins");
+    let positions: Vec<i64> = tabs
+        .iter()
+        .map(|tab| tab["position"].as_i64().unwrap())
+        .collect();
+    assert_eq!(positions, (1..=tabs.len() as i64).collect::<Vec<_>>());
+
+    // Students do not get the settings tab.
+    let resp = server
+        .get(&format!("/courses/{course}/tabs"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let student_tabs: Value = resp.json();
+    assert!(student_tabs
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|tab| tab["id"] != "settings"));
+
+    // Persisted tab configuration orders and hides manageable tabs.
+    sqlx::query(
+        "INSERT INTO course_tabs (course_id, tab_id, position, hidden) VALUES ($1, 'modules', 1, true)",
+    )
+    .bind(course)
+    .execute(&pool)
+    .await
+    .expect("seed tab config");
+
+    let resp = server
+        .get(&format!("/courses/{course}/tabs"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let tabs: Value = resp.json();
+    let tabs = tabs.as_array().expect("tabs array");
+    assert_eq!(tabs[0]["id"], "home", "home stays pinned first");
+    assert_eq!(tabs[1]["id"], "modules", "configured position 1");
+    assert_eq!(tabs[1]["hidden"], true);
+    assert_eq!(tabs[1]["visibility"], "admins");
+
+    cleanup(&pool, &prefix).await;
+}
