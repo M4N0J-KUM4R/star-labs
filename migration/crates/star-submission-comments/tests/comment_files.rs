@@ -443,7 +443,7 @@ async fn comment_delete_soft_deletes_and_detail_is_404() {
     seed_enrollment(&pool, student, course, "student").await;
     seed_enrollment(&pool, classmate, course, "student").await;
     let assignment = seed_assignment(&pool, course, "Essay").await;
-    let submission = seed_submission(&pool, assignment, student).await;
+    let _submission = seed_submission(&pool, assignment, student).await;
     let nested = nested_path(course, assignment, student);
 
     let resp = server
