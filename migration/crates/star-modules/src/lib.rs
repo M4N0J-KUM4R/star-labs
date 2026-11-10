@@ -48,6 +48,21 @@ pub struct ModuleWithItems {
     pub items: Vec<ModuleItem>,
 }
 
+/// Per-user module item completion state (Canvas "mark item as done").
+/// `state` is 'completed' after PUT .../done and 'incomplete' after
+/// DELETE .../done — Canvas flips a ContextModuleProgression requirement
+/// instead of dropping history, so rows are upserted, never removed.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ModuleItemCompletion {
+    pub id: i64,
+    pub module_id: i64,
+    pub item_id: i64,
+    pub user_id: i64,
+    pub state: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 #[derive(Debug, Deserialize)]
 pub struct CreateModule {
     pub name: String,
@@ -189,6 +204,39 @@ async fn require_visible_module_in_course(
     }
 
     Ok(())
+}
+
+/// Canvas context_module_items_api#get_module_item parity: 404 unless the
+/// item exists inside the module named by the nested route.
+async fn require_item_in_module(db: &PgPool, module_id: i64, item_id: i64) -> Result<(), ApiError> {
+    let exists: Option<(i32,)> =
+        sqlx::query_as(r#"SELECT 1 FROM module_items WHERE id = $1 AND module_id = $2"#)
+            .bind(item_id)
+            .bind(module_id)
+            .fetch_optional(db)
+            .await?;
+
+    if exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(())
+}
+
+/// Shared guard for PUT/DELETE .../items/{itemId}/done. Canvas authorizes with
+/// `authorized_action(@context, @current_user, :read)` before resolving the
+/// module/item, so course read access (active enrollment, or admin) is checked
+/// first, then the module and item must resolve inside the course.
+async fn require_done_access(
+    db: &PgPool,
+    course_id: i64,
+    module_id: i64,
+    item_id: i64,
+    auth: &AuthUser,
+) -> Result<(), ApiError> {
+    require_course_read_access(db, auth.id, course_id, auth).await?;
+    require_visible_module_in_course(db, course_id, module_id).await?;
+    require_item_in_module(db, module_id, item_id).await
 }
 
 // --------------------------------------------------------------------------
@@ -465,6 +513,75 @@ async fn list_module_items(
 }
 
 // --------------------------------------------------------------------------
+// Module item completion (Canvas mark-as-done)
+// --------------------------------------------------------------------------
+
+/// Upsert the caller's completion state for one module item. (user_id, item_id)
+/// is unique, so repeated PUT/DELETE calls reuse the row and keep created_at
+/// from the first completion.
+async fn record_item_completion(
+    db: &PgPool,
+    module_id: i64,
+    item_id: i64,
+    user_id: i64,
+    state: &str,
+) -> Result<ModuleItemCompletion, ApiError> {
+    let completion = sqlx::query_as::<_, ModuleItemCompletion>(
+        r#"
+        INSERT INTO module_item_completions (module_id, item_id, user_id, state)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (user_id, item_id)
+        DO UPDATE SET state = EXCLUDED.state, updated_at = now()
+        RETURNING id, module_id, item_id, user_id, state, created_at, updated_at
+        "#,
+    )
+    .bind(module_id)
+    .bind(item_id)
+    .bind(user_id)
+    .bind(state)
+    .fetch_one(db)
+    .await?;
+
+    Ok(completion)
+}
+
+/// PUT /courses/{courseId}/modules/{moduleId}/items/{itemId}/done
+///
+/// Canvas context_module_items_api#mark_as_done. Any user with course read
+/// access (i.e. an active enrollment, or an admin) may mark their own item
+/// completion; no teacher role is required.
+async fn mark_item_done(
+    State(state): State<AppState>,
+    Path((course_id, module_id, item_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<ModuleItemCompletion>, ApiError> {
+    require_done_access(&state.db, course_id, module_id, item_id, &auth).await?;
+
+    let completion =
+        record_item_completion(&state.db, module_id, item_id, auth.id, "completed").await?;
+
+    Ok(Json(completion))
+}
+
+/// DELETE /courses/{courseId}/modules/{moduleId}/items/{itemId}/done
+///
+/// Canvas context_module_items_api#mark_as_not_done: flips the caller's own
+/// completion back to 'incomplete' (the row is kept, matching Canvas's
+/// progression history semantics).
+async fn mark_item_not_done(
+    State(state): State<AppState>,
+    Path((course_id, module_id, item_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<ModuleItemCompletion>, ApiError> {
+    require_done_access(&state.db, course_id, module_id, item_id, &auth).await?;
+
+    let completion =
+        record_item_completion(&state.db, module_id, item_id, auth.id, "incomplete").await?;
+
+    Ok(Json(completion))
+}
+
+// --------------------------------------------------------------------------
 // Canvas nested route aliases
 // --------------------------------------------------------------------------
 
@@ -569,6 +686,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/modules/{moduleId}/items/{itemId}",
             delete(delete_course_module_item),
+        )
+        .route(
+            "/courses/{courseId}/modules/{moduleId}/items/{itemId}/done",
+            put(mark_item_done),
+        )
+        .route(
+            "/courses/{courseId}/modules/{moduleId}/items/{itemId}/done",
+            delete(mark_item_not_done),
         )
         .route("/modules/{id}/items", post(create_or_update_item))
         .route("/modules/{id}/items/{itemId}", delete(delete_module_item))
