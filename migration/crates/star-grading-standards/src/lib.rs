@@ -8,14 +8,19 @@
 //!   GET  /courses/{courseId}/grading_standards/{id}    — course-scoped alias (get)
 //!   DELETE /courses/{courseId}/grading_standards/{id}  — course-scoped alias (delete)
 //!   GET  /courses/{courseId}/final_grade?user_id=N — compute letter grade
+//!   GET  /accounts/{accountId}/grading_periods  — list account grading periods
+//!   POST /accounts/{accountId}/grading_periods  — create grading period(s)
+//!   GET  /grading_periods/{id}                  — get grading period
+//!   PUT  /grading_periods/{id}                  — update grading period
+//!   DELETE /grading_periods/{id}                — soft-delete grading period
 
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use star_auth::AuthUser;
@@ -563,6 +568,637 @@ async fn get_final_grade(
 }
 
 // ---------------------------------------------------------------------------
+// Grading periods (Canvas GradingPeriod / GradingPeriodGroup parity)
+// ---------------------------------------------------------------------------
+
+/// Upper bound on parent-account traversal (guards against cycles).
+const MAX_ACCOUNT_TREE_DEPTH: i64 = 10;
+
+const OVERLAP_MESSAGE: &str =
+    "Grading period cannot overlap with existing grading periods in group";
+
+/// Grading period row from `grading_periods`.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct GradingPeriod {
+    pub id: i64,
+    pub grading_period_group_id: i64,
+    pub title: String,
+    pub start_date: DateTime<Utc>,
+    pub end_date: DateTime<Utc>,
+    pub close_date: DateTime<Utc>,
+    pub weight: Option<f64>,
+    pub workflow_state: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Canvas `PermissionsSerializer` block for a grading period.
+#[derive(Debug, Clone, Serialize)]
+pub struct GradingPeriodPermissions {
+    pub read: bool,
+    pub update: bool,
+    pub delete: bool,
+}
+
+/// Canvas API v1 `GradingPeriod` shape.
+#[derive(Debug, Clone, Serialize)]
+pub struct GradingPeriodResponse {
+    pub id: i64,
+    pub grading_period_group_id: i64,
+    pub title: String,
+    pub start_date: DateTime<Utc>,
+    pub end_date: DateTime<Utc>,
+    pub close_date: DateTime<Utc>,
+    pub weight: Option<f64>,
+    pub is_closed: bool,
+    pub permissions: GradingPeriodPermissions,
+}
+
+impl GradingPeriodResponse {
+    fn from_row(row: GradingPeriod, can_manage: bool, now: DateTime<Utc>) -> Self {
+        Self {
+            id: row.id,
+            grading_period_group_id: row.grading_period_group_id,
+            title: row.title,
+            start_date: row.start_date,
+            end_date: row.end_date,
+            close_date: row.close_date,
+            weight: row.weight,
+            is_closed: now > row.close_date,
+            permissions: GradingPeriodPermissions {
+                read: true,
+                update: can_manage,
+                delete: can_manage,
+            },
+        }
+    }
+}
+
+/// Canvas wraps grading period payloads under a `grading_periods` root.
+#[derive(Debug, Serialize)]
+pub struct GradingPeriodsResponse {
+    pub grading_periods: Vec<GradingPeriodResponse>,
+}
+
+/// Canvas account-level index response (list plus create/read-only flags).
+#[derive(Debug, Serialize)]
+pub struct GradingPeriodsIndexResponse {
+    pub grading_periods: Vec<GradingPeriodResponse>,
+    pub can_create_grading_periods: bool,
+    pub grading_periods_read_only: bool,
+}
+
+/// Request fields for one grading period (Canvas `grading_periods[]` member).
+#[derive(Debug, Deserialize)]
+pub struct GradingPeriodParams {
+    pub title: Option<String>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub close_date: Option<String>,
+    pub weight: Option<f64>,
+}
+
+/// Accepts Canvas' `{"grading_periods": [...]}` envelope or a flat object.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum GradingPeriodPayload {
+    Wrapped {
+        grading_periods: Vec<GradingPeriodParams>,
+    },
+    Single(GradingPeriodParams),
+}
+
+impl GradingPeriodPayload {
+    fn into_periods(self) -> Vec<GradingPeriodParams> {
+        match self {
+            GradingPeriodPayload::Wrapped { grading_periods } => grading_periods,
+            GradingPeriodPayload::Single(params) => vec![params],
+        }
+    }
+
+    /// Canvas' update actions read `params[:grading_periods].first`.
+    fn into_single(self) -> Result<GradingPeriodParams, ApiError> {
+        self.into_periods()
+            .into_iter()
+            .next()
+            .ok_or_else(|| ApiError::Validation("grading_periods cannot be empty".into()))
+    }
+}
+
+/// Validated date range for a grading period.
+#[derive(Debug, Clone)]
+struct GradingPeriodWindow {
+    start_date: DateTime<Utc>,
+    end_date: DateTime<Utc>,
+    close_date: DateTime<Utc>,
+}
+
+/// Parse Canvas date params: RFC3339 timestamps or plain `YYYY-MM-DD` dates.
+fn parse_grading_period_date(value: &str) -> Result<DateTime<Utc>, ApiError> {
+    let value = value.trim();
+
+    if let Ok(dt) = DateTime::parse_from_rfc3339(value) {
+        return Ok(dt.with_timezone(&Utc));
+    }
+    if let Ok(naive) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S") {
+        return Ok(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc));
+    }
+    if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        let naive = date.and_time(NaiveTime::MIN);
+        return Ok(DateTime::<Utc>::from_naive_utc_and_offset(naive, Utc));
+    }
+
+    Err(ApiError::Validation(format!("invalid date: {value}")))
+}
+
+fn required_date(value: &Option<String>, field: &str) -> Result<DateTime<Utc>, ApiError> {
+    match value {
+        Some(v) => parse_grading_period_date(v),
+        None => Err(ApiError::Validation(format!("{field} is required"))),
+    }
+}
+
+/// Canvas validations: end_date >= start_date and close_date >= end_date.
+fn validate_period_window(window: &GradingPeriodWindow) -> Result<(), ApiError> {
+    if window.end_date < window.start_date {
+        return Err(ApiError::Validation(
+            "end_date must be after start date".into(),
+        ));
+    }
+    if window.close_date < window.end_date {
+        return Err(ApiError::Validation(
+            "close_date must be on or after end date".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Canvas ranges overlap when each starts before the other ends; shared
+/// endpoints are allowed.
+fn windows_overlap(a: &GradingPeriodWindow, b: &GradingPeriodWindow) -> bool {
+    a.start_date < b.end_date && b.start_date < a.end_date
+}
+
+// ---------------------------------------------------------------------------
+// Grading period permission helpers
+// ---------------------------------------------------------------------------
+
+/// True when the user is an account admin for exactly this account.
+async fn is_account_admin(pool: &PgPool, user_id: i64, account_id: i64) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM account_users WHERE account_id = $1 AND user_id = $2 LIMIT 1",
+    )
+    .bind(account_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.is_some())
+}
+
+/// True when the user is an account admin for the account or any ancestor.
+async fn is_account_admin_in_chain(
+    pool: &PgPool,
+    user_id: i64,
+    account_id: i64,
+) -> Result<bool, ApiError> {
+    let mut current = Some(account_id);
+    let mut depth = 0;
+
+    while let Some(id) = current {
+        if depth >= MAX_ACCOUNT_TREE_DEPTH {
+            return Ok(false);
+        }
+        depth += 1;
+
+        if is_account_admin(pool, user_id, id).await? {
+            return Ok(true);
+        }
+
+        let parent: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT parent_account_id FROM accounts WHERE id = $1")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+
+        current = parent.and_then(|(parent_id,)| parent_id);
+    }
+
+    Ok(false)
+}
+
+async fn account_exists(pool: &PgPool, account_id: i64) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await?;
+
+    Ok(row.is_some())
+}
+
+/// Manage rights: global admin or account admin (own account or an ancestor).
+async fn can_manage_account(
+    pool: &PgPool,
+    user_id: i64,
+    account_id: i64,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    if is_admin(auth) {
+        return Ok(true);
+    }
+
+    is_account_admin_in_chain(pool, user_id, account_id).await
+}
+
+/// Read rights: manage rights, or an enrollment in a course owned by the
+/// account (or one of its sub-accounts).
+async fn can_read_account(
+    pool: &PgPool,
+    user_id: i64,
+    account_id: i64,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    if can_manage_account(pool, user_id, account_id, auth).await? {
+        return Ok(true);
+    }
+
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"WITH RECURSIVE account_tree AS (
+               SELECT id FROM accounts WHERE id = $1
+               UNION
+               SELECT a.id FROM accounts a JOIN account_tree t ON a.parent_account_id = t.id
+           )
+           SELECT 1
+           FROM enrollments e
+           JOIN courses c ON c.id = e.course_id
+           WHERE e.user_id = $2 AND c.account_id IN (SELECT id FROM account_tree)
+           LIMIT 1"#,
+    )
+    .bind(account_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.is_some())
+}
+
+/// Return the account's active grading period set, creating one on demand.
+async fn ensure_account_group(pool: &PgPool, account_id: i64) -> Result<i64, ApiError> {
+    let existing: Option<(i64,)> = sqlx::query_as(
+        r#"SELECT id FROM grading_period_groups
+           WHERE account_id = $1 AND workflow_state = 'active'
+           ORDER BY id ASC
+           LIMIT 1"#,
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some((id,)) = existing {
+        return Ok(id);
+    }
+
+    let (id,): (i64,) =
+        sqlx::query_as("INSERT INTO grading_period_groups (account_id) VALUES ($1) RETURNING id")
+            .bind(account_id)
+            .fetch_one(pool)
+            .await?;
+
+    Ok(id)
+}
+
+/// Account owning a grading period group (course-level groups have none).
+async fn account_id_for_group(pool: &PgPool, group_id: i64) -> Result<Option<i64>, ApiError> {
+    let row: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT account_id FROM grading_period_groups WHERE id = $1")
+            .bind(group_id)
+            .fetch_optional(pool)
+            .await?;
+
+    Ok(row.and_then(|(account_id,)| account_id))
+}
+
+async fn fetch_grading_period(pool: &PgPool, id: i64) -> Result<Option<GradingPeriod>, ApiError> {
+    let row: Option<GradingPeriod> = sqlx::query_as(
+        r#"SELECT id, grading_period_group_id, title, start_date, end_date, close_date,
+                  weight, workflow_state, created_at, updated_at
+           FROM grading_periods
+           WHERE id = $1 AND workflow_state = 'active'"#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row)
+}
+
+/// True when another active period for the account overlaps `window`.
+async fn has_overlapping_period(
+    pool: &PgPool,
+    account_id: i64,
+    exclude_id: Option<i64>,
+    window: &GradingPeriodWindow,
+) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"SELECT 1
+           FROM grading_periods gp
+           JOIN grading_period_groups g ON g.id = gp.grading_period_group_id
+           WHERE g.account_id = $1
+             AND g.workflow_state = 'active'
+             AND gp.workflow_state = 'active'
+             AND gp.id <> $2
+             AND gp.end_date > $3
+             AND gp.start_date < $4
+           LIMIT 1"#,
+    )
+    .bind(account_id)
+    .bind(exclude_id.unwrap_or(0))
+    .bind(window.start_date)
+    .bind(window.end_date)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.is_some())
+}
+
+// ---------------------------------------------------------------------------
+// Grading period handlers
+// ---------------------------------------------------------------------------
+
+/// GET /accounts/{accountId}/grading_periods — list grading periods.
+async fn list_account_grading_periods(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<GradingPeriodsIndexResponse>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let can_manage = can_manage_account(&state.db, auth.id, account_id, &auth).await?;
+
+    let rows: Vec<GradingPeriod> = sqlx::query_as(
+        r#"SELECT gp.id, gp.grading_period_group_id, gp.title, gp.start_date, gp.end_date,
+                  gp.close_date, gp.weight, gp.workflow_state, gp.created_at, gp.updated_at
+           FROM grading_periods gp
+           JOIN grading_period_groups g ON g.id = gp.grading_period_group_id
+           WHERE g.account_id = $1
+             AND g.workflow_state = 'active'
+             AND gp.workflow_state = 'active'
+           ORDER BY gp.start_date ASC, gp.id ASC"#,
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let now = Utc::now();
+    let grading_periods = rows
+        .into_iter()
+        .map(|row| GradingPeriodResponse::from_row(row, can_manage, now))
+        .collect();
+
+    Ok(Json(GradingPeriodsIndexResponse {
+        grading_periods,
+        can_create_grading_periods: can_manage,
+        grading_periods_read_only: false,
+    }))
+}
+
+/// POST /accounts/{accountId}/grading_periods — create grading period(s).
+async fn create_account_grading_period(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<GradingPeriodPayload>,
+) -> Result<(StatusCode, Json<GradingPeriodsResponse>), ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_manage_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let params = payload.into_periods();
+    if params.is_empty() {
+        return Err(ApiError::Validation(
+            "grading_periods cannot be empty".into(),
+        ));
+    }
+
+    // Validate every period before writing anything.
+    let mut titles = Vec::with_capacity(params.len());
+    let mut windows = Vec::with_capacity(params.len());
+    for param in &params {
+        let title = param.title.as_deref().map(str::trim).unwrap_or_default();
+        if title.is_empty() {
+            return Err(ApiError::Validation("title is required".into()));
+        }
+
+        let start_date = required_date(&param.start_date, "start_date")?;
+        let end_date = required_date(&param.end_date, "end_date")?;
+        let close_date = match &param.close_date {
+            Some(value) => parse_grading_period_date(value)?,
+            None => end_date,
+        };
+        let window = GradingPeriodWindow {
+            start_date,
+            end_date,
+            close_date,
+        };
+        validate_period_window(&window)?;
+
+        titles.push(title.to_string());
+        windows.push(window);
+    }
+
+    // Canvas rejects overlapping periods within the batch and against the
+    // account's existing active periods.
+    for (index, window) in windows.iter().enumerate() {
+        for other in windows.iter().skip(index + 1) {
+            if windows_overlap(window, other) {
+                return Err(ApiError::Validation(OVERLAP_MESSAGE.into()));
+            }
+        }
+        if has_overlapping_period(&state.db, account_id, None, window).await? {
+            return Err(ApiError::Validation(OVERLAP_MESSAGE.into()));
+        }
+    }
+
+    let group_id = ensure_account_group(&state.db, account_id).await?;
+
+    let mut tx = state.db.begin().await?;
+    let mut created = Vec::with_capacity(params.len());
+    for ((title, window), param) in titles.iter().zip(windows.iter()).zip(params.iter()) {
+        let row: GradingPeriod = sqlx::query_as(
+            r#"INSERT INTO grading_periods
+                   (grading_period_group_id, title, start_date, end_date, close_date, weight)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               RETURNING id, grading_period_group_id, title, start_date, end_date, close_date,
+                         weight, workflow_state, created_at, updated_at"#,
+        )
+        .bind(group_id)
+        .bind(title)
+        .bind(window.start_date)
+        .bind(window.end_date)
+        .bind(window.close_date)
+        .bind(param.weight)
+        .fetch_one(&mut *tx)
+        .await?;
+
+        created.push(row);
+    }
+    tx.commit().await?;
+
+    let now = Utc::now();
+    let grading_periods = created
+        .into_iter()
+        .map(|row| GradingPeriodResponse::from_row(row, true, now))
+        .collect();
+
+    Ok((
+        StatusCode::CREATED,
+        Json(GradingPeriodsResponse { grading_periods }),
+    ))
+}
+
+/// GET /grading_periods/{id} — get a single grading period.
+async fn get_grading_period(
+    State(state): State<AppState>,
+    Path(period_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<GradingPeriodsResponse>, ApiError> {
+    let period = fetch_grading_period(&state.db, period_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let account_id = account_id_for_group(&state.db, period.grading_period_group_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let can_manage = can_manage_account(&state.db, auth.id, account_id, &auth).await?;
+
+    Ok(Json(GradingPeriodsResponse {
+        grading_periods: vec![GradingPeriodResponse::from_row(
+            period,
+            can_manage,
+            Utc::now(),
+        )],
+    }))
+}
+
+/// PUT /grading_periods/{id} — update a grading period.
+async fn update_grading_period(
+    State(state): State<AppState>,
+    Path(period_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<GradingPeriodPayload>,
+) -> Result<Json<GradingPeriodsResponse>, ApiError> {
+    let params = payload.into_single()?;
+
+    let period = fetch_grading_period(&state.db, period_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let account_id = account_id_for_group(&state.db, period.grading_period_group_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    if !can_manage_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let title = match params.title {
+        Some(title) => {
+            let title = title.trim().to_string();
+            if title.is_empty() {
+                return Err(ApiError::Validation("title cannot be empty".into()));
+            }
+            title
+        }
+        None => period.title.clone(),
+    };
+
+    let start_date = match &params.start_date {
+        Some(value) => parse_grading_period_date(value)?,
+        None => period.start_date,
+    };
+    let end_date = match &params.end_date {
+        Some(value) => parse_grading_period_date(value)?,
+        None => period.end_date,
+    };
+    let close_date = match &params.close_date {
+        Some(value) => parse_grading_period_date(value)?,
+        None => period.close_date,
+    };
+    let weight = params.weight.or(period.weight);
+
+    let window = GradingPeriodWindow {
+        start_date,
+        end_date,
+        close_date,
+    };
+    validate_period_window(&window)?;
+    if has_overlapping_period(&state.db, account_id, Some(period_id), &window).await? {
+        return Err(ApiError::Validation(OVERLAP_MESSAGE.into()));
+    }
+
+    let updated: GradingPeriod = sqlx::query_as(
+        r#"UPDATE grading_periods
+           SET title = $2, start_date = $3, end_date = $4, close_date = $5,
+               weight = $6, updated_at = now()
+           WHERE id = $1
+           RETURNING id, grading_period_group_id, title, start_date, end_date, close_date,
+                     weight, workflow_state, created_at, updated_at"#,
+    )
+    .bind(period_id)
+    .bind(&title)
+    .bind(start_date)
+    .bind(end_date)
+    .bind(close_date)
+    .bind(weight)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(GradingPeriodsResponse {
+        grading_periods: vec![GradingPeriodResponse::from_row(updated, true, Utc::now())],
+    }))
+}
+
+/// DELETE /grading_periods/{id} — soft-delete a grading period.
+async fn delete_grading_period(
+    State(state): State<AppState>,
+    Path(period_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    let period = fetch_grading_period(&state.db, period_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let account_id = account_id_for_group(&state.db, period.grading_period_group_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    if !can_manage_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    sqlx::query(
+        r#"UPDATE grading_periods SET workflow_state = 'deleted', updated_at = now()
+           WHERE id = $1"#,
+    )
+    .bind(period_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -587,6 +1223,17 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/grading_standards/{id}",
             delete(delete_course_grading_standard),
         )
+        .route(
+            "/accounts/{accountId}/grading_periods",
+            get(list_account_grading_periods),
+        )
+        .route(
+            "/accounts/{accountId}/grading_periods",
+            post(create_account_grading_period),
+        )
+        .route("/grading_periods/{id}", get(get_grading_period))
+        .route("/grading_periods/{id}", put(update_grading_period))
+        .route("/grading_periods/{id}", delete(delete_grading_period))
 }
 
 // ---------------------------------------------------------------------------
@@ -659,5 +1306,52 @@ mod tests {
     #[test]
     fn test_letter_grade_empty_entries() {
         assert_eq!(compute_letter_grade(92.0, &[]), None);
+    }
+
+    #[test]
+    fn test_parse_grading_period_date_formats() {
+        let timestamp = parse_grading_period_date("2014-01-07T15:04:00Z").unwrap();
+        assert_eq!(timestamp.to_rfc3339(), "2014-01-07T15:04:00+00:00");
+
+        let date_only = parse_grading_period_date("2014-01-07").unwrap();
+        assert_eq!(date_only.to_rfc3339(), "2014-01-07T00:00:00+00:00");
+
+        let without_offset = parse_grading_period_date(" 2014-01-07T15:04:00 ").unwrap();
+        assert_eq!(without_offset, timestamp);
+
+        assert!(parse_grading_period_date("not-a-date").is_err());
+    }
+
+    #[test]
+    fn test_validate_period_window_ordering() {
+        let window = |start: &str, end: &str, close: &str| GradingPeriodWindow {
+            start_date: parse_grading_period_date(start).unwrap(),
+            end_date: parse_grading_period_date(end).unwrap(),
+            close_date: parse_grading_period_date(close).unwrap(),
+        };
+
+        assert!(validate_period_window(&window("2024-01-01", "2024-03-01", "2024-03-08")).is_ok());
+        // close_date defaults to end_date in the handler, so equal dates are valid.
+        assert!(validate_period_window(&window("2024-01-01", "2024-03-01", "2024-03-01")).is_ok());
+        assert!(validate_period_window(&window("2024-03-02", "2024-03-01", "2024-03-01")).is_err());
+        assert!(validate_period_window(&window("2024-01-01", "2024-03-01", "2024-02-01")).is_err());
+    }
+
+    #[test]
+    fn test_windows_overlap_allows_touching_boundaries() {
+        let window = |start: &str, end: &str| GradingPeriodWindow {
+            start_date: parse_grading_period_date(start).unwrap(),
+            end_date: parse_grading_period_date(end).unwrap(),
+            close_date: parse_grading_period_date(end).unwrap(),
+        };
+
+        let first = window("2024-01-01", "2024-02-01");
+        let second = window("2024-02-01", "2024-03-01");
+        let overlapping = window("2024-01-15", "2024-02-15");
+
+        assert!(!windows_overlap(&first, &second));
+        assert!(!windows_overlap(&second, &first));
+        assert!(windows_overlap(&first, &overlapping));
+        assert!(windows_overlap(&overlapping, &second));
     }
 }
