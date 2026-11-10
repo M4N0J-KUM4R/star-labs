@@ -10,9 +10,15 @@
 //! - GET    /courses/{courseId}/discussion_topics/{topicId}/entries — list with nested replies
 //! - PUT    /courses/{courseId}/discussion_topics/{topicId}/read    — mark topic read (enrolled)
 //! - DELETE /courses/{courseId}/discussion_topics/{topicId}/read    — mark topic unread (enrolled)
+//! - GET    /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId} — get one entry (enrolled)
+//! - PUT    /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId} — update entry (author/moderator)
+//! - DELETE /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId} — soft-delete entry (author/moderator)
+//! - POST   /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/replies — reply to entry (enrolled)
 //! - PUT    /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/read — mark entry read (enrolled)
 //! - DELETE /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/read — mark entry unread (enrolled)
 //! - POST   /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/rating — rate entry 0/1 (enrolled)
+//! - PUT    /courses/{courseId}/discussion_topics/{topicId}/subscribed — subscribe (enrolled)
+//! - DELETE /courses/{courseId}/discussion_topics/{topicId}/subscribed — unsubscribe (enrolled)
 
 use axum::{
     extract::{Path, Query, State},
@@ -111,6 +117,18 @@ pub struct UpdateTopic {
 pub struct CreateEntry {
     pub message: String,
     pub parent_id: Option<i64>,
+}
+
+/// Request body for updating a discussion entry.
+#[derive(Debug, Deserialize)]
+pub struct UpdateEntry {
+    pub message: Option<String>,
+}
+
+/// Request body for replying to a discussion entry.
+#[derive(Debug, Deserialize)]
+pub struct CreateReply {
+    pub message: String,
 }
 
 /// Pagination query parameters.
@@ -537,6 +555,201 @@ async fn list_entries(
 }
 
 // ---------------------------------------------------------------------------
+// Single-entry read/update/delete + replies (Canvas entry parity)
+// ---------------------------------------------------------------------------
+
+/// Canvas `DiscussionEntry` :update / :delete policy: the entry's author or a
+/// forum moderator (course teacher / global admin).
+async fn check_entry_editor(
+    pool: &PgPool,
+    course_id: i64,
+    author_id: Option<i64>,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    if author_id == Some(auth.id) {
+        return Ok(true);
+    }
+    check_teacher_or_admin(pool, auth.id, course_id, auth).await
+}
+
+/// GET /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}.
+async fn get_entry(
+    State(state): State<AppState>,
+    Path((course_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<DiscussionEntry>, ApiError> {
+    ensure_entry_in_topic(&state.db, course_id, topic_id, entry_id, &auth).await?;
+
+    let row: Option<DiscussionEntryRow> = sqlx::query_as(
+        r#"
+        SELECT id, topic_id, parent_id, user_id, message, workflow_state, created_at, updated_at
+        FROM discussion_entries
+        WHERE id = $1 AND topic_id = $2 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(entry_id)
+    .bind(topic_id)
+    .fetch_optional(&state.db)
+    .await?;
+    row.map(|row| Json(DiscussionEntry::from(row)))
+        .ok_or(ApiError::NotFound)
+}
+
+/// PUT /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}.
+///
+/// Only the entry body is mutable here; Canvas also accepts
+/// `plaintext_message`/`remove_attachment`, which this metadata-only API
+/// ignores.
+async fn update_entry(
+    State(state): State<AppState>,
+    Path((course_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateEntry>,
+) -> Result<Json<DiscussionEntry>, ApiError> {
+    ensure_topic_in_course(&state.db, course_id, topic_id).await?;
+
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas raises RecordNotFound for deleted or cross-topic entries before
+    // checking the :update permission.
+    let existing: Option<(Option<i64>,)> = sqlx::query_as(
+        r#"
+        SELECT user_id FROM discussion_entries
+        WHERE id = $1 AND topic_id = $2 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(entry_id)
+    .bind(topic_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (author_id,) = existing.ok_or(ApiError::NotFound)?;
+
+    if !check_entry_editor(&state.db, course_id, author_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas `DiscussionEntry` validates presence of `message`, so a missing
+    // or blank body fails validation.
+    let message = payload
+        .message
+        .filter(|message| !message.trim().is_empty())
+        .ok_or_else(|| ApiError::Validation("message cannot be empty".into()))?;
+
+    let row: DiscussionEntryRow = sqlx::query_as(
+        r#"
+        UPDATE discussion_entries
+        SET message = $1, updated_at = now()
+        WHERE id = $2 AND topic_id = $3 AND workflow_state <> 'deleted'
+        RETURNING id, topic_id, parent_id, user_id, message, workflow_state, created_at, updated_at
+        "#,
+    )
+    .bind(&message)
+    .bind(entry_id)
+    .bind(topic_id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(DiscussionEntry::from(row)))
+}
+
+/// DELETE /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}.
+///
+/// Canvas soft-deletes the entry and clears its author and body.
+async fn delete_entry(
+    State(state): State<AppState>,
+    Path((course_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    ensure_topic_in_course(&state.db, course_id, topic_id).await?;
+
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let existing: Option<(Option<i64>,)> = sqlx::query_as(
+        r#"
+        SELECT user_id FROM discussion_entries
+        WHERE id = $1 AND topic_id = $2 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(entry_id)
+    .bind(topic_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (author_id,) = existing.ok_or(ApiError::NotFound)?;
+
+    if !check_entry_editor(&state.db, course_id, author_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE discussion_entries
+        SET workflow_state = 'deleted', user_id = NULL, message = NULL, updated_at = now()
+        WHERE id = $1 AND topic_id = $2
+        "#,
+    )
+    .bind(entry_id)
+    .bind(topic_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/replies.
+///
+/// Canvas `add_reply`: the parent must be a live entry of this topic, and the
+/// created entry is nested under it (replies to replies stay nested one level
+/// deeper, exactly like `POST .../entries` with `parent_id`).
+async fn add_reply(
+    State(state): State<AppState>,
+    Path((course_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<CreateReply>,
+) -> Result<(StatusCode, Json<DiscussionEntry>), ApiError> {
+    ensure_topic_in_course(&state.db, course_id, topic_id).await?;
+
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas `all_entries(@topic).find(params[:entry_id])` -> 404 when the
+    // parent is missing, deleted, or belongs to another topic.
+    let parent: Option<(i64,)> = sqlx::query_as(
+        "SELECT topic_id FROM discussion_entries WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(entry_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (parent_topic_id,) = parent.ok_or(ApiError::NotFound)?;
+    if parent_topic_id != topic_id {
+        return Err(ApiError::NotFound);
+    }
+
+    if payload.message.trim().is_empty() {
+        return Err(ApiError::Validation("message cannot be empty".into()));
+    }
+
+    let row: DiscussionEntryRow = sqlx::query_as(
+        r#"
+        INSERT INTO discussion_entries (topic_id, parent_id, user_id, message, workflow_state)
+        VALUES ($1, $2, $3, $4, 'active')
+        RETURNING id, topic_id, parent_id, user_id, message, workflow_state, created_at, updated_at
+        "#,
+    )
+    .bind(topic_id)
+    .bind(entry_id)
+    .bind(auth.id)
+    .bind(&payload.message)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(DiscussionEntry::from(row))))
+}
+
+// ---------------------------------------------------------------------------
 // Read state + rating helpers (Canvas discussion_topics_api semantics)
 // ---------------------------------------------------------------------------
 
@@ -818,6 +1031,72 @@ async fn rate_entry(
 }
 
 // ---------------------------------------------------------------------------
+// Topic subscription (Canvas subscribe_topic / unsubscribe_topic)
+// ---------------------------------------------------------------------------
+
+/// Apply a subscription change. Mirrors Canvas `change_subscribed_state`: the
+/// implicit default is "unsubscribed", and a request that already matches the
+/// current state is a 204 no-op that writes no row.
+async fn set_subscription(
+    pool: &PgPool,
+    course_id: i64,
+    topic_id: i64,
+    auth: &AuthUser,
+    subscribed: bool,
+) -> Result<StatusCode, ApiError> {
+    ensure_topic_in_course(pool, course_id, topic_id).await?;
+
+    if !check_enrolled_or_admin(pool, auth.id, course_id, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let current: Option<(bool,)> = sqlx::query_as(
+        "SELECT subscribed FROM discussion_subscriptions WHERE topic_id = $1 AND user_id = $2",
+    )
+    .bind(topic_id)
+    .bind(auth.id)
+    .fetch_optional(pool)
+    .await?;
+    if current.map(|(state,)| state).unwrap_or(false) == subscribed {
+        return Ok(StatusCode::NO_CONTENT);
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO discussion_subscriptions (topic_id, user_id, subscribed)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (topic_id, user_id) DO UPDATE
+        SET subscribed = EXCLUDED.subscribed, updated_at = now()
+        "#,
+    )
+    .bind(topic_id)
+    .bind(auth.id)
+    .bind(subscribed)
+    .execute(pool)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// PUT .../discussion_topics/{topicId}/subscribed — subscribe (Canvas: 204).
+async fn subscribe_topic(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_subscription(&state.db, course_id, topic_id, &auth, true).await
+}
+
+/// DELETE .../discussion_topics/{topicId}/subscribed — unsubscribe (Canvas: 204).
+async fn unsubscribe_topic(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_subscription(&state.db, course_id, topic_id, &auth, false).await
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -843,8 +1122,20 @@ pub fn router() -> Router<AppState> {
             get(list_entries),
         )
         .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}",
+            get(get_entry).put(update_entry).delete(delete_entry),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/replies",
+            post(add_reply),
+        )
+        .route(
             "/courses/{courseId}/discussion_topics/{topicId}/read",
             put(mark_topic_read).delete(mark_topic_unread),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/subscribed",
+            put(subscribe_topic).delete(unsubscribe_topic),
         )
         .route(
             "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/read",
