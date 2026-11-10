@@ -2335,3 +2335,136 @@ async fn unauthenticated_requests_are_401() {
         .await;
     assert_eq!(resp.status_code(), 401, "garbage token: {}", resp.text());
 }
+
+// ---------------------------------------------------------------------------
+// Assignment overrides
+// ---------------------------------------------------------------------------
+
+/// Ad-hoc override create -> list -> show (flat + nested) -> update -> delete.
+#[tokio::test]
+async fn test_assignment_overrides_crud() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let fx = seed_fixture(&server, &pool, &prefix, "Override CRUD").await;
+    let teacher = auth(fx.teacher, "teacher");
+    let nested = format!(
+        "/courses/{}/assignments/{}/overrides",
+        fx.course, fx.assignment
+    );
+
+    // Create an ad-hoc override targeting the enrolled student.
+    let resp = server
+        .post(&nested)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher)
+        .json(&json!({
+            "student_ids": [fx.student],
+            "title": "Extended deadline",
+            "due_at": "2026-02-01T23:59:00Z"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "create override: {}", resp.text());
+    let created: Value = resp.json();
+    let override_id = created["id"].as_i64().expect("override id");
+    assert_eq!(created["assignment_id"].as_i64(), Some(fx.assignment));
+    assert_eq!(created["title"], "Extended deadline");
+    assert_eq!(created["student_ids"], json!([fx.student]));
+    assert_eq!(created["workflow_state"], "active");
+    assert!(created["course_section_id"].is_null());
+    assert!(created["group_id"].is_null());
+
+    // List (nested) and show (flat + nested alias).
+    let list = get_ok(&server, &teacher, &nested).await;
+    assert_eq!(list.as_array().map(|rows| rows.len()), Some(1));
+
+    let shown = get_ok(
+        &server,
+        &teacher,
+        &format!("/assignment_overrides/{override_id}"),
+    )
+    .await;
+    assert_eq!(shown["title"], "Extended deadline");
+
+    let shown_nested = get_ok(&server, &teacher, &format!("{nested}/{override_id}")).await;
+    assert_eq!(shown_nested["id"].as_i64(), Some(override_id));
+
+    // Update through the flat route; omitting student_ids keeps the ad-hoc
+    // target set unchanged.
+    let resp = server
+        .put(&format!("/assignment_overrides/{override_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher)
+        .json(&json!({
+            "title": "Extended again",
+            "due_at": "2026-03-01T23:59:00Z"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "update override: {}", resp.text());
+    let updated: Value = resp.json();
+    assert_eq!(updated["title"], "Extended again");
+    assert_eq!(updated["student_ids"], json!([fx.student]));
+
+    // Delete soft-deletes and returns the former details (Canvas behavior).
+    let resp = server
+        .delete(&format!("/assignment_overrides/{override_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher)
+        .await;
+    assert_eq!(resp.status_code(), 200, "delete override: {}", resp.text());
+    let deleted: Value = resp.json();
+    assert_eq!(deleted["workflow_state"], "deleted");
+
+    // Deleted overrides disappear from both list and show.
+    let list = get_ok(&server, &teacher, &nested).await;
+    assert_eq!(list.as_array().map(|rows| rows.len()), Some(0));
+
+    let resp = server
+        .get(&format!("/assignment_overrides/{override_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, &teacher)
+        .await;
+    assert_eq!(resp.status_code(), 404, "deleted show: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Write access requires a teacher/admin and a valid target set.
+#[tokio::test]
+async fn test_assignment_override_write_permissions_and_validation() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let fx = seed_fixture(&server, &pool, &prefix, "Override Perms").await;
+    let student = auth(fx.student, "student");
+    let teacher = auth(fx.teacher, "teacher");
+    let nested = format!(
+        "/courses/{}/assignments/{}/overrides",
+        fx.course, fx.assignment
+    );
+
+    // Students cannot create overrides (teacher/admin only).
+    let resp = server
+        .post(&nested)
+        .add_header(axum::http::header::AUTHORIZATION, &student)
+        .json(&json!({ "student_ids": [fx.student] }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student create: {}", resp.text());
+
+    // One of student_ids/group_id/course_section_id is required.
+    let resp = server
+        .post(&nested)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher)
+        .json(&json!({ "title": "No target" }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "no target: {}", resp.text());
+
+    // Ad-hoc student ids must be enrolled students in the course.
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let resp = server
+        .post(&nested)
+        .add_header(axum::http::header::AUTHORIZATION, &teacher)
+        .json(&json!({ "student_ids": [outsider], "title": "Outsider" }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "unknown student: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
