@@ -1,15 +1,25 @@
-//! star-dashboard — activity view for logged-in users.
+//! star-dashboard — activity views for logged-in users.
 //!
-//! Provides the GET /dashboard endpoint with three sections:
+//! Phase 2: GET /dashboard with three sections:
 //! - upcoming: assignments due within 7 days + recent announcements (last 7 days)
 //! - courses: enrolled courses
 //! - recent_announcements: last 3 announcements across enrolled courses
 //!
+//! Phase 3 (Canvas parity):
+//! - GET /users/self/todo            — grading + submitting todo items
+//! - GET /users/self/upcoming_events — assignments + calendar events, next 7 days
+//! - GET /dashboard/dashboard_cards  — menu-style course cards
+//!
 //! Uses raw CTE/JOIN queries — no N+1.
 
-use axum::{extract::State, routing::get, Json, Router};
+use axum::{
+    extract::{RawQuery, State},
+    routing::get,
+    Json, Router,
+};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
+use star_assignments::Assignment;
 use star_common::{ApiError, AppState};
 
 use star_auth::AuthUser;
@@ -159,10 +169,694 @@ async fn dashboard_handler(
 }
 
 // -----------------------------------------------------------------------
+// Phase 3: todo items (GET /users/self/todo)
+// -----------------------------------------------------------------------
+
+/// One row of `GET /users/self/todo` (Canvas `todo_item_json`).
+///
+/// Canvas shape: context_type/context_id + context_name/context_short_name,
+/// type ("grading" | "submitting"), the ignore URLs, the nested assignment,
+/// html_url, and needs_grading_count on grading items only.
+#[derive(Debug, Clone, Serialize)]
+pub struct TodoItem {
+    pub context_type: String,
+    pub course_id: i64,
+    pub context_name: String,
+    pub context_short_name: String,
+    #[serde(rename = "type")]
+    pub item_type: String,
+    pub ignore: String,
+    pub ignore_permanently: String,
+    pub assignment: Assignment,
+    pub html_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub needs_grading_count: Option<i64>,
+}
+
+/// Shared row shape for the grading and submitting todo queries.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct TodoRow {
+    id: i64,
+    course_id: i64,
+    title: String,
+    description: Option<String>,
+    points_possible: f64,
+    due_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    context_name: String,
+    context_short_name: String,
+    needs_grading_count: i64,
+}
+
+impl TodoRow {
+    /// Convert a row into the Canvas todo item shape for the given purpose.
+    fn into_todo_item(self, item_type: &str) -> TodoItem {
+        let ignore_base = format!("/api/v1/users/self/todo/assignment_{}/{item_type}", self.id);
+        let html_url = if item_type == "grading" {
+            // Canvas speed_grader_course_gradebook_url
+            format!(
+                "/courses/{}/gradebook/speed_grader?assignment_id={}",
+                self.course_id, self.id
+            )
+        } else {
+            // Canvas course_assignment_url + "#submit"
+            format!("/courses/{}/assignments/{}#submit", self.course_id, self.id)
+        };
+
+        TodoItem {
+            context_type: "Course".to_string(),
+            course_id: self.course_id,
+            context_name: self.context_name,
+            context_short_name: self.context_short_name,
+            item_type: item_type.to_string(),
+            ignore: format!("{ignore_base}?permanent=0"),
+            ignore_permanently: format!("{ignore_base}?permanent=1"),
+            assignment: Assignment {
+                id: self.id,
+                course_id: self.course_id,
+                title: self.title,
+                description: self.description,
+                points_possible: self.points_possible,
+                due_at: self.due_at,
+                created_at: self.created_at,
+                updated_at: self.updated_at,
+            },
+            html_url,
+            needs_grading_count: (item_type == "grading").then_some(self.needs_grading_count),
+        }
+    }
+}
+
+/// Canvas `assignments_needing_grading`: assignments in courses where the user
+/// teaches that have at least one submitted-but-ungraded submission.
+async fn fetch_grading_todos(
+    db: &sqlx::PgPool,
+    user_id: i64,
+    course_ids: &[i64],
+) -> Result<Vec<TodoItem>, ApiError> {
+    let rows: Vec<TodoRow> = sqlx::query_as(
+        r#"
+        SELECT a.id, a.course_id, a.title, a.description, a.points_possible,
+               a.due_at, a.created_at, a.updated_at,
+               c.name        AS context_name,
+               c.course_code AS context_short_name,
+               (SELECT COUNT(*) FROM submissions s
+                 WHERE s.assignment_id = a.id
+                   AND s.body IS NOT NULL
+                   AND s.score IS NULL) AS needs_grading_count
+        FROM assignments a
+        JOIN courses c ON c.id = a.course_id
+        WHERE EXISTS (
+                SELECT 1 FROM enrollments e
+                 WHERE e.course_id = a.course_id
+                   AND e.user_id = $1
+                   AND e.role IN ('teacher', 'ta')
+                   AND e.workflow_state = 'active')
+          AND EXISTS (
+                SELECT 1 FROM submissions s
+                 WHERE s.assignment_id = a.id
+                   AND s.body IS NOT NULL
+                   AND s.score IS NULL)
+          AND (cardinality($2::bigint[]) = 0 OR a.course_id = ANY($2::bigint[]))
+        ORDER BY a.due_at NULLS LAST, a.id
+        LIMIT 50
+        "#,
+    )
+    .bind(user_id)
+    .bind(course_ids)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| row.into_todo_item("grading"))
+        .collect())
+}
+
+/// Canvas `assignments_needing_submitting`: assignments due in
+/// [now - 4 weeks, now + 1 week] for the user's student enrollments that have
+/// no submitted (body-bearing) submission yet.
+async fn fetch_submitting_todos(
+    db: &sqlx::PgPool,
+    user_id: i64,
+    course_ids: &[i64],
+) -> Result<Vec<TodoItem>, ApiError> {
+    let rows: Vec<TodoRow> = sqlx::query_as(
+        r#"
+        SELECT a.id, a.course_id, a.title, a.description, a.points_possible,
+               a.due_at, a.created_at, a.updated_at,
+               c.name        AS context_name,
+               c.course_code AS context_short_name,
+               0::bigint     AS needs_grading_count
+        FROM assignments a
+        JOIN courses c ON c.id = a.course_id
+        WHERE EXISTS (
+                SELECT 1 FROM enrollments e
+                 WHERE e.course_id = a.course_id
+                   AND e.user_id = $1
+                   AND e.role = 'student'
+                   AND e.workflow_state = 'active')
+          AND a.due_at IS NOT NULL
+          AND a.due_at >= now() - interval '4 weeks'
+          AND a.due_at <= now() + interval '1 week'
+          AND NOT EXISTS (
+                SELECT 1 FROM submissions s
+                 WHERE s.assignment_id = a.id
+                   AND s.user_id = $1
+                   AND s.body IS NOT NULL)
+          AND (cardinality($2::bigint[]) = 0 OR a.course_id = ANY($2::bigint[]))
+        ORDER BY a.due_at, a.id
+        LIMIT 50
+        "#,
+    )
+    .bind(user_id)
+    .bind(course_ids)
+    .fetch_all(db)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| row.into_todo_item("submitting"))
+        .collect())
+}
+
+/// GET /users/self/todo — the current user's Canvas todo list.
+///
+/// Merges grading (teacher) and submitting (student) items, ordered by due
+/// date like Canvas' BookmarkedCollection merge. Supports `course_ids[]`.
+async fn todo_handler(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    RawQuery(raw_query): RawQuery,
+) -> Result<Json<Vec<TodoItem>>, ApiError> {
+    let course_filter = parse_course_ids(raw_query.as_deref());
+    // Canvas: a present-but-empty filter yields an empty list, not everything.
+    if matches!(&course_filter, Some(ids) if ids.is_empty()) {
+        return Ok(Json(Vec::new()));
+    }
+    let course_ids = course_filter.unwrap_or_default();
+
+    let mut items = fetch_grading_todos(&state.db, auth.id, &course_ids).await?;
+    items.extend(fetch_submitting_todos(&state.db, auth.id, &course_ids).await?);
+
+    // Canvas sorts the merged collections by due_at then id.
+    items.sort_by(|a, b| match (&a.assignment.due_at, &b.assignment.due_at) {
+        (Some(left), Some(right)) => left
+            .cmp(right)
+            .then_with(|| a.assignment.id.cmp(&b.assignment.id)),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => a.assignment.id.cmp(&b.assignment.id),
+    });
+    items.truncate(50);
+
+    Ok(Json(items))
+}
+
+// -----------------------------------------------------------------------
+// Phase 3: upcoming events (GET /users/self/upcoming_events)
+// -----------------------------------------------------------------------
+
+/// Union of assignment and calendar events returned by upcoming_events.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+pub enum UpcomingEvent {
+    Assignment(AssignmentUpcomingEvent),
+    Calendar(CalendarUpcomingEvent),
+}
+
+/// Canvas `assignment_event_json` (CalendarEvent API module).
+#[derive(Debug, Clone, Serialize)]
+pub struct AssignmentUpcomingEvent {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub workflow_state: String,
+    pub submission_types: Vec<String>,
+    pub all_day: bool,
+    pub all_day_date: Option<String>,
+    pub assignment: Assignment,
+    pub html_url: String,
+    pub context_code: String,
+    pub context_name: String,
+    pub context_color: Option<String>,
+    pub start_at: DateTime<Utc>,
+    pub end_at: DateTime<Utc>,
+    pub url: String,
+    pub important_dates: bool,
+}
+
+/// Canvas `calendar_event_json` subset for the user's own/course events.
+#[derive(Debug, Clone, Serialize)]
+pub struct CalendarUpcomingEvent {
+    pub id: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub start_at: DateTime<Utc>,
+    pub end_at: Option<DateTime<Utc>>,
+    pub all_day: bool,
+    pub all_day_date: Option<String>,
+    pub title: String,
+    pub workflow_state: String,
+    pub comments: Option<String>,
+    #[serde(rename = "type")]
+    pub event_type: String,
+    pub location_address: Option<String>,
+    pub location_name: Option<String>,
+    pub description: Option<String>,
+    pub context_code: String,
+    pub context_name: Option<String>,
+    pub context_color: Option<String>,
+    pub all_context_codes: String,
+    pub child_events_count: i64,
+    pub html_url: String,
+    pub url: String,
+}
+
+/// Assignment row for upcoming_events (due_at is non-null in the query).
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct AssignmentEventRow {
+    id: i64,
+    course_id: i64,
+    title: String,
+    description: Option<String>,
+    points_possible: f64,
+    due_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    context_name: String,
+}
+
+/// Calendar event row for upcoming_events.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct CalendarEventEventRow {
+    id: i64,
+    course_id: Option<i64>,
+    user_id: Option<i64>,
+    title: String,
+    description: Option<String>,
+    start_at: DateTime<Utc>,
+    end_at: Option<DateTime<Utc>>,
+    workflow_state: String,
+    location_name: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    context_name: Option<String>,
+}
+
+/// GET /users/self/upcoming_events — assignments due plus calendar events in
+/// the next 7 days across the user's courses (and personal calendar), ordered
+/// by start date and capped at 20 like Canvas `User#upcoming_events`.
+async fn upcoming_events_handler(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<UpcomingEvent>>, ApiError> {
+    let assignment_rows: Vec<AssignmentEventRow> = sqlx::query_as(
+        r#"
+        SELECT a.id, a.course_id, a.title, a.description, a.points_possible,
+               a.due_at, a.created_at, a.updated_at, c.name AS context_name
+        FROM assignments a
+        JOIN courses c ON c.id = a.course_id
+        WHERE EXISTS (
+                SELECT 1 FROM enrollments e
+                 WHERE e.course_id = a.course_id
+                   AND e.user_id = $1
+                   AND e.workflow_state = 'active')
+          AND a.due_at IS NOT NULL
+          AND a.due_at > now()
+          AND a.due_at <= now() + interval '7 days'
+        ORDER BY a.due_at ASC, a.id ASC
+        LIMIT 20
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let calendar_rows: Vec<CalendarEventEventRow> = sqlx::query_as(
+        r#"
+        SELECT ce.id, ce.course_id, ce.user_id, ce.title, ce.description,
+               ce.start_at, ce.end_at, ce.workflow_state, ce.location_name,
+               ce.created_at, ce.updated_at,
+               COALESCE(c.name, u.name) AS context_name
+        FROM calendar_events ce
+        LEFT JOIN courses c ON c.id = ce.course_id
+        LEFT JOIN users u ON u.id = ce.user_id
+        WHERE ce.workflow_state <> 'deleted'
+          AND ce.start_at > now()
+          AND ce.start_at <= now() + interval '7 days'
+          AND ((ce.course_id IS NOT NULL AND EXISTS (
+                    SELECT 1 FROM enrollments e
+                     WHERE e.course_id = ce.course_id
+                       AND e.user_id = $1
+                       AND e.workflow_state = 'active'))
+               OR ce.user_id = $1)
+        ORDER BY ce.start_at ASC, ce.id ASC
+        LIMIT 20
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut events: Vec<(DateTime<Utc>, UpcomingEvent)> = Vec::new();
+
+    for row in assignment_rows {
+        let html_url = format!("/courses/{}/assignments/{}", row.course_id, row.id);
+        events.push((
+            row.due_at,
+            UpcomingEvent::Assignment(AssignmentUpcomingEvent {
+                id: format!("assignment_{}", row.id),
+                event_type: "assignment".to_string(),
+                title: row.title.clone(),
+                description: row.description.clone(),
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+                workflow_state: "published".to_string(),
+                submission_types: vec!["online".to_string()],
+                all_day: false,
+                all_day_date: None,
+                assignment: Assignment {
+                    id: row.id,
+                    course_id: row.course_id,
+                    title: row.title,
+                    description: row.description,
+                    points_possible: row.points_possible,
+                    due_at: Some(row.due_at),
+                    created_at: row.created_at,
+                    updated_at: row.updated_at,
+                },
+                html_url,
+                context_code: format!("course_{}", row.course_id),
+                context_name: row.context_name,
+                context_color: None,
+                start_at: row.due_at,
+                end_at: row.due_at,
+                url: format!("/api/v1/calendar_events/assignment_{}", row.id),
+                important_dates: false,
+            }),
+        ));
+    }
+
+    for row in calendar_rows {
+        let context_code = match (row.course_id, row.user_id) {
+            (Some(course_id), _) => format!("course_{course_id}"),
+            (None, Some(user_id)) => format!("user_{user_id}"),
+            (None, None) => format!("user_{}", auth.id),
+        };
+        let html_url = match row.course_id {
+            Some(course_id) => format!("/courses/{course_id}/calendar_events/{}", row.id),
+            None => format!("/calendar_events/{}", row.id),
+        };
+        events.push((
+            row.start_at,
+            UpcomingEvent::Calendar(CalendarUpcomingEvent {
+                id: row.id,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+                start_at: row.start_at,
+                end_at: row.end_at,
+                all_day: false,
+                all_day_date: None,
+                title: row.title,
+                workflow_state: row.workflow_state,
+                comments: None,
+                event_type: "event".to_string(),
+                location_address: None,
+                location_name: row.location_name,
+                description: row.description,
+                context_code: context_code.clone(),
+                context_name: row.context_name,
+                context_color: None,
+                all_context_codes: context_code,
+                child_events_count: 0,
+                html_url,
+                url: format!("/api/v1/calendar_events/{}", row.id),
+            }),
+        ));
+    }
+
+    events.sort_by(|a, b| a.0.cmp(&b.0));
+    events.truncate(20);
+
+    Ok(Json(events.into_iter().map(|(_, event)| event).collect()))
+}
+
+// -----------------------------------------------------------------------
+// Phase 3: dashboard cards (GET /dashboard/dashboard_cards)
+// -----------------------------------------------------------------------
+
+/// A card link in the Canvas `CourseForMenuPresenter` tab shape.
+#[derive(Debug, Clone, Serialize)]
+pub struct DashboardCardLink {
+    pub css_class: String,
+    pub icon: Option<String>,
+    pub hidden: bool,
+    pub path: String,
+    pub label: String,
+}
+
+/// Canvas `CourseForMenuPresenter#to_h` card shape (camelCase JSON).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DashboardCard {
+    pub long_name: String,
+    pub short_name: String,
+    pub original_name: String,
+    pub course_code: String,
+    pub asset_string: String,
+    pub href: String,
+    pub term: Option<String>,
+    pub subtitle: String,
+    pub enrollment_state: String,
+    pub enrollment_type: String,
+    pub observee: Option<String>,
+    pub id: i64,
+    pub is_favorited: bool,
+    pub is_k5_subject: bool,
+    pub is_homeroom: bool,
+    pub use_classic_font: bool,
+    pub can_manage: bool,
+    pub can_read_announcements: bool,
+    pub image: Option<String>,
+    pub color: Option<String>,
+    pub position: Option<i32>,
+    pub published: bool,
+    pub links: Vec<DashboardCardLink>,
+    pub can_change_course_publish_state: bool,
+    pub default_view: String,
+    pub pages_url: String,
+    pub front_page_title: Option<String>,
+}
+
+/// Row backing a dashboard card (one course, primary enrollment, position).
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct DashboardCardRow {
+    id: i64,
+    name: String,
+    course_code: String,
+    workflow_state: String,
+    role: String,
+    enrollment_state: String,
+    position: Option<i32>,
+}
+
+/// Canvas `DASHBOARD_CARD_TABS`: discussions, assignments, announcements, files.
+fn dashboard_card_links(course_id: i64) -> Vec<DashboardCardLink> {
+    [
+        (
+            "discussions",
+            "Discussions",
+            format!("/courses/{course_id}/discussion_topics"),
+        ),
+        (
+            "assignments",
+            "Assignments",
+            format!("/courses/{course_id}/assignments"),
+        ),
+        (
+            "announcements",
+            "Announcements",
+            format!("/courses/{course_id}/announcements"),
+        ),
+        ("files", "Files", format!("/courses/{course_id}/files")),
+    ]
+    .into_iter()
+    .map(|(css_class, label, path)| DashboardCardLink {
+        css_class: css_class.to_string(),
+        icon: None,
+        hidden: false,
+        path,
+        label: label.to_string(),
+    })
+    .collect()
+}
+
+/// Canvas `primary_enrollment_type` / `primary_enrollment_role` names.
+fn enrollment_type_for(role: &str) -> &'static str {
+    match role {
+        "teacher" => "TeacherEnrollment",
+        "ta" => "TaEnrollment",
+        "observer" => "ObserverEnrollment",
+        "designer" => "DesignerEnrollment",
+        _ => "StudentEnrollment",
+    }
+}
+
+/// Human role label used in the card subtitle ("enrolled as Student").
+fn enrollment_role_label(role: &str) -> &'static str {
+    match role {
+        "teacher" => "Teacher",
+        "ta" => "TA",
+        "observer" => "Observer",
+        "designer" => "Designer",
+        _ => "Student",
+    }
+}
+
+/// GET /dashboard/dashboard_cards — Canvas dashboard course cards for the
+/// current user, ordered by dashboard position (unpositioned last) then name.
+async fn dashboard_cards_handler(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<DashboardCard>>, ApiError> {
+    let rows: Vec<DashboardCardRow> = sqlx::query_as(
+        r#"
+        SELECT id, name, course_code, workflow_state, role, enrollment_state, position
+        FROM (
+            SELECT DISTINCT ON (c.id)
+                   c.id, c.name, c.course_code, c.workflow_state,
+                   e.role,
+                   e.workflow_state AS enrollment_state,
+                   dp.position,
+                   CASE e.role
+                       WHEN 'teacher' THEN 0
+                       WHEN 'ta' THEN 1
+                       WHEN 'designer' THEN 2
+                       ELSE 3
+                   END AS role_rank
+            FROM courses c
+            JOIN enrollments e
+              ON e.course_id = c.id
+             AND e.user_id = $1
+             AND e.workflow_state <> 'deleted'
+            LEFT JOIN dashboard_positions dp
+              ON dp.user_id = $1 AND dp.course_id = c.id
+            ORDER BY c.id, role_rank
+        ) cards
+        ORDER BY position NULLS LAST, name ASC
+        LIMIT 50
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let cards = rows
+        .into_iter()
+        .map(|row| {
+            let can_manage =
+                matches!(row.role.as_str(), "teacher" | "ta" | "designer") || auth.role == "admin";
+            DashboardCard {
+                long_name: format!("{} - {}", row.name, row.course_code),
+                short_name: row.course_code.clone(),
+                original_name: row.name,
+                course_code: row.course_code,
+                asset_string: format!("course_{}", row.id),
+                href: format!("/courses/{}", row.id),
+                term: None,
+                subtitle: format!("enrolled as {}", enrollment_role_label(&row.role)),
+                enrollment_state: row.enrollment_state,
+                enrollment_type: enrollment_type_for(&row.role).to_string(),
+                observee: None,
+                id: row.id,
+                is_favorited: false,
+                is_k5_subject: false,
+                is_homeroom: false,
+                use_classic_font: false,
+                can_manage,
+                can_read_announcements: true,
+                image: None,
+                color: None,
+                position: row.position,
+                published: matches!(row.workflow_state.as_str(), "available" | "completed"),
+                links: dashboard_card_links(row.id),
+                can_change_course_publish_state: can_manage,
+                default_view: "modules".to_string(),
+                pages_url: format!("/courses/{}/pages", row.id),
+                front_page_title: None,
+            }
+        })
+        .collect();
+
+    Ok(Json(cards))
+}
+
+// -----------------------------------------------------------------------
+// Query helpers
+// -----------------------------------------------------------------------
+
+/// Parse Canvas `course_ids[]` from the raw query string (also accepts the
+/// percent-encoded `course_ids%5B%5D` spelling). Returns None when absent and
+/// Some(empty) when present with no numeric ids.
+fn parse_course_ids(raw_query: Option<&str>) -> Option<Vec<i64>> {
+    let raw = raw_query?;
+    let mut seen = false;
+    let mut ids = Vec::new();
+
+    for pair in raw.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = key
+            .to_ascii_lowercase()
+            .replace("%5b", "[")
+            .replace("%5d", "]");
+        if key != "course_ids" && key != "course_ids[]" {
+            continue;
+        }
+        seen = true;
+        if let Ok(id) = value.parse::<i64>() {
+            ids.push(id);
+        }
+    }
+
+    seen.then_some(ids)
+}
+
+// -----------------------------------------------------------------------
 // Router
 // -----------------------------------------------------------------------
 
-/// Returns the dashboard router with GET /dashboard.
+/// Returns the dashboard router: the existing GET /dashboard plus the Phase 3
+/// todo, upcoming-events, and dashboard-card routes.
 pub fn router() -> Router<AppState> {
-    Router::new().route("/dashboard", get(dashboard_handler))
+    Router::new()
+        .route("/dashboard", get(dashboard_handler))
+        .route("/dashboard/dashboard_cards", get(dashboard_cards_handler))
+        .route("/users/self/todo", get(todo_handler))
+        .route("/users/self/upcoming_events", get(upcoming_events_handler))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_course_ids;
+
+    #[test]
+    fn parses_course_ids_filters() {
+        assert_eq!(parse_course_ids(None), None);
+        assert_eq!(parse_course_ids(Some("page=2")), None);
+        assert_eq!(
+            parse_course_ids(Some("course_ids[]=1&course_ids%5B%5D=2")),
+            Some(vec![1, 2])
+        );
+        // Present but empty / non-numeric -> Some(empty), never unfiltered.
+        assert_eq!(parse_course_ids(Some("course_ids=")), Some(vec![]));
+        assert_eq!(parse_course_ids(Some("course_ids[]=abc")), Some(vec![]));
+    }
 }
