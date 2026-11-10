@@ -12,14 +12,19 @@
 //! - `GET  /outcome_groups/{id}/outcomes` — list OutcomeLinks of a group (enrolled)
 //! - `POST /courses/{courseId}/outcome_groups/{groupId}/outcomes` — course-scoped link alias (teacher)
 //! - `GET  /courses/{courseId}/outcome_groups/{groupId}/outcomes` — course-scoped outcomes (enrolled)
+//! - `GET  /courses/{courseId}/root_outcome_group` — redirect to the course root group (enrolled)
+//! - `GET  /courses/{courseId}/outcome_group_links` — all course OutcomeLinks (enrolled)
+//! - `GET  /accounts/{accountId}/outcome_groups` — account groups (account admin)
+//! - `GET  /courses/{courseId}/outcome_groups/{id}` — course-scoped group show (enrolled)
 //! - `POST /outcomes/{outcomeId}/results` — record a result (teacher)
 //! - `GET  /outcomes/{outcomeId}/results` — list results (teacher or the user themself)
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header::LOCATION, StatusCode},
+    response::{IntoResponse, Response},
     routing::get,
     Json, Router,
 };
@@ -260,12 +265,104 @@ async fn check_teacher_or_admin_for_group(
     check_group_manage_access(pool, user_id, &group, auth).await
 }
 
+/// Depth cap for account-tree walks (same guard as star-accounts).
+const MAX_ACCOUNT_TREE_DEPTH: i64 = 10;
+
+/// Is the user an admin of this specific account?
+async fn is_account_admin(pool: &PgPool, user_id: i64, account_id: i64) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM account_users WHERE account_id = $1 AND user_id = $2 LIMIT 1",
+    )
+    .bind(account_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
+/// Canvas `read_outcomes` / `manage_outcomes` on an account: global admin, or
+/// an admin of the account itself or any ancestor account.
+async fn can_access_account(
+    pool: &PgPool,
+    user_id: i64,
+    account_id: i64,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    if is_admin(auth) {
+        return Ok(true);
+    }
+
+    let mut current = Some(account_id);
+    let mut depth = 0;
+    while let Some(id) = current {
+        if depth >= MAX_ACCOUNT_TREE_DEPTH {
+            return Ok(false);
+        }
+        depth += 1;
+        if is_account_admin(pool, user_id, id).await? {
+            return Ok(true);
+        }
+        let parent: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT parent_account_id FROM accounts WHERE id = $1")
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+        current = parent.and_then(|(parent_id,)| parent_id);
+    }
+
+    Ok(false)
+}
+
+/// Canvas `context.root_outcome_group`: the context's active root group,
+/// created on first access (titled after the context, like Canvas).
+///
+/// The upsert is backed by the partial unique index from migration 0059, so
+/// concurrent requests converge on a single row; a soft-deleted root is
+/// revived rather than duplicated.
+async fn ensure_root_outcome_group(
+    pool: &PgPool,
+    context_type: &str,
+    context_id: i64,
+    title: &str,
+) -> Result<LearningOutcomeGroup, ApiError> {
+    let course_id = (context_type == "Course").then_some(context_id);
+    let row: LearningOutcomeGroup = sqlx::query_as(
+        r#"
+        INSERT INTO outcome_groups
+            (course_id, context_type, context_id, title, root_group)
+        VALUES ($1, $2, $3, $4, TRUE)
+        ON CONFLICT (context_type, context_id) WHERE root_group
+        DO UPDATE SET workflow_state = 'active', updated_at = now()
+        RETURNING id, course_id, context_type, context_id, parent_outcome_group_id,
+                  title, description, vendor_guid, workflow_state, created_at, updated_at
+        "#,
+    )
+    .bind(course_id)
+    .bind(context_type)
+    .bind(context_id)
+    .bind(title)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
 /// Canvas `outcome_group_json`: the stored group plus the opaque URLs and
 /// `can_edit` flag that the API contract exposes.
 fn group_json(group: &LearningOutcomeGroup, can_edit: bool) -> serde_json::Value {
-    let base = match group.course_id {
-        Some(course_id) => format!("/api/v1/courses/{course_id}/outcome_groups/{}", group.id),
-        None => format!("/api/v1/outcome_groups/{}", group.id),
+    // Canvas routes the group under its owning context: courses, accounts, or
+    // the global namespace for global (context-less) groups.
+    let base = match (
+        group.course_id,
+        group.context_type.as_str(),
+        group.context_id,
+    ) {
+        (Some(course_id), _, _) => {
+            format!("/api/v1/courses/{course_id}/outcome_groups/{}", group.id)
+        }
+        (None, "Account", Some(account_id)) => {
+            format!("/api/v1/accounts/{account_id}/outcome_groups/{}", group.id)
+        }
+        _ => format!("/api/v1/outcome_groups/{}", group.id),
     };
     let url = base.clone();
     let subgroups_url = format!("{base}/subgroups");
@@ -300,12 +397,18 @@ fn link_json(
     can_unlink: bool,
     assessed: bool,
 ) -> serde_json::Value {
-    let url = match link.context_id {
-        Some(context_id) => format!(
+    // Canvas builds the link URL from the owning context, so account links
+    // resolve under /accounts and global links under /outcome_groups.
+    let url = match (link.context_type.as_str(), link.context_id) {
+        ("Course", Some(context_id)) => format!(
             "/api/v1/courses/{context_id}/outcome_groups/{}/outcomes/{}",
             link.outcome_group_id, link.outcome_id
         ),
-        None => format!(
+        ("Account", Some(context_id)) => format!(
+            "/api/v1/accounts/{context_id}/outcome_groups/{}/outcomes/{}",
+            link.outcome_group_id, link.outcome_id
+        ),
+        _ => format!(
             "/api/v1/outcome_groups/{}/outcomes/{}",
             link.outcome_group_id, link.outcome_id
         ),
@@ -391,6 +494,55 @@ async fn list_outcome_groups(
     Ok(Json(rows))
 }
 
+/// GET /accounts/{accountId}/outcome_groups (account admin)
+///
+/// Canvas `index` for account contexts: every active Account group owned by
+/// the account. `can_edit` is true for the account admins allowed to manage
+/// them.
+async fn list_account_outcome_groups(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    // Canvas resolves the context first, so an unknown account is 404 even
+    // for admins.
+    let account_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND workflow_state <> 'deleted')",
+    )
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await?;
+    if !account_exists {
+        return Err(ApiError::NotFound);
+    }
+
+    let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
+    if !can_manage {
+        return Err(ApiError::Forbidden);
+    }
+
+    let rows: Vec<LearningOutcomeGroup> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, context_type, context_id, parent_outcome_group_id,
+               title, description, vendor_guid, workflow_state, created_at, updated_at
+        FROM outcome_groups
+        WHERE context_type = 'Account'
+          AND context_id = $1
+          AND workflow_state = 'active'
+        ORDER BY id ASC
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(
+        rows.iter()
+            .map(|group| group_json(group, can_manage))
+            .collect(),
+    ))
+}
+
 /// GET /outcome_groups/{id} (enrolled)
 async fn show_outcome_group(
     State(state): State<AppState>,
@@ -403,6 +555,60 @@ async fn show_outcome_group(
     }
     let can_edit = check_group_manage_access(&state.db, auth.id, &group, &auth).await?;
     Ok(Json(group_json(&group, can_edit)))
+}
+
+/// GET /courses/{courseId}/outcome_groups/{id} (enrolled)
+///
+/// Canvas scopes the lookup to the context (`context_outcome_groups.find`), so
+/// a group owned by another course is 404, not 403.
+async fn show_course_outcome_group(
+    State(state): State<AppState>,
+    Path((course_id, group_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let group = fetch_outcome_group(&state.db, group_id).await?;
+    if group.course_id != Some(course_id) {
+        return Err(ApiError::NotFound);
+    }
+
+    let can_edit = check_group_manage_access(&state.db, auth.id, &group, &auth).await?;
+    Ok(Json(group_json(&group, can_edit)))
+}
+
+/// GET /courses/{courseId}/root_outcome_group (enrolled)
+///
+/// Canvas `OutcomeGroupsApiController#redirect`: 302 to the root group's
+/// canonical URL. The group JSON is included in the body so clients that do
+/// not follow redirects can still consume the response.
+async fn root_outcome_group(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let name: Option<String> = sqlx::query_scalar("SELECT name FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?;
+    let name = name.ok_or(ApiError::NotFound)?;
+
+    let group = ensure_root_outcome_group(&state.db, "Course", course_id, &name).await?;
+    let can_edit = check_group_manage_access(&state.db, auth.id, &group, &auth).await?;
+    let location = format!("/api/v1/courses/{course_id}/outcome_groups/{}", group.id);
+
+    Ok((
+        StatusCode::FOUND,
+        [(LOCATION, location)],
+        Json(group_json(&group, can_edit)),
+    )
+        .into_response())
 }
 
 /// PUT /outcome_groups/{id} (teacher)
@@ -797,6 +1003,100 @@ async fn list_group_outcome_links(
     Ok(Json(rows))
 }
 
+/// GET /courses/{courseId}/outcome_group_links (enrolled)
+///
+/// Canvas `link_index`: every active OutcomeLink in the course, ordered by id.
+/// The `outcome_style` / `outcome_group_style` query parameters are accepted
+/// but ignored — this route always returns the same detail level as
+/// `GET /outcome_groups/{id}/outcomes`.
+async fn list_course_outcome_group_links(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let links: Vec<LearningOutcomeLink> = sqlx::query_as(
+        r#"
+        SELECT ol.id, ol.outcome_id, ol.outcome_group_id,
+               ol.context_type, ol.context_id, ol.workflow_state
+        FROM outcome_links ol
+        JOIN outcome_groups og ON og.id = ol.outcome_group_id
+        WHERE og.course_id = $1
+          AND og.workflow_state = 'active'
+          AND ol.workflow_state = 'active'
+        ORDER BY ol.id ASC
+        "#,
+    )
+    .bind(course_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    if links.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+
+    let group_ids: Vec<i64> = links.iter().map(|link| link.outcome_group_id).collect();
+    let groups: Vec<LearningOutcomeGroup> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, context_type, context_id, parent_outcome_group_id,
+               title, description, vendor_guid, workflow_state, created_at, updated_at
+        FROM outcome_groups
+        WHERE id = ANY($1) AND workflow_state = 'active'
+        "#,
+    )
+    .bind(&group_ids)
+    .fetch_all(&state.db)
+    .await?;
+    let groups: HashMap<i64, LearningOutcomeGroup> =
+        groups.into_iter().map(|group| (group.id, group)).collect();
+
+    let outcome_ids: Vec<i64> = links.iter().map(|link| link.outcome_id).collect();
+    let outcomes: Vec<LearningOutcome> = sqlx::query_as(
+        r#"
+        SELECT id, title, description, display_name, workflow_state, created_at, updated_at
+        FROM learning_outcomes
+        WHERE id = ANY($1) AND workflow_state = 'active'
+        "#,
+    )
+    .bind(&outcome_ids)
+    .fetch_all(&state.db)
+    .await?;
+    let outcomes: HashMap<i64, LearningOutcome> = outcomes
+        .into_iter()
+        .map(|outcome| (outcome.id, outcome))
+        .collect();
+
+    let assessed_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT outcome_id FROM learning_outcome_results WHERE outcome_id = ANY($1)",
+    )
+    .bind(&outcome_ids)
+    .fetch_all(&state.db)
+    .await?;
+    let assessed: HashSet<i64> = assessed_ids.into_iter().collect();
+
+    let can_manage = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+
+    let rows: Vec<serde_json::Value> = links
+        .iter()
+        .filter_map(|link| {
+            let group = groups.get(&link.outcome_group_id)?;
+            let outcome = outcomes.get(&link.outcome_id)?;
+            Some(link_json(
+                link,
+                &group_json(group, can_manage),
+                outcome,
+                can_manage,
+                assessed.contains(&outcome.id),
+            ))
+        })
+        .collect();
+
+    Ok(Json(rows))
+}
+
 /// POST /courses/{courseId}/outcome_groups/{groupId}/outcomes {outcome_id} → 201
 async fn link_outcome_to_group(
     State(state): State<AppState>,
@@ -1010,6 +1310,23 @@ pub fn router() -> Router<AppState> {
             get(show_outcome_group)
                 .put(update_outcome_group)
                 .delete(delete_outcome_group),
+        )
+        // context-scoped group navigation (Canvas outcome_groups_api)
+        .route(
+            "/courses/{courseId}/root_outcome_group",
+            get(root_outcome_group),
+        )
+        .route(
+            "/courses/{courseId}/outcome_group_links",
+            get(list_course_outcome_group_links),
+        )
+        .route(
+            "/courses/{courseId}/outcome_groups/{id}",
+            get(show_course_outcome_group),
+        )
+        .route(
+            "/accounts/{accountId}/outcome_groups",
+            get(list_account_outcome_groups),
         )
         // outcomes
         .route(
@@ -1489,5 +1806,349 @@ mod tests {
 
         teardown(&pool, course_id, &[teacher_id]).await;
         teardown(&pool, other_course_id, &[other_teacher_id]).await;
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase 3: context-scoped outcome navigation
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn root_outcome_group_is_created_once_and_course_scoped() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let (course_id, teacher_id) = seed_course_with_teacher(&pool, "root").await;
+        let auth = AuthUser {
+            id: teacher_id,
+            role: "teacher".to_string(),
+        };
+        let state = test_state(&pool);
+
+        // The first request lazily creates the root group and redirects to it.
+        let response = root_outcome_group(State(state.clone()), Path(course_id), auth.clone())
+            .await
+            .expect("root outcome group");
+        assert_eq!(response.status(), StatusCode::FOUND);
+        let location = response
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .and_then(|value| value.to_str().ok())
+            .expect("location header")
+            .to_string();
+
+        let (root_id, root_course_id, root_title): (i64, Option<i64>, String) = sqlx::query_as(
+            "SELECT id, course_id, title FROM outcome_groups
+             WHERE course_id = $1 AND root_group AND workflow_state = 'active'",
+        )
+        .bind(course_id)
+        .fetch_one(&pool)
+        .await
+        .expect("root group row");
+        assert_eq!(root_course_id, Some(course_id));
+        assert_eq!(
+            location,
+            format!("/api/v1/courses/{course_id}/outcome_groups/{root_id}")
+        );
+
+        // Canvas titles the root group after its context.
+        let course_name: String = sqlx::query_scalar("SELECT name FROM courses WHERE id = $1")
+            .bind(course_id)
+            .fetch_one(&pool)
+            .await
+            .expect("course name");
+        assert_eq!(root_title, course_name);
+
+        // A second request reuses the row instead of creating another root.
+        let again = root_outcome_group(State(state.clone()), Path(course_id), auth.clone())
+            .await
+            .expect("root outcome group again");
+        assert_eq!(again.status(), StatusCode::FOUND);
+        assert_eq!(
+            again
+                .headers()
+                .get(axum::http::header::LOCATION)
+                .and_then(|value| value.to_str().ok()),
+            Some(location.as_str())
+        );
+        let root_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM outcome_groups WHERE course_id = $1 AND root_group",
+        )
+        .bind(course_id)
+        .fetch_one(&pool)
+        .await
+        .expect("root group count");
+        assert_eq!(root_count, 1);
+
+        // The course-scoped show route resolves the redirect target.
+        let Json(shown) =
+            show_course_outcome_group(State(state.clone()), Path((course_id, root_id)), auth)
+                .await
+                .expect("show root outcome group");
+        assert_eq!(shown["id"], root_id);
+        assert_eq!(shown["url"], location);
+        assert_eq!(shown["can_edit"], true);
+
+        teardown(&pool, course_id, &[teacher_id]).await;
+    }
+
+    #[tokio::test]
+    async fn course_outcome_group_show_rejects_other_courses() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let (course_id, teacher_id) = seed_course_with_teacher(&pool, "scope").await;
+        let (other_course_id, other_teacher_id) =
+            seed_course_with_teacher(&pool, "scope-other").await;
+        let auth = AuthUser {
+            id: teacher_id,
+            role: "teacher".to_string(),
+        };
+        let state = test_state(&pool);
+
+        let group = create_group(&state, course_id, &auth, "Scoped Group").await;
+        let Json(shown) =
+            show_course_outcome_group(State(state.clone()), Path((course_id, group.id)), auth)
+                .await
+                .expect("show own group");
+        assert_eq!(shown["id"], group.id);
+
+        // Admin bypasses enrollment, so the 404 proves the context scoping.
+        let admin = AuthUser {
+            id: teacher_id,
+            role: "admin".to_string(),
+        };
+        let err = show_course_outcome_group(
+            State(state.clone()),
+            Path((other_course_id, group.id)),
+            admin,
+        )
+        .await
+        .expect_err("group of another course must 404");
+        assert!(matches!(err, ApiError::NotFound));
+
+        teardown(&pool, course_id, &[teacher_id]).await;
+        teardown(&pool, other_course_id, &[other_teacher_id]).await;
+    }
+
+    #[tokio::test]
+    async fn course_outcome_group_links_lists_only_course_links() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let (course_id, teacher_id) = seed_course_with_teacher(&pool, "link-index").await;
+        let (other_course_id, other_teacher_id) =
+            seed_course_with_teacher(&pool, "link-index-other").await;
+        let auth = AuthUser {
+            id: teacher_id,
+            role: "teacher".to_string(),
+        };
+        let other_auth = AuthUser {
+            id: other_teacher_id,
+            role: "teacher".to_string(),
+        };
+        let state = test_state(&pool);
+
+        let group = create_group(&state, course_id, &auth, "Course Links").await;
+        let other_group =
+            create_group(&state, other_course_id, &other_auth, "Other Course Links").await;
+
+        let (_, Json(link)) = link_outcome_by_group_id(
+            State(state.clone()),
+            Path(group.id),
+            auth.clone(),
+            Json(LinkOutcome {
+                outcome_id: None,
+                move_from: None,
+                title: Some("Link Index Outcome".to_string()),
+                display_name: None,
+                description: None,
+            }),
+        )
+        .await
+        .expect("link course outcome");
+        let outcome_id = link["outcome_id"].as_i64().expect("outcome id");
+
+        let (_, Json(other_link)) = link_outcome_by_group_id(
+            State(state.clone()),
+            Path(other_group.id),
+            other_auth,
+            Json(LinkOutcome {
+                outcome_id: None,
+                move_from: None,
+                title: Some("Other Course Outcome".to_string()),
+                display_name: None,
+                description: None,
+            }),
+        )
+        .await
+        .expect("link other course outcome");
+        let other_outcome_id = other_link["outcome_id"].as_i64().expect("other outcome id");
+
+        // Only the links of the requested course are returned.
+        let Json(rows) =
+            list_course_outcome_group_links(State(state.clone()), Path(course_id), auth.clone())
+                .await
+                .expect("list course links");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], link["id"]);
+        assert_eq!(rows[0]["outcome_id"], outcome_id);
+        assert_eq!(rows[0]["outcome_group"]["id"], group.id);
+        assert_eq!(
+            rows[0]["url"],
+            format!(
+                "/api/v1/courses/{course_id}/outcome_groups/{}/outcomes/{outcome_id}",
+                group.id
+            )
+        );
+        assert_eq!(rows[0]["can_unlink"], true);
+        assert_eq!(rows[0]["assessed"], false);
+
+        // Assessing the outcome flips the Canvas `assessed` flag.
+        sqlx::query(
+            "INSERT INTO learning_outcome_results (outcome_id, user_id, score)
+             VALUES ($1, $2, $3)",
+        )
+        .bind(outcome_id)
+        .bind(teacher_id)
+        .bind(4.0_f64)
+        .execute(&pool)
+        .await
+        .expect("seed outcome result");
+        let Json(rows) =
+            list_course_outcome_group_links(State(state.clone()), Path(course_id), auth)
+                .await
+                .expect("list assessed course links");
+        assert_eq!(rows[0]["assessed"], true);
+
+        sqlx::query("DELETE FROM learning_outcome_results WHERE outcome_id = ANY($1)")
+            .bind(vec![outcome_id, other_outcome_id])
+            .execute(&pool)
+            .await
+            .expect("cleanup results");
+        sqlx::query("DELETE FROM learning_outcomes WHERE id = ANY($1)")
+            .bind(vec![outcome_id, other_outcome_id])
+            .execute(&pool)
+            .await
+            .expect("cleanup outcomes");
+        teardown(&pool, course_id, &[teacher_id]).await;
+        teardown(&pool, other_course_id, &[other_teacher_id]).await;
+    }
+
+    #[tokio::test]
+    async fn account_outcome_groups_require_account_admin() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let prefix = format!(
+            "outcomes-account-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_millis()
+        );
+        let account_id: i64 =
+            sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+                .bind(format!("{prefix} account"))
+                .fetch_one(&pool)
+                .await
+                .expect("seed account");
+        let account_admin_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind("Account Outcomes Admin")
+        .bind(format!("{prefix}-admin@test.local"))
+        .bind("unused-test-hash")
+        .fetch_one(&pool)
+        .await
+        .expect("seed account admin");
+        let outsider_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind("Account Outcomes Outsider")
+        .bind(format!("{prefix}-outsider@test.local"))
+        .bind("unused-test-hash")
+        .fetch_one(&pool)
+        .await
+        .expect("seed outsider");
+        sqlx::query(
+            "INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, 'admin')",
+        )
+        .bind(account_id)
+        .bind(account_admin_id)
+        .execute(&pool)
+        .await
+        .expect("grant account admin");
+
+        let active_group_id: i64 = sqlx::query_scalar(
+            "INSERT INTO outcome_groups (course_id, context_type, context_id, title)
+             VALUES (NULL, 'Account', $1, $2) RETURNING id",
+        )
+        .bind(account_id)
+        .bind(format!("{prefix} active group"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed account group");
+        let deleted_group_id: i64 = sqlx::query_scalar(
+            "INSERT INTO outcome_groups (course_id, context_type, context_id, title, workflow_state)
+             VALUES (NULL, 'Account', $1, $2, 'deleted') RETURNING id",
+        )
+        .bind(account_id)
+        .bind(format!("{prefix} deleted group"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed deleted account group");
+
+        let state = test_state(&pool);
+        let account_admin = AuthUser {
+            id: account_admin_id,
+            role: "student".to_string(),
+        };
+        let Json(rows) =
+            list_account_outcome_groups(State(state.clone()), Path(account_id), account_admin)
+                .await
+                .expect("account admin lists groups");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["id"], active_group_id);
+        assert_eq!(rows[0]["context_type"], "Account");
+        assert_eq!(
+            rows[0]["url"],
+            format!("/api/v1/accounts/{account_id}/outcome_groups/{active_group_id}")
+        );
+        assert_eq!(rows[0]["can_edit"], true);
+
+        // Non-admins may not read account outcomes.
+        let outsider = AuthUser {
+            id: outsider_id,
+            role: "student".to_string(),
+        };
+        let err = list_account_outcome_groups(State(state.clone()), Path(account_id), outsider)
+            .await
+            .expect_err("non-admin must be forbidden");
+        assert!(matches!(err, ApiError::Forbidden));
+
+        // Global admins always may.
+        let global_admin = AuthUser {
+            id: outsider_id,
+            role: "admin".to_string(),
+        };
+        let Json(rows) =
+            list_account_outcome_groups(State(state.clone()), Path(account_id), global_admin)
+                .await
+                .expect("global admin lists groups");
+        assert_eq!(rows.len(), 1);
+
+        sqlx::query("DELETE FROM outcome_groups WHERE id = ANY($1)")
+            .bind(vec![active_group_id, deleted_group_id])
+            .execute(&pool)
+            .await
+            .expect("cleanup account groups");
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup account");
+        sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+            .bind(vec![account_admin_id, outsider_id])
+            .execute(&pool)
+            .await
+            .expect("cleanup users");
     }
 }
