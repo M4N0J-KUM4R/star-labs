@@ -162,5 +162,5 @@ takes ~30 min, so day-to-day validation runs in CI.
       [migration/parity/report.md](migration/parity/report.md).
 - [x] Optional: llvm-cov coverage report in CI (nightly, 72.4% lines),
       Dependabot-style supply-chain protection via `cargo audit` in CI.
-- [ ] Add `SUPABASE_DATABASE_URL` repository secret to enable the nightly
-      Supabase compatibility job.
+- [x] `SUPABASE_DATABASE_URL` repository secret configured (2026-11-10,
+      session pooler → `star_lms_ci`); the nightly Supabase job now executes.
