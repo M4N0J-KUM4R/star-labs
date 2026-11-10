@@ -6,7 +6,7 @@ use argon2::{
 };
 use axum::{
     body::Bytes,
-    extract::{FromRef, FromRequest, Path, Request, State},
+    extract::{FromRef, FromRequest, Path, Query, Request, State},
     http::{
         header::{AUTHORIZATION, CONTENT_TYPE},
         StatusCode,
@@ -171,6 +171,15 @@ pub fn router() -> Router<AppState> {
             get(list_developer_keys).post(create_developer_key),
         )
         .route("/developer_keys/{id}", delete(destroy_developer_key))
+        // Canvas personal access tokens (manual "User-Generated" tokens).
+        .route(
+            "/tokens",
+            get(list_personal_tokens).post(create_personal_token),
+        )
+        .route(
+            "/tokens/{id}",
+            get(show_personal_token).delete(destroy_personal_token),
+        )
         .route("/login/oauth2/token", post(oauth2_token))
 }
 
@@ -619,6 +628,316 @@ async fn destroy_developer_key(
     let sql = format!("{DEVELOPER_KEY_SELECT} WHERE k.id = $1");
     let key: DeveloperKey = sqlx::query_as(&sql).bind(id).fetch_one(&app.db).await?;
     Ok(Json(developer_key_json(&key, 0)))
+}
+
+// ---------------------------------------------------------------------------
+// Personal access tokens (Canvas API v1 — /api/v1/tokens)
+// ---------------------------------------------------------------------------
+
+/// Canvas uses the first 5 characters of a token as its public hint.
+const TOKEN_HINT_LENGTH: usize = 5;
+
+/// GET /tokens defaults to 10 results per page, maximum 100 (Canvas
+/// `TokensController#user_generated_tokens`).
+const TOKENS_DEFAULT_PER_PAGE: i64 = 10;
+const TOKENS_MAX_PER_PAGE: i64 = 100;
+
+/// Pagination params for GET /tokens.
+#[derive(Debug, Deserialize)]
+struct TokenPagination {
+    page: Option<i64>,
+    per_page: Option<i64>,
+}
+
+impl TokenPagination {
+    fn resolve(&self) -> (i64, i64) {
+        let page = self.page.unwrap_or(1).max(1);
+        let per_page = self
+            .per_page
+            .unwrap_or(TOKENS_DEFAULT_PER_PAGE)
+            .clamp(1, TOKENS_MAX_PER_PAGE);
+        (per_page, (page - 1) * per_page)
+    }
+}
+
+/// Body of POST /tokens. Canvas wraps the fields in `token`; the flat form is
+/// accepted too, like the developer key handlers.
+#[derive(Debug, Default, Deserialize)]
+struct TokenParams {
+    purpose: Option<String>,
+    /// Canvas API name; stored in `permanent_expires_at`.
+    expires_at: Option<String>,
+    /// Accepted as an alias for `expires_at`.
+    permanent_expires_at: Option<String>,
+    scopes: Option<StringList>,
+}
+
+/// A manually created personal access token (`access_tokens` row with a NULL
+/// `developer_key_id`), shaped like Canvas `Token`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct PersonalAccessToken {
+    id: i64,
+    user_id: Option<i64>,
+    purpose: Option<String>,
+    scopes: Vec<String>,
+    workflow_state: String,
+    token: String,
+    token_hint: Option<String>,
+    remember_access: bool,
+    real_user_id: Option<i64>,
+    permanent_expires_at: Option<DateTime<Utc>>,
+    last_used_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+const PERSONAL_TOKEN_SELECT: &str = r#"
+    SELECT id, user_id, purpose, scopes, workflow_state, token, token_hint,
+           remember_access, real_user_id, permanent_expires_at, last_used_at,
+           created_at, updated_at
+    FROM access_tokens
+"#;
+
+/// First `TOKEN_HINT_LENGTH` characters of a token (Canvas `token_hint`).
+fn token_hint(token: &str) -> String {
+    token.chars().take(TOKEN_HINT_LENGTH).collect()
+}
+
+/// Parse Canvas `token[expires_at]`: an ISO8601/RFC3339 timestamp, with a
+/// date-only value accepted as midnight UTC (Canvas `Time.zone.parse`).
+fn parse_token_expires_at(raw: Option<&str>) -> Result<Option<DateTime<Utc>>, &'static str> {
+    let Some(raw) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(raw) {
+        return Ok(Some(parsed.with_timezone(&Utc)));
+    }
+    if let Ok(date) = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        let midnight = date.and_hms_opt(0, 0, 0).expect("midnight is valid");
+        return Ok(Some(midnight.and_utc()));
+    }
+    Err("Invalid expiration date format")
+}
+
+/// Canvas-shaped `Token` JSON (`Api::V1::Token#token_json`). The full token is
+/// only exposed on creation; afterwards `visible_token` is the masked hint.
+fn personal_token_json(token: &PersonalAccessToken, full_token: Option<&str>) -> serde_json::Value {
+    let hint = token
+        .token_hint
+        .clone()
+        .unwrap_or_else(|| token_hint(&token.token));
+    let visible_token = match full_token {
+        Some(full) => full.to_string(),
+        None => format!("{hint}..."),
+    };
+    let expired = token
+        .permanent_expires_at
+        .map(|at| at < Utc::now())
+        .unwrap_or(false);
+
+    serde_json::json!({
+        "id": token.id,
+        "created_at": token.created_at,
+        "expires_at": token.permanent_expires_at,
+        "last_used_at": token.last_used_at,
+        "purpose": token.purpose,
+        "real_user_id": token.real_user_id,
+        "remember_access": token.remember_access,
+        "scopes": token.scopes,
+        "updated_at": token.updated_at,
+        "user_id": token.user_id,
+        "workflow_state": token.workflow_state,
+        // Manually created tokens carry Canvas's default ("User-Generated")
+        // developer key name.
+        "app_name": "User-Generated",
+        "visible_token": visible_token,
+        "can_manually_regenerate": !expired,
+    })
+}
+
+/// Canvas `render_error` shape: `[{"message": "..."}]` with status 400.
+fn token_error(message: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!([{ "message": message }])),
+    )
+        .into_response()
+}
+
+async fn fetch_personal_token_by_id(
+    pool: &PgPool,
+    user_id: i64,
+    id: i64,
+) -> Result<PersonalAccessToken, ApiError> {
+    let sql = format!(
+        "{PERSONAL_TOKEN_SELECT}
+         WHERE user_id = $1 AND id = $2 AND developer_key_id IS NULL
+           AND workflow_state <> 'deleted'"
+    );
+    sqlx::query_as(&sql)
+        .bind(user_id)
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or(ApiError::NotFound)
+}
+
+async fn fetch_personal_token_by_hint(
+    pool: &PgPool,
+    user_id: i64,
+    hint: &str,
+) -> Result<PersonalAccessToken, ApiError> {
+    let sql = format!(
+        "{PERSONAL_TOKEN_SELECT}
+         WHERE user_id = $1 AND token_hint = $2 AND developer_key_id IS NULL
+           AND workflow_state <> 'deleted'
+         ORDER BY id DESC
+         LIMIT 1"
+    );
+    sqlx::query_as(&sql)
+        .bind(user_id)
+        .bind(hint)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or(ApiError::NotFound)
+}
+
+/// Resolve the `{id}` path segment: like Canvas, a 5-character value is a
+/// `token_hint`, anything else is the database id.
+async fn fetch_personal_token(
+    pool: &PgPool,
+    user_id: i64,
+    id_or_hint: &str,
+) -> Result<PersonalAccessToken, ApiError> {
+    if id_or_hint.len() == TOKEN_HINT_LENGTH {
+        fetch_personal_token_by_hint(pool, user_id, id_or_hint).await
+    } else {
+        let id: i64 = id_or_hint.parse().map_err(|_| ApiError::NotFound)?;
+        fetch_personal_token_by_id(pool, user_id, id).await
+    }
+}
+
+/// GET /tokens — list the current user's manually created access tokens.
+async fn list_personal_tokens(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Query(pag): Query<TokenPagination>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let (per_page, offset) = pag.resolve();
+    let sql = format!(
+        "{PERSONAL_TOKEN_SELECT}
+         WHERE user_id = $1 AND developer_key_id IS NULL
+           AND workflow_state <> 'deleted'
+         ORDER BY created_at ASC, id ASC
+         LIMIT $2 OFFSET $3"
+    );
+    let tokens: Vec<PersonalAccessToken> = sqlx::query_as(&sql)
+        .bind(auth.id)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(&app.db)
+        .await?;
+
+    Ok(Json(serde_json::Value::Array(
+        tokens
+            .iter()
+            .map(|token| personal_token_json(token, None))
+            .collect(),
+    )))
+}
+
+/// POST /tokens — create a personal access token for the current user.
+///
+/// The full token value is returned exactly once, in `visible_token`.
+async fn create_personal_token(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Response, ApiError> {
+    let raw = body.get("token").cloned().unwrap_or(body);
+    let params: TokenParams = serde_json::from_value(raw)
+        .map_err(|e| ApiError::BadRequest(format!("invalid token: {e}")))?;
+
+    let Some(purpose) = params
+        .purpose
+        .as_deref()
+        .map(str::trim)
+        .filter(|purpose| !purpose.is_empty())
+    else {
+        return Ok(token_error("token[purpose] is missing"));
+    };
+
+    let expires_at = match parse_token_expires_at(
+        params
+            .expires_at
+            .as_deref()
+            .or(params.permanent_expires_at.as_deref()),
+    ) {
+        Ok(expires_at) => expires_at,
+        Err(message) => return Ok(token_error(message)),
+    };
+
+    let scopes = params.scopes.map(StringList::into_vec).unwrap_or_default();
+    let token = generate_opaque_token(32);
+    let hint = token_hint(&token);
+
+    let id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO access_tokens
+            (user_id, developer_key_id, token, token_hint, purpose, scopes,
+             permanent_expires_at, remember_access, workflow_state)
+        VALUES ($1, NULL, $2, $3, $4, $5, $6, FALSE, 'active')
+        RETURNING id
+        "#,
+    )
+    .bind(auth.id)
+    .bind(&token)
+    .bind(&hint)
+    .bind(purpose)
+    .bind(scopes)
+    .bind(expires_at)
+    .fetch_one(&app.db)
+    .await?;
+
+    let row = fetch_personal_token_by_id(&app.db, auth.id, id).await?;
+    Ok((
+        StatusCode::OK,
+        Json(personal_token_json(&row, Some(token.as_str()))),
+    )
+        .into_response())
+}
+
+/// GET /tokens/{id} — show one of the current user's tokens (id or hint).
+async fn show_personal_token(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Path(id_or_hint): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let token = fetch_personal_token(&app.db, auth.id, &id_or_hint).await?;
+    Ok(Json(personal_token_json(&token, None)))
+}
+
+/// DELETE /tokens/{id} — soft delete one of the current user's tokens.
+async fn destroy_personal_token(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Path(id_or_hint): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let mut token = fetch_personal_token(&app.db, auth.id, &id_or_hint).await?;
+
+    sqlx::query(
+        "UPDATE access_tokens SET workflow_state = 'deleted', updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(token.id)
+    .execute(&app.db)
+    .await?;
+
+    token.workflow_state = "deleted".to_string();
+    token.updated_at = Utc::now();
+    Ok(Json(personal_token_json(&token, None)))
 }
 
 // ---------------------------------------------------------------------------
@@ -1080,6 +1399,33 @@ mod tests {
         assert!(!secrets_match("abc", "abcd"));
         assert!(!secrets_match("", "x"));
         assert!(secrets_match("", ""));
+    }
+
+    // -- Personal access token helpers --------------------------------------
+
+    #[test]
+    fn test_personal_token_hint_and_expiration_parsing() {
+        // Canvas token_hint is the first 5 characters of the token.
+        assert_eq!(token_hint("abcdef0123456789"), "abcde");
+        assert_eq!(token_hint("abc"), "abc");
+
+        // RFC3339 timestamps (the documented form).
+        let expected = DateTime::parse_from_rfc3339("2030-01-02T03:04:05Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        assert_eq!(
+            parse_token_expires_at(Some("2030-01-02T03:04:05Z"))
+                .unwrap()
+                .unwrap(),
+            expected
+        );
+        // Date-only values mean midnight UTC, like Canvas Time.zone.parse.
+        let date_only = parse_token_expires_at(Some("2030-01-02")).unwrap().unwrap();
+        assert_eq!(date_only.to_rfc3339(), "2030-01-02T00:00:00+00:00");
+        // Absent/blank means "no expiration"; garbage is rejected.
+        assert_eq!(parse_token_expires_at(None).unwrap(), None);
+        assert_eq!(parse_token_expires_at(Some("   ")).unwrap(), None);
+        assert!(parse_token_expires_at(Some("next tuesday")).is_err());
     }
 
     // -- Extractor: verified token + DB-sourced role (needs DATABASE_URL) ----
