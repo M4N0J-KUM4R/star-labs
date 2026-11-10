@@ -9,15 +9,20 @@
 //! - GET, POST /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments
 //! - DELETE    /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
 //!
+//! Comment read state (Canvas mark-read parity):
+//! - PUT /submissions/{submissionId}/comments/read → 204, marks the thread read
+//! - GET /submissions/{submissionId}/comments/unread_count → { "unread_count": n }
+//!
 //! Access control (Canvas-style):
 //! - POST: course teacher/admin OR the submission's own student
 //! - GET:  course teacher/admin OR the submission's own student
 //! - DELETE: author of the comment or admin
+//! - read state: same audience as GET (teacher/admin or own student)
 
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -46,6 +51,12 @@ pub struct SubmissionComment {
 #[derive(Debug, Deserialize)]
 pub struct CreateComment {
     pub comment: String,
+}
+
+/// Unread comment count response (Canvas `unread_count` shape).
+#[derive(Debug, Clone, Serialize)]
+pub struct UnreadCount {
+    pub unread_count: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -208,6 +219,26 @@ async fn create_comment_for(
     Ok((StatusCode::CREATED, Json(row)))
 }
 
+/// Verify the submission exists and the caller may read/post its comments.
+/// 404 when the submission is missing, 403 when access is denied.
+async fn authorize_comment_thread(
+    state: &AppState,
+    submission_id: i64,
+    auth: &AuthUser,
+) -> Result<(), ApiError> {
+    // Verify the submission exists (404 if not)
+    let _course_id = get_course_id_for_submission(&state.db, submission_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    // Access check
+    if !check_can_view_or_comment(&state.db, auth.id, submission_id, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    Ok(())
+}
+
 /// POST /submissions/{submissionId}/comments
 async fn create_comment(
     State(state): State<AppState>,
@@ -335,6 +366,97 @@ async fn delete_comment_nested(
 }
 
 // ---------------------------------------------------------------------------
+// Comment read state
+// ---------------------------------------------------------------------------
+
+/// Mark the whole comment thread read for the caller (Canvas mark-read parity).
+/// Stores the highest active comment id at mark time, so later comments count
+/// as unread again.
+async fn mark_comments_read_for(
+    state: &AppState,
+    submission_id: i64,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    authorize_comment_thread(state, submission_id, &auth).await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO submission_comment_reads
+            (submission_id, user_id, last_read_comment_id, read_at, updated_at)
+        VALUES (
+            $1,
+            $2,
+            (SELECT MAX(id) FROM submission_comments
+              WHERE submission_id = $1 AND workflow_state = 'active'),
+            now(),
+            now()
+        )
+        ON CONFLICT (submission_id, user_id) DO UPDATE
+        SET last_read_comment_id = EXCLUDED.last_read_comment_id,
+            read_at = now(),
+            updated_at = now()
+        "#,
+    )
+    .bind(submission_id)
+    .bind(auth.id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// PUT /submissions/{submissionId}/comments/read
+async fn mark_comments_read(
+    State(state): State<AppState>,
+    Path(submission_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    mark_comments_read_for(&state, submission_id, auth).await
+}
+
+/// Count unread comments for the caller: active comments authored by someone
+/// else with an id greater than the last read marker (all when never read).
+/// Comments the caller wrote never count as unread (Canvas parity).
+async fn unread_count_for(
+    state: &AppState,
+    submission_id: i64,
+    auth: &AuthUser,
+) -> Result<Json<UnreadCount>, ApiError> {
+    authorize_comment_thread(state, submission_id, auth).await?;
+
+    let (unread_count,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM submission_comments c
+        WHERE c.submission_id = $1
+          AND c.workflow_state = 'active'
+          AND c.author_id <> $2
+          AND c.id > COALESCE(
+              (SELECT r.last_read_comment_id
+                 FROM submission_comment_reads r
+                WHERE r.submission_id = $1 AND r.user_id = $2),
+              0
+          )
+        "#,
+    )
+    .bind(submission_id)
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(UnreadCount { unread_count }))
+}
+
+/// GET /submissions/{submissionId}/comments/unread_count
+async fn comments_unread_count(
+    State(state): State<AppState>,
+    Path(submission_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<UnreadCount>, ApiError> {
+    unread_count_for(&state, submission_id, &auth).await
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -345,6 +467,15 @@ pub fn router() -> Router<AppState> {
         .route(
             "/submissions/{submissionId}/comments/{commentId}",
             delete(delete_comment),
+        )
+        // Comment read state
+        .route(
+            "/submissions/{submissionId}/comments/read",
+            put(mark_comments_read),
+        )
+        .route(
+            "/submissions/{submissionId}/comments/unread_count",
+            get(comments_unread_count),
         )
         // Canvas nested aliases — resolve submission by course/assignment/user
         .route(
