@@ -21,10 +21,19 @@
 //!   get a " 2", " 3", ... suffix (Canvas prevent_duplicate_name)
 //! - DELETE soft-deletes (workflow_state = 'deleted') and refuses the root
 //!   folder or a non-empty folder unless force=true
+//!
+//! Mixed listings (migration 0061):
+//! - GET /courses/{courseId}/folders_and_files and GET /folders/{id}/all mirror
+//!   Canvas list_all_folders_and_files / list_folders_and_files: folders first,
+//!   then files, one page window across both, X-Total-Items header, Canvas
+//!   attachment_json/folder_json item shapes.
+//! - GET /courses/{courseId}/files/quota (and /files/quota?course_id=) mirror
+//!   Canvas files#api_quota: `{ quota, quota_used }` from courses.storage_quota
+//!   with the 50 MB default and 512-byte per-file minimum.
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header::HeaderName, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
@@ -46,6 +55,12 @@ const COURSE_ROOT_FOLDER_NAME: &str = "course files";
 const UNFILED_FOLDER_NAME: &str = "unfiled";
 /// Canvas fallback when the folder name is blank (infer_full_name).
 const DEFAULT_FOLDER_NAME: &str = "New Folder";
+/// Canvas Attachment::CONTEXT_DEFAULT_QUOTA (50 decimal megabytes).
+const DEFAULT_STORAGE_QUOTA: i64 = 50_000_000;
+/// Canvas Attachment::MINIMUM_SIZE_FOR_QUOTA.
+const MINIMUM_SIZE_FOR_QUOTA: i64 = 512;
+/// Canvas folders_and_files pagination default (Api.per_page default: 25).
+const MIXED_LIST_PER_PAGE: i64 = 25;
 
 // ─── auth helpers ───────────────────────────────────────────────────────────
 
@@ -164,6 +179,159 @@ fn pagination(page: Option<i64>, per_page: Option<i64>) -> (i64, i64) {
     let page = page.unwrap_or(1).max(1);
     let per_page = per_page.unwrap_or(20).clamp(1, 100);
     (per_page, (page - 1) * per_page)
+}
+
+// ─── folders_and_files (mixed listing) helpers ─────────────────────────────
+
+/// Sortable columns accepted by the Canvas folders_and_files listing
+/// (`sort`/`sort_by` + `order` params).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SortField {
+    Name,
+    CreatedAt,
+    UpdatedAt,
+    Size,
+}
+
+fn parse_sort_field(raw: Option<&str>) -> SortField {
+    match raw.unwrap_or("").to_ascii_lowercase().as_str() {
+        "created_at" => SortField::CreatedAt,
+        "updated_at" => SortField::UpdatedAt,
+        "size" => SortField::Size,
+        _ => SortField::Name,
+    }
+}
+
+fn sort_is_desc(raw: Option<&str>) -> bool {
+    raw.map(|order| order.eq_ignore_ascii_case("desc"))
+        .unwrap_or(false)
+}
+
+/// Folder ORDER BY clause. Folders have no size, so `size` falls back to name
+/// (Canvas folder_column_map has no size column either).
+fn folder_order_clause(sort: SortField, desc: bool) -> String {
+    let dir = if desc { "DESC" } else { "ASC" };
+    let column = match sort {
+        SortField::CreatedAt => "f.created_at",
+        SortField::UpdatedAt => "f.updated_at",
+        SortField::Name | SortField::Size => "f.name",
+    };
+    format!(" ORDER BY {column} {dir}, f.id {dir}")
+}
+
+/// File ORDER BY clause (Canvas file_column_map: display_name is "name").
+fn file_order_clause(sort: SortField, desc: bool) -> String {
+    let dir = if desc { "DESC" } else { "ASC" };
+    let column = match sort {
+        SortField::CreatedAt => "f.created_at",
+        SortField::UpdatedAt => "f.updated_at",
+        SortField::Size => "f.size",
+        SortField::Name => "f.display_name",
+    };
+    format!(" ORDER BY {column} {dir}, f.id {dir}")
+}
+
+/// Page window over the concatenated folders-then-files collection
+/// (Canvas paginated_folders_and_files_collection).
+#[derive(Debug, PartialEq, Eq)]
+struct PageWindow {
+    folder_limit: i64,
+    folder_offset: i64,
+    file_limit: i64,
+    file_offset: i64,
+}
+
+fn combined_page_window(folder_total: i64, per_page: i64, offset: i64) -> PageWindow {
+    let folder_total = folder_total.max(0);
+    let per_page = per_page.max(0);
+    let offset = offset.max(0);
+    if offset >= folder_total {
+        PageWindow {
+            folder_limit: 0,
+            folder_offset: 0,
+            file_limit: per_page,
+            file_offset: offset - folder_total,
+        }
+    } else {
+        let folder_limit = per_page.min(folder_total - offset);
+        PageWindow {
+            folder_limit,
+            folder_offset: offset,
+            file_limit: per_page - folder_limit,
+            file_offset: 0,
+        }
+    }
+}
+
+// ─── attachment_json helpers ───────────────────────────────────────────────
+
+/// Canvas Attachment.mime_class (app/models/attachment.rb): strip MIME
+/// parameters, look up the Canvas type table, then fall back to content-type
+/// prefixes and finally "file".
+fn mime_class(content_type: &str) -> &'static str {
+    let base = content_type
+        .split(';')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match base.as_str() {
+        "text/html" => "html",
+        "text/x-csharp" | "text/xml" | "text/css" | "application/xml" => "code",
+        "text" | "text/plain" => "text",
+        "application/rtf"
+        | "text/rtf"
+        | "application/vnd.oasis.opendocument.text"
+        | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        | "application/vnd.apple.pages"
+        | "application/x-docx"
+        | "application/msword" => "doc",
+        "application/pdf" => "pdf",
+        "application/vnd.ms-powerpoint"
+        | "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        | "applicatoin/vnd.apple.key" => "ppt",
+        "application/vnd.ms-excel"
+        | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        | "application/vnd.apple.numbers"
+        | "application/vnd.oasis.opendocument.spreadsheet" => "xls",
+        "image/jpeg"
+        | "image/pjpeg"
+        | "image/png"
+        | "image/gif"
+        | "image/bmp"
+        | "image/svg+xml"
+        | "image/webp"
+        | "image/vnd.microsoft.icon" => "image",
+        "application/x-rar"
+        | "application/x-rar-compressed"
+        | "application/x-zip"
+        | "application/x-zip-compressed"
+        | "application/zip" => "zip",
+        _ if base.starts_with("audio/") => "audio",
+        _ if base.starts_with("video/") => "video",
+        _ if base.starts_with("image/") => "image",
+        _ if base.starts_with("text/") => "text",
+        _ => "file",
+    }
+}
+
+/// Canvas Attachment.get_quota: a context quota of `nil` becomes the 50 MB
+/// default; an explicit 0 stays 0 (Ruby truthiness).
+fn effective_quota(storage_quota: Option<i64>) -> i64 {
+    storage_quota.unwrap_or(DEFAULT_STORAGE_QUOTA)
+}
+
+/// Canvas Attachment.get_quota sums `max(size, MINIMUM_SIZE_FOR_QUOTA)`.
+#[cfg(test)]
+fn quota_used(sizes: &[i64]) -> i64 {
+    sizes
+        .iter()
+        .map(|size| (*size).max(MINIMUM_SIZE_FOR_QUOTA))
+        .sum()
+}
+
+fn item_json<T: Serialize>(value: T) -> Result<serde_json::Value, ApiError> {
+    serde_json::to_value(value).map_err(|e| ApiError::Db(format!("serialize: {e}")))
 }
 
 /// Canvas-shaped error body for folder API conflicts (`{"message": ...}`).
@@ -311,6 +479,7 @@ pub struct FolderResponse {
     pub updated_at: DateTime<Utc>,
     pub category: Option<String>,
     pub locked: bool,
+    pub all_url: String,
     pub folders_url: String,
     pub files_url: String,
     pub files_count: i64,
@@ -322,6 +491,71 @@ pub struct FolderResponse {
     pub can_upload: bool,
 }
 
+/// Query params for the Canvas folders_and_files listings
+/// (GET /courses/{courseId}/folders_and_files and GET /folders/{id}/all).
+#[derive(Debug, Deserialize)]
+pub struct FoldersAndFilesQuery {
+    page: Option<i64>,
+    per_page: Option<i64>,
+    /// Canvas uses `sort`; accept `sort_by` too for consistency with folders.
+    sort: Option<String>,
+    sort_by: Option<String>,
+    order: Option<String>,
+    search_term: Option<String>,
+}
+
+/// Canvas attachment_json shape (lib/api/v1/attachment.rb).
+///
+/// Metadata only — `url`/`thumbnail_url` are empty because no binary storage
+/// exists. Both `content-type` (Canvas key) and `content_type` (star-lms
+/// convention) are emitted so existing clients keep working.
+#[derive(Debug, Serialize)]
+pub struct AttachmentResponse {
+    pub id: i64,
+    pub uuid: Option<String>,
+    pub folder_id: Option<i64>,
+    pub display_name: String,
+    pub filename: String,
+    pub upload_status: String,
+    #[serde(rename = "content-type")]
+    pub content_type: String,
+    #[serde(rename = "content_type")]
+    pub content_type_compat: String,
+    pub url: String,
+    pub size: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub unlock_at: Option<DateTime<Utc>>,
+    pub locked: bool,
+    pub hidden: bool,
+    pub lock_at: Option<DateTime<Utc>>,
+    pub hidden_for_user: bool,
+    pub locked_for_user: bool,
+    pub thumbnail_url: String,
+    pub modified_at: DateTime<Utc>,
+    pub mime_class: String,
+    pub media_entry_id: Option<String>,
+    pub category: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visibility_level: Option<String>,
+    /// star-lms extensions kept for parity with the existing files API.
+    pub course_id: i64,
+    pub folder: String,
+}
+
+/// Query params for GET /files/quota (shorthand; course_id in the query).
+#[derive(Debug, Deserialize)]
+pub struct QuotaQuery {
+    course_id: Option<i64>,
+}
+
+/// Canvas files#api_quota response: `{ quota, quota_used }`.
+#[derive(Debug, Serialize)]
+pub struct QuotaResponse {
+    pub quota: i64,
+    pub quota_used: i64,
+}
+
 // ─── router ────────────────────────────────────────────────────────────────
 
 /// Build the files router.
@@ -329,6 +563,11 @@ pub fn router() -> axum::Router<AppState> {
     Router::new()
         .route("/courses/{courseId}/files", get(list_course_files))
         .route("/courses/{courseId}/files", post(create_file))
+        .route(
+            "/courses/{courseId}/files/quota",
+            get(get_course_files_quota),
+        )
+        .route("/files/quota", get(get_files_quota))
         .route("/files/{id}", get(get_file))
         .route("/files/{id}", delete(delete_file))
         // Canvas folders API (lib/api/v1/folders + FoldersController).
@@ -340,6 +579,11 @@ pub fn router() -> axum::Router<AppState> {
         .route("/folders/{id}/folders", get(list_folder_children))
         .route("/folders/{id}/folders", post(create_subfolder))
         .route("/folders/{id}/files", get(list_folder_files))
+        .route("/folders/{id}/all", get(list_folder_all))
+        .route(
+            "/courses/{courseId}/folders_and_files",
+            get(list_course_folders_and_files),
+        )
         .route("/courses/{courseId}/folders", get(list_course_folders))
         .route("/courses/{courseId}/folders", post(create_course_folder))
         .route(
@@ -1083,6 +1327,183 @@ async fn delete_folder(
     Ok(Json(FolderResponse::from_row(folder, true)).into_response())
 }
 
+// ─── folders_and_files + quota handlers ────────────────────────────────────
+
+/// GET /courses/{courseId}/folders_and_files — Canvas internal API
+/// (FoldersController#list_all_folders_and_files): a flat, paginated listing
+/// of every course folder followed by every course file, with X-Total-Items.
+async fn list_course_folders_and_files(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    Query(params): Query<FoldersAndFilesQuery>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+    let allowed =
+        can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+    folders_and_files_response(&state.db, course_id, None, can_manage, &params).await
+}
+
+/// GET /folders/{id}/all — Canvas FoldersController#list_folders_and_files:
+/// mixed listing of one folder's subfolders (then its files).
+async fn list_folder_all(
+    State(state): State<AppState>,
+    Path(folder_id): Path<i64>,
+    Query(params): Query<FoldersAndFilesQuery>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    let folder = fetch_folder(&state.db, folder_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let course_id = folder_course_id(&folder)?;
+
+    let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+    let allowed =
+        can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+    folders_and_files_response(&state.db, course_id, Some(folder.id), can_manage, &params).await
+}
+
+/// Build the Canvas folders_and_files body: folders sort before files, the
+/// page window spans the concatenation, and X-Total-Items reports both counts.
+async fn folders_and_files_response(
+    db: &PgPool,
+    course_id: i64,
+    folder_id: Option<i64>,
+    can_manage: bool,
+    params: &FoldersAndFilesQuery,
+) -> Result<Response, ApiError> {
+    let per_page = params.per_page.unwrap_or(MIXED_LIST_PER_PAGE).clamp(1, 100);
+    let offset = (params.page.unwrap_or(1).max(1) - 1) * per_page;
+    let sort = parse_sort_field(params.sort.as_deref().or(params.sort_by.as_deref()));
+    let desc = sort_is_desc(params.order.as_deref());
+    let search = params
+        .search_term
+        .as_deref()
+        .map(str::trim)
+        .filter(|term| !term.is_empty());
+
+    let folder_filter = FolderFilter {
+        course_id,
+        parent_id: folder_id,
+        can_manage,
+        search,
+    };
+    let attachment_filter = AttachmentFilter {
+        course_id,
+        folder_id,
+        can_manage,
+        search,
+    };
+
+    let folder_total = count_folders_for_listing(db, &folder_filter).await?;
+    let file_total = count_attachments_for_listing(db, &attachment_filter).await?;
+    let window = combined_page_window(folder_total, per_page, offset);
+
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    if window.folder_limit > 0 {
+        let rows = fetch_folders_for_listing(
+            db,
+            &folder_filter,
+            sort,
+            desc,
+            window.folder_limit,
+            window.folder_offset,
+        )
+        .await?;
+        for row in rows {
+            items.push(item_json(FolderResponse::from_row(row, can_manage))?);
+        }
+    }
+    if window.file_limit > 0 {
+        let rows = fetch_attachments_for_listing(
+            db,
+            &attachment_filter,
+            sort,
+            desc,
+            window.file_limit,
+            window.file_offset,
+        )
+        .await?;
+        for row in rows {
+            items.push(item_json(AttachmentResponse::from_row(row, can_manage))?);
+        }
+    }
+
+    let total = folder_total + file_total;
+    let mut response = Json(items).into_response();
+    if let Ok(value) = HeaderValue::from_bytes(total.to_string().as_bytes()) {
+        response
+            .headers_mut()
+            .insert(HeaderName::from_static("x-total-items"), value);
+    }
+    Ok(response)
+}
+
+/// GET /courses/{courseId}/files/quota — Canvas files#api_quota.
+async fn get_course_files_quota(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<QuotaResponse>, ApiError> {
+    files_quota(&state, course_id, &auth).await
+}
+
+/// GET /files/quota?course_id=... — shorthand for the Canvas context route.
+async fn get_files_quota(
+    State(state): State<AppState>,
+    Query(params): Query<QuotaQuery>,
+    auth: AuthUser,
+) -> Result<Json<QuotaResponse>, ApiError> {
+    let course_id = params
+        .course_id
+        .ok_or_else(|| ApiError::BadRequest("course_id is required".into()))?;
+    files_quota(&state, course_id, &auth).await
+}
+
+/// Canvas Attachment.get_quota: quota = course.storage_quota (50 MB default),
+/// quota_used = sum(max(size, 512)) over active files.
+async fn files_quota(
+    state: &AppState,
+    course_id: i64,
+    auth: &AuthUser,
+) -> Result<Json<QuotaResponse>, ApiError> {
+    let storage_quota: Option<Option<i64>> =
+        sqlx::query_scalar("SELECT storage_quota FROM courses WHERE id = $1")
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let storage_quota = storage_quota.ok_or(ApiError::NotFound)?;
+
+    // Canvas api_quota requires the file create/update/delete rights.
+    let allowed = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    let (used,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COALESCE(SUM(GREATEST(size, $2)), 0)::bigint
+        FROM files
+        WHERE course_id = $1 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(course_id)
+    .bind(MINIMUM_SIZE_FOR_QUOTA)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(QuotaResponse {
+        quota: effective_quota(storage_quota),
+        quota_used: used,
+    }))
+}
+
 // ─── folder DB helpers ─────────────────────────────────────────────────────
 
 /// Raw folders row with file/subfolder counts (column order matches queries).
@@ -1114,6 +1535,22 @@ SELECT f.id, f.name, f.full_name, f.context_type, f.context_id,
        (SELECT count(*) FROM files fi WHERE fi.folder_id = f.id) AS files_count,
        (SELECT count(*) FROM folders sf
          WHERE sf.parent_folder_id = f.id AND sf.workflow_state <> 'deleted') AS folders_count
+FROM folders f
+"#;
+
+/// Canvas folder_json counts for viewers without file-management rights:
+/// hidden/locked children are excluded from files_count/folders_count.
+const FOLDER_SELECT_VISIBLE: &str = r#"
+SELECT f.id, f.name, f.full_name, f.context_type, f.context_id,
+       f.parent_folder_id, f.workflow_state, f.position, f.locked,
+       f.lock_at, f.unlock_at, f.for_submissions,
+       f.created_at, f.updated_at,
+       (SELECT count(*) FROM files fi
+         WHERE fi.folder_id = f.id AND fi.hidden = FALSE AND fi.locked = FALSE
+           AND (fi.lock_at IS NULL OR fi.lock_at > now())) AS files_count,
+       (SELECT count(*) FROM folders sf
+         WHERE sf.parent_folder_id = f.id AND sf.workflow_state = 'visible'
+           AND sf.locked = FALSE) AS folders_count
 FROM folders f
 "#;
 
@@ -1418,6 +1855,157 @@ async fn soft_delete_folder_tree(db: &PgPool, folder_id: i64) -> Result<(), ApiE
     Ok(())
 }
 
+// ─── folders_and_files DB helpers ──────────────────────────────────────────
+
+/// Scope for the folders side of a folders_and_files listing.
+struct FolderFilter<'a> {
+    course_id: i64,
+    parent_id: Option<i64>,
+    can_manage: bool,
+    search: Option<&'a str>,
+}
+
+/// Scope for the files side of a folders_and_files listing.
+struct AttachmentFilter<'a> {
+    course_id: i64,
+    folder_id: Option<i64>,
+    can_manage: bool,
+    search: Option<&'a str>,
+}
+
+/// Canvas folder_index_scope: active folders in the context (or under one
+/// parent), with hidden/locked folders excluded for viewers who cannot manage
+/// files. Returns the WHERE clause plus the next free bind index.
+fn folder_filter_where(filter: &FolderFilter, start_index: u32) -> (String, u32) {
+    let mut index = start_index;
+    let mut sql =
+        String::from(" WHERE f.context_type = 'Course' AND f.workflow_state <> 'deleted'");
+    sql.push_str(&format!(" AND f.context_id = ${index}"));
+    index += 1;
+    if filter.parent_id.is_some() {
+        sql.push_str(&format!(" AND f.parent_folder_id = ${index}"));
+        index += 1;
+    }
+    if !filter.can_manage {
+        sql.push_str(
+            " AND f.workflow_state <> 'hidden' AND f.locked = FALSE \
+             AND (f.lock_at IS NULL OR f.lock_at > now() \
+                  OR (f.unlock_at IS NOT NULL AND f.unlock_at < now()))",
+        );
+    }
+    if filter.search.is_some() {
+        sql.push_str(&format!(" AND f.name ILIKE '%' || ${index} || '%'"));
+        index += 1;
+    }
+    (sql, index)
+}
+
+/// Canvas file_index_scope: active files, with hidden files excluded for
+/// viewers who cannot manage files, plus an optional display_name search.
+fn attachment_filter_where(filter: &AttachmentFilter, start_index: u32) -> (String, u32) {
+    let mut index = start_index;
+    let mut sql = String::from(" WHERE f.workflow_state <> 'deleted'");
+    sql.push_str(&format!(" AND f.course_id = ${index}"));
+    index += 1;
+    if filter.folder_id.is_some() {
+        sql.push_str(&format!(" AND f.folder_id = ${index}"));
+        index += 1;
+    }
+    if !filter.can_manage {
+        sql.push_str(" AND f.hidden = FALSE");
+    }
+    if filter.search.is_some() {
+        sql.push_str(&format!(" AND f.display_name ILIKE '%' || ${index} || '%'"));
+        index += 1;
+    }
+    (sql, index)
+}
+
+async fn fetch_folders_for_listing(
+    db: &PgPool,
+    filter: &FolderFilter<'_>,
+    sort: SortField,
+    desc: bool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<FolderRow>, ApiError> {
+    let (mut where_clause, next) = folder_filter_where(filter, 1);
+    where_clause.push_str(&folder_order_clause(sort, desc));
+    where_clause.push_str(&format!(" LIMIT ${next} OFFSET ${}", next + 1));
+    let select = if filter.can_manage {
+        FOLDER_SELECT
+    } else {
+        FOLDER_SELECT_VISIBLE
+    };
+    let sql = format!("{select}{where_clause}");
+
+    let mut query = sqlx::query_as::<_, FolderRow>(&sql).bind(filter.course_id);
+    if let Some(parent_id) = filter.parent_id {
+        query = query.bind(parent_id);
+    }
+    if let Some(search) = filter.search {
+        query = query.bind(search);
+    }
+    Ok(query.bind(limit).bind(offset).fetch_all(db).await?)
+}
+
+async fn count_folders_for_listing(
+    db: &PgPool,
+    filter: &FolderFilter<'_>,
+) -> Result<i64, ApiError> {
+    let (where_clause, _) = folder_filter_where(filter, 1);
+    let sql = format!("SELECT count(*) FROM folders f{where_clause}");
+
+    let mut query = sqlx::query_scalar::<_, i64>(&sql).bind(filter.course_id);
+    if let Some(parent_id) = filter.parent_id {
+        query = query.bind(parent_id);
+    }
+    if let Some(search) = filter.search {
+        query = query.bind(search);
+    }
+    Ok(query.fetch_one(db).await?)
+}
+
+async fn fetch_attachments_for_listing(
+    db: &PgPool,
+    filter: &AttachmentFilter<'_>,
+    sort: SortField,
+    desc: bool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<AttachmentRow>, ApiError> {
+    let (mut where_clause, next) = attachment_filter_where(filter, 1);
+    where_clause.push_str(&file_order_clause(sort, desc));
+    where_clause.push_str(&format!(" LIMIT ${next} OFFSET ${}", next + 1));
+    let sql = format!("{ATTACHMENT_SELECT}{where_clause}");
+
+    let mut query = sqlx::query_as::<_, AttachmentRow>(&sql).bind(filter.course_id);
+    if let Some(folder_id) = filter.folder_id {
+        query = query.bind(folder_id);
+    }
+    if let Some(search) = filter.search {
+        query = query.bind(search);
+    }
+    Ok(query.bind(limit).bind(offset).fetch_all(db).await?)
+}
+
+async fn count_attachments_for_listing(
+    db: &PgPool,
+    filter: &AttachmentFilter<'_>,
+) -> Result<i64, ApiError> {
+    let (where_clause, _) = attachment_filter_where(filter, 1);
+    let sql = format!("SELECT count(*) FROM files f{where_clause}");
+
+    let mut query = sqlx::query_scalar::<_, i64>(&sql).bind(filter.course_id);
+    if let Some(folder_id) = filter.folder_id {
+        query = query.bind(folder_id);
+    }
+    if let Some(search) = filter.search {
+        query = query.bind(search);
+    }
+    Ok(query.fetch_one(db).await?)
+}
+
 // ─── row type ─────────────────────────────────────────────────────────────
 
 /// Raw files row as selected from the DB (column order matches every SELECT above).
@@ -1452,6 +2040,79 @@ impl From<FileRow> for FileResponse {
     }
 }
 
+/// Raw files row for the attachment_json listing (column order must match
+/// ATTACHMENT_SELECT).
+#[derive(Debug, sqlx::FromRow)]
+struct AttachmentRow {
+    id: i64,
+    course_id: i64,
+    folder_id: Option<i64>,
+    folder: String,
+    filename: String,
+    display_name: String,
+    content_type: String,
+    size: i64,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    uuid: Option<String>,
+    hidden: bool,
+    locked: bool,
+    lock_at: Option<DateTime<Utc>>,
+    unlock_at: Option<DateTime<Utc>>,
+    modified_at: DateTime<Utc>,
+    category: Option<String>,
+    visibility_level: Option<String>,
+}
+
+const ATTACHMENT_SELECT: &str = r#"
+SELECT f.id, f.course_id, f.folder_id, f.folder, f.filename, f.display_name,
+       f.content_type, f.size, f.created_at, f.updated_at,
+       f.uuid, f.hidden, f.locked, f.lock_at, f.unlock_at,
+       COALESCE(f.modified_at, f.updated_at) AS modified_at,
+       f.category, f.visibility_level
+FROM files f
+"#;
+
+impl AttachmentResponse {
+    fn from_row(row: AttachmentRow, can_manage: bool) -> Self {
+        let now = Utc::now();
+        let currently_locked = row.locked
+            || row.lock_at.map(|at| at <= now).unwrap_or(false)
+            || row.unlock_at.map(|at| at > now).unwrap_or(false)
+            || row.hidden;
+        let mime_class = mime_class(&row.content_type).to_string();
+        AttachmentResponse {
+            id: row.id,
+            uuid: row.uuid,
+            folder_id: row.folder_id,
+            display_name: row.display_name,
+            filename: row.filename,
+            upload_status: "success".to_string(),
+            content_type: row.content_type.clone(),
+            content_type_compat: row.content_type,
+            // Metadata-only: no binary storage, so no download/thumbnail URL.
+            url: String::new(),
+            size: row.size,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            unlock_at: row.unlock_at,
+            locked: row.locked,
+            hidden: row.hidden,
+            lock_at: row.lock_at,
+            hidden_for_user: !can_manage && row.hidden,
+            locked_for_user: !can_manage && currently_locked,
+            thumbnail_url: String::new(),
+            modified_at: row.modified_at,
+            mime_class,
+            media_entry_id: None,
+            category: row.category,
+            visibility_level: row.visibility_level,
+            course_id: row.course_id,
+            folder: row.folder,
+        }
+    }
+}
+
 impl FolderResponse {
     fn from_row(row: FolderRow, can_manage: bool) -> Self {
         let now = Utc::now();
@@ -1475,6 +2136,7 @@ impl FolderResponse {
             updated_at: row.updated_at,
             category: None,
             locked: row.locked,
+            all_url: format!("/api/v1/folders/{}/all", row.id),
             folders_url: format!("/api/v1/folders/{}/folders", row.id),
             files_url: format!("/api/v1/folders/{}/files", row.id),
             files_count: row.files_count,
@@ -1552,6 +2214,7 @@ mod tests {
         assert!(student.hidden_for_user);
         assert!(student.locked_for_user);
         assert!(!student.can_upload);
+        assert_eq!(student.all_url, "/api/v1/folders/7/all");
         assert_eq!(student.folders_url, "/api/v1/folders/7/folders");
         assert_eq!(student.files_url, "/api/v1/folders/7/files");
     }
@@ -1569,5 +2232,110 @@ mod tests {
         assert_eq!(root_folder_name_for_context("Course"), "course files");
         assert_eq!(root_folder_name_for_context("User"), "my files");
         assert_eq!(root_folder_name_for_context("Group"), "files");
+    }
+
+    #[test]
+    fn mime_class_matches_canvas_mapping() {
+        // Canvas Attachment.mime_class: strip parameters, map known types,
+        // fall back to content-type prefix and finally "file".
+        assert_eq!(mime_class("image/png"), "image");
+        assert_eq!(mime_class("application/pdf"), "pdf");
+        assert_eq!(mime_class("text/plain; charset=utf-8"), "text");
+        assert_eq!(mime_class("audio/mpeg"), "audio");
+        assert_eq!(mime_class("video/mp4"), "video");
+        assert_eq!(mime_class("application/zip"), "zip");
+        assert_eq!(mime_class("application/octet-stream"), "file");
+    }
+
+    #[test]
+    fn combined_page_window_orders_folders_before_files() {
+        // Folders first, files after; the page window spans the concatenation
+        // (Canvas paginated_folders_and_files_collection).
+        assert_eq!(
+            combined_page_window(2, 5, 0),
+            PageWindow {
+                folder_limit: 2,
+                folder_offset: 0,
+                file_limit: 3,
+                file_offset: 0,
+            }
+        );
+        assert_eq!(
+            combined_page_window(2, 5, 5),
+            PageWindow {
+                folder_limit: 0,
+                folder_offset: 0,
+                file_limit: 5,
+                file_offset: 3,
+            }
+        );
+        assert_eq!(
+            combined_page_window(10, 4, 2),
+            PageWindow {
+                folder_limit: 4,
+                folder_offset: 2,
+                file_limit: 0,
+                file_offset: 0,
+            }
+        );
+        assert_eq!(
+            combined_page_window(0, 5, 0),
+            PageWindow {
+                folder_limit: 0,
+                folder_offset: 0,
+                file_limit: 5,
+                file_offset: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn quota_defaults_and_minimum_file_size_match_canvas() {
+        // Attachment::CONTEXT_DEFAULT_QUOTA is 50 MB; an explicit nil falls
+        // back, but Ruby truthiness keeps an explicit 0 at 0.
+        assert_eq!(effective_quota(None), 50_000_000);
+        assert_eq!(effective_quota(Some(0)), 0);
+        assert_eq!(effective_quota(Some(1_048_576)), 1_048_576);
+        // Attachment.get_quota counts at least 512 bytes per file.
+        assert_eq!(
+            quota_used(&[0, 100, 512, 10_000]),
+            MINIMUM_SIZE_FOR_QUOTA * 3 + 10_000
+        );
+    }
+
+    #[test]
+    fn attachment_json_uses_canvas_field_names() {
+        let now = Utc::now();
+        let row = AttachmentRow {
+            id: 5,
+            course_id: 42,
+            folder_id: Some(9),
+            folder: "course files/lectures".to_string(),
+            filename: "lecture-1.pdf".to_string(),
+            display_name: "Lecture 1.pdf".to_string(),
+            content_type: "application/pdf".to_string(),
+            size: 2048,
+            created_at: now,
+            updated_at: now,
+            uuid: Some("abc123".to_string()),
+            hidden: true,
+            locked: false,
+            lock_at: None,
+            unlock_at: None,
+            modified_at: now,
+            category: Some("teaching_materials".to_string()),
+            visibility_level: None,
+        };
+
+        let json = serde_json::to_value(AttachmentResponse::from_row(row, false)).unwrap();
+        assert_eq!(json["display_name"], "Lecture 1.pdf");
+        // Canvas key is hyphenated; the star-lms alias is kept beside it.
+        assert_eq!(json["content-type"], "application/pdf");
+        assert_eq!(json["content_type"], "application/pdf");
+        assert_eq!(json["mime_class"], "pdf");
+        assert_eq!(json["folder_id"].as_i64(), Some(9));
+        assert_eq!(json["upload_status"], "success");
+        assert_eq!(json["hidden_for_user"].as_bool(), Some(true));
+        assert_eq!(json["visibility_level"], serde_json::Value::Null);
     }
 }
