@@ -225,3 +225,106 @@ fn test_parity_deleted_conversation_hidden_from_list() {
         "deleted conversation hidden from list"
     );
 }
+
+#[test]
+#[ignore]
+fn test_parity_conversation_participants_add_recipients_and_read() {
+    if std::env::var("STAR_PARITY_TESTS").is_err() {
+        return;
+    }
+    wait_ready();
+
+    let client = reqwest::blocking::Client::new();
+
+    let (_email1, token1) = get_auth("conv_parity_part_1@example.com");
+    let (_email2, token2) = get_auth("conv_parity_part_2@example.com");
+
+    // Resolve user 2's id.
+    let resp = client
+        .get(format!("{}/users/self", API_BASE))
+        .header("Authorization", auth_header(&token2))
+        .send()
+        .expect("users/self failed");
+    let self_body: serde_json::Value = resp.json().expect("users/self JSON");
+    let user2_id = self_body["id"].as_i64().expect("user 2 id");
+
+    // User 1 creates a conversation with no recipients.
+    let resp = client
+        .post(format!("{}/conversations", API_BASE))
+        .header("Authorization", auth_header(&token1))
+        .json(&json!({
+            "recipients": [],
+            "subject": "Participants parity",
+            "body": "First message"
+        }))
+        .send()
+        .expect("create conversation failed");
+    assert_eq!(resp.status().as_u16(), 201);
+    let created: serde_json::Value = resp.json().expect("create JSON");
+    let conv_id = created["id"].as_i64().unwrap();
+
+    // GET participants returns Canvas user entries.
+    let resp = client
+        .get(format!(
+            "{}/conversations/{}/participants",
+            API_BASE, conv_id
+        ))
+        .header("Authorization", auth_header(&token1))
+        .send()
+        .expect("participants failed");
+    assert_eq!(resp.status().as_u16(), 200);
+    let participants: serde_json::Value = resp.json().expect("participants JSON");
+    let participants = participants.as_array().expect("participants array");
+    assert!(!participants.is_empty());
+    assert!(participants[0]["id"].is_number());
+    assert!(participants[0]["name"].is_string());
+    assert!(participants[0]["full_name"].is_string());
+
+    // Add user 2 as a recipient.
+    let resp = client
+        .post(format!(
+            "{}/conversations/{}/add_recipients",
+            API_BASE, conv_id
+        ))
+        .header("Authorization", auth_header(&token1))
+        .json(&json!({ "recipients": [user2_id] }))
+        .send()
+        .expect("add_recipients failed");
+    assert_eq!(resp.status().as_u16(), 200, "add_recipients returned 200");
+    let detail: serde_json::Value = resp.json().expect("add_recipients JSON");
+    let audience = detail["participants"].as_array().unwrap();
+    assert!(audience.iter().any(|id| id.as_i64() == Some(user2_id)));
+    assert_eq!(
+        detail["messages"].as_array().unwrap().len(),
+        1,
+        "only the latest message is returned"
+    );
+
+    // Empty recipients is a 400.
+    let resp = client
+        .post(format!(
+            "{}/conversations/{}/add_recipients",
+            API_BASE, conv_id
+        ))
+        .header("Authorization", auth_header(&token1))
+        .json(&json!({ "recipients": [] }))
+        .send()
+        .expect("add_recipients empty failed");
+    assert_eq!(resp.status().as_u16(), 400, "empty recipients returned 400");
+
+    // Mark the conversation read for user 2.
+    let resp = client
+        .put(format!("{}/conversations/{}/read", API_BASE, conv_id))
+        .header("Authorization", auth_header(&token2))
+        .send()
+        .expect("mark read failed");
+    assert_eq!(resp.status().as_u16(), 200, "read returned 200");
+
+    // User 2 is now a participant and sees the conversation.
+    let resp = client
+        .get(format!("{}/conversations/{}", API_BASE, conv_id))
+        .header("Authorization", auth_header(&token2))
+        .send()
+        .expect("get conversation as user 2 failed");
+    assert_eq!(resp.status().as_u16(), 200);
+}
