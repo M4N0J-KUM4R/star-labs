@@ -14,13 +14,25 @@
 //! This crate is a library only — there is no axum router. Domain crates and
 //! `star-http` call these helpers so the rules live in one place.
 //!
+//! Phase 3 adds the permission administration endpoints:
+//!
+//! * `GET/PUT /accounts/{accountId}/role_overrides`
+//! * `GET/PUT /courses/{courseId}/role_overrides`
+//!
+//! [`get_role_overrides`] and [`put_role_overrides`] carry the full endpoint
+//! behavior (context lookup, `manage_role_overrides` authorization, payload
+//! validation, upsert, Canvas-shaped rows), so the router only has to parse
+//! the path context and call them.
+//!
 //! Note: [`Role`] values are the star-lms role strings stored in
 //! `enrollments.role` ("student", "teacher", …); [`Role::canvas_enrollment_type`]
 //! returns the Canvas API spelling ("TeacherEnrollment", …).
 
+use std::collections::BTreeMap;
 use std::fmt;
 use std::str::FromStr;
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sqlx::PgPool;
 use star_common::ApiError;
@@ -378,6 +390,287 @@ pub async fn course_permission_enabled(
     resolve_role_override(db, account_id, role.builtin_role_id(), permission).await
 }
 
+// ---------------------------------------------------------------------------
+// Role override administration endpoints
+// ---------------------------------------------------------------------------
+
+/// Polymorphic `role_overrides.context_type` used by the Phase 3 endpoints.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoleOverrideContext {
+    Account,
+    Course,
+}
+
+impl RoleOverrideContext {
+    /// Canvas context class name stored in `role_overrides.context_type`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RoleOverrideContext::Account => "Account",
+            RoleOverrideContext::Course => "Course",
+        }
+    }
+}
+
+impl fmt::Display for RoleOverrideContext {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for RoleOverrideContext {
+    type Err = ApiError;
+
+    /// Accepts the Canvas context class names case-insensitively.
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "account" => Ok(RoleOverrideContext::Account),
+            "course" => Ok(RoleOverrideContext::Course),
+            _ => Err(ApiError::BadRequest(format!(
+                "unknown role override context: {raw}"
+            ))),
+        }
+    }
+}
+
+/// A `role_overrides` row in Canvas `RoleOverride` JSON shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+pub struct RoleOverrideView {
+    pub id: i64,
+    pub permission: String,
+    pub enabled: bool,
+    pub locked: bool,
+    pub context_type: String,
+    pub context_id: i64,
+    pub role_id: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One Canvas-style `permissions[<name>]` entry of a PUT body.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PermissionUpdate {
+    /// New value of `enabled`; ignored when `explicit` is false.
+    #[serde(default)]
+    pub enabled: Option<bool>,
+    /// New value of `locked`.
+    #[serde(default)]
+    pub locked: Option<bool>,
+    /// Canvas `explicit`: only an explicit update changes `enabled`.
+    /// Absent is treated as explicit because this endpoint writes the row
+    /// directly instead of walking an inheritance chain.
+    #[serde(default)]
+    pub explicit: Option<bool>,
+}
+
+impl PermissionUpdate {
+    /// Value to store in `role_overrides.enabled`, if this entry changes it.
+    pub fn enabled_change(&self) -> Option<bool> {
+        if self.explicit == Some(false) {
+            None
+        } else {
+            self.enabled
+        }
+    }
+
+    fn validate(&self, permission: &str) -> Result<(), ApiError> {
+        if permission.trim().is_empty() {
+            return Err(ApiError::BadRequest(
+                "permission name must not be blank".to_string(),
+            ));
+        }
+        if self.enabled.is_none() && self.locked.is_none() {
+            return Err(ApiError::BadRequest(format!(
+                "permission {permission} must set enabled or locked"
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// PUT body for a context's role overrides.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RoleOverridesUpdate {
+    /// Built-in role the permissions apply to ([`Role::builtin_role_id`]);
+    /// sent in the body because the Canvas route carries the role in the path.
+    pub role_id: i64,
+    /// Canvas-style map of permission name to its update.
+    #[serde(default)]
+    pub permissions: BTreeMap<String, PermissionUpdate>,
+}
+
+/// Validate a PUT body; returns the built-in role it addresses.
+pub fn validate_role_overrides_update(update: &RoleOverridesUpdate) -> Result<Role, ApiError> {
+    let role = Role::from_builtin_role_id(update.role_id)
+        .ok_or_else(|| ApiError::BadRequest(format!("unknown role_id: {}", update.role_id)))?;
+    if update.permissions.is_empty() {
+        return Err(ApiError::BadRequest(
+            "permissions must not be empty".to_string(),
+        ));
+    }
+    for (permission, change) in &update.permissions {
+        change.validate(permission)?;
+    }
+    Ok(role)
+}
+
+/// Whether the account/course context exists (not soft-deleted).
+pub async fn role_override_context_exists(
+    db: &PgPool,
+    context: RoleOverrideContext,
+    context_id: i64,
+) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = match context {
+        RoleOverrideContext::Account => {
+            sqlx::query_as("SELECT 1 FROM accounts WHERE id = $1 AND workflow_state <> 'deleted'")
+                .bind(context_id)
+                .fetch_optional(db)
+                .await?
+        }
+        RoleOverrideContext::Course => {
+            sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
+                .bind(context_id)
+                .fetch_optional(db)
+                .await?
+        }
+    };
+    Ok(row.is_some())
+}
+
+/// Global star-lms admin (`users.role = 'admin'`).
+async fn is_global_admin(db: &PgPool, user_id: i64) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM users WHERE id = $1 AND role = 'admin'")
+            .bind(user_id)
+            .fetch_optional(db)
+            .await?;
+    Ok(row.is_some())
+}
+
+/// Whether the user holds Canvas `manage_role_overrides` for the context.
+///
+/// Canvas grants `manage_role_overrides` to AccountAdmin only
+/// (`config/initializers/permissions_registry.rb`), so both endpoint contexts
+/// accept a global admin or an account admin of the account/ancestor chain;
+/// a course is administered through its `courses.account_id`.
+pub async fn can_manage_role_overrides(
+    db: &PgPool,
+    user_id: i64,
+    context: RoleOverrideContext,
+    context_id: i64,
+) -> Result<bool, ApiError> {
+    if is_global_admin(db, user_id).await? {
+        return Ok(true);
+    }
+    match context {
+        RoleOverrideContext::Account => is_account_admin(db, user_id, context_id).await,
+        RoleOverrideContext::Course => is_course_account_admin(db, user_id, context_id).await,
+    }
+}
+
+/// [`can_manage_role_overrides`] as a guard: `403 Forbidden` when unauthorized.
+pub async fn require_manage_role_overrides(
+    db: &PgPool,
+    user_id: i64,
+    context: RoleOverrideContext,
+    context_id: i64,
+) -> Result<(), ApiError> {
+    if can_manage_role_overrides(db, user_id, context, context_id).await? {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
+}
+
+async fn fetch_context_role_overrides(
+    db: &PgPool,
+    context: RoleOverrideContext,
+    context_id: i64,
+) -> Result<Vec<RoleOverrideView>, ApiError> {
+    let rows: Vec<RoleOverrideView> = sqlx::query_as(
+        r#"
+        SELECT id, permission, enabled, locked, context_type, context_id,
+               role_id, created_at, updated_at
+        FROM role_overrides
+        WHERE context_type = $1 AND context_id = $2
+        ORDER BY permission ASC, role_id ASC, id ASC
+        "#,
+    )
+    .bind(context.as_str())
+    .bind(context_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+/// `GET /accounts/{accountId}/role_overrides` and
+/// `GET /courses/{courseId}/role_overrides`.
+///
+/// `404` when the context does not exist, `403` unless the caller holds
+/// `manage_role_overrides`; otherwise every override of the context as a bare
+/// JSON array ordered by permission then role.
+pub async fn get_role_overrides(
+    db: &PgPool,
+    user_id: i64,
+    context: RoleOverrideContext,
+    context_id: i64,
+) -> Result<Vec<RoleOverrideView>, ApiError> {
+    if !role_override_context_exists(db, context, context_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    require_manage_role_overrides(db, user_id, context, context_id).await?;
+    fetch_context_role_overrides(db, context, context_id).await
+}
+
+/// `PUT /accounts/{accountId}/role_overrides` and
+/// `PUT /courses/{courseId}/role_overrides`.
+///
+/// Upserts the body's permissions for one built-in role and returns the
+/// context's overrides (same payload as GET). Existing rows keep their
+/// `enabled`/`locked` value when the entry omits it, and `updated_at` moves.
+pub async fn put_role_overrides(
+    db: &PgPool,
+    user_id: i64,
+    context: RoleOverrideContext,
+    context_id: i64,
+    update: &RoleOverridesUpdate,
+) -> Result<Vec<RoleOverrideView>, ApiError> {
+    if !role_override_context_exists(db, context, context_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    require_manage_role_overrides(db, user_id, context, context_id).await?;
+
+    let role = validate_role_overrides_update(update)?;
+    let role_id = role.builtin_role_id();
+
+    let mut tx = db.begin().await?;
+    for (permission, change) in &update.permissions {
+        sqlx::query(
+            r#"
+            INSERT INTO role_overrides
+                (permission, enabled, locked, context_type, context_id, role_id)
+            VALUES ($1, COALESCE($2::boolean, TRUE), COALESCE($3::boolean, FALSE),
+                    $4, $5, $6)
+            ON CONFLICT (context_type, context_id, role_id, permission)
+            DO UPDATE SET
+                enabled = COALESCE($2::boolean, role_overrides.enabled),
+                locked = COALESCE($3::boolean, role_overrides.locked),
+                updated_at = now()
+            "#,
+        )
+        .bind(permission)
+        .bind(change.enabled_change())
+        .bind(change.locked)
+        .bind(context.as_str())
+        .bind(context_id)
+        .bind(role_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+
+    fetch_context_role_overrides(db, context, context_id).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -429,6 +722,279 @@ mod tests {
         assert_eq!(Role::Ta.canvas_enrollment_type(), "TaEnrollment");
         assert_eq!(Role::Student.as_str(), "student");
         assert_eq!(Role::from_builtin_role_id(999), None);
+    }
+
+    #[test]
+    fn role_override_context_parses_canvas_contexts() {
+        assert_eq!(
+            "Account".parse::<RoleOverrideContext>().unwrap(),
+            RoleOverrideContext::Account
+        );
+        assert_eq!(
+            "course".parse::<RoleOverrideContext>().unwrap(),
+            RoleOverrideContext::Course
+        );
+        assert!("site_admin".parse::<RoleOverrideContext>().is_err());
+        assert_eq!(RoleOverrideContext::Course.as_str(), "Course");
+    }
+
+    #[test]
+    fn role_overrides_update_requires_role_and_permissions() {
+        let mut body = update_body(&[("read_reports", change(Some(true), Some(true), Some(true)))]);
+        assert_eq!(
+            validate_role_overrides_update(&body).unwrap(),
+            Role::Teacher
+        );
+
+        body.role_id = 999;
+        assert!(validate_role_overrides_update(&body).is_err());
+
+        body.role_id = Role::Teacher.builtin_role_id();
+        body.permissions = BTreeMap::new();
+        assert!(validate_role_overrides_update(&body).is_err());
+
+        let blank = update_body(&[("   ", change(Some(true), None, None))]);
+        assert!(validate_role_overrides_update(&blank).is_err());
+
+        let empty = update_body(&[("read_reports", PermissionUpdate::default())]);
+        assert!(validate_role_overrides_update(&empty).is_err());
+    }
+
+    #[test]
+    fn permission_update_follows_canvas_explicit_semantics() {
+        assert_eq!(
+            change(Some(true), Some(false), Some(true)).enabled_change(),
+            Some(true)
+        );
+        assert_eq!(change(Some(true), None, Some(false)).enabled_change(), None);
+        assert_eq!(
+            change(Some(false), None, None).enabled_change(),
+            Some(false)
+        );
+        assert_eq!(change(None, Some(true), None).enabled_change(), None);
+    }
+
+    /// DB round trip for the Phase 3 role_overrides endpoints. Skips cleanly
+    /// when DATABASE_URL is unset or the base schema has not been migrated;
+    /// rows use a unique per-run prefix and are removed at the end.
+    #[tokio::test]
+    async fn role_overrides_put_and_get_round_trip() {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            println!("SKIP: DATABASE_URL not set");
+            return;
+        };
+        let pool = match sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+        {
+            Ok(pool) => pool,
+            Err(err) => {
+                println!("SKIP: cannot connect to Postgres: {err}");
+                return;
+            }
+        };
+
+        let schema: Option<(bool,)> = sqlx::query_as(
+            r#"
+            SELECT to_regclass('public.users') IS NOT NULL
+               AND to_regclass('public.accounts') IS NOT NULL
+               AND to_regclass('public.account_users') IS NOT NULL
+               AND to_regclass('public.courses') IS NOT NULL
+               AND to_regclass('public.role_overrides') IS NOT NULL
+            "#,
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("probe base schema");
+        let Some((schema_ready,)) = schema else {
+            println!("SKIP: base schema not migrated");
+            return;
+        };
+        if !schema_ready {
+            println!("SKIP: base schema not migrated");
+            return;
+        }
+
+        let prefix = format!(
+            "perm-p3-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_millis()
+        );
+
+        let admin_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO users (name, email, password_hash, role)
+            VALUES ($1, $2, 'not-used', 'admin')
+            RETURNING id
+            "#,
+        )
+        .bind(format!("{prefix}-admin"))
+        .bind(format!("{prefix}-admin@test.local"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed admin");
+
+        let student_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO users (name, email, password_hash, role)
+            VALUES ($1, $2, 'not-used', 'student')
+            RETURNING id
+            "#,
+        )
+        .bind(format!("{prefix}-student"))
+        .bind(format!("{prefix}-student@test.local"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed student");
+
+        let account_id: i64 = sqlx::query_scalar(
+            "INSERT INTO accounts (name, workflow_state) VALUES ($1, 'active') RETURNING id",
+        )
+        .bind(format!("{prefix}-account"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed account");
+
+        sqlx::query(
+            "INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, 'admin')",
+        )
+        .bind(account_id)
+        .bind(admin_id)
+        .execute(&pool)
+        .await
+        .expect("seed account admin");
+
+        let course_id: i64 = sqlx::query_scalar(
+            "INSERT INTO courses (name, course_code, account_id) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind(format!("{prefix}-course"))
+        .bind(format!("{prefix}-code"))
+        .bind(account_id)
+        .fetch_one(&pool)
+        .await
+        .expect("seed course");
+
+        let body = update_body(&[
+            ("read_reports", change(Some(true), Some(true), Some(true))),
+            ("send_messages", change(Some(false), None, None)),
+        ]);
+        let rows = put_role_overrides(
+            &pool,
+            admin_id,
+            RoleOverrideContext::Account,
+            account_id,
+            &body,
+        )
+        .await
+        .expect("account put");
+        assert_eq!(rows.len(), 2);
+        let reports = rows
+            .iter()
+            .find(|row| row.permission == "read_reports")
+            .expect("read_reports row");
+        assert!(reports.enabled);
+        assert!(reports.locked);
+        assert_eq!(reports.context_type, "Account");
+        assert_eq!(reports.context_id, account_id);
+        assert_eq!(reports.role_id, Role::Teacher.builtin_role_id());
+
+        // Repeating the PUT updates in place instead of duplicating the row.
+        let body = update_body(&[("read_reports", change(Some(false), None, Some(true)))]);
+        let rows = put_role_overrides(
+            &pool,
+            admin_id,
+            RoleOverrideContext::Account,
+            account_id,
+            &body,
+        )
+        .await
+        .expect("account re-put");
+        assert_eq!(rows.len(), 2);
+        let reports = rows
+            .iter()
+            .find(|row| row.permission == "read_reports")
+            .expect("read_reports row");
+        assert!(!reports.enabled);
+        assert!(reports.locked, "omitted locked keeps the stored value");
+
+        let listed = get_role_overrides(&pool, admin_id, RoleOverrideContext::Account, account_id)
+            .await
+            .expect("account get");
+        assert_eq!(listed, rows);
+
+        // Course-context overrides are a separate scope.
+        let body = update_body(&[("read_reports", change(Some(true), None, Some(true)))]);
+        let course_rows = put_role_overrides(
+            &pool,
+            admin_id,
+            RoleOverrideContext::Course,
+            course_id,
+            &body,
+        )
+        .await
+        .expect("course put");
+        assert_eq!(course_rows.len(), 1);
+        assert_eq!(course_rows[0].context_type, "Course");
+        assert_eq!(course_rows[0].context_id, course_id);
+
+        let denied =
+            get_role_overrides(&pool, student_id, RoleOverrideContext::Account, account_id).await;
+        assert!(matches!(denied, Err(ApiError::Forbidden)));
+
+        sqlx::query(
+            "DELETE FROM role_overrides WHERE (context_type = 'Account' AND context_id = $1)
+                OR (context_type = 'Course' AND context_id = $2)",
+        )
+        .bind(account_id)
+        .bind(course_id)
+        .execute(&pool)
+        .await
+        .expect("cleanup overrides");
+        sqlx::query("DELETE FROM account_users WHERE account_id = $1")
+            .bind(account_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup account users");
+        sqlx::query("DELETE FROM courses WHERE id = $1")
+            .bind(course_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup course");
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup account");
+        for user_id in [admin_id, student_id] {
+            sqlx::query("DELETE FROM users WHERE id = $1")
+                .bind(user_id)
+                .execute(&pool)
+                .await
+                .expect("cleanup user");
+        }
+    }
+
+    fn change(
+        enabled: Option<bool>,
+        locked: Option<bool>,
+        explicit: Option<bool>,
+    ) -> PermissionUpdate {
+        PermissionUpdate {
+            enabled,
+            locked,
+            explicit,
+        }
+    }
+
+    fn update_body(entries: &[(&str, PermissionUpdate)]) -> RoleOverridesUpdate {
+        RoleOverridesUpdate {
+            role_id: Role::Teacher.builtin_role_id(),
+            permissions: entries
+                .iter()
+                .map(|(permission, change)| (permission.to_string(), change.clone()))
+                .collect(),
+        }
     }
 
     fn rule(id: i64, enabled: bool, locked: bool, context_id: i64) -> RoleOverrideRule {
