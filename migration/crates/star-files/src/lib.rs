@@ -110,6 +110,35 @@ async fn user_teacher_of_course(
     Ok(row.0)
 }
 
+fn is_admin(auth: &AuthUser) -> bool {
+    auth.role == "admin"
+}
+
+/// Whether the user has an `account_users` row for the account.
+async fn user_account_admin(db: &PgPool, user_id: i64, account_id: i64) -> Result<bool, ApiError> {
+    let row: (bool,) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM account_users WHERE account_id = $1 AND user_id = $2)",
+    )
+    .bind(account_id)
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+    Ok(row.0)
+}
+
+/// Canvas Folder#read_contents for Group contexts: accepted membership.
+async fn user_in_group(db: &PgPool, user_id: i64, group_id: i64) -> Result<bool, ApiError> {
+    let row: (bool,) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM group_memberships \
+         WHERE group_id = $1 AND user_id = $2 AND workflow_state = 'accepted')",
+    )
+    .bind(group_id)
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+    Ok(row.0)
+}
+
 // ─── folder helpers ────────────────────────────────────────────────────────
 
 /// Canvas Folder.root_folder_name_for_context.
@@ -556,6 +585,59 @@ pub struct QuotaResponse {
     pub quota_used: i64,
 }
 
+/// Canvas FoldersController#duplicates response: `{ duplicates: [...] }`.
+#[derive(Debug, Serialize)]
+pub struct DuplicatesResponse {
+    pub duplicates: Vec<FolderResponse>,
+}
+
+/// Canvas user/group folders_and_files response: `{ folders, files }`.
+#[derive(Debug, Serialize)]
+pub struct ContextFoldersAndFiles {
+    pub folders: Vec<FolderResponse>,
+    pub files: Vec<AttachmentResponse>,
+}
+
+/// Request body for POST /folders/{id}/files (metadata only, no bytes).
+#[derive(Debug, Deserialize)]
+pub struct CreateFolderFileRequest {
+    pub filename: String,
+    pub display_name: Option<String>,
+    pub content_type: Option<String>,
+    pub size: Option<i64>,
+}
+
+/// `usage_rights` object of PUT /courses/{courseId}/usage_rights.
+#[derive(Debug, Deserialize)]
+pub struct UsageRightsParams {
+    pub use_justification: Option<String>,
+    pub legal_copyright: Option<String>,
+    pub license: Option<String>,
+}
+
+/// Request body for Canvas UsageRightsController#set_usage_rights.
+#[derive(Debug, Deserialize)]
+pub struct UsageRightsRequest {
+    pub file_ids: Option<Vec<i64>>,
+    pub folder_ids: Option<Vec<i64>>,
+    pub publish: Option<bool>,
+    pub usage_rights: Option<UsageRightsParams>,
+}
+
+/// Canvas usage_rights_json + message + file_ids.
+#[derive(Debug, Serialize)]
+pub struct UsageRightsResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub legal_copyright: Option<String>,
+    pub use_justification: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license_name: Option<String>,
+    pub message: String,
+    pub file_ids: Vec<i64>,
+}
+
 // ─── router ────────────────────────────────────────────────────────────────
 
 /// Build the files router.
@@ -579,6 +661,7 @@ pub fn router() -> axum::Router<AppState> {
         .route("/folders/{id}/folders", get(list_folder_children))
         .route("/folders/{id}/folders", post(create_subfolder))
         .route("/folders/{id}/files", get(list_folder_files))
+        .route("/folders/{id}/files", post(create_folder_file))
         .route("/folders/{id}/all", get(list_folder_all))
         .route(
             "/courses/{courseId}/folders_and_files",
@@ -589,6 +672,25 @@ pub fn router() -> axum::Router<AppState> {
         .route(
             "/courses/{courseId}/folders/root",
             get(get_course_root_folder),
+        )
+        // Canvas deep folders/files endpoints.
+        .route(
+            "/courses/{courseId}/folders/{id}/duplicates",
+            get(list_folder_duplicates),
+        )
+        .route(
+            "/users/{userId}/folders_and_files",
+            get(list_user_folders_and_files),
+        )
+        .route(
+            "/groups/{groupId}/folders_and_files",
+            get(list_group_folders_and_files),
+        )
+        .route("/accounts/{accountId}/folders", post(create_account_folder))
+        // Canvas UsageRightsController#set_usage_rights.
+        .route(
+            "/courses/{courseId}/usage_rights",
+            put(set_course_usage_rights),
         )
 }
 
@@ -1141,7 +1243,8 @@ async fn create_folder_inner(
     let new_folder = NewFolder {
         name,
         full_name,
-        course_id,
+        context_type: "Course".to_string(),
+        context_id: course_id,
         parent_id: parent.id,
         workflow_state: workflow_state.to_string(),
         position,
@@ -1504,6 +1607,445 @@ async fn files_quota(
     }))
 }
 
+// ─── deep folder/file handlers (Phase 4) ───────────────────────────────────
+
+/// GET /courses/{courseId}/folders/{id}/duplicates — Canvas
+/// FoldersController#duplicates: sibling folders sharing the same name.
+async fn list_folder_duplicates(
+    State(state): State<AppState>,
+    Path((course_id, folder_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<DuplicatesResponse>, ApiError> {
+    let folder = fetch_folder(&state.db, folder_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if folder.context_type != "Course" || folder.context_id != course_id {
+        return Err(ApiError::NotFound);
+    }
+
+    let allowed = user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+    let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+
+    // Canvas find_duplicate_folders: a root folder has no duplicates.
+    let Some(parent_id) = folder.parent_folder_id else {
+        return Ok(Json(DuplicatesResponse {
+            duplicates: Vec::new(),
+        }));
+    };
+    let sql = format!(
+        "{FOLDER_SELECT} WHERE f.parent_folder_id = $1 AND f.name = $2 \
+         AND f.id <> $3 AND f.workflow_state <> 'deleted' ORDER BY f.id ASC"
+    );
+    let rows = sqlx::query_as::<_, FolderRow>(&sql)
+        .bind(parent_id)
+        .bind(&folder.name)
+        .bind(folder.id)
+        .fetch_all(&state.db)
+        .await?;
+
+    Ok(Json(DuplicatesResponse {
+        duplicates: rows
+            .into_iter()
+            .map(|row| FolderResponse::from_row(row, can_manage))
+            .collect(),
+    }))
+}
+
+/// GET /users/{userId}/folders_and_files — Canvas
+/// FoldersController#list_all_folders_and_files for a User context.
+async fn list_user_folders_and_files(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>,
+    Query(params): Query<FoldersAndFilesQuery>,
+    auth: AuthUser,
+) -> Result<Json<ContextFoldersAndFiles>, ApiError> {
+    // Canvas: only self or an admin may read another user's files.
+    if auth.id != user_id && !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+    context_folders_and_files(&state.db, "User", user_id, true, &params).await
+}
+
+/// GET /groups/{groupId}/folders_and_files — Canvas
+/// FoldersController#list_all_folders_and_files for a Group context.
+async fn list_group_folders_and_files(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    Query(params): Query<FoldersAndFilesQuery>,
+    auth: AuthUser,
+) -> Result<Json<ContextFoldersAndFiles>, ApiError> {
+    let group: Option<(i64, Option<i64>)> = sqlx::query_as(
+        "SELECT id, course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (_, course_id) = group.ok_or(ApiError::NotFound)?;
+
+    let mut can_manage = is_admin(&auth);
+    if !can_manage {
+        if let Some(course_id) = course_id {
+            can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+        }
+    }
+    if !can_manage && !user_in_group(&state.db, auth.id, group_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    context_folders_and_files(&state.db, "Group", group_id, can_manage, &params).await
+}
+
+/// Canvas folders_and_files body for User/Group contexts.
+///
+/// Deviation: star-lms files are course-scoped (`files.course_id NOT NULL`).
+/// User listings expose the viewer's own uploaded metadata; Group listings
+/// have no file scope and return an empty files array.
+async fn context_folders_and_files(
+    db: &PgPool,
+    context_type: &str,
+    context_id: i64,
+    can_manage: bool,
+    params: &FoldersAndFilesQuery,
+) -> Result<Json<ContextFoldersAndFiles>, ApiError> {
+    let per_page = params.per_page.unwrap_or(MIXED_LIST_PER_PAGE).clamp(1, 100);
+    let offset = (params.page.unwrap_or(1).max(1) - 1) * per_page;
+    let search = params
+        .search_term
+        .as_deref()
+        .map(str::trim)
+        .filter(|term| !term.is_empty());
+
+    let sql = format!(
+        "{FOLDER_SELECT} WHERE f.context_type = $1 AND f.context_id = $2 \
+         AND f.workflow_state <> 'deleted' \
+         AND ($3::text IS NULL OR f.name ILIKE '%' || $3 || '%') \
+         ORDER BY f.name ASC, f.id ASC LIMIT $4 OFFSET $5"
+    );
+    let folders = sqlx::query_as::<_, FolderRow>(&sql)
+        .bind(context_type)
+        .bind(context_id)
+        .bind(search)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(db)
+        .await?;
+
+    let files = if context_type == "User" {
+        let sql = format!(
+            "{ATTACHMENT_SELECT} WHERE f.uploader_id = $1 \
+             AND f.workflow_state <> 'deleted' \
+             ORDER BY f.display_name ASC, f.id ASC LIMIT $2 OFFSET $3"
+        );
+        sqlx::query_as::<_, AttachmentRow>(&sql)
+            .bind(context_id)
+            .bind(per_page)
+            .bind(offset)
+            .fetch_all(db)
+            .await?
+    } else {
+        Vec::new()
+    };
+
+    Ok(Json(ContextFoldersAndFiles {
+        folders: folders
+            .into_iter()
+            .map(|row| FolderResponse::from_row(row, can_manage))
+            .collect(),
+        files: files
+            .into_iter()
+            .map(|row| AttachmentResponse::from_row(row, can_manage))
+            .collect(),
+    }))
+}
+
+/// POST /folders/{id}/files — Canvas FoldersController#create_file.
+/// Metadata only: no binary upload (out of scope).
+async fn create_folder_file(
+    State(state): State<AppState>,
+    Path(folder_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CreateFolderFileRequest>,
+) -> Result<Json<AttachmentResponse>, ApiError> {
+    if payload.filename.trim().is_empty() {
+        return Err(ApiError::Validation("filename is required".into()));
+    }
+
+    let folder = fetch_folder(&state.db, folder_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let course_id = folder_course_id(&folder)?;
+    // Canvas: creating an attachment requires manage_files_add (teacher).
+    let allowed = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    let display_name = match payload.display_name {
+        Some(ref d) if !d.trim().is_empty() => d.trim().to_string(),
+        _ => payload.filename.clone(),
+    };
+    let content_type = payload
+        .content_type
+        .unwrap_or_else(|| "application/octet-stream".into());
+
+    let file_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO files (course_id, uploader_id, filename, display_name,
+                           content_type, size, folder, folder_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id
+        "#,
+    )
+    .bind(course_id)
+    .bind(auth.id)
+    .bind(&payload.filename)
+    .bind(&display_name)
+    .bind(&content_type)
+    .bind(payload.size.unwrap_or(0))
+    .bind(&folder.full_name)
+    .bind(folder.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let sql = format!("{ATTACHMENT_SELECT} WHERE f.id = $1");
+    let row = sqlx::query_as::<_, AttachmentRow>(&sql)
+        .bind(file_id)
+        .fetch_one(&state.db)
+        .await?;
+    Ok(Json(AttachmentResponse::from_row(row, true)))
+}
+
+/// POST /accounts/{accountId}/folders — Canvas
+/// Accounts::FoldersController#create (Account folder context).
+async fn create_account_folder(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CreateFolderRequest>,
+) -> Result<Response, ApiError> {
+    let account: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if account.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    if !is_admin(&auth) && !user_account_admin(&state.db, auth.id, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let parent = match payload.parent_folder_id {
+        Some(parent_id) => {
+            let Some(parent) = fetch_folder(&state.db, parent_id).await? else {
+                return Ok(canvas_not_found());
+            };
+            if parent.context_type != "Account" || parent.context_id != account_id {
+                return Ok(canvas_not_found());
+            }
+            parent
+        }
+        None => ensure_root_folder_for(&state.db, "Account", account_id).await?,
+    };
+
+    let requested_name = normalize_folder_name(payload.name.as_deref());
+    let siblings = fetch_sibling_names(&state.db, parent.id).await?;
+    let name = dedupe_folder_name(&requested_name, &siblings);
+    let full_name = join_full_name(&parent.full_name, &name);
+    let position = match payload.position {
+        Some(position) => position,
+        None => next_position(&state.db, parent.id).await?,
+    };
+    let workflow_state = if payload.hidden.unwrap_or(false) {
+        "hidden"
+    } else {
+        "visible"
+    };
+
+    let row = insert_folder(
+        &state.db,
+        NewFolder {
+            name,
+            full_name,
+            context_type: "Account".to_string(),
+            context_id: account_id,
+            parent_id: parent.id,
+            workflow_state: workflow_state.to_string(),
+            position,
+            locked: payload.locked.unwrap_or(false),
+            lock_at: payload.lock_at,
+            unlock_at: payload.unlock_at,
+            for_submissions: payload.for_submissions.unwrap_or(false),
+        },
+    )
+    .await?;
+
+    Ok(Json(FolderResponse::from_row(row, true)).into_response())
+}
+
+/// Canvas usage_rights_json license_name.
+fn license_name(license: &str) -> Option<&'static str> {
+    Some(match license {
+        "cc_by" => "CC Attribution",
+        "cc_by_sa" => "CC Attribution Share-Alike",
+        "cc_by_nd" => "CC Attribution No-Derivatives",
+        "cc_by_nc" => "CC Attribution Non-Commercial",
+        "cc_by_nc_sa" => "CC Attribution Non-Commercial Share-Alike",
+        "cc_by_nc_nd" => "CC Attribution Non-Commercial No-Derivatives",
+        "cc0" => "Public Domain",
+        "public_domain" => "Public Domain",
+        "private" => "Private (Copyrighted)",
+        _ => return None,
+    })
+}
+
+/// Canvas UsageRights#use_justification allowed values.
+fn valid_use_justification(value: &str) -> bool {
+    matches!(
+        value,
+        "own_copyright" | "used_by_permission" | "fair_use" | "public_domain" | "creative_commons"
+    )
+}
+
+/// PUT /courses/{courseId}/usage_rights — Canvas
+/// UsageRightsController#set_usage_rights.
+async fn set_course_usage_rights(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<UsageRightsRequest>,
+) -> Result<Response, ApiError> {
+    let file_ids = payload.file_ids.unwrap_or_default();
+    let folder_ids = payload.folder_ids.unwrap_or_default();
+    if file_ids.is_empty() && folder_ids.is_empty() {
+        return Ok(canvas_error(
+            StatusCode::BAD_REQUEST,
+            "Must supply 'file_ids' and/or 'folder_ids' parameter",
+        ));
+    }
+    let Some(usage) = payload.usage_rights else {
+        return Ok(canvas_error(
+            StatusCode::BAD_REQUEST,
+            "No 'usage_rights' object supplied",
+        ));
+    };
+    let Some(use_justification) = usage
+        .use_justification
+        .filter(|value| valid_use_justification(value))
+    else {
+        return Ok(canvas_error(
+            StatusCode::BAD_REQUEST,
+            "Invalid use_justification",
+        ));
+    };
+
+    // Canvas: manage_files_edit.
+    let allowed = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Reuse an identical context usage_rights row (Canvas `.where(params).first`).
+    let existing: Option<i64> = sqlx::query_scalar(
+        r#"
+        SELECT id FROM usage_rights
+        WHERE context_type = 'Course' AND context_id = $1
+          AND use_justification = $2
+          AND legal_copyright IS NOT DISTINCT FROM $3
+          AND license IS NOT DISTINCT FROM $4
+        LIMIT 1
+        "#,
+    )
+    .bind(course_id)
+    .bind(&use_justification)
+    .bind(usage.legal_copyright.as_deref())
+    .bind(usage.license.as_deref())
+    .fetch_optional(&state.db)
+    .await?;
+
+    let usage_rights_id = match existing {
+        Some(id) => id,
+        None => {
+            sqlx::query_scalar(
+                r#"
+                INSERT INTO usage_rights
+                    (context_type, context_id, use_justification, legal_copyright, license)
+                VALUES ('Course', $1, $2, $3, $4)
+                RETURNING id
+                "#,
+            )
+            .bind(course_id)
+            .bind(&use_justification)
+            .bind(usage.legal_copyright.as_deref())
+            .bind(usage.license.as_deref())
+            .fetch_one(&state.db)
+            .await?
+        }
+    };
+
+    // Canvas assigns the rights to the given files plus every file in the
+    // given folders (recursively).
+    let file_ids = sqlx::query_scalar::<_, i64>(
+        r#"
+        WITH RECURSIVE tree AS (
+            SELECT id FROM folders
+            WHERE context_type = 'Course' AND context_id = $1
+              AND workflow_state <> 'deleted' AND id = ANY($2::bigint[])
+            UNION ALL
+            SELECT f.id FROM folders f JOIN tree t ON f.parent_folder_id = t.id
+        )
+        SELECT id FROM files
+        WHERE course_id = $1 AND workflow_state <> 'deleted'
+          AND (id = ANY($3::bigint[]) OR folder_id IN (SELECT id FROM tree))
+        ORDER BY id
+        "#,
+    )
+    .bind(course_id)
+    .bind(&folder_ids)
+    .bind(&file_ids)
+    .fetch_all(&state.db)
+    .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE files SET usage_rights_id = $1,
+                         locked = CASE WHEN $2 THEN FALSE ELSE locked END,
+                         updated_at = now()
+        WHERE course_id = $3 AND workflow_state <> 'deleted' AND id = ANY($4::bigint[])
+        "#,
+    )
+    .bind(usage_rights_id)
+    .bind(payload.publish.unwrap_or(false))
+    .bind(course_id)
+    .bind(&file_ids)
+    .execute(&state.db)
+    .await?;
+
+    let count = file_ids.len();
+    let message = if count == 1 {
+        "1 file updated".to_string()
+    } else {
+        format!("{count} files updated")
+    };
+
+    Ok(Json(UsageRightsResponse {
+        legal_copyright: usage.legal_copyright,
+        use_justification,
+        license_name: usage
+            .license
+            .as_deref()
+            .and_then(license_name)
+            .map(str::to_string),
+        license: usage.license,
+        message,
+        file_ids,
+    })
+    .into_response())
+}
+
 // ─── folder DB helpers ─────────────────────────────────────────────────────
 
 /// Raw folders row with file/subfolder counts (column order matches queries).
@@ -1557,7 +2099,8 @@ FROM folders f
 struct NewFolder {
     name: String,
     full_name: String,
-    course_id: i64,
+    context_type: String,
+    context_id: i64,
     parent_id: i64,
     workflow_state: String,
     position: i32,
@@ -1575,37 +2118,52 @@ async fn fetch_folder(db: &PgPool, folder_id: i64) -> Result<Option<FolderRow>, 
         .await?)
 }
 
-async fn fetch_root_folder(db: &PgPool, course_id: i64) -> Result<Option<FolderRow>, ApiError> {
+async fn fetch_root_folder(
+    db: &PgPool,
+    context_type: &str,
+    context_id: i64,
+) -> Result<Option<FolderRow>, ApiError> {
     let sql = format!(
-        "{FOLDER_SELECT} WHERE f.context_type = 'Course' AND f.context_id = $1 \
+        "{FOLDER_SELECT} WHERE f.context_type = $1 AND f.context_id = $2 \
          AND f.parent_folder_id IS NULL AND f.workflow_state <> 'deleted'"
     );
     Ok(sqlx::query_as::<_, FolderRow>(&sql)
-        .bind(course_id)
+        .bind(context_type)
+        .bind(context_id)
         .fetch_optional(db)
         .await?)
 }
 
 /// Canvas Folder.root_folders: lazily create the context's root folder.
-async fn ensure_root_folder(db: &PgPool, course_id: i64) -> Result<FolderRow, ApiError> {
-    if let Some(root) = fetch_root_folder(db, course_id).await? {
+async fn ensure_root_folder_for(
+    db: &PgPool,
+    context_type: &str,
+    context_id: i64,
+) -> Result<FolderRow, ApiError> {
+    if let Some(root) = fetch_root_folder(db, context_type, context_id).await? {
         return Ok(root);
     }
-    let name = root_folder_name_for_context("Course");
+    let name = root_folder_name_for_context(context_type);
     sqlx::query(
         r#"
         INSERT INTO folders (name, full_name, context_type, context_id, workflow_state, position)
-        VALUES ($1, $1, 'Course', $2, 'visible', 1)
+        VALUES ($1, $1, $2, $3, 'visible', 1)
         ON CONFLICT DO NOTHING
         "#,
     )
     .bind(name)
-    .bind(course_id)
+    .bind(context_type)
+    .bind(context_id)
     .execute(db)
     .await?;
-    fetch_root_folder(db, course_id)
+    fetch_root_folder(db, context_type, context_id)
         .await?
         .ok_or(ApiError::NotFound)
+}
+
+/// Course root folder helper (Canvas 'course files').
+async fn ensure_root_folder(db: &PgPool, course_id: i64) -> Result<FolderRow, ApiError> {
+    ensure_root_folder_for(db, "Course", course_id).await
 }
 
 /// Canvas Folder.unfiled_folder: default parent for folders created at the
@@ -1618,7 +2176,8 @@ async fn ensure_unfiled_folder(db: &PgPool, root: FolderRow) -> Result<FolderRow
     let new_folder = NewFolder {
         name: UNFILED_FOLDER_NAME.to_string(),
         full_name: join_full_name(&root.full_name, UNFILED_FOLDER_NAME),
-        course_id: root.context_id,
+        context_type: root.context_type.clone(),
+        context_id: root.context_id,
         parent_id: root.id,
         workflow_state: "visible".to_string(),
         position,
@@ -1636,7 +2195,7 @@ async fn insert_folder(db: &PgPool, folder: NewFolder) -> Result<FolderRow, ApiE
         INSERT INTO folders
             (name, full_name, context_type, context_id, parent_folder_id,
              workflow_state, position, locked, lock_at, unlock_at, for_submissions)
-        VALUES ($1, $2, 'Course', $3, $4, $5, $6, $7, $8, $9, $10)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING id, name, full_name, context_type, context_id, parent_folder_id,
                   workflow_state, position, locked, lock_at, unlock_at, for_submissions,
                   created_at, updated_at,
@@ -1645,7 +2204,8 @@ async fn insert_folder(db: &PgPool, folder: NewFolder) -> Result<FolderRow, ApiE
     )
     .bind(&folder.name)
     .bind(&folder.full_name)
-    .bind(folder.course_id)
+    .bind(&folder.context_type)
+    .bind(folder.context_id)
     .bind(folder.parent_id)
     .bind(&folder.workflow_state)
     .bind(folder.position)
@@ -1777,7 +2337,8 @@ async fn ensure_path(db: &PgPool, course_id: i64, path: &str) -> Result<FolderRo
         let new_folder = NewFolder {
             name: component.clone(),
             full_name: join_full_name(&current.full_name, &component),
-            course_id,
+            context_type: "Course".to_string(),
+            context_id: course_id,
             parent_id: current.id,
             workflow_state: "visible".to_string(),
             position,
@@ -2337,5 +2898,45 @@ mod tests {
         assert_eq!(json["upload_status"], "success");
         assert_eq!(json["hidden_for_user"].as_bool(), Some(true));
         assert_eq!(json["visibility_level"], serde_json::Value::Null);
+    }
+
+    #[test]
+    fn usage_rights_license_names_match_canvas() {
+        // Canvas UsageRights.licenses readable names.
+        assert_eq!(license_name("cc_by_sa"), Some("CC Attribution Share-Alike"));
+        assert_eq!(license_name("public_domain"), Some("Public Domain"));
+        assert_eq!(license_name("private"), Some("Private (Copyrighted)"));
+        assert_eq!(license_name("not_a_license"), None);
+    }
+
+    #[test]
+    fn usage_rights_use_justification_values_match_canvas() {
+        // Canvas UsageRights#use_justification enum.
+        assert!(valid_use_justification("own_copyright"));
+        assert!(valid_use_justification("used_by_permission"));
+        assert!(valid_use_justification("fair_use"));
+        assert!(valid_use_justification("public_domain"));
+        assert!(valid_use_justification("creative_commons"));
+        assert!(!valid_use_justification("borrowed"));
+        assert!(!valid_use_justification(""));
+    }
+
+    #[test]
+    fn duplicates_and_context_listings_use_canvas_envelopes() {
+        // Canvas folders_controller#duplicates: { duplicates: [...] };
+        // user/group folders_and_files: { folders: [...], files: [...] }.
+        let duplicates = serde_json::to_value(DuplicatesResponse {
+            duplicates: Vec::new(),
+        })
+        .unwrap();
+        assert!(duplicates["duplicates"].is_array());
+
+        let listing = serde_json::to_value(ContextFoldersAndFiles {
+            folders: Vec::new(),
+            files: Vec::new(),
+        })
+        .unwrap();
+        assert!(listing["folders"].is_array());
+        assert!(listing["files"].is_array());
     }
 }
