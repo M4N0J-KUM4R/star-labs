@@ -1,4 +1,5 @@
-//! star-courses — courses and enrollments for star-lms.
+//! star-courses — courses, enrollment terms, course sections and enrollments
+//! for star-lms.
 //!
 //! Implements the Canvas-style courses API with role-based access control.
 
@@ -154,6 +155,162 @@ pub struct PaginatedEnrollments {
     pub total: i64,
 }
 
+/// Enrollment term (Canvas API v1 EnrollmentTerm shape).
+///
+/// Mirrors `enrollment_term_json`: id, name, start_at, end_at,
+/// workflow_state, created_at. `account_id` is internal (auth scoping).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct Term {
+    pub id: i64,
+    #[serde(skip)]
+    pub account_id: i64,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_at: Option<DateTime<Utc>>,
+    pub workflow_state: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Canvas list response for GET /accounts/{accountId}/terms.
+#[derive(Debug, Clone, Serialize)]
+pub struct EnrollmentTermsList {
+    pub enrollment_terms: Vec<Term>,
+}
+
+/// Course section (Canvas API v1 Section shape requested by the brief).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct CourseSection {
+    pub id: i64,
+    pub name: String,
+    pub course_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_at: Option<DateTime<Utc>>,
+    pub workflow_state: String,
+}
+
+/// Fields accepted for creating/updating an enrollment term.
+#[derive(Debug, Default, Deserialize)]
+pub struct TermFields {
+    pub name: Option<String>,
+    pub start_at: Option<DateTime<Utc>>,
+    pub end_at: Option<DateTime<Utc>>,
+}
+
+/// Canvas wraps term params in `enrollment_term`; flat bodies are accepted too.
+#[derive(Debug, Deserialize)]
+pub struct TermPayload {
+    pub enrollment_term: Option<TermFields>,
+    #[serde(flatten)]
+    pub flat: TermFields,
+}
+
+impl TermPayload {
+    fn into_fields(self) -> TermFields {
+        self.enrollment_term.unwrap_or(self.flat)
+    }
+}
+
+/// Fields accepted for creating/updating a course section.
+#[derive(Debug, Default, Deserialize)]
+pub struct CourseSectionFields {
+    pub name: Option<String>,
+    pub start_at: Option<DateTime<Utc>>,
+    pub end_at: Option<DateTime<Utc>>,
+}
+
+/// Canvas wraps section params in `course_section`; flat bodies are accepted too.
+#[derive(Debug, Deserialize)]
+pub struct CourseSectionPayload {
+    pub course_section: Option<CourseSectionFields>,
+    #[serde(flatten)]
+    pub flat: CourseSectionFields,
+}
+
+impl CourseSectionPayload {
+    fn into_fields(self) -> CourseSectionFields {
+        self.course_section.unwrap_or(self.flat)
+    }
+}
+
+/// Query params for GET /accounts/{accountId}/terms (Canvas subset).
+#[derive(Debug, Default, Deserialize)]
+pub struct TermListQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+    pub term_name: Option<String>,
+    #[serde(rename = "workflow_state[]", default)]
+    pub workflow_states: Vec<String>,
+    pub workflow_state: Option<String>,
+}
+
+impl TermListQuery {
+    /// Canvas resolves `workflow_state[]` (plus the bare form) to a filter.
+    fn resolved_states(&self) -> Option<Vec<String>> {
+        let mut requested = self.workflow_states.clone();
+        if let Some(single) = &self.workflow_state {
+            requested.push(single.clone());
+        }
+        resolve_workflow_states(&requested)
+    }
+
+    fn pagination(&self) -> (i64, i64, i64) {
+        Pagination {
+            page: self.page,
+            per_page: self.per_page,
+        }
+        .resolve()
+    }
+}
+
+/// Query params for GET /courses/{courseId}/sections (Canvas subset).
+#[derive(Debug, Default, Deserialize)]
+pub struct SectionListQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+    pub search_term: Option<String>,
+}
+
+/// Resolve Canvas term `workflow_state[]` values.
+///
+/// Unknown values are ignored, an empty selection defaults to `active`, and
+/// `all` means "no filter" (`None`). Pure helper so it is unit-testable.
+fn resolve_workflow_states(requested: &[String]) -> Option<Vec<String>> {
+    let mut states: Vec<String> = requested
+        .iter()
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| matches!(s.as_str(), "active" | "deleted" | "all"))
+        .collect();
+
+    if states.iter().any(|s| s == "all") {
+        return None;
+    }
+    if states.is_empty() {
+        states.push("active".to_string());
+    }
+    states.sort();
+    states.dedup();
+    Some(states)
+}
+
+/// Reject an end date that precedes its start date (Canvas `validate_dates`).
+fn validate_date_range(
+    start_at: Option<DateTime<Utc>>,
+    end_at: Option<DateTime<Utc>>,
+) -> Result<(), ApiError> {
+    if let (Some(start_at), Some(end_at)) = (start_at, end_at) {
+        if end_at < start_at {
+            return Err(ApiError::Validation(
+                "end_at cannot be before start_at".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Permission helpers (pure functions — unit tested)
 // ---------------------------------------------------------------------------
@@ -209,6 +366,70 @@ pub async fn check_teacher_or_admin(
     .fetch_optional(pool)
     .await?;
 
+    Ok(row.is_some())
+}
+
+/// Maximum account hierarchy depth, guarding against circular references.
+const MAX_ACCOUNT_TREE_DEPTH: i64 = 10;
+
+/// Check if a user is an account admin for the given account or any parent
+/// account in the chain (same semantics as star-accounts).
+async fn check_account_admin(
+    pool: &PgPool,
+    user_id: i64,
+    account_id: i64,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    if is_admin(auth) {
+        return Ok(true);
+    }
+
+    let mut current_id = Some(account_id);
+    let mut depth = 0;
+
+    while let Some(id) = current_id {
+        if depth >= MAX_ACCOUNT_TREE_DEPTH {
+            return Ok(false);
+        }
+        depth += 1;
+
+        let row: Option<(i32,)> = sqlx::query_as(
+            r#"SELECT 1 FROM account_users WHERE account_id = $1 AND user_id = $2 LIMIT 1"#,
+        )
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+        if row.is_some() {
+            return Ok(true);
+        }
+
+        let parent: Option<(Option<i64>,)> =
+            sqlx::query_as(r#"SELECT parent_account_id FROM accounts WHERE id = $1"#)
+                .bind(id)
+                .fetch_optional(pool)
+                .await?;
+        current_id = parent.and_then(|(parent_id,)| parent_id);
+    }
+
+    Ok(false)
+}
+
+/// Lightweight existence probe used to return 404 before permission checks.
+async fn account_exists(pool: &PgPool, account_id: i64) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.is_some())
+}
+
+/// Lightweight existence probe for courses.
+async fn course_exists(pool: &PgPool, course_id: i64) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM courses WHERE id = $1"#)
+        .bind(course_id)
+        .fetch_optional(pool)
+        .await?;
     Ok(row.is_some())
 }
 
@@ -683,6 +904,471 @@ async fn delete_enrollment(
 }
 
 // ---------------------------------------------------------------------------
+// Enrollment terms (Canvas API v1)
+// ---------------------------------------------------------------------------
+
+/// Load a term by id (including soft-deleted ones, matching Canvas show).
+async fn fetch_term(pool: &PgPool, term_id: i64) -> Result<Term, ApiError> {
+    let term: Option<Term> = sqlx::query_as(
+        r#"
+        SELECT id, account_id, name, start_at, end_at, workflow_state, created_at
+        FROM terms WHERE id = $1
+        "#,
+    )
+    .bind(term_id)
+    .fetch_optional(pool)
+    .await?;
+
+    term.ok_or(ApiError::NotFound)
+}
+
+/// GET /accounts/{accountId}/terms — Canvas list shape
+/// `{ "enrollment_terms": [...] }`, defaulting to active terms.
+async fn list_terms(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Query(query): Query<TermListQuery>,
+) -> Result<Json<EnrollmentTermsList>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_account_admin(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let (_, per_page, offset) = query.pagination();
+    // Canvas workflow_state[] filter -> (include active, include deleted).
+    // `all` (None) includes both; the default is active only.
+    let (include_active, include_deleted) = match query.resolved_states() {
+        None => (true, true),
+        Some(states) => (
+            states.iter().any(|s| s == "active"),
+            states.iter().any(|s| s == "deleted"),
+        ),
+    };
+    let name_filter = query
+        .term_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("%{s}%"));
+
+    let terms: Vec<Term> = sqlx::query_as(
+        r#"
+        SELECT id, account_id, name, start_at, end_at, workflow_state, created_at
+        FROM terms
+        WHERE account_id = $1
+          AND (($2 AND workflow_state = 'active') OR ($3 AND workflow_state = 'deleted'))
+          AND ($4::text IS NULL OR name ILIKE $4)
+        ORDER BY start_at DESC, end_at DESC, id ASC
+        LIMIT $5 OFFSET $6
+        "#,
+    )
+    .bind(account_id)
+    .bind(include_active)
+    .bind(include_deleted)
+    .bind(name_filter)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(EnrollmentTermsList {
+        enrollment_terms: terms,
+    }))
+}
+
+/// POST /accounts/{accountId}/terms — create a term (account admin only).
+/// Canvas returns 200 with the serialized term.
+async fn create_term(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<TermPayload>,
+) -> Result<Json<Term>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_account_admin(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let fields = payload.into_fields();
+    let name = fields.name.as_deref().map(str::trim).unwrap_or("");
+    if name.is_empty() {
+        return Err(ApiError::Validation("name is required".into()));
+    }
+    validate_date_range(fields.start_at, fields.end_at)?;
+
+    let term: Term = sqlx::query_as(
+        r#"
+        INSERT INTO terms (account_id, name, start_at, end_at)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, account_id, name, start_at, end_at, workflow_state, created_at
+        "#,
+    )
+    .bind(account_id)
+    .bind(name)
+    .bind(fields.start_at)
+    .bind(fields.end_at)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(term))
+}
+
+/// GET /terms/{id} — retrieve a single term (account admin only).
+async fn get_term(
+    State(state): State<AppState>,
+    Path(term_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Term>, ApiError> {
+    let term = fetch_term(&state.db, term_id).await?;
+    if !check_account_admin(&state.db, auth.id, term.account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(term))
+}
+
+/// Shared update logic for flat and account-scoped term routes.
+async fn update_term_record(
+    pool: &PgPool,
+    auth: &AuthUser,
+    term: Term,
+    payload: TermPayload,
+) -> Result<Term, ApiError> {
+    // Canvas updates only active terms (deleted ones are 404).
+    if term.workflow_state != "active" {
+        return Err(ApiError::NotFound);
+    }
+    if !check_account_admin(pool, auth.id, term.account_id, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let fields = payload.into_fields();
+    if let Some(name) = fields.name.as_deref() {
+        if name.trim().is_empty() {
+            return Err(ApiError::Validation("name is required".into()));
+        }
+    }
+
+    let name = fields.name.unwrap_or(term.name);
+    let start_at = fields.start_at.or(term.start_at);
+    let end_at = fields.end_at.or(term.end_at);
+    validate_date_range(start_at, end_at)?;
+
+    let updated: Term = sqlx::query_as(
+        r#"
+        UPDATE terms
+        SET name = $2, start_at = $3, end_at = $4, updated_at = now()
+        WHERE id = $1
+        RETURNING id, account_id, name, start_at, end_at, workflow_state, created_at
+        "#,
+    )
+    .bind(term.id)
+    .bind(&name)
+    .bind(start_at)
+    .bind(end_at)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(updated)
+}
+
+/// PUT /terms/{id} — partial update (account admin only).
+async fn update_term(
+    State(state): State<AppState>,
+    Path(term_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<TermPayload>,
+) -> Result<Json<Term>, ApiError> {
+    let term = fetch_term(&state.db, term_id).await?;
+    let updated = update_term_record(&state.db, &auth, term, payload).await?;
+    Ok(Json(updated))
+}
+
+/// Shared soft-delete logic for flat and account-scoped term routes.
+async fn delete_term_record(pool: &PgPool, auth: &AuthUser, term: Term) -> Result<Term, ApiError> {
+    if !check_account_admin(pool, auth.id, term.account_id, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let deleted: Term = sqlx::query_as(
+        r#"
+        UPDATE terms SET workflow_state = 'deleted', updated_at = now()
+        WHERE id = $1
+        RETURNING id, account_id, name, start_at, end_at, workflow_state, created_at
+        "#,
+    )
+    .bind(term.id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(deleted)
+}
+
+/// DELETE /terms/{id} — soft-delete, returning the former term (Canvas shape).
+async fn delete_term(
+    State(state): State<AppState>,
+    Path(term_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Term>, ApiError> {
+    let term = fetch_term(&state.db, term_id).await?;
+    let deleted = delete_term_record(&state.db, &auth, term).await?;
+    Ok(Json(deleted))
+}
+
+/// GET /accounts/{accountId}/terms/{id} — Canvas-compatible scoped alias.
+async fn get_account_term(
+    State(state): State<AppState>,
+    Path((account_id, term_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Term>, ApiError> {
+    let term = fetch_term(&state.db, term_id).await?;
+    if term.account_id != account_id {
+        return Err(ApiError::NotFound);
+    }
+    if !check_account_admin(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(term))
+}
+
+/// PUT /accounts/{accountId}/terms/{id} — Canvas-compatible scoped alias.
+async fn update_account_term(
+    State(state): State<AppState>,
+    Path((account_id, term_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<TermPayload>,
+) -> Result<Json<Term>, ApiError> {
+    let term = fetch_term(&state.db, term_id).await?;
+    if term.account_id != account_id {
+        return Err(ApiError::NotFound);
+    }
+    let updated = update_term_record(&state.db, &auth, term, payload).await?;
+    Ok(Json(updated))
+}
+
+/// DELETE /accounts/{accountId}/terms/{id} — Canvas-compatible scoped alias.
+async fn delete_account_term(
+    State(state): State<AppState>,
+    Path((account_id, term_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Term>, ApiError> {
+    let term = fetch_term(&state.db, term_id).await?;
+    if term.account_id != account_id {
+        return Err(ApiError::NotFound);
+    }
+    let deleted = delete_term_record(&state.db, &auth, term).await?;
+    Ok(Json(deleted))
+}
+
+// ---------------------------------------------------------------------------
+// Course sections (Canvas API v1)
+// ---------------------------------------------------------------------------
+
+/// Load a section by id, or 404.
+async fn fetch_section(pool: &PgPool, section_id: i64) -> Result<CourseSection, ApiError> {
+    let section: Option<CourseSection> = sqlx::query_as(
+        r#"
+        SELECT id, name, course_id, start_at, end_at, workflow_state
+        FROM course_sections WHERE id = $1
+        "#,
+    )
+    .bind(section_id)
+    .fetch_optional(pool)
+    .await?;
+
+    section.ok_or(ApiError::NotFound)
+}
+
+/// GET /courses/{courseId}/sections — Canvas returns a bare array of sections.
+async fn list_sections(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Query(query): Query<SectionListQuery>,
+) -> Result<Json<Vec<CourseSection>>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let (_, per_page, offset) = Pagination {
+        page: query.page,
+        per_page: query.per_page,
+    }
+    .resolve();
+    let search = query
+        .search_term
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("%{s}%"));
+
+    let sections: Vec<CourseSection> = sqlx::query_as(
+        r#"
+        SELECT id, name, course_id, start_at, end_at, workflow_state
+        FROM course_sections
+        WHERE course_id = $1
+          AND workflow_state = 'active'
+          AND ($2::text IS NULL OR name ILIKE $2)
+        ORDER BY name ASC, id ASC
+        LIMIT $3 OFFSET $4
+        "#,
+    )
+    .bind(course_id)
+    .bind(search)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(sections))
+}
+
+/// POST /courses/{courseId}/sections — create a section (course teacher/admin).
+/// Canvas returns 200 with the serialized section.
+async fn create_section(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CourseSectionPayload>,
+) -> Result<Json<CourseSection>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let fields = payload.into_fields();
+    let name = fields.name.as_deref().map(str::trim).unwrap_or("");
+    if name.is_empty() {
+        return Err(ApiError::Validation("name is required".into()));
+    }
+    validate_date_range(fields.start_at, fields.end_at)?;
+
+    let section: CourseSection = sqlx::query_as(
+        r#"
+        INSERT INTO course_sections (course_id, name, start_at, end_at)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id, name, course_id, start_at, end_at, workflow_state
+        "#,
+    )
+    .bind(course_id)
+    .bind(name)
+    .bind(fields.start_at)
+    .bind(fields.end_at)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(section))
+}
+
+/// GET /sections/{id} — get a section (anyone enrolled or admin).
+async fn get_section(
+    State(state): State<AppState>,
+    Path(section_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<CourseSection>, ApiError> {
+    let section = fetch_section(&state.db, section_id).await?;
+    if !check_enrolled_or_admin(&state.db, auth.id, section.course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(section))
+}
+
+/// GET /courses/{courseId}/sections/{id} — Canvas-compatible course alias.
+async fn get_course_section(
+    State(state): State<AppState>,
+    Path((course_id, section_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<CourseSection>, ApiError> {
+    let section = fetch_section(&state.db, section_id).await?;
+    if section.course_id != course_id {
+        return Err(ApiError::NotFound);
+    }
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(section))
+}
+
+/// PUT /sections/{id} — partial update (course teacher/admin).
+async fn update_section(
+    State(state): State<AppState>,
+    Path(section_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CourseSectionPayload>,
+) -> Result<Json<CourseSection>, ApiError> {
+    let section = fetch_section(&state.db, section_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, section.course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let fields = payload.into_fields();
+    if let Some(name) = fields.name.as_deref() {
+        if name.trim().is_empty() {
+            return Err(ApiError::Validation("name is required".into()));
+        }
+    }
+
+    let name = fields.name.unwrap_or(section.name);
+    let start_at = fields.start_at.or(section.start_at);
+    let end_at = fields.end_at.or(section.end_at);
+    validate_date_range(start_at, end_at)?;
+
+    let updated: CourseSection = sqlx::query_as(
+        r#"
+        UPDATE course_sections
+        SET name = $2, start_at = $3, end_at = $4, updated_at = now()
+        WHERE id = $1
+        RETURNING id, name, course_id, start_at, end_at, workflow_state
+        "#,
+    )
+    .bind(section.id)
+    .bind(&name)
+    .bind(start_at)
+    .bind(end_at)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(updated))
+}
+
+/// DELETE /sections/{id} — soft-delete, returning the former section.
+///
+/// Canvas refuses to delete sections that have enrollments; section
+/// enrollments are owned by a separate workstream, so this route soft-deletes.
+async fn delete_section(
+    State(state): State<AppState>,
+    Path(section_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<CourseSection>, ApiError> {
+    let section = fetch_section(&state.db, section_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, section.course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let deleted: CourseSection = sqlx::query_as(
+        r#"
+        UPDATE course_sections SET workflow_state = 'deleted', updated_at = now()
+        WHERE id = $1
+        RETURNING id, name, course_id, start_at, end_at, workflow_state
+        "#,
+    )
+    .bind(section.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(deleted))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -701,6 +1387,25 @@ pub fn router() -> Router<AppState> {
             "/courses/{id}/enrollments/{userId}",
             delete(delete_enrollment),
         )
+        // Enrollment terms (Canvas API v1)
+        .route("/accounts/{accountId}/terms", get(list_terms))
+        .route("/accounts/{accountId}/terms", post(create_term))
+        .route("/accounts/{accountId}/terms/{id}", get(get_account_term))
+        .route("/accounts/{accountId}/terms/{id}", put(update_account_term))
+        .route(
+            "/accounts/{accountId}/terms/{id}",
+            delete(delete_account_term),
+        )
+        .route("/terms/{id}", get(get_term))
+        .route("/terms/{id}", put(update_term))
+        .route("/terms/{id}", delete(delete_term))
+        // Course sections (Canvas API v1)
+        .route("/courses/{courseId}/sections", get(list_sections))
+        .route("/courses/{courseId}/sections", post(create_section))
+        .route("/courses/{courseId}/sections/{id}", get(get_course_section))
+        .route("/sections/{id}", get(get_section))
+        .route("/sections/{id}", put(update_section))
+        .route("/sections/{id}", delete(delete_section))
 }
 
 // ---------------------------------------------------------------------------
@@ -840,6 +1545,45 @@ mod tests {
             per_page: Some(25),
         };
         assert_eq!(pag.resolve(), (7, 25, 150));
+    }
+
+    #[test]
+    fn test_resolve_workflow_states_defaults_to_active() {
+        assert_eq!(
+            resolve_workflow_states(&[]),
+            Some(vec!["active".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_resolve_workflow_states_all_disables_filter() {
+        assert_eq!(resolve_workflow_states(&["all".to_string()]), None);
+    }
+
+    #[test]
+    fn test_validate_date_range_accepts_valid_and_missing_dates() {
+        let start = chrono::DateTime::parse_from_rfc3339("2024-01-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let end = chrono::DateTime::parse_from_rfc3339("2024-05-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        assert!(validate_date_range(Some(start), Some(end)).is_ok());
+        assert!(validate_date_range(Some(start), None).is_ok());
+        assert!(validate_date_range(None, None).is_ok());
+    }
+
+    #[test]
+    fn test_validate_date_range_rejects_end_before_start() {
+        let start = chrono::DateTime::parse_from_rfc3339("2024-05-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let end = chrono::DateTime::parse_from_rfc3339("2024-01-10T00:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+
+        assert!(validate_date_range(Some(start), Some(end)).is_err());
     }
 }
 
