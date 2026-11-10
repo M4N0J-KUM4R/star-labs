@@ -1035,3 +1035,277 @@ async fn create_section_enrollment_as_student_is_403() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// Enrollment lifecycle: accept / reject / reactivate and user-scoped listing
+// ---------------------------------------------------------------------------
+
+/// Seed an enrollment in a specific workflow state (invited/inactive/rejected
+/// cannot be produced through the API) and return its id.
+async fn seed_state_enrollment(
+    pool: &PgPool,
+    user_id: i64,
+    course_id: i64,
+    role: &str,
+    workflow_state: &str,
+) -> i64 {
+    sqlx::query_scalar(
+        r#"
+        INSERT INTO enrollments (user_id, course_id, role, workflow_state)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id
+        "#,
+    )
+    .bind(user_id)
+    .bind(course_id)
+    .bind(role)
+    .bind(workflow_state)
+    .fetch_one(pool)
+    .await
+    .expect("seed state enrollment")
+}
+
+#[tokio::test]
+async fn accept_invitation_activates_membership() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let other = seed_user(&pool, &prefix, "Other", "student").await;
+    let course = seed_course(&pool, &prefix, "AcceptCourse").await;
+    let enrollment = seed_state_enrollment(&pool, student, course, "student", "invited").await;
+
+    // Only the invited user may accept.
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/enrollments/{enrollment}/accept"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/enrollments/{enrollment}/accept"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["success"], true);
+
+    let (state,): (String,) =
+        sqlx::query_as("SELECT workflow_state FROM enrollments WHERE id = $1")
+            .bind(enrollment)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "active");
+
+    // Accepting an already-active membership is still a success (Canvas).
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/enrollments/{enrollment}/accept"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["success"], true);
+
+    // An enrollment from another course is a 404, matching the Canvas
+    // `@context.enrollments.find` scope.
+    let other_course = seed_course(&pool, &prefix, "OtherAcceptCourse").await;
+    let resp = server
+        .post(&format!(
+            "/courses/{other_course}/enrollments/{enrollment}/accept"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn reject_then_accept_moves_invitation_through_rejected() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "RejectCourse").await;
+    let enrollment = seed_state_enrollment(&pool, student, course, "student", "invited").await;
+
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/enrollments/{enrollment}/reject"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["success"], true);
+
+    let (state,): (String,) =
+        sqlx::query_as("SELECT workflow_state FROM enrollments WHERE id = $1")
+            .bind(enrollment)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "rejected");
+
+    // Rejecting twice is idempotent.
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/enrollments/{enrollment}/reject"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // Canvas lets a rejected invitation be accepted (via invited).
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/enrollments/{enrollment}/accept"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    let (state,): (String,) =
+        sqlx::query_as("SELECT workflow_state FROM enrollments WHERE id = $1")
+            .bind(enrollment)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(state, "active");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn reactivate_requires_inactive_state_and_teacher_rights() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let course = seed_course(&pool, &prefix, "ReactivateCourse").await;
+    seed_course_teacher(&pool, teacher, course).await;
+    let enrollment = seed_state_enrollment(&pool, student, course, "student", "inactive").await;
+
+    // A user who does not manage the course cannot reactivate.
+    let resp = server
+        .put(&format!(
+            "/courses/{course}/enrollments/{enrollment}/reactivate"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    let resp = server
+        .put(&format!(
+            "/courses/{course}/enrollments/{enrollment}/reactivate"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["id"], enrollment);
+    assert_eq!(body["enrollment_state"], "active");
+    assert_eq!(body["user_id"], student);
+    assert_eq!(body["course_id"], course);
+
+    // Reactivating an active enrollment is a 400 with a Canvas error body.
+    let resp = server
+        .put(&format!(
+            "/courses/{course}/enrollments/{enrollment}/reactivate"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["error"], "enrollment not inactive");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn user_enrollments_listing_is_scoped_and_state_filtered() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let taught = seed_course(&pool, &prefix, "TaughtCourse").await;
+    let invited_course = seed_course(&pool, &prefix, "InvitedCourse").await;
+    let inactive_course = seed_course(&pool, &prefix, "InactiveCourse").await;
+    seed_course_teacher(&pool, teacher, taught).await;
+    seed_state_enrollment(&pool, student, taught, "student", "active").await;
+    seed_state_enrollment(&pool, student, invited_course, "student", "invited").await;
+    seed_state_enrollment(&pool, student, inactive_course, "student", "inactive").await;
+
+    // Self: current + invited by default, inactive hidden.
+    let resp = server
+        .get(&format!("/users/{student}/enrollments"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let arr = body.as_array().expect("array");
+    assert_eq!(arr.len(), 2, "rows: {arr:?}");
+    assert!(arr.iter().all(|e| e["enrollment_state"] != "inactive"));
+
+    // `self` alias resolves to the caller.
+    let resp = server
+        .get("/users/self/enrollments")
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>().as_array().unwrap().len(), 2);
+
+    // Explicit state filter widens to inactive.
+    let resp = server
+        .get(&format!("/users/{student}/enrollments?state=inactive"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let arr = body.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "rows: {arr:?}");
+    assert_eq!(arr[0]["course_id"], inactive_course);
+
+    // Unknown state is a Canvas-style 400.
+    let resp = server
+        .get(&format!("/users/{student}/enrollments?state=bogus"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["error"], "Invalid state bogus");
+
+    // Unrelated users get nothing.
+    let resp = server
+        .get(&format!("/users/{student}/enrollments"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // A course teacher sees only the enrollments in courses they teach.
+    let resp = server
+        .get(&format!("/users/{student}/enrollments"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let arr = body.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "rows: {arr:?}");
+    assert_eq!(arr[0]["course_id"], taught);
+
+    cleanup(&pool, &prefix).await;
+}
