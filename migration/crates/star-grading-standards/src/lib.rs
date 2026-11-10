@@ -13,6 +13,13 @@
 //!   GET  /grading_periods/{id}                  — get grading period
 //!   PUT  /grading_periods/{id}                  — update grading period
 //!   DELETE /grading_periods/{id}                — soft-delete grading period
+//!
+//! Account grading schemes (Canvas `GradingSchemesJsonController` parity):
+//!   GET    /accounts/{accountId}/grading_schemes — detail_list
+//!   POST   /accounts/{accountId}/grading_schemes — create
+//!   GET    /grading_schemes/{id}                 — show
+//!   PUT    /grading_schemes/{id}                 — update
+//!   DELETE /grading_schemes/{id}                 — soft-delete, returns {}
 
 use axum::{
     extract::{Path, Query, State},
@@ -1199,6 +1206,493 @@ async fn delete_grading_period(
 }
 
 // ---------------------------------------------------------------------------
+// Account grading schemes (Canvas GradingSchemeSerializer parity)
+// ---------------------------------------------------------------------------
+
+/// Canvas caps grading scheme listings at 100 rows (`GRADING_SCHEMES_LIMIT`).
+const GRADING_SCHEMES_LIMIT: i64 = 100;
+
+/// Canvas `GradingStandard.maximum_string_length`.
+const GRADING_SCHEME_NAME_MAX_LEN: usize = 255;
+
+/// One `{name, value}` row of a Canvas grading scheme `data` array.
+///
+/// `value` is the row's lower-bound percentage expressed as 0.0–1.0
+/// (e.g. 0.90 = 90%).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, sqlx::FromRow)]
+pub struct GradingSchemeDatum {
+    pub name: String,
+    pub value: f64,
+}
+
+/// Canvas `permissions` block for a grading scheme.
+///
+/// The Canvas `GradingStandard` policy exposes a single `manage` right, so the
+/// serializer emits exactly this key.
+#[derive(Debug, Clone, Serialize)]
+pub struct GradingSchemePermissions {
+    pub manage: bool,
+}
+
+/// Canvas `GradingSchemeSerializer#to_grading_scheme_json` shape.
+#[derive(Debug, Clone, Serialize)]
+pub struct GradingSchemeResponse {
+    /// Canvas serializes grading standard ids as strings, not numbers.
+    pub id: String,
+    pub title: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_name: Option<String>,
+    pub data: Vec<GradingSchemeDatum>,
+    pub permissions: GradingSchemePermissions,
+    pub assessed_assignment: bool,
+    pub points_based: bool,
+    pub scaling_factor: f64,
+    pub used_as_default: bool,
+    pub workflow_state: String,
+}
+
+/// Body for `POST /accounts/{accountId}/grading_schemes` and
+/// `PUT /grading_schemes/{id}`.
+///
+/// Canvas posts the grading scheme UI model verbatim:
+/// `{title, data: [{name, value}], points_based, scaling_factor}`. Update
+/// treats every field as optional and keeps the stored value when absent.
+#[derive(Debug, Deserialize)]
+pub struct GradingSchemeParams {
+    pub title: Option<String>,
+    pub data: Option<Vec<GradingSchemeDatum>>,
+    pub points_based: Option<bool>,
+    pub scaling_factor: Option<f64>,
+}
+
+/// Query params for the account scheme list (`?include_archived=true`).
+#[derive(Debug, Deserialize)]
+pub struct GradingSchemesQuery {
+    #[serde(default)]
+    pub include_archived: bool,
+}
+
+/// `grading_standards` row joined with its owning context name.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct GradingSchemeRow {
+    id: i64,
+    course_id: Option<i64>,
+    account_id: Option<i64>,
+    title: String,
+    workflow_state: String,
+    points_based: bool,
+    scaling_factor: f64,
+    context_name: Option<String>,
+}
+
+impl GradingSchemeRow {
+    /// Canvas renders `context_type` / `context_id` from the standard's
+    /// polymorphic context. Legacy rows without an owning account or course
+    /// expose no context (the serializer omits those keys).
+    fn context(&self) -> (Option<String>, Option<i64>) {
+        if let Some(account_id) = self.account_id {
+            (Some("Account".to_string()), Some(account_id))
+        } else if let Some(course_id) = self.course_id {
+            (Some("Course".to_string()), Some(course_id))
+        } else {
+            (None, None)
+        }
+    }
+}
+
+/// Canvas scheme validation failures are rendered with `:bad_request` (400),
+/// not the 422 this crate uses for other validation errors.
+fn scheme_validation(message: &str) -> ApiError {
+    ApiError::BadRequest(message.to_string())
+}
+
+fn validate_scheme_title(title: &str) -> Result<String, ApiError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(scheme_validation("title is required"));
+    }
+    Ok(title.to_string())
+}
+
+/// Canvas `GradingStandard#valid_grading_scheme_data` + `#full_range_scheme`:
+/// values are non-negative lower-bound percentages, unique, named, and must
+/// include a 0% floor. Names are trimmed like `trim_whitespace`.
+fn validate_scheme_data(data: &[GradingSchemeDatum]) -> Result<Vec<GradingSchemeDatum>, ApiError> {
+    if data.is_empty() {
+        return Err(scheme_validation("data cannot be empty"));
+    }
+
+    let mut normalized = Vec::with_capacity(data.len());
+    let mut seen: Vec<f64> = Vec::with_capacity(data.len());
+    let mut has_zero_floor = false;
+
+    for datum in data {
+        let name = datum.name.trim().to_string();
+        if name.is_empty() {
+            return Err(scheme_validation("a grading scheme name cannot be empty"));
+        }
+        if name.chars().count() > GRADING_SCHEME_NAME_MAX_LEN {
+            return Err(scheme_validation("a grading scheme name is too long"));
+        }
+        if !datum.value.is_finite() || !(0.0..=1.0).contains(&datum.value) {
+            return Err(scheme_validation(
+                "grading scheme values must be between 0.0 and 1.0",
+            ));
+        }
+        if seen
+            .iter()
+            .any(|value| (value - datum.value).abs() < f64::EPSILON)
+        {
+            return Err(scheme_validation(
+                "grading scheme cannot contain duplicate values",
+            ));
+        }
+        if datum.value.abs() < f64::EPSILON {
+            has_zero_floor = true;
+        }
+
+        seen.push(datum.value);
+        normalized.push(GradingSchemeDatum {
+            name,
+            value: datum.value,
+        });
+    }
+
+    if !has_zero_floor {
+        return Err(scheme_validation(
+            "grading schemes must have 0% for the lowest grade",
+        ));
+    }
+
+    Ok(normalized)
+}
+
+/// Canvas `GradingStandard#scaling_factor_points_based`: percentage schemes
+/// always scale by 1.
+fn validate_scaling_factor(points_based: bool, scaling_factor: f64) -> Result<(), ApiError> {
+    if !scaling_factor.is_finite() || scaling_factor <= 0.0 {
+        return Err(scheme_validation("scaling_factor must be greater than 0"));
+    }
+    if !points_based && (scaling_factor - 1.0).abs() > f64::EPSILON {
+        return Err(scheme_validation(
+            "scaling_factor must be 1 if scheme points_based is false",
+        ));
+    }
+    Ok(())
+}
+
+const GRADING_SCHEME_SELECT: &str = r#"SELECT gs.id, gs.course_id, gs.account_id, gs.title,
+          gs.workflow_state, gs.points_based, gs.scaling_factor,
+          COALESCE(a.name, c.name) AS context_name
+   FROM grading_standards gs
+   LEFT JOIN accounts a ON a.id = gs.account_id
+   LEFT JOIN courses c ON c.id = gs.course_id"#;
+
+async fn fetch_grading_scheme(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<GradingSchemeRow>, ApiError> {
+    let sql =
+        format!("{GRADING_SCHEME_SELECT} WHERE gs.id = $1 AND gs.workflow_state <> 'deleted'");
+    let row = sqlx::query_as(&sql).bind(id).fetch_optional(pool).await?;
+    Ok(row)
+}
+
+async fn list_grading_scheme_rows(
+    pool: &PgPool,
+    account_id: i64,
+    include_archived: bool,
+) -> Result<Vec<GradingSchemeRow>, ApiError> {
+    let workflow = if include_archived {
+        "gs.workflow_state <> 'deleted'"
+    } else {
+        "gs.workflow_state = 'active'"
+    };
+    // Canvas `.sorted`: usage_count >= 3 first, then title. Nothing maintains
+    // usage_count in this schema, so title order is equivalent.
+    let sql = format!(
+        "{GRADING_SCHEME_SELECT}
+         WHERE gs.account_id = $1 AND {workflow}
+         ORDER BY lower(gs.title) ASC, gs.id ASC
+         LIMIT $2"
+    );
+    let rows = sqlx::query_as(&sql)
+        .bind(account_id)
+        .bind(GRADING_SCHEMES_LIMIT)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
+async fn fetch_scheme_data(
+    pool: &PgPool,
+    standard_id: i64,
+) -> Result<Vec<GradingSchemeDatum>, ApiError> {
+    let data: Vec<GradingSchemeDatum> = sqlx::query_as(
+        r#"SELECT name, min_score::float8 AS value
+           FROM grading_scheme_entries
+           WHERE grading_standard_id = $1
+           ORDER BY position ASC, id ASC"#,
+    )
+    .bind(standard_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(data)
+}
+
+async fn to_scheme_response(
+    row: GradingSchemeRow,
+    pool: &PgPool,
+    can_manage: bool,
+) -> Result<GradingSchemeResponse, ApiError> {
+    let data = fetch_scheme_data(pool, row.id).await?;
+    let (context_type, context_id) = row.context();
+
+    Ok(GradingSchemeResponse {
+        id: row.id.to_string(),
+        title: row.title,
+        context_type,
+        context_id,
+        context_name: row.context_name,
+        data,
+        permissions: GradingSchemePermissions { manage: can_manage },
+        // The schema has no assignments.grading_standard_id or
+        // accounts.grading_standard_id columns, so Canvas' usage flags are
+        // reported as false.
+        assessed_assignment: false,
+        points_based: row.points_based,
+        scaling_factor: row.scaling_factor,
+        used_as_default: false,
+        workflow_state: row.workflow_state,
+    })
+}
+
+/// Manage rights for a scheme: account admins for account schemes, teachers
+/// for course schemes, and global admins for context-less rows.
+async fn can_manage_scheme(
+    pool: &PgPool,
+    auth: &AuthUser,
+    row: &GradingSchemeRow,
+) -> Result<bool, ApiError> {
+    if let Some(account_id) = row.account_id {
+        can_manage_account(pool, auth.id, account_id, auth).await
+    } else if let Some(course_id) = row.course_id {
+        check_teacher_or_admin(pool, auth.id, course_id, auth).await
+    } else {
+        Ok(is_admin(auth))
+    }
+}
+
+async fn can_read_scheme(
+    pool: &PgPool,
+    auth: &AuthUser,
+    row: &GradingSchemeRow,
+) -> Result<bool, ApiError> {
+    if let Some(account_id) = row.account_id {
+        can_read_account(pool, auth.id, account_id, auth).await
+    } else if let Some(course_id) = row.course_id {
+        check_enrolled_or_admin(pool, auth.id, course_id, auth).await
+    } else {
+        Ok(is_admin(auth))
+    }
+}
+
+async fn insert_scheme_entries(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    standard_id: i64,
+    data: &[GradingSchemeDatum],
+) -> Result<(), sqlx::Error> {
+    for (position, datum) in data.iter().enumerate() {
+        sqlx::query(
+            r#"INSERT INTO grading_scheme_entries (grading_standard_id, name, min_score, position)
+               VALUES ($1, $2, $3, $4)"#,
+        )
+        .bind(standard_id)
+        .bind(&datum.name)
+        .bind(datum.value)
+        .bind(position as i32)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
+}
+
+/// GET /accounts/{accountId}/grading_schemes — Canvas `detail_list`.
+async fn list_account_grading_schemes(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    Query(query): Query<GradingSchemesQuery>,
+    auth: AuthUser,
+) -> Result<Json<Vec<GradingSchemeResponse>>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let can_manage = can_manage_account(&state.db, auth.id, account_id, &auth).await?;
+
+    let rows = list_grading_scheme_rows(&state.db, account_id, query.include_archived).await?;
+    let mut result = Vec::with_capacity(rows.len());
+    for row in rows {
+        result.push(to_scheme_response(row, &state.db, can_manage).await?);
+    }
+
+    Ok(Json(result))
+}
+
+/// POST /accounts/{accountId}/grading_schemes — Canvas `create`.
+///
+/// Canvas renders the created scheme with a 200 status (errors are 400).
+async fn create_account_grading_scheme(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<GradingSchemeParams>,
+) -> Result<Json<GradingSchemeResponse>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_manage_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let title = validate_scheme_title(payload.title.as_deref().unwrap_or_default())?;
+    let data = payload
+        .data
+        .ok_or_else(|| scheme_validation("data is required"))?;
+    let data = validate_scheme_data(&data)?;
+    let points_based = payload.points_based.unwrap_or(false);
+    let scaling_factor = payload.scaling_factor.unwrap_or(1.0);
+    validate_scaling_factor(points_based, scaling_factor)?;
+
+    let mut tx = state.db.begin().await?;
+    let (id,): (i64,) = sqlx::query_as(
+        r#"INSERT INTO grading_standards (account_id, title, points_based, scaling_factor)
+           VALUES ($1, $2, $3, $4)
+           RETURNING id"#,
+    )
+    .bind(account_id)
+    .bind(&title)
+    .bind(points_based)
+    .bind(scaling_factor)
+    .fetch_one(&mut *tx)
+    .await?;
+    insert_scheme_entries(&mut tx, id, &data).await?;
+    tx.commit().await?;
+
+    let row = fetch_grading_scheme(&state.db, id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let response = to_scheme_response(row, &state.db, true).await?;
+
+    Ok(Json(response))
+}
+
+/// GET /grading_schemes/{id} — Canvas `show`.
+async fn get_grading_scheme(
+    State(state): State<AppState>,
+    Path(scheme_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<GradingSchemeResponse>, ApiError> {
+    let row = fetch_grading_scheme(&state.db, scheme_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if !can_read_scheme(&state.db, &auth, &row).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let can_manage = can_manage_scheme(&state.db, &auth, &row).await?;
+
+    Ok(Json(to_scheme_response(row, &state.db, can_manage).await?))
+}
+
+/// PUT /grading_schemes/{id} — Canvas `update`.
+async fn update_grading_scheme(
+    State(state): State<AppState>,
+    Path(scheme_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<GradingSchemeParams>,
+) -> Result<Json<GradingSchemeResponse>, ApiError> {
+    let row = fetch_grading_scheme(&state.db, scheme_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if !can_manage_scheme(&state.db, &auth, &row).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let title = match payload.title {
+        Some(title) => validate_scheme_title(&title)?,
+        None => row.title.clone(),
+    };
+    let points_based = payload.points_based.unwrap_or(row.points_based);
+    let scaling_factor = payload.scaling_factor.unwrap_or(row.scaling_factor);
+    validate_scaling_factor(points_based, scaling_factor)?;
+    let data = match &payload.data {
+        Some(data) => Some(validate_scheme_data(data)?),
+        None => None,
+    };
+
+    let mut tx = state.db.begin().await?;
+    sqlx::query(
+        r#"UPDATE grading_standards
+           SET title = $2, points_based = $3, scaling_factor = $4, updated_at = now()
+           WHERE id = $1"#,
+    )
+    .bind(scheme_id)
+    .bind(&title)
+    .bind(points_based)
+    .bind(scaling_factor)
+    .execute(&mut *tx)
+    .await?;
+
+    if let Some(data) = &data {
+        sqlx::query("DELETE FROM grading_scheme_entries WHERE grading_standard_id = $1")
+            .bind(scheme_id)
+            .execute(&mut *tx)
+            .await?;
+        insert_scheme_entries(&mut tx, scheme_id, data).await?;
+    }
+    tx.commit().await?;
+
+    let row = fetch_grading_scheme(&state.db, scheme_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let response = to_scheme_response(row, &state.db, true).await?;
+
+    Ok(Json(response))
+}
+
+/// DELETE /grading_schemes/{id} — Canvas `destroy`.
+///
+/// Soft-deletes the scheme and renders `{}` (Canvas does not 204 here).
+async fn delete_grading_scheme(
+    State(state): State<AppState>,
+    Path(scheme_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let row = fetch_grading_scheme(&state.db, scheme_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if !can_manage_scheme(&state.db, &auth, &row).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    sqlx::query(
+        r#"UPDATE grading_standards SET workflow_state = 'deleted', updated_at = now()
+           WHERE id = $1"#,
+    )
+    .bind(scheme_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(Json(serde_json::json!({})))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -1234,6 +1728,17 @@ pub fn router() -> Router<AppState> {
         .route("/grading_periods/{id}", get(get_grading_period))
         .route("/grading_periods/{id}", put(update_grading_period))
         .route("/grading_periods/{id}", delete(delete_grading_period))
+        .route(
+            "/accounts/{accountId}/grading_schemes",
+            get(list_account_grading_schemes),
+        )
+        .route(
+            "/accounts/{accountId}/grading_schemes",
+            post(create_account_grading_scheme),
+        )
+        .route("/grading_schemes/{id}", get(get_grading_scheme))
+        .route("/grading_schemes/{id}", put(update_grading_scheme))
+        .route("/grading_schemes/{id}", delete(delete_grading_scheme))
 }
 
 // ---------------------------------------------------------------------------
