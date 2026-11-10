@@ -1377,5 +1377,377 @@ async fn every_route_rejects_anonymous_callers_with_401() {
     assert_eq!(resp.status_code(), 401);
     assert_eq!(resp.text(), "unauthorized");
 
+    // PUT/DELETE topic read.
+    let topic_read = format!("{base}/1/read");
+    let resp = server.put(&topic_read).await;
+    assert_eq!(resp.status_code(), 401);
+    assert_eq!(resp.text(), "unauthorized");
+    let resp = server.delete(&topic_read).await;
+    assert_eq!(resp.status_code(), 401);
+
+    // PUT entry read.
+    let entry_read = format!("{base}/1/entries/2/read");
+    let resp = server.put(&entry_read).await;
+    assert_eq!(resp.status_code(), 401);
+    assert_eq!(resp.text(), "unauthorized");
+
+    // POST entry rating.
+    let resp = server.post(&format!("{base}/1/entries/2/rating")).await;
+    assert_eq!(resp.status_code(), 401);
+    assert_eq!(resp.text(), "unauthorized");
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// PUT/DELETE .../discussion_topics/{topicId}/read — topic read state
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn topic_read_state_lifecycle_matches_canvas_noop_semantics() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "TopicReads").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let student_bearer = auth(student, "student");
+
+    let topic = create_topic_ok(
+        &server,
+        course,
+        &auth(teacher, "teacher"),
+        &format!("{prefix}-ReadMe"),
+    )
+    .await;
+    let topic_id = topic["id"].as_i64().unwrap();
+    let url = format!("/courses/{course}/discussion_topics/{topic_id}/read");
+
+    // PUT marks the topic read: 204 with an empty body and one read row.
+    let resp = server
+        .put(&url)
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
+    assert_eq!(resp.text(), "", "204 must carry an empty body");
+
+    let (state, forced, read_at): (String, Option<bool>, Option<chrono::DateTime<chrono::Utc>>) =
+        sqlx::query_as(
+            "SELECT workflow_state, forced_read_state, read_at
+             FROM discussion_topic_reads WHERE topic_id = $1 AND user_id = $2",
+        )
+        .bind(topic_id)
+        .bind(student)
+        .fetch_one(&pool)
+        .await
+        .expect("read row must exist after PUT");
+    assert_eq!(state, "read");
+    assert_eq!(forced, None, "forced_read_state was not supplied");
+    assert!(read_at.is_some(), "read_at must be stamped when read");
+
+    // QUIRK: repeating PUT with forced_read_state=true is a no-op in Canvas
+    // (state already matches), so forced_read_state stays NULL.
+    let resp = server
+        .put(&format!("{url}?forced_read_state=true"))
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
+    let forced: Option<bool> = sqlx::query_scalar(
+        "SELECT forced_read_state FROM discussion_topic_reads WHERE topic_id = $1 AND user_id = $2",
+    )
+    .bind(topic_id)
+    .bind(student)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(forced, None, "no-op must not touch forced_read_state");
+
+    // DELETE flips the existing row to unread and records the forced option.
+    let resp = server
+        .delete(&format!("{url}?forced_read_state=false"))
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
+    let (state, forced): (String, Option<bool>) = sqlx::query_as(
+        "SELECT workflow_state, forced_read_state
+         FROM discussion_topic_reads WHERE topic_id = $1 AND user_id = $2",
+    )
+    .bind(topic_id)
+    .bind(student)
+    .fetch_one(&pool)
+    .await
+    .expect("read row must survive unread");
+    assert_eq!(state, "unread");
+    assert_eq!(forced, Some(false));
+
+    // QUIRK: default state is unread, so DELETE on a never-read topic is a
+    // 204 no-op that does NOT create a row.
+    let other = create_topic_ok(
+        &server,
+        course,
+        &auth(teacher, "teacher"),
+        &format!("{prefix}-NeverRead"),
+    )
+    .await;
+    let other_id = other["id"].as_i64().unwrap();
+    let resp = server
+        .delete(&format!(
+            "/courses/{course}/discussion_topics/{other_id}/read"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM discussion_topic_reads WHERE topic_id = $1 AND user_id = $2",
+    )
+    .bind(other_id)
+    .bind(student)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 0, "no-op unread must not create a read row");
+
+    // Authenticated but unenrolled callers get 403 on a real topic.
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let resp = server
+        .put(&url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+    assert_eq!(resp.text(), "forbidden");
+
+    // Deleted topics are gone for the read endpoints too.
+    let resp = server
+        .delete(&format!("/courses/{course}/discussion_topics/{other_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 204);
+    let resp = server
+        .put(&format!(
+            "/courses/{course}/discussion_topics/{other_id}/read"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer)
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    assert_eq!(resp.text(), "not found");
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// PUT/DELETE .../entries/{entryId}/read — entry read state
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn entry_read_state_validates_course_topic_and_enrollment() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let course_a = seed_course(&pool, &prefix, "EntryReadA").await;
+    let course_b = seed_course(&pool, &prefix, "EntryReadB").await;
+    seed_enrollment(&pool, teacher, course_a, "teacher").await;
+    seed_enrollment(&pool, student, course_a, "student").await;
+
+    let teacher_bearer = auth(teacher, "teacher");
+    let student_bearer = auth(student, "student");
+
+    let topic = create_topic_ok(
+        &server,
+        course_a,
+        &teacher_bearer,
+        &format!("{prefix}-EntryReadTopic"),
+    )
+    .await;
+    let topic_id = topic["id"].as_i64().unwrap();
+    let entry = create_entry_ok(
+        &server,
+        course_a,
+        topic_id,
+        &student_bearer,
+        json!({ "message": "read me" }),
+    )
+    .await;
+    let entry_id = entry["id"].as_i64().unwrap();
+    let url = format!("/courses/{course_a}/discussion_topics/{topic_id}/entries/{entry_id}/read");
+
+    // An unenrolled caller is a 403, like Canvas' topic :read authorization.
+    let resp = server
+        .put(&url)
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+    assert_eq!(resp.text(), "forbidden");
+
+    // Addressing the entry through the wrong course path is a 404.
+    let resp = server
+        .put(&format!(
+            "/courses/{course_b}/discussion_topics/{topic_id}/entries/{entry_id}/read"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    assert_eq!(resp.text(), "not found");
+
+    // An entry addressed under the wrong topic is a 404 too.
+    let other_topic = create_topic_ok(
+        &server,
+        course_a,
+        &teacher_bearer,
+        &format!("{prefix}-OtherEntryTopic"),
+    )
+    .await;
+    let other_topic_id = other_topic["id"].as_i64().unwrap();
+    let resp = server
+        .put(&format!(
+            "/courses/{course_a}/discussion_topics/{other_topic_id}/entries/{entry_id}/read"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    // PUT marks the entry read (204, empty body) for the enrolled student.
+    let resp = server
+        .put(&url)
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
+    assert_eq!(resp.text(), "", "204 must carry an empty body");
+    let state: String = sqlx::query_scalar(
+        "SELECT workflow_state FROM discussion_entry_reads WHERE entry_id = $1 AND user_id = $2",
+    )
+    .bind(entry_id)
+    .bind(student)
+    .fetch_one(&pool)
+    .await
+    .expect("entry read row must exist after PUT");
+    assert_eq!(state, "read");
+
+    // DELETE marks it unread again and stays a 204.
+    let resp = server
+        .delete(&url)
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
+    let state: String = sqlx::query_scalar(
+        "SELECT workflow_state FROM discussion_entry_reads WHERE entry_id = $1 AND user_id = $2",
+    )
+    .bind(entry_id)
+    .bind(student)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(state, "unread");
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// POST .../entries/{entryId}/rating — entry rating
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn rate_entry_accepts_zero_or_one_and_rejects_other_values() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let course = seed_course(&pool, &prefix, "Rating").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let student_bearer = auth(student, "student");
+
+    let topic = create_topic_ok(
+        &server,
+        course,
+        &auth(teacher, "teacher"),
+        &format!("{prefix}-Rated"),
+    )
+    .await;
+    let topic_id = topic["id"].as_i64().unwrap();
+    let entry = create_entry_ok(
+        &server,
+        course,
+        topic_id,
+        &student_bearer,
+        json!({ "message": "rate me" }),
+    )
+    .await;
+    let entry_id = entry["id"].as_i64().unwrap();
+    let url = format!("/courses/{course}/discussion_topics/{topic_id}/entries/{entry_id}/rating");
+
+    // rating=1 via query -> 204, stored as 1.
+    let resp = server
+        .post(&format!("{url}?rating=1"))
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
+    assert_eq!(resp.text(), "", "204 must carry an empty body");
+    let rating: i32 = sqlx::query_scalar(
+        "SELECT rating FROM discussion_entry_ratings WHERE entry_id = $1 AND user_id = $2",
+    )
+    .bind(entry_id)
+    .bind(student)
+    .fetch_one(&pool)
+    .await
+    .expect("rating row must exist");
+    assert_eq!(rating, 1);
+
+    // rating=0 via JSON body clears it (upsert, still a single row).
+    let resp = server
+        .post(&url)
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .json(&json!({ "rating": 0 }))
+        .await;
+    assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
+    let (rating, count): (i32, i64) = sqlx::query_as(
+        "SELECT rating, count(*) OVER () FROM discussion_entry_ratings
+         WHERE entry_id = $1 AND user_id = $2",
+    )
+    .bind(entry_id)
+    .bind(student)
+    .fetch_one(&pool)
+    .await
+    .expect("rating row must still exist");
+    assert_eq!(rating, 0);
+    assert_eq!(count, 1, "rating must upsert, not duplicate");
+
+    // Anything outside 0/1 is a 400 with Canvas' JSON error body.
+    let resp = server
+        .post(&format!("{url}?rating=5"))
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["message"], "Invalid rating given");
+
+    // QUIRK: Canvas coerces a missing rating via `params[:rating].to_i` (nil -> 0),
+    // so a bare POST is accepted as rating 0.
+    let resp = server
+        .post(&url)
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer)
+        .await;
+    assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
+
+    // Unenrolled callers are rejected before any rating write.
+    let resp = server
+        .post(&format!("{url}?rating=1"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+    assert_eq!(resp.text(), "forbidden");
+
     cleanup(&pool, &prefix).await;
 }
