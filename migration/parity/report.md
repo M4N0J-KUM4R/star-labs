@@ -6,8 +6,8 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 167 | 1403 | 11.9% |
-| REST routes referenced from `ui/` | 91 | 503 | 18.1% |
+| REST API routes | 244 | 1403 | 17.4% |
+| REST routes referenced from `ui/` | 149 | 503 | 29.6% |
 | GraphQL files | 0 | 390 | 0.0% |
 | GraphQL object types | 0 | 170 | 0.0% |
 | GraphQL mutations | 0 | 110 | 0.0% |
@@ -15,54 +15,62 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | JS/JSX/TS/TSX files | 0 | 5459 | 0.0% |
 | ERB views | 0 | 475 | 0.0% |
 | js_env files | 0 | 124 | 0.0% |
-| Schema tables (vs 688 Canvas models) | 68 | 688 | n/a |
+| Schema tables (vs 688 Canvas models) | 93 | 688 | n/a |
 
-Implemented REST route count: **167 / 1403** (11.9%).
+Implemented REST route count: **244 / 1403** (17.4%).
 
-Star registrations: 277 route/method pairs from 253 `.route(...)` calls (0 unparsed); 111 have no Canvas match and are listed as extras below.
+Star registrations: 387 route/method pairs from 344 `.route(...)` calls (0 unparsed); 145 have no Canvas match and are listed as extras below.
 
 Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 
-## Controllers with coverage (46)
+## Controllers with coverage (54)
 
 | Controller | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| `discussion_topics_api` | 8 | 58 | 13.8% |
-| `wiki_pages_api` | 8 | 29 | 27.6% |
-| `folders` | 7 | 34 | 20.6% |
-| `conversations` | 6 | 16 | 37.5% |
-| `courses` | 6 | 38 | 15.8% |
+| `discussion_topics_api` | 11 | 58 | 19.0% |
+| `courses` | 10 | 38 | 26.3% |
+| `users` | 10 | 39 | 25.6% |
+| `wiki_pages_api` | 10 | 29 | 34.5% |
+| `conversations` | 9 | 16 | 56.2% |
+| `enrollments_api` | 9 | 14 | 64.3% |
+| `folders` | 9 | 34 | 26.5% |
+| `context_module_items_api` | 8 | 12 | 66.7% |
+| `groups` | 8 | 17 | 47.1% |
+| `accounts` | 7 | 22 | 31.8% |
+| `outcome_groups_api` | 7 | 40 | 17.5% |
+| `appointment_groups` | 6 | 8 | 75.0% |
+| `files` | 6 | 26 | 23.1% |
 | `group_categories` | 6 | 16 | 37.5% |
 | `sections` | 6 | 9 | 66.7% |
+| `submissions_api` | 6 | 44 | 13.6% |
 | `assignment_overrides` | 5 | 10 | 50.0% |
 | `assignments_api` | 5 | 12 | 41.7% |
-| `context_module_items_api` | 5 | 12 | 41.7% |
+| `calendar_events_api` | 5 | 15 | 33.3% |
 | `context_modules_api` | 5 | 8 | 62.5% |
-| `enrollments_api` | 5 | 14 | 35.7% |
-| `groups` | 5 | 17 | 29.4% |
+| `group_memberships` | 5 | 11 | 45.5% |
 | `planner_notes` | 5 | 5 | 100.0% |
 | `quizzes/quiz_groups` | 5 | 6 | 83.3% |
 | `quizzes/quiz_questions` | 5 | 5 | 100.0% |
+| `quizzes/quiz_submissions_api` | 5 | 7 | 71.4% |
 | `quizzes/quizzes_api` | 5 | 7 | 71.4% |
 | `assignment_groups_api` | 4 | 5 | 80.0% |
-| `calendar_events_api` | 4 | 15 | 26.7% |
+| `content_migrations` | 4 | 25 | 16.0% |
 | `discussion_topics` | 4 | 10 | 40.0% |
-| `files` | 4 | 26 | 15.4% |
 | `grading_standards_api` | 4 | 10 | 40.0% |
-| `users` | 4 | 39 | 10.3% |
+| `jobs_v2` | 4 | 12 | 33.3% |
+| `lti/registrations` | 4 | 20 | 20.0% |
 | `account_notifications` | 3 | 8 | 37.5% |
-| `accounts` | 3 | 22 | 13.6% |
 | `admins` | 3 | 4 | 75.0% |
 | `content_exports_api` | 3 | 14 | 21.4% |
-| `group_memberships` | 3 | 11 | 27.3% |
-| `outcome_groups_api` | 3 | 40 | 7.5% |
-| `quizzes/quiz_submissions_api` | 3 | 7 | 42.9% |
 | `rubrics` | 3 | 3 | 100.0% |
+| `rubrics_api` | 3 | 15 | 20.0% |
+| `submission_comments_api` | 3 | 4 | 75.0% |
 | `terms` | 3 | 3 | 100.0% |
+| `discussion_entries` | 2 | 4 | 50.0% |
 | `jobs` | 2 | 3 | 66.7% |
+| `lti/deployments` | 2 | 5 | 40.0% |
 | `notification_preferences` | 2 | 10 | 20.0% |
-| `rubrics_api` | 2 | 15 | 13.3% |
-| `submissions_api` | 2 | 44 | 4.5% |
+| `quizzes/quiz_reports` | 2 | 4 | 50.0% |
 | `terms_api` | 2 | 2 | 100.0% |
 | `assignment_groups` | 1 | 1 | 100.0% |
 | `assignments` | 1 | 1 | 100.0% |
@@ -71,15 +79,20 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `lti/account_lookup` | 1 | 1 | 100.0% |
 | `profile` | 1 | 2 | 50.0% |
 | `sub_accounts` | 1 | 2 | 50.0% |
-| `submission_comments_api` | 1 | 4 | 25.0% |
 | `submissions` | 1 | 2 | 50.0% |
+| `tabs` | 1 | 5 | 20.0% |
 
-## Star routes with no Canvas match (111)
+## Star routes with no Canvas match (145)
 
 | Verb | Path | Crate |
 |---|---|---|
 | DELETE | `/account_notifications/{id}` | `star-accounts` |
 | POST | `/accounts/{accountId}/grading_periods` | `star-grading-standards` |
+| GET | `/accounts/{accountId}/grading_schemes` | `star-grading-standards` |
+| POST | `/accounts/{accountId}/grading_schemes` | `star-grading-standards` |
+| GET | `/accounts/{accountId}/role_overrides` | `star-permissions` |
+| PUT | `/accounts/{accountId}/role_overrides` | `star-permissions` |
+| PUT | `/accounts/{id}/settings` | `star-accounts` |
 | POST | `/accounts/{id}/users/{userId}` | `star-accounts` |
 | DELETE | `/announcements/{id}` | `star-announcements` |
 | GET | `/announcements/{id}` | `star-announcements` |
@@ -98,6 +111,8 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | GET | `/auth/me` | `star-auth` |
 | POST | `/auth/register` | `star-auth` |
 | GET | `/content_exports/{id}` | `star-content` |
+| GET | `/content_migrations/migrators` | `star-content` |
+| GET | `/content_migrations/{id}` | `star-content` |
 | GET | `/conversations/{id}/participants` | `star-conversations` |
 | PUT | `/conversations/{id}/read` | `star-conversations` |
 | POST | `/courses` | `star-courses` |
@@ -111,33 +126,51 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | GET | `/courses/{courseId}/assignments/{id}/submissions/self` | `star-assignments` |
 | GET | `/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments` | `star-submission-comments` |
 | POST | `/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments` | `star-submission-comments` |
+| GET | `/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}` | `star-submission-comments` |
 | GET | `/courses/{courseId}/calendar_events` | `star-calendar` |
 | POST | `/courses/{courseId}/calendar_events` | `star-calendar` |
+| GET | `/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}` | `star-discussions` |
 | GET | `/courses/{courseId}/final_grade` | `star-grading-standards` |
 | GET | `/courses/{courseId}/folders/root` | `star-files` |
 | GET | `/courses/{courseId}/gradebook` | `star-assignments` |
 | POST | `/courses/{courseId}/groups` | `star-groups` |
+| DELETE | `/courses/{courseId}/modules/items/{itemId}` | `star-modules` |
+| GET | `/courses/{courseId}/modules/items/{itemId}` | `star-modules` |
+| PUT | `/courses/{courseId}/modules/items/{itemId}` | `star-modules` |
 | POST | `/courses/{courseId}/outcome_groups` | `star-outcomes` |
 | GET | `/courses/{courseId}/outcomes` | `star-outcomes` |
 | POST | `/courses/{courseId}/outcomes` | `star-outcomes` |
+| GET | `/courses/{courseId}/role_overrides` | `star-permissions` |
+| PUT | `/courses/{courseId}/role_overrides` | `star-permissions` |
 | GET | `/courses/{courseId}/rubrics/{rubricId}/assessments` | `star-rubrics` |
 | POST | `/courses/{courseId}/rubrics/{rubricId}/assessments` | `star-rubrics` |
+| POST | `/courses/{courseId}/rubrics/{rubricId}/associations` | `star-rubrics` |
 | GET | `/dashboard` | `star-dashboard` |
 | GET | `/developer_keys` | `star-auth` |
 | POST | `/developer_keys` | `star-auth` |
 | GET | `/enrollments` | `star-enrollments` |
 | POST | `/enrollments` | `star-enrollments` |
 | DELETE | `/enrollments/{id}` | `star-enrollments` |
+| GET | `/files/quota` | `star-files` |
 | GET | `/folders` | `star-files` |
 | POST | `/folders` | `star-files` |
 | DELETE | `/grading_periods/{id}` | `star-grading-standards` |
 | GET | `/grading_periods/{id}` | `star-grading-standards` |
 | PUT | `/grading_periods/{id}` | `star-grading-standards` |
+| DELETE | `/grading_schemes/{id}` | `star-grading-standards` |
+| GET | `/grading_schemes/{id}` | `star-grading-standards` |
+| PUT | `/grading_schemes/{id}` | `star-grading-standards` |
 | DELETE | `/grading_standards/{id}` | `star-grading-standards` |
 | GET | `/grading_standards/{id}` | `star-grading-standards` |
+| POST | `/groups/{groupId}/users` | `star-groups` |
 | GET | `/health` | `star-http` |
 | POST | `/jobs/{id}/cancel` | `star-jobs` |
+| GET | `/jobs2` | `star-jobs` |
 | POST | `/login/oauth2/token` | `star-auth` |
+| DELETE | `/lti_registrations/{id}` | `star-lti` |
+| GET | `/lti_registrations/{id}` | `star-lti` |
+| GET | `/lti_registrations/{id}/deployments` | `star-lti` |
+| POST | `/lti_registrations/{id}/deployments` | `star-lti` |
 | DELETE | `/modules/{id}` | `star-modules` |
 | GET | `/modules/{id}` | `star-modules` |
 | PUT | `/modules/{id}` | `star-modules` |
@@ -164,6 +197,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | DELETE | `/rubric_assessments/{id}` | `star-rubrics` |
 | GET | `/rubric_assessments/{id}` | `star-rubrics` |
 | PUT | `/rubric_assessments/{id}` | `star-rubrics` |
+| DELETE | `/rubric_associations/{id}` | `star-rubrics` |
 | DELETE | `/rubrics/{id}` | `star-rubrics` |
 | GET | `/rubrics/{id}` | `star-rubrics` |
 | PUT | `/rubrics/{id}` | `star-rubrics` |
@@ -174,10 +208,16 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | PUT | `/submissions/{submissionId}/comments/read` | `star-submission-comments` |
 | GET | `/submissions/{submissionId}/comments/unread_count` | `star-submission-comments` |
 | DELETE | `/submissions/{submissionId}/comments/{commentId}` | `star-submission-comments` |
+| GET | `/submissions/{submissionId}/comments/{commentId}` | `star-submission-comments` |
+| PUT | `/submissions/{submissionId}/comments/{commentId}` | `star-submission-comments` |
 | PUT | `/submissions/{id}/grade` | `star-assignments` |
 | DELETE | `/terms/{id}` | `star-courses` |
 | GET | `/terms/{id}` | `star-courses` |
 | PUT | `/terms/{id}` | `star-courses` |
+| GET | `/tokens` | `star-auth` |
+| POST | `/tokens` | `star-auth` |
+| DELETE | `/tokens/{id}` | `star-auth` |
+| GET | `/tokens/{id}` | `star-auth` |
 | GET | `/users` | `star-users` |
 | GET | `/users/self` | `star-users` |
 | GET | `/users/self/communication_channels` | `star-notifications` |
@@ -189,6 +229,8 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | GET | `/users/self/notifications` | `star-notifications` |
 | GET | `/users/self/profile` | `star-users` |
 | PUT | `/users/self/profile` | `star-users` |
+| GET | `/users/{user_id}/notification_preferences` | `star-notifications` |
+| PUT | `/users/{user_id}/notification_preferences` | `star-notifications` |
 
 ## Parser scope and limitations
 
