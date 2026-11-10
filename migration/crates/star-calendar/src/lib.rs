@@ -1397,9 +1397,7 @@ fn parse_appointment_json_timestamp(value: &Value) -> Result<DateTime<Utc>, ApiE
 /// `populate_missing_dates`).
 type AppointmentDateRange = (DateTime<Utc>, DateTime<Utc>);
 
-fn parse_new_appointments(
-    value: Option<&Value>,
-) -> Result<Vec<AppointmentDateRange>, ApiError> {
+fn parse_new_appointments(value: Option<&Value>) -> Result<Vec<AppointmentDateRange>, ApiError> {
     let Some(value) = value else {
         return Ok(Vec::new());
     };
