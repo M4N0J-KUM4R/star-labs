@@ -65,8 +65,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
     };
 
     let server =
-        TestServer::new(star_permissions::router().with_state(state))
-            .expect("build TestServer");
+        TestServer::new(star_permissions::router().with_state(state)).expect("build TestServer");
     Some((server, pool, run_prefix()))
 }
 
@@ -124,10 +123,12 @@ async fn create_role_ok(
 
 /// Delete every row created by this run, in FK-safe order.
 async fn cleanup(pool: &PgPool, prefix: &str) {
-    let _ = sqlx::query("DELETE FROM roles WHERE account_id IN (SELECT id FROM accounts WHERE name LIKE $1)")
-        .bind(format!("{prefix}-%"))
-        .execute(pool)
-        .await;
+    let _ = sqlx::query(
+        "DELETE FROM roles WHERE account_id IN (SELECT id FROM accounts WHERE name LIKE $1)",
+    )
+    .bind(format!("{prefix}-%"))
+    .execute(pool)
+    .await;
     let _ = sqlx::query("DELETE FROM account_users WHERE account_id IN (SELECT id FROM accounts WHERE name LIKE $1)")
         .bind(format!("{prefix}-%"))
         .execute(pool)
@@ -190,10 +191,19 @@ async fn list_roles_returns_builtins_and_custom_roles() {
     assert!(list.is_array(), "response must be a JSON array");
 
     // At minimum we must see the five built-in roles.
-    let builtin_names: Vec<&str> = ["StudentEnrollment", "TeacherEnrollment", "TaEnrollment", "DesignerEnrollment", "ObserverEnrollment"];
+    let builtin_names = [
+        "StudentEnrollment",
+        "TeacherEnrollment",
+        "TaEnrollment",
+        "DesignerEnrollment",
+        "ObserverEnrollment",
+    ];
     for name in builtin_names {
         assert!(
-            list.iter().any(|r| r["name"] == name && r["workflow_state"] == "built_in"),
+            list.as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r["name"] == name && r["workflow_state"] == "built_in"),
             "built-in role {name} must appear with workflow_state=built_in"
         );
     }
@@ -203,10 +213,26 @@ async fn list_roles_returns_builtins_and_custom_roles() {
         assert!(role["id"].is_i64(), "id must be i64: {}", role);
         assert!(role["name"].is_string(), "name must be string: {}", role);
         assert!(role["label"].is_string(), "label must be string: {}", role);
-        assert!(role["base_role_type"].is_string(), "base_role_type must be string: {}", role);
-        assert!(role["workflow_state"].is_string(), "workflow_state must be string: {}", role);
-        assert!(role["created_at"].is_string(), "created_at must be string: {}", role);
-        assert!(role["updated_at"].is_string(), "updated_at must be string: {}", role);
+        assert!(
+            role["base_role_type"].is_string(),
+            "base_role_type must be string: {}",
+            role
+        );
+        assert!(
+            role["workflow_state"].is_string(),
+            "workflow_state must be string: {}",
+            role
+        );
+        assert!(
+            role["created_at"].is_string(),
+            "created_at must be string: {}",
+            role
+        );
+        assert!(
+            role["updated_at"].is_string(),
+            "updated_at must be string: {}",
+            role
+        );
     }
 
     cleanup(&pool, &prefix).await;
@@ -263,7 +289,10 @@ async fn create_role_returns_new_role_with_active_state() {
         .await;
     let list: Value = resp.json();
     assert!(
-        list.as_array().unwrap().iter().any(|r| r["id"] == created["id"]),
+        list.as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == created["id"]),
         "created role must appear in list"
     );
 
@@ -311,8 +340,13 @@ async fn create_role_rejects_blank_label() {
     let account = seed_account(&pool, &prefix, "CreateBlankLabel").await;
     let admin_bearer = auth(admin, "admin");
 
-    for label in ["", "   ", null] {
-        let body = if label == "null" {
+    let labels = [
+        serde_json::Value::String(String::new()),
+        serde_json::Value::String("   ".to_string()),
+        serde_json::Value::Null,
+    ];
+    for label in labels {
+        let body = if label.is_null() {
             json!({})
         } else {
             json!({ "label": label })
@@ -323,7 +357,8 @@ async fn create_role_rejects_blank_label() {
             .json(&body)
             .await;
         assert_eq!(
-            resp.status_code(), 400,
+            resp.status_code(),
+            400,
             "blank label {label:?} must be 400; body: {}",
             resp.text()
         );
@@ -367,7 +402,13 @@ async fn create_role_conflict_on_duplicate_name() {
     let admin_bearer = auth(admin, "admin");
 
     // Create first role.
-    create_role_ok(&server, account, &admin_bearer, "Duplicate", Some("student"));
+    create_role_ok(
+        &server,
+        account,
+        &admin_bearer,
+        "Duplicate",
+        Some("student"),
+    );
 
     // Second create with same label → 409.
     let resp = server
@@ -564,7 +605,14 @@ async fn update_role_forbidden_for_non_admin() {
     let account = seed_account(&pool, &prefix, "UpdateForbidden").await;
     let admin_bearer = auth(admin, "admin");
 
-    let created = create_role_ok(&server, account, &admin_bearer, "ForbidUpdate", Some("student")).await;
+    let created = create_role_ok(
+        &server,
+        account,
+        &admin_bearer,
+        "ForbidUpdate",
+        Some("student"),
+    )
+    .await;
     let role_id = created["id"].as_i64().unwrap();
 
     let resp = server
@@ -594,7 +642,8 @@ async fn delete_role_soft_deletes_and_returns_deleted_role() {
     let account = seed_account(&pool, &prefix, "DeleteRole").await;
     let admin_bearer = auth(admin, "admin");
 
-    let created = create_role_ok(&server, account, &admin_bearer, "ToDelete", Some("student")).await;
+    let created =
+        create_role_ok(&server, account, &admin_bearer, "ToDelete", Some("student")).await;
     let role_id = created["id"].as_i64().unwrap();
 
     let resp = server
@@ -681,7 +730,14 @@ async fn delete_role_forbidden_for_non_admin() {
     let account = seed_account(&pool, &prefix, "DeleteForbidden").await;
     let admin_bearer = auth(admin, "admin");
 
-    let created = create_role_ok(&server, account, &admin_bearer, "ForbidDelete", Some("student")).await;
+    let created = create_role_ok(
+        &server,
+        account,
+        &admin_bearer,
+        "ForbidDelete",
+        Some("student"),
+    )
+    .await;
     let role_id = created["id"].as_i64().unwrap();
 
     let resp = server
@@ -709,7 +765,14 @@ async fn deleted_role_update_and_delete_return_404() {
     let account = seed_account(&pool, &prefix, "DeletedEdge").await;
     let admin_bearer = auth(admin, "admin");
 
-    let created = create_role_ok(&server, account, &admin_bearer, "OnceDeleted", Some("student")).await;
+    let created = create_role_ok(
+        &server,
+        account,
+        &admin_bearer,
+        "OnceDeleted",
+        Some("student"),
+    )
+    .await;
     let role_id = created["id"].as_i64().unwrap();
 
     // First delete.
