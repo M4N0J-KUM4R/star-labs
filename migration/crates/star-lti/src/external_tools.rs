@@ -190,7 +190,7 @@ async fn require_account(pool: &PgPool, account_id: i64) -> Result<(), ApiError>
 
 /// Whether the user has any enrollment in the course.
 async fn is_course_member(pool: &PgPool, user_id: i64, course_id: i64) -> Result<bool, ApiError> {
-    let row: Option<(i64,)> =
+    let row: Option<(i32,)> =
         sqlx::query_as("SELECT 1 FROM enrollments WHERE course_id = $1 AND user_id = $2 LIMIT 1")
             .bind(course_id)
             .bind(user_id)
@@ -201,7 +201,7 @@ async fn is_course_member(pool: &PgPool, user_id: i64, course_id: i64) -> Result
 
 /// Whether the user teaches the course.
 async fn is_course_teacher(pool: &PgPool, user_id: i64, course_id: i64) -> Result<bool, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(
+    let row: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM enrollments WHERE course_id = $1 AND user_id = $2 AND role = 'teacher' \
          LIMIT 1",
     )
