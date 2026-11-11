@@ -726,7 +726,7 @@ pub fn router() -> Router<AppState> {
         // only, no upload binary handling).
         .route("/users/{userId}/files", post(create_user_file))
         // Canvas accounts users#create.
-        .route("/accounts/{accountId}/users", post(create_account_user))
+        .route("/accounts/{id}/users", post(create_account_user))
         // Canvas users_controller#get_custom_colors / #get_custom_color /
         // #set_custom_color.
         .route("/users/{userId}/colors", get(get_custom_colors))
