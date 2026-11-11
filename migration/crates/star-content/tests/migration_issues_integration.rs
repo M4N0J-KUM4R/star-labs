@@ -349,3 +349,16 @@ async fn selective_data_lists_sections_and_rejects_unknown_type() {
 
     cleanup(&pool, &prefix).await;
 }
+
+#[tokio::test]
+async fn migration_issues_require_authentication() {
+    let Some((server, _pool, _prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let res = server
+        .get("/courses/1/content_migrations/1/migration_issues")
+        .await;
+    assert_eq!(res.status_code(), 401);
+}
