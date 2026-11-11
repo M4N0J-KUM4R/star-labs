@@ -66,7 +66,7 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
     )
     .bind(name)
     .bind(&sortable_name)
-    .bind(format!("{prefix}-{name}@test.local".replace(' ', "-")))
+    .bind(format!("{prefix}-{}@test.local", name.replace(' ', "-")))
     .bind(role)
     .fetch_one(pool)
     .await
@@ -383,6 +383,117 @@ async fn create_account_user_permissions_and_validation() {
         }))
         .await;
     assert_eq!(res.status_code(), 404);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn account_admin_is_scoped_to_their_account() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let account_admin = seed_user(&pool, &prefix, "Scoped Admin", "student").await;
+    let other_admin = seed_user(&pool, &prefix, "Other Scoped Admin", "student").await;
+    let (account_a,): (i64,) =
+        sqlx::query_as("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+            .bind(format!("{prefix} scoped A"))
+            .fetch_one(&pool)
+            .await
+            .expect("seed account A");
+    let (account_b,): (i64,) =
+        sqlx::query_as("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+            .bind(format!("{prefix} scoped B"))
+            .fetch_one(&pool)
+            .await
+            .expect("seed account B");
+    for (account_id, user_id) in [(account_a, account_admin), (account_b, other_admin)] {
+        sqlx::query(
+            "INSERT INTO account_users (account_id, user_id, role) \
+             VALUES ($1, $2, 'admin')",
+        )
+        .bind(account_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .expect("seed account admin");
+    }
+
+    let body_a = json!({
+        "user": { "name": "Scoped Created A" },
+        "pseudonym": { "unique_id": format!("{prefix}-scoped-a@test.local") }
+    });
+    let res = server
+        .post(&format!("/accounts/{account_a}/users"))
+        .add_header("Authorization", auth(account_admin, "student"))
+        .json(&body_a)
+        .await;
+    assert_eq!(res.status_code(), 200, "{}", res.text());
+
+    let (password_hash,): (String,) =
+        sqlx::query_as("SELECT password_hash FROM users WHERE email = $1")
+            .bind(format!("{prefix}-scoped-a@test.local"))
+            .fetch_one(&pool)
+            .await
+            .expect("fetch created user hash");
+    assert!(
+        !star_auth::verify_password("", &password_hash),
+        "omitted password must not create an empty-password login"
+    );
+
+    let body_b = json!({
+        "user": { "name": "Scoped Created B" },
+        "pseudonym": { "unique_id": format!("{prefix}-scoped-b@test.local") }
+    });
+    let res = server
+        .post(&format!("/accounts/{account_a}/users"))
+        .add_header("Authorization", auth(other_admin, "student"))
+        .json(&body_b)
+        .await;
+    assert_eq!(res.status_code(), 403, "{}", res.text());
+
+    let res = server
+        .post(&format!("/accounts/{account_b}/users"))
+        .add_header("Authorization", auth(other_admin, "student"))
+        .json(&body_b)
+        .await;
+    assert_eq!(res.status_code(), 200, "{}", res.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn terminate_sessions_rejects_tokens_issued_before_logout() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let user = seed_user(&pool, &prefix, "Revoked User", "student").await;
+    let token = auth(user, "student");
+    let url = format!("/users/{user}/colors");
+
+    let res = server
+        .get(&url)
+        .add_header("Authorization", token.as_str())
+        .await;
+    assert_eq!(res.status_code(), 200, "{}", res.text());
+
+    sqlx::query(
+        "UPDATE users SET last_logged_out = now() + interval '5 seconds' \
+         WHERE id = $1",
+    )
+    .bind(user)
+    .execute(&pool)
+    .await
+    .expect("mark logout");
+
+    let res = server
+        .get(&url)
+        .add_header("Authorization", token.as_str())
+        .await;
+    assert_eq!(res.status_code(), 401, "{}", res.text());
 
     cleanup(&pool, &prefix).await;
 }
