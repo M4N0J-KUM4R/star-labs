@@ -15,6 +15,12 @@
 //! - `GET  /courses/{courseId}/root_outcome_group` — redirect to the course root group (enrolled)
 //! - `GET  /courses/{courseId}/outcome_group_links` — all course OutcomeLinks (enrolled)
 //! - `GET  /accounts/{accountId}/outcome_groups` — account groups (account admin)
+//! - `GET    /accounts/{accountId}/outcome_groups/{id}` — account group show (account admin)
+//! - `PUT    /accounts/{accountId}/outcome_groups/{id}` — account group update (account admin)
+//! - `DELETE /accounts/{accountId}/outcome_groups/{id}` — account group soft-delete (account admin)
+//! - `GET    /accounts/{accountId}/outcome_groups/{id}/subgroups` — account subgroups (account admin)
+//! - `PUT    /courses/{courseId}/outcome_groups/{id}` — course group update (teacher)
+//! - `DELETE /courses/{courseId}/outcome_groups/{id}` — course group soft-delete (teacher)
 //! - `GET  /courses/{courseId}/outcome_groups/{id}` — course-scoped group show (enrolled)
 //! - `POST /outcomes/{outcomeId}/results` — record a result (teacher)
 //! - `GET  /outcomes/{outcomeId}/results` — list results (teacher or the user themself)
@@ -626,6 +632,17 @@ async fn update_outcome_group(
         return Err(ApiError::Forbidden);
     }
     let payload = payload.map(|Json(fields)| fields).unwrap_or_default();
+    apply_outcome_group_update(&state.db, group, payload).await
+}
+
+/// Shared update body for the unscoped and context-scoped Canvas `update`
+/// actions: validate the parent, persist the provided fields, re-render.
+async fn apply_outcome_group_update(
+    pool: &PgPool,
+    group: LearningOutcomeGroup,
+    payload: UpdateOutcomeGroup,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let group_id = group.id;
 
     if payload
         .title
@@ -646,7 +663,7 @@ async fn update_outcome_group(
             "SELECT id, course_id, workflow_state FROM outcome_groups WHERE id = $1",
         )
         .bind(parent_id)
-        .fetch_optional(&state.db)
+        .fetch_optional(pool)
         .await?;
         let (_, parent_course_id, parent_state) = parent.ok_or(ApiError::NotFound)?;
         if parent_state == "deleted" {
@@ -672,7 +689,7 @@ async fn update_outcome_group(
         )
         .bind(group_id)
         .bind(parent_id)
-        .fetch_one(&state.db)
+        .fetch_one(pool)
         .await?;
         if in_subtree {
             return Err(ApiError::BadRequest(
@@ -699,11 +716,191 @@ async fn update_outcome_group(
     .bind(payload.description.as_deref())
     .bind(payload.vendor_guid.as_deref())
     .bind(payload.parent_outcome_group_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(pool)
     .await?;
 
     let row = row.ok_or(ApiError::NotFound)?;
     Ok(Json(group_json(&row, true)))
+}
+
+/// Does the account exist and is it not deleted?
+async fn account_exists(pool: &PgPool, account_id: i64) -> Result<bool, ApiError> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND workflow_state <> 'deleted')",
+    )
+    .bind(account_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(exists)
+}
+
+/// Canvas `context_outcome_groups.find`: a group outside the URL's context is
+/// 404, not 403.
+async fn fetch_account_outcome_group(
+    pool: &PgPool,
+    account_id: i64,
+    group_id: i64,
+) -> Result<LearningOutcomeGroup, ApiError> {
+    let group = fetch_outcome_group(pool, group_id).await?;
+    if group.context_type != "Account" || group.context_id != Some(account_id) {
+        return Err(ApiError::NotFound);
+    }
+    Ok(group)
+}
+
+async fn fetch_course_outcome_group(
+    pool: &PgPool,
+    course_id: i64,
+    group_id: i64,
+) -> Result<LearningOutcomeGroup, ApiError> {
+    let group = fetch_outcome_group(pool, group_id).await?;
+    if group.course_id != Some(course_id) {
+        return Err(ApiError::NotFound);
+    }
+    Ok(group)
+}
+
+/// Canvas `#destroy` for context-scoped routes: soft-delete and render the
+/// deleted group (200), unlike the legacy unscoped DELETE which returns 204.
+async fn destroy_scoped_outcome_group(
+    pool: &PgPool,
+    group: LearningOutcomeGroup,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let row: Option<LearningOutcomeGroup> = sqlx::query_as(
+        r#"
+        UPDATE outcome_groups
+        SET workflow_state = 'deleted', updated_at = now()
+        WHERE id = $1 AND workflow_state <> 'deleted'
+        RETURNING id, course_id, context_type, context_id, parent_outcome_group_id,
+                  title, description, vendor_guid, workflow_state, created_at, updated_at
+        "#,
+    )
+    .bind(group.id)
+    .fetch_optional(pool)
+    .await?;
+    let row = row.ok_or(ApiError::NotFound)?;
+    Ok(Json(group_json(&row, true)))
+}
+
+/// GET /accounts/{accountId}/outcome_groups/{id} (account admin)
+async fn show_account_outcome_group(
+    State(state): State<AppState>,
+    Path((account_id, group_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
+    if !can_manage {
+        return Err(ApiError::Forbidden);
+    }
+
+    let group = fetch_account_outcome_group(&state.db, account_id, group_id).await?;
+    Ok(Json(group_json(&group, can_manage)))
+}
+
+/// PUT /accounts/{accountId}/outcome_groups/{id} (account admin)
+async fn update_account_outcome_group(
+    State(state): State<AppState>,
+    Path((account_id, group_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    payload: Option<Json<UpdateOutcomeGroup>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let group = fetch_account_outcome_group(&state.db, account_id, group_id).await?;
+    let payload = payload.map(|Json(fields)| fields).unwrap_or_default();
+    apply_outcome_group_update(&state.db, group, payload).await
+}
+
+/// DELETE /accounts/{accountId}/outcome_groups/{id} (account admin)
+async fn delete_account_outcome_group(
+    State(state): State<AppState>,
+    Path((account_id, group_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let group = fetch_account_outcome_group(&state.db, account_id, group_id).await?;
+    destroy_scoped_outcome_group(&state.db, group).await
+}
+
+/// GET /accounts/{accountId}/outcome_groups/{id}/subgroups (account admin)
+///
+/// Canvas `#subgroups`: immediate active children, ordered by title.
+async fn list_account_outcome_subgroups(
+    State(state): State<AppState>,
+    Path((account_id, group_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
+    if !can_manage {
+        return Err(ApiError::Forbidden);
+    }
+
+    let group = fetch_account_outcome_group(&state.db, account_id, group_id).await?;
+    let rows: Vec<LearningOutcomeGroup> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, context_type, context_id, parent_outcome_group_id,
+               title, description, vendor_guid, workflow_state, created_at, updated_at
+        FROM outcome_groups
+        WHERE parent_outcome_group_id = $1 AND workflow_state = 'active'
+        ORDER BY title ASC, id ASC
+        "#,
+    )
+    .bind(group.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(
+        rows.iter()
+            .map(|child| group_json(child, can_manage))
+            .collect(),
+    ))
+}
+
+/// PUT /courses/{courseId}/outcome_groups/{id} (teacher)
+async fn update_course_outcome_group(
+    State(state): State<AppState>,
+    Path((course_id, group_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    payload: Option<Json<UpdateOutcomeGroup>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let group = fetch_course_outcome_group(&state.db, course_id, group_id).await?;
+    let payload = payload.map(|Json(fields)| fields).unwrap_or_default();
+    apply_outcome_group_update(&state.db, group, payload).await
+}
+
+/// DELETE /courses/{courseId}/outcome_groups/{id} (teacher)
+async fn delete_course_outcome_group(
+    State(state): State<AppState>,
+    Path((course_id, group_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let group = fetch_course_outcome_group(&state.db, course_id, group_id).await?;
+    destroy_scoped_outcome_group(&state.db, group).await
 }
 
 /// DELETE /outcome_groups/{id} (teacher) — soft-delete
@@ -1322,11 +1519,23 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/outcome_groups/{id}",
-            get(show_course_outcome_group),
+            get(show_course_outcome_group)
+                .put(update_course_outcome_group)
+                .delete(delete_course_outcome_group),
         )
         .route(
             "/accounts/{accountId}/outcome_groups",
             get(list_account_outcome_groups),
+        )
+        .route(
+            "/accounts/{accountId}/outcome_groups/{id}",
+            get(show_account_outcome_group)
+                .put(update_account_outcome_group)
+                .delete(delete_account_outcome_group),
+        )
+        .route(
+            "/accounts/{accountId}/outcome_groups/{id}/subgroups",
+            get(list_account_outcome_subgroups),
         )
         // outcomes
         .route(
@@ -1363,7 +1572,7 @@ mod tests {
     #[tokio::test]
     async fn only_active_enrollments_grant_course_outcome_permissions() {
         let Some(database_url) = std::env::var("DATABASE_URL").ok() else {
-            eprintln!("skipping: DATABASE_URL not set");
+            eprintln!("SKIP: DATABASE_URL not set");
             return;
         };
         let pool = sqlx::postgres::PgPoolOptions::new()
@@ -1533,7 +1742,7 @@ mod tests {
 
     async fn test_pool() -> Option<PgPool> {
         let Some(database_url) = std::env::var("DATABASE_URL").ok() else {
-            eprintln!("skipping: DATABASE_URL not set");
+            eprintln!("SKIP: DATABASE_URL not set");
             return None;
         };
         let pool = sqlx::postgres::PgPoolOptions::new()
@@ -2150,5 +2359,340 @@ mod tests {
             .execute(&pool)
             .await
             .expect("cleanup users");
+    }
+
+    #[tokio::test]
+    async fn account_group_show_update_subgroups_and_delete() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let prefix = format!(
+            "outcomes-deep-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_millis()
+        );
+        let account_id: i64 =
+            sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+                .bind(format!("{prefix} account"))
+                .fetch_one(&pool)
+                .await
+                .expect("seed account");
+        let admin_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind("Deep Outcomes Admin")
+        .bind(format!("{prefix}@test.local"))
+        .bind("unused-test-hash")
+        .fetch_one(&pool)
+        .await
+        .expect("seed account admin");
+        sqlx::query(
+            "INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, 'admin')",
+        )
+        .bind(account_id)
+        .bind(admin_id)
+        .execute(&pool)
+        .await
+        .expect("grant account admin");
+
+        let group_id: i64 = sqlx::query_scalar(
+            "INSERT INTO outcome_groups (course_id, context_type, context_id, title)
+             VALUES (NULL, 'Account', $1, $2) RETURNING id",
+        )
+        .bind(account_id)
+        .bind(format!("{prefix} parent"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed account group");
+        let child_z: i64 = sqlx::query_scalar(
+            "INSERT INTO outcome_groups
+                 (course_id, context_type, context_id, parent_outcome_group_id, title)
+             VALUES (NULL, 'Account', $1, $2, $3) RETURNING id",
+        )
+        .bind(account_id)
+        .bind(group_id)
+        .bind(format!("{prefix} child zeta"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed zeta child");
+        let child_a: i64 = sqlx::query_scalar(
+            "INSERT INTO outcome_groups
+                 (course_id, context_type, context_id, parent_outcome_group_id, title)
+             VALUES (NULL, 'Account', $1, $2, $3) RETURNING id",
+        )
+        .bind(account_id)
+        .bind(group_id)
+        .bind(format!("{prefix} child alpha"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed alpha child");
+        let child_ids = vec![child_z, child_a];
+
+        let state = test_state(&pool);
+        let admin = AuthUser {
+            id: admin_id,
+            role: "student".to_string(),
+        };
+
+        let Json(shown) = show_account_outcome_group(
+            State(state.clone()),
+            Path((account_id, group_id)),
+            admin.clone(),
+        )
+        .await
+        .expect("show account group");
+        assert_eq!(shown["id"], group_id);
+        assert_eq!(shown["can_edit"], true);
+
+        let Json(updated) = update_account_outcome_group(
+            State(state.clone()),
+            Path((account_id, group_id)),
+            admin.clone(),
+            Some(Json(UpdateOutcomeGroup {
+                title: Some(format!("{prefix} renamed")),
+                ..Default::default()
+            })),
+        )
+        .await
+        .expect("update account group");
+        assert_eq!(updated["title"], format!("{prefix} renamed"));
+
+        // Canvas orders subgroups by title.
+        let Json(subgroups) = list_account_outcome_subgroups(
+            State(state.clone()),
+            Path((account_id, group_id)),
+            admin.clone(),
+        )
+        .await
+        .expect("list subgroups");
+        assert_eq!(subgroups.len(), 2);
+        assert_eq!(
+            subgroups[0]["title"],
+            format!("{prefix} child alpha"),
+            "subgroups are title-ordered"
+        );
+        assert_eq!(subgroups[1]["id"], child_ids[0]);
+
+        // Scoped delete renders the deleted group (Canvas destroy), unlike the
+        // legacy unscoped DELETE which returns 204.
+        let Json(deleted) = delete_account_outcome_group(
+            State(state.clone()),
+            Path((account_id, group_id)),
+            admin.clone(),
+        )
+        .await
+        .expect("delete account group");
+        assert_eq!(deleted["workflow_state"], "deleted");
+        let err =
+            show_account_outcome_group(State(state.clone()), Path((account_id, group_id)), admin)
+                .await
+                .expect_err("deleted group is gone");
+        assert!(matches!(err, ApiError::NotFound));
+
+        sqlx::query("DELETE FROM outcome_groups WHERE id = $1")
+            .bind(group_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup parent group");
+        sqlx::query("DELETE FROM outcome_groups WHERE id = ANY($1)")
+            .bind(child_ids)
+            .execute(&pool)
+            .await
+            .expect("cleanup child groups");
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup account");
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(admin_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup user");
+    }
+
+    #[tokio::test]
+    async fn account_group_routes_scope_to_account_and_admin() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let prefix = format!(
+            "outcomes-deep-scope-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_millis()
+        );
+        let account_id: i64 =
+            sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+                .bind(format!("{prefix} account"))
+                .fetch_one(&pool)
+                .await
+                .expect("seed account");
+        let other_account_id: i64 =
+            sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+                .bind(format!("{prefix} other account"))
+                .fetch_one(&pool)
+                .await
+                .expect("seed other account");
+        let admin_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind("Scoped Outcomes Admin")
+        .bind(format!("{prefix}@test.local"))
+        .bind("unused-test-hash")
+        .fetch_one(&pool)
+        .await
+        .expect("seed admin");
+        let outsider_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, $3) RETURNING id",
+        )
+        .bind("Scoped Outcomes Outsider")
+        .bind(format!("{prefix}-outsider@test.local"))
+        .bind("unused-test-hash")
+        .fetch_one(&pool)
+        .await
+        .expect("seed outsider");
+        sqlx::query(
+            "INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, 'admin')",
+        )
+        .bind(account_id)
+        .bind(admin_id)
+        .execute(&pool)
+        .await
+        .expect("grant account admin");
+
+        let group_id: i64 = sqlx::query_scalar(
+            "INSERT INTO outcome_groups (course_id, context_type, context_id, title)
+             VALUES (NULL, 'Account', $1, $2) RETURNING id",
+        )
+        .bind(other_account_id)
+        .bind(format!("{prefix} other group"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed other-account group");
+
+        let state = test_state(&pool);
+        let admin = AuthUser {
+            id: admin_id,
+            role: "student".to_string(),
+        };
+
+        // A group belonging to another account is 404, not 403.
+        let err = show_account_outcome_group(
+            State(state.clone()),
+            Path((account_id, group_id)),
+            admin.clone(),
+        )
+        .await
+        .expect_err("cross-account group must 404");
+        assert!(matches!(err, ApiError::NotFound));
+
+        let err = show_account_outcome_group(
+            State(state.clone()),
+            Path((i64::MAX, group_id)),
+            admin.clone(),
+        )
+        .await
+        .expect_err("unknown account must 404");
+        assert!(matches!(err, ApiError::NotFound));
+
+        let outsider = AuthUser {
+            id: outsider_id,
+            role: "student".to_string(),
+        };
+        let err = show_account_outcome_group(
+            State(state.clone()),
+            Path((other_account_id, group_id)),
+            outsider,
+        )
+        .await
+        .expect_err("non-admin must be forbidden");
+        assert!(matches!(err, ApiError::Forbidden));
+
+        sqlx::query("DELETE FROM outcome_groups WHERE id = $1")
+            .bind(group_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup group");
+        sqlx::query("DELETE FROM accounts WHERE id = ANY($1)")
+            .bind(vec![account_id, other_account_id])
+            .execute(&pool)
+            .await
+            .expect("cleanup accounts");
+        sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+            .bind(vec![admin_id, outsider_id])
+            .execute(&pool)
+            .await
+            .expect("cleanup users");
+    }
+
+    #[tokio::test]
+    async fn course_scoped_group_update_and_delete_require_context() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let (course_id, teacher_id) = seed_course_with_teacher(&pool, "deep-update").await;
+        let (other_course_id, other_teacher_id) =
+            seed_course_with_teacher(&pool, "deep-update-other").await;
+        let state = test_state(&pool);
+        let teacher = AuthUser {
+            id: teacher_id,
+            role: "teacher".to_string(),
+        };
+        let group = create_group(&state, course_id, &teacher, "original title").await;
+
+        // A teacher of another course cannot reach the group through their URL.
+        let other_teacher = AuthUser {
+            id: other_teacher_id,
+            role: "teacher".to_string(),
+        };
+        let err = update_course_outcome_group(
+            State(state.clone()),
+            Path((other_course_id, group.id)),
+            other_teacher,
+            Some(Json(UpdateOutcomeGroup {
+                title: Some("hijacked".into()),
+                ..Default::default()
+            })),
+        )
+        .await
+        .expect_err("foreign context must 404");
+        assert!(matches!(err, ApiError::NotFound));
+
+        let Json(updated) = update_course_outcome_group(
+            State(state.clone()),
+            Path((course_id, group.id)),
+            teacher.clone(),
+            Some(Json(UpdateOutcomeGroup {
+                title: Some("course scoped title".into()),
+                ..Default::default()
+            })),
+        )
+        .await
+        .expect("course-scoped update");
+        assert_eq!(updated["title"], "course scoped title");
+        assert_eq!(updated["can_edit"], true);
+
+        let Json(deleted) = delete_course_outcome_group(
+            State(state.clone()),
+            Path((course_id, group.id)),
+            teacher.clone(),
+        )
+        .await
+        .expect("course-scoped delete");
+        assert_eq!(deleted["workflow_state"], "deleted");
+
+        let err =
+            delete_course_outcome_group(State(state.clone()), Path((course_id, group.id)), teacher)
+                .await
+                .expect_err("second delete is 404");
+        assert!(matches!(err, ApiError::NotFound));
+
+        sqlx::query("DELETE FROM outcome_groups WHERE id = $1")
+            .bind(group.id)
+            .execute(&pool)
+            .await
+            .expect("cleanup group");
+        teardown(&pool, course_id, &[teacher_id]).await;
+        teardown(&pool, other_course_id, &[other_teacher_id]).await;
     }
 }
