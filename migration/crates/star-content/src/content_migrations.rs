@@ -4,6 +4,8 @@
 //! - GET  /courses/{courseId}/content_migrations            — index
 //! - POST /courses/{courseId}/content_migrations            — create
 //! - GET  /courses/{courseId}/content_migrations/{id}       — show
+//! - PUT  /courses/{courseId}/content_migrations/{id}       — update
+//! - GET  /courses/{courseId}/content_migrations/{id}/selective_data — content_list
 //! - GET  /courses/{courseId}/content_migrations/migrators  — available_migrators
 //! - GET  /content_migrations/{id}                          — flat show alias
 //! - GET  /content_migrations/migrators                     — flat migrators alias
@@ -161,7 +163,7 @@ struct ContentMigrationRow {
 // Canvas JSON helpers
 // ---------------------------------------------------------------------------
 
-fn ts(value: &DateTime<Utc>) -> String {
+pub(crate) fn ts(value: &DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Secs, true)
 }
 
@@ -260,6 +262,38 @@ fn object_present(settings: Option<&Map<String, Value>>, key: &str) -> bool {
     }
 }
 
+/// Canvas `set_date_shift_options` (only persisted when enabled).
+fn merge_date_shift(
+    payload: &Value,
+    merged: &mut Map<String, Value>,
+) -> Option<(StatusCode, Json<Value>)> {
+    let date_shift = payload
+        .get("date_shift_options")
+        .and_then(Value::as_object)?;
+    let shift_dates = truthy(date_shift.get("shift_dates"));
+    let remove_dates = truthy(date_shift.get("remove_dates"));
+    if shift_dates && remove_dates {
+        return Some((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "date_shift_options": [
+                    "cannot specify shift_dates and remove_dates simultaneously"
+                ]
+            })),
+        ));
+    }
+    if shift_dates || remove_dates {
+        let mut kept = Map::new();
+        for key in DATE_SHIFT_KEYS {
+            if let Some(value) = date_shift.get(key) {
+                kept.insert(key.to_string(), value.clone());
+            }
+        }
+        merged.insert("date_shift_options".to_string(), Value::Object(kept));
+    }
+    None
+}
+
 fn bad_request(message: &str) -> (StatusCode, Json<Value>) {
     (StatusCode::BAD_REQUEST, Json(json!({ "message": message })))
 }
@@ -277,12 +311,12 @@ fn includes_audit_info(params: &HashMap<String, String>) -> bool {
 // Permission helpers
 // ---------------------------------------------------------------------------
 
-fn is_admin(auth: &AuthUser) -> bool {
+pub(crate) fn is_admin(auth: &AuthUser) -> bool {
     auth.role == "admin"
 }
 
 /// 404 unless the course exists (Canvas `require_context`).
-async fn ensure_course(db: &PgPool, course_id: i64) -> Result<(), ApiError> {
+pub(crate) async fn ensure_course(db: &PgPool, course_id: i64) -> Result<(), ApiError> {
     let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
         .bind(course_id)
         .fetch_optional(db)
@@ -291,7 +325,11 @@ async fn ensure_course(db: &PgPool, course_id: i64) -> Result<(), ApiError> {
 }
 
 /// Canvas `manage_course_content`: teachers/designers/TAs and global admins.
-async fn manages_course(db: &PgPool, auth: &AuthUser, course_id: i64) -> Result<bool, ApiError> {
+pub(crate) async fn manages_course(
+    db: &PgPool,
+    auth: &AuthUser,
+    course_id: i64,
+) -> Result<bool, ApiError> {
     if is_admin(auth) {
         return Ok(true);
     }
@@ -307,7 +345,7 @@ async fn manages_course(db: &PgPool, auth: &AuthUser, course_id: i64) -> Result<
 }
 
 /// Canvas pagination params (page default 1, per_page default 10, max 100).
-fn pagination(params: &HashMap<String, String>) -> (i64, i64) {
+pub(crate) fn pagination(params: &HashMap<String, String>) -> (i64, i64) {
     let page = params
         .get("page")
         .and_then(|value| value.parse::<i64>().ok())
@@ -633,28 +671,8 @@ async fn create_migration(
     }
 
     // Canvas `set_date_shift_options` (only persisted when enabled).
-    if let Some(date_shift) = payload.get("date_shift_options").and_then(Value::as_object) {
-        let shift_dates = truthy(date_shift.get("shift_dates"));
-        let remove_dates = truthy(date_shift.get("remove_dates"));
-        if shift_dates && remove_dates {
-            return Ok((
-                StatusCode::BAD_REQUEST,
-                Json(json!({
-                    "date_shift_options": [
-                        "cannot specify shift_dates and remove_dates simultaneously"
-                    ]
-                })),
-            ));
-        }
-        if shift_dates || remove_dates {
-            let mut kept = Map::new();
-            for key in DATE_SHIFT_KEYS {
-                if let Some(value) = date_shift.get(key) {
-                    kept.insert(key.to_string(), value.clone());
-                }
-            }
-            merged.insert("date_shift_options".to_string(), Value::Object(kept));
-        }
+    if let Some((status, json)) = merge_date_shift(&payload, &mut merged) {
+        return Ok((status, json));
     }
 
     let selective_import = truthy(payload.get("selective_import"));
@@ -769,6 +787,251 @@ async fn list_migrators(_auth: AuthUser) -> Json<Value> {
     Json(migrators_json())
 }
 
+/// PUT /courses/{courseId}/content_migrations/{id} — Canvas `update`.
+///
+/// Mirrors `update_migration`: the migration type cannot change, `settings`
+/// and `date_shift_options` merge into the stored migration_settings, and a
+/// `pre_attachment` restarts the upload (workflow_state `pre_processing`).
+/// No worker runs in this workspace, so without a `pre_attachment` the
+/// workflow_state is left untouched.
+async fn update_course_migration(
+    State(state): State<AppState>,
+    Path((course_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    body: Option<Json<Value>>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    ensure_course(&state.db, course_id).await?;
+    if !manages_course(&state.db, &auth, course_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let mut row = find_course_migration(&state.db, course_id, id).await?;
+    check_pre_processing_timeout(&state.db, &mut row).await?;
+
+    let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
+
+    let mut merged = match parse_settings(&row.migration_settings) {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    };
+    if let Some(settings) = payload.get("settings").and_then(Value::as_object) {
+        for (key, value) in settings {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    if let Some((status, json)) = merge_date_shift(&payload, &mut merged) {
+        return Ok((status, json));
+    }
+
+    // Canvas `update_migration` selective-import / copy-options bookkeeping.
+    let select = payload
+        .get("select")
+        .filter(|value| value.is_object())
+        .filter(|_| row.migration_type == "course_copy_importer");
+    let copy = payload.get("copy").filter(|value| value.is_object());
+    if truthy(payload.get("selective_import")) {
+        merged.insert("import_immediately".to_string(), Value::Bool(false));
+    } else if let Some(select) = select {
+        merged.insert("copy_options".to_string(), select.clone());
+    } else if let Some(copy) = copy {
+        merged.insert("copy_options".to_string(), copy.clone());
+    } else {
+        merged.insert("import_immediately".to_string(), Value::Bool(true));
+    }
+
+    let pre_attachment = payload.get("pre_attachment").and_then(Value::as_object);
+    let attachment_name = pre_attachment
+        .and_then(|params| params.get("name"))
+        .and_then(json_string);
+    let attachment_size = pre_attachment
+        .and_then(|params| params.get("size"))
+        .and_then(json_i64);
+    let workflow_state = pre_attachment.map(|_| "pre_processing");
+
+    let migration_settings =
+        serde_json::to_string(&Value::Object(merged)).unwrap_or_else(|_| "{}".to_string());
+
+    sqlx::query(
+        "UPDATE content_migrations SET \
+            migration_settings = $1, \
+            attachment_name = COALESCE($2, attachment_name), \
+            attachment_size = COALESCE($3, attachment_size), \
+            workflow_state = COALESCE($4, workflow_state), \
+            started_at = CASE WHEN $4::text IS NULL THEN started_at ELSE now() END, \
+            updated_at = now() \
+         WHERE id = $5",
+    )
+    .bind(migration_settings)
+    .bind(attachment_name.as_deref())
+    .bind(attachment_size)
+    .bind(workflow_state)
+    .bind(row.id)
+    .execute(&state.db)
+    .await?;
+
+    let row = find_course_migration(&state.db, course_id, row.id).await?;
+    // Canvas renders the updated migration as JSON with HTTP 200.
+    Ok((StatusCode::OK, Json(migration_json(&row, is_admin(&auth)))))
+}
+
+// ---------------------------------------------------------------------------
+// Selective import data (Canvas `content_list`)
+// ---------------------------------------------------------------------------
+
+/// One top-level selective import section (Canvas
+/// `Canvas::Migration::Helpers::SelectiveContentFormatter`).
+struct SelectiveSection {
+    /// Canvas node `type`.
+    kind: &'static str,
+    title: &'static str,
+    table: &'static str,
+    title_column: &'static str,
+}
+
+const SELECTIVE_SECTIONS: [SelectiveSection; 9] = [
+    SelectiveSection {
+        kind: "context_modules",
+        title: "Modules",
+        table: "modules",
+        title_column: "name",
+    },
+    SelectiveSection {
+        kind: "assignments",
+        title: "Assignments",
+        table: "assignments",
+        title_column: "title",
+    },
+    SelectiveSection {
+        kind: "quizzes",
+        title: "Quizzes",
+        table: "quizzes",
+        title_column: "title",
+    },
+    SelectiveSection {
+        kind: "discussion_topics",
+        title: "Discussions",
+        table: "discussion_topics",
+        title_column: "title",
+    },
+    SelectiveSection {
+        kind: "wiki_pages",
+        title: "Pages",
+        table: "pages",
+        title_column: "title",
+    },
+    SelectiveSection {
+        kind: "announcements",
+        title: "Announcements",
+        table: "announcements",
+        title_column: "title",
+    },
+    SelectiveSection {
+        kind: "rubrics",
+        title: "Rubrics",
+        table: "rubrics",
+        title_column: "title",
+    },
+    SelectiveSection {
+        kind: "groups",
+        title: "Groups",
+        table: "groups",
+        title_column: "name",
+    },
+    SelectiveSection {
+        kind: "attachments",
+        title: "Files",
+        table: "files",
+        title_column: "filename",
+    },
+];
+
+fn selective_section(kind: &str) -> Option<&'static SelectiveSection> {
+    SELECTIVE_SECTIONS
+        .iter()
+        .find(|section| section.kind == kind)
+}
+
+/// GET /courses/{courseId}/content_migrations/{id}/selective_data — Canvas
+/// `content_list`. Without `type` the top-level section list is returned;
+/// with a known `type` the section's items. Unknown types are a 400 with
+/// Canvas' `unsupported migration type` message.
+async fn selective_data(
+    State(state): State<AppState>,
+    Path((course_id, id)): Path<(i64, i64)>,
+    Query(params): Query<HashMap<String, String>>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    ensure_course(&state.db, course_id).await?;
+    if !manages_course(&state.db, &auth, course_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let row = find_course_migration(&state.db, course_id, id).await?;
+    // Course copies enumerate the source course; everything else the target.
+    let source_course_id = row.source_course_id.unwrap_or(course_id);
+    let base_url = format!("/api/v1/courses/{course_id}/content_migrations/{id}/selective_data");
+    let requested = params
+        .get("type")
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+
+    let Some(kind) = requested else {
+        let mut nodes = vec![json!({
+            "type": "course_settings",
+            "property": "copy[all_course_settings]",
+            "title": "Course Settings",
+        })];
+        for section in SELECTIVE_SECTIONS.iter() {
+            let count_sql = format!(
+                "SELECT count(*) FROM {} WHERE course_id = $1",
+                section.table
+            );
+            let count: i64 = sqlx::query_scalar(&count_sql)
+                .bind(source_course_id)
+                .fetch_one(&state.db)
+                .await?;
+            nodes.push(json!({
+                "type": section.kind,
+                "property": format!("copy[all_{}]", section.kind),
+                "title": section.title,
+                "count": count,
+                "sub_items_url": format!("{base_url}?type={}", section.kind),
+            }));
+        }
+        return Ok((StatusCode::OK, Json(Value::Array(nodes))));
+    };
+
+    let Some(section) = selective_section(kind) else {
+        return Ok(bad_request("unsupported migration type"));
+    };
+
+    let items_sql = format!(
+        "SELECT id, {} FROM {} WHERE course_id = $1 ORDER BY id LIMIT 100",
+        section.title_column, section.table
+    );
+    let rows: Vec<(i64, Option<String>)> = sqlx::query_as(&items_sql)
+        .bind(source_course_id)
+        .fetch_all(&state.db)
+        .await?;
+
+    let item_type = if section.kind == "context_modules" {
+        "modules"
+    } else {
+        section.kind
+    };
+    let nodes: Vec<Value> = rows
+        .into_iter()
+        .map(|(item_id, title)| {
+            json!({
+                "type": item_type,
+                "title": title,
+                "property": format!("copy[{}][{item_id}]", section.kind),
+            })
+        })
+        .collect();
+    Ok((StatusCode::OK, Json(Value::Array(nodes))))
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -786,7 +1049,11 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/content_migrations/{id}",
-            get(show_course_migration),
+            get(show_course_migration).put(update_course_migration),
+        )
+        .route(
+            "/courses/{courseId}/content_migrations/{id}/selective_data",
+            get(selective_data),
         )
         .route("/content_migrations/migrators", get(list_migrators))
         .route("/content_migrations/{id}", get(show_migration))
