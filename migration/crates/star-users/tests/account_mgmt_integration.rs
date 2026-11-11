@@ -386,3 +386,68 @@ async fn create_account_user_permissions_and_validation() {
 
     cleanup(&pool, &prefix).await;
 }
+
+#[tokio::test]
+async fn account_admin_is_scoped_to_their_account() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let account_admin = seed_user(&pool, &prefix, "Scoped Admin", "student").await;
+    let other_admin = seed_user(&pool, &prefix, "Other Scoped Admin", "student").await;
+    let (account_a,): (i64,) =
+        sqlx::query_as("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+            .bind(format!("{prefix} scoped A"))
+            .fetch_one(&pool)
+            .await
+            .expect("seed account A");
+    let (account_b,): (i64,) =
+        sqlx::query_as("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+            .bind(format!("{prefix} scoped B"))
+            .fetch_one(&pool)
+            .await
+            .expect("seed account B");
+    for (account_id, user_id) in [(account_a, account_admin), (account_b, other_admin)] {
+        sqlx::query(
+            "INSERT INTO account_users (account_id, user_id, role) \
+             VALUES ($1, $2, 'admin')",
+        )
+        .bind(account_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .expect("seed account admin");
+    }
+
+    let body_a = json!({
+        "user": { "name": "Scoped Created A" },
+        "pseudonym": { "unique_id": format!("{prefix}-scoped-a@test.local") }
+    });
+    let res = server
+        .post(&format!("/accounts/{account_a}/users"))
+        .add_header("Authorization", auth(account_admin, "student"))
+        .json(&body_a)
+        .await;
+    assert_eq!(res.status_code(), 200, "{}", res.text());
+
+    let body_b = json!({
+        "user": { "name": "Scoped Created B" },
+        "pseudonym": { "unique_id": format!("{prefix}-scoped-b@test.local") }
+    });
+    let res = server
+        .post(&format!("/accounts/{account_a}/users"))
+        .add_header("Authorization", auth(other_admin, "student"))
+        .json(&body_b)
+        .await;
+    assert_eq!(res.status_code(), 403, "{}", res.text());
+
+    let res = server
+        .post(&format!("/accounts/{account_b}/users"))
+        .add_header("Authorization", auth(other_admin, "student"))
+        .json(&body_b)
+        .await;
+    assert_eq!(res.status_code(), 200, "{}", res.text());
+
+    cleanup(&pool, &prefix).await;
+}
