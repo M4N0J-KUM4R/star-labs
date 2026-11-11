@@ -140,11 +140,16 @@ async fn list_auth_providers_returns_wrapped_array() {
     let body: Value = resp.json();
     // Must be wrapped per Canvas contract.
     assert!(
-        body.get("authentication_providers").and_then(|v| v.as_array()).is_some(),
+        body.get("authentication_providers")
+            .and_then(|v| v.as_array())
+            .is_some(),
         "list body must be wrapped in {{'authentication_providers': [...]}}: {body}"
     );
     let arr = body["authentication_providers"].as_array().unwrap();
-    assert!(arr.is_array(), "authentication_providers value must be an array");
+    assert!(
+        arr.is_array(),
+        "authentication_providers value must be an array"
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -292,8 +297,7 @@ async fn create_auth_provider_defaults_position_to_zero() {
     assert_eq!(resp.status_code(), 200, "create: {}", resp.text());
     let created: Value = resp.json();
     assert_eq!(
-        created["position"],
-        0,
+        created["position"], 0,
         "position must default to 0 when not specified: {}",
         created
     );
@@ -370,7 +374,11 @@ async fn show_auth_provider_returns_unwrapped_object() {
     assert_eq!(resp.status_code(), 200, "show: {}", resp.text());
     let body: Value = resp.json();
     assert!(
-        body.as_object().is_some() && !body.as_object().unwrap().contains_key("authentication_providers"),
+        body.as_object().is_some()
+            && !body
+                .as_object()
+                .unwrap()
+                .contains_key("authentication_providers"),
         "show response must be the bare object, not wrapped: {body}"
     );
     assert_eq!(body["id"], id);
@@ -441,7 +449,12 @@ async fn update_auth_provider_merges_settings() {
         }))
         .await;
 
-    assert_eq!(update_resp.status_code(), 200, "update: {}", update_resp.text());
+    assert_eq!(
+        update_resp.status_code(),
+        200,
+        "update: {}",
+        update_resp.text()
+    );
     let updated: Value = update_resp.json();
     assert_eq!(
         updated["log_in_url"], "https://new.example.org/login",
@@ -485,7 +498,12 @@ async fn delete_auth_provider_returns_deleted_object_and_purges_from_list() {
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
-    assert_eq!(delete_resp.status_code(), 200, "delete: {}", delete_resp.text());
+    assert_eq!(
+        delete_resp.status_code(),
+        200,
+        "delete: {}",
+        delete_resp.text()
+    );
     let deleted: Value = delete_resp.json();
     assert_eq!(
         deleted["workflow_state"], "deleted",
@@ -499,7 +517,11 @@ async fn delete_auth_provider_returns_deleted_object_and_purges_from_list() {
         .get(&format!("/accounts/1/authentication_providers/{id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
-    assert_eq!(show_resp.status_code(), 404, "show after delete must be 404");
+    assert_eq!(
+        show_resp.status_code(),
+        404,
+        "show after delete must be 404"
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -527,7 +549,9 @@ async fn sso_settings_show_returns_wrapped_object() {
     assert_eq!(resp.status_code(), 200, "get sso_settings: {}", resp.text());
     let body: Value = resp.json();
     assert!(
-        body.get("sso_settings").and_then(|v| v.as_object()).is_some(),
+        body.get("sso_settings")
+            .and_then(|v| v.as_object())
+            .is_some(),
         "sso_settings response must be wrapped in {{'sso_settings': {{...}}}}: {body}"
     );
 
@@ -618,13 +642,21 @@ async fn sso_settings_update_persists_and_returns_wrapped() {
     );
     let body: Value = put_resp.json();
     assert!(
-        body.get("sso_settings").and_then(|v| v.as_object()).is_some(),
+        body.get("sso_settings")
+            .and_then(|v| v.as_object())
+            .is_some(),
         "put response must be wrapped in {{'sso_settings': {{...}}}}: {body}"
     );
     let settings = &body["sso_settings"];
     assert_eq!(settings["login_handle_name"], "MyLoginHandle");
-    assert_eq!(settings["change_password_url"], "https://example.com/change-password");
-    assert_eq!(settings["auth_discovery_url"], "https://example.com/sso/discover");
+    assert_eq!(
+        settings["change_password_url"],
+        "https://example.com/change-password"
+    );
+    assert_eq!(
+        settings["auth_discovery_url"],
+        "https://example.com/sso/discover"
+    );
     assert_eq!(settings["discovery_page_active"], true);
 
     // GET reflects persisted values.
@@ -634,8 +666,7 @@ async fn sso_settings_update_persists_and_returns_wrapped() {
         .await;
     let get_body: Value = get_resp.json();
     assert_eq!(
-        get_body["sso_settings"]["login_handle_name"],
-        "MyLoginHandle",
+        get_body["sso_settings"]["login_handle_name"], "MyLoginHandle",
         "persisted login_handle_name must survive GET: {}",
         get_body
     );
@@ -691,15 +722,13 @@ async fn sso_settings_update_accepts_flat_params() {
         }))
         .await;
 
-    assert_eq!(
-        resp.status_code(),
-        200,
-        "flat update: {}",
-        resp.text()
-    );
+    assert_eq!(resp.status_code(), 200, "flat update: {}", resp.text());
     let body: Value = resp.json();
     assert_eq!(body["sso_settings"]["login_handle_name"], "FlatHandle");
-    assert_eq!(body["sso_settings"]["unknown_user_url"], "https://example.com/unknown");
+    assert_eq!(
+        body["sso_settings"]["unknown_user_url"],
+        "https://example.com/unknown"
+    );
 
     cleanup(&pool, &prefix).await;
 }

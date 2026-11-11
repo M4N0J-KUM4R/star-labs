@@ -1612,7 +1612,7 @@ async fn update_sso_settings(
     let params = parse_sso_settings(raw);
 
     // Build dynamic UPDATE from provided fields.
-    let mut set_clauses = vec![];
+    let mut set_clauses: Vec<String> = vec![];
     let mut bind_idx = 1;
 
     macro_rules! bind_opt {
