@@ -169,7 +169,6 @@ async fn create_issue_defaults_and_rejects_unknown_issue_type() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let issue: Value = resp.json();
-    let issue_id = issue["id"].as_i64().expect("issue id");
     assert_eq!(issue["issue_type"], "error");
     assert_eq!(issue["workflow_state"], "active");
     assert_eq!(issue["unresolved"], true);
