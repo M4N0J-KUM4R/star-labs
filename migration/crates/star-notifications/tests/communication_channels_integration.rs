@@ -100,26 +100,8 @@ async fn seed_channel(
 }
 
 /// Mint a valid bearer token for the given user.
-fn auth_header(pool: &PgPool, user_id: i64, role: &str) -> String {
-    use star_auth::{AdminClaims, UserClaims};
-    let jwt_secret = JWT_SECRET.to_string();
-    let claims = if role == "admin" {
-        AdminClaims {
-            sub: user_id,
-            exp: chrono::Utc::now().timestamp() + 3600,
-            iat: chrono::Utc::now().timestamp(),
-        }
-        .into()
-    } else {
-        UserClaims {
-            sub: user_id,
-            exp: chrono::Utc::now().timestamp() + 3600,
-            iat: chrono::Utc::now().timestamp(),
-        }
-        .into()
-    };
-    let token = jsonwebtoken::encode(&jsonwebtoken::Header::default(), &claims, &jwt_secret)
-        .expect("mint token");
+fn auth_header(_pool: &PgPool, user_id: i64, role: &str) -> String {
+    let token = star_auth::create_token(user_id, role, JWT_SECRET).expect("mint token");
     format!("Bearer {token}")
 }
 
