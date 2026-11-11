@@ -44,6 +44,8 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod external_tools;
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -556,6 +558,7 @@ pub fn router() -> Router<AppState> {
             "/lti_registrations/{id}/deployments",
             get(list_deployments).post(create_deployment),
         )
+        .merge(external_tools::router())
 }
 
 // ---------------------------------------------------------------------------
