@@ -1889,6 +1889,211 @@ async fn create_quiz_report(
 }
 
 // ---------------------------------------------------------------------------
+// Quiz statistics (Canvas Quizzes::QuizStatisticsController — index)
+// ---------------------------------------------------------------------------
+
+/// Canvas QuizStatistics aggregate shape (simplified from Canvas' full stats).
+#[derive(Debug, Clone, Serialize)]
+pub struct QuizStatistics {
+    pub id: i64,
+    pub quiz_id: i64,
+    pub multiple_attempts_exist: bool,
+    pub includes_all_versions: bool,
+    pub generated_at: DateTime<Utc>,
+    pub url: String,
+    pub html_url: String,
+    pub question_statistics: Value,
+    pub submission_statistics: Value,
+}
+
+/// Load aggregate submission stats from completed quiz_submissions.
+async fn load_submission_stats(
+    pool: &PgPool,
+    quiz_id: i64,
+    include_all_versions: bool,
+) -> Result<Value, ApiError> {
+    let where_all = if include_all_versions {
+        "".to_string()
+    } else {
+        format!(
+            " AND id IN (SELECT MAX(id) FROM quiz_submissions \
+             WHERE quiz_id = $1 AND workflow_state IN ('complete', 'pending_review') \
+             GROUP BY user_id)"
+        )
+    };
+
+    let row: Option<(i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>)> =
+        sqlx::query_as(&format!(
+            r#"
+            SELECT
+                COUNT(DISTINCT user_id)::bigint AS unique_count,
+                AVG(score)::float8 AS score_average,
+                MAX(score)::float8 AS score_high,
+                MIN(score)::float8 AS score_low,
+                STDDEV(score)::float8 AS score_stdev
+            FROM quiz_submissions
+            WHERE quiz_id = $1 AND score IS NOT NULL
+              AND workflow_state IN ('complete', 'pending_review')
+            {where_all}
+            "#,
+        ))
+        .bind(quiz_id)
+        .fetch_optional(pool)
+        .await?;
+
+    let (unique_count, score_avg, score_high, score_low, score_stdev) =
+        row.unwrap_or((0, None, None, None, None));
+
+    Ok(json!({
+        "unique_count": unique_count,
+        "score_average": score_avg,
+        "score_high": score_high,
+        "score_low": score_low,
+        "score_stdev": score_stdev,
+        "scores": {},
+    }))
+}
+
+/// GET /courses/{courseId}/quizzes/{quizId}/statistics
+///
+/// Canvas `index`: returns aggregate quiz statistics. Teacher/admin only.
+async fn get_quiz_statistics(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    Query(params): Query<HashMap<String, String>>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let quiz: Option<(String,)> =
+        sqlx::query_as("SELECT quiz_type FROM quizzes WHERE id = $1")
+            .bind(quiz_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (quiz_type,) = quiz.ok_or(ApiError::NotFound)?;
+
+    let all_versions = query_bool(&params, "all_versions");
+
+    // question_statistics: empty array as we don't store per-question aggregates
+    let question_stats: Value = json!([]);
+
+    let submission_stats =
+        load_submission_stats(&state.db, quiz_id, all_versions).await?;
+
+    let stats = json!({
+        "quiz_statistics": [{
+            "id": quiz_id,
+            "quiz_id": quiz_id,
+            "multiple_attempts_exist": false,
+            "includes_all_versions": all_versions,
+            "generated_at": chrono::Utc::now(),
+            "url": format!("/api/v1/courses/{}/quizzes/{}/statistics", course_id, quiz_id),
+            "html_url": format!("/courses/{}/quizzes/{}/statistics", course_id, quiz_id),
+            "question_statistics": question_stats,
+            "submission_statistics": submission_stats,
+        }]
+    });
+
+    Ok(Json(stats))
+}
+
+// ---------------------------------------------------------------------------
+// Quiz reorder & access code validation (Canvas quizzes_controller)
+// ---------------------------------------------------------------------------
+
+/// POST /courses/{courseId}/quizzes/{quizId}/reorder
+///
+/// Canvas `reorder`: teacher/admin only. Accepts an `order` array of
+/// {type: "question"|"group", id, position}. We persist the order to the
+/// `position` column of quiz_questions and quiz_question_groups.
+async fn reorder_quiz(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<Value>,
+) -> Result<StatusCode, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let order = body
+        .get("order")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::BadRequest("order array is required".into()))?;
+
+    for (idx, item) in order.iter().enumerate() {
+        let item_type = item.get("type").and_then(Value::as_str);
+        let id = item.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
+            ApiError::BadRequest("each order item needs {type, id}".into())
+        })?;
+        let position = (idx + 1) as i32;
+
+        match item_type {
+            Some("question") => {
+                sqlx::query("UPDATE quiz_questions SET position = $2 WHERE id = $1 AND quiz_id = $3")
+                    .bind(id)
+                    .bind(position)
+                    .bind(quiz_id)
+                    .execute(&state.db)
+                    .await?;
+            }
+            Some("group") => {
+                sqlx::query("UPDATE quiz_question_groups SET position = $2 WHERE id = $1 AND quiz_id = $3")
+                    .bind(id)
+                    .bind(position)
+                    .bind(quiz_id)
+                    .execute(&state.db)
+                    .await?;
+            }
+            _ => return Err(ApiError::BadRequest("type must be 'question' or 'group'".into())),
+        }
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /courses/{courseId}/quizzes/{quizId}/validate_access_code
+///
+/// Canvas `validate_access_code`: any enrolled user can call it.
+/// Returns a plain boolean `true` if the code matches the quiz's access_code.
+#[derive(Debug, Deserialize)]
+struct AccessCodeRequest {
+    access_code: String,
+}
+
+async fn validate_access_code(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<AccessCodeRequest>,
+) -> Result<Json<Value>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let row: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT access_code FROM quizzes WHERE id = $1")
+            .bind(quiz_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (access_code,) = row.ok_or(ApiError::NotFound)?;
+
+    let correct = access_code
+        .as_ref()
+        .is_some_and(|code| code == &payload.access_code);
+
+    Ok(Json(json!(correct)))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -1982,6 +2187,21 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/quizzes/{quizId}/groups/{groupId}",
             delete(delete_quiz_group),
+        )
+        // Quiz reorder (Canvas quizzes_controller#reorder)
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/reorder",
+            post(reorder_quiz),
+        )
+        // Quiz access code validation (Canvas quizzes_controller#validate_access_code)
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/validate_access_code",
+            post(validate_access_code),
+        )
+        // Quiz statistics (Canvas quiz_statistics_controller#index)
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/statistics",
+            get(get_quiz_statistics),
         )
 }
 
