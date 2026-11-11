@@ -213,7 +213,7 @@ async fn validate_access_code() {
         .json(&json!({ "access_code": "secret123" }))
         .await;
     assert_eq!(resp.status_code(), 200, "correct code: {}", resp.text());
-    let body: Value = resp.json().await;
+    let body: Value = resp.json();
     assert_eq!(body, json!(true), "correct code body");
 
     // Wrong code → false
@@ -223,7 +223,7 @@ async fn validate_access_code() {
         .json(&json!({ "access_code": "wrong" }))
         .await;
     assert_eq!(resp.status_code(), 200, "wrong code: {}", resp.text());
-    let body: Value = resp.json().await;
+    let body: Value = resp.json();
     assert_eq!(body, json!(false), "wrong code body");
 
     // Teardown
@@ -266,7 +266,7 @@ async fn quiz_statistics() {
         .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
         .await;
     assert_eq!(resp.status_code(), 200, "teacher stats: {}", resp.text());
-    let body: Value = resp.json().await;
+    let body: Value = resp.json();
     assert!(body.get("quiz_statistics").is_some(), "missing quiz_statistics key: {}", body);
     let stats = &body["quiz_statistics"];
     assert!(stats.is_array(), "quiz_statistics should be array: {}", body);
