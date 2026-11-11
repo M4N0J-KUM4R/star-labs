@@ -278,8 +278,9 @@ async fn compound(pool: &PgPool, rows: Vec<EventRow>) -> Result<Json<Compound>, 
         Vec::new()
     } else {
         sqlx::query_as(
-            "SELECT id, course_id, title, points_possible FROM assignments
-             WHERE id = ANY($1) ORDER BY id",
+            "SELECT id, course_id, title,
+                    points_possible::double precision AS points_possible
+             FROM assignments WHERE id = ANY($1) ORDER BY id",
         )
         .bind(&assignment_ids)
         .fetch_all(pool)

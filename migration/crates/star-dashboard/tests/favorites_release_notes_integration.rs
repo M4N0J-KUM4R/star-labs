@@ -352,8 +352,12 @@ async fn release_notes_admin_crud_latest_and_unread_count() {
         .as_str()
         .expect("production show_at");
     assert_eq!(
-        DateTime::parse_from_rfc3339(returned_at).expect("returned show_at"),
-        DateTime::parse_from_rfc3339(&shown_at).expect("expected show_at")
+        DateTime::parse_from_rfc3339(returned_at)
+            .expect("returned show_at")
+            .timestamp_micros(),
+        DateTime::parse_from_rfc3339(&shown_at)
+            .expect("expected show_at")
+            .timestamp_micros()
     );
     assert_eq!(note["langs"]["en"]["title"], format!("{prefix}-NoteOne"));
     assert_eq!(note["langs"]["en"]["url"], "/notes/1");
