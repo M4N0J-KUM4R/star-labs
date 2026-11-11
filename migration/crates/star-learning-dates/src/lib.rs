@@ -265,6 +265,7 @@ async fn load_details(
 
     // No date_details row yet: fall back to the assignment's own due date,
     // matching Canvas (the assignment is the overridable object).
+    let stored_is_none = stored.is_none();
     let mut details = match stored {
         Some(row) => DateDetails {
             id: object_id,
@@ -288,7 +289,7 @@ async fn load_details(
         },
     };
 
-    if stored.is_none() && asset == Asset::Assignment {
+    if stored_is_none && asset == Asset::Assignment {
         details.due_at = sqlx::query_scalar("SELECT due_at FROM assignments WHERE id = $1")
             .bind(object_id)
             .fetch_one(pool)
