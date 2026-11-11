@@ -431,6 +431,17 @@ async fn account_admin_is_scoped_to_their_account() {
         .await;
     assert_eq!(res.status_code(), 200, "{}", res.text());
 
+    let (password_hash,): (String,) =
+        sqlx::query_as("SELECT password_hash FROM users WHERE email = $1")
+            .bind(format!("{prefix}-scoped-a@test.local"))
+            .fetch_one(&pool)
+            .await
+            .expect("fetch created user hash");
+    assert!(
+        !star_auth::verify_password("", &password_hash),
+        "omitted password must not create an empty-password login"
+    );
+
     let body_b = json!({
         "user": { "name": "Scoped Created B" },
         "pseudonym": { "unique_id": format!("{prefix}-scoped-b@test.local") }
@@ -448,6 +459,41 @@ async fn account_admin_is_scoped_to_their_account() {
         .json(&body_b)
         .await;
     assert_eq!(res.status_code(), 200, "{}", res.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn terminate_sessions_rejects_tokens_issued_before_logout() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let user = seed_user(&pool, &prefix, "Revoked User", "student").await;
+    let token = auth(user, "student");
+    let url = format!("/users/{user}/colors");
+
+    let res = server
+        .get(&url)
+        .add_header("Authorization", token.as_str())
+        .await;
+    assert_eq!(res.status_code(), 200, "{}", res.text());
+
+    sqlx::query(
+        "UPDATE users SET last_logged_out = now() + interval '5 seconds' \
+         WHERE id = $1",
+    )
+    .bind(user)
+    .execute(&pool)
+    .await
+    .expect("mark logout");
+
+    let res = server
+        .get(&url)
+        .add_header("Authorization", token.as_str())
+        .await;
+    assert_eq!(res.status_code(), 401, "{}", res.text());
 
     cleanup(&pool, &prefix).await;
 }
