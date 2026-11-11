@@ -1322,6 +1322,8 @@ async fn destroy_release_note(
     }))
 }
 
+type LatestReleaseNoteQueryRow = (i64, String, Option<String>, Option<String>, DateTime<Utc>);
+
 /// GET /release_notes/latest — the notes already shown in this environment
 /// for the caller's roles, newest first, limit 10. Marks the newest as seen.
 async fn latest_release_notes(
@@ -1348,11 +1350,10 @@ async fn latest_release_notes(
         LIMIT 10
         "#
     );
-    let rows: Vec<(i64, String, Option<String>, Option<String>, DateTime<Utc>)> =
-        sqlx::query_as(&sql)
-            .bind(&role)
-            .fetch_all(&state.db)
-            .await?;
+    let rows: Vec<LatestReleaseNoteQueryRow> = sqlx::query_as(&sql)
+        .bind(&role)
+        .fetch_all(&state.db)
+        .await?;
 
     let last_seen = match &user {
         Some(user) => last_seen_release_note(&state.db, user.id)

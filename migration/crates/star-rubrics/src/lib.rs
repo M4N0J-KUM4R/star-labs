@@ -1618,14 +1618,8 @@ fn export_error(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({ "error": message }))).into_response()
 }
 
-fn required_rubric_ids(params: DownloadRubrics) -> Result<Vec<i64>, Response> {
-    match params.rubric_ids {
-        Some(ids) if !ids.is_empty() => Ok(ids),
-        _ => Err(export_error(
-            StatusCode::BAD_REQUEST,
-            "No rubric IDs provided",
-        )),
-    }
+fn required_rubric_ids(params: DownloadRubrics) -> Option<Vec<i64>> {
+    params.rubric_ids.filter(|ids| !ids.is_empty())
 }
 
 /// Load criteria (with ratings) for the given rubrics, ordered by position.
@@ -1764,9 +1758,11 @@ async fn download_course_rubrics(
         return Err(ApiError::Forbidden);
     }
 
-    let rubric_ids = match required_rubric_ids(params) {
-        Ok(ids) => ids,
-        Err(response) => return Ok(response),
+    let Some(rubric_ids) = required_rubric_ids(params) else {
+        return Ok(export_error(
+            StatusCode::BAD_REQUEST,
+            "No rubric IDs provided",
+        ));
     };
 
     let rubrics: Vec<Rubric> = sqlx::query_as(
@@ -1815,9 +1811,11 @@ async fn download_account_rubrics(
         return Err(ApiError::NotFound);
     }
 
-    let rubric_ids = match required_rubric_ids(params) {
-        Ok(ids) => ids,
-        Err(response) => return Ok(response),
+    let Some(rubric_ids) = required_rubric_ids(params) else {
+        return Ok(export_error(
+            StatusCode::BAD_REQUEST,
+            "No rubric IDs provided",
+        ));
     };
 
     let rubrics: Vec<Rubric> = sqlx::query_as(
