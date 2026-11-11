@@ -413,3 +413,14 @@ async fn visible_nav_tools_shape_and_error_cases() {
 
     teardown(&pool, &[teacher_id, outsider_id], account_id, course_id).await;
 }
+
+#[tokio::test]
+async fn external_tools_require_authentication() {
+    let Some((server, _pool, _prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let res = server.get("/courses/1/external_tools/1").await;
+    assert_eq!(res.status_code(), 401);
+}
