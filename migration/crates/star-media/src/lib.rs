@@ -176,14 +176,17 @@ fn to_json(
         media_sources: Vec::new(),
         media_tracks: tracks
             .into_iter()
-            .map(|track| MediaTrackSummary {
-                id: track.id,
-                kind: track.kind,
-                locale: track.locale,
-                workflow_state: track.workflow_state,
-                asr: track.is_asr(),
-                created_at: track.created_at,
-                updated_at: track.updated_at,
+            .map(|track| {
+                let asr = track.is_asr();
+                MediaTrackSummary {
+                    id: track.id,
+                    kind: track.kind,
+                    locale: track.locale,
+                    workflow_state: track.workflow_state,
+                    asr,
+                    created_at: track.created_at,
+                    updated_at: track.updated_at,
+                }
             })
             .collect(),
         viewer_restrictions: serde_json::json!({}),
