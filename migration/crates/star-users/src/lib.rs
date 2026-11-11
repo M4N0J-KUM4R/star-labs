@@ -2,6 +2,7 @@
 //!
 //! Exposes `pub fn router() -> axum::Router<AppState>`.
 
+use argon2::password_hash::rand_core::{OsRng, RngCore};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -1260,8 +1261,12 @@ async fn create_account_user(
             Some((first, last)) => format!("{last}, {first}"),
             None => name.clone(),
         });
-    let hash =
-        hash_password(payload.password.as_deref().unwrap_or("")).map_err(ApiError::BadRequest)?;
+    let password = payload.password.unwrap_or_else(|| {
+        let mut bytes = [0u8; 32];
+        OsRng.fill_bytes(&mut bytes);
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+    });
+    let hash = hash_password(&password).map_err(ApiError::BadRequest)?;
 
     let user: UserResponse = sqlx::query_as(
         r#"
