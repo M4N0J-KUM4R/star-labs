@@ -109,7 +109,9 @@ pub struct ListToolsQuery {
     pub placement: Option<String>,
     /// Canvas `selectable` — only tools that are selectable.
     pub selectable: Option<bool>,
-    /// Canvas `include_parents` — accepted for parity, ignored.
+    /// Canvas `include_parents` — accepted for parity; parent-account tools
+    /// are not merged into course listings in this workspace.
+    #[allow(dead_code)]
     pub include_parents: Option<bool>,
 }
 
