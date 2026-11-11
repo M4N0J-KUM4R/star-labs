@@ -3001,6 +3001,313 @@ async fn reserve_appointment(
 }
 
 // ---------------------------------------------------------------------------
+// Phase 4 — calendar preferences + visible contexts
+// (Canvas CalendarEventsApiController: visible_contexts, save_selected_contexts,
+//  save_enabled_account_calendars)
+// ---------------------------------------------------------------------------
+
+/// Body for POST /calendar_events/save_selected_contexts.
+#[derive(Debug, Default, Deserialize)]
+pub struct SaveSelectedContexts {
+    #[serde(default)]
+    pub selected_contexts: Option<Vec<String>>,
+}
+
+/// Body for POST /calendar_events/save_enabled_account_calendars.
+#[derive(Debug, Default, Deserialize)]
+pub struct SaveEnabledAccountCalendars {
+    /// Kept as a loose value: Canvas coerces string/boolean form input.
+    #[serde(default)]
+    pub mark_feature_as_seen: Option<Value>,
+    #[serde(default)]
+    pub enabled_account_calendars: Option<Vec<String>>,
+}
+
+/// Canvas `calendar_events/visible_contexts` entry.
+#[derive(Debug, Clone, Serialize)]
+pub struct VisibleContext {
+    pub id: String,
+    pub name: String,
+    pub asset_string: String,
+    pub color: Option<String>,
+    pub selected: bool,
+    pub allow_observers_in_appointment_groups: bool,
+    pub can_create_appointment_groups: bool,
+    pub sections: Vec<Value>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct VisibleContextCourse {
+    id: i64,
+    name: String,
+    can_manage: bool,
+}
+
+/// Build the Canvas `{ contexts: [...] }` payload. The user's personal calendar
+/// comes first, then the enrolled courses (Canvas `favorites_first`).
+fn build_visible_contexts(
+    user_id: i64,
+    user_name: &str,
+    courses: &[VisibleContextCourse],
+    selected_contexts: &[String],
+) -> Value {
+    let is_selected = |asset_string: &str| selected_contexts.iter().any(|s| s == asset_string);
+
+    let user_asset = format!("user_{user_id}");
+    let mut contexts = vec![VisibleContext {
+        id: user_id.to_string(),
+        name: user_name.to_string(),
+        asset_string: user_asset.clone(),
+        color: None,
+        selected: is_selected(&user_asset),
+        allow_observers_in_appointment_groups: false,
+        can_create_appointment_groups: false,
+        sections: Vec::new(),
+    }];
+
+    for course in courses {
+        let asset_string = format!("course_{}", course.id);
+        contexts.push(VisibleContext {
+            id: course.id.to_string(),
+            name: course.name.clone(),
+            selected: is_selected(&asset_string),
+            asset_string,
+            color: None,
+            allow_observers_in_appointment_groups: false,
+            can_create_appointment_groups: course.can_manage,
+            sections: Vec::new(),
+        });
+    }
+
+    json!({ "contexts": contexts })
+}
+
+/// Load `selected_calendar_contexts`, `enabled_account_calendars` and
+/// `account_calendar_events_seen` for a user (empty defaults when unset).
+async fn load_calendar_preferences(
+    db: &PgPool,
+    user_id: i64,
+) -> Result<(Vec<String>, Vec<String>, bool), ApiError> {
+    let row: Option<(Vec<String>, Vec<String>, bool)> = sqlx::query_as(
+        r#"
+        SELECT selected_contexts, enabled_account_calendars, account_calendars_seen
+        FROM calendar_user_preferences
+        WHERE user_id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?;
+
+    Ok(row.unwrap_or_default())
+}
+
+/// Upsert only the preferences present in the request (Canvas `set_preference`).
+async fn save_calendar_preferences(
+    db: &PgPool,
+    user_id: i64,
+    selected_contexts: Option<Vec<String>>,
+    enabled_account_calendars: Option<Vec<String>>,
+    mark_feature_as_seen: Option<bool>,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        r#"
+        INSERT INTO calendar_user_preferences
+            (user_id, selected_contexts, enabled_account_calendars, account_calendars_seen)
+        VALUES ($1, COALESCE($2, '{}'), COALESCE($3, '{}'), COALESCE($4, false))
+        ON CONFLICT (user_id) DO UPDATE
+        SET selected_contexts = COALESCE($2, calendar_user_preferences.selected_contexts),
+            enabled_account_calendars = COALESCE($3, calendar_user_preferences.enabled_account_calendars),
+            account_calendars_seen = COALESCE($4, calendar_user_preferences.account_calendars_seen),
+            updated_at = now()
+        "#,
+    )
+    .bind(user_id)
+    .bind(selected_contexts)
+    .bind(enabled_account_calendars)
+    .bind(mark_feature_as_seen)
+    .execute(db)
+    .await?;
+
+    Ok(())
+}
+
+/// Parse `start_date` / `end_date` for the user-calendar range (defaults today).
+fn parse_calendar_range(params: &CalendarRangeParams) -> (NaiveDate, NaiveDate) {
+    let today = Utc::now().date_naive();
+    let start_date = params
+        .start_date
+        .as_ref()
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .unwrap_or(today);
+    let end_date = params
+        .end_date
+        .as_ref()
+        .and_then(|s| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .unwrap_or(today);
+    normalize_calendar_range(start_date, end_date)
+}
+
+/// POST /calendar_events — create a personal event on the caller's calendar.
+async fn create_own_calendar_event(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<CreateCalendarEvent>,
+) -> Result<(StatusCode, Json<CalendarEvent>), ApiError> {
+    if payload.title.trim().is_empty() {
+        return Err(ApiError::Validation("title cannot be empty".into()));
+    }
+
+    let row: CalendarEvent = sqlx::query_as(
+        r#"
+        INSERT INTO calendar_events (course_id, user_id, title, description, start_at, end_at, workflow_state, location_name)
+        VALUES (NULL, $1, $2, $3, $4, $5, 'active', $6)
+        RETURNING id, course_id, user_id, title, description, start_at, end_at, workflow_state, location_name, created_at, updated_at
+        "#,
+    )
+    .bind(auth.id)
+    .bind(&payload.title)
+    .bind(&payload.description)
+    .bind(payload.start_at)
+    .bind(payload.end_at)
+    .bind(&payload.location_name)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+/// GET /users/{userId}/calendar_events — Canvas `user_index`.
+///
+/// Self or admin only (Canvas additionally allows observers; the crate has no
+/// observer role). Returns the user's personal events plus events of the
+/// courses they are enrolled in, within the requested date range.
+async fn list_calendar_events_for_user(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+    Query(params): Query<CalendarRangeParams>,
+    auth: AuthUser,
+) -> Result<Json<Vec<CalendarEvent>>, ApiError> {
+    let target_id = if user_id == "self" {
+        auth.id
+    } else {
+        user_id
+            .trim()
+            .parse::<i64>()
+            .map_err(|_| ApiError::NotFound)?
+    };
+
+    if target_id != auth.id && !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE id = $1")
+        .bind(target_id)
+        .fetch_optional(&state.db)
+        .await?;
+    if existing.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    let (start_date, end_date) = parse_calendar_range(&params);
+
+    let course_ids: Vec<i64> =
+        sqlx::query_scalar("SELECT DISTINCT course_id FROM enrollments WHERE user_id = $1")
+            .bind(target_id)
+            .fetch_all(&state.db)
+            .await?;
+
+    let rows: Vec<CalendarEvent> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, user_id, title, description, start_at, end_at,
+               workflow_state, location_name, created_at, updated_at
+        FROM calendar_events
+        WHERE workflow_state <> 'deleted'
+          AND start_at >= $2
+          AND start_at < ($3 + interval '1 day')
+          AND (user_id = $1 OR course_id = ANY($4))
+        ORDER BY start_at ASC
+        "#,
+    )
+    .bind(target_id)
+    .bind(start_date)
+    .bind(end_date)
+    .bind(&course_ids)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(rows))
+}
+
+/// GET /calendar_events/visible_contexts — contexts the user can see.
+async fn list_visible_contexts(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    let (selected_contexts, _, _) = load_calendar_preferences(&state.db, auth.id).await?;
+
+    let user_name: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await?;
+    let user_name = user_name.map(|(name,)| name).unwrap_or_default();
+
+    let courses: Vec<VisibleContextCourse> = sqlx::query_as(
+        r#"
+        SELECT c.id,
+               c.name,
+               EXISTS (
+                   SELECT 1 FROM enrollments te
+                   WHERE te.course_id = c.id AND te.user_id = $1 AND te.role = 'teacher'
+               ) AS can_manage
+        FROM courses c
+        JOIN enrollments e ON e.course_id = c.id
+        WHERE e.user_id = $1
+        ORDER BY c.id
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(build_visible_contexts(
+        auth.id,
+        &user_name,
+        &courses,
+        &selected_contexts,
+    )))
+}
+
+/// POST /calendar_events/save_selected_contexts — persist the selection.
+async fn save_selected_contexts(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<SaveSelectedContexts>,
+) -> Result<Json<Value>, ApiError> {
+    save_calendar_preferences(&state.db, auth.id, payload.selected_contexts, None, None).await?;
+    Ok(Json(json!({ "status": "ok" })))
+}
+
+/// POST /calendar_events/save_enabled_account_calendars — persist account picks.
+async fn save_enabled_account_calendars(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<SaveEnabledAccountCalendars>,
+) -> Result<Json<Value>, ApiError> {
+    let mark_feature_as_seen = payload.mark_feature_as_seen.as_ref().map(truthy_value);
+
+    save_calendar_preferences(
+        &state.db,
+        auth.id,
+        None,
+        payload.enabled_account_calendars,
+        mark_feature_as_seen,
+    )
+    .await?;
+    Ok(Json(json!({ "status": "ok" })))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -3017,6 +3324,23 @@ pub fn router() -> Router<AppState> {
         )
         // Global (user calendar)
         .route("/calendar_events", get(list_user_calendar_events))
+        .route("/calendar_events", post(create_own_calendar_event))
+        .route(
+            "/users/{userId}/calendar_events",
+            get(list_calendar_events_for_user),
+        )
+        .route(
+            "/calendar_events/visible_contexts",
+            get(list_visible_contexts),
+        )
+        .route(
+            "/calendar_events/save_selected_contexts",
+            post(save_selected_contexts),
+        )
+        .route(
+            "/calendar_events/save_enabled_account_calendars",
+            post(save_enabled_account_calendars),
+        )
         // Singleton
         .route("/calendar_events/{id}", get(get_calendar_event))
         .route("/calendar_events/{id}", put(update_calendar_event))
@@ -3244,5 +3568,137 @@ mod appointment_tests {
         assert!(!requiring_action(Some(2), 2, false));
         assert!(!requiring_action(Some(2), 0, true));
         assert!(!requiring_action(None, 0, false));
+    }
+}
+
+#[cfg(test)]
+mod calendar_deep_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn visible_contexts_stringify_ids_and_mark_selection() {
+        let courses = vec![
+            VisibleContextCourse {
+                id: 1,
+                name: "Course One".into(),
+                can_manage: true,
+            },
+            VisibleContextCourse {
+                id: 2,
+                name: "Course Two".into(),
+                can_manage: false,
+            },
+        ];
+        let selected = vec!["course_2".to_string(), "user_9".to_string()];
+
+        let payload = build_visible_contexts(9, "Ada Lovelace", &courses, &selected);
+        let contexts = payload["contexts"].as_array().unwrap();
+        assert_eq!(contexts.len(), 3);
+
+        assert_eq!(contexts[0]["id"], json!("9"));
+        assert_eq!(contexts[0]["asset_string"], json!("user_9"));
+        assert_eq!(contexts[0]["name"], json!("Ada Lovelace"));
+        assert_eq!(contexts[0]["selected"], json!(true));
+        assert_eq!(contexts[0]["sections"], json!([]));
+
+        assert_eq!(contexts[1]["asset_string"], json!("course_1"));
+        assert_eq!(contexts[1]["selected"], json!(false));
+        assert_eq!(contexts[1]["can_create_appointment_groups"], json!(true));
+
+        assert_eq!(contexts[2]["id"], json!("2"));
+        assert_eq!(contexts[2]["selected"], json!(true));
+        assert_eq!(contexts[2]["can_create_appointment_groups"], json!(false));
+        assert_eq!(contexts[2]["color"], Value::Null);
+    }
+
+    #[test]
+    fn save_bodies_default_to_noop_and_coerce_mark_feature_as_seen() {
+        let empty: SaveSelectedContexts = serde_json::from_value(json!({})).unwrap();
+        assert!(empty.selected_contexts.is_none());
+
+        let body: SaveSelectedContexts =
+            serde_json::from_value(json!({ "selected_contexts": ["course_1", "user_2"] })).unwrap();
+        assert_eq!(body.selected_contexts.unwrap().len(), 2);
+
+        let seen: SaveEnabledAccountCalendars = serde_json::from_value(json!({
+            "mark_feature_as_seen": "true",
+            "enabled_account_calendars": ["1", "2"]
+        }))
+        .unwrap();
+        assert!(truthy_value(seen.mark_feature_as_seen.as_ref().unwrap()));
+        assert_eq!(seen.enabled_account_calendars.unwrap().len(), 2);
+
+        let never_seen: SaveEnabledAccountCalendars =
+            serde_json::from_value(json!({ "mark_feature_as_seen": false })).unwrap();
+        assert!(!truthy_value(
+            never_seen.mark_feature_as_seen.as_ref().unwrap()
+        ));
+    }
+
+    /// DB-backed: preference round-trip pins the actual upsert behavior
+    /// (absent fields keep their stored value).
+    #[tokio::test]
+    async fn calendar_preferences_round_trip() {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            println!("SKIP: DATABASE_URL not set");
+            return;
+        };
+
+        let db = PgPool::connect(&database_url).await.expect("connect");
+        let prefix = format!(
+            "caldeep-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_millis()
+        );
+
+        let user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (name, email, password_hash) VALUES ($1, $2, 'x') RETURNING id",
+        )
+        .bind(&prefix)
+        .bind(format!("{prefix}@example.test"))
+        .fetch_one(&db)
+        .await
+        .expect("insert user");
+
+        // Unset preferences load as empty defaults.
+        assert_eq!(
+            load_calendar_preferences(&db, user_id).await.unwrap(),
+            (Vec::<String>::new(), Vec::<String>::new(), false)
+        );
+
+        save_calendar_preferences(
+            &db,
+            user_id,
+            Some(vec!["course_1".to_string()]),
+            Some(vec!["7".to_string()]),
+            Some(true),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            load_calendar_preferences(&db, user_id).await.unwrap(),
+            (vec!["course_1".to_string()], vec!["7".to_string()], true)
+        );
+
+        // Absent fields (NULL binds) keep the stored values.
+        save_calendar_preferences(&db, user_id, Some(vec!["user_3".to_string()]), None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            load_calendar_preferences(&db, user_id).await.unwrap(),
+            (vec!["user_3".to_string()], vec!["7".to_string()], true)
+        );
+
+        sqlx::query("DELETE FROM calendar_user_preferences WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user_id)
+            .execute(&db)
+            .await
+            .unwrap();
     }
 }
