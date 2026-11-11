@@ -671,6 +671,269 @@ pub async fn put_role_overrides(
     fetch_context_role_overrides(db, context, context_id).await
 }
 
+// ---------------------------------------------------------------------------
+// Canvas Role API (`accounts/roles_controller`)
+// ---------------------------------------------------------------------------
+
+/// A `roles` row in Canvas `Role` JSON shape. `account_id` is `null` for the
+/// five built-in enrollment roles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, sqlx::FromRow)]
+pub struct RoleView {
+    pub id: i64,
+    pub name: String,
+    pub label: String,
+    pub base_role_type: String,
+    pub workflow_state: String,
+    pub account_id: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request body for create/update; Canvas posts `role[label]=…` (nested), so
+/// both the nested and the flat form are accepted.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct RoleApiInput {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub base_role_type: Option<String>,
+    #[serde(default)]
+    pub workflow_state: Option<String>,
+}
+
+/// Canvas create body: `{"role": {...}}` or flat `{...}`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum RoleRequest {
+    Nested { role: RoleApiInput },
+    Flat(RoleApiInput),
+}
+
+impl RoleRequest {
+    pub fn into_input(self) -> RoleApiInput {
+        match self {
+            RoleRequest::Nested { role } => role,
+            RoleRequest::Flat(input) => input,
+        }
+    }
+}
+
+impl RoleApiInput {
+    /// Canvas base role type the custom role extends; `400` when unknown.
+    fn base_role(&self) -> Result<Option<Role>, ApiError> {
+        match &self.base_role_type {
+            None => Ok(None),
+            Some(raw) => raw
+                .parse::<Role>()
+                .map(Some)
+                .map_err(|_| ApiError::BadRequest(format!("unknown base_role_type: {raw}"))),
+        }
+    }
+
+    fn validate_workflow_state(&self) -> Result<(), ApiError> {
+        match self.workflow_state.as_deref() {
+            None | Some("active") | Some("inactive") | Some("deleted") => Ok(()),
+            Some(other) => Err(ApiError::BadRequest(format!(
+                "unknown workflow_state: {other}"
+            ))),
+        }
+    }
+}
+
+/// `404` when the account does not exist, `403` unless the caller can manage
+/// roles on it (reuses the `manage_role_overrides` admin checks).
+async fn require_roles_admin(db: &PgPool, user_id: i64, account_id: i64) -> Result<(), ApiError> {
+    if !role_override_context_exists(db, RoleOverrideContext::Account, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    require_manage_role_overrides(db, user_id, RoleOverrideContext::Account, account_id).await
+}
+
+const ROLE_COLUMNS: &str = "id, name, label, base_role_type, workflow_state, account_id, \
+                            created_at, updated_at";
+
+/// `GET /accounts/{accountId}/roles` — the account's custom roles, oldest
+/// first. Built-in roles (NULL `account_id`) are not listed.
+pub async fn roles_list(
+    db: &PgPool,
+    user_id: i64,
+    account_id: i64,
+) -> Result<Vec<RoleView>, ApiError> {
+    require_roles_admin(db, user_id, account_id).await?;
+
+    let rows: Vec<RoleView> = sqlx::query_as(&format!(
+        "SELECT {ROLE_COLUMNS} FROM roles
+         WHERE account_id = $1 AND workflow_state <> 'deleted'
+         ORDER BY id ASC"
+    ))
+    .bind(account_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+/// `POST /accounts/{accountId}/roles` — creates a custom role.
+///
+/// `400` when `label` is missing/blank or `base_role_type` is unknown, `409`
+/// when the account already has a role with that name.
+pub async fn role_create(
+    db: &PgPool,
+    user_id: i64,
+    account_id: i64,
+    input: &RoleApiInput,
+) -> Result<RoleView, ApiError> {
+    require_roles_admin(db, user_id, account_id).await?;
+
+    let label = input
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("role label is required".to_string()))?;
+    input.validate_workflow_state()?;
+    let base_role_type = input
+        .base_role()?
+        .map(|role| role.canvas_enrollment_type())
+        .unwrap_or("StudentEnrollment");
+    let name = input
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .unwrap_or(label);
+
+    let created: Option<RoleView> = sqlx::query_as(&format!(
+        "INSERT INTO roles (account_id, name, label, base_role_type, workflow_state)
+         VALUES ($1, $2, $3, $4, COALESCE($5, 'active'))
+         ON CONFLICT (account_id, name) DO NOTHING
+         RETURNING {ROLE_COLUMNS}"
+    ))
+    .bind(account_id)
+    .bind(name)
+    .bind(label)
+    .bind(base_role_type)
+    .bind(input.workflow_state.as_deref())
+    .fetch_optional(db)
+    .await?;
+
+    created.ok_or_else(|| ApiError::Conflict(format!("role {name} already exists")))
+}
+
+/// `GET /accounts/{accountId}/roles/{id}` — a custom role of the account or
+/// any built-in role; `404` otherwise.
+pub async fn role_show(
+    db: &PgPool,
+    user_id: i64,
+    account_id: i64,
+    role_id: i64,
+) -> Result<RoleView, ApiError> {
+    require_roles_admin(db, user_id, account_id).await?;
+    fetch_role(db, account_id, role_id).await
+}
+
+async fn fetch_role(db: &PgPool, account_id: i64, role_id: i64) -> Result<RoleView, ApiError> {
+    let role: Option<RoleView> = sqlx::query_as(&format!(
+        "SELECT {ROLE_COLUMNS} FROM roles
+         WHERE id = $1 AND (account_id = $2 OR account_id IS NULL)
+           AND workflow_state <> 'deleted'"
+    ))
+    .bind(role_id)
+    .bind(account_id)
+    .fetch_optional(db)
+    .await?;
+    role.ok_or(ApiError::NotFound)
+}
+
+/// `PUT /accounts/{accountId}/roles/{id}` — updates the supplied fields.
+/// Built-in roles cannot be modified (`400`).
+pub async fn role_update(
+    db: &PgPool,
+    user_id: i64,
+    account_id: i64,
+    role_id: i64,
+    input: &RoleApiInput,
+) -> Result<RoleView, ApiError> {
+    require_roles_admin(db, user_id, account_id).await?;
+    input.validate_workflow_state()?;
+    let base_role_type = input.base_role()?.map(|role| role.canvas_enrollment_type());
+    let label = input
+        .label
+        .as_deref()
+        .map(str::trim)
+        .filter(|label| !label.is_empty());
+    let name = input
+        .name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+
+    let updated: Option<RoleView> = sqlx::query_as(&format!(
+        "UPDATE roles SET
+             label = COALESCE($3, label),
+             name = COALESCE($4, name),
+             base_role_type = COALESCE($5, base_role_type),
+             workflow_state = COALESCE($6, workflow_state),
+             updated_at = now()
+         WHERE id = $1 AND account_id = $2
+         RETURNING {ROLE_COLUMNS}"
+    ))
+    .bind(role_id)
+    .bind(account_id)
+    .bind(label)
+    .bind(name)
+    .bind(base_role_type)
+    .bind(input.workflow_state.as_deref())
+    .fetch_optional(db)
+    .await?;
+
+    match updated {
+        Some(role) => Ok(role),
+        None => Err(reject_builtin_or_missing(db, account_id, role_id).await),
+    }
+}
+
+/// `DELETE /accounts/{accountId}/roles/{id}` — soft deletes (`workflow_state
+/// = 'deleted'`) and returns the role. Built-in roles cannot be deleted
+/// (`400`).
+pub async fn role_delete(
+    db: &PgPool,
+    user_id: i64,
+    account_id: i64,
+    role_id: i64,
+) -> Result<RoleView, ApiError> {
+    require_roles_admin(db, user_id, account_id).await?;
+
+    let deleted: Option<RoleView> = sqlx::query_as(&format!(
+        "UPDATE roles SET workflow_state = 'deleted', updated_at = now()
+         WHERE id = $1 AND account_id = $2 AND workflow_state <> 'deleted'
+         RETURNING {ROLE_COLUMNS}"
+    ))
+    .bind(role_id)
+    .bind(account_id)
+    .fetch_optional(db)
+    .await?;
+
+    match deleted {
+        Some(role) => Ok(role),
+        None => Err(reject_builtin_or_missing(db, account_id, role_id).await),
+    }
+}
+
+/// `400` for a built-in role, `404` when the account has no such role.
+async fn reject_builtin_or_missing(db: &PgPool, account_id: i64, role_id: i64) -> ApiError {
+    match Role::from_builtin_role_id(role_id) {
+        Some(_) => ApiError::BadRequest("built-in roles cannot be modified".to_string()),
+        None => match fetch_role(db, account_id, role_id).await {
+            Ok(role) if role.account_id.is_none() => {
+                ApiError::BadRequest("built-in roles cannot be modified".to_string())
+            }
+            _ => ApiError::NotFound,
+        },
+    }
+}
+
 use axum::{
     extract::{Path, State},
     routing::get,
@@ -689,6 +952,16 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/role_overrides",
             get(get_course_overrides).put(put_course_overrides),
+        )
+        .route(
+            "/accounts/{accountId}/roles",
+            get(list_account_roles).post(create_account_role),
+        )
+        .route(
+            "/accounts/{accountId}/roles/{id}",
+            get(show_account_role)
+                .put(update_account_role)
+                .delete(delete_account_role),
         )
 }
 
@@ -744,6 +1017,56 @@ async fn put_course_overrides(
     )
     .await
     .map(Json)
+}
+
+async fn list_account_roles(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<RoleView>>, ApiError> {
+    roles_list(&state.db, auth.id, account_id).await.map(Json)
+}
+
+async fn create_account_role(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(body): Json<RoleRequest>,
+) -> Result<Json<RoleView>, ApiError> {
+    role_create(&state.db, auth.id, account_id, &body.into_input())
+        .await
+        .map(Json)
+}
+
+async fn show_account_role(
+    State(state): State<AppState>,
+    Path((account_id, role_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<RoleView>, ApiError> {
+    role_show(&state.db, auth.id, account_id, role_id)
+        .await
+        .map(Json)
+}
+
+async fn update_account_role(
+    State(state): State<AppState>,
+    Path((account_id, role_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<RoleRequest>,
+) -> Result<Json<RoleView>, ApiError> {
+    role_update(&state.db, auth.id, account_id, role_id, &body.into_input())
+        .await
+        .map(Json)
+}
+
+async fn delete_account_role(
+    State(state): State<AppState>,
+    Path((account_id, role_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<RoleView>, ApiError> {
+    role_delete(&state.db, auth.id, account_id, role_id)
+        .await
+        .map(Json)
 }
 
 #[cfg(test)]
@@ -1036,6 +1359,275 @@ mod tests {
             .execute(&pool)
             .await
             .expect("cleanup course");
+        sqlx::query("DELETE FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup account");
+        for user_id in [admin_id, student_id] {
+            sqlx::query("DELETE FROM users WHERE id = $1")
+                .bind(user_id)
+                .execute(&pool)
+                .await
+                .expect("cleanup user");
+        }
+    }
+
+    #[test]
+    fn role_input_validates_base_role_type_and_state() {
+        let input = RoleApiInput {
+            base_role_type: Some("TaEnrollment".to_string()),
+            workflow_state: Some("active".to_string()),
+            ..RoleApiInput::default()
+        };
+        assert_eq!(input.base_role().unwrap(), Some(Role::Ta));
+        assert!(input.validate_workflow_state().is_ok());
+
+        let unknown_base = RoleApiInput {
+            base_role_type: Some("Wizard".to_string()),
+            ..RoleApiInput::default()
+        };
+        assert!(matches!(
+            unknown_base.base_role(),
+            Err(ApiError::BadRequest(_))
+        ));
+
+        let bad_state = RoleApiInput {
+            workflow_state: Some("zombie".to_string()),
+            ..RoleApiInput::default()
+        };
+        assert!(matches!(
+            bad_state.validate_workflow_state(),
+            Err(ApiError::BadRequest(_))
+        ));
+        assert!(RoleApiInput::default().base_role().unwrap().is_none());
+    }
+
+    #[test]
+    fn role_request_accepts_nested_and_flat_bodies() {
+        let nested = RoleRequest::Nested {
+            role: RoleApiInput {
+                label: Some("Grader".to_string()),
+                ..RoleApiInput::default()
+            },
+        };
+        assert_eq!(nested.into_input().label.as_deref(), Some("Grader"));
+
+        let flat = RoleRequest::Flat(RoleApiInput {
+            name: Some("grader".to_string()),
+            ..RoleApiInput::default()
+        });
+        assert_eq!(flat.into_input().name.as_deref(), Some("grader"));
+    }
+
+    /// DB round trip for the Phase 4 roles endpoints. Skips cleanly when
+    /// DATABASE_URL is unset or the schema has not been migrated; rows use a
+    /// unique per-run prefix and are removed at the end.
+    #[tokio::test]
+    async fn roles_api_create_show_update_delete_round_trip() {
+        let Ok(database_url) = std::env::var("DATABASE_URL") else {
+            println!("SKIP: DATABASE_URL not set");
+            return;
+        };
+        let pool = match sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&database_url)
+            .await
+        {
+            Ok(pool) => pool,
+            Err(err) => {
+                println!("SKIP: cannot connect to Postgres: {err}");
+                return;
+            }
+        };
+
+        let schema: Option<(bool,)> = sqlx::query_as(
+            r#"
+            SELECT to_regclass('public.users') IS NOT NULL
+               AND to_regclass('public.accounts') IS NOT NULL
+               AND to_regclass('public.account_users') IS NOT NULL
+               AND to_regclass('public.roles') IS NOT NULL
+            "#,
+        )
+        .fetch_optional(&pool)
+        .await
+        .expect("probe base schema");
+        let Some((schema_ready,)) = schema else {
+            println!("SKIP: base schema not migrated");
+            return;
+        };
+        if !schema_ready {
+            println!("SKIP: base schema not migrated");
+            return;
+        }
+
+        let prefix = format!(
+            "perm-p4-{}-{}",
+            std::process::id(),
+            Utc::now().timestamp_millis()
+        );
+
+        let admin_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO users (name, email, password_hash, role)
+            VALUES ($1, $2, 'not-used', 'admin')
+            RETURNING id
+            "#,
+        )
+        .bind(format!("{prefix}-admin"))
+        .bind(format!("{prefix}-admin@test.local"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed admin");
+
+        let student_id: i64 = sqlx::query_scalar(
+            r#"
+            INSERT INTO users (name, email, password_hash, role)
+            VALUES ($1, $2, 'not-used', 'student')
+            RETURNING id
+            "#,
+        )
+        .bind(format!("{prefix}-student"))
+        .bind(format!("{prefix}-student@test.local"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed student");
+
+        let account_id: i64 = sqlx::query_scalar(
+            "INSERT INTO accounts (name, workflow_state) VALUES ($1, 'active') RETURNING id",
+        )
+        .bind(format!("{prefix}-account"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed account");
+
+        sqlx::query(
+            "INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, 'admin')",
+        )
+        .bind(account_id)
+        .bind(admin_id)
+        .execute(&pool)
+        .await
+        .expect("seed account admin");
+
+        // A fresh account starts with no custom roles (built-ins are global).
+        let listed = roles_list(&pool, admin_id, account_id)
+            .await
+            .expect("empty list");
+        assert!(listed.is_empty());
+
+        let input = RoleApiInput {
+            label: Some("Grader".to_string()),
+            base_role_type: Some("ta".to_string()),
+            ..RoleApiInput::default()
+        };
+        let created = role_create(&pool, admin_id, account_id, &input)
+            .await
+            .expect("create role");
+        assert_eq!(created.label, "Grader");
+        assert_eq!(created.base_role_type, "TaEnrollment");
+        assert_eq!(created.workflow_state, "active");
+        assert_eq!(created.account_id, Some(account_id));
+
+        let duplicate = role_create(&pool, admin_id, account_id, &input).await;
+        assert!(matches!(duplicate, Err(ApiError::Conflict(_))));
+
+        let blank_label = role_create(
+            &pool,
+            admin_id,
+            account_id,
+            &RoleApiInput {
+                label: Some("  ".to_string()),
+                ..RoleApiInput::default()
+            },
+        )
+        .await;
+        assert!(matches!(blank_label, Err(ApiError::BadRequest(_))));
+
+        let listed = roles_list(&pool, admin_id, account_id)
+            .await
+            .expect("list roles");
+        assert_eq!(listed, vec![created.clone()]);
+
+        let shown = role_show(&pool, admin_id, account_id, created.id)
+            .await
+            .expect("show role");
+        assert_eq!(shown, created);
+
+        // Built-in roles are visible but immutable.
+        let builtin = role_show(&pool, admin_id, account_id, Role::Teacher.builtin_role_id())
+            .await
+            .expect("show builtin role");
+        assert_eq!(builtin.account_id, None);
+        let builtin_update = role_update(
+            &pool,
+            admin_id,
+            account_id,
+            Role::Teacher.builtin_role_id(),
+            &RoleApiInput {
+                label: Some("Nope".to_string()),
+                ..RoleApiInput::default()
+            },
+        )
+        .await;
+        assert!(matches!(builtin_update, Err(ApiError::BadRequest(_))));
+
+        let updated = role_update(
+            &pool,
+            admin_id,
+            account_id,
+            created.id,
+            &RoleApiInput {
+                label: Some("Head Grader".to_string()),
+                ..RoleApiInput::default()
+            },
+        )
+        .await
+        .expect("update role");
+        assert_eq!(updated.label, "Head Grader");
+        assert_eq!(updated.name, created.name);
+
+        let missing = role_update(
+            &pool,
+            admin_id,
+            account_id,
+            99_999_999,
+            &RoleApiInput::default(),
+        )
+        .await;
+        assert!(matches!(missing, Err(ApiError::NotFound)));
+
+        let forbidden = roles_list(&pool, student_id, account_id).await;
+        assert!(matches!(forbidden, Err(ApiError::Forbidden)));
+
+        let deleted = role_delete(&pool, admin_id, account_id, created.id)
+            .await
+            .expect("delete role");
+        assert_eq!(deleted.workflow_state, "deleted");
+        let gone = role_show(&pool, admin_id, account_id, created.id).await;
+        assert!(matches!(gone, Err(ApiError::NotFound)));
+        let empty = roles_list(&pool, admin_id, account_id)
+            .await
+            .expect("list after delete");
+        assert!(empty.is_empty());
+
+        let builtin_delete =
+            role_delete(&pool, admin_id, account_id, Role::Teacher.builtin_role_id()).await;
+        assert!(matches!(builtin_delete, Err(ApiError::BadRequest)));
+
+        let missing_account = roles_list(&pool, admin_id, 99_999_999).await;
+        assert!(matches!(missing_account, Err(ApiError::NotFound)));
+
+        sqlx::query("DELETE FROM roles WHERE account_id = $1")
+            .bind(account_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup roles");
+        sqlx::query("DELETE FROM account_users WHERE account_id = $1")
+            .bind(account_id)
+            .execute(&pool)
+            .await
+            .expect("cleanup account users");
         sqlx::query("DELETE FROM accounts WHERE id = $1")
             .bind(account_id)
             .execute(&pool)
