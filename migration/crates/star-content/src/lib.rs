@@ -12,16 +12,22 @@
 //!
 //! plus the content_migrations routes (`content_migrations.rs`):
 //! - `/courses/{courseId}/content_migrations`            — list / create
-//! - `/courses/{courseId}/content_migrations/{id}`       — nested show
+//! - `/courses/{courseId}/content_migrations/{id}`       — nested show / update
+//! - `/courses/{courseId}/content_migrations/{id}/selective_data` — selective import tree
 //! - `/courses/{courseId}/content_migrations/migrators`  — available migrators
 //! - `/content_migrations/{id}`                          — flat show
 //! - `/content_migrations/migrators`                     — flat migrators
+//!
+//! and the migration_issues routes (`migration_issues.rs`):
+//! - `/courses/{courseId}/content_migrations/{id}/migration_issues`            — list / create
+//! - `/courses/{courseId}/content_migrations/{id}/migration_issues/{issueId}` — update
 //!
 //! The sub-crates own all handlers and domain logic; this crate only
 //! provides a single merged `Router<AppState>` for inclusion in `star-http`.
 
 pub mod content_exports;
 pub mod content_migrations;
+pub mod migration_issues;
 
 use axum::Router;
 use star_common::AppState;
@@ -34,6 +40,7 @@ pub fn router() -> Router<AppState> {
         .merge(star_modules::router())
         .merge(content_exports::router())
         .merge(content_migrations::router())
+        .merge(migration_issues::router())
 }
 
 #[cfg(test)]
