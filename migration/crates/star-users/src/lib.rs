@@ -2,6 +2,7 @@
 //!
 //! Exposes `pub fn router() -> axum::Router<AppState>`.
 
+use argon2::password_hash::{rand_core::OsRng, SaltString};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
@@ -13,6 +14,7 @@ use serde::Deserialize;
 use sqlx::PgPool;
 use star_auth::{hash_password, AuthUser};
 use star_common::{ApiError, AppState};
+use std::collections::BTreeMap;
 
 // --------------------------------------------------------------------------
 // Domain types
@@ -263,6 +265,49 @@ pub struct CreateUserFileRequest {
     pub size: Option<i64>,
     pub folder: Option<String>,
     pub folder_id: Option<i64>,
+}
+
+/// Canvas `UserColor` row (lib/api/v1/user_color.rb).
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct UserColorResponse {
+    pub id: i64,
+    pub user_id: i64,
+    pub context: String,
+    pub color: String,
+}
+
+/// Body for PUT /users/{userId}/colors/{context}.
+#[derive(Debug, Deserialize)]
+pub struct SetCustomColorRequest {
+    pub hexcode: Option<String>,
+}
+
+/// Body for PUT /users/{userId}/dashboard_positions. Canvas form params send
+/// string values, JSON clients send numbers, so values stay untyped here.
+#[derive(Debug, Deserialize)]
+pub struct UpdateDashboardPositionsRequest {
+    pub dashboard_positions: BTreeMap<String, serde_json::Value>,
+}
+
+/// Body for POST /accounts/{accountId}/users (Canvas users#create).
+#[derive(Debug, Default, Deserialize)]
+pub struct CreateAccountUserRequest {
+    #[serde(default)]
+    pub user: AccountUserFields,
+    #[serde(default)]
+    pub pseudonym: AccountPseudonym,
+    pub password: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct AccountUserFields {
+    pub name: Option<String>,
+    pub sortable_name: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct AccountPseudonym {
+    pub unique_id: Option<String>,
 }
 
 // --------------------------------------------------------------------------
@@ -575,6 +620,88 @@ async fn upsert_user_settings(
 }
 
 // --------------------------------------------------------------------------
+// Custom colors / dashboard positions / account users helpers
+// --------------------------------------------------------------------------
+
+/// Canvas `CustomColorHelper::HEX_REGEX` (`/^#?(\h{3}|\h{6})$/`) plus
+/// `normalize_hexcode` (leading `#` added when missing).
+fn normalize_hexcode(raw: &str) -> Option<String> {
+    let digits = raw.strip_prefix('#').unwrap_or(raw);
+    let valid = matches!(digits.len(), 3 | 6) && digits.chars().all(|c| c.is_ascii_hexdigit());
+    valid.then(|| format!("#{digits}"))
+}
+
+/// Canvas `Context.find_by_asset_string`: `<type>_<id>` where the type names a
+/// known context table and the id exists. Unknown/missing contexts are 404.
+async fn asset_exists(pool: &PgPool, asset_string: &str) -> Result<bool, ApiError> {
+    let Some((kind, id)) = asset_string.split_once('_') else {
+        return Ok(false);
+    };
+    let Ok(id) = id.parse::<i64>() else {
+        return Ok(false);
+    };
+    let table = match kind {
+        "course" => "courses",
+        "group" => "groups",
+        "user" => "users",
+        _ => return Ok(false),
+    };
+    let row: Option<(i32,)> = sqlx::query_as(&format!("SELECT 1 FROM {table} WHERE id = $1"))
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(row.is_some())
+}
+
+/// Load a user's saved colors as Canvas' `{asset_string: hexcode}` hash.
+async fn load_custom_colors(
+    pool: &PgPool,
+    user_id: i64,
+) -> Result<BTreeMap<String, String>, ApiError> {
+    let rows: Vec<UserColorResponse> = sqlx::query_as(
+        "SELECT id, user_id, context, color FROM user_colors WHERE user_id = $1 ORDER BY context",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| (row.context, row.color))
+        .collect())
+}
+
+/// Load a user's dashboard positions as Canvas' `{asset_string: position}` map.
+async fn load_dashboard_positions(
+    pool: &PgPool,
+    user_id: i64,
+) -> Result<BTreeMap<String, i64>, ApiError> {
+    let rows: Vec<(i64, i64)> = sqlx::query_as(
+        "SELECT course_id, position::bigint AS position \
+         FROM dashboard_positions WHERE user_id = $1 ORDER BY position",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(rows
+        .into_iter()
+        .map(|(course_id, position)| (format!("course_{course_id}"), position))
+        .collect())
+}
+
+/// Canvas `Integer(val)` for the position values; strings and numbers are
+/// accepted, anything else is the "Invalid position provided" 400.
+fn parse_dashboard_position(value: &serde_json::Value) -> Option<i64> {
+    match value {
+        serde_json::Value::Number(number) => number.as_i64(),
+        serde_json::Value::String(text) => text.trim().parse().ok(),
+        _ => None,
+    }
+}
+
+// --------------------------------------------------------------------------
 // Router
 // --------------------------------------------------------------------------
 
@@ -598,6 +725,23 @@ pub fn router() -> Router<AppState> {
         // Canvas users_controller#create_file (attachment preflight; metadata
         // only, no upload binary handling).
         .route("/users/{userId}/files", post(create_user_file))
+        // Canvas accounts users#create.
+        .route("/accounts/{id}/users", post(create_account_user))
+        // Canvas users_controller#get_custom_colors / #get_custom_color /
+        // #set_custom_color.
+        .route("/users/{userId}/colors", get(get_custom_colors))
+        .route(
+            "/users/{userId}/colors/{context}",
+            get(get_custom_color).put(set_custom_color),
+        )
+        // Canvas users_controller#get_dashboard_positions /
+        // #set_dashboard_positions.
+        .route(
+            "/users/{userId}/dashboard_positions",
+            get(get_dashboard_positions).put(set_dashboard_positions),
+        )
+        // Canvas users_controller#terminate_sessions.
+        .route("/users/{userId}/sessions", delete(terminate_sessions))
 }
 
 // --------------------------------------------------------------------------
@@ -1055,9 +1199,261 @@ async fn create_user_file(
     Ok(Json(file))
 }
 
+/// POST /accounts/{accountId}/users — Canvas users#create. Account admins (or
+/// site admins) create a user with a pseudonym (login email) and optional
+/// password. Duplicate logins and missing required fields are 400s.
+async fn create_account_user(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(account_id): Path<i64>,
+    Json(payload): Json<CreateAccountUserRequest>,
+) -> Result<Json<UserResponse>, ApiError> {
+    let account: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    account.ok_or(ApiError::NotFound)?;
+
+    let role = get_user_role(&state.db, auth.id)
+        .await?
+        .unwrap_or_else(|| "student".to_string());
+    if !is_admin(&role) {
+        let account_admin: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM account_users \
+             WHERE account_id = $1 AND user_id = $2 AND role = 'admin'",
+        )
+        .bind(account_id)
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+        if account_admin.is_none() {
+            return Err(ApiError::Forbidden);
+        }
+    }
+
+    let name = payload
+        .user
+        .name
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("user[name] is required".into()))?;
+    let email = payload
+        .pseudonym
+        .unique_id
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("pseudonym[unique_id] is required".into()))?;
+
+    let taken: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM users WHERE email = $1")
+        .bind(&email)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    if taken.is_some() {
+        return Err(ApiError::BadRequest("email has already been taken".into()));
+    }
+
+    let sortable_name = payload
+        .user
+        .sortable_name
+        .unwrap_or_else(|| match name.rsplit_once(' ') {
+            Some((first, last)) => format!("{last}, {first}"),
+            None => name.clone(),
+        });
+    let password = payload
+        .password
+        .unwrap_or_else(|| SaltString::generate(&mut OsRng).as_str().to_string());
+    let hash = hash_password(&password).map_err(ApiError::BadRequest)?;
+
+    let user: UserResponse = sqlx::query_as(
+        r#"
+        INSERT INTO users (name, sortable_name, email, password_hash, role)
+        VALUES ($1, $2, $3, $4, 'student')
+        RETURNING id, name, sortable_name, email, role, created_at
+        "#,
+    )
+    .bind(&name)
+    .bind(&sortable_name)
+    .bind(&email)
+    .bind(&hash)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(user))
+}
+
+/// GET /users/{userId}/colors — Canvas `{custom_colors: {asset_string: hex}}`.
+async fn get_custom_colors(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
+    let colors = load_custom_colors(&state.db, user_id).await?;
+    Ok(Json(serde_json::json!({ "custom_colors": colors })))
+}
+
+/// GET /users/{userId}/colors/{context} — Canvas `{hexcode}`; an unset asset
+/// string is 404 ("Asset does not have an associated color.").
+async fn get_custom_color(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, context)): Path<(String, String)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
+    let color: Option<(String,)> =
+        sqlx::query_as("SELECT color FROM user_colors WHERE user_id = $1 AND context = $2")
+            .bind(user_id)
+            .bind(&context)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+    let (hexcode,) = color.ok_or(ApiError::NotFound)?;
+    Ok(Json(serde_json::json!({ "hexcode": hexcode })))
+}
+
+/// PUT /users/{userId}/colors/{context} — validates the asset string (404 when
+/// the context does not exist) and the hexcode (400), then upserts the color.
+async fn set_custom_color(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, context)): Path<(String, String)>,
+    Json(payload): Json<SetCustomColorRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
+    if !asset_exists(&state.db, &context).await? {
+        return Err(ApiError::NotFound);
+    }
+    let hexcode = payload
+        .hexcode
+        .as_deref()
+        .and_then(normalize_hexcode)
+        .ok_or_else(|| ApiError::BadRequest("Invalid Hexcode Provided".into()))?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO user_colors (user_id, context, color)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (user_id, context) DO UPDATE
+        SET color = EXCLUDED.color, updated_at = now()
+        "#,
+    )
+    .bind(user_id)
+    .bind(&context)
+    .bind(&hexcode)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(serde_json::json!({ "hexcode": hexcode })))
+}
+
+/// GET /users/{userId}/dashboard_positions — Canvas
+/// `{dashboard_positions: {asset_string: position}}`.
+async fn get_dashboard_positions(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
+    let positions = load_dashboard_positions(&state.db, user_id).await?;
+    Ok(Json(
+        serde_json::json!({ "dashboard_positions": positions }),
+    ))
+}
+
+/// PUT /users/{userId}/dashboard_positions — merges the submitted positions.
+/// Unknown assets are 404; non-numeric or abs(position) > 1000 values are 400.
+async fn set_dashboard_positions(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+    Json(payload): Json<UpdateDashboardPositionsRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
+
+    for (asset_string, value) in &payload.dashboard_positions {
+        if !asset_exists(&state.db, asset_string).await? {
+            return Err(ApiError::NotFound);
+        }
+        let position = parse_dashboard_position(value)
+            .ok_or_else(|| ApiError::BadRequest("Invalid position provided".into()))?;
+        if position.abs() > 1_000 {
+            return Err(ApiError::BadRequest(format!(
+                "Position {position} is too high. Your dashboard cards can probably be sorted with numbers 1-5, you could even use a 0."
+            )));
+        }
+        let course_id = asset_string
+            .strip_prefix("course_")
+            .and_then(|id| id.parse::<i64>().ok())
+            .ok_or(ApiError::NotFound)?;
+        sqlx::query(
+            r#"
+            INSERT INTO dashboard_positions (user_id, course_id, position)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (user_id, course_id) DO UPDATE
+            SET position = EXCLUDED.position, updated_at = now()
+            "#,
+        )
+        .bind(user_id)
+        .bind(course_id)
+        .bind(position as i32)
+        .execute(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    }
+
+    let positions = load_dashboard_positions(&state.db, user_id).await?;
+    Ok(Json(
+        serde_json::json!({ "dashboard_positions": positions }),
+    ))
+}
+
+/// DELETE /users/{userId}/sessions — Canvas users#terminate_sessions: stamps
+/// `last_logged_out` and expires every active access token for the user.
+async fn terminate_sessions(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
+
+    sqlx::query("UPDATE users SET last_logged_out = now(), updated_at = now() WHERE id = $1")
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    sqlx::query(
+        "UPDATE access_tokens \
+         SET updated_at = now(), permanent_expires_at = now() \
+         WHERE user_id = $1 AND workflow_state = 'active'",
+    )
+    .bind(user_id)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(
+        serde_json::json!({ "message": "All sessions terminated" }),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
+    use super::normalize_hexcode;
     use super::pagination_values;
+
+    #[test]
+    fn normalize_hexcode_matches_canvas_regex() {
+        assert_eq!(normalize_hexcode("fffeee"), Some("#fffeee".into()));
+        assert_eq!(normalize_hexcode("#ABC"), Some("#ABC".into()));
+        assert_eq!(normalize_hexcode("#abcd"), None);
+        assert_eq!(normalize_hexcode("zzz"), None);
+        assert_eq!(normalize_hexcode(""), None);
+    }
 
     #[test]
     fn pagination_clamps_limits_and_handles_extreme_page_numbers() {
