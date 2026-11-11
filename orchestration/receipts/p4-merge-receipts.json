@@ -1,0 +1,46 @@
+{
+  "receipts": [
+    {
+      "receipt_id": "p4-ext-002",
+      "task": "external-tools",
+      "slice": "Phase 4 external-tools parity",
+      "impl_branch": "p4/external-tools",
+      "impl_head": "99c0b9507d85d2204c43464b0026205cac8f73c7",
+      "tests_branch": "p4-tests/external-tools",
+      "tests_head": "ecccaaaf893903d134ce02a689f97a97b270e6e6",
+      "base_branch": "main",
+      "base_sha": "c37a48535c34e713ae64a31f753a6bdeae3fcb5d",
+      "candidate_branch": "p4-candidate/external-tools",
+      "candidate_sha": "c85b9a1cb63deac41a5c8eda6dbf1b0f3425b368",
+      "pr_number": 3,
+      "review_verdict": "approved_with_findings",
+      "findings": [
+        "Prior candidate c7d20f6 failed CI: SELECT 1 decoded as i64 (INT4 mismatch) in is_course_member/is_course_teacher caused 500s on authorized requests.",
+        "Fix 99c0b95 changes both decodes to (i32,) matching the is_account_admin precedent; candidate rebuilt as c85b9a1.",
+        "Residual: Production build transient apt DNS failure (azure.archive.ubuntu.com) also hit main run 43047054578; both rerun with --failed. Gate must verify per-check conclusions, not mergeStateStatus."
+      ],
+      "recorded_at": "2026-11-11T16:45:00Z"
+    },
+    {
+      "receipt_id": "p4-cm-001",
+      "task": "content-migrations-deep",
+      "slice": "Phase 4 content-migrations-deep parity",
+      "impl_branch": "p4/content-migrations-deep",
+      "impl_head": "2a7080e0d481315b2f8e7ce119e96f2f83af768c",
+      "tests_branch": "p4-tests/content-migrations-deep",
+      "tests_head": "0da4c9f2e2bf0c28ac3d8a0f38d74a64e001235d",
+      "base_branch": "main",
+      "base_sha": "c37a48535c34e713ae64a31f753a6bdeae3fcb5d",
+      "candidate_branch": "p4-candidate/content-migrations-deep",
+      "candidate_sha": "fc7111143690dc7cc02f9ec205eb57038ac7ef50",
+      "pr_number": 5,
+      "review_verdict": "approved_with_findings",
+      "findings": [
+        "All functional checks green on fc71111: Rust migration validation, Parity scoreboard, Bootstrap validation, Test (debug, PostgreSQL).",
+        "Production build failed on transient apt DNS (azure.archive.ubuntu.com) in 'Install musl toolchain'; same failure hit main run 43047054578 which previously passed the same step. Rerun --failed launched.",
+        "impl_head recorded as unverified placeholder pending git rev-parse; verify before merge."
+      ],
+      "recorded_at": "2026-11-11T16:45:00Z"
+    }
+  ]
+}
