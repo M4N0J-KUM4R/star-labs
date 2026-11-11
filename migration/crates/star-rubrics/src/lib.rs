@@ -4,7 +4,8 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -1549,6 +1550,301 @@ async fn delete_course_rubric(
 }
 
 // ---------------------------------------------------------------------------
+// CSV template + export (Canvas `RubricsApiController#upload_template` /
+// `#download_rubrics`)
+// ---------------------------------------------------------------------------
+
+/// Canvas `RubricImport.template_file` verbatim: the CSV users fill in before
+/// `POST .../rubrics/upload`.
+const RUBRIC_IMPORT_TEMPLATE: &str = "\
+Rubric Name,Criteria Name,Criteria Description,Criteria Enable Range,Rating Name,Rating Description,Rating Points,Rating Name,Rating Description,Rating Points,Rating Name,Rating Description,Rating Points\n\
+Rubric 1,Criteria 1,Criteria 1 Description,false,Rating 1,Rating 1 Description,2,Rating 2,Rating 2 Description,1,Rating 3,Rating 3 Description,0\n\
+Rubric 1,Criteria 2,Criteria 2 Description,false,Criteria 2 Rating 1,Rating Description,1,Criteria 2 Rating 2,Rating 2 Description,1\n";
+
+/// `rubric_ids` from a Canvas export request (array or comma-separated ids).
+#[derive(Debug, Deserialize)]
+pub struct DownloadRubrics {
+    #[serde(default)]
+    pub rubric_ids: Option<Vec<i64>>,
+}
+
+/// One criterion row of the export query, with its optional rating columns.
+#[derive(Debug, sqlx::FromRow)]
+struct ExportCriterionRow {
+    criterion_id: i64,
+    rubric_id: i64,
+    description: String,
+    long_description: Option<String>,
+    criterion_use_range: bool,
+    rating_description: Option<String>,
+    rating_long_description: Option<String>,
+    rating_points: Option<f64>,
+}
+
+/// Grouped criterion used to build one CSV row.
+struct ExportCriterion {
+    rubric_id: i64,
+    description: String,
+    long_description: Option<String>,
+    criterion_use_range: bool,
+    ratings: Vec<(String, Option<String>, f64)>,
+}
+
+fn csv_escape(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+fn csv_response(filename: &str, body: String) -> Response {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/csv".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        body,
+    )
+        .into_response()
+}
+
+/// Canvas renders `{ "error": ... }` with 400/404 for export problems.
+fn export_error(status: StatusCode, message: &str) -> Response {
+    (status, Json(serde_json::json!({ "error": message }))).into_response()
+}
+
+fn required_rubric_ids(params: DownloadRubrics) -> Option<Vec<i64>> {
+    params.rubric_ids.filter(|ids| !ids.is_empty())
+}
+
+/// Load criteria (with ratings) for the given rubrics, ordered by position.
+async fn export_criteria(
+    pool: &PgPool,
+    rubric_ids: &[i64],
+) -> Result<Vec<ExportCriterion>, ApiError> {
+    let rows: Vec<ExportCriterionRow> = sqlx::query_as(
+        r#"
+        SELECT rc.id AS criterion_id,
+               rc.rubric_id,
+               rc.description,
+               rc.long_description,
+               rc.criterion_use_range,
+               rr.description AS rating_description,
+               rr.long_description AS rating_long_description,
+               rr.points AS rating_points
+        FROM rubric_criteria rc
+        LEFT JOIN rubric_ratings rr ON rr.criterion_id = rc.id
+        WHERE rc.rubric_id = ANY($1)
+        ORDER BY rc.rubric_id ASC, rc.position ASC, rc.id ASC, rr.position ASC, rr.id ASC
+        "#,
+    )
+    .bind(rubric_ids)
+    .fetch_all(pool)
+    .await?;
+
+    let mut criteria: Vec<ExportCriterion> = Vec::new();
+    let mut last_id: Option<i64> = None;
+    for row in rows {
+        if last_id != Some(row.criterion_id) {
+            criteria.push(ExportCriterion {
+                rubric_id: row.rubric_id,
+                description: row.description,
+                long_description: row.long_description,
+                criterion_use_range: row.criterion_use_range,
+                ratings: Vec::new(),
+            });
+            last_id = Some(row.criterion_id);
+        }
+        if let (Some(description), Some(points)) = (row.rating_description, row.rating_points) {
+            if let Some(criterion) = criteria.last_mut() {
+                criterion
+                    .ratings
+                    .push((description, row.rating_long_description, points));
+            }
+        }
+    }
+    Ok(criteria)
+}
+
+/// Canvas `generate_rubrics_csv`: one row per criterion, padded rating triples.
+fn rubrics_csv(rubrics: &[Rubric], criteria: &[ExportCriterion]) -> String {
+    let max_ratings = criteria.iter().map(|c| c.ratings.len()).max().unwrap_or(0);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut headers = vec![
+        "Rubric Name".to_string(),
+        "Criteria Name".to_string(),
+        "Criteria Description".to_string(),
+        "Criteria Enable Range".to_string(),
+    ];
+    for _ in 0..max_ratings {
+        headers.push("Rating Name".to_string());
+        headers.push("Rating Description".to_string());
+        headers.push("Rating Points".to_string());
+    }
+    rows.push(headers);
+
+    for rubric in rubrics {
+        for criterion in criteria.iter().filter(|c| c.rubric_id == rubric.id) {
+            let mut row = vec![
+                rubric.title.clone(),
+                criterion.description.clone(),
+                criterion.long_description.clone().unwrap_or_default(),
+                criterion.criterion_use_range.to_string(),
+            ];
+            for index in 0..max_ratings {
+                match criterion.ratings.get(index) {
+                    Some((description, long_description, points)) => {
+                        row.push(description.clone());
+                        row.push(long_description.clone().unwrap_or_default());
+                        row.push(points.to_string());
+                    }
+                    None => {
+                        row.push(String::new());
+                        row.push(String::new());
+                        row.push(String::new());
+                    }
+                }
+            }
+            rows.push(row);
+        }
+    }
+
+    let mut csv = rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|cell| csv_escape(cell))
+                .collect::<Vec<_>>()
+                .join(",")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    csv.push('\n');
+    csv
+}
+
+/// GET /rubrics/upload_template  → 200 text/csv attachment.
+async fn upload_template(_auth: AuthUser) -> Response {
+    csv_response(
+        "import_rubric_template.csv",
+        RUBRIC_IMPORT_TEMPLATE.to_string(),
+    )
+}
+
+/// POST /courses/{courseId}/rubrics/download_rubrics  → 200 text/csv.
+///
+/// Canvas requires `read_rubrics` or `manage_rubrics`; any course enrollment
+/// satisfies `read_rubrics` in star-lms.
+async fn download_course_rubrics(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Json(params): Json<DownloadRubrics>,
+) -> Result<Response, ApiError> {
+    let course_exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?;
+    if course_exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let Some(rubric_ids) = required_rubric_ids(params) else {
+        return Ok(export_error(
+            StatusCode::BAD_REQUEST,
+            "No rubric IDs provided",
+        ));
+    };
+
+    let rubrics: Vec<Rubric> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, title, points_possible, workflow_state, created_at, updated_at
+        FROM rubrics
+        WHERE course_id = $1 AND id = ANY($2) AND workflow_state != 'deleted'
+        ORDER BY created_at ASC, id ASC
+        "#,
+    )
+    .bind(course_id)
+    .bind(&rubric_ids)
+    .fetch_all(&state.db)
+    .await?;
+
+    if rubrics.is_empty() {
+        return Ok(export_error(StatusCode::NOT_FOUND, "No rubrics found"));
+    }
+
+    let criteria = export_criteria(&state.db, &rubric_ids).await?;
+    Ok(csv_response(
+        "rubrics_export.csv",
+        rubrics_csv(&rubrics, &criteria),
+    ))
+}
+
+/// POST /accounts/{accountId}/rubrics/download_rubrics  → 200 text/csv.
+///
+/// Account-scoped export; star-lms rubrics live on courses, so the account's
+/// courses are selected through `courses.account_id`. Account admin only.
+async fn download_account_rubrics(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(params): Json<DownloadRubrics>,
+) -> Result<Response, ApiError> {
+    if !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    let account: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await?;
+    if account.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    let Some(rubric_ids) = required_rubric_ids(params) else {
+        return Ok(export_error(
+            StatusCode::BAD_REQUEST,
+            "No rubric IDs provided",
+        ));
+    };
+
+    let rubrics: Vec<Rubric> = sqlx::query_as(
+        r#"
+        SELECT r.id, r.course_id, r.title, r.points_possible, r.workflow_state,
+               r.created_at, r.updated_at
+        FROM rubrics r
+        JOIN courses c ON c.id = r.course_id
+        WHERE c.account_id = $1 AND r.id = ANY($2) AND r.workflow_state != 'deleted'
+        ORDER BY r.created_at ASC, r.id ASC
+        "#,
+    )
+    .bind(account_id)
+    .bind(&rubric_ids)
+    .fetch_all(&state.db)
+    .await?;
+
+    if rubrics.is_empty() {
+        return Ok(export_error(StatusCode::NOT_FOUND, "No rubrics found"));
+    }
+
+    let criteria = export_criteria(&state.db, &rubric_ids).await?;
+    Ok(csv_response(
+        "rubrics_export.csv",
+        rubrics_csv(&rubrics, &criteria),
+    ))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -1592,6 +1888,15 @@ pub fn router() -> Router<AppState> {
         .route(
             "/rubric_associations/{id}",
             delete(delete_rubric_association),
+        )
+        .route("/rubrics/upload_template", get(upload_template))
+        .route(
+            "/courses/{courseId}/rubrics/download_rubrics",
+            post(download_course_rubrics),
+        )
+        .route(
+            "/accounts/{accountId}/rubrics/download_rubrics",
+            post(download_account_rubrics),
         )
 }
 
