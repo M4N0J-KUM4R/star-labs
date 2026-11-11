@@ -19,6 +19,12 @@
 //! - POST   /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/rating — rate entry 0/1 (enrolled)
 //! - PUT    /courses/{courseId}/discussion_topics/{topicId}/subscribed — subscribe (enrolled)
 //! - DELETE /courses/{courseId}/discussion_topics/{topicId}/subscribed — unsubscribe (enrolled)
+//! - GET    /courses/{courseId}/discussion_topics/{topicId}/summaries — last summary (teacher/admin)
+//! - POST   /courses/{courseId}/discussion_topics/{topicId}/summaries — generate summary (teacher/admin)
+//! - GET    /groups/{groupId}/discussion_topics/{topicId}/summaries — last summary (group context)
+//! - POST   /groups/{groupId}/discussion_topics/{topicId}/summaries — generate summary (group context)
+//! - PUT    /courses/{courseId}/discussion_topics/update_discussion_types — set discussion types (teacher/admin)
+//! - PUT    /courses/{courseId}/discussion_topics/migrate_disallow — migrate side comments (teacher/admin)
 
 use axum::{
     extract::{Path, Query, State},
@@ -1097,6 +1103,685 @@ async fn unsubscribe_topic(
 }
 
 // ---------------------------------------------------------------------------
+// Discussion summaries (Canvas find_summary / find_or_create_summary)
+// ---------------------------------------------------------------------------
+
+/// Canvas stores two summary rows per generation: the "raw" summary and the
+/// "refined" summary that points back at it through `parent_id`.
+const SUMMARY_CONFIG_RAW: &str = "discussion_topic_summary_raw";
+const SUMMARY_CONFIG_REFINED: &str = "discussion_topic_summary_refined";
+
+/// Canvas `llm_config_raw.rate_limit[:limit]`: the number of summaries a user
+/// may generate per day for one context (config/llm_configs/discussion_topic_summary_raw.yml).
+const SUMMARY_RATE_LIMIT: i64 = 25;
+
+/// Canvas `usage` object: `{"currentCount": 1, "limit": 5}`.
+#[derive(Debug, Clone, Serialize)]
+pub struct SummaryUsage {
+    #[serde(rename = "currentCount")]
+    pub current_count: i64,
+    pub limit: i64,
+}
+
+/// Canvas `find_or_create_summary` response body.
+#[derive(Debug, Clone, Serialize)]
+pub struct CreatedSummary {
+    pub id: i64,
+    pub text: Option<String>,
+    pub usage: SummaryUsage,
+}
+
+/// Canvas `find_summary` response body.
+#[derive(Debug, Clone, Serialize)]
+pub struct LastSummary {
+    pub id: i64,
+    pub text: Option<String>,
+    #[serde(rename = "userInput")]
+    pub user_input: Option<String>,
+    pub obsolete: bool,
+    pub usage: SummaryUsage,
+}
+
+/// `userInput` argument of the summary endpoints (query string or JSON body).
+#[derive(Debug, Deserialize, Default)]
+pub struct SummaryParams {
+    #[serde(rename = "userInput")]
+    pub user_input: Option<String>,
+}
+
+/// Canvas `update_discussion_types` arguments: two arrays of topic ids.
+#[derive(Debug, Deserialize, Default)]
+pub struct UpdateDiscussionTypesParams {
+    #[serde(alias = "threaded[]")]
+    pub threaded: Option<Vec<i64>>,
+    #[serde(alias = "not_threaded[]")]
+    pub not_threaded: Option<Vec<i64>>,
+}
+
+/// Canvas `migrate_disallow` response body.
+#[derive(Debug, Clone, Serialize)]
+pub struct MigrateDisallowResult {
+    pub update_count: i64,
+}
+
+/// Canvas `discussion_topic_summaries` row.
+#[derive(Debug, Clone, sqlx::FromRow)]
+#[allow(dead_code)]
+struct SummaryRow {
+    id: i64,
+    discussion_topic_id: i64,
+    user_id: i64,
+    llm_config_version: String,
+    dynamic_content_hash: String,
+    user_input: Option<String>,
+    summary: Option<String>,
+    parent_id: Option<i64>,
+}
+
+/// Canvas renders the API errors of these endpoints as `{"error": "..."}`.
+fn canvas_error(status: StatusCode, message: &str) -> Response {
+    (status, Json(serde_json::json!({ "error": message }))).into_response()
+}
+
+/// Canvas `update_discussion_types` invalid-data body.
+fn canvas_error_with_count(status: StatusCode, message: &str, count: i64) -> Response {
+    (
+        status,
+        Json(serde_json::json!({ "error": message, "count": count })),
+    )
+        .into_response()
+}
+
+/// FNV-1a (64 bit) rendered as hex. Canvas stores an opaque
+/// `dynamic_content_hash` next to every generated summary.
+fn fnv1a_hex(parts: &[String]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for part in parts {
+        for byte in part.as_bytes() {
+            hash ^= u64::from(*byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        hash ^= 0xff;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Canvas stores a `dynamic_content_hash` next to every summary and compares
+/// the raw summary's hash with a freshly computed one to flag an outdated
+/// summary. The hash covers the live entries of the topic.
+async fn topic_content_hash(pool: &PgPool, topic_id: i64) -> Result<String, ApiError> {
+    let rows: Vec<(i64, DateTime<Utc>)> = sqlx::query_as(
+        r#"
+        SELECT id, updated_at FROM discussion_entries
+        WHERE topic_id = $1 AND workflow_state <> 'deleted'
+        ORDER BY id
+        "#,
+    )
+    .bind(topic_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut parts: Vec<String> = Vec::with_capacity(rows.len() + 1);
+    parts.push(format!("topic={topic_id}"));
+    for (id, updated_at) in rows {
+        parts.push(format!("{id}:{}", updated_at.timestamp_micros()));
+    }
+    Ok(fnv1a_hex(&parts))
+}
+
+/// The topic title and its live entries, oldest first.
+async fn topic_entries(
+    pool: &PgPool,
+    topic_id: i64,
+) -> Result<(String, Vec<(i64, Option<String>)>), ApiError> {
+    let title: Option<String> =
+        sqlx::query_scalar("SELECT title FROM discussion_topics WHERE id = $1")
+            .bind(topic_id)
+            .fetch_optional(pool)
+            .await?;
+    let rows: Vec<(i64, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT id, message FROM discussion_entries
+        WHERE topic_id = $1 AND workflow_state <> 'deleted'
+        ORDER BY id
+        "#,
+    )
+    .bind(topic_id)
+    .fetch_all(pool)
+    .await?;
+    Ok((title.unwrap_or_default(), rows))
+}
+
+fn truncate(text: &str, max: usize) -> &str {
+    match text.char_indices().nth(max) {
+        Some((index, _)) => &text[..index],
+        None => text,
+    }
+}
+
+/// Deterministic local stand-in for Canvas' LLM summary: an extractive digest
+/// of the discussion so far. Canvas delegates this to its LLM service.
+fn build_summary_text(
+    title: &str,
+    focus: Option<&str>,
+    entries: &[(i64, Option<String>)],
+) -> String {
+    let mut text = String::new();
+    if let Some(focus) = focus.map(str::trim).filter(|value| !value.is_empty()) {
+        text.push_str(&format!("Focus: {}. ", truncate(focus, 200)));
+    }
+    text.push_str(&format!(
+        "{} entries posted in \"{}\".",
+        entries.len(),
+        title
+    ));
+    if let Some(message) = entries
+        .first()
+        .and_then(|(_, message)| message.as_deref())
+        .map(str::trim)
+        .filter(|message| !message.is_empty())
+    {
+        text.push_str(&format!(" First: {}", truncate(message, 280)));
+    }
+    if entries.len() > 1 {
+        if let Some(message) = entries
+            .last()
+            .and_then(|(_, message)| message.as_deref())
+            .map(str::trim)
+            .filter(|message| !message.is_empty())
+        {
+            text.push_str(&format!(" Latest: {}", truncate(message, 280)));
+        }
+    }
+    text
+}
+
+/// Canvas counts the summaries a user generated today (`cache_key` holds the
+/// user uuid, the LLM config and the date).
+async fn summary_usage(pool: &PgPool, user_id: i64) -> Result<SummaryUsage, ApiError> {
+    let current_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT count(*) FROM discussion_topic_summaries
+        WHERE user_id = $1 AND llm_config_version = $2
+          AND created_at >= date_trunc('day', now() AT TIME ZONE 'UTC') AT TIME ZONE 'UTC'
+        "#,
+    )
+    .bind(user_id)
+    .bind(SUMMARY_CONFIG_REFINED)
+    .fetch_one(pool)
+    .await?;
+    Ok(SummaryUsage {
+        current_count,
+        limit: SUMMARY_RATE_LIMIT,
+    })
+}
+
+/// Canvas `fetch_or_create_summary`: the summary is reused while the
+/// discussion content (and the requested focus) are unchanged; otherwise a
+/// raw summary and its refined counterpart are stored.
+async fn create_or_reuse_summary(
+    pool: &PgPool,
+    topic_id: i64,
+    user_id: i64,
+    user_input: Option<&str>,
+) -> Result<SummaryRow, ApiError> {
+    let content_hash = topic_content_hash(pool, topic_id).await?;
+    let refined_hash = fnv1a_hex(&[
+        content_hash.clone(),
+        user_input.unwrap_or_default().to_string(),
+    ]);
+
+    let existing: Option<SummaryRow> = sqlx::query_as(
+        r#"
+        SELECT id, discussion_topic_id, user_id, llm_config_version, dynamic_content_hash,
+               user_input, summary, parent_id
+        FROM discussion_topic_summaries
+        WHERE discussion_topic_id = $1 AND user_id = $2 AND llm_config_version = $3
+          AND dynamic_content_hash = $4
+          AND user_input IS NOT DISTINCT FROM $5
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(topic_id)
+    .bind(user_id)
+    .bind(SUMMARY_CONFIG_REFINED)
+    .bind(&refined_hash)
+    .bind(user_input)
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some(existing) = existing {
+        return Ok(existing);
+    }
+
+    let (title, entries) = topic_entries(pool, topic_id).await?;
+    let raw_text = build_summary_text(&title, None, &entries);
+    let refined_text = build_summary_text(&title, user_input, &entries);
+
+    let raw: SummaryRow = sqlx::query_as(
+        r#"
+        INSERT INTO discussion_topic_summaries
+            (discussion_topic_id, user_id, llm_config_version, dynamic_content_hash, user_input, summary)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, discussion_topic_id, user_id, llm_config_version, dynamic_content_hash,
+                  user_input, summary, parent_id
+        "#,
+    )
+    .bind(topic_id)
+    .bind(user_id)
+    .bind(SUMMARY_CONFIG_RAW)
+    .bind(&content_hash)
+    .bind(user_input)
+    .bind(&raw_text)
+    .fetch_one(pool)
+    .await?;
+
+    let refined: SummaryRow = sqlx::query_as(
+        r#"
+        INSERT INTO discussion_topic_summaries
+            (discussion_topic_id, user_id, llm_config_version, dynamic_content_hash, user_input,
+             summary, parent_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, discussion_topic_id, user_id, llm_config_version, dynamic_content_hash,
+                  user_input, summary, parent_id
+        "#,
+    )
+    .bind(topic_id)
+    .bind(user_id)
+    .bind(SUMMARY_CONFIG_REFINED)
+    .bind(&refined_hash)
+    .bind(user_input)
+    .bind(&refined_text)
+    .bind(raw.id)
+    .fetch_one(pool)
+    .await?;
+
+    // Canvas enables the topic summary once a summary has been generated.
+    sqlx::query(
+        "UPDATE discussion_topics SET summary_enabled = TRUE, updated_at = now() WHERE id = $1",
+    )
+    .bind(topic_id)
+    .execute(pool)
+    .await?;
+
+    Ok(refined)
+}
+
+/// Canvas `find_summary`: the caller's most recent refined summary of the
+/// topic together with its raw parent. A missing row is a 404.
+async fn load_last_summary(
+    pool: &PgPool,
+    topic_id: i64,
+    user_id: i64,
+) -> Result<Option<LastSummary>, ApiError> {
+    let summary: Option<SummaryRow> = sqlx::query_as(
+        r#"
+        SELECT id, discussion_topic_id, user_id, llm_config_version, dynamic_content_hash,
+               user_input, summary, parent_id
+        FROM discussion_topic_summaries
+        WHERE discussion_topic_id = $1 AND user_id = $2 AND llm_config_version = $3
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(topic_id)
+    .bind(user_id)
+    .bind(SUMMARY_CONFIG_REFINED)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(summary) = summary else {
+        return Ok(None);
+    };
+
+    // Canvas only answers when the refined summary still has its raw parent.
+    let parent: Option<SummaryRow> = match summary.parent_id {
+        Some(parent_id) => {
+            sqlx::query_as(
+                r#"
+                SELECT id, discussion_topic_id, user_id, llm_config_version, dynamic_content_hash,
+                       user_input, summary, parent_id
+                FROM discussion_topic_summaries
+                WHERE id = $1
+                "#,
+            )
+            .bind(parent_id)
+            .fetch_optional(pool)
+            .await?
+        }
+        None => None,
+    };
+    let Some(parent) = parent else {
+        return Ok(None);
+    };
+
+    let current_hash = topic_content_hash(pool, topic_id).await?;
+    let usage = summary_usage(pool, user_id).await?;
+    Ok(Some(LastSummary {
+        id: summary.id,
+        text: summary.summary,
+        user_input: summary.user_input,
+        obsolete: parent.dynamic_content_hash != current_hash,
+        usage,
+    }))
+}
+
+/// 404 unless the topic is an active topic of the course context (Canvas'
+/// `@context.all_discussion_topics.active.find(topic_id)`).
+async fn ensure_course_topic(pool: &PgPool, course_id: i64, topic_id: i64) -> Result<(), ApiError> {
+    let topic: Option<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT id FROM discussion_topics
+        WHERE id = $1 AND course_id = $2 AND group_id IS NULL AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(topic_id)
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await?;
+    topic.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+/// 404 unless the topic is an active topic of the group context.
+async fn ensure_group_topic(pool: &PgPool, group_id: i64, topic_id: i64) -> Result<(), ApiError> {
+    let topic: Option<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT id FROM discussion_topics
+        WHERE id = $1 AND group_id = $2 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(topic_id)
+    .bind(group_id)
+    .fetch_optional(pool)
+    .await?;
+    topic.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+/// Canvas `require_context_and_read_access` for a group context: group
+/// members, the parent course's teachers and admins may read it.
+async fn ensure_group_read_access(
+    pool: &PgPool,
+    group_id: i64,
+    auth: &AuthUser,
+) -> Result<(), ApiError> {
+    if is_admin(auth) {
+        return Ok(());
+    }
+    let membership: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM group_memberships
+        WHERE group_id = $1 AND user_id = $2 AND workflow_state <> 'deleted'
+        LIMIT 1
+        "#,
+    )
+    .bind(group_id)
+    .bind(auth.id)
+    .fetch_optional(pool)
+    .await?;
+    if membership.is_some() {
+        return Ok(());
+    }
+    let teacher: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM enrollments e
+        JOIN groups g ON g.course_id = e.course_id
+        WHERE g.id = $1 AND e.user_id = $2 AND e.role = 'teacher'
+        LIMIT 1
+        "#,
+    )
+    .bind(group_id)
+    .bind(auth.id)
+    .fetch_optional(pool)
+    .await?;
+    if teacher.is_some() {
+        return Ok(());
+    }
+    Err(ApiError::Forbidden)
+}
+
+/// `userInput` may arrive as a query argument or inside the JSON body.
+fn merge_user_input(query: Option<String>, body: Option<String>) -> Option<String> {
+    body.or(query)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// GET /courses/{courseId}/discussion_topics/{topicId}/summaries.
+///
+/// Canvas `find_summary`: the caller's last summary of the discussion.
+async fn find_course_summary(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    // Canvas order: require_context_and_read_access, require_topic,
+    // user_can_summarize?.
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_course_topic(&state.db, course_id, topic_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    match load_last_summary(&state.db, topic_id, auth.id).await? {
+        Some(summary) => Ok(Json(summary).into_response()),
+        None => Ok(canvas_error(StatusCode::NOT_FOUND, "No summary found.")),
+    }
+}
+
+/// POST /courses/{courseId}/discussion_topics/{topicId}/summaries.
+///
+/// Canvas `find_or_create_summary`: generates (or reuses) a summary of the
+/// discussion so far.
+async fn find_or_create_course_summary(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    Query(params): Query<SummaryParams>,
+    auth: AuthUser,
+    payload: Option<Json<SummaryParams>>,
+) -> Result<Response, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_course_topic(&state.db, course_id, topic_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let user_input = merge_user_input(
+        params.user_input,
+        payload.and_then(|Json(body)| body.user_input),
+    );
+    let summary =
+        create_or_reuse_summary(&state.db, topic_id, auth.id, user_input.as_deref()).await?;
+    let usage = summary_usage(&state.db, auth.id).await?;
+    Ok(Json(CreatedSummary {
+        id: summary.id,
+        text: summary.summary,
+        usage,
+    })
+    .into_response())
+}
+
+/// GET /groups/{groupId}/discussion_topics/{topicId}/summaries.
+///
+/// Canvas `find_summary` for a group context: `user_can_summarize?` is false
+/// for every group topic (a group topic has no course), so the endpoint
+/// answers 403 once the caller passes the context and topic checks.
+async fn find_group_summary(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    ensure_group_topic(&state.db, group_id, topic_id).await?;
+    Err(ApiError::Forbidden)
+}
+
+/// POST /groups/{groupId}/discussion_topics/{topicId}/summaries.
+///
+/// Canvas `find_or_create_summary` for a group context: summaries are only
+/// available in course contexts, so the endpoint answers 403 once the caller
+/// passes the context and topic checks.
+async fn find_or_create_group_summary(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    Query(_params): Query<SummaryParams>,
+    auth: AuthUser,
+    _payload: Option<Json<SummaryParams>>,
+) -> Result<Response, ApiError> {
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    ensure_group_topic(&state.db, group_id, topic_id).await?;
+    Err(ApiError::Forbidden)
+}
+
+/// Number of active side-comment topics of the course that are part of `ids`.
+async fn count_side_comment_topics(
+    pool: &PgPool,
+    course_id: i64,
+    ids: &[i64],
+) -> Result<i64, ApiError> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT count(*) FROM discussion_topics
+        WHERE course_id = $1 AND group_id IS NULL AND workflow_state <> 'deleted'
+          AND discussion_type = 'side_comment' AND id = ANY($2)
+        "#,
+    )
+    .bind(course_id)
+    .bind(ids.to_vec())
+    .fetch_one(pool)
+    .await?;
+    Ok(count)
+}
+
+/// Move the given side-comment topics of the course to another discussion type.
+async fn set_discussion_types(
+    pool: &PgPool,
+    course_id: i64,
+    ids: &[i64],
+    discussion_type: &str,
+) -> Result<(), ApiError> {
+    if ids.is_empty() {
+        return Ok(());
+    }
+    sqlx::query(
+        r#"
+        UPDATE discussion_topics
+        SET discussion_type = $3, updated_at = now()
+        WHERE course_id = $1 AND group_id IS NULL AND workflow_state <> 'deleted'
+          AND discussion_type = 'side_comment' AND id = ANY($2)
+        "#,
+    )
+    .bind(course_id)
+    .bind(ids.to_vec())
+    .bind(discussion_type)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// PUT /courses/{courseId}/discussion_topics/update_discussion_types.
+///
+/// Canvas `update_discussion_types`: assigns every side-comment topic of the
+/// course to either the threaded or the not-threaded discussion type. The
+/// request has to cover each side-comment topic exactly once.
+async fn update_discussion_types(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    Query(params): Query<UpdateDiscussionTypesParams>,
+    auth: AuthUser,
+    payload: Option<Json<UpdateDiscussionTypesParams>>,
+) -> Result<Response, ApiError> {
+    // Canvas gates the endpoint behind a site-admin feature flag (404 when
+    // it is off); the workspace has no feature-flag store, so the gate is
+    // not reproduced here.
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let body = payload.map(|Json(body)| body).unwrap_or_default();
+    let threaded = body.threaded.or(params.threaded).unwrap_or_default();
+    let not_threaded = body
+        .not_threaded
+        .or(params.not_threaded)
+        .unwrap_or_default();
+
+    if threaded.is_empty() && not_threaded.is_empty() {
+        return Ok(canvas_error(StatusCode::BAD_REQUEST, "Missing data"));
+    }
+
+    let side_comment_count: i64 = sqlx::query_scalar(
+        r#"
+        SELECT count(*) FROM discussion_topics
+        WHERE course_id = $1 AND group_id IS NULL AND workflow_state <> 'deleted'
+          AND discussion_type = 'side_comment'
+        "#,
+    )
+    .bind(course_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let to_threaded = count_side_comment_topics(&state.db, course_id, &threaded).await?;
+    let to_not_threaded = count_side_comment_topics(&state.db, course_id, &not_threaded).await?;
+
+    if to_threaded != threaded.len() as i64
+        || to_not_threaded != not_threaded.len() as i64
+        || to_threaded + to_not_threaded != side_comment_count
+    {
+        return Ok(canvas_error_with_count(
+            StatusCode::BAD_REQUEST,
+            "Invalid data",
+            side_comment_count,
+        ));
+    }
+
+    set_discussion_types(&state.db, course_id, &threaded, "threaded").await?;
+    set_discussion_types(&state.db, course_id, &not_threaded, "not_threaded").await?;
+
+    Ok(Json(serde_json::json!({ "success": "true" })).into_response())
+}
+
+/// PUT /courses/{courseId}/discussion_topics/migrate_disallow.
+///
+/// Canvas `migrate_disallow`: turns every side-comment topic of the course
+/// into a threaded one.
+async fn migrate_disallow(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<MigrateDisallowResult>, ApiError> {
+    // Canvas gates the endpoint behind a site-admin feature flag (404 when
+    // it is off); the workspace has no feature-flag store, so the gate is
+    // not reproduced here.
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let updated = sqlx::query(
+        r#"
+        UPDATE discussion_topics
+        SET discussion_type = 'threaded', updated_at = now()
+        WHERE course_id = $1 AND group_id IS NULL AND workflow_state <> 'deleted'
+          AND discussion_type = 'side_comment'
+        "#,
+    )
+    .bind(course_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(Json(MigrateDisallowResult {
+        update_count: updated.rows_affected() as i64,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -1144,5 +1829,29 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/rating",
             post(rate_entry),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/summaries",
+            get(find_course_summary),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/summaries",
+            post(find_or_create_course_summary),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/summaries",
+            get(find_group_summary),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/summaries",
+            post(find_or_create_group_summary),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/update_discussion_types",
+            put(update_discussion_types),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/migrate_disallow",
+            put(migrate_disallow),
         )
 }
