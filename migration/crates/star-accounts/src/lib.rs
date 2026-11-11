@@ -268,6 +268,16 @@ pub struct CreateAccountAdmin {
     pub role: Option<String>,
 }
 
+/// Canvas user object rendered by `Accounts#remove_user` (`render json:
+/// @user`). Only the columns this schema stores are included.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct RemovedAccountUser {
+    pub id: i64,
+    pub name: String,
+    pub sortable_name: Option<String>,
+    pub email: String,
+}
+
 // --------------------------------------------------------------------------
 // Account settings + hierarchy listings (Phase 3)
 // --------------------------------------------------------------------------
@@ -485,6 +495,89 @@ async fn account_tree_json(
         })
         .collect())
 }
+
+/// Canvas `account_json` for a single row, with the computed `root_account_id`
+/// and without the optional count includes.
+async fn account_tree_row(pool: &PgPool, row: AccountRow) -> Result<AccountTreeJson, ApiError> {
+    let root_account_id = if row.parent_account_id.is_none() {
+        None
+    } else {
+        account_root_ids(pool, &[row.id])
+            .await?
+            .get(&row.id)
+            .copied()
+    };
+    Ok(AccountTreeJson {
+        id: row.id,
+        name: row.name,
+        parent_account_id: row.parent_account_id,
+        root_account_id,
+        workflow_state: row.workflow_state,
+        course_count: None,
+        sub_account_count: None,
+    })
+}
+
+/// Canvas `@domain_root_account`: the surviving top-level account.
+async fn root_account_id(pool: &PgPool) -> Result<Option<i64>, ApiError> {
+    sqlx::query_scalar(
+        r#"
+        SELECT id FROM accounts
+        WHERE parent_account_id IS NULL AND workflow_state <> 'deleted'
+        ORDER BY id ASC
+        LIMIT 1
+        "#,
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)
+}
+
+/// Canvas `Accounts#update_api` takes the attributes from `params[:account]`;
+/// JSON clients may also post them flat.
+fn account_attributes(payload: Value) -> Result<Map<String, Value>, ApiError> {
+    if !payload.is_object() {
+        return Err(ApiError::BadRequest("account must be a JSON object".into()));
+    }
+    match payload.get("account") {
+        Some(Value::Object(map)) => Ok(map.clone()),
+        Some(_) => Err(ApiError::BadRequest("account must be a JSON object".into())),
+        None => Ok(payload.as_object().cloned().unwrap_or_default()),
+    }
+}
+
+/// Canvas checks `account.user_account_associations` before removing a user;
+/// here an association is an `account_users` grant or an enrollment in a
+/// course belonging to the account subtree.
+async fn user_in_account(
+    pool: &PgPool,
+    user_id: i64,
+    account_ids: &[i64],
+) -> Result<bool, ApiError> {
+    let row: (bool,) = sqlx::query_as(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM account_users
+            WHERE user_id = $1 AND account_id = ANY($2)
+          UNION ALL
+            SELECT 1
+            FROM enrollments e
+            JOIN courses c ON c.id = e.course_id
+            WHERE e.user_id = $1 AND c.account_id = ANY($2)
+        )
+        "#,
+    )
+    .bind(user_id)
+    .bind(account_ids)
+    .fetch_one(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(row.0)
+}
+
+/// Name Canvas gives the auto-created sub-account
+/// (`Account#manually_created_courses_account`).
+const MANUALLY_CREATED_COURSES_NAME: &str = "Manually-Created Courses";
 
 /// Accounts the caller can administer (Canvas `User#adminable_accounts`):
 /// global admins administer every account; everyone else administers the
@@ -864,7 +957,7 @@ async fn fetch_admin(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/accounts", get(list_accounts))
-        .route("/accounts/{id}", get(get_account))
+        .route("/accounts/{id}", get(get_account).put(update_account))
         .route(
             "/accounts/{id}/sub_accounts",
             get(list_sub_accounts).post(create_sub_account),
@@ -875,7 +968,17 @@ pub fn router() -> Router<AppState> {
         )
         .route("/accounts/{id}/courses", get(list_account_courses))
         .route("/accounts/{id}/users", get(list_account_users))
-        .route("/accounts/{id}/users/{userId}", post(grant_account_admin))
+        .route(
+            "/accounts/{id}/users/{userId}",
+            post(grant_account_admin).delete(remove_account_user),
+        )
+        // Canvas Api::V1::Accounts#manually_created_courses_account /
+        // #acceptable_use_policy
+        .route(
+            "/manually_created_courses_account",
+            get(get_manually_created_courses_account),
+        )
+        .route("/acceptable_use_policy", get(get_acceptable_use_policy))
         // Canvas Api::V1::Accounts#manageable_accounts /
         // #course_creation_accounts
         .route("/manageable_accounts", get(list_manageable_accounts))
@@ -1451,6 +1554,275 @@ async fn delete_account_admin(
     // Canvas' admin_json after destroy reports workflow_state "deleted".
     admin.workflow_state = "deleted".to_string();
     Ok(Json(admin))
+}
+
+// --------------------------------------------------------------------------
+// Account admin deep handlers (Phase 4)
+// --------------------------------------------------------------------------
+
+/// PUT /accounts/{id} — Canvas `Accounts#update_api`. Renames the account,
+/// shallow-merges `settings`, and moves the account to a new parent. Returns
+/// the `account_json` subset.
+async fn update_account(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<Value>,
+) -> Result<Json<AccountTreeJson>, ApiError> {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let current: Option<(Option<i64>,)> =
+        sqlx::query_as(r#"SELECT parent_account_id FROM accounts WHERE id = $1"#)
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+    let current_parent = current.ok_or(ApiError::NotFound)?.0;
+
+    let attributes = account_attributes(payload)?;
+
+    let name = match attributes.get("name") {
+        Some(Value::String(name)) => {
+            let trimmed = name.trim();
+            if trimmed.is_empty() {
+                return Err(ApiError::Validation(
+                    "The account name cannot be blank".into(),
+                ));
+            }
+            Some(trimmed.to_string())
+        }
+        Some(_) => return Err(ApiError::Validation("name must be a string".into())),
+        None => None,
+    };
+
+    let settings = match attributes.get("settings") {
+        Some(Value::Object(map)) => Some(Value::Object(map.clone()).to_string()),
+        Some(_) => {
+            return Err(ApiError::BadRequest(
+                "account settings must be a JSON object".into(),
+            ))
+        }
+        None => None,
+    };
+
+    let mut new_parent: Option<i64> = None;
+    if attributes.contains_key("parent_account_id") {
+        let target = attributes["parent_account_id"]
+            .as_i64()
+            .ok_or_else(|| ApiError::BadRequest("parent_account_id must be an id".into()))?;
+        if current_parent.is_none() {
+            return Err(ApiError::BadRequest(
+                "You cannot move a root account.".into(),
+            ));
+        }
+        if target == account_id {
+            return Err(ApiError::BadRequest(
+                "You cannot move an account into itself".into(),
+            ));
+        }
+        if !account_exists(&state.db, target).await? {
+            return Err(ApiError::NotFound);
+        }
+        if !can_access_account(&state.db, auth.id, target, &auth).await? {
+            return Err(ApiError::Forbidden);
+        }
+        let subtree = account_subtree_ids(&state.db, &[account_id]).await?;
+        if subtree.contains(&target) {
+            return Err(ApiError::BadRequest(
+                "You cannot move an account into its own sub-account".into(),
+            ));
+        }
+        new_parent = Some(target);
+    }
+
+    let row: AccountRow = sqlx::query_as(
+        r#"
+        UPDATE accounts
+        SET name = COALESCE($2, name),
+            settings = settings || COALESCE($3::jsonb, '{}'::jsonb),
+            parent_account_id = COALESCE($4, parent_account_id),
+            updated_at = now()
+        WHERE id = $1
+        RETURNING id, name, parent_account_id, workflow_state
+        "#,
+    )
+    .bind(account_id)
+    .bind(name)
+    .bind(settings)
+    .bind(new_parent)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(account_tree_row(&state.db, row).await?))
+}
+
+/// GET /manually_created_courses_account — Canvas
+/// `Accounts#manually_created_courses_account`. Returns (creating on first
+/// call) the root account's "Manually-Created Courses" sub-account and
+/// remembers its id in the root account settings.
+async fn get_manually_created_courses_account(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+) -> Result<Json<AccountTreeJson>, ApiError> {
+    let root_id = root_account_id(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let stored: String = sqlx::query_scalar(r#"SELECT settings::text FROM accounts WHERE id = $1"#)
+        .bind(root_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    let stored_id = parse_account_settings(&stored)
+        .get("manually_created_courses_account_id")
+        .and_then(Value::as_i64);
+
+    let mut account_id = match stored_id {
+        Some(id) => sqlx::query_scalar(
+            r#"
+            SELECT id FROM accounts
+            WHERE id = $1 AND parent_account_id = $2 AND workflow_state <> 'deleted'
+            "#,
+        )
+        .bind(id)
+        .bind(root_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?,
+        None => None,
+    };
+
+    if account_id.is_none() {
+        account_id = sqlx::query_scalar(
+            r#"
+            SELECT id FROM accounts
+            WHERE parent_account_id = $1 AND name = $2 AND workflow_state <> 'deleted'
+            ORDER BY id ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(root_id)
+        .bind(MANUALLY_CREATED_COURSES_NAME)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    }
+
+    let account_id = match account_id {
+        Some(id) => id,
+        None => sqlx::query_scalar(
+            r#"INSERT INTO accounts (name, parent_account_id) VALUES ($1, $2) RETURNING id"#,
+        )
+        .bind(MANUALLY_CREATED_COURSES_NAME)
+        .bind(root_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(ApiError::from)?,
+    };
+
+    if stored_id != Some(account_id) {
+        sqlx::query(
+            r#"
+            UPDATE accounts
+            SET settings = settings ||
+                jsonb_build_object('manually_created_courses_account_id', $2::bigint),
+                updated_at = now()
+            WHERE id = $1
+            "#,
+        )
+        .bind(root_id)
+        .bind(account_id)
+        .execute(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    }
+
+    let row: AccountRow = sqlx::query_as(&format!(
+        r#"SELECT {ACCOUNT_ROW_COLUMNS} FROM accounts WHERE id = $1"#
+    ))
+    .bind(account_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(Json(account_tree_row(&state.db, row).await?))
+}
+
+/// DELETE /accounts/{account_id}/users/{user_id} — Canvas
+/// `Accounts#remove_user`. Root accounts only; the user must be associated
+/// with the account. The schema has a single account tree and no user
+/// `workflow_state`, so the user row is deleted (cascading grants and
+/// enrollments) instead of Canvas's soft delete, and the pre-delete user
+/// object is returned.
+async fn remove_account_user(
+    State(state): State<AppState>,
+    Path((account_id, user_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<RemovedAccountUser>, ApiError> {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let account: Option<(Option<i64>,)> =
+        sqlx::query_as(r#"SELECT parent_account_id FROM accounts WHERE id = $1"#)
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+    if account.ok_or(ApiError::NotFound)?.0.is_some() {
+        return Err(ApiError::NotFound);
+    }
+
+    let user: Option<RemovedAccountUser> =
+        sqlx::query_as(r#"SELECT id, name, sortable_name, email FROM users WHERE id = $1"#)
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+    let user = user.ok_or(ApiError::NotFound)?;
+
+    let subtree = account_subtree_ids(&state.db, &[account_id]).await?;
+    if !user_in_account(&state.db, user_id, &subtree).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    sqlx::query(r#"DELETE FROM users WHERE id = $1"#)
+        .bind(user_id)
+        .execute(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(user))
+}
+
+/// GET /acceptable_use_policy — Canvas `Accounts#acceptable_use_policy`
+/// (JSON). Anonymous: Canvas skips `require_user` for this action. Renders
+/// `{redirectUrl}` when the root account has an external policy URL, and
+/// `{content}` (nullable) otherwise.
+async fn get_acceptable_use_policy(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
+    let root_id = root_account_id(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+        r#"SELECT external_url, content FROM account_terms_of_service WHERE account_id = $1"#,
+    )
+    .bind(root_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    let (external, content) = match row {
+        Some((external, content)) => (external, content),
+        None => (None, None),
+    };
+
+    let external = external
+        .map(|url| url.trim().to_string())
+        .filter(|url| !url.is_empty());
+    let body = match external {
+        Some(url) => serde_json::json!({ "redirectUrl": url }),
+        None => serde_json::json!({ "content": content }),
+    };
+    Ok(Json(body))
 }
 
 // --------------------------------------------------------------------------
