@@ -103,6 +103,22 @@ struct EnrollmentStateRow {
     workflow_state: String,
 }
 
+/// Query params for `PUT /courses/{courseId}/users/{userId}/last_attended`.
+#[derive(Debug, Deserialize)]
+pub struct LastAttendedParams {
+    pub date: Option<String>,
+}
+
+/// Query params for `GET /temporary_enrollment_status`.
+///
+/// Canvas takes a repeated `user_ids[]`; the router cannot deserialize
+/// repeated keys, so the same values are accepted comma-separated.
+#[derive(Debug, Deserialize)]
+pub struct BulkTemporaryEnrollmentParams {
+    pub user_ids: Option<String>,
+    pub limit: Option<usize>,
+}
+
 /// Error type for the Canvas lifecycle/list endpoints.
 ///
 /// Canvas answers invalid transitions with a 400 `{ "error": ... }` body,
@@ -111,6 +127,8 @@ struct EnrollmentStateRow {
 enum EnrollmentActionError {
     Api(ApiError),
     Invalid(String),
+    /// Canvas `#last_attended` answers 400 `{ "message": "Invalid date time input" }`.
+    InvalidDate,
 }
 
 impl From<ApiError> for EnrollmentActionError {
@@ -126,6 +144,11 @@ impl IntoResponse for EnrollmentActionError {
             Self::Invalid(message) => {
                 (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
             }
+            Self::InvalidDate => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "message": "Invalid date time input" })),
+            )
+                .into_response(),
         }
     }
 }
@@ -306,6 +329,20 @@ pub fn router() -> Router<AppState> {
         )
         // Canvas: GET /api/v1/users/:user_id/enrollments ("self" allowed)
         .route("/users/{userId}/enrollments", get(list_user_enrollments))
+        // Canvas EnrollmentsApiController temporary-enrollment status.
+        .route(
+            "/users/{userId}/temporary_enrollment_status",
+            get(show_temporary_enrollment_status),
+        )
+        .route(
+            "/temporary_enrollment_status",
+            get(bulk_temporary_enrollment_status),
+        )
+        // Canvas EnrollmentsApiController#last_attended.
+        .route(
+            "/courses/{courseId}/users/{userId}/last_attended",
+            put(update_last_attended),
+        )
 }
 
 // --------------------------------------------------------------------------
@@ -904,4 +941,236 @@ async fn list_user_enrollments(
     .map_err(ApiError::from)?;
 
     Ok(Json(rows))
+}
+
+// --------------------------------------------------------------------------
+// Temporary enrollment status (Canvas EnrollmentsApiController
+// #show_temporary_enrollment_status / #bulk_temporary_enrollment_status)
+// --------------------------------------------------------------------------
+
+/// Compute one user's temporary enrollment status flags.
+///
+/// Canvas scopes these to `Enrollment.all_active_or_pending` joined to
+/// available courses. This schema has no course workflow state, so the
+/// `workflow_state = 'active'` enrollment filter is the whole condition.
+async fn temporary_enrollment_status(
+    pool: &PgPool,
+    user_id: i64,
+) -> Result<serde_json::Value, ApiError> {
+    let (is_provider,): (bool,) = sqlx::query_as(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM enrollments
+            WHERE temporary_enrollment_source_user_id = $1 AND workflow_state = 'active'
+        )
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .map_err(ApiError::from)?;
+
+    let (is_recipient,): (bool,) = sqlx::query_as(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM enrollments
+            WHERE user_id = $1 AND temporary_enrollment_source_user_id IS NOT NULL
+              AND workflow_state = 'active'
+        )
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .map_err(ApiError::from)?;
+
+    let (can_provide,): (bool,) = sqlx::query_as(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM enrollments WHERE user_id = $1 AND workflow_state = 'active'
+        )
+        "#,
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(json!({
+        "is_provider": is_provider,
+        "is_recipient": is_recipient,
+        "can_provide": can_provide,
+    }))
+}
+
+/// GET /users/{userId}/temporary_enrollment_status — one user's temporary
+/// enrollment flags. A caller may read their own status; other users require
+/// admin, mirroring Canvas `grants_right?(:api_show_user)`.
+async fn show_temporary_enrollment_status(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(user_ref): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let target_user_id = if user_ref == "self" {
+        auth.id
+    } else {
+        user_ref.parse::<i64>().map_err(|_| ApiError::NotFound)?
+    };
+
+    if !user_exists(&state.db, target_user_id).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    let auth_role = get_user_role(&state.db, auth.id)
+        .await?
+        .unwrap_or_else(|| "student".to_string());
+
+    if target_user_id != auth.id && !is_admin(&auth_role) {
+        return Err(ApiError::Forbidden);
+    }
+
+    Ok(Json(
+        temporary_enrollment_status(&state.db, target_user_id).await?,
+    ))
+}
+
+/// GET /temporary_enrollment_status?user_ids=1,2 — statuses for many users.
+///
+/// Canvas omits users the caller cannot see (it filters on
+/// `grants_right?(:api_show_user)`); here that means the caller themselves plus
+/// every user when the caller is an admin. A missing `user_ids` is Canvas's
+/// 400 with an empty JSON body.
+async fn bulk_temporary_enrollment_status(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<BulkTemporaryEnrollmentParams>,
+) -> Response {
+    match bulk_temporary_enrollment_status_inner(&state, &auth, params).await {
+        Ok(value) => Json(value).into_response(),
+        Err(ApiError::BadRequest(_)) => (StatusCode::BAD_REQUEST, Json(json!({}))).into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn bulk_temporary_enrollment_status_inner(
+    state: &AppState,
+    auth: &AuthUser,
+    params: BulkTemporaryEnrollmentParams,
+) -> Result<serde_json::Value, ApiError> {
+    let raw = params
+        .user_ids
+        .ok_or_else(|| ApiError::BadRequest("user_ids is required".into()))?;
+
+    // Canvas defaults to 10 and caps at 100 (Api::PER_PAGE / MAX_PER_PAGE).
+    let limit = params.limit.unwrap_or(10).clamp(1, 100);
+
+    let mut user_ids: Vec<i64> = Vec::new();
+    for part in raw.split(',') {
+        if let Ok(id) = part.trim().parse::<i64>() {
+            if !user_ids.contains(&id) {
+                user_ids.push(id);
+            }
+        }
+    }
+    user_ids.truncate(limit);
+
+    if user_ids.is_empty() {
+        return Err(ApiError::BadRequest("user_ids is required".into()));
+    }
+
+    let auth_role = get_user_role(&state.db, auth.id)
+        .await?
+        .unwrap_or_else(|| "student".to_string());
+    let caller_is_admin = is_admin(&auth_role);
+
+    let mut result = serde_json::Map::new();
+    for user_id in user_ids {
+        if user_id != auth.id && !caller_is_admin {
+            continue;
+        }
+        if !user_exists(&state.db, user_id).await? {
+            continue;
+        }
+        result.insert(
+            user_id.to_string(),
+            temporary_enrollment_status(&state.db, user_id).await?,
+        );
+    }
+
+    Ok(serde_json::Value::Object(result))
+}
+
+// --------------------------------------------------------------------------
+// Last attended date (Canvas EnrollmentsApiController#last_attended)
+// --------------------------------------------------------------------------
+
+/// Parse the Canvas `date` argument. Canvas uses `Time.zone.parse`, which
+/// accepts an RFC 1123 date; RFC 3339 and plain `YYYY-MM-DD` are accepted here.
+fn parse_last_attended_date(raw: &str) -> Option<DateTime<Utc>> {
+    if let Ok(dt) = DateTime::parse_from_rfc3339(raw) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    if let Ok(dt) = DateTime::parse_from_rfc2822(raw) {
+        return Some(dt.with_timezone(&Utc));
+    }
+    chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+        .ok()
+        .and_then(|d| d.and_hms_opt(0, 0, 0))
+        .map(|dt| dt.and_utc())
+}
+
+/// PUT /courses/{courseId}/users/{userId}/last_attended — stamp the last
+/// attended date on every enrollment of one user in one course.
+///
+/// Canvas authorizes `[:view_all_grades, :manage_grades]` (course teachers and
+/// admins), answers `{ date: ... }`, and returns 400
+/// `{ message: "Invalid date time input" }` when `date` does not parse.
+async fn update_last_attended(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((course_id, user_id)): Path<(i64, i64)>,
+    Query(params): Query<LastAttendedParams>,
+) -> Result<Json<serde_json::Value>, EnrollmentActionError> {
+    let course_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    if course_exists.is_none() {
+        return Err(ApiError::NotFound.into());
+    }
+
+    let auth_role = get_user_role(&state.db, auth.id)
+        .await?
+        .unwrap_or_else(|| "student".to_string());
+
+    if !is_admin(&auth_role)
+        && !is_teacher_in_course(&state.db, auth.id, course_id, &auth_role).await?
+    {
+        return Err(ApiError::Forbidden.into());
+    }
+
+    let date = params
+        .date
+        .as_deref()
+        .and_then(parse_last_attended_date)
+        .ok_or(EnrollmentActionError::InvalidDate)?;
+
+    // Canvas updates every enrollment of the user in the course, including
+    // ones in other sections.
+    sqlx::query(
+        r#"
+        UPDATE enrollments
+        SET last_attended_at = $1, updated_at = now()
+        WHERE course_id = $2 AND user_id = $3
+        "#,
+    )
+    .bind(date)
+    .bind(course_id)
+    .bind(user_id)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(json!({ "date": date })))
 }
