@@ -558,3 +558,14 @@ async fn update_discussion_types_covers_every_side_comment_and_migrate_disallow_
 
     cleanup(&pool, &prefix).await;
 }
+
+#[tokio::test]
+async fn summaries_require_authentication() {
+    let Some((server, _pool, _prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let res = server.get("/courses/1/discussion_topics/1/summaries").await;
+    assert_eq!(res.status_code(), 401);
+}
