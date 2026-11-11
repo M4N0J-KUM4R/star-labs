@@ -246,6 +246,30 @@ pub struct UpdateGroupCategory {
     pub auto_leader: Option<String>,
 }
 
+/// Query params for GET /accounts/{accountId}/group_categories. Canvas filters
+/// on `collaboration_state` (all | collaborative | non_collaborative, default
+/// collaborative).
+#[derive(Debug, Deserialize)]
+pub struct AccountCategoriesQuery {
+    pub collaboration_state: Option<String>,
+}
+
+/// One member returned by POST /group_categories/{id}/assign_unassigned_members
+/// (Canvas `new_members` entry; sections are not exposed by this service).
+#[derive(Debug, Clone, Serialize)]
+pub struct AssignedMember {
+    pub user_id: i64,
+    pub name: String,
+    pub display_name: String,
+}
+
+/// One group's share of the assignment result (Canvas response array item).
+#[derive(Debug, Clone, Serialize)]
+pub struct AssignedGroupMembers {
+    pub id: i64,
+    pub new_members: Vec<AssignedMember>,
+}
+
 const GROUP_CATEGORY_COLUMNS: &str = "id, course_id, account_id, name, role, self_signup, \
      self_signup_end_at, group_limit, auto_leader, non_collaborative, created_at";
 
@@ -555,6 +579,37 @@ async fn category_is_member(
     Ok(is_member)
 }
 
+async fn ensure_account_exists(pool: &PgPool, account_id: i64) -> Result<(), ApiError> {
+    let account: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await?;
+    account.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+/// Account-scoped counterpart of `category_name_taken`.
+async fn account_category_name_taken(
+    pool: &PgPool,
+    account_id: i64,
+    name: &str,
+    exclude_id: Option<i64>,
+) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM group_categories
+        WHERE account_id = $1 AND name = $2 AND workflow_state != 'deleted'
+          AND ($3::BIGINT IS NULL OR id != $3)
+        LIMIT 1
+        "#,
+    )
+    .bind(account_id)
+    .bind(name)
+    .bind(exclude_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
 /// Create the `create_group_count` groups Canvas creates along with a category.
 /// Canvas English singularizes the category name; this keeps the raw name.
 async fn create_category_groups(
@@ -620,8 +675,25 @@ pub fn router() -> Router<AppState> {
         )
         .route("/group_categories/{id}", get(get_group_category))
         .route("/group_categories/{id}", put(update_group_category))
+        .route("/group_categories/{id}", patch(update_group_category))
         .route("/group_categories/{id}", delete(delete_group_category))
         .route("/group_categories/{id}/groups", get(list_category_groups))
+        // Canvas group categories in an account context (accounts/group_categories)
+        .route(
+            "/accounts/{accountId}/group_categories",
+            get(list_account_group_categories),
+        )
+        .route(
+            "/accounts/{accountId}/group_categories",
+            post(create_account_group_category),
+        )
+        // Canvas group_categories#assign_unassigned_members
+        .route(
+            "/group_categories/{id}/assign_unassigned_members",
+            post(assign_unassigned_members),
+        )
+        // Canvas groups#create without a course route (category context)
+        .route("/groups", post(create_group_standalone))
 }
 
 // ---------------------------------------------------------------------------
@@ -1716,6 +1788,272 @@ async fn list_category_groups(
     .await?;
 
     Ok(Json(groups))
+}
+
+// ---------------------------------------------------------------------------
+// Account group categories / standalone group / assignment handlers
+// ---------------------------------------------------------------------------
+
+/// GET /accounts/{accountId}/group_categories — account-scoped categories
+/// (Canvas group_categories#index, `collaboration_state` filter).
+async fn list_account_group_categories(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    Query(query): Query<AccountCategoriesQuery>,
+    auth: AuthUser,
+) -> Result<Json<Vec<GroupCategory>>, ApiError> {
+    if !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_account_exists(&state.db, account_id).await?;
+
+    let collaboration_state = query
+        .collaboration_state
+        .map(|value| value.trim().to_lowercase())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "collaborative".to_string());
+
+    // None means "all"; Some(false) is the Canvas default.
+    let non_collaborative = match collaboration_state.as_str() {
+        "collaborative" => Some(false),
+        "non_collaborative" => Some(true),
+        "all" => None,
+        _ => {
+            return Err(ApiError::BadRequest(
+                "Invalid collaboration_state parameter".into(),
+            ))
+        }
+    };
+
+    let sql = format!(
+        r#"
+        SELECT {GROUP_CATEGORY_COLUMNS} FROM group_categories
+        WHERE account_id = $1 AND workflow_state != 'deleted'
+          AND ($2::BOOLEAN IS NULL OR non_collaborative = $2)
+        ORDER BY id
+        "#
+    );
+    let categories: Vec<GroupCategoryRow> = sqlx::query_as(&sql)
+        .bind(account_id)
+        .bind(non_collaborative)
+        .fetch_all(&state.db)
+        .await?;
+
+    let mut response = Vec::with_capacity(categories.len());
+    for category in categories {
+        let is_member = category_is_member(&state.db, category.id, auth.id).await?;
+        response.push(group_category_json(category, is_member));
+    }
+    Ok(Json(response))
+}
+
+/// POST /accounts/{accountId}/group_categories — create an account category
+/// (Canvas group_categories#create; admin only). Course-only flags
+/// (`self_signup`, `group_limit`, `auto_leader`) are ignored, like Canvas.
+async fn create_account_group_category(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CreateGroupCategory>,
+) -> Result<Json<GroupCategory>, ApiError> {
+    if !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_account_exists(&state.db, account_id).await?;
+
+    let name = payload.name.trim().to_string();
+    validate_group_category_fields(&name, None, None, None)?;
+
+    if account_category_name_taken(&state.db, account_id, &name, None).await? {
+        return Err(ApiError::BadRequest(format!("{name} is already in use.")));
+    }
+
+    let sql = format!(
+        r#"
+        INSERT INTO group_categories (account_id, name, non_collaborative)
+        VALUES ($1, $2, $3)
+        RETURNING {GROUP_CATEGORY_COLUMNS}
+        "#
+    );
+    let category: GroupCategoryRow = sqlx::query_as(&sql)
+        .bind(account_id)
+        .bind(&name)
+        .bind(payload.non_collaborative)
+        .fetch_one(&state.db)
+        .await?;
+
+    Ok(Json(group_category_json(category, false)))
+}
+
+/// POST /groups — create a group from its category's context (Canvas
+/// groups#create). Course categories need a teacher/admin; account categories
+/// and categories-less creates need an admin.
+async fn create_group_standalone(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<CreateGroup>,
+) -> Result<Json<Group>, ApiError> {
+    let name = payload.name.trim().to_string();
+    if name.is_empty() {
+        return Err(ApiError::Validation("name is required".into()));
+    }
+
+    let (course_id, account_id) = match payload.group_category_id {
+        Some(category_id) => {
+            let category = fetch_group_category(&state.db, category_id).await?;
+            if !can_manage_group_category(&state.db, auth.id, &category, &auth).await? {
+                return Err(ApiError::Forbidden);
+            }
+            (category.course_id, category.account_id)
+        }
+        // Canvas falls back to the domain root account's communities category;
+        // this service has no domain root, so a bare POST /groups is admin-only.
+        None => {
+            if !is_admin(&auth) {
+                return Err(ApiError::Forbidden);
+            }
+            (None, None)
+        }
+    };
+
+    let join_level = if [
+        "invitation_only",
+        "parent_context_auto_join",
+        "parent_context_request",
+    ]
+    .contains(&payload.join_level.as_str())
+    {
+        payload.join_level.clone()
+    } else {
+        "invitation_only".to_string()
+    };
+
+    let group: Group = sqlx::query_as(
+        r#"
+        INSERT INTO groups
+            (course_id, account_id, name, description, join_level, group_category_id)
+        VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING id, course_id, name, description, workflow_state, join_level,
+                  group_category_id, created_at, updated_at
+        "#,
+    )
+    .bind(course_id)
+    .bind(account_id)
+    .bind(&name)
+    .bind(&payload.description)
+    .bind(&join_level)
+    .bind(payload.group_category_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(group))
+}
+
+/// POST /group_categories/{id}/assign_unassigned_members — distribute course
+/// students without a group in this category evenly across its active groups
+/// (Canvas group_categories#assign_unassigned_members).
+///
+/// Deviation: Canvas runs asynchronously and returns a Progress unless
+/// `sync=true`; this service always assigns synchronously and returns the
+/// membership summary, and ignores `group_by_section`.
+async fn assign_unassigned_members(
+    State(state): State<AppState>,
+    Path(category_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<AssignedGroupMembers>>, ApiError> {
+    let category = fetch_group_category(&state.db, category_id).await?;
+
+    if !can_manage_group_category(&state.db, auth.id, &category, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    if category.role.as_deref() == Some("student_organized") {
+        return Err(ApiError::BadRequest(
+            "student organized categories cannot assign members".into(),
+        ));
+    }
+    let Some(course_id) = category.course_id else {
+        return Err(ApiError::BadRequest(
+            "group category must belong to a course".into(),
+        ));
+    };
+    if category.self_signup.as_deref() == Some("restricted") {
+        return Err(ApiError::BadRequest(
+            "restricted self signup categories cannot assign members".into(),
+        ));
+    }
+
+    let group_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM groups \
+         WHERE group_category_id = $1 AND workflow_state != 'deleted' ORDER BY id",
+    )
+    .bind(category_id)
+    .fetch_all(&state.db)
+    .await?;
+    if group_ids.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+
+    let unassigned: Vec<(i64, String)> = sqlx::query_as(
+        r#"
+        SELECT u.id, u.name
+        FROM users u
+        JOIN enrollments e ON e.user_id = u.id
+        WHERE e.course_id = $1 AND e.role = 'student'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM group_memberships gm
+              JOIN groups g ON g.id = gm.group_id
+              WHERE g.group_category_id = $2
+                AND g.workflow_state != 'deleted'
+                AND gm.user_id = u.id
+                AND gm.workflow_state != 'deleted'
+          )
+        GROUP BY u.id, u.name
+        ORDER BY u.id
+        "#,
+    )
+    .bind(course_id)
+    .bind(category_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    // Round-robin over the active groups keeps the split balanced.
+    let mut assignment: Vec<AssignedGroupMembers> = group_ids
+        .iter()
+        .map(|id| AssignedGroupMembers {
+            id: *id,
+            new_members: Vec::new(),
+        })
+        .collect();
+
+    for (index, (user_id, name)) in unassigned.into_iter().enumerate() {
+        let slot = index % group_ids.len();
+        sqlx::query(
+            r#"
+            INSERT INTO group_memberships (group_id, user_id, workflow_state)
+            VALUES ($1, $2, 'accepted')
+            ON CONFLICT (group_id, user_id) DO NOTHING
+            "#,
+        )
+        .bind(group_ids[slot])
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
+
+        assignment[slot].new_members.push(AssignedMember {
+            user_id,
+            name: name.clone(),
+            display_name: name,
+        });
+    }
+
+    Ok(Json(
+        assignment
+            .into_iter()
+            .filter(|group| !group.new_members.is_empty())
+            .collect(),
+    ))
 }
 
 #[cfg(test)]

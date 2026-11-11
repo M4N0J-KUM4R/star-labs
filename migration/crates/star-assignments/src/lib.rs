@@ -1268,10 +1268,11 @@ async fn create_submission(
     // Upsert: INSERT ... ON CONFLICT UPDATE
     let submission: Submission = sqlx::query_as(
         r#"
-        INSERT INTO submissions (assignment_id, user_id, body, submission_type)
-        VALUES ($1, $2, $3, 'online_text_entry')
+        INSERT INTO submissions (assignment_id, user_id, body, submission_type, anonymous_id)
+        VALUES ($1, $2, $3, 'online_text_entry', gen_random_uuid()::text)
         ON CONFLICT (assignment_id, user_id) DO UPDATE
-        SET body = $3, submission_type = 'online_text_entry', submitted_at = now()
+        SET body = $3, submission_type = 'online_text_entry', submitted_at = now(),
+            anonymous_id = COALESCE(submissions.anonymous_id, gen_random_uuid()::text)
         RETURNING id, assignment_id, user_id, body, score::float8, submitted_at, created_at, updated_at
         "#,
     )
@@ -1595,6 +1596,277 @@ async fn bulk_mark_read(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
+// Submission read states + anonymous submissions (Phase 4)
+// ---------------------------------------------------------------------------
+
+/// Canvas `AnonymousSubmission`: a submission serialized with the student
+/// identity replaced by the assignment-scoped `anonymous_id`.
+#[derive(Debug, Clone, Serialize)]
+pub struct AnonymousSubmission {
+    pub id: i64,
+    pub assignment_id: i64,
+    pub anonymous_id: String,
+    pub attempt: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grade: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    pub submitted_at: DateTime<Utc>,
+    pub workflow_state: String,
+    pub url: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct AnonymousSubmissionRow {
+    id: i64,
+    assignment_id: i64,
+    user_id: i64,
+    anonymous_id: String,
+    attempt: i32,
+    body: Option<String>,
+    grade: Option<String>,
+    score: Option<f64>,
+    submitted_at: DateTime<Utc>,
+    workflow_state: String,
+}
+
+const ANONYMOUS_SUBMISSION_SELECT: &str = r#"
+    SELECT s.id,
+           s.assignment_id,
+           s.user_id,
+           s.anonymous_id,
+           s.attempt,
+           s.body,
+           s.score::float8::text AS grade,
+           s.score::float8 AS score,
+           s.submitted_at,
+           s.workflow_state
+    FROM submissions s
+"#;
+
+impl AnonymousSubmission {
+    fn from_row(row: AnonymousSubmissionRow, course_id: i64) -> Self {
+        Self {
+            url: format!(
+                "/courses/{course_id}/assignments/{}/anonymous_submissions/{}",
+                row.assignment_id, row.anonymous_id
+            ),
+            id: row.id,
+            assignment_id: row.assignment_id,
+            anonymous_id: row.anonymous_id,
+            attempt: row.attempt,
+            body: row.body,
+            grade: row.grade,
+            score: row.score,
+            submitted_at: row.submitted_at,
+            workflow_state: row.workflow_state,
+        }
+    }
+}
+
+/// PUT /courses/{courseId}/submissions/{id}/clear_unread — marks the
+/// submission read for the caller. Always 204, like Canvas' `clear_unread`
+/// (ids outside the course are silently ignored).
+async fn clear_unread(
+    State(state): State<AppState>,
+    Path((course_id, submission_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    sqlx::query(
+        r#"
+        INSERT INTO submission_reads (submission_id, user_id, read_state, read_at, source)
+        SELECT s.id, $2, 'read', now(), 'clear_unread'
+        FROM submissions s
+        JOIN assignments a ON a.id = s.assignment_id
+        WHERE s.id = $1 AND a.course_id = $3
+        ON CONFLICT (submission_id, user_id) DO UPDATE
+        SET read_state = 'read', read_at = now(), source = 'clear_unread', updated_at = now()
+        "#,
+    )
+    .bind(submission_id)
+    .bind(auth.id)
+    .bind(course_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/gradeable_students —
+/// Canvas `gradeable_students`: one `UserDisplay` per student with a
+/// submission row, or an `AnonymousUserDisplay` when anonymous grading is on
+/// and `allow_new_anonymous_id` is passed. Requires view-all-grades.
+async fn gradeable_students(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let (sort_by_name, descending, allow_new_anonymous_id) =
+        parse_gradeable_students_query(raw_query.as_deref());
+
+    let anonymous_grading: bool =
+        sqlx::query_scalar("SELECT anonymous_grading FROM assignments WHERE id = $1")
+            .bind(assignment_id)
+            .fetch_one(&state.db)
+            .await?;
+    let anonymize = allow_new_anonymous_id && anonymous_grading;
+
+    let direction = if descending { "DESC" } else { "ASC" };
+    let order_by = if anonymize {
+        format!("s.anonymous_id {direction}")
+    } else if sort_by_name {
+        format!("u.name {direction}, u.id {direction}")
+    } else {
+        format!("s.user_id {direction}")
+    };
+
+    let sql = format!(
+        r#"
+        SELECT s.user_id, s.anonymous_id, u.name
+        FROM submissions s
+        JOIN assignments a ON a.id = s.assignment_id
+        JOIN users u ON u.id = s.user_id
+        JOIN enrollments e ON e.user_id = s.user_id AND e.course_id = a.course_id
+        WHERE s.assignment_id = $1 AND e.role = 'student' AND e.workflow_state <> 'deleted'
+        ORDER BY {order_by}
+        "#
+    );
+
+    let rows: Vec<(i64, Option<String>, String)> = sqlx::query_as(&sql)
+        .bind(assignment_id)
+        .fetch_all(&state.db)
+        .await?;
+
+    let students = rows
+        .into_iter()
+        .map(|(user_id, anonymous_id, name)| {
+            if anonymize {
+                serde_json::json!({
+                    "id": anonymous_id.unwrap_or_default(),
+                    "display_name": "Student",
+                    "avatar_image_url": serde_json::Value::Null,
+                    "html_url": serde_json::Value::Null,
+                    "pronouns": serde_json::Value::Null,
+                })
+            } else {
+                serde_json::json!({
+                    "id": user_id,
+                    "display_name": name,
+                    "avatar_image_url": serde_json::Value::Null,
+                    "html_url": format!("/courses/{course_id}/users/{user_id}"),
+                    "pronouns": serde_json::Value::Null,
+                })
+            }
+        })
+        .collect();
+
+    Ok(Json(students))
+}
+
+/// Parse `sort`, `order`, and `allow_new_anonymous_id` from the query string.
+fn parse_gradeable_students_query(raw_query: Option<&str>) -> (bool, bool, bool) {
+    let mut sort_by_name = false;
+    let mut descending = false;
+    let mut allow_new_anonymous_id = false;
+
+    for pair in raw_query.unwrap_or_default().split('&') {
+        let mut parts = pair.splitn(2, '=');
+        let key = parts.next().unwrap_or_default();
+        let value = parts.next().unwrap_or_default();
+        match key {
+            "sort" => sort_by_name = value == "name",
+            "order" => descending = value.eq_ignore_ascii_case("desc"),
+            "allow_new_anonymous_id" => allow_new_anonymous_id = value == "true" || value == "1",
+            _ => {}
+        }
+    }
+
+    (sort_by_name, descending, allow_new_anonymous_id)
+}
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}
+async fn show_anonymous_submission(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, anonymous_id)): Path<(i64, i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<AnonymousSubmission>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    let row: Option<AnonymousSubmissionRow> = sqlx::query_as(&format!(
+        "{ANONYMOUS_SUBMISSION_SELECT} WHERE s.assignment_id = $1 AND s.anonymous_id = $2"
+    ))
+    .bind(assignment_id)
+    .bind(&anonymous_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let row = row.ok_or(ApiError::NotFound)?;
+
+    if auth.id != row.user_id
+        && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?
+    {
+        return Err(ApiError::Forbidden);
+    }
+
+    Ok(Json(AnonymousSubmission::from_row(row, course_id)))
+}
+
+/// PUT /courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId} —
+/// grades the submission found by its anonymous id (Canvas `update_anonymous`).
+async fn update_anonymous_submission(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, anonymous_id)): Path<(i64, i64, String)>,
+    auth: AuthUser,
+    Json(payload): Json<GradeSubmission>,
+) -> Result<Json<AnonymousSubmission>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let submission_id: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM submissions WHERE assignment_id = $1 AND anonymous_id = $2",
+    )
+    .bind(assignment_id)
+    .bind(&anonymous_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let submission_id = submission_id.ok_or(ApiError::NotFound)?;
+
+    sqlx::query(
+        r#"
+        UPDATE submissions
+        SET score = $2, graded_at = now(), grader_id = $3,
+            workflow_state = 'graded', updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(submission_id)
+    .bind(payload.score)
+    .bind(auth.id)
+    .execute(&state.db)
+    .await?;
+
+    let row: AnonymousSubmissionRow =
+        sqlx::query_as(&format!("{ANONYMOUS_SUBMISSION_SELECT} WHERE s.id = $1"))
+            .bind(submission_id)
+            .fetch_one(&state.db)
+            .await?;
+
+    Ok(Json(AnonymousSubmission::from_row(row, course_id)))
 }
 
 /// POST /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/files
@@ -2158,6 +2430,23 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/files",
             post(create_submission_file),
+        )
+        // Submission read states + anonymous submissions (Phase 4)
+        .route(
+            "/courses/{courseId}/submissions/{id}/clear_unread",
+            put(clear_unread),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/gradeable_students",
+            get(gradeable_students),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
+            get(show_anonymous_submission),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
+            put(update_anonymous_submission),
         )
         // Canvas v1 nested aliases (same handlers, course-scoped paths)
         .route(

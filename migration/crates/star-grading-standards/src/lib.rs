@@ -1693,6 +1693,408 @@ async fn delete_grading_scheme(
 }
 
 // ---------------------------------------------------------------------------
+// Blackout dates (Canvas BlackoutDatesController parity)
+// ---------------------------------------------------------------------------
+
+/// A row of the `blackout_dates` table.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct BlackoutDate {
+    pub id: i64,
+    pub context_id: i64,
+    pub context_type: String,
+    pub title: String,
+    pub description: Option<String>,
+    pub start_date: DateTime<Utc>,
+    pub end_date: DateTime<Utc>,
+    pub parent_grading_period_id: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Canvas API v1 `BlackoutDate` shape.
+///
+/// Canvas exposes the title as `event_title`; the table column is `title`.
+#[derive(Debug, Clone, Serialize)]
+pub struct BlackoutDateResponse {
+    pub id: i64,
+    pub context_id: i64,
+    pub context_type: String,
+    pub start_date: DateTime<Utc>,
+    pub end_date: DateTime<Utc>,
+    pub event_title: String,
+    pub description: Option<String>,
+    pub parent_grading_period_id: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<BlackoutDate> for BlackoutDateResponse {
+    fn from(row: BlackoutDate) -> Self {
+        Self {
+            id: row.id,
+            context_id: row.context_id,
+            context_type: row.context_type,
+            start_date: row.start_date,
+            end_date: row.end_date,
+            event_title: row.title,
+            description: row.description,
+            parent_grading_period_id: row.parent_grading_period_id,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
+    }
+}
+
+/// Canvas `blackout_date_params`: `start_date`, `end_date`, `event_title`.
+#[derive(Debug, Deserialize)]
+pub struct BlackoutDateParams {
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub event_title: Option<String>,
+    #[serde(alias = "title")]
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub parent_grading_period_id: Option<i64>,
+}
+
+/// Body of `PUT /courses/{courseId}/blackout_dates` (Canvas `bulk_update`).
+#[derive(Debug, Deserialize)]
+pub struct BlackoutDatesBulkParams {
+    #[serde(default)]
+    pub blackout_dates: Vec<BlackoutDateBulkEntry>,
+}
+
+/// One member of a Canvas bulk-update payload.
+#[derive(Debug, Deserialize)]
+pub struct BlackoutDateBulkEntry {
+    pub id: Option<i64>,
+    pub start_date: Option<String>,
+    pub end_date: Option<String>,
+    pub event_title: Option<String>,
+    #[serde(alias = "title")]
+    pub title: Option<String>,
+}
+
+/// Validated blackout date values.
+struct BlackoutDateWindow {
+    title: String,
+    description: Option<String>,
+    start_date: DateTime<Utc>,
+    end_date: DateTime<Utc>,
+    parent_grading_period_id: Option<i64>,
+}
+
+/// Canvas requires a title of 1..=255 characters.
+const BLACKOUT_TITLE_MAX_LEN: usize = 255;
+
+fn validate_blackout_window(params: &BlackoutDateParams) -> Result<BlackoutDateWindow, ApiError> {
+    let title = params
+        .event_title
+        .as_deref()
+        .or(params.title.as_deref())
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+
+    if title.is_empty() {
+        return Err(ApiError::Validation("event_title is required".into()));
+    }
+    if title.chars().count() > BLACKOUT_TITLE_MAX_LEN {
+        return Err(ApiError::Validation("event_title is too long".into()));
+    }
+
+    let start_date = required_date(&params.start_date, "start_date")?;
+    let end_date = required_date(&params.end_date, "end_date")?;
+
+    if end_date < start_date {
+        return Err(ApiError::Validation(
+            "end_date can't be before start date".into(),
+        ));
+    }
+
+    Ok(BlackoutDateWindow {
+        title,
+        description: params.description.clone(),
+        start_date,
+        end_date,
+        parent_grading_period_id: params.parent_grading_period_id,
+    })
+}
+
+/// Verify a referenced grading period exists (Canvas links blackout dates to
+/// a grading period through `parent_grading_period_id`).
+async fn require_grading_period_exists(
+    pool: &PgPool,
+    grading_period_id: i64,
+) -> Result<(), ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM grading_periods WHERE id = $1")
+        .bind(grading_period_id)
+        .fetch_optional(pool)
+        .await?;
+
+    if row.is_none() {
+        return Err(ApiError::Validation(
+            "parent_grading_period_id does not exist".into(),
+        ));
+    }
+    Ok(())
+}
+
+const BLACKOUT_SELECT: &str = r#"SELECT id, context_id, context_type, title, description,
+          start_date, end_date, parent_grading_period_id, created_at, updated_at
+   FROM blackout_dates"#;
+
+async fn list_blackout_dates(
+    pool: &PgPool,
+    context_type: &str,
+    context_id: i64,
+) -> Result<Vec<BlackoutDate>, ApiError> {
+    let sql = format!(
+        "{BLACKOUT_SELECT}
+         WHERE context_type = $1 AND context_id = $2
+         ORDER BY start_date ASC, id ASC"
+    );
+    let rows = sqlx::query_as(&sql)
+        .bind(context_type)
+        .bind(context_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
+async fn fetch_blackout_date(
+    pool: &PgPool,
+    id: i64,
+    context_type: &str,
+    context_id: i64,
+) -> Result<Option<BlackoutDate>, ApiError> {
+    let sql = format!(
+        "{BLACKOUT_SELECT}
+         WHERE id = $1 AND context_type = $2 AND context_id = $3"
+    );
+    let row = sqlx::query_as(&sql)
+        .bind(id)
+        .bind(context_type)
+        .bind(context_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
+async fn insert_blackout_date(
+    pool: &PgPool,
+    context_type: &str,
+    context_id: i64,
+    window: &BlackoutDateWindow,
+) -> Result<BlackoutDate, ApiError> {
+    let row = sqlx::query_as(
+        r#"INSERT INTO blackout_dates
+               (context_id, context_type, title, description, start_date, end_date,
+                parent_grading_period_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)
+           RETURNING id, context_id, context_type, title, description, start_date, end_date,
+                     parent_grading_period_id, created_at, updated_at"#,
+    )
+    .bind(context_id)
+    .bind(context_type)
+    .bind(&window.title)
+    .bind(&window.description)
+    .bind(window.start_date)
+    .bind(window.end_date)
+    .bind(window.parent_grading_period_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+/// GET /courses/{courseId}/blackout_dates — list blackout dates for a course.
+async fn list_course_blackout_dates(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<BlackoutDateResponse>>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let rows = list_blackout_dates(&state.db, "Course", course_id).await?;
+    Ok(Json(
+        rows.into_iter().map(BlackoutDateResponse::from).collect(),
+    ))
+}
+
+/// POST /courses/{courseId}/blackout_dates — create a blackout date.
+async fn create_course_blackout_date(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<BlackoutDateParams>,
+) -> Result<(StatusCode, Json<BlackoutDateResponse>), ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let window = validate_blackout_window(&payload)?;
+    if let Some(gp_id) = window.parent_grading_period_id {
+        require_grading_period_exists(&state.db, gp_id).await?;
+    }
+
+    let row = insert_blackout_date(&state.db, "Course", course_id, &window).await?;
+    Ok((StatusCode::CREATED, Json(BlackoutDateResponse::from(row))))
+}
+
+/// GET /accounts/{accountId}/blackout_dates — list blackout dates for an account.
+async fn list_account_blackout_dates(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<BlackoutDateResponse>>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let rows = list_blackout_dates(&state.db, "Account", account_id).await?;
+    Ok(Json(
+        rows.into_iter().map(BlackoutDateResponse::from).collect(),
+    ))
+}
+
+/// POST /accounts/{accountId}/blackout_dates — create an account blackout date.
+async fn create_account_blackout_date(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<BlackoutDateParams>,
+) -> Result<(StatusCode, Json<BlackoutDateResponse>), ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_manage_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let window = validate_blackout_window(&payload)?;
+    if let Some(gp_id) = window.parent_grading_period_id {
+        require_grading_period_exists(&state.db, gp_id).await?;
+    }
+
+    let row = insert_blackout_date(&state.db, "Account", account_id, &window).await?;
+    Ok((StatusCode::CREATED, Json(BlackoutDateResponse::from(row))))
+}
+
+/// PUT /courses/{courseId}/blackout_dates — Canvas `bulk_update`.
+///
+/// Entries with an id are updated, entries without one are created, and
+/// existing rows missing from the payload are deleted.
+async fn bulk_update_course_blackout_dates(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<BlackoutDatesBulkParams>,
+) -> Result<Json<Vec<BlackoutDateResponse>>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let existing = list_blackout_dates(&state.db, "Course", course_id).await?;
+
+    let mut updates: Vec<(i64, BlackoutDateWindow)> = Vec::new();
+    let mut creates: Vec<BlackoutDateWindow> = Vec::new();
+    for entry in &payload.blackout_dates {
+        let params = BlackoutDateParams {
+            start_date: entry.start_date.clone(),
+            end_date: entry.end_date.clone(),
+            event_title: entry.event_title.clone(),
+            title: entry.title.clone(),
+            description: None,
+            parent_grading_period_id: None,
+        };
+        let window = validate_blackout_window(&params)?;
+        match entry.id {
+            Some(id) => updates.push((id, window)),
+            None => creates.push(window),
+        }
+    }
+
+    let mut tx = state.db.begin().await?;
+
+    // Delete existing rows that are absent from the payload.
+    let kept: Vec<i64> = updates.iter().map(|(id, _)| *id).collect();
+    for row in &existing {
+        if !kept.contains(&row.id) {
+            sqlx::query("DELETE FROM blackout_dates WHERE id = $1")
+                .bind(row.id)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+
+    for (id, window) in &updates {
+        sqlx::query(
+            r#"UPDATE blackout_dates
+               SET title = $2, start_date = $3, end_date = $4, updated_at = now()
+               WHERE id = $1 AND context_type = 'Course' AND context_id = $5"#,
+        )
+        .bind(id)
+        .bind(&window.title)
+        .bind(window.start_date)
+        .bind(window.end_date)
+        .bind(course_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    for window in &creates {
+        sqlx::query(
+            r#"INSERT INTO blackout_dates
+                   (context_id, context_type, title, description, start_date, end_date,
+                    parent_grading_period_id)
+               VALUES ($1, 'Course', $2, $3, $4, $5, $6)"#,
+        )
+        .bind(course_id)
+        .bind(&window.title)
+        .bind(&window.description)
+        .bind(window.start_date)
+        .bind(window.end_date)
+        .bind(window.parent_grading_period_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    let rows = list_blackout_dates(&state.db, "Course", course_id).await?;
+    Ok(Json(
+        rows.into_iter().map(BlackoutDateResponse::from).collect(),
+    ))
+}
+
+/// DELETE /courses/{courseId}/blackout_dates/{id} — delete a blackout date.
+async fn delete_course_blackout_date(
+    State(state): State<AppState>,
+    Path((course_id, blackout_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let row = fetch_blackout_date(&state.db, blackout_id, "Course", course_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    sqlx::query("DELETE FROM blackout_dates WHERE id = $1")
+        .bind(row.id)
+        .execute(&state.db)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -1739,6 +2141,30 @@ pub fn router() -> Router<AppState> {
         .route("/grading_schemes/{id}", get(get_grading_scheme))
         .route("/grading_schemes/{id}", put(update_grading_scheme))
         .route("/grading_schemes/{id}", delete(delete_grading_scheme))
+        .route(
+            "/courses/{courseId}/blackout_dates",
+            get(list_course_blackout_dates),
+        )
+        .route(
+            "/courses/{courseId}/blackout_dates",
+            post(create_course_blackout_date),
+        )
+        .route(
+            "/courses/{courseId}/blackout_dates",
+            put(bulk_update_course_blackout_dates),
+        )
+        .route(
+            "/courses/{courseId}/blackout_dates/{id}",
+            delete(delete_course_blackout_date),
+        )
+        .route(
+            "/accounts/{accountId}/blackout_dates",
+            get(list_account_blackout_dates),
+        )
+        .route(
+            "/accounts/{accountId}/blackout_dates",
+            post(create_account_blackout_date),
+        )
 }
 
 // ---------------------------------------------------------------------------

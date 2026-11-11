@@ -10,6 +10,8 @@
 //! - GET /courses/{courseId}/pages/{url}/revisions/latest      (current version)
 //! - GET /courses/{courseId}/pages/{url}/revisions/{revisionId} (one version)
 //! - GET/PUT /courses/{courseId}/front_page                    (course front page)
+//! - POST /courses/{courseId}/pages/{urlOrId}/duplicate        (copy a page)
+//! - POST /courses/{courseId}/pages_ai/alt_text                (stub alt text)
 //!
 //! Canvas parity notes (wiki_page.rb, wiki_pages_api_controller.rb):
 //! - pages carry `url` (slug derived from title), `workflow_state`
@@ -25,7 +27,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
@@ -1218,6 +1220,122 @@ async fn show_revision(
 }
 
 // ---------------------------------------------------------------------------
+// Page duplication (Canvas wiki_pages_api_controller#duplicate)
+// ---------------------------------------------------------------------------
+
+/// Canvas `get_copy_title(page, t("Copy"), title)`: "Title" -> "Title Copy".
+fn duplicate_title(title: &str) -> String {
+    format!("{title} Copy")
+}
+
+/// POST /courses/{courseId}/pages/{urlOrId}/duplicate — copy a page.
+///
+/// Canvas authorizes `:create` on the page (teachers/admins), then saves the
+/// copy as an unpublished page with the source body and editing roles and
+/// answers 200 with `wiki_page_json`. Soft-deleted pages are not resolvable
+/// here, so they answer 404 rather than Canvas' 400
+/// `{"error":"cannot duplicate deleted page"}`.
+async fn duplicate_page(
+    State(state): State<AppState>,
+    Path((course_id, page_ref)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<PageDetail>, ApiError> {
+    let page = load_page_in_course(&state.db, course_id, &page_ref).await?;
+
+    if !user_teacher_of_course(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let title = duplicate_title(&page.title);
+    let url = generate_url_slug(&title);
+
+    let mut tx = state.db.begin().await?;
+
+    let copy: PageDetail = sqlx::query_as(
+        r#"
+        INSERT INTO pages (course_id, title, body, url, workflow_state, editing_roles,
+                           duplicated_from_page_id)
+        VALUES ($1, $2, $3, $4, 'unpublished', $5, $6)
+        RETURNING id, course_id, title, body, url, workflow_state, editing_roles,
+                  created_at, updated_at
+        "#,
+    )
+    .bind(course_id)
+    .bind(&title)
+    .bind(&page.body)
+    .bind(&url)
+    .bind(&page.editing_roles)
+    .bind(page.id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // simply_versioned: the creating save is revision 1.
+    insert_revision(
+        &mut tx,
+        copy.id,
+        auth.id,
+        &copy.title,
+        copy.body.as_deref(),
+        copy.url.as_deref(),
+    )
+    .await?;
+
+    tx.commit().await?;
+
+    Ok(Json(copy))
+}
+
+// ---------------------------------------------------------------------------
+// AI alt text (Canvas wiki_pages_api_controller#ai_generate_alt_text)
+// ---------------------------------------------------------------------------
+
+/// Request body for POST /courses/{courseId}/pages_ai/alt_text.
+#[derive(Debug, Deserialize)]
+pub struct AltTextRequest {
+    pub attachment_id: Option<i64>,
+}
+
+/// Canvas `{ image: { altText } }` response of `ai_generate_alt_text`.
+#[derive(Debug, Serialize)]
+pub struct AltTextResponse {
+    pub image: AltTextImage,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AltTextImage {
+    #[serde(rename = "altText")]
+    pub alt_text: String,
+}
+
+/// POST /courses/{courseId}/pages_ai/alt_text — stub.
+///
+/// Canvas requires content-manage rights (teachers/admins), a valid
+/// `attachment_id` and a configured AI client. No AI client exists here, so
+/// the handler validates the request and answers the Canvas response shape
+/// with placeholder text instead of calling an external service.
+async fn generate_alt_text(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    payload: Option<Json<AltTextRequest>>,
+) -> Result<Json<AltTextResponse>, ApiError> {
+    if !user_teacher_of_course(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas `ai_alt_text_params_valid?`: blank attachment_id -> 400.
+    let attachment_id = payload
+        .and_then(|Json(body)| body.attachment_id)
+        .ok_or_else(|| ApiError::BadRequest("attachment_id is required".into()))?;
+
+    Ok(Json(AltTextResponse {
+        image: AltTextImage {
+            alt_text: format!("Image of attachment {attachment_id}"),
+        },
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -1253,6 +1371,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/front_page",
             get(get_front_page).put(update_front_page),
+        )
+        .route(
+            "/courses/{courseId}/pages/{url}/duplicate",
+            post(duplicate_page),
+        )
+        .route(
+            "/courses/{courseId}/pages_ai/alt_text",
+            post(generate_alt_text),
         )
 }
 
