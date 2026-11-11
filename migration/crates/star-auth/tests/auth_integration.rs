@@ -139,6 +139,13 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
         .bind(format!("{prefix}%"))
         .execute(pool)
         .await;
+    // Authentication providers for this run (position stores prefix in auth_type as sentinel).
+    let _ = sqlx::query("DELETE FROM authentication_providers WHERE auth_type LIKE $1")
+        .bind(format!("{prefix}%"))
+        .execute(pool)
+        .await;
+    // SSO settings were updated in-place; we do not clean them up since they
+    // are account-level and the test account is shared infrastructure.
 }
 
 // ---------------------------------------------------------------------------
@@ -1313,6 +1320,231 @@ async fn tokens_are_scoped_to_their_owner() {
         .await;
     assert_eq!(resp.status_code(), 200, "owner show: {}", resp.text());
     assert_eq!(resp.json::<Value>()["workflow_state"], "active");
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// Authentication providers + SSO settings
+// ---------------------------------------------------------------------------
+
+/// Seed a real account row for auth-providers tests (needed because the
+/// FK references accounts.id). Uses id 1 which should exist from prior
+/// migrations.
+async fn seed_account_if_needed(pool: &PgPool) {
+    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = 1")
+        .fetch_optional(pool)
+        .await
+        .expect("check account");
+    if exists.is_none() {
+        sqlx::query("INSERT INTO accounts (id, name) VALUES (1, 'Test Account') ON CONFLICT (id) DO NOTHING")
+            .execute(pool)
+            .await
+            .expect("seed account");
+    }
+}
+
+#[tokio::test]
+async fn auth_providers_crud_requires_admin() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    seed_account_if_needed(&pool).await;
+
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+
+    // Anonymous → 401.
+    let resp = server.get("/accounts/1/authentication_providers").await;
+    assert_eq!(resp.status_code(), 401, "anonymous list: {}", resp.text());
+
+    // Student → 403.
+    let resp = server
+        .get("/accounts/1/authentication_providers")
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student list: {}", resp.text());
+
+    // Admin → 200 (empty list, account has no providers yet).
+    let resp = server
+        .get("/accounts/1/authentication_providers")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "admin list: {}", resp.text());
+    let body: Value = resp.json();
+    assert!(body["authentication_providers"].is_array(), "body: {body}");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn auth_providers_create_show_update_delete() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    seed_account_if_needed(&pool).await;
+    let admin = seed_user(&pool, &prefix, "Admin2", "admin").await;
+    let admin_auth = auth(admin, "admin");
+
+    // POST create a SAML provider with settings.
+    let create_resp = server
+        .post("/accounts/1/authentication_providers")
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .json(&json!({
+            "authentication_provider": {
+                "auth_type": "saml",
+                "position": 1,
+                "idp_entity_id": "https://idp.example.org/saml2",
+                "log_in_url": "https://idp.example.org/login"
+            }
+        }))
+        .await;
+    assert_eq!(
+        create_resp.status_code(),
+        200,
+        "create: {}",
+        create_resp.text()
+    );
+    let created: Value = create_resp.json();
+    let provider_id = created["id"].as_i64().expect("provider id");
+    assert_eq!(created["auth_type"], "saml");
+    assert_eq!(created["position"], 1);
+    assert_eq!(created["idp_entity_id"], "https://idp.example.org/saml2");
+    assert_eq!(created["log_in_url"], "https://idp.example.org/login");
+
+    // GET show.
+    let show_resp = server
+        .get(&format!(
+            "/accounts/1/authentication_providers/{provider_id}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .await;
+    assert_eq!(show_resp.status_code(), 200, "show: {}", show_resp.text());
+    assert_eq!(show_resp.json::<Value>()["id"], provider_id);
+
+    // PUT update: change log_in_url and position.
+    let update_resp = server
+        .put(&format!(
+            "/accounts/1/authentication_providers/{provider_id}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .json(&json!({
+            "authentication_provider": {
+                "position": 2,
+                "log_in_url": "https://idp.example.org/new-login"
+            }
+        }))
+        .await;
+    assert_eq!(
+        update_resp.status_code(),
+        200,
+        "update: {}",
+        update_resp.text()
+    );
+    let updated: Value = update_resp.json();
+    assert_eq!(updated["position"], 2);
+    assert_eq!(updated["log_in_url"], "https://idp.example.org/new-login");
+    // Original idp_entity_id preserved.
+    assert_eq!(updated["idp_entity_id"], "https://idp.example.org/saml2");
+
+    // DELETE soft-deletes.
+    let delete_resp = server
+        .delete(&format!(
+            "/accounts/1/authentication_providers/{provider_id}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .await;
+    assert_eq!(
+        delete_resp.status_code(),
+        200,
+        "delete: {}",
+        delete_resp.text()
+    );
+    assert_eq!(delete_resp.json::<Value>()["workflow_state"], "deleted");
+
+    // GET after delete → 404.
+    let gone_resp = server
+        .get(&format!(
+            "/accounts/1/authentication_providers/{provider_id}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .await;
+    assert_eq!(
+        gone_resp.status_code(),
+        404,
+        "after delete: {}",
+        gone_resp.text()
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn sso_settings_show_and_update() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    seed_account_if_needed(&pool).await;
+    let admin = seed_user(&pool, &prefix, "Admin3", "admin").await;
+    let admin_auth = auth(admin, "admin");
+
+    // GET sso_settings returns current values (may be nulls).
+    let get_resp = server
+        .get("/accounts/1/sso_settings")
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .await;
+    assert_eq!(
+        get_resp.status_code(),
+        200,
+        "get sso_settings: {}",
+        get_resp.text()
+    );
+    let body: Value = get_resp.json();
+    assert!(body["sso_settings"].is_object(), "body: {body}");
+
+    // PUT update sso_settings.
+    let update_resp = server
+        .put("/accounts/1/sso_settings")
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .json(&json!({
+            "sso_settings": {
+                "login_handle_name": "Username",
+                "change_password_url": "https://example.org/reset",
+                "auth_discovery_url": "https://example.org/discover",
+                "unknown_user_url": "https://example.org/unknown",
+                "login_help_url": "https://example.org/help"
+            }
+        }))
+        .await;
+    assert_eq!(
+        update_resp.status_code(),
+        200,
+        "update sso: {}",
+        update_resp.text()
+    );
+    let updated: Value = update_resp.json()["sso_settings"];
+    assert_eq!(updated["login_handle_name"], "Username");
+    assert_eq!(updated["change_password_url"], "https://example.org/reset");
+    assert_eq!(
+        updated["auth_discovery_url"],
+        "https://example.org/discover"
+    );
+    assert_eq!(updated["unknown_user_url"], "https://example.org/unknown");
+    assert_eq!(updated["login_help_url"], "https://example.org/help");
+
+    // GET reflects the update.
+    let get2_resp = server
+        .get("/accounts/1/sso_settings")
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .await;
+    let get2_body: Value = get2_resp.json()["sso_settings"];
+    assert_eq!(get2_body["login_handle_name"], "Username");
 
     cleanup(&pool, &prefix).await;
 }
