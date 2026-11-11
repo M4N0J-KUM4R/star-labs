@@ -353,7 +353,7 @@ async fn selective_data_lists_sections_and_rejects_unknown_type() {
 #[tokio::test]
 async fn migration_issues_require_authentication() {
     let Some((server, _pool, _prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
+        eprintln!("SKIP: DATABASE_URL not set");
         return;
     };
 
