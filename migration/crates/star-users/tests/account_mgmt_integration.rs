@@ -66,7 +66,7 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
     )
     .bind(name)
     .bind(&sortable_name)
-    .bind(format!("{prefix}-{name}@test.local".replace(' ', "-")))
+    .bind(format!("{prefix}-{}@test.local", name.replace(' ', "-")))
     .bind(role)
     .fetch_one(pool)
     .await
