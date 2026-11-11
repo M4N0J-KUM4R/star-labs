@@ -1669,27 +1669,27 @@ async fn update_sso_settings(
         let mut sql = "UPDATE accounts SET ".to_string();
         let mut parts = vec![];
 
-        if let Some(v) = new_login_handle_name {
+        if new_login_handle_name.is_some() {
             parts.push(format!("login_handle_name = ${}", bind_idx));
             bind_idx += 1;
         }
-        if let Some(v) = new_change_password_url {
+        if new_change_password_url.is_some() {
             parts.push(format!("change_password_url = ${}", bind_idx));
             bind_idx += 1;
         }
-        if let Some(v) = new_auth_discovery_url {
+        if new_auth_discovery_url.is_some() {
             parts.push(format!("auth_discovery_url = ${}", bind_idx));
             bind_idx += 1;
         }
-        if let Some(v) = new_unknown_user_url {
+        if new_unknown_user_url.is_some() {
             parts.push(format!("unknown_user_url = ${}", bind_idx));
             bind_idx += 1;
         }
-        if let Some(v) = new_login_help_url {
+        if new_login_help_url.is_some() {
             parts.push(format!("login_help_url = ${}", bind_idx));
             bind_idx += 1;
         }
-        if let Some(v) = new_discovery_page_active {
+        if new_discovery_page_active.is_some() {
             parts.push(format!("discovery_page_active = ${}", bind_idx));
             bind_idx += 1;
         }
