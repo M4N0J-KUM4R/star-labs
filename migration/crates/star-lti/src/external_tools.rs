@@ -137,6 +137,7 @@ pub struct CreateToolRequest {
     pub lti_version: Option<String>,
     pub developer_key_id: Option<i64>,
     pub lti_registration_id: Option<i64>,
+    pub deployment_id: Option<i64>,
     pub tool_configuration: Option<Value>,
     pub custom_fields: Option<Value>,
     pub selection_width: Option<i32>,
@@ -164,7 +165,7 @@ async fn course_account_id(pool: &PgPool, course_id: i64) -> Result<Option<i64>,
             .bind(course_id)
             .fetch_optional(pool)
             .await?;
-    Ok(row.map(|(account_id,)| account_id))
+    Ok(row.and_then(|(account_id,)| account_id))
 }
 
 /// 404 when the course does not exist.
