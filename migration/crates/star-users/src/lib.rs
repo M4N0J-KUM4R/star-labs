@@ -678,7 +678,8 @@ async fn load_dashboard_positions(
     user_id: i64,
 ) -> Result<BTreeMap<String, i64>, ApiError> {
     let rows: Vec<(i64, i64)> = sqlx::query_as(
-        "SELECT course_id, position FROM dashboard_positions WHERE user_id = $1 ORDER BY position",
+        "SELECT course_id, position::bigint AS position \
+         FROM dashboard_positions WHERE user_id = $1 ORDER BY position",
     )
     .bind(user_id)
     .fetch_all(pool)
