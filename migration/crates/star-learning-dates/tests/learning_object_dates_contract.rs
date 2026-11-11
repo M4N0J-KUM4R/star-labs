@@ -607,7 +607,7 @@ async fn page_due_at_always_null() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
 
     let page_url = format!("{prefix}-page-due");
-    sqlx::query_scalar(
+    sqlx::query_scalar::<_, i64>(
         "INSERT INTO pages (course_id, title, url) VALUES ($1, $2, $3) RETURNING id",
     )
     .bind(course)
