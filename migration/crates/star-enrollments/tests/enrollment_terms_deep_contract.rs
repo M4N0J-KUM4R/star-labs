@@ -103,14 +103,16 @@ async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
 async fn seed_course_with_feature(pool: &PgPool, prefix: &str, name: &str) -> i64 {
     let course_id = seed_course(pool, prefix, name).await;
     // Ensure the account has the feature flag enabled; insert if absent.
+    // 0088_feature_flags keys overrides on (context_type, context_id, feature)
+    // and requires display_name.
     sqlx::query(
         r#"
-        INSERT INTO account_features (account_id, feature, state)
-        SELECT a.id, 'temporary_enrollments', 'enabled'
+        INSERT INTO feature_flags (context_type, context_id, feature, display_name, state)
+        SELECT 'Account', a.id, 'temporary_enrollments', 'Temporary Enrollments', 'enabled'
         FROM accounts a
         JOIN courses c ON c.account_id = a.id
         WHERE c.id = $1
-        ON CONFLICT (account_id, feature) DO UPDATE SET state = 'enabled'
+        ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'
         "#,
     )
     .bind(course_id)
@@ -428,7 +430,7 @@ async fn contract_temporary_status_self_returns_three_flags() {
         return;
     };
 
-    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let _admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let user = seed_user(&pool, &prefix, "User", "student").await;
     let course = seed_course_with_feature(&pool, &prefix, "TempSelf").await;
     seed_enrollment(&pool, user, course, "student", None).await;
@@ -519,18 +521,16 @@ async fn contract_temporary_status_is_provider_flag() {
 
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
-    assert_eq!(
+    assert!(
         body["is_provider"]
             .as_bool()
             .expect("is_provider must be bool"),
-        true,
         "provider's is_provider must be true: {body}"
     );
-    assert_eq!(
-        body["is_recipient"]
+    assert!(
+        !body["is_recipient"]
             .as_bool()
             .expect("is_recipient must be bool"),
-        false,
         "provider is not a recipient: {body}"
     );
 
@@ -545,18 +545,16 @@ async fn contract_temporary_status_is_provider_flag() {
 
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
-    assert_eq!(
-        body["is_provider"]
+    assert!(
+        !body["is_provider"]
             .as_bool()
             .expect("is_provider must be bool"),
-        false,
         "recipient is not a provider: {body}"
     );
-    assert_eq!(
+    assert!(
         body["is_recipient"]
             .as_bool()
             .expect("is_recipient must be bool"),
-        true,
         "recipient's is_recipient must be true: {body}"
     );
 
@@ -655,18 +653,11 @@ async fn contract_bulk_temporary_status_limit_caps_at_100() {
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let course = seed_course_with_feature(&pool, &prefix, "BulkLimit").await;
+    let _ = course;
 
     // Seed 110 users (over the 100 cap).
-    let user_ids: Vec<i64> = (0..110)
-        .map(|i| {
-            std::thread::spawn(move || {
-                // need block_on so we use a sync approach
-                i
-            })
-            .join()
-            .unwrap()
-        })
-        .collect();
+    let user_ids: Vec<i64> = (0..110).map(|i| i).collect();
+    let _ = user_ids;
 
     // We can't easily create 110 users inline without making the test too heavy,
     // so instead we verify the limit param is accepted without error by passing
