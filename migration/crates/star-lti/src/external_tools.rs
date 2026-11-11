@@ -818,6 +818,7 @@ async fn all_visible_nav_tools(
             .bind(course_id)
             .fetch_one(&state.db)
             .await?;
+        let course_name = course_name.0;
 
         let sql = format!(
             "SELECT {TOOL_COLUMNS} FROM external_tools \
