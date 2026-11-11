@@ -421,10 +421,20 @@ async fn acceptable_use_policy_uses_camel_case_redirect_url() {
         return;
     };
 
+    // ToS rows are keyed on the shared root account (UNIQUE account_id); other
+    // test binaries mutate that row in parallel. Serialize with a session-level
+    // advisory lock held on a dedicated connection while HTTP requests use the
+    // pool.
+    let mut lock_conn = pool.acquire().await.expect("lock connection");
+    sqlx::query("SELECT pg_advisory_lock(8901)")
+        .execute(&mut *lock_conn)
+        .await
+        .expect("acquire ToS lock");
     let root = root_account(&pool).await;
     // Insert a row with an external URL.
     sqlx::query(
-        "INSERT INTO account_terms_of_service (account_id, terms_type, content, external_url) VALUES ($1, 'built_in:default', 'ignored', $2)",
+        "INSERT INTO account_terms_of_service (account_id, terms_type, content, external_url) VALUES ($1, 'built_in:default', 'ignored', $2) \
+         ON CONFLICT (account_id) DO UPDATE SET content = 'ignored', external_url = EXCLUDED.external_url",
     )
     .bind(root)
     .bind(format!("https://{prefix}.example.test/policy"))
@@ -451,6 +461,10 @@ async fn acceptable_use_policy_uses_camel_case_redirect_url() {
         .bind(root)
         .execute(&pool)
         .await;
+    let _ = sqlx::query("SELECT pg_advisory_unlock(8901)")
+        .execute(&mut *lock_conn)
+        .await;
+    drop(lock_conn);
     cleanup(&pool, &prefix).await;
 }
 
@@ -463,6 +477,12 @@ async fn acceptable_use_policy_content_field_when_no_external_url() {
         return;
     };
 
+    // Serialize against the other ToS test binaries (shared root account).
+    let mut lock_conn = pool.acquire().await.expect("lock connection");
+    sqlx::query("SELECT pg_advisory_lock(8901)")
+        .execute(&mut *lock_conn)
+        .await
+        .expect("acquire ToS lock");
     let root = root_account(&pool).await;
 
     // Ensure no terms of service row at all.
@@ -514,6 +534,10 @@ async fn acceptable_use_policy_content_field_when_no_external_url() {
         .bind(root)
         .execute(&pool)
         .await;
+    let _ = sqlx::query("SELECT pg_advisory_unlock(8901)")
+        .execute(&mut *lock_conn)
+        .await;
+    drop(lock_conn);
     cleanup(&pool, &prefix).await;
 }
 

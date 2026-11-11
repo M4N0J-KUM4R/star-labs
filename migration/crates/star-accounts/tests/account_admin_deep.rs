@@ -466,6 +466,12 @@ async fn acceptable_use_policy_renders_content_or_redirect() {
     };
     let _ = &prefix;
 
+    // Serialize against the other ToS test binaries (shared root account).
+    let mut lock_conn = pool.acquire().await.expect("lock connection");
+    sqlx::query("SELECT pg_advisory_lock(8901)")
+        .execute(&mut *lock_conn)
+        .await
+        .expect("acquire ToS lock");
     let root = root_account(&pool).await;
     let before: Option<(Option<String>, Option<String>, Option<String>)> = sqlx::query_as(
         "SELECT external_url, content, terms_type FROM account_terms_of_service WHERE account_id = $1",
@@ -540,5 +546,9 @@ async fn acceptable_use_policy_renders_content_or_redirect() {
         .await;
     }
 
+    let _ = sqlx::query("SELECT pg_advisory_unlock(8901)")
+        .execute(&mut *lock_conn)
+        .await;
+    drop(lock_conn);
     cleanup(&pool, &prefix).await;
 }

@@ -368,6 +368,10 @@ pub struct AccountTreeJson {
     pub root_account_id: Option<i64>,
     pub workflow_state: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub course_count: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub_account_count: Option<i64>,
@@ -487,6 +491,8 @@ async fn account_tree_json(
                 parent_account_id: row.parent_account_id,
                 root_account_id,
                 workflow_state: row.workflow_state,
+                created_at: None,
+                updated_at: None,
                 course_count: with_course_count
                     .then(|| course_counts.get(&row.id).copied().unwrap_or(0)),
                 sub_account_count: with_sub_account_count
@@ -513,6 +519,8 @@ async fn account_tree_row(pool: &PgPool, row: AccountRow) -> Result<AccountTreeJ
         parent_account_id: row.parent_account_id,
         root_account_id,
         workflow_state: row.workflow_state,
+        created_at: None,
+        updated_at: None,
         course_count: None,
         sub_account_count: None,
     })
@@ -1636,7 +1644,7 @@ async fn update_account(
         new_parent = Some(target);
     }
 
-    let row: AccountRow = sqlx::query_as(
+    let account: Account = sqlx::query_as(
         r#"
         UPDATE accounts
         SET name = COALESCE($2, name),
@@ -1644,7 +1652,7 @@ async fn update_account(
             parent_account_id = COALESCE($4, parent_account_id),
             updated_at = now()
         WHERE id = $1
-        RETURNING id, name, parent_account_id, workflow_state
+        RETURNING id, name, parent_account_id, workflow_state, created_at, updated_at
         "#,
     )
     .bind(account_id)
@@ -1655,7 +1663,27 @@ async fn update_account(
     .await
     .map_err(ApiError::from)?;
 
-    Ok(Json(account_tree_row(&state.db, row).await?))
+    let response: AccountResponse = account.into();
+    let root_account_id = if response.parent_account_id.is_none() {
+        None
+    } else {
+        account_root_ids(&state.db, &[account_id])
+            .await?
+            .get(&account_id)
+            .copied()
+    };
+
+    Ok(Json(AccountTreeJson {
+        id: response.id,
+        name: response.name,
+        parent_account_id: response.parent_account_id,
+        root_account_id,
+        workflow_state: response.workflow_state,
+        created_at: Some(response.created_at),
+        updated_at: Some(response.updated_at),
+        course_count: None,
+        sub_account_count: None,
+    }))
 }
 
 /// GET /manually_created_courses_account — Canvas
