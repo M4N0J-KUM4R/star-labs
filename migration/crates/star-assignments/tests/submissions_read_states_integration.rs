@@ -291,7 +291,7 @@ async fn gradeable_students_requires_grades_permission_and_hides_names_when_anon
         .await;
     let flagged: Vec<Value> = flagged.json();
     assert_eq!(
-        flagged[0]["id"], beta,
+        flagged[0]["id"], alpha,
         "anonymous_grading false: {flagged:?}"
     );
 

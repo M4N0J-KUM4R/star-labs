@@ -20,7 +20,7 @@
 //! - Only the `en` locale text is stored/served by this API.
 
 use axum_test::TestServer;
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 use star_common::AppState;
@@ -348,9 +348,12 @@ async fn release_notes_admin_crud_latest_and_unread_count() {
     let note_id = note["id"].as_i64().expect("note id");
     assert_eq!(note["published"], true);
     assert_eq!(note["target_roles"], json!([reader_role]));
+    let returned_at = note["show_ats"]["production"]
+        .as_str()
+        .expect("production show_at");
     assert_eq!(
-        note["show_ats"]["production"],
-        Value::String(shown_at.clone())
+        DateTime::parse_from_rfc3339(returned_at).expect("returned show_at"),
+        DateTime::parse_from_rfc3339(&shown_at).expect("expected show_at")
     );
     assert_eq!(note["langs"]["en"]["title"], format!("{prefix}-NoteOne"));
     assert_eq!(note["langs"]["en"]["url"], "/notes/1");

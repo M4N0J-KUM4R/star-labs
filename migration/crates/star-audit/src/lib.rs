@@ -203,7 +203,8 @@ async fn fetch_events(
         r#"
         SELECT uuid, course_id, assignment_id, student_id, grader_id,
                event_type, grade_before, grade_after,
-               points_possible_before, points_possible_after,
+               points_possible_before::double precision AS points_possible_before,
+               points_possible_after::double precision AS points_possible_after,
                excused_before, excused_after, graded_anonymously,
                version_number, request_id, created_at
         FROM grade_change_events
