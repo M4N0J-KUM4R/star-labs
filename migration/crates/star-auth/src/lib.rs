@@ -88,10 +88,8 @@ where
         // token lifetime is fixed by create_token, so issued-at is derived
         // from exp without adding another claim.
         let issued_at = claims.exp as i64 - TOKEN_EXPIRY_SECS as i64;
-        if let Some(last_logged_out) = last_logged_out {
-            if issued_at < last_logged_out.timestamp() {
-                return Err(ApiError::Unauthorized);
-            }
+        if last_logged_out.is_some_and(|last| issued_at < last.timestamp()) {
+            return Err(ApiError::Unauthorized);
         }
 
         Ok(AuthUser {
