@@ -1140,7 +1140,7 @@ async fn show_temporary_enrollment_status(
     // Canvas checks `@domain_root_account&.feature_enabled?(:temporary_enrollments)`
     // at the account level. If disabled for every account the user has enrollments
     // in, return an empty 200 object so the response is not a valid status object.
-    let has_enabled_account: bool = sqlx::query_as(
+    let (has_enabled_account,): (bool,) = sqlx::query_as(
         r#"
         SELECT EXISTS (
             SELECT 1 FROM feature_flags ff
@@ -1180,7 +1180,7 @@ async fn bulk_temporary_enrollment_status(
     auth: AuthUser,
     RawQuery(raw_query): RawQuery,
 ) -> Response {
-    let (user_ids, raw_limit) = match parse_bulk_enrollment_query(raw_query) {
+    let (user_ids, raw_limit) = match parse_bulk_enrollment_query(raw_query.as_deref()) {
         Ok(x) => x,
         Err(ApiError::BadRequest(_)) => {
             return (StatusCode::BAD_REQUEST, Json(json!({}))).into_response()
