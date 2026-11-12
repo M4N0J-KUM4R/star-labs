@@ -754,8 +754,8 @@ async fn require_roles_admin(db: &PgPool, user_id: i64, account_id: i64) -> Resu
 const ROLE_COLUMNS: &str = "id, name, label, base_role_type, workflow_state, account_id, \
                             created_at, updated_at";
 
-/// `GET /accounts/{accountId}/roles` — the account's custom roles, oldest
-/// first. Built-in roles (NULL `account_id`) are not listed.
+/// `GET /accounts/{accountId}/roles` — the account's custom roles and all
+/// built-in roles (NULL account_id), oldest first.
 pub async fn roles_list(
     db: &PgPool,
     user_id: i64,
@@ -763,14 +763,22 @@ pub async fn roles_list(
 ) -> Result<Vec<RoleView>, ApiError> {
     require_roles_admin(db, user_id, account_id).await?;
 
-    let rows: Vec<RoleView> = sqlx::query_as(&format!(
+    let mut rows: Vec<RoleView> = sqlx::query_as(&format!(
         "SELECT {ROLE_COLUMNS} FROM roles
          WHERE account_id = $1 AND workflow_state <> 'deleted'
+         UNION ALL
+         SELECT {ROLE_COLUMNS} FROM roles WHERE account_id IS NULL
          ORDER BY id ASC"
     ))
     .bind(account_id)
     .fetch_all(db)
     .await?;
+    // Built-in roles (NULL account_id) must report workflow_state = "built_in".
+    for role in rows.iter_mut() {
+        if role.account_id.is_none() {
+            role.workflow_state = "built_in".to_string();
+        }
+    }
     Ok(rows)
 }
 
@@ -843,7 +851,12 @@ async fn fetch_role(db: &PgPool, account_id: i64, role_id: i64) -> Result<RoleVi
     .bind(account_id)
     .fetch_optional(db)
     .await?;
-    role.ok_or(ApiError::NotFound)
+    let mut role = role.ok_or(ApiError::NotFound)?;
+    // Built-in roles (NULL account_id) must report workflow_state = "built_in".
+    if role.account_id.is_none() {
+        role.workflow_state = "built_in".to_string();
+    }
+    Ok(role)
 }
 
 /// `PUT /accounts/{accountId}/roles/{id}` — updates the supplied fields.
@@ -890,7 +903,16 @@ pub async fn role_update(
 
     match updated {
         Some(role) => Ok(role),
-        None => Err(reject_builtin_or_missing(db, account_id, role_id).await),
+        None => {
+            // 404 when the role is already soft-deleted (distinguish from
+            // built-in / truly missing, which reject_builtin_or_missing handles).
+            if let Ok(role) = fetch_role(db, account_id, role_id).await {
+                if role.workflow_state == "deleted" {
+                    return Err(ApiError::NotFound);
+                }
+            }
+            Err(reject_builtin_or_missing(db, account_id, role_id).await)
+        }
     }
 }
 
@@ -917,7 +939,15 @@ pub async fn role_delete(
 
     match deleted {
         Some(role) => Ok(role),
-        None => Err(reject_builtin_or_missing(db, account_id, role_id).await),
+        None => {
+            // 404 when the role is already soft-deleted.
+            if let Ok(role) = fetch_role(db, account_id, role_id).await {
+                if role.workflow_state == "deleted" {
+                    return Err(ApiError::NotFound);
+                }
+            }
+            Err(reject_builtin_or_missing(db, account_id, role_id).await)
+        }
     }
 }
 
