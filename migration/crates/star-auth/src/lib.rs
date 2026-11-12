@@ -1666,7 +1666,6 @@ async fn update_sso_settings(
         }
         if new_discovery_page_active.is_some() {
             parts.push(format!("discovery_page_active = ${}", bind_idx));
-            bind_idx += 1;
         }
 
         sql.push_str(&parts.join(", "));
