@@ -1666,30 +1666,38 @@ async fn update_sso_settings(
         }
         if new_discovery_page_active.is_some() {
             parts.push(format!("discovery_page_active = ${}", bind_idx));
+            bind_idx += 1;
         }
 
         sql.push_str(&parts.join(", "));
-        sql.push_str(" WHERE id = $1");
+        // The account_id placeholder must come after every SET
+        // placeholder, and be bound last, or every value shifts one
+        // column over.
+        sql.push_str(&format!(" WHERE id = ${}", bind_idx));
 
-        let mut q = sqlx::query(&sql).bind(account_id);
-        if let Some(v) = new_login_handle_name.flatten() {
+        let mut q = sqlx::query(&sql);
+        // Bind the Option (not its flattened value): a key sent with an
+        // explicit null must bind NULL to un-set the column, matching
+        // Canvas's update_sso_settings semantics.
+        if let Some(v) = new_login_handle_name {
             q = q.bind(v);
         }
-        if let Some(v) = new_change_password_url.flatten() {
+        if let Some(v) = new_change_password_url {
             q = q.bind(v);
         }
-        if let Some(v) = new_auth_discovery_url.flatten() {
+        if let Some(v) = new_auth_discovery_url {
             q = q.bind(v);
         }
-        if let Some(v) = new_unknown_user_url.flatten() {
+        if let Some(v) = new_unknown_user_url {
             q = q.bind(v);
         }
-        if let Some(v) = new_login_help_url.flatten() {
+        if let Some(v) = new_login_help_url {
             q = q.bind(v);
         }
         if let Some(v) = new_discovery_page_active {
             q = q.bind(v);
         }
+        q = q.bind(account_id);
 
         q.execute(&app.db).await.map_err(ApiError::from)?;
     }
