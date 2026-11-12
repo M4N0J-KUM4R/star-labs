@@ -133,7 +133,7 @@ async fn list_user_channels_self_returns_own_channels() {
 
     let token = auth_header(&pool, user_id, "student");
     let resp = server
-        .get(&format!("/api/v1/users/self/communication_channels"))
+        .get("/api/v1/users/self/communication_channels")
         .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .await;
 
@@ -304,7 +304,7 @@ async fn list_user_channels_excludes_retired() {
 
     let token = auth_header(&pool, user_id, "student");
     let resp = server
-        .get(&format!("/api/v1/users/self/communication_channels"))
+        .get("/api/v1/users/self/communication_channels")
         .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .await;
 
