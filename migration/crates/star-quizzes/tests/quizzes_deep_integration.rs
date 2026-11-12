@@ -71,14 +71,12 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
 }
 
 async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
-    sqlx::query_scalar(
-        r#"INSERT INTO courses (name, course_code) VALUES ($1, $2) RETURNING id"#,
-    )
-    .bind(name)
-    .bind(format!("{prefix}-{name}"))
-    .fetch_one(pool)
-    .await
-    .expect("seed course")
+    sqlx::query_scalar(r#"INSERT INTO courses (name, course_code) VALUES ($1, $2) RETURNING id"#)
+        .bind(name)
+        .bind(format!("{prefix}-{name}"))
+        .fetch_one(pool)
+        .await
+        .expect("seed course")
 }
 
 async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str) {
@@ -179,11 +177,31 @@ async fn reorder_quiz() {
     assert_eq!(resp.status_code(), 400, "invalid type: {}", resp.text());
 
     // Teardown
-    sqlx::query("DELETE FROM quiz_questions WHERE quiz_id = $1").bind(quiz).execute(&pool).await.expect("teardown questions");
-    sqlx::query("DELETE FROM quizzes WHERE id = $1").bind(quiz).execute(&pool).await.expect("teardown quiz");
-    sqlx::query("DELETE FROM enrollments WHERE course_id = $1").bind(course).execute(&pool).await.expect("teardown enrollments");
-    sqlx::query("DELETE FROM courses WHERE id = $1").bind(course).execute(&pool).await.expect("teardown course");
-    sqlx::query("DELETE FROM users WHERE id = ANY($1)").bind(vec![teacher, student]).execute(&pool).await.expect("teardown users");
+    sqlx::query("DELETE FROM quiz_questions WHERE quiz_id = $1")
+        .bind(quiz)
+        .execute(&pool)
+        .await
+        .expect("teardown questions");
+    sqlx::query("DELETE FROM quizzes WHERE id = $1")
+        .bind(quiz)
+        .execute(&pool)
+        .await
+        .expect("teardown quiz");
+    sqlx::query("DELETE FROM enrollments WHERE course_id = $1")
+        .bind(course)
+        .execute(&pool)
+        .await
+        .expect("teardown enrollments");
+    sqlx::query("DELETE FROM courses WHERE id = $1")
+        .bind(course)
+        .execute(&pool)
+        .await
+        .expect("teardown course");
+    sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+        .bind(vec![teacher, student])
+        .execute(&pool)
+        .await
+        .expect("teardown users");
 }
 
 /// POST /courses/{courseId}/quizzes/{quizId}/validate_access_code
@@ -208,7 +226,10 @@ async fn validate_access_code() {
 
     // Correct code → true
     let resp = server
-        .post(&format!("/courses/{}/quizzes/{}/validate_access_code", course, quiz))
+        .post(&format!(
+            "/courses/{}/quizzes/{}/validate_access_code",
+            course, quiz
+        ))
         .add_header(axum::http::header::AUTHORIZATION, &teacher_auth)
         .json(&json!({ "access_code": "secret123" }))
         .await;
@@ -218,7 +239,10 @@ async fn validate_access_code() {
 
     // Wrong code → false
     let resp = server
-        .post(&format!("/courses/{}/quizzes/{}/validate_access_code", course, quiz))
+        .post(&format!(
+            "/courses/{}/quizzes/{}/validate_access_code",
+            course, quiz
+        ))
         .add_header(axum::http::header::AUTHORIZATION, &student_auth)
         .json(&json!({ "access_code": "wrong" }))
         .await;
@@ -227,10 +251,26 @@ async fn validate_access_code() {
     assert_eq!(body, json!(false), "wrong code body");
 
     // Teardown
-    sqlx::query("DELETE FROM quizzes WHERE id = $1").bind(quiz).execute(&pool).await.expect("teardown quiz");
-    sqlx::query("DELETE FROM enrollments WHERE course_id = $1").bind(course).execute(&pool).await.expect("teardown enrollments");
-    sqlx::query("DELETE FROM courses WHERE id = $1").bind(course).execute(&pool).await.expect("teardown course");
-    sqlx::query("DELETE FROM users WHERE id = ANY($1)").bind(vec![teacher, student]).execute(&pool).await.expect("teardown users");
+    sqlx::query("DELETE FROM quizzes WHERE id = $1")
+        .bind(quiz)
+        .execute(&pool)
+        .await
+        .expect("teardown quiz");
+    sqlx::query("DELETE FROM enrollments WHERE course_id = $1")
+        .bind(course)
+        .execute(&pool)
+        .await
+        .expect("teardown enrollments");
+    sqlx::query("DELETE FROM courses WHERE id = $1")
+        .bind(course)
+        .execute(&pool)
+        .await
+        .expect("teardown course");
+    sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+        .bind(vec![teacher, student])
+        .execute(&pool)
+        .await
+        .expect("teardown users");
 }
 
 /// GET /courses/{courseId}/quizzes/{quizId}/statistics
@@ -267,18 +307,50 @@ async fn quiz_statistics() {
         .await;
     assert_eq!(resp.status_code(), 200, "teacher stats: {}", resp.text());
     let body: Value = resp.json();
-    assert!(body.get("quiz_statistics").is_some(), "missing quiz_statistics key: {}", body);
+    assert!(
+        body.get("quiz_statistics").is_some(),
+        "missing quiz_statistics key: {}",
+        body
+    );
     let stats = &body["quiz_statistics"];
-    assert!(stats.is_array(), "quiz_statistics should be array: {}", body);
+    assert!(
+        stats.is_array(),
+        "quiz_statistics should be array: {}",
+        body
+    );
     assert_eq!(stats.as_array().unwrap().len(), 1, "one stats entry");
     let entry = &stats[0];
     assert_eq!(entry["quiz_id"], json!(quiz), "quiz_id matches");
-    assert_eq!(entry["submission_statistics"]["unique_count"], json!(0), "no submissions yet");
+    assert_eq!(
+        entry["submission_statistics"]["unique_count"],
+        json!(0),
+        "no submissions yet"
+    );
 
     // Teardown
-    sqlx::query("DELETE FROM quiz_questions WHERE quiz_id = $1").bind(quiz).execute(&pool).await.expect("teardown questions");
-    sqlx::query("DELETE FROM quizzes WHERE id = $1").bind(quiz).execute(&pool).await.expect("teardown quiz");
-    sqlx::query("DELETE FROM enrollments WHERE course_id = $1").bind(course).execute(&pool).await.expect("teardown enrollments");
-    sqlx::query("DELETE FROM courses WHERE id = $1").bind(course).execute(&pool).await.expect("teardown course");
-    sqlx::query("DELETE FROM users WHERE id = ANY($1)").bind(vec![teacher, student]).execute(&pool).await.expect("teardown users");
+    sqlx::query("DELETE FROM quiz_questions WHERE quiz_id = $1")
+        .bind(quiz)
+        .execute(&pool)
+        .await
+        .expect("teardown questions");
+    sqlx::query("DELETE FROM quizzes WHERE id = $1")
+        .bind(quiz)
+        .execute(&pool)
+        .await
+        .expect("teardown quiz");
+    sqlx::query("DELETE FROM enrollments WHERE course_id = $1")
+        .bind(course)
+        .execute(&pool)
+        .await
+        .expect("teardown enrollments");
+    sqlx::query("DELETE FROM courses WHERE id = $1")
+        .bind(course)
+        .execute(&pool)
+        .await
+        .expect("teardown course");
+    sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+        .bind(vec![teacher, student])
+        .execute(&pool)
+        .await
+        .expect("teardown users");
 }

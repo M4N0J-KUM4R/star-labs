@@ -1969,11 +1969,10 @@ async fn get_quiz_statistics(
         return Err(ApiError::Forbidden);
     }
 
-    let quiz: Option<(String,)> =
-        sqlx::query_as("SELECT quiz_type FROM quizzes WHERE id = $1")
-            .bind(quiz_id)
-            .fetch_optional(&state.db)
-            .await?;
+    let quiz: Option<(String,)> = sqlx::query_as("SELECT quiz_type FROM quizzes WHERE id = $1")
+        .bind(quiz_id)
+        .fetch_optional(&state.db)
+        .await?;
     let (quiz_type,) = quiz.ok_or(ApiError::NotFound)?;
 
     let all_versions = query_bool(&params, "all_versions");
@@ -1981,8 +1980,7 @@ async fn get_quiz_statistics(
     // question_statistics: empty array as we don't store per-question aggregates
     let question_stats: Value = json!([]);
 
-    let submission_stats =
-        load_submission_stats(&state.db, quiz_id, all_versions).await?;
+    let submission_stats = load_submission_stats(&state.db, quiz_id, all_versions).await?;
 
     let stats = json!({
         "quiz_statistics": [{
@@ -2029,29 +2027,38 @@ async fn reorder_quiz(
 
     for (idx, item) in order.iter().enumerate() {
         let item_type = item.get("type").and_then(Value::as_str);
-        let id = item.get("id").and_then(|v| v.as_i64()).ok_or_else(|| {
-            ApiError::BadRequest("each order item needs {type, id}".into())
-        })?;
+        let id = item
+            .get("id")
+            .and_then(|v| v.as_i64())
+            .ok_or_else(|| ApiError::BadRequest("each order item needs {type, id}".into()))?;
         let position = (idx + 1) as i32;
 
         match item_type {
             Some("question") => {
-                sqlx::query("UPDATE quiz_questions SET position = $2 WHERE id = $1 AND quiz_id = $3")
-                    .bind(id)
-                    .bind(position)
-                    .bind(quiz_id)
-                    .execute(&state.db)
-                    .await?;
+                sqlx::query(
+                    "UPDATE quiz_questions SET position = $2 WHERE id = $1 AND quiz_id = $3",
+                )
+                .bind(id)
+                .bind(position)
+                .bind(quiz_id)
+                .execute(&state.db)
+                .await?;
             }
             Some("group") => {
-                sqlx::query("UPDATE quiz_question_groups SET position = $2 WHERE id = $1 AND quiz_id = $3")
-                    .bind(id)
-                    .bind(position)
-                    .bind(quiz_id)
-                    .execute(&state.db)
-                    .await?;
+                sqlx::query(
+                    "UPDATE quiz_question_groups SET position = $2 WHERE id = $1 AND quiz_id = $3",
+                )
+                .bind(id)
+                .bind(position)
+                .bind(quiz_id)
+                .execute(&state.db)
+                .await?;
             }
-            _ => return Err(ApiError::BadRequest("type must be 'question' or 'group'".into())),
+            _ => {
+                return Err(ApiError::BadRequest(
+                    "type must be 'question' or 'group'".into(),
+                ))
+            }
         }
     }
 
