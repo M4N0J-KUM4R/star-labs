@@ -1282,8 +1282,8 @@ async fn bounced_communication_channels(
             cc.last_bounce_at,
             cc.last_bounce_summary
         FROM communication_channels cc
-        JOIN users u ON u.id = cc.user_id
-        WHERE u.account_id = $1
+        JOIN account_users au ON au.user_id = cc.user_id
+        WHERE au.account_id = $1
           AND cc.bounce_count > 0
           AND cc.workflow_state != 'retired'
         ORDER BY cc.last_bounce_at DESC NULLS LAST, cc.id DESC

@@ -52,8 +52,12 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
         jwt_secret: JWT_SECRET.to_string(),
     };
 
-    let server =
-        TestServer::new(star_notifications::router().with_state(state)).expect("build TestServer");
+    let server = TestServer::new(
+        axum::Router::new()
+            .nest("/api/v1", star_notifications::router())
+            .with_state(state),
+    )
+    .expect("build TestServer");
     Some((server, pool, run_prefix()))
 }
 
@@ -141,7 +145,7 @@ async fn list_user_channels_self_returns_own_channels() {
         resp.status_code(),
         200,
         "self returns 200: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
     let body: Value = resp.json::<Value>();
     assert!(
@@ -198,7 +202,7 @@ async fn list_user_channels_admin_can_read_other_user() {
         resp.status_code(),
         200,
         "admin reading other user: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
     let body: Value = resp.json::<Value>();
     assert!(body.is_array(), "response must be an array");
@@ -245,7 +249,7 @@ async fn list_user_channels_student_cannot_read_other_user() {
         resp.status_code(),
         403,
         "student reading other user must be 403: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
 
     // Clean up
@@ -367,7 +371,7 @@ async fn create_channel_email_ok() {
         resp.status_code(),
         200,
         "create email channel: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
     let body: Value = resp.json::<Value>();
     assert_eq!(body["address"], "newemail@example.edu");
@@ -417,7 +421,7 @@ async fn create_channel_push_requires_token() {
         resp.status_code(),
         400,
         "push without token: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
 }
 
@@ -446,7 +450,7 @@ async fn create_channel_push_with_token_ok() {
         resp.status_code(),
         200,
         "push with token: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
     let body: Value = resp.json::<Value>();
     assert_eq!(body["type"], "push");
@@ -479,7 +483,7 @@ async fn create_channel_duplicate_returns_400() {
         resp.status_code(),
         400,
         "duplicate channel must be 400: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
 }
 
@@ -504,12 +508,7 @@ async fn create_channel_invalid_email_returns_400() {
         .json(&payload)
         .await;
 
-    assert_eq!(
-        resp.status_code(),
-        400,
-        "invalid email: {:#?}",
-        resp.json::<Value>()
-    );
+    assert_eq!(resp.status_code(), 400, "invalid email: {:#?}", resp.text());
 }
 
 #[tokio::test]
@@ -533,12 +532,7 @@ async fn create_channel_missing_type_returns_400() {
         .json(&payload)
         .await;
 
-    assert_eq!(
-        resp.status_code(),
-        400,
-        "missing type: {:#?}",
-        resp.json::<Value>()
-    );
+    assert_eq!(resp.status_code(), 400, "missing type: {:#?}", resp.text());
 }
 
 #[tokio::test]
@@ -562,12 +556,7 @@ async fn create_channel_invalid_type_returns_400() {
         .json(&payload)
         .await;
 
-    assert_eq!(
-        resp.status_code(),
-        400,
-        "invalid type: {:#?}",
-        resp.json::<Value>()
-    );
+    assert_eq!(resp.status_code(), 400, "invalid type: {:#?}", resp.text());
 }
 
 #[tokio::test]
@@ -682,7 +671,7 @@ async fn create_channel_nested_communication_channel_payload() {
         resp.status_code(),
         200,
         "nested payload: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
     let body: Value = resp.json::<Value>();
     assert_eq!(body["address"], "nested@example.edu");
@@ -728,7 +717,7 @@ async fn delete_channel_owner_ok() {
         resp.status_code(),
         200,
         "owner delete must return 200 with channel JSON: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
     let body: Value = resp.json::<Value>();
     assert_eq!(
@@ -757,7 +746,7 @@ async fn delete_channel_nonexistent_returns_404() {
         resp.status_code(),
         404,
         "delete nonexistent: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
 }
 
@@ -786,7 +775,7 @@ async fn delete_channel_other_user_returns_403() {
         resp.status_code(),
         403,
         "deleting another user's channel must be 403: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
 }
 
@@ -813,7 +802,7 @@ async fn delete_channel_already_retired_returns_404() {
         resp.status_code(),
         404,
         "deleting already-retired channel must be 404: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
 }
 
@@ -841,7 +830,7 @@ async fn bounced_channels_requires_admin() {
         resp.status_code(),
         403,
         "non-admin must get 403: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
 }
 
@@ -868,7 +857,7 @@ async fn bounced_channels_unknown_account_returns_404() {
         resp.status_code(),
         404,
         "unknown account must be 404: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
 }
 
@@ -889,18 +878,20 @@ async fn bounced_channels_returns_envelope_with_channels_key() {
             .expect("seed account");
 
     let admin_id = seed_user(&pool, &prefix, "bounce-acct-admin", "admin").await;
-    sqlx::query("UPDATE users SET account_id = $1 WHERE id = $2")
+    sqlx::query("INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, $3)")
         .bind(account_id)
         .bind(admin_id)
+        .bind("admin")
         .execute(&pool)
         .await
         .expect("link user to account");
 
     // Bounced channel for a user in this account
     let user_id = seed_user(&pool, &prefix, "bounce-channel-user", "student").await;
-    sqlx::query("UPDATE users SET account_id = $1 WHERE id = $2")
+    sqlx::query("INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, $3)")
         .bind(account_id)
         .bind(user_id)
+        .bind("student")
         .execute(&pool)
         .await
         .expect("link user to account");
@@ -924,7 +915,7 @@ async fn bounced_channels_returns_envelope_with_channels_key() {
         resp.status_code(),
         200,
         "bounced channels: {:#?}",
-        resp.json::<Value>()
+        resp.text()
     );
     let body: Value = resp.json::<Value>();
     assert!(
@@ -990,17 +981,19 @@ async fn bounced_channels_excludes_retired_channels() {
             .expect("seed account");
 
     let admin_id = seed_user(&pool, &prefix, "bounce-retired-admin", "admin").await;
-    sqlx::query("UPDATE users SET account_id = $1 WHERE id = $2")
+    sqlx::query("INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, $3)")
         .bind(account_id)
         .bind(admin_id)
+        .bind("admin")
         .execute(&pool)
         .await
         .expect("link user to account");
 
     let user_id = seed_user(&pool, &prefix, "bounce-retired-user", "student").await;
-    sqlx::query("UPDATE users SET account_id = $1 WHERE id = $2")
+    sqlx::query("INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, $3)")
         .bind(account_id)
         .bind(user_id)
+        .bind("student")
         .execute(&pool)
         .await
         .expect("link user to account");
