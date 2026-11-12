@@ -656,16 +656,14 @@ async fn contract_bulk_temporary_status_limit_caps_at_100() {
     let _ = course;
 
     // Seed 110 users (over the 100 cap).
-    let user_ids: Vec<i64> = (0..110).map(|i| i).collect();
+    let user_ids: Vec<i64> = (0..110).collect();
     let _ = user_ids;
 
     // We can't easily create 110 users inline without making the test too heavy,
     // so instead we verify the limit param is accepted without error by passing
     // a large limit value and confirming the response is still 200.
     let resp = server
-        .get(&format!(
-            "/temporary_enrollment_status?user_ids[]=1&user_ids[]=2&limit=500"
-        ))
+        .get("/temporary_enrollment_status?user_ids[]=1&user_ids[]=2&limit=500")
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 

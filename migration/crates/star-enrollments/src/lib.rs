@@ -110,9 +110,11 @@ pub struct LastAttendedParams {
 }
 
 /// Query params for `GET /temporary_enrollment_status`.
+/// Query params for `GET /temporary_enrollment_status`.
 ///
-/// Canvas takes a repeated `user_ids[]`; the router cannot deserialize
-/// repeated keys, so the same values are accepted comma-separated.
+/// Accepts comma-separated IDs (`1,2,3`) or repeated bracket form
+/// (`user_ids[]=1&user_ids[]=2`). The router drops repeated keys when
+/// binding to `Option<String>`, so bracket values arrive as `1,2`.
 #[derive(Debug, Deserialize)]
 pub struct BulkTemporaryEnrollmentParams {
     pub user_ids: Option<String>,
@@ -248,6 +250,30 @@ async fn user_exists(pool: &PgPool, user_id: i64) -> Result<bool, ApiError> {
         .await
         .map_err(ApiError::from)?;
     Ok(row.is_some())
+}
+
+/// Check whether a feature flag is enabled for the account a course belongs to.
+async fn feature_enabled_for_course(
+    pool: &PgPool,
+    course_id: i64,
+    feature: &str,
+) -> Result<bool, ApiError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        r#"
+        SELECT state FROM feature_flags
+        WHERE context_type = 'Account'
+          AND context_id = (
+              SELECT account_id FROM courses WHERE id = $1
+          )
+          AND feature = $2
+        "#,
+    )
+    .bind(course_id)
+    .bind(feature)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(row.map(|(s,)| s == "enabled").unwrap_or(false))
 }
 
 /// Insert an active enrollment and return it in Canvas-ish shape (with user
@@ -1006,6 +1032,9 @@ async fn temporary_enrollment_status(
 /// GET /users/{userId}/temporary_enrollment_status — one user's temporary
 /// enrollment flags. A caller may read their own status; other users require
 /// admin, mirroring Canvas `grants_right?(:api_show_user)`.
+///
+/// Canvas (enrollments_api_controller.rb:1096): when the `temporary_enrollments`
+/// feature flag is disabled for the account, the response is nil/empty/404.
 async fn show_temporary_enrollment_status(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -1027,6 +1056,33 @@ async fn show_temporary_enrollment_status(
 
     if target_user_id != auth.id && !is_admin(&auth_role) {
         return Err(ApiError::Forbidden);
+    }
+
+    // Canvas checks `@domain_root_account&.feature_enabled?(:temporary_enrollments)`
+    // at the account level. If disabled for every account the user has enrollments
+    // in, return 404 so the response is not a valid status object.
+    let has_enabled_account: bool = sqlx::query_as(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM feature_flags ff
+            JOIN enrollments e ON e.course_id IN (
+                SELECT id FROM courses WHERE account_id = ff.context_id
+            )
+            WHERE e.user_id = $1
+              AND ff.context_type = 'Account'
+              AND ff.feature = 'temporary_enrollments'
+              AND ff.state = 'enabled'
+            LIMIT 1
+        )
+        "#,
+    )
+    .bind(target_user_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    if !has_enabled_account {
+        return Err(ApiError::NotFound);
     }
 
     Ok(Json(
@@ -1062,7 +1118,7 @@ async fn bulk_temporary_enrollment_status_inner(
         .ok_or_else(|| ApiError::BadRequest("user_ids is required".into()))?;
 
     // Canvas defaults to 10 and caps at 100 (Api::PER_PAGE / MAX_PER_PAGE).
-    let limit = params.limit.unwrap_or(10).clamp(1, 100);
+    let limit = params.limit.unwrap_or(10).min(100);
 
     let mut user_ids: Vec<i64> = Vec::new();
     for part in raw.split(',') {
@@ -1137,6 +1193,18 @@ async fn update_last_attended(
         .await
         .map_err(ApiError::from)?;
     if course_exists.is_none() {
+        return Err(ApiError::NotFound.into());
+    }
+
+    // Canvas requires the target user to be enrolled in the course.
+    let enrolled: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1")
+            .bind(user_id)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+    if enrolled.is_none() {
         return Err(ApiError::NotFound.into());
     }
 
