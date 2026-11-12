@@ -94,7 +94,6 @@ pub struct DateDetails {
 
 #[derive(Debug, sqlx::FromRow)]
 struct DateRow {
-    id: i64,
     due_at: Option<DateTime<Utc>>,
     unlock_at: Option<DateTime<Utc>>,
     lock_at: Option<DateTime<Utc>>,
@@ -253,7 +252,7 @@ async fn load_details(
 ) -> Result<DateDetails, ApiError> {
     let stored: Option<DateRow> = sqlx::query_as(
         r#"
-        SELECT id, due_at, unlock_at, lock_at, only_visible_to_overrides
+        SELECT due_at, unlock_at, lock_at, only_visible_to_overrides
         FROM learning_object_dates
         WHERE learning_object_type = $1 AND learning_object_id = $2
         "#,
