@@ -889,7 +889,7 @@ pub async fn role_update(
              base_role_type = COALESCE($5, base_role_type),
              workflow_state = COALESCE($6, workflow_state),
              updated_at = now()
-         WHERE id = $1 AND account_id = $2
+         WHERE id = $1 AND account_id = $2 AND workflow_state <> 'deleted'
          RETURNING {ROLE_COLUMNS}"
     ))
     .bind(role_id)
@@ -903,16 +903,7 @@ pub async fn role_update(
 
     match updated {
         Some(role) => Ok(role),
-        None => {
-            // 404 when the role is already soft-deleted (distinguish from
-            // built-in / truly missing, which reject_builtin_or_missing handles).
-            if let Ok(role) = fetch_role(db, account_id, role_id).await {
-                if role.workflow_state == "deleted" {
-                    return Err(ApiError::NotFound);
-                }
-            }
-            Err(reject_builtin_or_missing(db, account_id, role_id).await)
-        }
+        None => Err(reject_builtin_or_missing(db, account_id, role_id).await),
     }
 }
 
@@ -939,15 +930,7 @@ pub async fn role_delete(
 
     match deleted {
         Some(role) => Ok(role),
-        None => {
-            // 404 when the role is already soft-deleted.
-            if let Ok(role) = fetch_role(db, account_id, role_id).await {
-                if role.workflow_state == "deleted" {
-                    return Err(ApiError::NotFound);
-                }
-            }
-            Err(reject_builtin_or_missing(db, account_id, role_id).await)
-        }
+        None => Err(reject_builtin_or_missing(db, account_id, role_id).await),
     }
 }
 
@@ -1544,7 +1527,7 @@ mod tests {
         let listed = roles_list(&pool, admin_id, account_id)
             .await
             .expect("empty list");
-        assert!(listed.is_empty());
+        assert!(listed.iter().all(|r| r.account_id.is_none()));
 
         let input = RoleApiInput {
             label: Some("Grader".to_string()),
@@ -1577,7 +1560,12 @@ mod tests {
         let listed = roles_list(&pool, admin_id, account_id)
             .await
             .expect("list roles");
-        assert_eq!(listed, vec![created.clone()]);
+        let custom: Vec<_> = listed
+            .iter()
+            .filter(|r| r.account_id == Some(account_id))
+            .cloned()
+            .collect();
+        assert_eq!(custom, vec![created.clone()]);
 
         let shown = role_show(&pool, admin_id, account_id, created.id)
             .await
@@ -1639,7 +1627,7 @@ mod tests {
         let empty = roles_list(&pool, admin_id, account_id)
             .await
             .expect("list after delete");
-        assert!(empty.is_empty());
+        assert!(empty.iter().all(|r| r.account_id.is_none()));
 
         let builtin_delete =
             role_delete(&pool, admin_id, account_id, Role::Teacher.builtin_role_id()).await;
