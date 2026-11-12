@@ -1528,7 +1528,7 @@ async fn sso_settings_show_and_update() {
         "update sso: {}",
         update_resp.text()
     );
-    let updated: Value = update_resp.json::<serde_json::Value>()["sso_settings"];
+    let updated: Value = update_resp.json::<serde_json::Value>()["sso_settings"].clone();
     assert_eq!(updated["login_handle_name"], "Username");
     assert_eq!(updated["change_password_url"], "https://example.org/reset");
     assert_eq!(
@@ -1543,7 +1543,7 @@ async fn sso_settings_show_and_update() {
         .get("/accounts/1/sso_settings")
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .await;
-    let get2_body: Value = get2_resp.json::<serde_json::Value>()["sso_settings"];
+    let get2_body: Value = get2_resp.json::<serde_json::Value>()["sso_settings"].clone();
     assert_eq!(get2_body["login_handle_name"], "Username");
 
     cleanup(&pool, &prefix).await;
