@@ -14,4 +14,7 @@ star-common = { path = "../star-common" }
 star-auth = { path = "../star-auth" }
 
 [dev-dependencies]
-reqwest = { version = "0.12", features = ["blocking", "json"] }
+star-db = { path = "../star-db" }
+tokio = { workspace = true }
+axum-test = { workspace = true }
+reqwest = { workspace = true, features = ["blocking"] }
