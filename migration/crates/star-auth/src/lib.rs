@@ -76,12 +76,21 @@ where
         // Load the user's current role from the database. The token's role
         // claim is advisory only and never used for authorization; users
         // deleted since the token was minted are rejected.
-        let (role,): (String,) = sqlx::query_as("SELECT role FROM users WHERE id = $1")
-            .bind(claims.sub)
-            .fetch_optional(&app.db)
-            .await
-            .map_err(ApiError::from)?
-            .ok_or(ApiError::Unauthorized)?;
+        let (role, last_logged_out): (String, Option<chrono::DateTime<chrono::Utc>>) =
+            sqlx::query_as("SELECT role, last_logged_out FROM users WHERE id = $1")
+                .bind(claims.sub)
+                .fetch_optional(&app.db)
+                .await
+                .map_err(ApiError::from)?
+                .ok_or(ApiError::Unauthorized)?;
+
+        // Tokens minted before the last logout are no longer valid. The
+        // token lifetime is fixed by create_token, so issued-at is derived
+        // from exp without adding another claim.
+        let issued_at = claims.exp as i64 - TOKEN_EXPIRY_SECS as i64;
+        if last_logged_out.is_some_and(|last| issued_at < last.timestamp()) {
+            return Err(ApiError::Unauthorized);
+        }
 
         Ok(AuthUser {
             id: claims.sub,
