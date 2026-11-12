@@ -134,7 +134,7 @@ async fn list_user_channels_self_returns_own_channels() {
     let token = auth_header(&pool, user_id, "student");
     let resp = server
         .get(&format!("/api/v1/users/self/communication_channels"))
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .await;
 
     assert_eq!(
@@ -191,7 +191,7 @@ async fn list_user_channels_admin_can_read_other_user() {
     let admin_token = auth_header(&pool, admin_id, "admin");
     let resp = server
         .get(&format!("/api/v1/users/{target_id}/communication_channels"))
-        .header("Authorization", &admin_token)
+        .add_header(axum::http::header::AUTHORIZATION, admin_token.as_str())
         .await;
 
     assert_eq!(
@@ -238,7 +238,7 @@ async fn list_user_channels_student_cannot_read_other_user() {
     let token_a = auth_header(&pool, student_a, "student");
     let resp = server
         .get(&format!("/api/v1/users/{student_b}/communication_channels"))
-        .header("Authorization", &token_a)
+        .add_header(axum::http::header::AUTHORIZATION, token_a.as_str())
         .await;
 
     assert_eq!(
@@ -277,7 +277,7 @@ async fn list_user_channels_unknown_user_returns_404() {
     // 99999999 is extremely unlikely to exist
     let resp = server
         .get("/api/v1/users/99999999/communication_channels")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .await;
 
     assert_eq!(resp.status_code(), 404, "unknown user must be 404");
@@ -305,7 +305,7 @@ async fn list_user_channels_excludes_retired() {
     let token = auth_header(&pool, user_id, "student");
     let resp = server
         .get(&format!("/api/v1/users/self/communication_channels"))
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .await;
 
     assert_eq!(resp.status_code(), 200);
@@ -359,7 +359,7 @@ async fn create_channel_email_ok() {
     });
     let resp = server
         .post("/api/v1/users/self/communication_channels")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .json(&payload)
         .await;
 
@@ -409,7 +409,7 @@ async fn create_channel_push_requires_token() {
     });
     let resp = server
         .post("/api/v1/users/self/communication_channels")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .json(&payload)
         .await;
 
@@ -438,7 +438,7 @@ async fn create_channel_push_with_token_ok() {
     });
     let resp = server
         .post("/api/v1/users/self/communication_channels")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .json(&payload)
         .await;
 
@@ -471,7 +471,7 @@ async fn create_channel_duplicate_returns_400() {
     });
     let resp = server
         .post("/api/v1/users/self/communication_channels")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .json(&payload)
         .await;
 
@@ -500,7 +500,7 @@ async fn create_channel_invalid_email_returns_400() {
     });
     let resp = server
         .post("/api/v1/users/self/communication_channels")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .json(&payload)
         .await;
 
@@ -529,7 +529,7 @@ async fn create_channel_missing_type_returns_400() {
     });
     let resp = server
         .post("/api/v1/users/self/communication_channels")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .json(&payload)
         .await;
 
@@ -558,7 +558,7 @@ async fn create_channel_invalid_type_returns_400() {
     });
     let resp = server
         .post("/api/v1/users/self/communication_channels")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .json(&payload)
         .await;
 
@@ -588,7 +588,7 @@ async fn create_channel_student_cannot_skip_confirmation() {
     });
     let resp = server
         .post("/api/v1/users/self/communication_channels")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .json(&payload)
         .await;
 
@@ -630,7 +630,7 @@ async fn create_channel_admin_can_skip_confirmation() {
     });
     let resp = server
         .post("/api/v1/users/self/communication_channels")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .json(&payload)
         .await;
 
@@ -674,7 +674,7 @@ async fn create_channel_nested_communication_channel_payload() {
     });
     let resp = server
         .post("/api/v1/users/self/communication_channels")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .json(&payload)
         .await;
 
@@ -721,7 +721,7 @@ async fn delete_channel_owner_ok() {
         .delete(&format!(
             "/api/v1/users/self/communication_channels/{channel_id}"
         ))
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .await;
 
     assert_eq!(
@@ -750,7 +750,7 @@ async fn delete_channel_nonexistent_returns_404() {
 
     let resp = server
         .delete("/api/v1/users/self/communication_channels/999999")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .await;
 
     assert_eq!(
@@ -779,7 +779,7 @@ async fn delete_channel_other_user_returns_403() {
         .delete(&format!(
             "/api/v1/users/{user_b}/communication_channels/{channel_id}"
         ))
-        .header("Authorization", &token_a)
+        .add_header(axum::http::header::AUTHORIZATION, token_a.as_str())
         .await;
 
     assert_eq!(
@@ -806,7 +806,7 @@ async fn delete_channel_already_retired_returns_404() {
         .delete(&format!(
             "/api/v1/users/self/communication_channels/{channel_id}"
         ))
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .await;
 
     assert_eq!(
@@ -834,7 +834,7 @@ async fn bounced_channels_requires_admin() {
 
     let resp = server
         .get("/api/v1/accounts/1/bounced_communication_channels")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .await;
 
     assert_eq!(
@@ -861,7 +861,7 @@ async fn bounced_channels_unknown_account_returns_404() {
     // verify a non-existent account returns 404)
     let resp = server
         .get("/api/v1/accounts/999999/bounced_communication_channels")
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .await;
 
     assert_eq!(
@@ -918,7 +918,7 @@ async fn bounced_channels_returns_envelope_with_channels_key() {
         .get(&format!(
             "/api/v1/accounts/{account_id}/bounced_communication_channels"
         ))
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .await;
 
     assert_eq!(
@@ -1037,7 +1037,7 @@ async fn bounced_channels_excludes_retired_channels() {
         .get(&format!(
             "/api/v1/accounts/{account_id}/bounced_communication_channels"
         ))
-        .header("Authorization", &token)
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .await;
 
     assert_eq!(resp.status_code(), 200);
