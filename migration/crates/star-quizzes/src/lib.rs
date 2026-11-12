@@ -1913,15 +1913,15 @@ async fn load_submission_stats(
     include_all_versions: bool,
 ) -> Result<Value, ApiError> {
     let where_all = if include_all_versions {
-        "".to_string()
+        String::new()
     } else {
-        format!(
-            " AND id IN (SELECT MAX(id) FROM quiz_submissions \
-             WHERE quiz_id = $1 AND workflow_state IN ('complete', 'pending_review') \
-             GROUP BY user_id)"
-        )
+        " AND id IN (SELECT MAX(id) FROM quiz_submissions \
+         WHERE quiz_id = $1 AND workflow_state IN ('complete', 'pending_review') \
+         GROUP BY user_id)"
+            .to_string()
     };
 
+    #[allow(clippy::type_complexity)]
     let row: Option<(i64, Option<f64>, Option<f64>, Option<f64>, Option<f64>)> =
         sqlx::query_as(&format!(
             r#"
@@ -1973,7 +1973,7 @@ async fn get_quiz_statistics(
         .bind(quiz_id)
         .fetch_optional(&state.db)
         .await?;
-    let (quiz_type,) = quiz.ok_or(ApiError::NotFound)?;
+    let (_quiz_type,) = quiz.ok_or(ApiError::NotFound)?;
 
     let all_versions = query_bool(&params, "all_versions");
 
