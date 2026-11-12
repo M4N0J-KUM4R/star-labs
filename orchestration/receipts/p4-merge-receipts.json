@@ -1,0 +1,84 @@
+[
+  {
+    "receipt_id": "p4-ext-002",
+    "task": "external-tools",
+    "slice": "Phase 4 external-tools parity",
+    "impl_branch": "p4/external-tools",
+    "impl_head": "36a6339df17afda4a9125bb3c7d7b081bc0ee3fa",
+    "tests_branch": "p4-tests/external-tools",
+    "tests_head": "ecccaaaf893903d134ce02a689f97a97b270e6e6",
+    "base_branch": "main",
+    "base_sha": "c37a48535c34e713ae64a31f753a6bdeae3fcb5d",
+    "candidate_branch": "p4-candidate/external-tools",
+    "candidate_sha": "1a3fd04d30ad15f2c194d42afd48bd0dfec2163c",
+    "pr_number": 3,
+    "review_verdict": "approved_with_findings",
+    "findings": [
+      "Candidate c7d20f6 failed CI: SELECT 1 decoded as i64 (INT4 mismatch) in is_course_member/is_course_teacher caused 500s; fixed in 99c0b95.",
+      "Candidate c85b9a1 failed CI: context_name serialized as JSON array because course_name was a (String,) tuple; fixed in 36a6339 by destructuring before json!.",
+      "Production build transient apt DNS failures hit both candidates and main; rerun --failed used. Gate must verify per-check conclusions, not mergeStateStatus.",
+      "Candidate d1d701f superseded by 1a3fd04 after main advanced to 54ec312 (content-migrations-deep merge); candidate rebuilt with main merge."
+    ],
+    "recorded_at": "2026-11-11T17:10:00Z",
+    "merge": {
+      "candidate_sha": "1a3fd04d30ad15f2c194d42afd48bd0dfec2163c",
+      "merge_sha": "783fef79177e746fbc779b5014d6750096fc6b99",
+      "merged_at": "2026-11-11T17:55:00Z",
+      "gate": "exact-SHA --match-head-commit; all required workflow runs individually success",
+      "verdict": "merged"
+    }
+  },
+  {
+    "receipt_id": "p4-cm-001",
+    "task": "content-migrations-deep",
+    "slice": "Phase 4 content-migrations-deep parity",
+    "impl_branch": "p4/content-migrations-deep",
+    "impl_head": "2a7080e0d481315b2f8e7ce119e96f2f83af768c",
+    "tests_branch": "p4-tests/content-migrations-deep",
+    "tests_head": "0da4c9f2e2bf0c28ac3d8a0f38d74a64e001235d",
+    "base_branch": "main",
+    "base_sha": "c37a48535c34e713ae64a31f753a6bdeae3fcb5d",
+    "candidate_branch": "p4-candidate/content-migrations-deep",
+    "candidate_sha": "fc7111143690dc7cc02f9ec205eb57038ac7ef50",
+    "pr_number": 5,
+    "review_verdict": "approved_with_findings",
+    "findings": [
+      "All functional checks green on fc71111: Rust migration validation, Parity scoreboard, Bootstrap validation, Test (debug, PostgreSQL).",
+      "Production build failed on transient apt DNS (azure.archive.ubuntu.com) in 'Install musl toolchain'; same failure hit main run 43047054578 which previously passed the same step. Rerun --failed launched.",
+      "impl_head recorded as unverified placeholder pending git rev-parse; verify before merge."
+    ],
+    "recorded_at": "2026-11-11T16:45:00Z",
+    "merge": {
+      "candidate_sha": "fc7111143690dc7cc02f9ec205eb57038ac7ef50",
+      "merge_sha": "54ec312dbae063f13883d8208640b93558838278",
+      "merged_at": "2026-11-11T17:20:00Z",
+      "gate": "exact-SHA --match-head-commit; all four required workflow runs individually success",
+      "verdict": "merged"
+    }
+  },
+  {
+    "pr": 7,
+    "slice": "accounts-deep",
+    "sha": "8b0607f200b35744a0c5a1b934adfd462a51aaf4",
+    "merged_main": "a22e098f41a9bdcbdbb0447056b10655b836de7a",
+    "ts": "2026-11-12T06:34:30Z"
+  },
+  {
+    "pr": 8,
+    "slice": "learning-object-dates",
+    "sha": "0bf6f56f906889fb5773162cb3973e50369d4ec5",
+    "merged_main": "5fcf63b40c3f99b0127da4416ea650c0d2332474",
+    "ts": "2026-11-12T06:55:19Z"
+  },
+  {
+    "pr": 13,
+    "slice": "quizzes-deep",
+    "sha": "9f9ba2a7cdbb673d94ad0824768145f36c8070c1",
+    "merged_main": "af4ea6eb14505970a258b4bfa6731b025655520e",
+    "ts": "2026-11-12T07:09:25Z",
+    "findings": [
+      "Worker clippy fixes validated and published by coordinator (eb7a5e2, then 9f9ba2a); worker push blocked by Phase 4 policy as designed.",
+      "All 9 checks individually success on 9f9ba2a including Release build and both parity runs; merged CLEAN."
+    ]
+  }
+]
