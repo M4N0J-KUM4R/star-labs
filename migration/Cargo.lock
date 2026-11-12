@@ -2780,11 +2780,14 @@ name = "star-permissions"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "axum-test",
  "chrono",
  "serde",
+ "serde_json",
  "sqlx",
  "star-auth",
  "star-common",
+ "star-db",
  "tokio",
 ]
 
