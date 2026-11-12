@@ -882,9 +882,8 @@ async fn bounced_channels_returns_envelope_with_channels_key() {
 
     // Create an account, admin user associated with it, and a bounced channel
     let account_id: i64 =
-        sqlx::query_scalar("INSERT INTO accounts (name, domain) VALUES ($1, $2) RETURNING id")
+        sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
             .bind(format!("{prefix}-bounce-acct"))
-            .bind(format!("{prefix}-bounce.test.local"))
             .fetch_one(&pool)
             .await
             .expect("seed account");
@@ -984,9 +983,8 @@ async fn bounced_channels_excludes_retired_channels() {
     let _ = prefix;
 
     let account_id: i64 =
-        sqlx::query_scalar("INSERT INTO accounts (name, domain) VALUES ($1, $2) RETURNING id")
+        sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
             .bind(format!("{prefix}-bounce-retired-acct"))
-            .bind(format!("{prefix}-bounce-retired.test.local"))
             .fetch_one(&pool)
             .await
             .expect("seed account");

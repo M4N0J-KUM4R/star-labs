@@ -1302,8 +1302,8 @@ mod tests {
         authorize_channel_operation, authorize_preferences_read, authorize_preferences_write,
         derive_category, parse_preference_updates, parse_single_frequency, resolve_user_segment,
         router, validate_new_channel, BouncedChannelRow, BouncedChannelsResponse,
-        CommunicationChannel, CommunicationChannelPreferencesResponse, NotificationPolicyRow,
-        NotificationPreference, NotificationPreferencesResponse,
+        CommunicationChannelPreferencesResponse, NotificationPolicyRow, NotificationPreference,
+        NotificationPreferencesResponse,
     };
     use chrono::{DateTime, Utc};
     use star_auth::AuthUser;
