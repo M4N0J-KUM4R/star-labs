@@ -1543,7 +1543,7 @@ async fn sso_settings_show_and_update() {
         .get("/accounts/1/sso_settings")
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .await;
-    let get2_body: Value = get2_resp.json()["sso_settings"];
+    let get2_body: Value = get2_resp.json::<serde_json::Value>()["sso_settings"];
     assert_eq!(get2_body["login_handle_name"], "Username");
 
     cleanup(&pool, &prefix).await;
