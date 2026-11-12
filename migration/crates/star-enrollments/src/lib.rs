@@ -3,7 +3,7 @@
 //! Exposes `pub fn router() -> axum::Router<AppState>`.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, RawQuery, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -113,12 +113,91 @@ pub struct LastAttendedParams {
 /// Query params for `GET /temporary_enrollment_status`.
 ///
 /// Accepts comma-separated IDs (`1,2,3`) or repeated bracket form
-/// (`user_ids[]=1&user_ids[]=2`). The router drops repeated keys when
-/// binding to `Option<String>`, so bracket values arrive as `1,2`.
+/// (`user_ids[]=1&user_ids[]=2`). Both spellings are parsed manually via
+/// `RawQuery` to support repeated keys (which Axum's `Query` binder drops).
 #[derive(Debug, Deserialize)]
 pub struct BulkTemporaryEnrollmentParams {
     pub user_ids: Option<String>,
     pub limit: Option<usize>,
+}
+
+/// Minimal percent-decoding for raw query/body components.
+fn decode_query_component(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let high = (bytes[index + 1] as char).to_digit(16);
+                let low = (bytes[index + 2] as char).to_digit(16);
+                match (high, low) {
+                    (Some(high), Some(low)) => {
+                        decoded.push((high * 16 + low) as u8);
+                        index += 3;
+                    }
+                    _ => {
+                        decoded.push(b'%');
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+/// Parse `user_ids` from a raw query string, supporting both comma-separated
+/// (`1,2,3`) and repeated-bracket (`user_ids[]=1&user_ids[]=2`) forms.
+fn parse_bulk_enrollment_query(
+    raw_query: Option<&str>,
+) -> Result<(Vec<i64>, Option<i64>), ApiError> {
+    let mut user_ids: Vec<i64> = Vec::new();
+    let mut limit: Option<i64> = None;
+
+    let Some(raw_query) = raw_query else {
+        return Err(ApiError::BadRequest("user_ids is required".into()));
+    };
+
+    for pair in raw_query.split('&') {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = decode_query_component(raw_key).to_ascii_lowercase();
+        let value = decode_query_component(raw_value);
+
+        match key.as_str() {
+            "user_ids" | "user_ids[]" => {
+                for part in value.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+                    if let Ok(id) = part.parse::<i64>() {
+                        if !user_ids.contains(&id) {
+                            user_ids.push(id);
+                        }
+                    }
+                }
+            }
+            "limit" => {
+                if let Ok(l) = value.parse::<i64>() {
+                    limit = Some(l);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if user_ids.is_empty() {
+        return Err(ApiError::BadRequest("user_ids is required".into()));
+    }
+
+    Ok((user_ids, limit))
 }
 
 /// Error type for the Canvas lifecycle/list endpoints.
@@ -1060,7 +1139,7 @@ async fn show_temporary_enrollment_status(
 
     // Canvas checks `@domain_root_account&.feature_enabled?(:temporary_enrollments)`
     // at the account level. If disabled for every account the user has enrollments
-    // in, return 404 so the response is not a valid status object.
+    // in, return an empty 200 object so the response is not a valid status object.
     let has_enabled_account: bool = sqlx::query_as(
         r#"
         SELECT EXISTS (
@@ -1082,7 +1161,7 @@ async fn show_temporary_enrollment_status(
     .map_err(ApiError::from)?;
 
     if !has_enabled_account {
-        return Err(ApiError::NotFound);
+        return Ok(Json(json!({})));
     }
 
     Ok(Json(
@@ -1099,11 +1178,21 @@ async fn show_temporary_enrollment_status(
 async fn bulk_temporary_enrollment_status(
     State(state): State<AppState>,
     auth: AuthUser,
-    Query(params): Query<BulkTemporaryEnrollmentParams>,
+    RawQuery(raw_query): RawQuery,
 ) -> Response {
-    match bulk_temporary_enrollment_status_inner(&state, &auth, params).await {
+    let (user_ids, raw_limit) = match parse_bulk_enrollment_query(raw_query) {
+        Ok(x) => x,
+        Err(ApiError::BadRequest(_)) => {
+            return (StatusCode::BAD_REQUEST, Json(json!({}))).into_response()
+        }
+        Err(e) => return e.into_response(),
+    };
+
+    // Canvas defaults to 10 and caps at 100 (Api::PER_PAGE / MAX_PER_PAGE).
+    let limit = raw_limit.unwrap_or(10).clamp(1, 100);
+
+    match bulk_temporary_enrollment_status_inner(&state, &auth, user_ids, limit).await {
         Ok(value) => Json(value).into_response(),
-        Err(ApiError::BadRequest(_)) => (StatusCode::BAD_REQUEST, Json(json!({}))).into_response(),
         Err(e) => e.into_response(),
     }
 }
@@ -1111,28 +1200,10 @@ async fn bulk_temporary_enrollment_status(
 async fn bulk_temporary_enrollment_status_inner(
     state: &AppState,
     auth: &AuthUser,
-    params: BulkTemporaryEnrollmentParams,
+    mut user_ids: Vec<i64>,
+    limit: i64,
 ) -> Result<serde_json::Value, ApiError> {
-    let raw = params
-        .user_ids
-        .ok_or_else(|| ApiError::BadRequest("user_ids is required".into()))?;
-
-    // Canvas defaults to 10 and caps at 100 (Api::PER_PAGE / MAX_PER_PAGE).
-    let limit = params.limit.unwrap_or(10).min(100);
-
-    let mut user_ids: Vec<i64> = Vec::new();
-    for part in raw.split(',') {
-        if let Ok(id) = part.trim().parse::<i64>() {
-            if !user_ids.contains(&id) {
-                user_ids.push(id);
-            }
-        }
-    }
-    user_ids.truncate(limit);
-
-    if user_ids.is_empty() {
-        return Err(ApiError::BadRequest("user_ids is required".into()));
-    }
+    user_ids.truncate(limit as usize);
 
     let auth_role = get_user_role(&state.db, auth.id)
         .await?
