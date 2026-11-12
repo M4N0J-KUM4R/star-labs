@@ -35,7 +35,7 @@ fn run_prefix() -> String {
     format!(
         "auth-providers-tests-{}-{}",
         std::process::id(),
-        chrono::Utc::now().timestamp_millis() as i64 + n as i64
+        chrono::Utc::now().timestamp_millis() + n as i64
     )
 }
 
@@ -145,7 +145,6 @@ async fn list_auth_providers_returns_wrapped_array() {
             .is_some(),
         "list body must be wrapped in {{'authentication_providers': [...]}}: {body}"
     );
-    let arr = body["authentication_providers"].as_array().unwrap();
 
     cleanup(&pool, &prefix).await;
 }
