@@ -143,7 +143,7 @@ async fn list_user_channels_self_returns_own_channels() {
         "self returns 200: {:#?}",
         resp.json::<Value>()
     );
-    let body: Value = resp.json().await;
+    let body: Value = resp.json::<Value>().await;
     assert!(
         body.is_array(),
         "response must be an array of CommunicationChannel"
@@ -200,7 +200,7 @@ async fn list_user_channels_admin_can_read_other_user() {
         "admin reading other user: {:#?}",
         resp.json::<Value>()
     );
-    let body: Value = resp.json().await;
+    let body: Value = resp.json::<Value>().await;
     assert!(body.is_array(), "response must be an array");
     let found = body
         .as_array()
@@ -309,7 +309,7 @@ async fn list_user_channels_excludes_retired() {
         .await;
 
     assert_eq!(resp.status_code(), 200);
-    let body: Value = resp.json().await;
+    let body: Value = resp.json::<Value>().await;
     let addresses: Vec<_> = body
         .as_array()
         .unwrap()
@@ -369,7 +369,7 @@ async fn create_channel_email_ok() {
         "create email channel: {:#?}",
         resp.json::<Value>()
     );
-    let body: Value = resp.json().await;
+    let body: Value = resp.json::<Value>().await;
     assert_eq!(body["address"], "newemail@example.edu");
     assert_eq!(body["type"], "email");
     assert_eq!(
@@ -448,7 +448,7 @@ async fn create_channel_push_with_token_ok() {
         "push with token: {:#?}",
         resp.json::<Value>()
     );
-    let body: Value = resp.json().await;
+    let body: Value = resp.json::<Value>().await;
     assert_eq!(body["type"], "push");
     assert_eq!(body["workflow_state"], "unconfirmed");
 }
@@ -593,7 +593,7 @@ async fn create_channel_student_cannot_skip_confirmation() {
         .await;
 
     assert_eq!(resp.status_code(), 200);
-    let body: Value = resp.json().await;
+    let body: Value = resp.json::<Value>().await;
     assert_eq!(
         body["workflow_state"], "unconfirmed",
         "student with skip_confirmation=true must still be unconfirmed"
@@ -635,7 +635,7 @@ async fn create_channel_admin_can_skip_confirmation() {
         .await;
 
     assert_eq!(resp.status_code(), 200);
-    let body: Value = resp.json().await;
+    let body: Value = resp.json::<Value>().await;
     assert_eq!(
         body["workflow_state"], "active",
         "admin with skip_confirmation=true must be active"
@@ -684,7 +684,7 @@ async fn create_channel_nested_communication_channel_payload() {
         "nested payload: {:#?}",
         resp.json::<Value>()
     );
-    let body: Value = resp.json().await;
+    let body: Value = resp.json::<Value>().await;
     assert_eq!(body["address"], "nested@example.edu");
     assert_eq!(body["type"], "email");
 
@@ -730,7 +730,7 @@ async fn delete_channel_owner_ok() {
         "owner delete must return 200 with channel JSON: {:#?}",
         resp.json::<Value>()
     );
-    let body: Value = resp.json().await;
+    let body: Value = resp.json::<Value>().await;
     assert_eq!(
         body["workflow_state"], "retired",
         "deleted channel must be retired"
@@ -927,7 +927,7 @@ async fn bounced_channels_returns_envelope_with_channels_key() {
         "bounced channels: {:#?}",
         resp.json::<Value>()
     );
-    let body: Value = resp.json().await;
+    let body: Value = resp.json::<Value>().await;
     assert!(
         body.as_object()
             .unwrap()
@@ -1041,7 +1041,7 @@ async fn bounced_channels_excludes_retired_channels() {
         .await;
 
     assert_eq!(resp.status_code(), 200);
-    let body: Value = resp.json().await;
+    let body: Value = resp.json::<Value>().await;
     let channels = &body["communication_channels"];
     let addresses: Vec<_> = channels
         .as_array()
