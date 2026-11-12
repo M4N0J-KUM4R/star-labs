@@ -146,10 +146,6 @@ async fn list_auth_providers_returns_wrapped_array() {
         "list body must be wrapped in {{'authentication_providers': [...]}}: {body}"
     );
     let arr = body["authentication_providers"].as_array().unwrap();
-    assert!(
-        arr.is_array(),
-        "authentication_providers value must be an array"
-    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -223,7 +219,7 @@ async fn list_auth_providers_ordered_by_position_then_id() {
         .iter()
         .filter(|p| {
             let t = p["auth_type"].as_str().unwrap_or("");
-            t.starts_with(prefix)
+            t.starts_with(prefix.as_str())
         })
         .collect();
 
