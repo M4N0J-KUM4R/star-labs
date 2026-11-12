@@ -1048,7 +1048,7 @@ async fn create_personal_token(server: &TestServer, user: i64, role: &str, body:
         .json(&body)
         .await;
     assert_eq!(resp.status_code(), 200, "create token: {}", resp.text());
-    resp.json()
+    resp.json::<Value>()
 }
 
 #[tokio::test]
