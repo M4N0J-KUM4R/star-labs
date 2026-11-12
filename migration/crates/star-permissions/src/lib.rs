@@ -1613,7 +1613,7 @@ mod tests {
 
         let builtin_delete =
             role_delete(&pool, admin_id, account_id, Role::Teacher.builtin_role_id()).await;
-        assert!(matches!(builtin_delete, Err(ApiError::BadRequest)));
+        assert!(matches!(builtin_delete, Err(ApiError::BadRequest(_))));
 
         let missing_account = roles_list(&pool, admin_id, 99_999_999).await;
         assert!(matches!(missing_account, Err(ApiError::NotFound)));

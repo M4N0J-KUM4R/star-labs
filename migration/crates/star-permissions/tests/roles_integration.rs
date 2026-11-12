@@ -408,7 +408,8 @@ async fn create_role_conflict_on_duplicate_name() {
         &admin_bearer,
         "Duplicate",
         Some("student"),
-    );
+    )
+    .await;
 
     // Second create with same label → 409.
     let resp = server
