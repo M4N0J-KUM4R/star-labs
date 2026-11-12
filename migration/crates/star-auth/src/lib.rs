@@ -1524,17 +1524,14 @@ async fn destroy_authentication_provider(
 // SSO Settings (Canvas API v1 — /accounts/{id}/sso_settings)
 // ---------------------------------------------------------------------------
 
-/// SSO settings live in the accounts table (already altered by migration 0100).
-#[derive(Serialize)]
-struct SsoSettingsResponse {
-    login_handle_name: Option<String>,
-    change_password_url: Option<String>,
-    auth_discovery_url: Option<String>,
-    unknown_user_url: Option<String>,
-    login_help_url: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    discovery_page_active: Option<bool>,
-}
+type SsoSettingsRow = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<bool>,
+);
 
 /// GET /accounts/{account_id}/sso_settings — return current SSO settings.
 async fn show_sso_settings(
@@ -1544,14 +1541,7 @@ async fn show_sso_settings(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin(&auth)?;
 
-    let row: Option<(
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<bool>,
-    )> = sqlx::query_as(
+    let row: Option<SsoSettingsRow> = sqlx::query_as(
         "SELECT login_handle_name, change_password_url, auth_discovery_url,
                     unknown_user_url, login_help_url, discovery_page_active
              FROM accounts WHERE id = $1",
@@ -1611,22 +1601,6 @@ async fn update_sso_settings(
 
     let params = parse_sso_settings(raw);
 
-    // Build dynamic UPDATE from provided fields.
-    let mut set_clauses: Vec<String> = vec![];
-    let mut bind_idx = 1;
-
-    macro_rules! bind_opt {
-        ($field:expr, $col:expr) => {
-            if let Some(val) = params
-                .get(stringify!($field))
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-            {
-                set_clauses.push(format!("{} = ${}", $col, bind_idx));
-                bind_idx += 1;
-            }
-        };
-    }
-
     // Handle all possible SSO setting fields
     let mut new_login_handle_name: Option<Option<String>> = None;
     let mut new_change_password_url: Option<Option<String>> = None;
@@ -1668,6 +1642,7 @@ async fn update_sso_settings(
     {
         let mut sql = "UPDATE accounts SET ".to_string();
         let mut parts = vec![];
+        let mut bind_idx = 1;
 
         if new_login_handle_name.is_some() {
             parts.push(format!("login_handle_name = ${}", bind_idx));
@@ -1721,14 +1696,7 @@ async fn update_sso_settings(
     }
 
     // Return updated settings.
-    let updated: Option<(
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<bool>,
-    )> = sqlx::query_as(
+    let updated: Option<SsoSettingsRow> = sqlx::query_as(
         "SELECT login_handle_name, change_password_url, auth_discovery_url,
                     unknown_user_url, login_help_url, discovery_page_active
              FROM accounts WHERE id = $1",

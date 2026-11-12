@@ -1528,7 +1528,7 @@ async fn sso_settings_show_and_update() {
         "update sso: {}",
         update_resp.text()
     );
-    let updated: Value = update_resp.json()["sso_settings"];
+    let updated: Value = update_resp.json::<serde_json::Value>()["sso_settings"];
     assert_eq!(updated["login_handle_name"], "Username");
     assert_eq!(updated["change_password_url"], "https://example.org/reset");
     assert_eq!(
