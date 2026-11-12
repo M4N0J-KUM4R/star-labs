@@ -1032,10 +1032,10 @@ async fn create_account_role(
     Path(account_id): Path<i64>,
     auth: AuthUser,
     Json(body): Json<RoleRequest>,
-) -> Result<Json<RoleView>, ApiError> {
+) -> Result<(axum::http::StatusCode, Json<RoleView>), ApiError> {
     role_create(&state.db, auth.id, account_id, &body.into_input())
         .await
-        .map(Json)
+        .map(|view| (axum::http::StatusCode::CREATED, Json(view)))
 }
 
 async fn show_account_role(
