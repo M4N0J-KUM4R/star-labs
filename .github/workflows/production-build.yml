@@ -9,6 +9,7 @@ on:
   pull_request:
     paths:
       - 'migration/**'
+      - 'orchestration/**'
       - '.github/workflows/production-build.yml'
   workflow_dispatch:
 

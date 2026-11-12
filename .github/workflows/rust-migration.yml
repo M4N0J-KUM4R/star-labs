@@ -8,6 +8,7 @@ on:
   pull_request:
     paths:
       - 'migration/**'
+      - 'orchestration/**'
       - '.github/workflows/rust-migration.yml'
   workflow_dispatch:
 
