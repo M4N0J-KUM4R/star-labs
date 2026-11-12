@@ -190,6 +190,21 @@ pub fn router() -> Router<AppState> {
             get(show_personal_token).delete(destroy_personal_token),
         )
         .route("/login/oauth2/token", post(oauth2_token))
+        // Canvas account authentication providers + SSO settings.
+        .route(
+            "/accounts/{account_id}/authentication_providers",
+            get(list_authentication_providers).post(create_authentication_provider),
+        )
+        .route(
+            "/accounts/{account_id}/authentication_providers/{id}",
+            get(show_authentication_provider)
+                .put(update_authentication_provider)
+                .delete(destroy_authentication_provider),
+        )
+        .route(
+            "/accounts/{account_id}/sso_settings",
+            get(show_sso_settings).put(update_sso_settings),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -1284,6 +1299,438 @@ async fn oauth2_token(State(app): State<AppState>, params: OAuthTokenRequest) ->
             "The grant_type you requested is not currently supported",
         ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// Authentication providers (Canvas API v1 — /accounts/{id}/authentication_providers)
+// ---------------------------------------------------------------------------
+
+/// Canvas AuthenticationProvider shape (subset of Api::V1::AuthenticationProvider).
+/// auth_type is stored directly; all other settings live in the JSONB `settings` column.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct AuthenticationProvider {
+    pub id: i64,
+    pub account_id: i64,
+    pub auth_type: String,
+    pub position: Option<i32>,
+    pub settings: serde_json::Value,
+    pub workflow_state: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Flat parameters for POST/PUT /authentication_providers.
+/// Canvas wraps in `authentication_provider` or accepts flat params.
+#[derive(Debug, Default, Deserialize)]
+struct AuthProviderParams {
+    auth_type: Option<String>,
+    position: Option<i32>,
+    #[serde(flatten)]
+    settings: serde_json::Map<String, serde_json::Value>,
+}
+
+const AUTH_PROVIDER_SELECT: &str = r#"
+    SELECT id, account_id, auth_type, position, settings,
+           workflow_state, created_at, updated_at
+    FROM authentication_providers
+"#;
+
+/// Canvas-shaped AuthenticationProvider JSON (matches aac_json output).
+fn authentication_provider_json(ap: &AuthenticationProvider) -> serde_json::Value {
+    let mut obj = serde_json::json!({
+        "id": ap.id,
+        "account_id": ap.account_id,
+        "auth_type": ap.auth_type,
+        "position": ap.position,
+        "workflow_state": ap.workflow_state,
+        "created_at": ap.created_at,
+        "updated_at": ap.updated_at,
+    });
+    // Merge settings fields at the top level.
+    if let serde_json::Value::Object(m) = &ap.settings {
+        for (k, v) in m {
+            obj[k] = v.clone();
+        }
+    }
+    obj
+}
+
+/// Fetch a single authentication provider by id, or None if not found / deleted.
+async fn fetch_authentication_provider(
+    pool: &PgPool,
+    id: i64,
+) -> Result<AuthenticationProvider, ApiError> {
+    sqlx::query_as::<_, AuthenticationProvider>(&format!(
+        "{AUTH_PROVIDER_SELECT} WHERE id = $1 AND workflow_state <> 'deleted'"
+    ))
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?
+    .ok_or(ApiError::NotFound)
+}
+
+/// Parse incoming params: accepts `{"authentication_provider": {...}}` wrapper
+/// or flat params, matching Canvas's dual input style.
+fn parse_auth_provider_params(raw: serde_json::Value) -> Result<AuthProviderParams, ApiError> {
+    let params = raw.get("authentication_provider").cloned().unwrap_or(raw);
+    serde_json::from_value(params)
+        .map_err(|e| ApiError::BadRequest(format!("invalid auth provider params: {e}")))
+}
+
+/// GET /accounts/{account_id}/authentication_providers — list active providers.
+async fn list_authentication_providers(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Path(account_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
+
+    let providers: Vec<AuthenticationProvider> =
+        sqlx::query_as::<_, AuthenticationProvider>(&format!(
+            "{AUTH_PROVIDER_SELECT}
+         WHERE account_id = $1 AND workflow_state <> 'deleted'
+         ORDER BY position ASC NULLS LAST, id ASC"
+        ))
+        .bind(account_id)
+        .fetch_all(&app.db)
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "authentication_providers": providers
+            .iter()
+            .map(authentication_provider_json)
+            .collect::<Vec<_>>()
+    })))
+}
+
+/// POST /accounts/{account_id}/authentication_providers — create a provider.
+async fn create_authentication_provider(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Path(account_id): Path<i64>,
+    Json(raw): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
+
+    let params = parse_auth_provider_params(raw)?;
+    let auth_type = params
+        .auth_type
+        .ok_or_else(|| ApiError::Validation("auth_type is required".into()))?;
+
+    // position defaults to append
+    let position = params.position.unwrap_or(0);
+
+    let id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO authentication_providers
+            (account_id, auth_type, position, settings, workflow_state)
+        VALUES ($1, $2, $3, $4, 'active')
+        RETURNING id
+        "#,
+    )
+    .bind(account_id)
+    .bind(&auth_type)
+    .bind(position)
+    .bind(serde_json::Value::Object(params.settings))
+    .fetch_one(&app.db)
+    .await?;
+
+    let ap = fetch_authentication_provider(&app.db, id).await?;
+    Ok(Json(authentication_provider_json(&ap)))
+}
+
+/// GET /accounts/{account_id}/authentication_providers/{id} — get one provider.
+async fn show_authentication_provider(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Path((_account_id, id)): Path<(i64, i64)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
+    let ap = fetch_authentication_provider(&app.db, id).await?;
+    Ok(Json(authentication_provider_json(&ap)))
+}
+
+/// PUT /accounts/{account_id}/authentication_providers/{id} — update a provider.
+async fn update_authentication_provider(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Path((_account_id, id)): Path<(i64, i64)>,
+    Json(raw): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
+
+    let existing = fetch_authentication_provider(&app.db, id).await?;
+    let params = parse_auth_provider_params(raw)?;
+
+    let position = params.position.unwrap_or(existing.position.unwrap_or(0));
+    let settings = if params.settings.is_empty() {
+        existing.settings.clone()
+    } else {
+        // Merge: existing settings then overlay new ones
+        let mut merged = existing
+            .settings
+            .clone()
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        for (k, v) in params.settings {
+            merged.insert(k, v);
+        }
+        serde_json::Value::Object(merged)
+    };
+
+    sqlx::query(
+        r#"
+        UPDATE authentication_providers
+        SET position = $2, settings = $3, updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .bind(position)
+    .bind(&settings)
+    .execute(&app.db)
+    .await?;
+
+    let ap = fetch_authentication_provider(&app.db, id).await?;
+    Ok(Json(authentication_provider_json(&ap)))
+}
+
+/// DELETE /accounts/{account_id}/authentication_providers/{id} — soft delete.
+async fn destroy_authentication_provider(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Path((_account_id, id)): Path<(i64, i64)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
+
+    let ap = fetch_authentication_provider(&app.db, id).await?;
+
+    sqlx::query(
+        "UPDATE authentication_providers SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&app.db)
+    .await?;
+
+    let mut deleted = ap;
+    deleted.workflow_state = "deleted".to_string();
+    deleted.updated_at = Utc::now();
+    Ok(Json(authentication_provider_json(&deleted)))
+}
+
+// ---------------------------------------------------------------------------
+// SSO Settings (Canvas API v1 — /accounts/{id}/sso_settings)
+// ---------------------------------------------------------------------------
+
+type SsoSettingsRow = (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<bool>,
+);
+
+/// GET /accounts/{account_id}/sso_settings — return current SSO settings.
+async fn show_sso_settings(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Path(account_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
+
+    let row: Option<SsoSettingsRow> = sqlx::query_as(
+        "SELECT login_handle_name, change_password_url, auth_discovery_url,
+                    unknown_user_url, login_help_url, discovery_page_active
+             FROM accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(&app.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let row = row.ok_or(ApiError::NotFound)?;
+    let (
+        login_handle_name,
+        change_password_url,
+        auth_discovery_url,
+        unknown_user_url,
+        login_help_url,
+        discovery_page_active,
+    ) = row;
+
+    Ok(Json(serde_json::json!({
+        "sso_settings": {
+            "login_handle_name": login_handle_name,
+            "change_password_url": change_password_url,
+            "auth_discovery_url": auth_discovery_url,
+            "unknown_user_url": unknown_user_url,
+            "login_help_url": login_help_url,
+            "discovery_page_active": discovery_page_active,
+        }
+    })))
+}
+
+/// Parse sso_settings wrapper or flat params (Canvas accepts both).
+fn parse_sso_settings(raw: serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    raw.get("sso_settings")
+        .and_then(|v| v.as_object())
+        .cloned()
+        .unwrap_or_else(|| raw.as_object().cloned().unwrap_or_default())
+}
+
+/// PUT /accounts/{account_id}/sso_settings — update SSO settings.
+async fn update_sso_settings(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Path(account_id): Path<i64>,
+    Json(raw): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
+
+    // Verify account exists.
+    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&app.db)
+        .await?;
+    if exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    let params = parse_sso_settings(raw);
+
+    // Handle all possible SSO setting fields
+    let mut new_login_handle_name: Option<Option<String>> = None;
+    let mut new_change_password_url: Option<Option<String>> = None;
+    let mut new_auth_discovery_url: Option<Option<String>> = None;
+    let mut new_unknown_user_url: Option<Option<String>> = None;
+    let mut new_login_help_url: Option<Option<String>> = None;
+    let mut new_discovery_page_active: Option<Option<bool>> = None;
+
+    for (key, val) in &params {
+        match key.as_str() {
+            "login_handle_name" => {
+                new_login_handle_name = Some(val.as_str().map(|s| s.to_string()));
+            }
+            "change_password_url" => {
+                new_change_password_url = Some(val.as_str().map(|s| s.to_string()));
+            }
+            "auth_discovery_url" => {
+                new_auth_discovery_url = Some(val.as_str().map(|s| s.to_string()));
+            }
+            "unknown_user_url" => {
+                new_unknown_user_url = Some(val.as_str().map(|s| s.to_string()));
+            }
+            "login_help_url" => {
+                new_login_help_url = Some(val.as_str().map(|s| s.to_string()));
+            }
+            "discovery_page_active" => {
+                new_discovery_page_active = Some(val.as_bool());
+            }
+            _ => {}
+        }
+    }
+
+    if new_login_handle_name.is_some()
+        || new_change_password_url.is_some()
+        || new_auth_discovery_url.is_some()
+        || new_unknown_user_url.is_some()
+        || new_login_help_url.is_some()
+        || new_discovery_page_active.is_some()
+    {
+        let mut sql = "UPDATE accounts SET ".to_string();
+        let mut parts = vec![];
+        let mut bind_idx = 1;
+
+        if new_login_handle_name.is_some() {
+            parts.push(format!("login_handle_name = ${}", bind_idx));
+            bind_idx += 1;
+        }
+        if new_change_password_url.is_some() {
+            parts.push(format!("change_password_url = ${}", bind_idx));
+            bind_idx += 1;
+        }
+        if new_auth_discovery_url.is_some() {
+            parts.push(format!("auth_discovery_url = ${}", bind_idx));
+            bind_idx += 1;
+        }
+        if new_unknown_user_url.is_some() {
+            parts.push(format!("unknown_user_url = ${}", bind_idx));
+            bind_idx += 1;
+        }
+        if new_login_help_url.is_some() {
+            parts.push(format!("login_help_url = ${}", bind_idx));
+            bind_idx += 1;
+        }
+        if new_discovery_page_active.is_some() {
+            parts.push(format!("discovery_page_active = ${}", bind_idx));
+            bind_idx += 1;
+        }
+
+        sql.push_str(&parts.join(", "));
+        // The account_id placeholder must come after every SET
+        // placeholder, and be bound last, or every value shifts one
+        // column over.
+        sql.push_str(&format!(" WHERE id = ${}", bind_idx));
+
+        let mut q = sqlx::query(&sql);
+        // Bind the Option (not its flattened value): a key sent with an
+        // explicit null must bind NULL to un-set the column, matching
+        // Canvas's update_sso_settings semantics.
+        if let Some(v) = new_login_handle_name {
+            q = q.bind(v);
+        }
+        if let Some(v) = new_change_password_url {
+            q = q.bind(v);
+        }
+        if let Some(v) = new_auth_discovery_url {
+            q = q.bind(v);
+        }
+        if let Some(v) = new_unknown_user_url {
+            q = q.bind(v);
+        }
+        if let Some(v) = new_login_help_url {
+            q = q.bind(v);
+        }
+        if let Some(v) = new_discovery_page_active {
+            q = q.bind(v);
+        }
+        q = q.bind(account_id);
+
+        q.execute(&app.db).await.map_err(ApiError::from)?;
+    }
+
+    // Return updated settings.
+    let updated: Option<SsoSettingsRow> = sqlx::query_as(
+        "SELECT login_handle_name, change_password_url, auth_discovery_url,
+                    unknown_user_url, login_help_url, discovery_page_active
+             FROM accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(&app.db)
+    .await?;
+
+    let (
+        login_handle_name,
+        change_password_url,
+        auth_discovery_url,
+        unknown_user_url,
+        login_help_url,
+        discovery_page_active,
+    ) = updated.unwrap_or((None, None, None, None, None, None));
+
+    Ok(Json(serde_json::json!({
+        "sso_settings": {
+            "login_handle_name": login_handle_name,
+            "change_password_url": change_password_url,
+            "auth_discovery_url": auth_discovery_url,
+            "unknown_user_url": unknown_user_url,
+            "login_help_url": login_help_url,
+            "discovery_page_active": discovery_page_active,
+        }
+    })))
 }
 
 // ---------------------------------------------------------------------------
