@@ -694,6 +694,12 @@ async fn contract_bulk_temporary_status_limit_caps_at_100() {
 /// Canvas contract: when the temporary_enrollments feature is disabled for
 /// the account, the single-user endpoint returns a response that is NOT the
 /// standard three-field status object (empty, 404, or structured differently).
+///
+/// The disabled account is a dedicated one (passed via Canvas's optional
+/// `account_id` argument) rather than the shared root account: sibling tests
+/// in this binary enable `temporary_enrollments` on the root account and the
+/// shared `cleanup()` never removes feature_flags rows, so a root-account
+/// "absent flag" scenario cannot be isolated from parallel siblings.
 #[tokio::test]
 async fn contract_temporary_status_feature_disabled_returns_empty_or_not_found() {
     let Some((server, pool, prefix)) = setup().await else {
@@ -702,12 +708,47 @@ async fn contract_temporary_status_feature_disabled_returns_empty_or_not_found()
     };
 
     let user = seed_user(&pool, &prefix, "User", "student").await;
-    // Course WITHOUT the feature flag enabled (no account_features row).
-    let course = seed_course(&pool, &prefix, "TempDisabled").await;
+    let account_name = format!("{prefix}-TempDisabledAccount");
+
+    // Dedicated account with the feature explicitly DISABLED.
+    let account: i64 =
+        sqlx::query_scalar(r#"INSERT INTO accounts (name) VALUES ($1) RETURNING id"#)
+            .bind(&account_name)
+            .fetch_one(&pool)
+            .await
+            .expect("seed account");
+    sqlx::query(
+        r#"
+        INSERT INTO feature_flags (context_type, context_id, feature, display_name, state)
+        VALUES ('Account', $1, 'temporary_enrollments', 'Temporary Enrollments', 'disabled')
+        ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'disabled'
+        "#,
+    )
+    .bind(account)
+    .execute(&pool)
+    .await
+    .expect("disable temporary_enrollments feature");
+
+    // Course WITHOUT the feature enabled, under the disabled account.
+    let course: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO courses (name, course_code, account_id)
+        VALUES ($1, $2, $3)
+        RETURNING id
+        "#,
+    )
+    .bind("TempDisabled")
+    .bind(format!("{prefix}-TempDisabled"))
+    .bind(account)
+    .fetch_one(&pool)
+    .await
+    .expect("seed course");
     seed_enrollment(&pool, user, course, "student", None).await;
 
     let resp = server
-        .get(&format!("/users/{user}/temporary_enrollment_status"))
+        .get(&format!(
+            "/users/{user}/temporary_enrollment_status?account_id={account}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
         .await;
 
@@ -727,6 +768,15 @@ async fn contract_temporary_status_feature_disabled_returns_empty_or_not_found()
     );
 
     cleanup(&pool, &prefix).await;
+    let _ =
+        sqlx::query("DELETE FROM feature_flags WHERE context_type = 'Account' AND context_id = $1")
+            .bind(account)
+            .execute(&pool)
+            .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE name = $1")
+        .bind(&account_name)
+        .execute(&pool)
+        .await;
 }
 
 // ---------------------------------------------------------------------------
