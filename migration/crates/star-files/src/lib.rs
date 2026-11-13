@@ -215,7 +215,7 @@ fn make_unique_filename(filename: &str, existing: &[String]) -> String {
     let (stem, ext) = filename.split_at(split);
     let mut addition = 1u32;
     let mut candidate = format!("{stem}-{addition}{ext}");
-    while existing.iter().any(|s| *s == &candidate) {
+    while existing.contains(&candidate) {
         addition += 1;
         candidate = format!("{stem}-{addition}{ext}");
     }
@@ -2638,7 +2638,7 @@ async fn remove_group_usage_rights(
     .bind(group_id)
     .fetch_optional(&state.db)
     .await?;
-    let course_id = group.ok_or(ApiError::NotFound)?.flatten();
+    let course_id = group.ok_or(ApiError::NotFound)?;
 
     // Canvas: manage_files_delete on the group context (group managers are the
     // parent course's teachers, plus admins).
@@ -2680,7 +2680,7 @@ async fn remove_group_usage_rights(
 /// no usage-rights rows of its own; the endpoint keeps the Canvas envelope
 /// (self or admin) and answers `{message, file_ids: []}` with 200.
 async fn remove_user_usage_rights(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     Path(user_id): Path<i64>,
     auth: AuthUser,
     payload: Option<Json<RemoveUsageRightsRequest>>,
