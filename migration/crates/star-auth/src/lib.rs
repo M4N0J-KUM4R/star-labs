@@ -12,7 +12,7 @@ use axum::{
         StatusCode,
     },
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use axum_core::extract::FromRequestParts;
@@ -179,7 +179,12 @@ pub fn router() -> Router<AppState> {
             "/developer_keys",
             get(list_developer_keys).post(create_developer_key),
         )
-        .route("/developer_keys/{id}", delete(destroy_developer_key))
+        .route(
+            "/developer_keys/{id}",
+            get(show_developer_key)
+                .put(update_developer_key)
+                .delete(destroy_developer_key),
+        )
         // Canvas personal access tokens (manual "User-Generated" tokens).
         .route(
             "/tokens",
@@ -622,6 +627,119 @@ async fn create_developer_key(
 
     let key = fetch_developer_key(&app.db, id).await?;
     Ok(Json(developer_key_json(&key, 0)))
+}
+
+/// GET /developer_keys/{id} — show a single non-deleted key (admin only).
+/// Canvas itself has no GET /developer_keys/:id route (the UI filters the
+/// account listing); this completes the crate's CRUD trio with the same
+/// Canvas-shaped JSON as the list/create/destroy actions.
+async fn show_developer_key(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
+
+    let key = fetch_developer_key(&app.db, id).await?;
+
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)
+         FROM access_tokens
+         WHERE developer_key_id = $1 AND workflow_state = 'active'",
+    )
+    .bind(id)
+    .fetch_one(&app.db)
+    .await?;
+
+    Ok(Json(developer_key_json(&key, count)))
+}
+
+/// PUT /developer_keys/{id} — update a key (admin only). Canvas'
+/// `DeveloperKeysController#update` assigns the submitted developer_key
+/// params over the existing key, so omitted fields keep their stored values.
+/// The client secret is never rotated by an update.
+async fn update_developer_key(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<i64>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
+
+    // 404 for unknown or already-deleted keys.
+    let existing = fetch_developer_key(&app.db, id).await?;
+
+    let raw = body.get("developer_key").cloned().unwrap_or(body);
+    let params: DeveloperKeyParams = serde_json::from_value(raw)
+        .map_err(|e| ApiError::BadRequest(format!("invalid developer_key: {e}")))?;
+
+    // Canvas' deprecated single redirect_uri is folded into redirect_uris on
+    // create; on update the array form wins when both are sent.
+    let mut redirect_uris = params
+        .redirect_uris
+        .map(StringList::into_vec)
+        .unwrap_or_else(|| existing.redirect_uris.clone());
+    if let Some(single) = params
+        .redirect_uri
+        .as_deref()
+        .map(str::trim)
+        .filter(|single| !single.is_empty())
+        .filter(|single| !redirect_uris.iter().any(|uri| uri.as_str() == *single))
+    {
+        redirect_uris.push(single.to_string());
+    }
+    let scopes = params
+        .scopes
+        .map(StringList::into_vec)
+        .unwrap_or_else(|| existing.scopes.clone());
+
+    sqlx::query(
+        r#"
+        UPDATE developer_keys
+        SET name = $2, email = $3, icon_url = $4, notes = $5,
+            redirect_uris = $6, scopes = $7, require_scopes = $8,
+            allow_includes = $9, visible = $10, vendor_code = $11,
+            auto_expire_tokens = $12, client_credentials_audience = $13,
+            updated_at = now()
+        WHERE id = $1 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(id)
+    .bind(params.name.or(existing.name))
+    .bind(params.email.or(existing.email))
+    .bind(params.icon_url.or(existing.icon_url))
+    .bind(params.notes.or(existing.notes))
+    .bind(redirect_uris)
+    .bind(scopes)
+    .bind(params.require_scopes.unwrap_or(existing.require_scopes))
+    .bind(params.allow_includes.unwrap_or(existing.allow_includes))
+    .bind(params.visible.unwrap_or(existing.visible))
+    .bind(params.vendor_code.or(existing.vendor_code))
+    .bind(
+        params
+            .auto_expire_tokens
+            .unwrap_or(existing.auto_expire_tokens),
+    )
+    .bind(
+        params
+            .client_credentials_audience
+            .or(existing.client_credentials_audience),
+    )
+    .execute(&app.db)
+    .await?;
+
+    let key = fetch_developer_key(&app.db, id).await?;
+
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*)
+         FROM access_tokens
+         WHERE developer_key_id = $1 AND workflow_state = 'active'",
+    )
+    .bind(id)
+    .fetch_one(&app.db)
+    .await?;
+
+    Ok(Json(developer_key_json(&key, count)))
 }
 
 /// DELETE /developer_keys/{id} — soft delete a key and revoke its tokens.

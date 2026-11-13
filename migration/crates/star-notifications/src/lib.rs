@@ -19,6 +19,17 @@
 //! - POST   /users/{userId}/communication_channels
 //! - DELETE /users/{userId}/communication_channels/{id}
 //! - GET    /accounts/{accountId}/bounced_communication_channels
+//!
+//! Canvas parity additions (notification_preferences_controller.rb,
+//! config/routes.rb:2066–2076):
+//! - GET    /users/{userId}/communication_channels/{communicationChannelId}/notification_preferences
+//! - GET    /users/{userId}/communication_channels/{communicationChannelId}/notification_preferences/{notification}
+//! - GET    /users/{userId}/communication_channels/{type}/{address}/notification_preferences
+//! - GET    /users/{userId}/communication_channels/{type}/{address}/notification_preferences/{notification}
+//! - GET    /users/{userId}/notification_preference_categories
+//! - PUT    /users/{userId}/communication_channels/{type}/{address}/notification_preferences
+//! - PUT    /users/{userId}/communication_channels/{type}/{address}/notification_preferences/{notification}
+//! - PUT    /users/{userId}/notification_preference_categories/{category}
 
 use axum::{
     extract::{Path, State},
@@ -427,7 +438,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/users/self/communication_channels/{communication_channel_id}/notification_preferences/{notification}",
-            put(update_channel_preference),
+            get(show_channel_preference_self).put(update_channel_preference),
         )
         // User-level notification preferences (Canvas API v1)
         .route(
@@ -455,6 +466,45 @@ pub fn router() -> Router<AppState> {
         .route(
             "/accounts/{account_id}/bounced_communication_channels",
             get(bounced_communication_channels),
+        )
+        // Per-channel notification preferences, scoped by channel id
+        // (Canvas notification_preferences index/show; reads self-or-admin)
+        .route(
+            "/users/{user_id}/communication_channels/{communication_channel_id}/notification_preferences",
+            get(index_channel_preferences_scoped),
+        )
+        .route(
+            "/users/{user_id}/communication_channels/{communication_channel_id}/notification_preferences/{notification}",
+            get(show_channel_preference_scoped),
+        )
+        // Per-channel notification preferences, scoped by (type, address)
+        .route(
+            "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences",
+            get(index_channel_preferences_by_address),
+        )
+        .route(
+            "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}",
+            get(show_channel_preference_by_address),
+        )
+        // User-level preference categories (Canvas `category_index`)
+        .route(
+            "/users/{user_id}/notification_preference_categories",
+            get(list_channel_preference_categories),
+        )
+        // Preference updates, scoped by (type, address) (Canvas `update_all`
+        // and `update`; writes are self-only — render_unauthorized_action)
+        .route(
+            "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences",
+            put(update_channel_preferences_by_address),
+        )
+        .route(
+            "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}",
+            put(update_channel_preference_by_address),
+        )
+        // Bulk update by category (Canvas `update_preferences_by_category`)
+        .route(
+            "/users/{user_id}/notification_preference_categories/{category}",
+            put(update_channel_preferences_by_category),
         )
 }
 
@@ -898,6 +948,21 @@ async fn update_channel_preference(
     }))
 }
 
+/// GET /users/self/communication_channels/{id}/notification_preferences/{notification}
+/// — Canvas' `show`; delegates to the scoped handler with the `self` segment.
+async fn show_channel_preference_self(
+    state: State<AppState>,
+    auth: AuthUser,
+    Path((channel_id, notification)): Path<(i64, String)>,
+) -> Result<Json<CommunicationChannelPreferencesResponse>, ApiError> {
+    show_channel_preference_scoped(
+        state,
+        auth,
+        Path(("self".to_string(), channel_id, notification)),
+    )
+    .await
+}
+
 // --------------------------------------------------------------------------
 // Handlers — User-level notification preferences (Canvas API v1)
 // --------------------------------------------------------------------------
@@ -1223,6 +1288,370 @@ async fn delete_user_communication_channel(
 }
 
 // --------------------------------------------------------------------------
+// Handlers — Channel notification preferences, scoped forms (Canvas API v1)
+// --------------------------------------------------------------------------
+
+/// Response envelope for the user-level category list (Canvas
+/// `category_index` renders `{ "categories": [...] }`).
+#[derive(Debug, Serialize)]
+pub struct NotificationPreferenceCategoriesResponse {
+    pub categories: Vec<String>,
+}
+
+/// Every category slug `derive_category` can produce, in declaration order.
+/// Canvas derives the category list from the Notification catalog; this
+/// schema has no catalog table, so the slugs come straight from
+/// `derive_category`'s keyword sets (unique, uncompressed).
+const NOTIFICATION_CATEGORIES: [&str; 9] = [
+    "announcement",
+    "discussion",
+    "conversation",
+    "grading",
+    "due_date",
+    "calendar",
+    "registration",
+    "administrative",
+    "other",
+];
+
+/// The crate's stand-in for Canvas' Notification catalog: the notification
+/// names belonging to each category. Canvas' `update_preferences_by_category`
+/// upserts a policy for every notification `Notification.where(category:)`
+/// returns; without a catalog table this static map defines that membership,
+/// built from `derive_category`'s keyword sets (every listed name derives
+/// back to its category — see the round-trip unit test).
+fn category_notifications(category: &str) -> Option<&'static [&'static str]> {
+    match category {
+        "announcement" => Some(&["new_announcement", "announcement_created_by_student"]),
+        "discussion" => Some(&[
+            "new_discussion_topic",
+            "new_discussion_entry",
+            "discussion_mention",
+        ]),
+        "conversation" => Some(&[
+            "new_conversation",
+            "added_to_conversation",
+            "conversation_message",
+        ]),
+        "grading" => Some(&[
+            "grade_change",
+            "submission_comment",
+            "submission_score_updated",
+        ]),
+        "due_date" => Some(&[
+            "due_date_changed",
+            "assignment_created",
+            "assignment_changed",
+        ]),
+        "calendar" => Some(&[
+            "new_calendar_event",
+            "calendar_event_updated",
+            "appointment_reserved_by_user",
+            "appointment_cancelled_by_user",
+        ]),
+        "registration" => Some(&[
+            "new_enrollment",
+            "enrollment_accepted",
+            "enrollment_rejected",
+        ]),
+        "administrative" => Some(&["new_account_notification", "report_generated"]),
+        "other" => Some(&["unknown_notification"]),
+        _ => None,
+    }
+}
+
+/// Resolve Canvas' channel-address form (`:type/:address`) to the user's
+/// unretired channel. Canvas scopes `@user.communication_channels.unretired
+/// .of_type(type).by_path(address).first` and raises RecordNotFound when
+/// nothing matches; unknown user channels are therefore 404, never another
+/// user's channel.
+async fn resolve_channel_by_address(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    channel_type: &str,
+    address: &str,
+) -> Result<CommunicationChannel, ApiError> {
+    let row: Option<CommunicationChannel> = sqlx::query_as(
+        r#"
+        SELECT id, path, path_type, position, user_id, workflow_state, created_at
+        FROM communication_channels
+        WHERE user_id = $1 AND lower(path_type) = lower($2) AND lower(path) = lower($3)
+          AND workflow_state != 'retired'
+        ORDER BY position ASC, id ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .bind(channel_type)
+    .bind(address)
+    .fetch_optional(pool)
+    .await?;
+
+    row.ok_or(ApiError::NotFound)
+}
+
+/// Canvas' `NotificationPolicy.find_or_update_for` without a frequency: the
+/// stored preference for the notification, or an unpersisted default with
+/// frequency "never". The default row is NOT written on read — Canvas builds
+/// an in-memory policy (`frequency ||= ... || "never"`) that is only saved by
+/// the update actions — and the category comes from `derive_category`
+/// because this schema has no notification catalog.
+async fn find_channel_preference(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+    channel_id: i64,
+    notification: &str,
+) -> Result<NotificationPreference, ApiError> {
+    let row: Option<NotificationPreference> = sqlx::query_as(
+        r#"
+        SELECT notification, category, frequency
+        FROM notification_preferences
+        WHERE communication_channel_id = $1 AND user_id = $2 AND notification = $3
+        "#,
+    )
+    .bind(channel_id)
+    .bind(user_id)
+    .bind(notification)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.unwrap_or(NotificationPreference {
+        notification: notification.to_string(),
+        category: derive_category(notification).to_string(),
+        frequency: "never".to_string(),
+    }))
+}
+
+/// GET /users/{user_id}/communication_channels/{communication_channel_id}/notification_preferences
+/// Canvas' `index`: every stored preference for the channel, wrapped in the
+/// `notification_preferences` envelope. Reads are self-or-admin (Canvas
+/// authorized_action :view_statistics).
+async fn index_channel_preferences_scoped(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, channel_id)): Path<(String, i64)>,
+) -> Result<Json<CommunicationChannelPreferencesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_read(&auth, target_user_id)?;
+    owned_channel_exists(&state.db, target_user_id, channel_id).await?;
+
+    let rows = list_preferences_for_channel(&state.db, target_user_id, channel_id).await?;
+    Ok(Json(CommunicationChannelPreferencesResponse {
+        notification_preferences: rows,
+    }))
+}
+
+/// GET /users/{user_id}/communication_channels/{communication_channel_id}/notification_preferences/{notification}
+/// Canvas' `show`: one-element envelope from `find_or_update_for` without a
+/// frequency — an unknown notification defaults to "never" without persisting.
+async fn show_channel_preference_scoped(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, channel_id, notification)): Path<(String, i64, String)>,
+) -> Result<Json<CommunicationChannelPreferencesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_read(&auth, target_user_id)?;
+    owned_channel_exists(&state.db, target_user_id, channel_id).await?;
+
+    let notification = validate_notification(&notification)?;
+    let row = find_channel_preference(&state.db, target_user_id, channel_id, &notification).await?;
+    Ok(Json(CommunicationChannelPreferencesResponse {
+        notification_preferences: vec![row],
+    }))
+}
+
+/// GET /users/{user_id}/communication_channels/{type}/{address}/notification_preferences
+/// Canvas' `index` on the channel-address form.
+async fn index_channel_preferences_by_address(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, channel_type, address)): Path<(String, String, String)>,
+) -> Result<Json<CommunicationChannelPreferencesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_read(&auth, target_user_id)?;
+    let channel =
+        resolve_channel_by_address(&state.db, target_user_id, &channel_type, &address).await?;
+
+    let rows = list_preferences_for_channel(&state.db, target_user_id, channel.id).await?;
+    Ok(Json(CommunicationChannelPreferencesResponse {
+        notification_preferences: rows,
+    }))
+}
+
+/// GET /users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}
+/// Canvas' `show` on the channel-address form.
+async fn show_channel_preference_by_address(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, channel_type, address, notification)): Path<(
+        String,
+        String,
+        String,
+        String,
+    )>,
+) -> Result<Json<CommunicationChannelPreferencesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_read(&auth, target_user_id)?;
+    let channel =
+        resolve_channel_by_address(&state.db, target_user_id, &channel_type, &address).await?;
+
+    let notification = validate_notification(&notification)?;
+    let row = find_channel_preference(&state.db, target_user_id, channel.id, &notification).await?;
+    Ok(Json(CommunicationChannelPreferencesResponse {
+        notification_preferences: vec![row],
+    }))
+}
+
+/// GET /users/{user_id}/notification_preference_categories — Canvas'
+/// `category_index` envelope listing the known category slugs.
+async fn list_channel_preference_categories(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<NotificationPreferenceCategoriesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_read(&auth, target_user_id)?;
+
+    Ok(Json(NotificationPreferenceCategoriesResponse {
+        categories: NOTIFICATION_CATEGORIES
+            .iter()
+            .map(|slug| slug.to_string())
+            .collect(),
+    }))
+}
+
+/// PUT /users/{user_id}/communication_channels/{type}/{address}/notification_preferences
+/// Canvas' `update_all` on the channel-address form: upsert every preference
+/// in the body, then return the channel's stored preferences. Writes are
+/// self-only (Canvas render_unauthorized_action).
+async fn update_channel_preferences_by_address(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, channel_type, address)): Path<(String, String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<CommunicationChannelPreferencesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_write(&auth, target_user_id)?;
+    let channel =
+        resolve_channel_by_address(&state.db, target_user_id, &channel_type, &address).await?;
+
+    let updates = parse_preference_updates(&body)?;
+    for (notification, frequency) in &updates {
+        upsert_channel_preference(
+            &state.db,
+            target_user_id,
+            channel.id,
+            notification,
+            frequency,
+        )
+        .await?;
+    }
+    let rows = list_preferences_for_channel(&state.db, target_user_id, channel.id).await?;
+    Ok(Json(CommunicationChannelPreferencesResponse {
+        notification_preferences: rows,
+    }))
+}
+
+/// PUT /users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}
+/// Canvas' `update` on the channel-address form: single-notification upsert
+/// returning a one-element envelope.
+async fn update_channel_preference_by_address(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, channel_type, address, notification)): Path<(
+        String,
+        String,
+        String,
+        String,
+    )>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<CommunicationChannelPreferencesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_write(&auth, target_user_id)?;
+    let channel =
+        resolve_channel_by_address(&state.db, target_user_id, &channel_type, &address).await?;
+
+    let notification = validate_notification(&notification)?;
+    let frequency = parse_single_frequency(&body)?;
+    let row = upsert_channel_preference(
+        &state.db,
+        target_user_id,
+        channel.id,
+        &notification,
+        &frequency,
+    )
+    .await?;
+
+    Ok(Json(CommunicationChannelPreferencesResponse {
+        notification_preferences: vec![row],
+    }))
+}
+
+/// PUT /users/{user_id}/notification_preference_categories/{category} —
+/// Canvas' `update_preferences_by_category`: apply one frequency to every
+/// notification in the category, across all of the user's unretired channels
+/// (Canvas upserts per channel; the user-level form mirrors the user
+/// `update_all` handler). Unknown categories are 404 (Canvas RecordNotFound
+/// from `Notification.where(category:)`). Self-only write.
+async fn update_channel_preferences_by_category(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, category)): Path<(String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<UserNotificationPreferencesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_write(&auth, target_user_id)?;
+
+    let notifications = category_notifications(&category).ok_or(ApiError::NotFound)?;
+    let frequency = parse_single_frequency(&body)?;
+
+    ensure_unretired_channel(&state.db, target_user_id).await?;
+
+    let channel_ids: Vec<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT id FROM communication_channels
+        WHERE user_id = $1 AND workflow_state <> 'retired'
+        ORDER BY position ASC, id ASC
+        "#,
+    )
+    .bind(target_user_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    for (channel_id,) in &channel_ids {
+        for notification in notifications {
+            upsert_channel_preference(
+                &state.db,
+                target_user_id,
+                *channel_id,
+                notification,
+                &frequency,
+            )
+            .await?;
+        }
+    }
+
+    // Canvas returns exactly the category's policies; the user-level view
+    // collapses channels, so filter the aggregate to this category.
+    let rows = list_user_preferences_for(&state.db, target_user_id)
+        .await?
+        .into_iter()
+        .filter(|row| row.category == category)
+        .collect();
+    Ok(Json(UserNotificationPreferencesResponse {
+        notification_preferences: rows,
+    }))
+}
+
+// --------------------------------------------------------------------------
 // Handlers — Account Bounced-Email Report (Canvas BulkActions)
 // --------------------------------------------------------------------------
 
@@ -1300,10 +1729,11 @@ async fn bounced_communication_channels(
 mod tests {
     use super::{
         authorize_channel_operation, authorize_preferences_read, authorize_preferences_write,
-        derive_category, parse_preference_updates, parse_single_frequency, resolve_user_segment,
-        router, validate_new_channel, BouncedChannelRow, BouncedChannelsResponse,
-        CommunicationChannelPreferencesResponse, NotificationPolicyRow, NotificationPreference,
-        NotificationPreferencesResponse,
+        category_notifications, derive_category, parse_preference_updates, parse_single_frequency,
+        resolve_user_segment, router, validate_new_channel, BouncedChannelRow,
+        BouncedChannelsResponse, CommunicationChannelPreferencesResponse, NotificationPolicyRow,
+        NotificationPreference, NotificationPreferenceCategoriesResponse,
+        NotificationPreferencesResponse, NOTIFICATION_CATEGORIES,
     };
     use chrono::{DateTime, Utc};
     use star_auth::AuthUser;
@@ -1315,6 +1745,53 @@ mod tests {
         // router proves the new /users/{user_id} routes coexist with
         // /users/self/notification_preferences.
         let _router = router();
+    }
+
+    #[test]
+    fn scoped_notification_preference_routes_build_without_conflicts() {
+        // matchit 0.8.4 normalizes parameter names alphabetically per route,
+        // so the /users/{user_id}/communication_channels/{type}/{address}/...
+        // forms (three params) coexist with the
+        // /users/{user_id}/communication_channels/{communication_channel_id}/...
+        // forms (two params): their normalized segment suffixes differ.
+        // Building the router proves none of the nine new registrations
+        // collide with each other or with the /users/self/... legacy routes.
+        let _router = router();
+    }
+
+    #[test]
+    fn category_notifications_round_trip_through_derive_category() {
+        for slug in NOTIFICATION_CATEGORIES {
+            let names = category_notifications(slug).expect("known category");
+            assert!(!names.is_empty(), "category {slug} must list notifications");
+            for name in names {
+                assert_eq!(
+                    derive_category(name),
+                    slug,
+                    "catalog name {name} must derive back to {slug}"
+                );
+            }
+        }
+        assert!(category_notifications("no_such_category").is_none());
+    }
+
+    #[test]
+    fn preference_categories_response_uses_canvas_envelope() {
+        let response = NotificationPreferenceCategoriesResponse {
+            categories: NOTIFICATION_CATEGORIES
+                .iter()
+                .map(|s| s.to_string())
+                .collect(),
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        let categories = json["categories"].as_array().unwrap();
+        assert_eq!(categories.len(), 9, "all nine category slugs");
+        assert_eq!(categories[0], "announcement");
+        assert_eq!(categories[4], "due_date");
+        assert_eq!(categories[8], "other");
+        let mut unique = categories.clone();
+        unique.dedup();
+        assert_eq!(unique.len(), categories.len(), "slugs must be unique");
     }
 
     #[test]

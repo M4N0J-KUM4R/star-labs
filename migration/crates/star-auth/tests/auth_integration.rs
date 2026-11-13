@@ -2,10 +2,10 @@
 //!
 //! Exercises the real auth router (POST /auth/register, POST /auth/login,
 //! GET /auth/me, POST /auth/logout), the Canvas developer key routes
-//! (GET/POST /developer_keys, DELETE /developer_keys/{id}), the OAuth2
-//! token endpoint (POST /login/oauth2/token) and the personal access token
-//! routes (GET/POST /tokens, GET/DELETE /tokens/{id}) through axum-test
-//! against a real Postgres, plus the public helpers
+//! (GET/POST /developer_keys, GET/PUT/DELETE /developer_keys/{id}), the
+//! OAuth2 token endpoint (POST /login/oauth2/token) and the personal access
+//! token routes (GET/POST /tokens, GET/DELETE /tokens/{id}) through
+//! axum-test against a real Postgres, plus the public helpers
 //! (hash_password/verify_password, create_token/verify_token,
 //! fetch_user_by_id via GET /auth/me) and the AuthUser extractor.
 //!
@@ -788,6 +788,184 @@ async fn developer_keys_crud_is_admin_only() {
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 404, "repeat delete: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn developer_keys_show_returns_canvas_shape() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "DevKeyShowAdmin", "admin").await;
+    let student = seed_user(&pool, &prefix, "DevKeyShowStudent", "student").await;
+    let name = format!("{prefix}-DevKeyShow");
+
+    let resp = server
+        .post("/developer_keys")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "developer_key": {
+                "name": name,
+                "email": "show@example.com",
+                "scopes": ["url:GET|/api/v1/courses"],
+                "redirect_uris": ["https://example.com/oauth2/callback"]
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "create: {}", resp.text());
+    let created: Value = resp.json();
+    let key_id = created["id"].as_i64().expect("id");
+    let api_key = created["api_key"].as_str().expect("api_key").to_string();
+
+    // Show is admin-only: anonymous 401, non-admin 403.
+    let resp = server.get(&format!("/developer_keys/{key_id}")).await;
+    assert_eq!(resp.status_code(), 401, "anonymous show: {}", resp.text());
+    let resp = server
+        .get(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student show: {}", resp.text());
+
+    // Admin show mirrors the create response (access_token_count starts at 0).
+    let resp = server
+        .get(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "admin show: {}", resp.text());
+    let shown: Value = resp.json();
+    assert_eq!(shown["id"], key_id);
+    assert_eq!(shown["name"], name.as_str());
+    assert_eq!(shown["workflow_state"], "active");
+    assert_eq!(shown["user_id"], admin);
+    assert_eq!(shown["access_token_count"], 0);
+    assert_eq!(shown["api_key"], api_key.as_str(), "secret is echoed");
+    assert_eq!(
+        shown["redirect_uris"],
+        "https://example.com/oauth2/callback"
+    );
+    assert_eq!(shown["scopes"][0], "url:GET|/api/v1/courses");
+
+    // Unknown (and already-deleted) keys are 404.
+    let resp = server
+        .get("/developer_keys/99999999")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "unknown show: {}", resp.text());
+
+    let resp = server
+        .delete(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "delete: {}", resp.text());
+    let resp = server
+        .get(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "deleted show: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn developer_keys_update_partial_and_admin_only() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "DevKeyUpdAdmin", "admin").await;
+    let student = seed_user(&pool, &prefix, "DevKeyUpdStudent", "student").await;
+    let name = format!("{prefix}-DevKeyUpd");
+
+    let resp = server
+        .post("/developer_keys")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "developer_key": {
+                "name": name,
+                "email": "before@example.com",
+                "notes": "before",
+                "redirect_uris": ["https://before.example.com/callback"],
+                "scopes": ["url:GET|/api/v1/courses"]
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "create: {}", resp.text());
+    let created: Value = resp.json();
+    let key_id = created["id"].as_i64().expect("id");
+    let api_key = created["api_key"].as_str().expect("api_key").to_string();
+
+    // Update is admin-only: anonymous 401, non-admin 403.
+    let resp = server
+        .put(&format!("/developer_keys/{key_id}"))
+        .json(&json!({ "developer_key": { "notes": "nope" } }))
+        .await;
+    assert_eq!(resp.status_code(), 401, "anonymous update: {}", resp.text());
+    let resp = server
+        .put(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "developer_key": { "notes": "nope" } }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student update: {}", resp.text());
+
+    // Partial update: submitted fields change, omitted fields keep their
+    // stored values (Canvas assigns developer_key_params over @key).
+    let resp = server
+        .put(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "developer_key": {
+                "notes": "after",
+                "visible": false,
+                "redirect_uris": ["https://after.example.com/callback",
+                                   "https://extra.example.com/callback"]
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "update: {}", resp.text());
+    let updated: Value = resp.json();
+    assert_eq!(updated["id"], key_id);
+    assert_eq!(updated["notes"], "after", "submitted field is updated");
+    assert_eq!(updated["visible"], false, "boolean flag is updated");
+    assert_eq!(
+        updated["redirect_uris"],
+        "https://after.example.com/callback\nhttps://extra.example.com/callback",
+        "array fields are replaced"
+    );
+    assert_eq!(updated["name"], name.as_str(), "omitted name is kept");
+    assert_eq!(
+        updated["email"], "before@example.com",
+        "omitted email is kept"
+    );
+    assert_eq!(
+        updated["scopes"][0], "url:GET|/api/v1/courses",
+        "omitted scopes are kept"
+    );
+    assert_eq!(
+        updated["api_key"],
+        api_key.as_str(),
+        "update must not rotate the client secret"
+    );
+    assert_eq!(updated["user_id"], admin, "creator is unchanged");
+
+    // Updates persist (show reflects them).
+    let resp = server
+        .get(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    let shown: Value = resp.json();
+    assert_eq!(shown["notes"], "after", "update must persist");
+
+    // Unknown keys are 404.
+    let resp = server
+        .put("/developer_keys/99999999")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "developer_key": { "notes": "x" } }))
+        .await;
+    assert_eq!(resp.status_code(), 404, "unknown update: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }
