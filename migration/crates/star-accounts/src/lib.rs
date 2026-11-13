@@ -2351,7 +2351,7 @@ async fn update_account_notification(
     .map_err(ApiError::from)?;
 
     // Roles are replaced wholesale when the request provides a list.
-    if let Some(roles) = &payload.account_notification_roles {
+    if payload.account_notification_roles.is_some() {
         sqlx::query(r#"DELETE FROM account_notification_roles WHERE account_notification_id = $1"#)
             .bind(notification_id)
             .execute(&state.db)

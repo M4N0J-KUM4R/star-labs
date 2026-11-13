@@ -248,11 +248,7 @@ async fn check_can_view_or_comment(
 
     // Or the submission's own student?
     let owner_id = get_submission_owner(pool, submission_id).await?;
-    if owner_id == Some(user_id) {
-        return Ok(true);
-    }
-
-    Ok(false)
+    Ok(owner_id == Some(user_id))
 }
 
 // ---------------------------------------------------------------------------
