@@ -104,12 +104,26 @@ async fn seed_account_if_needed(pool: &PgPool) {
     }
 }
 
+/// Distinct account per mutating test — parallel sso_settings PUTs on the
+/// shared account 1 overwrite each other between PUT and GET.
+async fn seed_unique_account(pool: &PgPool, prefix: &str, tag: &str) -> i64 {
+    sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+        .bind(format!("{prefix}-{tag}"))
+        .fetch_one(pool)
+        .await
+        .expect("seed unique account")
+}
+
 async fn cleanup(pool: &PgPool, prefix: &str) {
     let _ = sqlx::query("DELETE FROM users WHERE email LIKE $1")
         .bind(format!("{prefix}%@test.local"))
         .execute(pool)
         .await;
     let _ = sqlx::query("DELETE FROM authentication_providers WHERE auth_type LIKE $1")
+        .bind(format!("{prefix}%"))
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE name LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
         .await;
@@ -613,16 +627,7 @@ async fn sso_settings_update_persists_and_returns_wrapped() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
-    // Dedicated account: the flat-update test writes account 1 from a
-    // parallel thread in this same binary, which races this test's GET.
-    let account_id: i64 = sqlx::query_scalar(
-        "INSERT INTO accounts (name) VALUES ($1) RETURNING id",
-    )
-    .bind(format!("{prefix}-sso-account"))
-    .fetch_one(&pool)
-    .await
-    .expect("seed account");
+    let account_id = seed_unique_account(&pool, &prefix, "SsoWrapAcct").await;
     let admin = seed_user(&pool, &prefix, "SsoUpdAdmin", "admin").await;
 
     let put_resp = server
@@ -714,11 +719,11 @@ async fn sso_settings_update_accepts_flat_params() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account_id = seed_unique_account(&pool, &prefix, "SsoFlatAcct").await;
     let admin = seed_user(&pool, &prefix, "SsoFlatAdmin", "admin").await;
 
     let resp = server
-        .put("/accounts/1/sso_settings")
+        .put(&format!("/accounts/{account_id}/sso_settings"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "login_handle_name": "FlatHandle",
