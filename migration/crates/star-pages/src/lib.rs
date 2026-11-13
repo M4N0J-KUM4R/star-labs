@@ -1316,7 +1316,7 @@ async fn revert_page(
     .bind(&revision.body)
     .bind(&revision.url)
     .bind(page.id)
-    .fetch_one(&mut tx)
+    .fetch_one(&mut *tx)
     .await?;
 
     // simply_versioned: the revert save appends the restored state as the new
