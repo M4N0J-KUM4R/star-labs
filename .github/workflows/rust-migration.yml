@@ -7,6 +7,7 @@ on:
       - '.github/workflows/rust-migration.yml'
   pull_request:
     paths:
+      - 'specs/**'
       - 'migration/**'
       - 'orchestration/**'
       - '.github/workflows/rust-migration.yml'
