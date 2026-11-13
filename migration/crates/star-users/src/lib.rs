@@ -141,11 +141,16 @@ pub struct SettingsQuery {
 
 impl SettingsQuery {
     fn wants_mobile_settings(&self) -> bool {
+        self.wants("mobile_settings")
+    }
+
+    /// True when the given value appears in `include[]` / `include`.
+    fn wants(&self, value: &str) -> bool {
         [self.include_bracket.as_deref(), self.include.as_deref()]
             .into_iter()
             .flatten()
-            .flat_map(|value| value.split(','))
-            .any(|value| value.trim() == "mobile_settings")
+            .flat_map(|include| include.split(','))
+            .any(|entry| entry.trim() == value)
     }
 }
 
@@ -308,6 +313,133 @@ pub struct AccountUserFields {
 #[derive(Debug, Default, Deserialize)]
 pub struct AccountPseudonym {
     pub unique_id: Option<String>,
+}
+
+/// Canvas `todo_item_count` response (UsersController#todo_item_count):
+/// `{"needs_grading_count": N, "assignments_needing_submitting": M}`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct TodoItemCount {
+    pub needs_grading_count: i64,
+    pub assignments_needing_submitting: i64,
+}
+
+/// Raw missing-submission rows decode straight into the Canvas assignment
+/// shape (`TodoAssignment`), since missing_submissions returns plain
+/// assignment JSON.
+
+/// One entry of GET /users/{userId}/graded_submissions: a Canvas submission
+/// with its assignment fields (per UsersController#user_graded_submissions,
+/// which renders `submission_json(s, s.assignment, ...)`).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GradedSubmission {
+    pub id: i64,
+    pub assignment_id: i64,
+    pub user_id: i64,
+    pub attempt: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grade: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    pub submitted_at: Option<DateTime<Utc>>,
+    pub graded_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grader_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub submission_type: Option<String>,
+    pub workflow_state: String,
+    pub url: String,
+    pub preview_url: String,
+    /// Canvas embeds `assignment` when `include[]=assignment` is sent; the
+    /// fields below mirror the assignment object.
+    pub assignment: TodoAssignment,
+}
+
+/// Raw graded-submission row joining the submission to its assignment.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct GradedSubmissionRow {
+    id: i64,
+    assignment_id: i64,
+    user_id: i64,
+    attempt: i32,
+    body: Option<String>,
+    grade: Option<String>,
+    score: Option<f64>,
+    submitted_at: Option<DateTime<Utc>>,
+    graded_at: Option<DateTime<Utc>>,
+    grader_id: Option<i64>,
+    submission_type: Option<String>,
+    workflow_state: String,
+    assignment_course_id: i64,
+    assignment_title: String,
+    assignment_description: Option<String>,
+    assignment_points_possible: f64,
+    assignment_due_at: Option<DateTime<Utc>>,
+    assignment_created_at: DateTime<Utc>,
+    assignment_updated_at: DateTime<Utc>,
+}
+
+impl GradedSubmissionRow {
+    fn into_submission(self, course_id: i64) -> GradedSubmission {
+        let url = format!(
+            "/courses/{course_id}/assignments/{}/submissions/{}",
+            self.assignment_id, self.user_id
+        );
+        GradedSubmission {
+            id: self.id,
+            assignment_id: self.assignment_id,
+            user_id: self.user_id,
+            attempt: self.attempt,
+            body: self.body,
+            grade: self.grade,
+            score: self.score,
+            submitted_at: self.submitted_at,
+            graded_at: self.graded_at,
+            grader_id: self.grader_id,
+            submission_type: self.submission_type,
+            workflow_state: self.workflow_state,
+            preview_url: format!("{url}?preview=1"),
+            url,
+            assignment: TodoAssignment {
+                id: self.assignment_id,
+                course_id: self.assignment_course_id,
+                title: self.assignment_title,
+                description: self.assignment_description,
+                points_possible: self.assignment_points_possible,
+                due_at: self.assignment_due_at,
+                created_at: self.assignment_created_at,
+                updated_at: self.assignment_updated_at,
+            },
+        }
+    }
+}
+
+/// One entry of GET /users/self/activity_stream — a Canvas StreamItem.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct StreamItem {
+    pub id: i64,
+    /// Canvas asset_string: e.g. "assignment_12".
+    pub asset_string: String,
+    /// Canvas item_type: Submission | DiscussionTopic | Conversation | ...
+    #[sqlx(rename = "item_type")]
+    #[serde(rename = "type")]
+    pub stream_item_type: String,
+    /// Context the item belongs to, e.g. "course_42".
+    pub context_code: Option<String>,
+    pub title: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One entry of GET /users/self/activity_stream/summary:
+/// `{"type": T, "unread_count": N, "count": M}`.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct StreamItemSummary {
+    #[sqlx(rename = "item_type")]
+    #[serde(rename = "type")]
+    pub stream_item_type: String,
+    pub unread_count: i64,
+    pub count: i64,
 }
 
 // --------------------------------------------------------------------------
@@ -742,6 +874,39 @@ pub fn router() -> Router<AppState> {
         )
         // Canvas users_controller#terminate_sessions.
         .route("/users/{userId}/sessions", delete(terminate_sessions))
+        // Canvas users_controller#todo_item_count: counts of todo items
+        // (assignments needing grading + assignments needing submitting).
+        // GET /users/self/todo itself is served by star-dashboard; a second
+        // registration here would collide in star-http's merged router.
+        .route("/users/self/todo_item_count", get(todo_item_count))
+        // Canvas users_controller#missing_submissions: assignments the user
+        // (as an active student) has not submitted.
+        .route(
+            "/users/{userId}/missing_submissions",
+            get(missing_submissions),
+        )
+        // Canvas users_controller#user_graded_submissions: the user's
+        // submissions that have a score, newest graded first.
+        .route("/users/{id}/graded_submissions", get(graded_submissions))
+        // Canvas users_controller#activity_stream / #activity_stream_summary /
+        // #ignore_stream_item / #ignore_all_stream_items.
+        .route(
+            "/users/self/activity_stream",
+            get(activity_stream).delete(ignore_all_stream_items),
+        )
+        .route(
+            "/users/self/activity_stream/summary",
+            get(activity_stream_summary),
+        )
+        .route(
+            "/users/self/activity_stream/{id}",
+            delete(ignore_stream_item),
+        )
+        // Canvas users_controller#ignore_item: hide a todo item.
+        .route(
+            "/users/self/todo/{asset_string}/{purpose}",
+            delete(ignore_todo_item),
+        )
 }
 
 // --------------------------------------------------------------------------
@@ -1439,6 +1604,511 @@ async fn terminate_sessions(
     Ok(Json(
         serde_json::json!({ "message": "All sessions terminated" }),
     ))
+}
+
+// --------------------------------------------------------------------------
+// Todo item count / missing + graded submissions / activity stream handlers
+// --------------------------------------------------------------------------
+
+/// GET /users/self/todo_item_count — Canvas UsersController#todo_item_count.
+///
+/// Canvas renders `{needs_grading_count:, assignments_needing_submitting:}`:
+/// - `submissions_needing_grading_count`: submissions in the user's teacher/TA
+///   courses that have been submitted but not graded yet, minus items hidden
+///   via an `Ignore` row with purpose `grading`.
+/// - `assignments_needing_submitting`: assignments in the user's active
+///   student courses due in [4 weeks ago, 1 week from now] the user has not
+///   submitted (with `include[]=ungraded_quizzes` the same count for
+///   ungraded quizzes; the schema keeps quiz points in `quiz_submissions`,
+///   so quizzes without a `quiz_submissions` row are counted the same way).
+///
+/// Simplifications documented against Canvas:
+/// - Canvas caps the count at the first 100 todo items; no cap here (COUNT is
+///   cheap on this schema).
+/// - Canvas' `needs_grading` condition also counts resubmissions where
+///   `grade_matches_current_submission` is false; this schema has no such
+///   column, so a submission with a score never needs grading.
+/// - `todo_ignores` is applied to both counts like Canvas' `Ignore` model.
+async fn todo_item_count(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<SettingsQuery>,
+) -> Result<Json<TodoItemCount>, ApiError> {
+    let include_ungraded_quizzes = params.wants("ungraded_quizzes");
+
+    let grading: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM submissions s
+        JOIN assignments a ON a.id = s.assignment_id
+        JOIN enrollments te
+          ON te.course_id = a.course_id
+         AND te.user_id = $1
+         AND te.role IN ('teacher', 'ta')
+         AND te.workflow_state = 'active'
+        WHERE s.body IS NOT NULL
+          AND s.score IS NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM todo_ignores ig
+               WHERE ig.user_id = $1
+                 AND ig.asset_type = 'assignment'
+                 AND ig.asset_id = s.assignment_id
+                 AND ig.purpose = 'grading')
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Canvas assignments_needing_submitting (schema has no
+    // assignments.submission_types so the not_graded/wiki_page/none exclusion
+    // cannot be expressed; "submitted" means a submission row whose body or
+    // submission_type is set, mirroring Canvas' workflow_state <> 'deleted'
+    // plus (submission_type IS NOT NULL OR excused) rule).
+    let submitting: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*)
+        FROM assignments a
+        JOIN courses c ON c.id = a.course_id
+        WHERE EXISTS (
+              SELECT 1 FROM enrollments e
+               WHERE e.course_id = a.course_id
+                 AND e.user_id = $1
+                 AND e.role = 'student'
+                 AND e.workflow_state = 'active')
+          AND a.due_at IS NOT NULL
+          AND a.due_at >= now() - interval '4 weeks'
+          AND a.due_at <= now() + interval '1 week'
+          AND NOT EXISTS (
+              SELECT 1 FROM submissions s
+               WHERE s.assignment_id = a.id
+                 AND s.user_id = $1
+                 AND (s.body IS NOT NULL OR s.submission_type IS NOT NULL OR s.excused))
+          AND NOT EXISTS (
+              SELECT 1 FROM todo_ignores ig
+               WHERE ig.user_id = $1
+                 AND ig.asset_type = 'assignment'
+                 AND ig.asset_id = a.id
+                 AND ig.purpose = 'submitting')
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let quizzes: i64 = if include_ungraded_quizzes {
+        sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM quizzes q
+            JOIN courses c ON c.id = q.course_id
+            WHERE EXISTS (
+                  SELECT 1 FROM enrollments e
+                   WHERE e.course_id = q.course_id
+                     AND e.user_id = $1
+                     AND e.role = 'student'
+                     AND e.workflow_state = 'active')
+              AND q.published
+              AND q.quiz_type IN ('assignment', 'graded_survey')
+              AND NOT EXISTS (
+                  SELECT 1 FROM quiz_submissions qs
+                   WHERE qs.quiz_id = q.id AND qs.user_id = $1)
+              AND NOT EXISTS (
+                  SELECT 1 FROM todo_ignores ig
+                   WHERE ig.user_id = $1
+                     AND ig.asset_type = 'quiz'
+                     AND ig.asset_id = q.id
+                     AND ig.purpose = 'submitting')
+            "#,
+        )
+        .bind(auth.id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(ApiError::from)?
+    } else {
+        0
+    };
+
+    Ok(Json(TodoItemCount {
+        needs_grading_count: grading,
+        assignments_needing_submitting: submitting + quizzes,
+    }))
+}
+
+/// GET /users/{userId}/missing_submissions — Canvas
+/// UsersController#missing_submissions.
+///
+/// Canvas resolves the user (`api_find(User, ...)`), then authorizes
+/// `:read` on the user — the caller themself or an admin (observers are the
+/// third path, via `observed_user_id`; this schema has no observer
+/// enrollments, so that branch is omitted). It then returns the assignments
+/// in the user's participating-student courses that have no submission from
+/// the user (Canvas `Submission.active.missing`, effectively "no submission
+/// row for a published assignment"), ordered by due date.
+///
+/// Simplifications documented against Canvas:
+/// - The schema has no `assignments.published` / `submission_types` /
+///   `lock_at` columns, so the published, expecting-submission, not-locked
+///   and `filter[]=submittable` conditions cannot be expressed and are
+///   omitted (the star-dashboard todo route makes the same trade-off).
+/// - `course_ids[]` and `include[]=course` are not supported; the response
+///   is the plain assignment list, paginated like Canvas (LIMIT/OFFSET).
+async fn missing_submissions(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+    Query(pag): Query<Pagination>,
+) -> Result<Json<Vec<TodoAssignment>>, ApiError> {
+    let user_id = authorize_missing_submissions(&state, &auth, &raw_user_id).await?;
+    let (_page, per_page, offset) = pagination_values(pag.page, pag.per_page);
+
+    let rows: Vec<TodoAssignment> = sqlx::query_as(
+        r#"
+        SELECT a.id,
+               a.course_id,
+               a.title,
+               a.description,
+               a.points_possible::float8 AS points_possible,
+               a.due_at,
+               a.created_at,
+               a.updated_at
+        FROM assignments a
+        JOIN courses c ON c.id = a.course_id
+        WHERE EXISTS (
+              SELECT 1 FROM enrollments e
+               WHERE e.course_id = a.course_id
+                 AND e.user_id = $1
+                 AND e.role = 'student'
+                 AND e.workflow_state = 'active')
+          AND NOT EXISTS (
+              SELECT 1 FROM submissions s
+               WHERE s.assignment_id = a.id
+                 AND s.user_id = $1
+                 AND (s.body IS NOT NULL OR s.submission_type IS NOT NULL OR s.excused))
+        ORDER BY a.due_at NULLS LAST, a.id
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(user_id)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(rows))
+}
+
+/// Canvas missing_submissions permission: `self` (or the caller's numeric id)
+/// resolves to the caller; another user requires the admin role. The user
+/// must exist (404 otherwise, including non-numeric ids).
+async fn authorize_missing_submissions(
+    state: &AppState,
+    auth: &AuthUser,
+    raw_user_id: &str,
+) -> Result<i64, ApiError> {
+    let user_id = resolve_path_user(raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+    if !is_self(auth.id, user_id) {
+        let role = get_user_role(&state.db, auth.id)
+            .await?
+            .unwrap_or_else(|| "student".to_string());
+        if !is_admin(&role) {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    Ok(user_id)
+}
+
+/// GET /users/{id}/graded_submissions — Canvas
+/// UsersController#user_graded_submissions.
+///
+/// Canvas authorizes `read_grades` on the resolved user; the only callers
+/// that pass in this API are the user themself (admins technically pass too,
+/// but Canvas scopes the endpoint to a user's own submissions, so this
+/// implementation is self-only: any other caller is 403).
+///
+/// Simplifications documented against Canvas:
+/// - Canvas orders by `graded_at` DESC via a BookmarkedCollection; this
+///   orders by `graded_at DESC NULLS LAST, id DESC` with LIMIT/OFFSET
+///   pagination.
+/// - `only_current_enrollments` and `only_published_assignments` are not
+///   supported (no assignments.published column; enrollments in this schema
+///   are active by construction).
+/// - Canvas' `graded` scope also includes excused submissions; those have no
+///   score here, so the `score IS NOT NULL` predicate matches the documented
+///   "submissions with a score" shape.
+async fn graded_submissions(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(user_id): Path<i64>,
+    Query(pag): Query<Pagination>,
+) -> Result<Json<Vec<GradedSubmission>>, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    if !is_self(auth.id, user_id) {
+        return Err(ApiError::Forbidden);
+    }
+    let (_page, per_page, offset) = pagination_values(pag.page, pag.per_page);
+
+    let rows: Vec<GradedSubmissionRow> = sqlx::query_as(
+        r#"
+        SELECT s.id,
+               s.assignment_id,
+               s.user_id,
+               s.attempt,
+               s.body,
+               s.score::float8::text AS grade,
+               s.score::float8 AS score,
+               s.submitted_at,
+               s.graded_at,
+               s.grader_id,
+               s.submission_type,
+               s.workflow_state,
+               a.course_id AS assignment_course_id,
+               a.title AS assignment_title,
+               a.description AS assignment_description,
+               a.points_possible::float8 AS assignment_points_possible,
+               a.due_at AS assignment_due_at,
+               a.created_at AS assignment_created_at,
+               a.updated_at AS assignment_updated_at
+        FROM submissions s
+        JOIN assignments a ON a.id = s.assignment_id
+        WHERE s.user_id = $1
+          AND s.score IS NOT NULL
+        ORDER BY s.graded_at DESC NULLS LAST, s.id DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(user_id)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    // The submission URL carries the assignment's course id, already present
+    // on each joined row.
+    Ok(Json(
+        rows.into_iter()
+            .map(|row| row.into_submission(row.assignment_course_id))
+            .collect(),
+    ))
+}
+
+/// GET /users/self/activity_stream — Canvas UsersController#activity_stream.
+///
+/// Canvas aggregates StreamItemInstances across every context the user
+/// participates in. This implementation reads the `stream_items` table
+/// (migration 0106): rows are appended by the API itself (no background
+/// dispatcher), so the stream reflects recorded activity rather than a
+/// live query over discussions/conversations. `only_active_courses=true`
+/// keeps only items whose context course has an active enrollment, matching
+/// Canvas' option. Pagination follows Canvas (LIMIT/OFFSET).
+async fn activity_stream(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<StreamQuery>,
+) -> Result<Json<Vec<StreamItem>>, ApiError> {
+    let (_page, per_page, offset) = pagination_values(params.page, params.per_page);
+    let only_active_courses = params.only_active_courses.unwrap_or(false);
+
+    let rows: Vec<StreamItem> = sqlx::query_as(
+        r#"
+        SELECT si.id,
+               si.asset_string,
+               si.item_type,
+               si.context_code,
+               si.title,
+               si.created_at
+        FROM stream_items si
+        WHERE si.user_id = $1
+          AND NOT si.hidden
+          AND (NOT $2::boolean OR EXISTS (
+               SELECT 1 FROM enrollments e
+                WHERE e.user_id = $1
+                  AND e.role = 'student'
+                  AND e.workflow_state = 'active'
+                  AND si.context_code = 'course_' || e.course_id))
+        ORDER BY si.created_at DESC, si.id DESC
+        LIMIT $3 OFFSET $4
+        "#,
+    )
+    .bind(auth.id)
+    .bind(only_active_courses)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(rows))
+}
+
+/// GET /users/self/activity_stream/summary — Canvas
+/// UsersController#activity_stream_summary: one `{type, unread_count, count}`
+/// entry per stream item type.
+///
+/// Simplification: Canvas tracks per-item read state
+/// (ContentParticipation); this schema records no read state, so
+/// `unread_count` is always 0 (Canvas emits the field with 0 for fully-read
+/// types).
+async fn activity_stream_summary(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<StreamItemSummary>>, ApiError> {
+    let rows: Vec<StreamItemSummary> = sqlx::query_as(
+        r#"
+        SELECT si.item_type,
+               0::bigint AS unread_count,
+               COUNT(*) AS count
+        FROM stream_items si
+        WHERE si.user_id = $1
+          AND NOT si.hidden
+        GROUP BY si.item_type
+        ORDER BY si.item_type
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(rows))
+}
+
+/// DELETE /users/self/activity_stream/{id} — Canvas
+/// UsersController#ignore_stream_item: hide one stream item. Canvas always
+/// renders `{"hidden": true}`, even when the id does not belong to the user
+/// (the update simply matches no rows).
+async fn ignore_stream_item(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(item_id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    sqlx::query(
+        "UPDATE stream_items SET hidden = TRUE, updated_at = now() \
+                 WHERE user_id = $1 AND id = $2",
+    )
+    .bind(auth.id)
+    .bind(item_id)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(serde_json::json!({ "hidden": true })))
+}
+
+/// DELETE /users/self/activity_stream — Canvas
+/// UsersController#ignore_all_stream_items: hide every stream item.
+async fn ignore_all_stream_items(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    sqlx::query(
+        "UPDATE stream_items SET hidden = TRUE, updated_at = now() \
+                 WHERE user_id = $1 AND NOT hidden",
+    )
+    .bind(auth.id)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(serde_json::json!({ "hidden": true })))
+}
+
+/// DELETE /users/self/todo/{assetString}/{purpose} — Canvas
+/// UsersController#ignore_item: record a todo ignore so the item stops
+/// counting in todo_item_count. Canvas upserts an `Ignore` row keyed on
+/// (user, asset, purpose) with a `permanent` flag (`permanent=1` hides the
+/// item forever, otherwise until the item changes); this schema's
+/// `todo_ignores` table carries the same columns. Canvas answers
+/// `{"ignored": true}` on success and 400 when the purpose is unknown.
+async fn ignore_todo_item(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((asset_string, purpose)): Path<(String, String)>,
+    Query(params): Query<IgnoreQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !matches!(
+        purpose.as_str(),
+        "grading" | "submitting" | "reviewing" | "moderation"
+    ) {
+        return Err(ApiError::BadRequest("unknown purpose".into()));
+    }
+    let Some((asset_type, asset_id)) = split_asset_string(&asset_string) else {
+        return Err(ApiError::NotFound);
+    };
+    if !asset_type_exists(&state.db, asset_type, asset_id).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    let permanent = params.permanent.as_deref() == Some("1");
+    sqlx::query(
+        r#"
+        INSERT INTO todo_ignores (user_id, asset_type, asset_id, purpose, permanent)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (user_id, asset_type, asset_id, purpose, permanent)
+        DO UPDATE SET updated_at = now()
+        "#,
+    )
+    .bind(auth.id)
+    .bind(asset_type)
+    .bind(asset_id)
+    .bind(&purpose)
+    .bind(permanent)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(serde_json::json!({ "ignored": true })))
+}
+
+/// Query params for the activity stream routes.
+#[derive(Debug, Default, Deserialize)]
+pub struct StreamQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+    /// Canvas `only_active_courses` for activity_stream / summary.
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub only_active_courses: Option<bool>,
+}
+
+/// Query params for DELETE /users/self/todo/{assetString}/{purpose}:
+/// Canvas checks `params[:permanent] == "1"`.
+#[derive(Debug, Default, Deserialize)]
+pub struct IgnoreQuery {
+    pub permanent: Option<String>,
+}
+
+/// Split a Canvas asset string `"<type>_<id>"` like
+/// `Context.find_by_asset_string` would parse it.
+fn split_asset_string(asset_string: &str) -> Option<(&str, i64)> {
+    let (kind, id) = asset_string.split_once('_')?;
+    let id = id.parse::<i64>().ok()?;
+    Some((kind, id))
+}
+
+/// The asset types todo ignores address (Canvas' allowlist minus the ones
+/// this schema has no table for: AssessmentRequest, SubAssignment,
+/// PeerReviewSubAssignment).
+async fn asset_type_exists(
+    pool: &PgPool,
+    asset_type: &str,
+    asset_id: i64,
+) -> Result<bool, ApiError> {
+    let table = match asset_type {
+        "assignment" => "assignments",
+        "quiz" => "quizzes",
+        _ => return Ok(false),
+    };
+    let row: Option<(i32,)> = sqlx::query_as(&format!("SELECT 1 FROM {table} WHERE id = $1"))
+        .bind(asset_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(row.is_some())
 }
 
 #[cfg(test)]
