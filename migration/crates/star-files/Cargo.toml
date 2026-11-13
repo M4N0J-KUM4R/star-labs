@@ -14,3 +14,10 @@ chrono = { workspace = true }
 jsonwebtoken = { workspace = true }
 tower = { workspace = true }
 futures = { workspace = true }
+
+[dev-dependencies]
+star-db = { path = "../star-db" }
+axum-test = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+tokio = { workspace = true }
+serde_json = { workspace = true }
