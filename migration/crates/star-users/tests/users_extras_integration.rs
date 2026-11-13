@@ -260,7 +260,7 @@ async fn todo_item_count_counts_unsubmitted_and_grading() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     assert_eq!(
-        resp.json(),
+        resp.json::<serde_json::Value>(),
         serde_json::json!({ "needs_grading_count": 0, "assignments_needing_submitting": 0 })
     );
 
@@ -341,7 +341,10 @@ async fn todo_item_count_excludes_ignored() {
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json(), serde_json::json!({ "ignored": true }));
+    assert_eq!(
+        resp.json::<serde_json::Value>(),
+        serde_json::json!({ "ignored": true })
+    );
 
     let resp = server
         .get("/users/self/todo_item_count")
@@ -548,7 +551,7 @@ async fn missing_submissions_other_user_forbidden() {
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json(), serde_json::json!([]));
+    assert_eq!(resp.json::<serde_json::Value>(), serde_json::json!([]));
 
     // Missing user: 404 for the admin, 403 for a non-admin (permission
     // check first, matching the rest of this API).
@@ -617,7 +620,7 @@ async fn graded_submissions_requires_self() {
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json(), serde_json::json!([]));
+    assert_eq!(resp.json::<serde_json::Value>(), serde_json::json!([]));
 
     // Missing user: 404 for self-style probes is impossible (the caller is
     // not the missing id), so the shape is 404 for the admin and 403 for a
@@ -764,14 +767,14 @@ async fn activity_stream_empty_and_summary_shapes() {
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json(), serde_json::json!([]));
+    assert_eq!(resp.json::<serde_json::Value>(), serde_json::json!([]));
 
     let resp = server
         .get("/users/self/activity_stream/summary")
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json(), serde_json::json!([]));
+    assert_eq!(resp.json::<serde_json::Value>(), serde_json::json!([]));
 
     // Seed three items of two types for the student, plus one for someone
     // else (must never leak into the student's stream).
@@ -851,7 +854,10 @@ async fn activity_stream_empty_and_summary_shapes() {
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json(), serde_json::json!({ "hidden": true }));
+    assert_eq!(
+        resp.json::<serde_json::Value>(),
+        serde_json::json!({ "hidden": true })
+    );
 
     // Hidden item is gone from both the stream and the summary.
     let resp = server
@@ -882,7 +888,10 @@ async fn activity_stream_empty_and_summary_shapes() {
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json(), serde_json::json!({ "hidden": true }));
+    assert_eq!(
+        resp.json::<serde_json::Value>(),
+        serde_json::json!({ "hidden": true })
+    );
 
     // DELETE the whole stream hides everything.
     let resp = server
@@ -890,21 +899,24 @@ async fn activity_stream_empty_and_summary_shapes() {
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json(), serde_json::json!({ "hidden": true }));
+    assert_eq!(
+        resp.json::<serde_json::Value>(),
+        serde_json::json!({ "hidden": true })
+    );
 
     let resp = server
         .get("/users/self/activity_stream")
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json(), serde_json::json!([]));
+    assert_eq!(resp.json::<serde_json::Value>(), serde_json::json!([]));
 
     let resp = server
         .get("/users/self/activity_stream/summary")
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json(), serde_json::json!([]));
+    assert_eq!(resp.json::<serde_json::Value>(), serde_json::json!([]));
 
     // The other user's stream is untouched by all of the above.
     let resp = server

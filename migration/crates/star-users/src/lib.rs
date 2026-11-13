@@ -323,9 +323,9 @@ pub struct TodoItemCount {
     pub assignments_needing_submitting: i64,
 }
 
-/// Raw missing-submission rows decode straight into the Canvas assignment
-/// shape (`TodoAssignment`), since missing_submissions returns plain
-/// assignment JSON.
+// Raw missing-submission rows decode straight into the Canvas assignment
+// shape (`TodoAssignment`), since missing_submissions returns plain
+// assignment JSON.
 
 /// One entry of GET /users/{userId}/graded_submissions: a Canvas submission
 /// with its assignment fields (per UsersController#user_graded_submissions,
@@ -1892,7 +1892,10 @@ async fn graded_submissions(
     // on each joined row.
     Ok(Json(
         rows.into_iter()
-            .map(|row| row.into_submission(row.assignment_course_id))
+            .map(|row| {
+                let course_id = row.assignment_course_id;
+                row.into_submission(course_id)
+            })
             .collect(),
     ))
 }
