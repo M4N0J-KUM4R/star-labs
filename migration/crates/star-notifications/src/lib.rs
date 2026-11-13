@@ -438,7 +438,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/users/self/communication_channels/{communication_channel_id}/notification_preferences/{notification}",
-            put(update_channel_preference),
+            get(show_channel_preference_self).put(update_channel_preference),
         )
         // User-level notification preferences (Canvas API v1)
         .route(
@@ -946,6 +946,21 @@ async fn update_channel_preference(
     Ok(Json(CommunicationChannelPreferencesResponse {
         notification_preferences: vec![row],
     }))
+}
+
+/// GET /users/self/communication_channels/{id}/notification_preferences/{notification}
+/// — Canvas' `show`; delegates to the scoped handler with the `self` segment.
+async fn show_channel_preference_self(
+    state: State<AppState>,
+    auth: AuthUser,
+    Path((channel_id, notification)): Path<(i64, String)>,
+) -> Result<Json<CommunicationChannelPreferencesResponse>, ApiError> {
+    show_channel_preference_scoped(
+        state,
+        auth,
+        Path(("self".to_string(), channel_id, notification)),
+    )
+    .await
 }
 
 // --------------------------------------------------------------------------

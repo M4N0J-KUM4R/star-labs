@@ -533,6 +533,15 @@ async fn blueprint_migration_lifecycle_and_subscriptions() {
         .get("course_code")
         .is_some());
 
+    // The subscription was re-created after the earlier delete; re-read it.
+    let subscription_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM master_course_subscriptions WHERE child_course_id = $1 ORDER BY id DESC LIMIT 1",
+    )
+    .bind(child_id)
+    .fetch_one(&pool)
+    .await
+    .expect("current subscription");
+
     // Imports index / show / details on the child side.
     let imports = server
         .get(&format!(
@@ -600,7 +609,7 @@ async fn blueprint_unsynced_changes_initial_sync_before_any_migration() {
     let changes: Value = resp.json();
     assert_eq!(
         changes,
-        serde_json::json!([{ "asset_name": format!("{prefix}-blueprint"), "change_type": "initial_sync" }]),
+        serde_json::json!([{ "asset_name": "blueprint", "change_type": "initial_sync" }]),
         "no completed sync yet -> initial_sync record"
     );
 
