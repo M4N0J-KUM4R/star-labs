@@ -1810,7 +1810,8 @@ async fn authorize_missing_submissions(
     raw_user_id: &str,
 ) -> Result<i64, ApiError> {
     let user_id = resolve_path_user(raw_user_id, auth.id)?;
-    ensure_user_exists(&state.db, user_id).await?;
+    // Permission runs before existence, matching the rest of this API: a
+    // non-admin probing a missing id gets 403, not 404.
     if !is_self(auth.id, user_id) {
         let role = get_user_role(&state.db, auth.id)
             .await?
@@ -1819,6 +1820,7 @@ async fn authorize_missing_submissions(
             return Err(ApiError::Forbidden);
         }
     }
+    ensure_user_exists(&state.db, user_id).await?;
     Ok(user_id)
 }
 
@@ -1846,8 +1848,18 @@ async fn graded_submissions(
     Path(user_id): Path<i64>,
     Query(pag): Query<Pagination>,
 ) -> Result<Json<Vec<GradedSubmission>>, ApiError> {
-    ensure_user_exists(&state.db, user_id).await?;
+    // Canvas order: authorize (read_grades) first — a non-admin is 403 even
+    // for a missing id — then resolve the user (404 when missing), then the
+    // self-only scope check (an admin asking for another user's grades is
+    // still 403 once that user exists).
     if !is_self(auth.id, user_id) {
+        let role = get_user_role(&state.db, auth.id)
+            .await?
+            .unwrap_or_else(|| "student".to_string());
+        if !is_admin(&role) {
+            return Err(ApiError::Forbidden);
+        }
+        ensure_user_exists(&state.db, user_id).await?;
         return Err(ApiError::Forbidden);
     }
     let (_page, per_page, offset) = pagination_values(pag.page, pag.per_page);
