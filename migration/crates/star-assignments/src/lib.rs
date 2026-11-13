@@ -2295,10 +2295,20 @@ async fn select_peer_reviews(
 /// submissions (`for_assessee`).
 async fn list_peer_reviews(
     State(state): State<AppState>,
-    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    Path(path): Path<Vec<i64>>,
     RawQuery(raw_query): RawQuery,
     auth: AuthUser,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    // Two captures on the assignment route, three on the submission route
+    // (Canvas renders both with the same `index` action).
+    let (course_id, assignment_id, submission_id) = match path.as_slice() {
+        [course_id, assignment_id] => (*course_id, *assignment_id, None),
+        [course_id, assignment_id, submission_id] => {
+            (*course_id, *assignment_id, Some(*submission_id))
+        }
+        _ => return Err(ApiError::NotFound),
+    };
+
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
 
     let can_grade = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
@@ -2307,7 +2317,8 @@ async fn list_peer_reviews(
     }
 
     let query = parse_peer_review_query(raw_query.as_deref());
-    let mut reviews = select_peer_reviews(&state.db, assignment_id, query.submission_id).await?;
+    let submission_id = query.submission_id.or(submission_id);
+    let mut reviews = select_peer_reviews(&state.db, assignment_id, submission_id).await?;
     if !can_grade {
         reviews.retain(|review| review.user_id == auth.id);
     }
