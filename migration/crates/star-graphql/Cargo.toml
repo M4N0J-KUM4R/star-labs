@@ -1,0 +1,20 @@
+[package]
+name = "star-graphql"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+star-common = { path = "../star-common" }
+star-auth = { path = "../star-auth" }
+axum = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+async-graphql = { version = "7", default-features = false, features = ["chrono"] }
+async-graphql-axum = { version = "7", default-features = false }
+
+[dev-dependencies]
+star-db = { path = "../star-db" }
+tokio = { workspace = true }
+axum-test = { workspace = true }
