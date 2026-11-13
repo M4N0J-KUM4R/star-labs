@@ -614,10 +614,19 @@ async fn sso_settings_update_persists_and_returns_wrapped() {
     };
 
     seed_account_if_needed(&pool).await;
+    // Dedicated account: the flat-update test writes account 1 from a
+    // parallel thread in this same binary, which races this test's GET.
+    let account_id: i64 = sqlx::query_scalar(
+        "INSERT INTO accounts (name) VALUES ($1) RETURNING id",
+    )
+    .bind(format!("{prefix}-sso-account"))
+    .fetch_one(&pool)
+    .await
+    .expect("seed account");
     let admin = seed_user(&pool, &prefix, "SsoUpdAdmin", "admin").await;
 
     let put_resp = server
-        .put("/accounts/1/sso_settings")
+        .put(&format!("/accounts/{account_id}/sso_settings"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "sso_settings": {
@@ -656,7 +665,7 @@ async fn sso_settings_update_persists_and_returns_wrapped() {
 
     // GET reflects persisted values.
     let get_resp = server
-        .get("/accounts/1/sso_settings")
+        .get(&format!("/accounts/{account_id}/sso_settings"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     let get_body: Value = get_resp.json();
