@@ -45,7 +45,7 @@
 //! - POST   /{context}/discussion_topics/{topicId}/accessibility/queue_scan — queue scan (401 shape)
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, Query, RawQuery, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -2873,23 +2873,75 @@ async fn group_topic_view(
     ctx_topic_view(&state, TopicContext::Group(group_id), topic_id, &auth).await
 }
 
-/// Query params of the entry_list endpoints: `ids[]=1&ids[]=2`.
-#[derive(Debug, Deserialize, Default)]
+/// Query params of the entry_list endpoints: `ids[]=1&ids[]=2` (or
+/// `ids=1,2`). Parsed from the raw query string because serde_urlencoded
+/// cannot deserialize repeated `ids[]` keys into a sequence.
+#[derive(Debug, Default)]
 pub struct EntryListParams {
-    #[serde(rename = "ids[]", default)]
-    pub ids_bracket: Vec<i64>,
-    #[serde(default)]
     pub ids: Vec<i64>,
 }
 
 impl EntryListParams {
-    fn entry_ids(&self) -> Vec<i64> {
-        if !self.ids_bracket.is_empty() {
-            self.ids_bracket.clone()
-        } else {
-            self.ids.clone()
+    fn parse(raw_query: Option<&str>) -> Result<Self, ApiError> {
+        let mut ids = Vec::new();
+        let Some(raw_query) = raw_query else {
+            return Ok(Self { ids });
+        };
+        for pair in raw_query.split('&') {
+            let Some((raw_key, raw_value)) = pair.split_once('=') else {
+                continue;
+            };
+            let key = decode_query_component(raw_key).to_ascii_lowercase();
+            let key = key.strip_suffix("[]").unwrap_or(key.as_str());
+            if key != "ids" {
+                continue;
+            }
+            for part in decode_query_component(raw_value).split(',') {
+                let part = part.trim();
+                if part.is_empty() {
+                    continue;
+                }
+                let id = part
+                    .parse::<i64>()
+                    .map_err(|_| ApiError::BadRequest("invalid ids".into()))?;
+                ids.push(id);
+            }
+        }
+        Ok(Self { ids })
+    }
+}
+
+/// Percent-decode a single query-string component (`+` means space).
+fn decode_query_component(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' if index + 2 < bytes.len() => {
+                let hex = &value[index + 1..index + 3];
+                match u8::from_str_radix(hex, 16) {
+                    Ok(byte) => {
+                        decoded.push(byte);
+                        index += 3;
+                    }
+                    Err(_) => {
+                        decoded.push(bytes[index]);
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
         }
     }
+    String::from_utf8_lossy(&decoded).into_owned()
 }
 
 /// Canvas `entry_list`: the requested entries in id order; deleted entries
@@ -2906,7 +2958,7 @@ async fn ctx_entry_list(
         return Err(ApiError::Forbidden);
     }
 
-    let ids = params.entry_ids();
+    let ids = params.ids.clone();
     if ids.is_empty() {
         return Ok(Json(Vec::new()));
     }
@@ -2939,9 +2991,10 @@ async fn ctx_entry_list(
 async fn course_entry_list(
     State(state): State<AppState>,
     Path((course_id, topic_id)): Path<(i64, i64)>,
-    Query(params): Query<EntryListParams>,
+    RawQuery(raw_query): RawQuery,
     auth: AuthUser,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let params = EntryListParams::parse(raw_query.as_deref())?;
     ctx_entry_list(
         &state,
         TopicContext::Course(course_id),
@@ -2956,9 +3009,10 @@ async fn course_entry_list(
 async fn group_entry_list(
     State(state): State<AppState>,
     Path((group_id, topic_id)): Path<(i64, i64)>,
-    Query(params): Query<EntryListParams>,
+    RawQuery(raw_query): RawQuery,
     auth: AuthUser,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let params = EntryListParams::parse(raw_query.as_deref())?;
     ctx_entry_list(
         &state,
         TopicContext::Group(group_id),
