@@ -1001,7 +1001,9 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/accounts/{account_id}/account_notifications/{id}",
-            delete(delete_account_notification_scoped),
+            get(show_account_notification)
+                .put(update_account_notification)
+                .delete(delete_account_notification_scoped),
         )
         .route(
             "/account_notifications/{id}",
@@ -1013,8 +1015,25 @@ pub fn router() -> Router<AppState> {
             get(list_account_admins).post(create_account_admin),
         )
         .route(
+            "/accounts/{account_id}/admins/self",
+            get(list_account_admins_self),
+        )
+        .route(
             "/accounts/{account_id}/admins/{user_id}",
             delete(delete_account_admin),
+        )
+        // Canvas Api::V1::Accounts#terms_of_service / #help_links /
+        // #permissions
+        .route(
+            "/accounts/{id}/terms_of_service",
+            get(get_account_terms_of_service),
+        )
+        .route("/accounts/{id}/help_links", get(get_account_help_links))
+        .route("/accounts/{id}/permissions", get(get_account_permissions))
+        // Canvas SubAccountsController#destroy
+        .route(
+            "/accounts/{id}/sub_accounts/{subAccountId}",
+            delete(delete_sub_account),
         )
 }
 
@@ -2012,6 +2031,423 @@ async fn list_course_creation_accounts(
     Query(pag): Query<Pagination>,
 ) -> Result<Json<Vec<AccountTreeJson>>, ApiError> {
     Ok(Json(adminable_accounts_page(&state, &auth, &pag).await?))
+}
+
+// --------------------------------------------------------------------------
+// Account admin extras (Phase 5)
+// ---------------------------------------------------------------------------
+
+/// Canvas TermsOfService JSON for GET /accounts/{id}/terms_of_service.
+///
+/// Canvas reads the root account's policy (`@account.root_account
+/// .terms_of_service`); this schema stores it in `account_terms_of_service`
+/// (migration 0089). `passive` and `self_registration_type` have no columns
+/// here and fall back to the Canvas defaults (false / null).
+async fn get_account_terms_of_service(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    let roots = account_root_ids(&state.db, &[account_id]).await?;
+    let root_id = roots.get(&account_id).copied().unwrap_or(account_id);
+
+    let row: Option<(i64, Option<String>, Option<String>)> = sqlx::query_as(
+        r#"SELECT id, terms_type, content FROM account_terms_of_service WHERE account_id = $1"#,
+    )
+    .bind(root_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    let (tos_id, terms_type, content) = match row {
+        Some((id, terms_type, content)) => (id, terms_type, content),
+        // Canvas seeds a default TermsOfService per root account; this schema
+        // only stores explicit policies, so the default shape is returned.
+        None => (0, Some("default".to_string()), None),
+    };
+
+    Ok(Json(serde_json::json!({
+        "id": tos_id,
+        "terms_type": terms_type,
+        "passive": false,
+        "account_id": root_id,
+        "content": content,
+        "self_registration_type": Value::Null,
+    })))
+}
+
+/// GET /accounts/{id}/help_links — Canvas `Accounts#help_links`.
+///
+/// Static Canvas-shaped default list: account-settings `custom_help_links`
+/// overrides are not modeled in this schema, so the Canvas defaults are
+/// returned with an empty custom list (documented simplification).
+async fn get_account_help_links(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(Json(serde_json::json!({
+        "help_link_name": "Help",
+        "help_link_icon": "help",
+        "custom_help_links": [],
+        "default_help_links": [
+            {
+                "id": "link_1",
+                "text": "Ask your instructor a question",
+                "subtext": "Questions are submitted to your instructor",
+                "url": "#teacher_feedback",
+                "type": "default",
+                "available_to": ["student"],
+            },
+            {
+                "id": "link_2",
+                "text": "Search the Canvas Guides",
+                "subtext": "Find answers to common questions",
+                "url": "http://lms.canvaslms.com/search/",
+                "type": "default",
+                "available_to": ["user"],
+            },
+            {
+                "id": "link_0",
+                "text": "Report a problem",
+                "subtext": "Get help with Canvas!",
+                "url": "#ticket_create",
+                "type": "default",
+                "available_to": ["user"],
+            },
+        ],
+    })))
+}
+
+/// Permission names returned when the caller does not request a subset
+/// (Canvas `rights_status` covers every granted right).
+const DEFAULT_PERMISSION_NAMES: &[&str] = &[
+    "manage_account_memberships",
+    "manage_courses_admin",
+    "create_courses",
+    "manage_admin_roles",
+    "manage_alerts",
+    "manage_sis",
+    "manage_settings",
+    "manage_feature_flags",
+    "view_statistics",
+    "become_user",
+];
+
+/// GET /accounts/{id}/permissions — Canvas `Accounts#permissions`: a map of
+/// permission name to boolean for the requesting user.
+///
+/// Canvas lets any user with a relationship to the account ask (the map
+/// itself reflects their rights), so the route is open to every
+/// authenticated caller; without a granular permission engine the value is
+/// the crate's account-admin gate (global admin or account admin in the
+/// chain) — true for account admins, false for everyone else.
+async fn get_account_permissions(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Result<Json<Value>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    let mut requested: Vec<String> = Vec::new();
+    for (key, value) in &pairs {
+        match key.as_str() {
+            // Canvas sends `permissions[]=x`; `permissions=a,b` is accepted too.
+            "permissions[]" | "permissions" => {
+                for part in value.split(',') {
+                    let name = part.trim().to_ascii_lowercase();
+                    if !name.is_empty() && !requested.contains(&name) {
+                        requested.push(name);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    if requested.is_empty() {
+        requested = DEFAULT_PERMISSION_NAMES
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
+    }
+
+    let allowed = can_access_account(&state.db, auth.id, account_id, &auth).await?;
+    let map: Map<String, Value> = requested
+        .into_iter()
+        .map(|name| (name, Value::Bool(allowed)))
+        .collect();
+    Ok(Json(Value::Object(map)))
+}
+
+/// DELETE /accounts/{id}/sub_accounts/{subAccountId} — Canvas
+/// `SubAccountsController#destroy`. Refuses a root account (401), a
+/// sub-account holding courses (409) or sub-accounts (409); otherwise the
+/// row is deleted (cascading its courses/grants) and the former account JSON
+/// is returned.
+async fn delete_sub_account(
+    State(state): State<AppState>,
+    Path((account_id, sub_account_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<AccountTreeJson>, ApiError> {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let row: Option<AccountRow> = sqlx::query_as(&format!(
+        r#"SELECT {ACCOUNT_ROW_COLUMNS} FROM accounts WHERE id = $1"#
+    ))
+    .bind(sub_account_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    let row = row.ok_or(ApiError::NotFound)?;
+
+    // Canvas `subaccount_or_self`: the target must be the account itself or
+    // one of its descendants.
+    if row.parent_account_id.is_none() {
+        return Err(ApiError::Unauthorized);
+    }
+    if sub_account_id != account_id {
+        let subtree = account_subtree_ids(&state.db, &[account_id]).await?;
+        if !subtree.contains(&sub_account_id) {
+            return Err(ApiError::NotFound);
+        }
+    }
+
+    let (course_count,): (i64,) = sqlx::query_as(
+        r#"SELECT COUNT(*) FROM courses WHERE account_id = $1 AND workflow_state <> 'deleted'"#,
+    )
+    .bind(sub_account_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    if course_count > 0 {
+        return Err(ApiError::Conflict(
+            "You can't delete a sub-account that has courses in it.".into(),
+        ));
+    }
+
+    let (sub_count,): (i64,) = sqlx::query_as(
+        r#"SELECT COUNT(*) FROM accounts WHERE parent_account_id = $1 AND workflow_state <> 'deleted'"#,
+    )
+    .bind(sub_account_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    if sub_count > 0 {
+        return Err(ApiError::Conflict(
+            "You can't delete a sub-account that has sub-accounts in it.".into(),
+        ));
+    }
+
+    let response = account_tree_row(&state.db, row).await?;
+    sqlx::query(r#"DELETE FROM accounts WHERE id = $1"#)
+        .bind(sub_account_id)
+        .execute(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    Ok(Json(response))
+}
+
+/// Body of PUT /accounts/{account_id}/account_notifications/{id}; every
+/// field is optional (absent keeps the current value, Canvas update
+/// semantics).
+#[derive(Debug, Default, Deserialize)]
+pub struct UpdateAccountNotification {
+    pub subject: Option<String>,
+    pub message: Option<String>,
+    pub start_at: Option<DateTime<Utc>>,
+    pub end_at: Option<DateTime<Utc>>,
+    pub pub_icon: Option<String>,
+    #[serde(rename = "icon")]
+    pub icon: Option<String>,
+    #[serde(default, alias = "roles")]
+    pub account_notification_roles: Option<Vec<String>>,
+}
+
+/// Current notification columns needed to merge an update.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct AccountNotificationCurrentRow {
+    account_id: i64,
+    subject: String,
+    message: String,
+    start_at: DateTime<Utc>,
+    end_at: DateTime<Utc>,
+    icon: Option<String>,
+}
+
+/// PUT /accounts/{account_id}/account_notifications/{id} — Canvas
+/// `AccountNotificationsController#update`. Updates the provided fields,
+/// re-validates like create and replaces the role rows when the request
+/// carries `account_notification_roles`.
+async fn update_account_notification(
+    State(state): State<AppState>,
+    Path((account_id, notification_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateAccountNotification>,
+) -> Result<Json<AccountNotificationResponse>, ApiError> {
+    let current: Option<AccountNotificationCurrentRow> = sqlx::query_as(
+        r#"
+        SELECT account_id, subject, message, start_at, end_at, icon
+        FROM account_notifications
+        WHERE id = $1 AND workflow_state = 'active'
+        "#,
+    )
+    .bind(notification_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    let current = current.ok_or(ApiError::NotFound)?;
+    if current.account_id != account_id {
+        return Err(ApiError::NotFound);
+    }
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let icon = payload.icon.or(payload.pub_icon).or(current.icon);
+    let merged = CreateAccountNotification {
+        subject: payload.subject.unwrap_or(current.subject),
+        message: payload.message.unwrap_or(current.message),
+        start_at: payload.start_at.unwrap_or(current.start_at),
+        end_at: payload.end_at.unwrap_or(current.end_at),
+        icon: icon.clone(),
+        account_notification_roles: payload.account_notification_roles.clone(),
+    };
+    validate_notification(&merged)?;
+
+    sqlx::query(
+        r#"
+        UPDATE account_notifications
+        SET subject = $2, message = $3, start_at = $4, end_at = $5, icon = $6,
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(notification_id)
+    .bind(&merged.subject)
+    .bind(&merged.message)
+    .bind(merged.start_at)
+    .bind(merged.end_at)
+    .bind(&icon)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Roles are replaced wholesale when the request provides a list.
+    if let Some(roles) = &payload.account_notification_roles {
+        sqlx::query(r#"DELETE FROM account_notification_roles WHERE account_notification_id = $1"#)
+            .bind(notification_id)
+            .execute(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+        for (role_id, role_name) in notification_role_entries(&merged) {
+            sqlx::query(
+                r#"
+                INSERT INTO account_notification_roles
+                    (account_notification_id, role_id, role_name)
+                VALUES ($1, $2, $3)
+                "#,
+            )
+            .bind(notification_id)
+            .bind(role_id)
+            .bind(role_name)
+            .execute(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+        }
+    }
+
+    let notification = fetch_notification(&state.db, notification_id, false)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(notification))
+}
+
+/// GET /accounts/{account_id}/account_notifications/{id} — Canvas
+/// `AccountNotificationsController#show` (scoped; 404 when the notification
+/// belongs to another account).
+async fn show_account_notification(
+    State(state): State<AppState>,
+    Path((account_id, notification_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<AccountNotificationResponse>, ApiError> {
+    let owner: Option<(i64,)> = sqlx::query_as(
+        r#"SELECT account_id FROM account_notifications WHERE id = $1 AND workflow_state = 'active'"#,
+    )
+    .bind(notification_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    let (owner_id,) = owner.ok_or(ApiError::NotFound)?;
+    if owner_id != account_id {
+        return Err(ApiError::NotFound);
+    }
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let notification = fetch_notification(&state.db, notification_id, false)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(notification))
+}
+
+/// GET /accounts/{account_id}/admins/self — Canvas `AdminsController#self_roles`
+/// (`Api.paginate` over the caller's account_users rows). The literal `self`
+/// segment needs its own route entry so it matches before the parameterized
+/// /admins/{user_id} route.
+async fn list_account_admins_self(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Query(pag): Query<Pagination>,
+) -> Result<Json<Vec<AccountAdmin>>, ApiError> {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    let (_, per_page, offset) = pag.resolve();
+    let rows: Vec<AccountAdminRow> = sqlx::query_as(
+        r#"
+        SELECT au.id, au.account_id, au.user_id, au.role,
+               u.name AS user_name,
+               u.sortable_name AS user_sortable_name,
+               u.email AS user_email
+        FROM account_users au
+        JOIN users u ON u.id = au.user_id
+        WHERE au.account_id = $1 AND au.user_id = $2
+        ORDER BY au.id ASC
+        LIMIT $3 OFFSET $4
+        "#,
+    )
+    .bind(account_id)
+    .bind(auth.id)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(Json(rows.into_iter().map(AccountAdmin::from).collect()))
 }
 
 // --------------------------------------------------------------------------
