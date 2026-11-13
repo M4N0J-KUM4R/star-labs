@@ -2148,6 +2148,1030 @@ async fn ping_course(_auth: AuthUser) -> Result<Json<Value>, ApiError> {
 }
 
 // ---------------------------------------------------------------------------
+// Blueprint courses / master courses (Canvas API v1)
+// ---------------------------------------------------------------------------
+
+/// Blueprint template (Canvas `MasterCourses::MasterTemplate`).
+///
+/// `id` is the master_templates id; `course_id` is the blueprint course the
+/// template belongs to. `last_export_completed_at` mirrors Canvas
+/// (`MasterTemplate#last_export_completed_at` = imports_completed_at of the
+/// latest completed migration) and is read via a lateral join in
+/// `fetch_template`, staying `None` for a never-synced template.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct MasterTemplate {
+    pub id: i64,
+    pub course_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_export_completed_at: Option<DateTime<Utc>>,
+}
+
+/// The `associated_course_count` / `latest_migration` additions Canvas makes
+/// in `master_template_json` (Api::V1::MasterCourses).
+#[derive(Debug, Clone, Serialize)]
+pub struct MasterTemplateJson {
+    #[serde(flatten)]
+    pub template: MasterTemplate,
+    pub associated_course_count: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub latest_migration: Option<MasterMigrationJson>,
+}
+
+/// A blueprint sync run (Canvas `MasterCourses::MasterMigration`).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct MasterMigrationRow {
+    pub id: i64,
+    pub user_id: i64,
+    pub workflow_state: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub comment: Option<String>,
+    pub created_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exports_started_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imports_queued_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub imports_completed_at: Option<DateTime<Utc>>,
+}
+
+/// Migration JSON (Canvas `master_migration_json`): the base row plus the
+/// template (blueprint side) or subscription (associated side) reference and
+/// the owning `user_display_json` subset.
+#[derive(Debug, Clone, Serialize)]
+pub struct MasterMigrationJson {
+    #[serde(flatten)]
+    pub migration: MasterMigrationRow,
+    pub template_id: i64,
+    pub user: MasterMigrationUser,
+}
+
+/// `user_display_json` subset (Api::V1::User): id, anonymous_id,
+/// display_name, avatar_image_url, html_url, pronouns. `html_url` mirrors the
+/// other user URLs in this repo (no host configured, relative path).
+#[derive(Debug, Clone, Serialize)]
+pub struct MasterMigrationUser {
+    pub id: i64,
+    pub anonymous_id: String,
+    pub display_name: String,
+    pub avatar_image_url: Option<String>,
+    pub html_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pronouns: Option<String>,
+}
+
+/// A migration as seen from an associated course: same row, but Canvas swaps
+/// `template_id` for `subscription_id` on the child side.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChildMigrationJson {
+    #[serde(flatten)]
+    pub migration: MasterMigrationRow,
+    pub subscription_id: i64,
+    pub user: MasterMigrationUser,
+}
+
+/// Blueprint subscription (Canvas `child_subscription_json`): the association
+/// plus a `blueprint_course` summary (`course_summary_json` subset).
+#[derive(Debug, Clone, Serialize)]
+pub struct ChildSubscriptionJson {
+    pub id: i64,
+    pub template_id: i64,
+    pub blueprint_course: BlueprintCourseSummary,
+}
+
+/// `course_summary_json` subset: id, name, course_code.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct BlueprintCourseSummary {
+    pub id: i64,
+    pub name: String,
+    pub course_code: String,
+}
+
+/// Body of PUT .../update_associations: `course_ids_to_add[]` and
+/// `course_ids_to_remove[]` (flat keys; JSON clients send the same names).
+#[derive(Debug, Default, Deserialize)]
+pub struct UpdateAssociations {
+    #[serde(default)]
+    pub course_ids_to_add: Option<Vec<i64>>,
+    #[serde(default)]
+    pub course_ids_to_remove: Option<Vec<i64>>,
+}
+
+/// Body of POST .../migrations (`queue_migration`). Canvas takes `comment`
+/// plus a few booleans that only affect job options, not the migration row.
+#[derive(Debug, Default, Deserialize)]
+pub struct QueueMigration {
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+/// Body of PUT .../restrict_item: `content_type`, `content_id`, `restricted`.
+#[derive(Debug, Default, Deserialize)]
+pub struct RestrictItem {
+    #[serde(default)]
+    pub content_type: Option<String>,
+    #[serde(default)]
+    pub content_id: Option<i64>,
+    #[serde(default)]
+    pub restricted: Option<bool>,
+}
+
+/// The content types Canvas accepts for `restrict_item` that this schema can
+/// resolve (course_pace / lti-quiz have no dedicated tables here and are
+/// rejected as invalid, matching Canvas' content-type whitelist intent).
+const RESTRICT_CONTENT_TYPES: &[(&str, &str)] = &[
+    ("assignment", "assignments"),
+    ("attachment", "files"),
+    ("discussion_topic", "discussion_topics"),
+    ("external_tool", "external_tools"),
+    ("quiz", "quizzes"),
+    ("wiki_page", "pages"),
+];
+
+/// Master migration workflow states (Canvas `MasterCourses::MasterMigration`).
+const MIGRATION_RUNNING_STATES: &[&str] = &["queued", "exporting", "imports_queued"];
+
+/// The running states as an owned array for `workflow_state = ANY($n)` binds.
+fn running_states() -> Vec<String> {
+    MIGRATION_RUNNING_STATES
+        .iter()
+        .map(|state| state.to_string())
+        .collect()
+}
+
+/// Template row plus the associated-course count, from one query.
+#[derive(sqlx::FromRow)]
+struct TemplateCountRow {
+    id: i64,
+    course_id: i64,
+    last_export_completed_at: Option<DateTime<Utc>>,
+    associated_course_count: i64,
+}
+
+/// Load the caller's account admin gate for the course's account (Canvas
+/// `require_account_level_manage_rights` / `:manage_master_courses`).
+async fn check_course_account_admin(
+    pool: &PgPool,
+    auth: &AuthUser,
+    course_id: i64,
+) -> Result<bool, ApiError> {
+    let account: Option<(Option<i64>,)> =
+        sqlx::query_as(r#"SELECT account_id FROM courses WHERE id = $1"#)
+            .bind(course_id)
+            .fetch_optional(pool)
+            .await?;
+    match account {
+        Some((Some(account_id),)) => check_account_admin(pool, auth.id, account_id, auth).await,
+        // Courses without an account belong to the root account.
+        Some((None,)) => Ok(is_admin(auth)),
+        None => Ok(false),
+    }
+}
+
+/// Shared authorization for every blueprint route: the course must exist and
+/// the caller must be able to administer the course's account (Canvas gates
+/// the whole controller on course `:manage` + account `:manage_master_courses`;
+/// this repo's account-admin check covers both).
+async fn require_blueprint_admin(
+    state: &AppState,
+    auth: &AuthUser,
+    course_id: i64,
+) -> Result<(), ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_course_account_admin(&state.db, auth, course_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(())
+}
+
+/// Resolve `default` / numeric template ids like Canvas `get_template`.
+/// Returns the master_templates row for the course, 404 otherwise.
+async fn fetch_template(
+    pool: &PgPool,
+    course_id: i64,
+    template_segment: &str,
+) -> Result<TemplateCountRow, ApiError> {
+    let row: Option<TemplateCountRow> = if template_segment == "default" {
+        sqlx::query_as(
+            r#"
+            SELECT t.id, t.course_id,
+                   (SELECT m.imports_completed_at FROM master_migrations m
+                    WHERE m.master_template_id = t.id AND m.workflow_state = 'completed'
+                    ORDER BY m.id DESC LIMIT 1) AS last_export_completed_at,
+                   (SELECT COUNT(*) FROM master_course_subscriptions s
+                    WHERE s.master_template_id = t.id AND s.workflow_state = 'active')
+                       AS associated_course_count
+            FROM master_templates t
+            WHERE t.course_id = $1 AND t.workflow_state = 'active'
+            ORDER BY t.id ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(course_id)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        let template_id: i64 = template_segment.parse().map_err(|_| ApiError::NotFound)?;
+        sqlx::query_as(
+            r#"
+            SELECT t.id, t.course_id,
+                   (SELECT m.imports_completed_at FROM master_migrations m
+                    WHERE m.master_template_id = t.id AND m.workflow_state = 'completed'
+                    ORDER BY m.id DESC LIMIT 1) AS last_export_completed_at,
+                   (SELECT COUNT(*) FROM master_course_subscriptions s
+                    WHERE s.master_template_id = t.id AND s.workflow_state = 'active')
+                       AS associated_course_count
+            FROM master_templates t
+            WHERE t.id = $1 AND t.course_id = $2 AND t.workflow_state = 'active'
+            "#,
+        )
+        .bind(template_id)
+        .bind(course_id)
+        .fetch_optional(pool)
+        .await?
+    };
+    row.ok_or(ApiError::NotFound)
+}
+
+/// Load the user summary Canvas embeds in `master_migration_json`.
+async fn fetch_migration_user(
+    pool: &PgPool,
+    user_id: i64,
+) -> Result<MasterMigrationUser, ApiError> {
+    #[derive(sqlx::FromRow)]
+    struct UserRow {
+        id: i64,
+        name: String,
+        avatar_url: Option<String>,
+        pronouns: Option<String>,
+    }
+    let row: Option<UserRow> = sqlx::query_as(
+        r#"
+        SELECT u.id, u.name, p.avatar_url, NULL::text AS pronouns
+        FROM users u
+        LEFT JOIN user_profiles p ON p.user_id = u.id
+        WHERE u.id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    let row = row.ok_or(ApiError::NotFound)?;
+    Ok(MasterMigrationUser {
+        id: row.id,
+        anonymous_id: to_base36(row.id),
+        display_name: row.name,
+        avatar_image_url: row.avatar_url,
+        html_url: format!("/users/{}", row.id),
+        pronouns: row.pronouns,
+    })
+}
+
+/// Canvas `user_display_json` anonymous_id: the user id in base 36.
+fn to_base36(mut id: i64) -> String {
+    if id == 0 {
+        return "0".to_string();
+    }
+    let mut digits = Vec::new();
+    while id > 0 {
+        let digit = (id % 36) as u32;
+        digits.push(std::char::from_digit(digit, 36).unwrap());
+        id /= 36;
+    }
+    digits.into_iter().rev().collect()
+}
+
+/// Map a migration row to the blueprint-side JSON (template_id + user).
+async fn migration_json(
+    pool: &PgPool,
+    migration: MasterMigrationRow,
+    template_id: i64,
+) -> Result<MasterMigrationJson, ApiError> {
+    let user = fetch_migration_user(pool, migration.user_id).await?;
+    Ok(MasterMigrationJson {
+        migration,
+        template_id,
+        user,
+    })
+}
+
+/// Map a migration row to the associated-course-side JSON (subscription_id).
+async fn child_migration_json(
+    pool: &PgPool,
+    migration: MasterMigrationRow,
+    subscription_id: i64,
+) -> Result<ChildMigrationJson, ApiError> {
+    let user = fetch_migration_user(pool, migration.user_id).await?;
+    Ok(ChildMigrationJson {
+        migration,
+        subscription_id,
+        user,
+    })
+}
+
+/// GET /courses/{courseId}/blueprint_templates/{templateId} — Canvas
+/// `MasterCourses::MasterTemplatesController#show` (`master_template_json`).
+async fn show_blueprint_template(
+    State(state): State<AppState>,
+    Path((course_id, template_segment)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<MasterTemplateJson>, ApiError> {
+    require_blueprint_admin(&state, &auth, course_id).await?;
+    let template = fetch_template(&state.db, course_id, &template_segment).await?;
+
+    // Canvas adds latest_migration for the template's active_migration
+    // (latest running migration). Without a job runner the latest running
+    // migration is the newest one in a running state, if any.
+    let running: Option<MasterMigrationRow> = sqlx::query_as(
+        r#"
+        SELECT id, user_id, workflow_state, comment, created_at,
+               exports_started_at, imports_queued_at, imports_completed_at
+        FROM master_migrations
+        WHERE master_template_id = $1 AND workflow_state = ANY($2)
+        ORDER BY id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(template.id)
+    .bind(running_states())
+    .fetch_optional(&state.db)
+    .await?;
+    let latest_migration = match running {
+        Some(migration) => Some(migration_json(&state.db, migration, template.id).await?),
+        None => None,
+    };
+
+    Ok(Json(MasterTemplateJson {
+        template: MasterTemplate {
+            id: template.id,
+            course_id: template.course_id,
+            last_export_completed_at: template.last_export_completed_at,
+        },
+        associated_course_count: template.associated_course_count,
+        latest_migration,
+    }))
+}
+
+/// GET /courses/{courseId}/blueprint_templates/{templateId}/associated_courses
+/// — Canvas `#associated_courses` (`course_summary_json` with teachers).
+async fn blueprint_associated_courses(
+    State(state): State<AppState>,
+    Path((course_id, template_segment)): Path<(i64, String)>,
+    auth: AuthUser,
+    Query(pag): Query<Pagination>,
+) -> Result<Json<Vec<BlueprintCourseSummary>>, ApiError> {
+    require_blueprint_admin(&state, &auth, course_id).await?;
+    let template = fetch_template(&state.db, course_id, &template_segment).await?;
+
+    let (_, per_page, offset) = pag.resolve();
+    let courses: Vec<BlueprintCourseSummary> = sqlx::query_as(
+        r#"
+        SELECT c.id, c.name, c.course_code
+        FROM master_course_subscriptions s
+        JOIN courses c ON c.id = s.child_course_id
+        WHERE s.master_template_id = $1 AND s.workflow_state = 'active'
+        ORDER BY c.id ASC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(template.id)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(courses))
+}
+
+/// PUT /courses/{courseId}/blueprint_templates/{templateId}/update_associations
+/// — Canvas `#update_associations`. Adds/removes child-course associations;
+/// courses must belong to the blueprint course's account and must not be
+/// associated with another template. Canvas replies `{"success": true}`.
+async fn blueprint_update_associations(
+    State(state): State<AppState>,
+    Path((course_id, template_segment)): Path<(i64, String)>,
+    auth: AuthUser,
+    payload: Option<Json<UpdateAssociations>>,
+) -> Result<Json<Value>, ApiError> {
+    require_blueprint_admin(&state, &auth, course_id).await?;
+    let template = fetch_template(&state.db, course_id, &template_segment).await?;
+    let payload = payload.map(|Json(body)| body).unwrap_or_default();
+
+    let mut ids_to_add = payload.course_ids_to_add.unwrap_or_default();
+    let mut ids_to_remove = payload.course_ids_to_remove.unwrap_or_default();
+    ids_to_add.sort();
+    ids_to_add.dedup();
+    ids_to_remove.sort();
+    ids_to_remove.dedup();
+
+    // Canvas rejects a course present in both lists with 400.
+    if ids_to_add.iter().any(|id| ids_to_remove.contains(id)) {
+        return Err(ApiError::BadRequest(
+            "cannot add and remove a course at the same time".into(),
+        ));
+    }
+
+    if !ids_to_remove.is_empty() {
+        // A running sync blocks removals in Canvas; with migrations created
+        // directly in a terminal state this can only trigger for rows seeded
+        // in a running state, but the check is kept for parity.
+        let (running,): (bool,) = sqlx::query_as(
+            r#"
+            SELECT EXISTS (
+                SELECT 1 FROM master_migrations
+                WHERE master_template_id = $1 AND workflow_state = ANY($2)
+            )
+            "#,
+        )
+        .bind(template.id)
+        .bind(running_states())
+        .fetch_one(&state.db)
+        .await?;
+        if running {
+            return Err(ApiError::BadRequest(
+                "cannot remove courses while a sync is ongoing".into(),
+            ));
+        }
+
+        sqlx::query(
+            r#"
+            DELETE FROM master_course_subscriptions
+            WHERE master_template_id = $1 AND child_course_id = ANY($2)
+            "#,
+        )
+        .bind(template.id)
+        .bind(&ids_to_remove)
+        .execute(&state.db)
+        .await?;
+    }
+
+    if !ids_to_add.is_empty() {
+        // Valid additions: non-deleted courses in the blueprint course's
+        // account that are not themselves blueprints.
+        let valid: Vec<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT c.id
+            FROM courses c
+            WHERE c.id = ANY($1)
+              AND c.account_id = (SELECT account_id FROM courses WHERE id = $2)
+              AND c.workflow_state <> 'deleted'
+              AND NOT EXISTS (
+                  SELECT 1 FROM master_templates t WHERE t.course_id = c.id
+              )
+            ORDER BY c.id ASC
+            "#,
+        )
+        .bind(&ids_to_add)
+        .bind(course_id)
+        .fetch_all(&state.db)
+        .await?;
+        let valid_ids: Vec<i64> = valid.into_iter().map(|(id,)| id).collect();
+        let invalid: Vec<i64> = ids_to_add
+            .iter()
+            .filter(|id| !valid_ids.contains(id))
+            .copied()
+            .collect();
+        if !invalid.is_empty() {
+            let names = invalid
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(ApiError::BadRequest(format!(
+                "invalid courses to add ({names})"
+            )));
+        }
+
+        // Courses already associated with another template are rejected.
+        let other: Vec<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT child_course_id FROM master_course_subscriptions
+            WHERE child_course_id = ANY($1) AND master_template_id <> $2
+            "#,
+        )
+        .bind(&valid_ids)
+        .bind(template.id)
+        .fetch_all(&state.db)
+        .await?;
+        if !other.is_empty() {
+            let names = other
+                .iter()
+                .map(|(id,)| id.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(ApiError::BadRequest(format!(
+                "cannot add courses already associated with other templates ({names})"
+            )));
+        }
+
+        // Insert the new associations; existing ones are ignored (Canvas
+        // skips already-associated ids).
+        sqlx::query(
+            r#"
+            INSERT INTO master_course_subscriptions (master_template_id, child_course_id)
+            SELECT $1, id FROM unnest($2::bigint[]) AS id
+            ON CONFLICT (master_template_id, child_course_id) DO NOTHING
+            "#,
+        )
+        .bind(template.id)
+        .bind(&valid_ids)
+        .execute(&state.db)
+        .await?;
+    }
+
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// GET /courses/{courseId}/blueprint_templates/{templateId}/unsynced_changes
+/// — Canvas `#unsynced_changes`. Lists course objects updated since the last
+/// completed sync's export start; before any sync Canvas returns a single
+/// `initial_sync` ChangeRecord.
+async fn blueprint_unsynced_changes(
+    State(state): State<AppState>,
+    Path((course_id, template_segment)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    require_blueprint_admin(&state, &auth, course_id).await?;
+    let template = fetch_template(&state.db, course_id, &template_segment).await?;
+
+    // Canvas uses last_export_started_at (latest *completed* migration's
+    // exports_started_at); a template that never synced gets initial_sync.
+    let cutoff: Option<(Option<DateTime<Utc>>,)> = sqlx::query_as(
+        r#"
+        SELECT m.exports_started_at FROM master_migrations m
+        WHERE m.master_template_id = $1 AND m.workflow_state = 'completed'
+        ORDER BY m.id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(template.id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let course_name: (String,) = sqlx::query_as(r#"SELECT name FROM courses WHERE id = $1"#)
+        .bind(course_id)
+        .fetch_one(&state.db)
+        .await?;
+
+    let Some((Some(cutoff),)) = cutoff else {
+        return Ok(Json(vec![serde_json::json!({
+            "asset_name": course_name.0,
+            "change_type": "initial_sync",
+        })]));
+    };
+
+    // Content types this schema models, with the column holding the asset name
+    // (Context.asset_name equivalent). Items are capped like Canvas'
+    // master_courses_history_count.
+    const HISTORY_LIMIT: i64 = 150;
+    let content_types: &[(&str, &str)] = &[
+        ("assignment", "assignments"),
+        ("attachment", "files"),
+        ("discussion_topic", "discussion_topics"),
+        ("external_tool", "external_tools"),
+        ("quiz", "quizzes"),
+        ("wiki_page", "pages"),
+    ];
+
+    let mut changes: Vec<Value> = Vec::new();
+    for (asset_type, table) in content_types {
+        let name_column = match table {
+            "discussion_topics" | "pages" | "quizzes" => "title",
+            "files" => "filename",
+            "external_tools" => "name",
+            _ => "title",
+        };
+        let rows: Vec<(i64, String, DateTime<Utc>, DateTime<Utc>)> = sqlx::query_as(&format!(
+            r#"
+            SELECT id, {name_column} AS asset_name, created_at, updated_at
+            FROM {table}
+            WHERE course_id = $1 AND updated_at > $2
+            ORDER BY id ASC
+            LIMIT {HISTORY_LIMIT}
+            "#
+        ))
+        .bind(course_id)
+        .bind(cutoff)
+        .fetch_all(&state.db)
+        .await?;
+        for (asset_id, asset_name, created_at, _updated_at) in rows {
+            let change_type = if created_at > cutoff {
+                "created"
+            } else {
+                "updated"
+            };
+            changes.push(serde_json::json!({
+                "asset_id": asset_id,
+                "asset_type": asset_type,
+                "asset_name": asset_name,
+                "change_type": change_type,
+                "html_url": format!("/courses/{course_id}/{table}/{asset_id}"),
+                "locked": false,
+            }));
+        }
+        if changes.len() as i64 >= HISTORY_LIMIT {
+            changes.truncate(HISTORY_LIMIT as usize);
+            break;
+        }
+    }
+
+    // The syllabus counts as a changed asset once it is touched after the
+    // cutoff (Canvas changed_syllabus_json).
+    let syllabus_updated: Option<(DateTime<Utc>,)> = sqlx::query_as(
+        r#"SELECT updated_at FROM courses WHERE id = $1 AND syllabus_body IS NOT NULL"#,
+    )
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if let Some((updated_at,)) = syllabus_updated {
+        if updated_at > cutoff {
+            changes.push(serde_json::json!({
+                "asset_id": course_id,
+                "asset_type": "syllabus",
+                "asset_name": "Syllabus",
+                "change_type": "updated",
+                "html_url": format!("/courses/{course_id}/assignments/syllabus"),
+                "locked": false,
+            }));
+        }
+    }
+
+    Ok(Json(changes))
+}
+
+/// POST /courses/{courseId}/blueprint_templates/{templateId}/migrations —
+/// Canvas `#queue_migration`. Queues a sync to every active associated
+/// course.
+///
+/// Structural simplification: this repo has no background job runner, so the
+/// migration row is created directly in the terminal `completed` state with
+/// the export/import timestamps set to now() (Canvas' worker would normally
+/// walk queued -> exporting -> imports_queued -> completed).
+async fn queue_blueprint_migration(
+    State(state): State<AppState>,
+    Path((course_id, template_segment)): Path<(i64, String)>,
+    auth: AuthUser,
+    payload: Option<Json<QueueMigration>>,
+) -> Result<Json<MasterMigrationJson>, ApiError> {
+    require_blueprint_admin(&state, &auth, course_id).await?;
+    let template = fetch_template(&state.db, course_id, &template_segment).await?;
+    let payload = payload.map(|Json(body)| body).unwrap_or_default();
+
+    let (running,): (bool,) = sqlx::query_as(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM master_migrations
+            WHERE master_template_id = $1 AND workflow_state = ANY($2)
+        )
+        "#,
+    )
+    .bind(template.id)
+    .bind(running_states())
+    .fetch_one(&state.db)
+    .await?;
+    if running {
+        return Err(ApiError::BadRequest(
+            "Cannot queue a migration while one is currently running".into(),
+        ));
+    }
+
+    let (has_subscriptions,): (bool,) = sqlx::query_as(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM master_course_subscriptions
+            WHERE master_template_id = $1 AND workflow_state = 'active'
+        )
+        "#,
+    )
+    .bind(template.id)
+    .fetch_one(&state.db)
+    .await?;
+    if !has_subscriptions {
+        return Err(ApiError::BadRequest(
+            "No associated courses to migrate to".into(),
+        ));
+    }
+
+    let migration: MasterMigrationRow = sqlx::query_as(
+        r#"
+        INSERT INTO master_migrations
+            (master_template_id, user_id, workflow_state, comment,
+             exports_started_at, imports_queued_at, imports_completed_at)
+        VALUES ($1, $2, 'completed', $3, now(), now(), now())
+        RETURNING id, user_id, workflow_state, comment, created_at,
+                  exports_started_at, imports_queued_at, imports_completed_at
+        "#,
+    )
+    .bind(template.id)
+    .bind(auth.id)
+    .bind(&payload.comment)
+    .fetch_one(&state.db)
+    .await?;
+
+    // Canvas tracks the last export on the template; the derived JSON reads
+    // it from the latest completed migration, so nothing else to update.
+    Ok(Json(
+        migration_json(&state.db, migration, template.id).await?,
+    ))
+}
+
+/// GET /courses/{courseId}/blueprint_templates/{templateId}/migrations —
+/// Canvas `#migrations_index`, newest first.
+async fn list_blueprint_migrations(
+    State(state): State<AppState>,
+    Path((course_id, template_segment)): Path<(i64, String)>,
+    auth: AuthUser,
+    Query(pag): Query<Pagination>,
+) -> Result<Json<Vec<MasterMigrationJson>>, ApiError> {
+    require_blueprint_admin(&state, &auth, course_id).await?;
+    let template = fetch_template(&state.db, course_id, &template_segment).await?;
+
+    let (_, per_page, offset) = pag.resolve();
+    let rows: Vec<MasterMigrationRow> = sqlx::query_as(
+        r#"
+        SELECT id, user_id, workflow_state, comment, created_at,
+               exports_started_at, imports_queued_at, imports_completed_at
+        FROM master_migrations
+        WHERE master_template_id = $1
+        ORDER BY id DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(template.id)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut migrations = Vec::with_capacity(rows.len());
+    for row in rows {
+        migrations.push(migration_json(&state.db, row, template.id).await?);
+    }
+    Ok(Json(migrations))
+}
+
+/// Load one migration of a template, or 404.
+async fn fetch_template_migration(
+    pool: &PgPool,
+    template_id: i64,
+    migration_segment: &str,
+) -> Result<MasterMigrationRow, ApiError> {
+    let migration_id: i64 = migration_segment.parse().map_err(|_| ApiError::NotFound)?;
+    let row: Option<MasterMigrationRow> = sqlx::query_as(
+        r#"
+        SELECT id, user_id, workflow_state, comment, created_at,
+               exports_started_at, imports_queued_at, imports_completed_at
+        FROM master_migrations
+        WHERE id = $1 AND master_template_id = $2
+        "#,
+    )
+    .bind(migration_id)
+    .bind(template_id)
+    .fetch_optional(pool)
+    .await?;
+    row.ok_or(ApiError::NotFound)
+}
+
+/// GET /courses/{courseId}/blueprint_templates/{templateId}/migrations/{id}
+/// — Canvas `#migrations_show`.
+async fn show_blueprint_migration(
+    State(state): State<AppState>,
+    Path((course_id, template_segment, migration_segment)): Path<(i64, String, String)>,
+    auth: AuthUser,
+) -> Result<Json<MasterMigrationJson>, ApiError> {
+    require_blueprint_admin(&state, &auth, course_id).await?;
+    let template = fetch_template(&state.db, course_id, &template_segment).await?;
+    let migration = fetch_template_migration(&state.db, template.id, &migration_segment).await?;
+    Ok(Json(
+        migration_json(&state.db, migration, template.id).await?,
+    ))
+}
+
+/// GET /courses/{courseId}/blueprint_templates/{templateId}/migrations/{id}/details
+/// — Canvas `#migration_details`. Canvas streams the exported objects from
+/// the content export; there is no export storage here, so the response is
+/// the documented empty ChangeRecord list (same as a selective sync with no
+/// recorded changes).
+async fn blueprint_migration_details(
+    State(state): State<AppState>,
+    Path((course_id, template_segment, migration_segment)): Path<(i64, String, String)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    require_blueprint_admin(&state, &auth, course_id).await?;
+    let template = fetch_template(&state.db, course_id, &template_segment).await?;
+    // The migration must exist for the template even though no details are
+    // stored (Canvas first! raises RecordNotFound otherwise).
+    fetch_template_migration(&state.db, template.id, &migration_segment).await?;
+    Ok(Json(Vec::new()))
+}
+
+/// PUT /courses/{courseId}/blueprint_templates/{templateId}/restrict_item —
+/// Canvas `#restrict_item`. This schema has no master_content_tags table, so
+/// the route validates the content type/id pair and reports success; locked
+/// state is not persisted (documented structural simplification).
+async fn blueprint_restrict_item(
+    State(state): State<AppState>,
+    Path((course_id, template_segment)): Path<(i64, String)>,
+    auth: AuthUser,
+    payload: Option<Json<RestrictItem>>,
+) -> Result<Json<Value>, ApiError> {
+    require_blueprint_admin(&state, &auth, course_id).await?;
+    let template = fetch_template(&state.db, course_id, &template_segment).await?;
+    let payload = payload.map(|Json(body)| body).unwrap_or_default();
+
+    let content_type = payload
+        .content_type
+        .ok_or_else(|| ApiError::BadRequest("Must be a valid content type".into()))?;
+    let table = RESTRICT_CONTENT_TYPES
+        .iter()
+        .find(|(name, _)| *name == content_type.as_str())
+        .map(|(_, table)| *table)
+        .ok_or_else(|| {
+            ApiError::BadRequest(format!(
+                "Must be a valid content type (assignment,attachment,discussion_topic,external_tool,quiz,wiki_page). Got {content_type}"
+            ))
+        })?;
+    let content_id = payload
+        .content_id
+        .ok_or_else(|| ApiError::BadRequest("Must set 'content_id'".into()))?;
+    if payload.restricted.is_none() {
+        return Err(ApiError::BadRequest("Must set 'restricted'".into()));
+    }
+
+    // The item must exist in the blueprint course (Canvas 404s otherwise).
+    let (exists,): (bool,) = sqlx::query_as(&format!(
+        r#"SELECT EXISTS (SELECT 1 FROM {table} WHERE id = $1 AND course_id = $2)"#
+    ))
+    .bind(content_id)
+    .bind(template.course_id)
+    .fetch_one(&state.db)
+    .await?;
+    if !exists {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// GET /courses/{courseId}/blueprint_subscriptions — Canvas
+/// `#subscriptions_index` (`child_subscription_json`), newest first.
+async fn list_blueprint_subscriptions(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Query(pag): Query<Pagination>,
+) -> Result<Json<Vec<ChildSubscriptionJson>>, ApiError> {
+    require_blueprint_admin(&state, &auth, course_id).await?;
+
+    let (_, per_page, offset) = pag.resolve();
+    #[derive(sqlx::FromRow)]
+    struct SubscriptionRow {
+        id: i64,
+        template_id: i64,
+        course_id: i64,
+        name: String,
+        course_code: String,
+    }
+    let rows: Vec<SubscriptionRow> = sqlx::query_as(
+        r#"
+        SELECT s.id, s.master_template_id AS template_id,
+               c.id AS course_id, c.name, c.course_code
+        FROM master_course_subscriptions s
+        JOIN master_templates t ON t.id = s.master_template_id
+        JOIN courses c ON c.id = t.course_id
+        WHERE s.child_course_id = $1 AND s.workflow_state = 'active'
+        ORDER BY s.id DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(course_id)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    let subscriptions = rows
+        .into_iter()
+        .map(|row| ChildSubscriptionJson {
+            id: row.id,
+            template_id: row.template_id,
+            blueprint_course: BlueprintCourseSummary {
+                id: row.course_id,
+                name: row.name,
+                course_code: row.course_code,
+            },
+        })
+        .collect();
+    Ok(Json(subscriptions))
+}
+
+/// Resolve `default` / numeric subscription ids like Canvas `get_subscription`.
+async fn fetch_subscription(
+    pool: &PgPool,
+    child_course_id: i64,
+    subscription_segment: &str,
+) -> Result<(i64, i64), ApiError> {
+    let row: Option<(i64, i64)> = if subscription_segment == "default" {
+        sqlx::query_as(
+            r#"
+            SELECT id, master_template_id FROM master_course_subscriptions
+            WHERE child_course_id = $1 AND workflow_state = 'active'
+            ORDER BY id ASC
+            LIMIT 1
+            "#,
+        )
+        .bind(child_course_id)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        let subscription_id: i64 = subscription_segment
+            .parse()
+            .map_err(|_| ApiError::NotFound)?;
+        sqlx::query_as(
+            r#"
+            SELECT id, master_template_id FROM master_course_subscriptions
+            WHERE id = $1 AND child_course_id = $2 AND workflow_state = 'active'
+            "#,
+        )
+        .bind(subscription_id)
+        .bind(child_course_id)
+        .fetch_optional(pool)
+        .await?
+    };
+    row.ok_or(ApiError::NotFound)
+}
+
+/// GET /courses/{courseId}/blueprint_subscriptions/{subscriptionId}/migrations
+/// — Canvas `#imports_index`. The child side views the template's sync
+/// history through the subscription; newest first.
+async fn list_blueprint_imports(
+    State(state): State<AppState>,
+    Path((course_id, subscription_segment)): Path<(i64, String)>,
+    auth: AuthUser,
+    Query(pag): Query<Pagination>,
+) -> Result<Json<Vec<ChildMigrationJson>>, ApiError> {
+    require_blueprint_admin(&state, &auth, course_id).await?;
+    let (subscription_id, template_id) =
+        fetch_subscription(&state.db, course_id, &subscription_segment).await?;
+
+    let (_, per_page, offset) = pag.resolve();
+    let rows: Vec<MasterMigrationRow> = sqlx::query_as(
+        r#"
+        SELECT id, user_id, workflow_state, comment, created_at,
+               exports_started_at, imports_queued_at, imports_completed_at
+        FROM master_migrations
+        WHERE master_template_id = $1
+        ORDER BY id DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(template_id)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut migrations = Vec::with_capacity(rows.len());
+    for row in rows {
+        migrations.push(child_migration_json(&state.db, row, subscription_id).await?);
+    }
+    Ok(Json(migrations))
+}
+
+/// GET /courses/{courseId}/blueprint_subscriptions/{subscriptionId}/migrations/{id}
+/// — Canvas `#imports_show`.
+async fn show_blueprint_import(
+    State(state): State<AppState>,
+    Path((course_id, subscription_segment, migration_segment)): Path<(i64, String, String)>,
+    auth: AuthUser,
+) -> Result<Json<ChildMigrationJson>, ApiError> {
+    require_blueprint_admin(&state, &auth, course_id).await?;
+    let (subscription_id, template_id) =
+        fetch_subscription(&state.db, course_id, &subscription_segment).await?;
+    let migration = fetch_template_migration(&state.db, template_id, &migration_segment).await?;
+    Ok(Json(
+        child_migration_json(&state.db, migration, subscription_id).await?,
+    ))
+}
+
+/// GET /courses/{courseId}/blueprint_subscriptions/{subscriptionId}/migrations/{id}/details
+/// — Canvas `#import_details`; no export storage means an empty ChangeRecord
+/// list (the migration itself must still exist).
+async fn blueprint_import_details(
+    State(state): State<AppState>,
+    Path((course_id, subscription_segment, migration_segment)): Path<(i64, String, String)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    require_blueprint_admin(&state, &auth, course_id).await?;
+    let (subscription_id, template_id) =
+        fetch_subscription(&state.db, course_id, &subscription_segment).await?;
+    let _ = subscription_id;
+    fetch_template_migration(&state.db, template_id, &migration_segment).await?;
+    Ok(Json(Vec::new()))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -2204,6 +3228,55 @@ pub fn router() -> Router<AppState> {
         )
         .route("/courses/{courseId}/ping", post(ping_course))
         .route("/users/{userId}/courses", get(list_user_courses))
+        // Blueprint courses / master courses (Canvas API v1)
+        .route(
+            "/courses/{courseId}/blueprint_templates/{templateId}",
+            get(show_blueprint_template),
+        )
+        .route(
+            "/courses/{courseId}/blueprint_templates/{templateId}/associated_courses",
+            get(blueprint_associated_courses),
+        )
+        .route(
+            "/courses/{courseId}/blueprint_templates/{templateId}/update_associations",
+            put(blueprint_update_associations),
+        )
+        .route(
+            "/courses/{courseId}/blueprint_templates/{templateId}/unsynced_changes",
+            get(blueprint_unsynced_changes),
+        )
+        .route(
+            "/courses/{courseId}/blueprint_templates/{templateId}/migrations",
+            get(list_blueprint_migrations).post(queue_blueprint_migration),
+        )
+        .route(
+            "/courses/{courseId}/blueprint_templates/{templateId}/migrations/{id}",
+            get(show_blueprint_migration),
+        )
+        .route(
+            "/courses/{courseId}/blueprint_templates/{templateId}/migrations/{id}/details",
+            get(blueprint_migration_details),
+        )
+        .route(
+            "/courses/{courseId}/blueprint_templates/{templateId}/restrict_item",
+            put(blueprint_restrict_item),
+        )
+        .route(
+            "/courses/{courseId}/blueprint_subscriptions",
+            get(list_blueprint_subscriptions),
+        )
+        .route(
+            "/courses/{courseId}/blueprint_subscriptions/{subscriptionId}/migrations",
+            get(list_blueprint_imports),
+        )
+        .route(
+            "/courses/{courseId}/blueprint_subscriptions/{subscriptionId}/migrations/{id}",
+            get(show_blueprint_import),
+        )
+        .route(
+            "/courses/{courseId}/blueprint_subscriptions/{subscriptionId}/migrations/{id}/details",
+            get(blueprint_import_details),
+        )
 }
 
 // ---------------------------------------------------------------------------
