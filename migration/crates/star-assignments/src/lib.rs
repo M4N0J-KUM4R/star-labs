@@ -2187,6 +2187,357 @@ async fn course_grade_submission(
 }
 
 // ---------------------------------------------------------------------------
+// Peer reviews (Canvas PeerReviewsApiController)
+// ---------------------------------------------------------------------------
+
+/// Canvas `AssessmentRequest` peer review
+/// (lib/api/v1/assessment_request.rb): the reviewed submission id is exposed
+/// as `asset_id` with `asset_type` always "Submission".
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PeerReview {
+    pub id: i64,
+    pub user_id: i64,
+    pub assessor_id: i64,
+    pub asset_id: i64,
+    pub asset_type: String,
+    pub workflow_state: String,
+}
+
+/// `include[]` values accepted by the peer review routes.
+#[derive(Debug, Default)]
+struct PeerReviewQuery {
+    submission_id: Option<i64>,
+    include_user: bool,
+    include_submission_comments: bool,
+}
+
+/// Parse `include[]` and `submission_id` from the raw query string.
+fn parse_peer_review_query(raw_query: Option<&str>) -> PeerReviewQuery {
+    let mut query = PeerReviewQuery::default();
+    for pair in raw_query.unwrap_or_default().split('&') {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = decode_query_component(raw_key).to_ascii_lowercase();
+        let key = key.strip_suffix("[]").unwrap_or(key.as_str()).to_string();
+        let value = decode_query_component(raw_value);
+        match key.as_str() {
+            "submission_id" => query.submission_id = value.parse::<i64>().ok(),
+            "include" => {
+                if value == "user" {
+                    query.include_user = true;
+                } else if value == "submission_comments" {
+                    query.include_submission_comments = true;
+                }
+            }
+            _ => {}
+        }
+    }
+    query
+}
+
+/// Canvas `user_display_json` (id + display_name) for the include[]=user case.
+async fn user_display(pool: &PgPool, user_id: i64) -> Result<serde_json::Value, ApiError> {
+    let row: Option<(String,)> = sqlx::query_as(r#"SELECT name FROM users WHERE id = $1"#)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row
+        .map(|(name,)| serde_json::json!({ "id": user_id, "display_name": name }))
+        .unwrap_or(serde_json::Value::Null))
+}
+
+/// Fetch the submission, verify it belongs to the assignment, and return it.
+/// Canvas `peer_review_assets` raises RecordNotFound on a mismatch (404).
+async fn ensure_submission_in_assignment(
+    pool: &PgPool,
+    assignment_id: i64,
+    submission_id: i64,
+) -> Result<(i64, i64), ApiError> {
+    let row: Option<(i64, i64)> =
+        sqlx::query_as(r#"SELECT user_id, assignment_id FROM submissions WHERE id = $1"#)
+            .bind(submission_id)
+            .fetch_optional(pool)
+            .await?;
+    let (user_id, submission_assignment_id) = row.ok_or(ApiError::NotFound)?;
+    if submission_assignment_id != assignment_id {
+        return Err(ApiError::NotFound);
+    }
+    Ok((user_id, submission_id))
+}
+
+/// Select all peer reviews for an assignment, optionally narrowed to one
+/// submission (Canvas `for_asset`).
+async fn select_peer_reviews(
+    pool: &PgPool,
+    assignment_id: i64,
+    submission_id: Option<i64>,
+) -> Result<Vec<PeerReview>, ApiError> {
+    let sql = r#"
+        SELECT ar.id, ar.user_id, ar.assessor_id, ar.asset_id, ar.asset_type, ar.workflow_state
+        FROM assessment_requests ar
+        JOIN submissions s ON s.id = ar.asset_id
+        WHERE s.assignment_id = $1
+          AND ($2::bigint IS NULL OR ar.asset_id = $2)
+        ORDER BY ar.id ASC
+    "#;
+    let rows: Vec<PeerReview> = sqlx::query_as(sql)
+        .bind(assignment_id)
+        .bind(submission_id)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows)
+}
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/peer_reviews and
+/// GET .../submissions/{submissionId}/peer_reviews — Canvas `index`.
+/// Teachers/admins see every review; students only see reviews of their own
+/// submissions (`for_assessee`).
+async fn list_peer_reviews(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    let can_grade = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+    if !can_grade && !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let query = parse_peer_review_query(raw_query.as_deref());
+    let mut reviews = select_peer_reviews(&state.db, assignment_id, query.submission_id).await?;
+    if !can_grade {
+        reviews.retain(|review| review.user_id == auth.id);
+    }
+
+    let mut entries = Vec::with_capacity(reviews.len());
+    for review in reviews {
+        let mut entry = serde_json::json!({
+            "id": review.id,
+            "user_id": review.user_id,
+            "assessor_id": review.assessor_id,
+            "asset_id": review.asset_id,
+            "asset_type": review.asset_type,
+            "workflow_state": review.workflow_state,
+        });
+        if query.include_user {
+            entry["user"] = user_display(&state.db, review.user_id).await?;
+            entry["assessor"] = user_display(&state.db, review.assessor_id).await?;
+        }
+        if query.include_submission_comments {
+            let comments: Vec<serde_json::Value> = sqlx::query_as(
+                r#"
+                SELECT id, author_id, comment, created_at
+                FROM submission_comments
+                WHERE submission_id = $1 AND workflow_state <> 'deleted'
+                ORDER BY id ASC
+                "#,
+            )
+            .bind(review.asset_id)
+            .fetch_all(&state.db)
+            .await?;
+            entry["submission_comments"] = serde_json::json!(comments);
+        }
+        entries.push(entry);
+    }
+
+    Ok(Json(entries))
+}
+
+/// POST /courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
+/// — Canvas `create`. The submission is lazily created for its owner like
+/// Canvas' `find_or_create_submission`; the reviewer (user_id param) must be
+/// an active student in the course. 400 "Create failed" when the reviewer is
+/// the submission owner.
+async fn create_peer_review(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, submission_id)): Path<(i64, i64, i64)>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    let (student_id, _) =
+        ensure_submission_in_assignment(&state.db, assignment_id, submission_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let reviewer_id: i64 = parse_peer_review_user_id(&body)?;
+
+    // Canvas `peer_review_assets` resolves the reviewer among visible
+    // students; an unknown or non-student reviewer is a 404.
+    let reviewer_is_student: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM enrollments
+            WHERE course_id = $1 AND user_id = $2
+              AND role = 'student' AND workflow_state <> 'deleted'
+        )
+        "#,
+    )
+    .bind(course_id)
+    .bind(reviewer_id)
+    .fetch_one(&state.db)
+    .await?;
+    if !reviewer_is_student {
+        return Err(ApiError::NotFound);
+    }
+
+    if reviewer_id == student_id {
+        return Err(ApiError::BadRequest("Create failed".into()));
+    }
+
+    // Canvas `assign_peer_review` also ensures the reviewer has a submission.
+    sqlx::query(
+        r#"
+        INSERT INTO submissions (assignment_id, user_id)
+        VALUES ($1, $2)
+        ON CONFLICT (assignment_id, user_id)
+        DO UPDATE SET updated_at = submissions.updated_at
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(reviewer_id)
+    .execute(&state.db)
+    .await?;
+
+    let review: PeerReview = sqlx::query_as(
+        r#"
+        INSERT INTO assessment_requests
+            (user_id, assessor_id, asset_id, asset_type, workflow_state)
+        VALUES ($1, $2, $3, 'Submission', 'assigned')
+        ON CONFLICT (asset_id, assessor_id) DO UPDATE
+        SET updated_at = now()
+        RETURNING id, user_id, assessor_id, asset_id, asset_type, workflow_state
+        "#,
+    )
+    .bind(student_id)
+    .bind(reviewer_id)
+    .bind(submission_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    // Canvas keeps the per-submission assessment_request_count bumped on the
+    // submission row; star-lms mirrors it on the assignment's
+    // peer_review_count for the whole set of assigned reviews.
+    sqlx::query(
+        r#"
+        UPDATE assignments
+        SET peer_review_count = (
+            SELECT COUNT(*) FROM assessment_requests ar
+            JOIN submissions s ON s.id = ar.asset_id
+            WHERE s.assignment_id = $1
+        ), updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(assignment_id)
+    .execute(&state.db)
+    .await?;
+
+    let mut entry = serde_json::json!({
+        "id": review.id,
+        "user_id": review.user_id,
+        "assessor_id": review.assessor_id,
+        "asset_id": review.asset_id,
+        "asset_type": review.asset_type,
+        "workflow_state": review.workflow_state,
+    });
+    let query = parse_peer_review_query(raw_query.as_deref());
+    if query.include_user {
+        entry["user"] = user_display(&state.db, review.user_id).await?;
+        entry["assessor"] = user_display(&state.db, review.assessor_id).await?;
+    }
+
+    Ok((StatusCode::CREATED, Json(entry)))
+}
+
+/// Extract `user_id` from a JSON or form-encoded peer review body.
+fn parse_peer_review_user_id(body: &[u8]) -> Result<i64, ApiError> {
+    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(body) {
+        if let Some(id) = json.get("user_id").and_then(json_id) {
+            return Ok(id);
+        }
+    }
+    let body = String::from_utf8_lossy(body);
+    for pair in body.split('&') {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = decode_query_component(raw_key).to_ascii_lowercase();
+        if key == "user_id" {
+            if let Ok(id) = decode_query_component(raw_value).trim().parse::<i64>() {
+                return Ok(id);
+            }
+        }
+    }
+    Err(ApiError::BadRequest("user_id is required".into()))
+}
+
+/// DELETE /courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
+/// — Canvas `destroy`. 400 "Delete failed" when no review matches the
+/// (submission, reviewer, assessee) triple.
+async fn destroy_peer_review(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, submission_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    let (student_id, _) =
+        ensure_submission_in_assignment(&state.db, assignment_id, submission_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let reviewer_id = parse_peer_review_user_id(&body)?;
+
+    let review: Option<PeerReview> = sqlx::query_as(
+        r#"
+        DELETE FROM assessment_requests
+        WHERE asset_id = $1 AND assessor_id = $2 AND user_id = $3
+        RETURNING id, user_id, assessor_id, asset_id, asset_type, workflow_state
+        "#,
+    )
+    .bind(submission_id)
+    .bind(reviewer_id)
+    .bind(student_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let review = review.ok_or_else(|| ApiError::BadRequest("Delete failed".into()))?;
+
+    sqlx::query(
+        r#"
+        UPDATE assignments
+        SET peer_review_count = (
+            SELECT COUNT(*) FROM assessment_requests ar
+            JOIN submissions s ON s.id = ar.asset_id
+            WHERE s.assignment_id = $1
+        ), updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(assignment_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "id": review.id,
+        "user_id": review.user_id,
+        "assessor_id": review.assessor_id,
+        "asset_id": review.asset_id,
+        "asset_type": review.asset_type,
+        "workflow_state": review.workflow_state,
+    })))
+}
+
+// ---------------------------------------------------------------------------
 // Assignment overrides (Canvas AssignmentOverridesController)
 // ---------------------------------------------------------------------------
 
@@ -2447,6 +2798,23 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
             put(update_anonymous_submission),
+        )
+        // Canvas peer reviews API (PeerReviewsApiController)
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/peer_reviews",
+            get(list_peer_reviews),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
+            get(list_peer_reviews),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
+            post(create_peer_review),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
+            delete(destroy_peer_review),
         )
         // Canvas v1 nested aliases (same handlers, course-scoped paths)
         .route(
