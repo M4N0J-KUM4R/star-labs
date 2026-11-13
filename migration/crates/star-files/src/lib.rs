@@ -30,6 +30,15 @@
 //! - GET /courses/{courseId}/files/quota (and /files/quota?course_id=) mirror
 //!   Canvas files#api_quota: `{ quota, quota_used }` from courses.storage_quota
 //!   with the 50 MB default and 512-byte per-file minimum.
+//!
+//! File update + context show (Phase 5, Canvas files_controller):
+//! - PUT /files/{id} mirrors files#api_update: rename/move/lock/hide with
+//!   Canvas's 409 duplicate conflict and on_duplicate=overwrite|rename.
+//! - GET /files/{id}/public_url answers `{ public_url }` (metadata-only URL).
+//! - GET /courses|groups|users/{contextId}/files/{id} are context-scoped
+//!   files#api_show reads; hidden files 404 for students.
+//! - GET /courses/{courseId}/files/file_ref/{migrationId} translates a
+//!   course-copy file reference (files#file_ref) via the file's uuid.
 
 use axum::{
     extract::{Path, Query, State},
@@ -184,6 +193,26 @@ fn dedupe_folder_name(name: &str, sibling_names: &[String]) -> String {
         }
     }
     format!("{name} {candidate}")
+}
+
+/// Canvas Attachment.make_unique_filename: append "-1", "-2", ... before the
+/// extension until the name is unused among `existing` siblings.
+fn make_unique_filename(filename: &str, existing: &[String]) -> String {
+    if !existing.iter().any(|s| s == filename) {
+        return filename.to_string();
+    }
+    let split = filename
+        .rfind('.')
+        .filter(|dot| *dot > 0 && !filename[*dot + 1..].is_empty())
+        .unwrap_or(filename.len());
+    let (stem, ext) = filename.split_at(split);
+    let mut addition = 1u32;
+    let mut candidate = format!("{stem}-{addition}{ext}");
+    while existing.iter().any(|s| *s == &candidate) {
+        addition += 1;
+        candidate = format!("{stem}-{addition}{ext}");
+    }
+    candidate
 }
 
 /// Join a parent folder's full name with a child name (Canvas `full_name`).
@@ -638,6 +667,112 @@ pub struct UsageRightsResponse {
     pub file_ids: Vec<i64>,
 }
 
+/// Request body for PUT /files/{id} (Canvas files#api_update).
+#[derive(Debug, Deserialize)]
+pub struct UpdateFileRequest {
+    pub name: Option<String>,
+    pub parent_folder_id: Option<i64>,
+    pub lock_at: Option<DateTime<Utc>>,
+    pub unlock_at: Option<DateTime<Utc>>,
+    pub locked: Option<bool>,
+    pub hidden: Option<bool>,
+    pub visibility_level: Option<String>,
+    pub on_duplicate: Option<String>,
+}
+
+/// GET /files/{id}/public_url response (Canvas files#public_url).
+#[derive(Debug, Serialize)]
+pub struct PublicUrlResponse {
+    pub public_url: String,
+}
+
+/// GET /groups/{groupId}/files/{id} response — mirrors the star-groups
+/// GroupFile shape (group_files is the metadata-only Group file table).
+#[derive(Debug, Serialize)]
+pub struct GroupFileResponse {
+    pub id: i64,
+    pub group_id: i64,
+    pub folder: String,
+    pub filename: String,
+    pub display_name: String,
+    pub content_type: String,
+    pub size: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request body for POST /folders/{destFolderId}/copy_file.
+#[derive(Debug, Deserialize)]
+pub struct CopyFileRequest {
+    pub source_file_id: Option<i64>,
+    pub on_duplicate: Option<String>,
+    pub name: Option<String>,
+}
+
+/// Request body for POST /folders/{destFolderId}/copy_folder.
+#[derive(Debug, Deserialize)]
+pub struct CopyFolderRequest {
+    pub source_folder_id: Option<i64>,
+}
+
+/// Canvas GET content_licenses list item (UsageRightsController#licenses).
+#[derive(Debug, Serialize)]
+pub struct LicenseEntry {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+}
+
+/// Canvas UsageRights.licenses (app/models/usage_rights.rb ContentLicenses):
+/// id, readable name and license text URL for every supported license.
+pub fn canvas_licenses() -> Vec<LicenseEntry> {
+    [
+        ("private", "Private (Copyrighted)", ""),
+        (
+            "cc_by",
+            "CC Attribution",
+            "http://creativecommons.org/licenses/by/4.0",
+        ),
+        (
+            "cc_by_sa",
+            "CC Attribution Share-Alike",
+            "http://creativecommons.org/licenses/by-sa/4.0",
+        ),
+        (
+            "cc_by_nd",
+            "CC Attribution No Derivatives",
+            "http://creativecommons.org/licenses/by-nd/4.0",
+        ),
+        (
+            "cc_by_nc",
+            "CC Attribution Non-Commercial",
+            "http://creativecommons.org/licenses/by-nc/4.0",
+        ),
+        (
+            "cc_by_nc_sa",
+            "CC Attribution Non-Commercial Share-Alike",
+            "http://creativecommons.org/licenses/by-nc-sa/4.0",
+        ),
+        (
+            "cc_by_nc_nd",
+            "CC Attribution Non-Commercial No Derivatives",
+            "http://creativecommons.org/licenses/by-nc-nd/4.0",
+        ),
+        (
+            "public_domain",
+            "Public Domain",
+            "http://creativecommons.org/licenses/publicdomain/",
+        ),
+    ]
+    .into_iter()
+    .map(|(id, name, url)| LicenseEntry {
+        id: id.to_string(),
+        name: name.to_string(),
+        url: url.to_string(),
+    })
+    .collect()
+}
+
 // ─── router ────────────────────────────────────────────────────────────────
 
 /// Build the files router.
@@ -650,8 +785,16 @@ pub fn router() -> axum::Router<AppState> {
             get(get_course_files_quota),
         )
         .route("/files/quota", get(get_files_quota))
-        .route("/files/{id}", get(get_file))
-        .route("/files/{id}", delete(delete_file))
+        .route("/files/{id}", get(get_file).delete(delete_file))
+        .route("/files/{id}", put(update_file))
+        .route("/files/{id}/public_url", get(get_file_public_url))
+        .route("/courses/{courseId}/files/{id}", get(get_course_file))
+        .route("/groups/{groupId}/files/{id}", get(get_group_file))
+        .route("/users/{userId}/files/{id}", get(get_user_file))
+        .route(
+            "/courses/{courseId}/files/file_ref/{migrationId}",
+            get(get_file_ref),
+        )
         // Canvas folders API (lib/api/v1/folders + FoldersController).
         .route("/folders", get(list_folders))
         .route("/folders", post(create_folder))
@@ -891,6 +1034,321 @@ async fn delete_file(
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ─── file update / public_url / context show handlers (Phase 5) ────────────
+
+/// PUT /files/{id} — Canvas files#api_update: rename/move/lock/hide.
+///
+/// Teachers/admins only (Canvas manage_files on the file's course). Renaming
+/// or moving onto a sibling that already uses the display_name answers 409
+/// with Canvas's duplicate message unless on_duplicate is "overwrite" or
+/// "rename" (Canvas Attachment#handle_duplicates).
+async fn update_file(
+    State(state): State<AppState>,
+    Path(file_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateFileRequest>,
+) -> Result<Response, ApiError> {
+    let sql = format!("{ATTACHMENT_SELECT} WHERE f.id = $1 AND f.workflow_state <> 'deleted'");
+    let file = sqlx::query_as::<_, AttachmentRow>(&sql)
+        .bind(file_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let allowed = user_teacher_of_course(&state.db, auth.id, file.course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas api_update moves only within the attachment's own context.
+    let mut folder_id = file.folder_id;
+    let mut folder = file.folder.clone();
+    if let Some(parent_folder_id) = payload.parent_folder_id {
+        let Some(target) = fetch_folder(&state.db, parent_folder_id).await? else {
+            return Err(ApiError::NotFound);
+        };
+        if target.context_type != "Course" || target.context_id != file.course_id {
+            return Err(ApiError::NotFound);
+        }
+        folder_id = Some(target.id);
+        folder = target.full_name;
+    }
+
+    // Canvas truncates name to 255 characters (api_update).
+    let mut display_name = file.display_name.clone();
+    if let Some(name) = payload.name.as_deref() {
+        display_name = name.chars().take(255).collect();
+    }
+    if let Some(level) = payload.visibility_level.as_deref() {
+        if !matches!(level, "inherit" | "context" | "institution" | "public") {
+            return Ok(canvas_error(
+                StatusCode::BAD_REQUEST,
+                "visibility_level must be one of 'inherit', 'context', 'institution', 'public'",
+            ));
+        }
+    }
+
+    // Canvas: a rename or move onto an existing sibling display_name is a
+    // conflict unless on_duplicate resolves it.
+    let name_changed = display_name != file.display_name;
+    let folder_changed = folder_id != file.folder_id;
+    let mut on_duplicate: Option<&str> = None;
+    if name_changed || folder_changed {
+        let (conflict,): (bool,) = sqlx::query_as(
+            "SELECT EXISTS(SELECT 1 FROM files \
+             WHERE folder_id IS NOT DISTINCT FROM $1 AND display_name = $2 \
+               AND id <> $3 AND workflow_state <> 'deleted')",
+        )
+        .bind(folder_id)
+        .bind(&display_name)
+        .bind(file_id)
+        .fetch_one(&state.db)
+        .await?;
+        if conflict {
+            match payload.on_duplicate.as_deref() {
+                Some("overwrite") => on_duplicate = Some("overwrite"),
+                Some("rename") => on_duplicate = Some("rename"),
+                _ => {
+                    return Ok(canvas_error(
+                        StatusCode::CONFLICT,
+                        "file already exists; use on_duplicate='overwrite' or 'rename'",
+                    ))
+                }
+            }
+        }
+    }
+    if on_duplicate == Some("rename") {
+        let siblings = sqlx::query_scalar::<_, String>(
+            "SELECT display_name FROM files \
+             WHERE folder_id IS NOT DISTINCT FROM $1 AND id <> $2 \
+               AND workflow_state <> 'deleted'",
+        )
+        .bind(folder_id)
+        .bind(file_id)
+        .fetch_all(&state.db)
+        .await?;
+        display_name = make_unique_filename(&display_name, &siblings);
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE files SET
+            display_name = $2,
+            folder_id = $3,
+            folder = $4,
+            lock_at = $5,
+            unlock_at = $6,
+            locked = $7,
+            hidden = $8,
+            visibility_level = COALESCE($9, visibility_level),
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(file_id)
+    .bind(&display_name)
+    .bind(folder_id)
+    .bind(&folder)
+    .bind(payload.lock_at.or(file.lock_at))
+    .bind(payload.unlock_at.or(file.unlock_at))
+    .bind(payload.locked.unwrap_or(file.locked))
+    .bind(payload.hidden.unwrap_or(file.hidden))
+    .bind(
+        payload
+            .visibility_level
+            .clone()
+            .or(file.visibility_level.clone()),
+    )
+    .execute(&state.db)
+    .await?;
+
+    // Canvas handle_duplicates(:overwrite) destroys the replaced siblings.
+    if on_duplicate == Some("overwrite") {
+        sqlx::query(
+            "DELETE FROM files \
+             WHERE folder_id IS NOT DISTINCT FROM $1 AND display_name = $2 \
+               AND id <> $3 AND workflow_state <> 'deleted'",
+        )
+        .bind(folder_id)
+        .bind(&display_name)
+        .bind(file_id)
+        .execute(&state.db)
+        .await?;
+    }
+
+    let sql = format!("{ATTACHMENT_SELECT} WHERE f.id = $1");
+    let updated = sqlx::query_as::<_, AttachmentRow>(&sql)
+        .bind(file_id)
+        .fetch_one(&state.db)
+        .await?;
+    Ok(Json(AttachmentResponse::from_row(updated, true)).into_response())
+}
+
+/// GET /files/{id}/public_url — Canvas files#public_url.
+///
+/// Metadata-only: there is no object storage, so the URL points at the
+/// download route with the file's uuid as the verifier.
+async fn get_file_public_url(
+    State(state): State<AppState>,
+    Path(file_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<PublicUrlResponse>, ApiError> {
+    let row: Option<(i64, i64, Option<String>)> = sqlx::query_as(
+        "SELECT course_id, uploader_id, uuid FROM files \
+         WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(file_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (course_id, uploader_id, uuid) = row.ok_or(ApiError::NotFound)?;
+
+    // Canvas requires the download right (uploader, enrolled users, admin).
+    let is_uploader = uploader_id == auth.id;
+    let allowed =
+        is_uploader || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    let verifier = uuid.unwrap_or_default();
+    Ok(Json(PublicUrlResponse {
+        public_url: format!("/api/v1/files/{file_id}/download?verifier={verifier}"),
+    }))
+}
+
+/// GET /courses/{courseId}/files/{id} — Canvas files#api_show (course scope).
+///
+/// Enrolled users see non-hidden files; hidden files are invisible to
+/// students (404); teachers/admins see everything.
+async fn get_course_file(
+    State(state): State<AppState>,
+    Path((course_id, file_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<AttachmentResponse>, ApiError> {
+    let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+    let allowed =
+        can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    let sql = format!(
+        "{ATTACHMENT_SELECT} WHERE f.id = $1 AND f.course_id = $2 AND f.workflow_state <> 'deleted'"
+    );
+    let file = sqlx::query_as::<_, AttachmentRow>(&sql)
+        .bind(file_id)
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    // Canvas api_show hides hidden attachments from non-managers.
+    if file.hidden && !can_manage {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(Json(AttachmentResponse::from_row(file, can_manage)))
+}
+
+/// GET /groups/{groupId}/files/{id} — Canvas files#api_show (group scope).
+///
+/// Group files live in the metadata-only `group_files` table (migration
+/// 0064); accepted members may read them, teachers/admins manage them.
+async fn get_group_file(
+    State(state): State<AppState>,
+    Path((group_id, file_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<GroupFileResponse>, ApiError> {
+    let course_id: Option<i64> = sqlx::query_scalar(
+        "SELECT course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?
+    .flatten()
+    .ok_or(ApiError::NotFound)?;
+
+    let mut can_manage = is_admin(&auth);
+    if !can_manage {
+        if let Some(course_id) = course_id {
+            can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+        }
+    }
+    if !can_manage && !user_in_group(&state.db, auth.id, group_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let row = sqlx::query_as::<_, GroupFileRow>(
+        "SELECT id, group_id, folder, filename, \
+                COALESCE(display_name, filename) AS display_name, \
+                content_type, size, created_at, updated_at \
+         FROM group_files WHERE id = $1 AND group_id = $2",
+    )
+    .bind(file_id)
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+
+    Ok(Json(GroupFileResponse::from(row)))
+}
+
+/// GET /users/{userId}/files/{id} — Canvas files#api_show (user scope).
+///
+/// Deviation: star-lms files are course-scoped, so a user's files are the
+/// metadata they uploaded (uploader_id), like list_user_folders_and_files.
+async fn get_user_file(
+    State(state): State<AppState>,
+    Path((user_id, file_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<AttachmentResponse>, ApiError> {
+    if auth.id != user_id && !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    let sql = format!(
+        "{ATTACHMENT_SELECT} WHERE f.id = $1 AND f.uploader_id = $2 AND f.workflow_state <> 'deleted'"
+    );
+    let file = sqlx::query_as::<_, AttachmentRow>(&sql)
+        .bind(file_id)
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    Ok(Json(AttachmentResponse::from_row(file, true)))
+}
+
+/// GET /courses/{courseId}/files/file_ref/{migrationId} — Canvas
+/// files#file_ref: translate a course-copy file reference.
+///
+/// Deviation: files carry no Canvas migration_id, so the reference resolves
+/// against the file's uuid (the per-file identifier course copies keep).
+async fn get_file_ref(
+    State(state): State<AppState>,
+    Path((course_id, migration_id)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<AttachmentResponse>, ApiError> {
+    let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+    let allowed =
+        can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    let sql = format!(
+        "{ATTACHMENT_SELECT} WHERE f.course_id = $1 AND f.uuid = $2 AND f.workflow_state <> 'deleted'"
+    );
+    let file = sqlx::query_as::<_, AttachmentRow>(&sql)
+        .bind(course_id)
+        .bind(&migration_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    Ok(Json(AttachmentResponse::from_row(file, can_manage)))
 }
 
 // ─── folder handlers ───────────────────────────────────────────────────────
@@ -2634,6 +3092,36 @@ SELECT f.id, f.course_id, f.folder_id, f.folder, f.filename, f.display_name,
 FROM files f
 "#;
 
+/// Raw group_files row (column order matches the SELECT in get_group_file).
+#[derive(Debug, sqlx::FromRow)]
+struct GroupFileRow {
+    id: i64,
+    group_id: i64,
+    folder: String,
+    filename: String,
+    display_name: String,
+    content_type: String,
+    size: i64,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<GroupFileRow> for GroupFileResponse {
+    fn from(r: GroupFileRow) -> Self {
+        GroupFileResponse {
+            id: r.id,
+            group_id: r.group_id,
+            folder: r.folder,
+            filename: r.filename,
+            display_name: r.display_name,
+            content_type: r.content_type,
+            size: r.size,
+            created_at: r.created_at,
+            updated_at: r.updated_at,
+        }
+    }
+}
+
 impl AttachmentResponse {
     fn from_row(row: AttachmentRow, can_manage: bool) -> Self {
         let now = Utc::now();
@@ -2743,6 +3231,27 @@ mod tests {
         assert_eq!(
             dedupe_folder_name("notes", &["notes".to_string(), "notes 3".to_string()]),
             "notes 2"
+        );
+    }
+
+    #[test]
+    fn make_unique_filename_appends_counter_like_canvas() {
+        // Canvas make_unique_filename: "notes.pdf" -> "notes-1.pdf".
+        assert_eq!(make_unique_filename("notes.pdf", &[]), "notes.pdf");
+        assert_eq!(
+            make_unique_filename("notes.pdf", &["notes.pdf".to_string()]),
+            "notes-1.pdf"
+        );
+        assert_eq!(
+            make_unique_filename(
+                "notes.pdf",
+                &["notes.pdf".to_string(), "notes-1.pdf".to_string()]
+            ),
+            "notes-2.pdf"
+        );
+        assert_eq!(
+            make_unique_filename("readme", &["readme".to_string()]),
+            "readme-1"
         );
     }
 
