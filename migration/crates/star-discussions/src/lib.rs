@@ -25,6 +25,24 @@
 //! - POST   /groups/{groupId}/discussion_topics/{topicId}/summaries — generate summary (group context)
 //! - PUT    /courses/{courseId}/discussion_topics/update_discussion_types — set discussion types (teacher/admin)
 //! - PUT    /courses/{courseId}/discussion_topics/migrate_disallow — migrate side comments (teacher/admin)
+//! - GET    /groups/{groupId}/discussion_topics/{topicId} — group topic show (group read access)
+//! - GET/POST /groups/{groupId}/discussion_topics/{topicId}/entries — group entry list / create
+//! - GET/PUT/DELETE /groups/{groupId}/discussion_topics/{topicId}/entries/{entryId} — group entry CRUD
+//! - GET/POST /groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}/replies — group replies
+//! - GET    /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/replies — flat replies (course)
+//! - PUT/DELETE .../read, POST .../rating, PUT/DELETE .../subscribed — group read-state / rating / subscription
+//! - PUT    /courses/{courseId}/discussion_topics/read_all — mark every topic read
+//! - PUT    /groups/{groupId}/discussion_topics/read_all — mark every group topic read
+//! - PUT/DELETE /{context}/discussion_topics/{topicId}/read_all — topic + entries read state
+//! - GET    /{context}/discussion_topics/{topicId}/view — view (entries, participants, unread, ratings)
+//! - GET    /{context}/discussion_topics/{topicId}/entry_list — requested entries, deleted flagged
+//! - POST   /{context}/discussion_topics/{topicId}/duplicate — duplicate a topic
+//! - PUT    /{context}/discussion_topics/{topicId}/summaries/disable — disable the topic summary
+//! - POST   /{context}/discussion_topics/{topicId}/summaries/{summaryId}/feedback — summary feedback
+//! - GET/POST /{context}/discussion_topics/{topicId}/insights — insights (empty state per Canvas)
+//! - GET/PUT /{context}/discussion_topics/{topicId}/insights/entries — insight entries (empty state)
+//! - POST   /{context}/discussion_topics/{topicId}/accessibility/scan — accessibility scan (401 shape)
+//! - POST   /{context}/discussion_topics/{topicId}/accessibility/queue_scan — queue scan (401 shape)
 
 use axum::{
     extract::{Path, Query, State},
@@ -54,6 +72,8 @@ pub struct DiscussionTopic {
     pub message: Option<String>,
     pub workflow_state: String,
     pub discussion_type: String,
+    pub pinned: bool,
+    pub locked: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -84,6 +104,9 @@ pub struct DiscussionEntry {
     pub updated_at: DateTime<Utc>,
     #[serde(default)]
     pub replies: Vec<DiscussionEntry>,
+    /// Present (and true) only in `entry_list` responses for deleted entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<bool>,
 }
 
 impl From<DiscussionEntryRow> for DiscussionEntry {
@@ -98,6 +121,7 @@ impl From<DiscussionEntryRow> for DiscussionEntry {
             created_at: row.created_at,
             updated_at: row.updated_at,
             replies: Vec::new(),
+            deleted: None,
         }
     }
 }
@@ -116,6 +140,12 @@ pub struct UpdateTopic {
     pub title: Option<String>,
     pub message: Option<String>,
     pub discussion_type: Option<String>,
+    /// Canvas `published` — true maps to the active state, false to unpublished.
+    pub published: Option<bool>,
+    /// Canvas `pinned` — keep the topic at the top of the forum (teacher/admin).
+    pub pinned: Option<bool>,
+    /// Canvas `locked` — lock the topic against new comments (teacher/admin).
+    pub locked: Option<bool>,
 }
 
 /// Request body for creating a discussion entry.
@@ -267,7 +297,7 @@ async fn create_topic(
         r#"
         INSERT INTO discussion_topics (course_id, title, message, discussion_type, workflow_state)
         VALUES ($1, $2, $3, $4, 'active')
-        RETURNING id, course_id, title, message, workflow_state, discussion_type, created_at, updated_at
+        RETURNING id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
         "#,
     )
     .bind(course_id)
@@ -291,7 +321,7 @@ async fn list_topics(
     }
     let rows: Vec<DiscussionTopic> = sqlx::query_as(
         r#"
-        SELECT id, course_id, title, message, workflow_state, discussion_type, created_at, updated_at
+        SELECT id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
         FROM discussion_topics
         WHERE course_id = $1 AND workflow_state <> 'deleted'
         ORDER BY created_at DESC
@@ -317,7 +347,7 @@ async fn get_topic(
     }
     let row: Option<DiscussionTopic> = sqlx::query_as(
         r#"
-        SELECT id, course_id, title, message, workflow_state, discussion_type, created_at, updated_at
+        SELECT id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
         FROM discussion_topics
         WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
         "#,
@@ -339,7 +369,7 @@ async fn update_topic(
     // Fetch existing to verify ownership and get current values.
     let existing: Option<DiscussionTopic> = sqlx::query_as(
         r#"
-        SELECT id, course_id, title, message, workflow_state, discussion_type, created_at, updated_at
+        SELECT id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
         FROM discussion_topics
         WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
         "#,
@@ -357,6 +387,15 @@ async fn update_topic(
     let title = payload.title.unwrap_or(existing.title);
     let message = payload.message.or(existing.message);
     let discussion_type = payload.discussion_type.unwrap_or(existing.discussion_type);
+    // Canvas maps `published` onto the workflow state (true -> active, false
+    // -> unpublished); `pinned` and `locked` are plain moderation flags.
+    let workflow_state = match payload.published {
+        Some(true) => "active".to_string(),
+        Some(false) => "unpublished".to_string(),
+        None => existing.workflow_state.clone(),
+    };
+    let pinned = payload.pinned.unwrap_or(existing.pinned);
+    let locked = payload.locked.unwrap_or(existing.locked);
 
     if title.trim().is_empty() {
         return Err(ApiError::Validation("title cannot be empty".into()));
@@ -370,14 +409,18 @@ async fn update_topic(
     let updated: DiscussionTopic = sqlx::query_as(
         r#"
         UPDATE discussion_topics
-        SET title = $1, message = $2, discussion_type = $3, updated_at = now()
-        WHERE id = $4 AND course_id = $5 AND workflow_state <> 'deleted'
-        RETURNING id, course_id, title, message, workflow_state, discussion_type, created_at, updated_at
+        SET title = $1, message = $2, discussion_type = $3, workflow_state = $4,
+            pinned = $5, locked = $6, updated_at = now()
+        WHERE id = $7 AND course_id = $8 AND workflow_state <> 'deleted'
+        RETURNING id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
         "#,
     )
     .bind(&title)
     .bind(&message)
     .bind(&discussion_type)
+    .bind(&workflow_state)
+    .bind(pinned)
+    .bind(locked)
     .bind(id)
     .bind(course_id)
     .fetch_one(&state.db)
@@ -1782,6 +1825,1524 @@ async fn migrate_disallow(
 }
 
 // ---------------------------------------------------------------------------
+// Context-generic helpers (course + group Canvas contexts)
+// ---------------------------------------------------------------------------
+
+/// A discussion context: a course or a group (Canvas `@context`).
+#[derive(Debug, Clone, Copy)]
+enum TopicContext {
+    Course(i64),
+    Group(i64),
+}
+
+/// 404 unless the topic exists, is not soft-deleted, and belongs to the
+/// context in the URL (course topics have `group_id IS NULL`, group topics
+/// carry the group id).
+async fn ensure_ctx_topic(pool: &PgPool, ctx: TopicContext, topic_id: i64) -> Result<(), ApiError> {
+    let (sql, ctx_id) = match ctx {
+        TopicContext::Course(course_id) => (
+            "SELECT id FROM discussion_topics WHERE id = $1 AND course_id = $2 AND group_id IS NULL AND workflow_state <> 'deleted'",
+            course_id,
+        ),
+        TopicContext::Group(group_id) => (
+            "SELECT id FROM discussion_topics WHERE id = $1 AND group_id = $2 AND workflow_state <> 'deleted'",
+            group_id,
+        ),
+    };
+    let row: Option<(i64,)> = sqlx::query_as(sql)
+        .bind(topic_id)
+        .bind(ctx_id)
+        .fetch_optional(pool)
+        .await?;
+    row.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+/// Canvas `require_context_and_read_access`: enrolled users and admins may
+/// read a course; group members, the parent course's teachers and admins may
+/// read a group.
+async fn check_ctx_read_access(
+    pool: &PgPool,
+    ctx: TopicContext,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    match ctx {
+        TopicContext::Course(course_id) => {
+            check_enrolled_or_admin(pool, auth.id, course_id, auth).await
+        }
+        TopicContext::Group(group_id) => {
+            ensure_group_read_access(pool, group_id, auth).await?;
+            Ok(true)
+        }
+    }
+}
+
+/// Canvas `moderate_forum`: course teachers/admins for a course; group
+/// members, the parent course's teachers and admins for a group.
+async fn check_ctx_moderate_access(
+    pool: &PgPool,
+    ctx: TopicContext,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    match ctx {
+        TopicContext::Course(course_id) => {
+            check_teacher_or_admin(pool, auth.id, course_id, auth).await
+        }
+        TopicContext::Group(group_id) => {
+            if is_admin(auth) {
+                return Ok(true);
+            }
+            let member: Option<(i32,)> = sqlx::query_as(
+                r#"
+                SELECT 1 FROM group_memberships
+                WHERE group_id = $1 AND user_id = $2 AND workflow_state <> 'deleted'
+                LIMIT 1
+                "#,
+            )
+            .bind(group_id)
+            .bind(auth.id)
+            .fetch_optional(pool)
+            .await?;
+            if member.is_some() {
+                return Ok(true);
+            }
+            let teacher: Option<(i32,)> = sqlx::query_as(
+                r#"
+                SELECT 1 FROM enrollments e
+                JOIN groups g ON g.course_id = e.course_id
+                WHERE g.id = $1 AND e.user_id = $2 AND e.role = 'teacher'
+                LIMIT 1
+                "#,
+            )
+            .bind(group_id)
+            .bind(auth.id)
+            .fetch_optional(pool)
+            .await?;
+            Ok(teacher.is_some())
+        }
+    }
+}
+
+/// Context + topic + entry existence + read access (Canvas `require_entry`).
+async fn ensure_ctx_entry(
+    pool: &PgPool,
+    ctx: TopicContext,
+    topic_id: i64,
+    entry_id: i64,
+    auth: &AuthUser,
+) -> Result<(), ApiError> {
+    ensure_ctx_topic(pool, ctx, topic_id).await?;
+    if !check_ctx_read_access(pool, ctx, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let entry: Option<(i64,)> = sqlx::query_as(
+        "SELECT topic_id FROM discussion_entries WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(entry_id)
+    .fetch_optional(pool)
+    .await?;
+    let (entry_topic_id,) = entry.ok_or(ApiError::NotFound)?;
+    if entry_topic_id != topic_id {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+/// Canvas `DiscussionEntry` :update / :delete policy: the author or a forum
+/// moderator of the entry's context.
+async fn check_ctx_entry_editor(
+    pool: &PgPool,
+    ctx: TopicContext,
+    author_id: Option<i64>,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    if author_id == Some(auth.id) {
+        return Ok(true);
+    }
+    check_ctx_moderate_access(pool, ctx, auth).await
+}
+
+/// Upsert one topic read-state row (Canvas `change_read_state` no-op semantics).
+async fn upsert_topic_read_state(
+    pool: &PgPool,
+    topic_id: i64,
+    user_id: i64,
+    new_state: &str,
+    forced: Option<bool>,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        r#"
+        INSERT INTO discussion_topic_reads (topic_id, user_id, workflow_state, forced_read_state, read_at)
+        VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'read' THEN now() ELSE NULL END)
+        ON CONFLICT (topic_id, user_id) DO UPDATE
+        SET workflow_state = EXCLUDED.workflow_state,
+            forced_read_state = COALESCE(EXCLUDED.forced_read_state, discussion_topic_reads.forced_read_state),
+            read_at = CASE WHEN EXCLUDED.workflow_state = 'read' THEN now() ELSE discussion_topic_reads.read_at END,
+            updated_at = now()
+        "#,
+    )
+    .bind(topic_id)
+    .bind(user_id)
+    .bind(new_state)
+    .bind(forced)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Upsert one entry read-state row (same no-op semantics as topics).
+async fn upsert_entry_read_state(
+    pool: &PgPool,
+    entry_id: i64,
+    user_id: i64,
+    new_state: &str,
+    forced: Option<bool>,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        r#"
+        INSERT INTO discussion_entry_reads (entry_id, user_id, workflow_state, forced_read_state, read_at)
+        VALUES ($1, $2, $3, $4, CASE WHEN $3 = 'read' THEN now() ELSE NULL END)
+        ON CONFLICT (entry_id, user_id) DO UPDATE
+        SET workflow_state = EXCLUDED.workflow_state,
+            forced_read_state = COALESCE(EXCLUDED.forced_read_state, discussion_entry_reads.forced_read_state),
+            read_at = CASE WHEN EXCLUDED.workflow_state = 'read' THEN now() ELSE discussion_entry_reads.read_at END,
+            updated_at = now()
+        "#,
+    )
+    .bind(entry_id)
+    .bind(user_id)
+    .bind(new_state)
+    .bind(forced)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Canvas `change_topic_read_state` for either context.
+async fn set_ctx_topic_read_state(
+    pool: &PgPool,
+    ctx: TopicContext,
+    topic_id: i64,
+    auth: &AuthUser,
+    new_state: &str,
+    forced: Option<bool>,
+) -> Result<StatusCode, ApiError> {
+    ensure_ctx_topic(pool, ctx, topic_id).await?;
+    if !check_ctx_read_access(pool, ctx, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    upsert_topic_read_state(pool, topic_id, auth.id, new_state, forced).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Canvas `change_entry_read_state` for either context.
+async fn set_ctx_entry_read_state(
+    pool: &PgPool,
+    ctx: TopicContext,
+    topic_id: i64,
+    entry_id: i64,
+    auth: &AuthUser,
+    new_state: &str,
+    forced: Option<bool>,
+) -> Result<StatusCode, ApiError> {
+    ensure_ctx_entry(pool, ctx, topic_id, entry_id, auth).await?;
+    upsert_entry_read_state(pool, entry_id, auth.id, new_state, forced).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Canvas `change_topic_all_read_state`: the topic and every active entry.
+async fn set_ctx_all_read_state(
+    pool: &PgPool,
+    ctx: TopicContext,
+    topic_id: i64,
+    auth: &AuthUser,
+    new_state: &str,
+    forced: Option<bool>,
+) -> Result<StatusCode, ApiError> {
+    ensure_ctx_topic(pool, ctx, topic_id).await?;
+    if !check_ctx_read_access(pool, ctx, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    upsert_topic_read_state(pool, topic_id, auth.id, new_state, forced).await?;
+    sqlx::query(
+        r#"
+        INSERT INTO discussion_entry_reads (entry_id, user_id, workflow_state, forced_read_state, read_at)
+        SELECT e.id, $2, $3, $4, CASE WHEN $3 = 'read' THEN now() ELSE NULL END
+        FROM discussion_entries e
+        WHERE e.topic_id = $1 AND e.workflow_state <> 'deleted'
+        ON CONFLICT (entry_id, user_id) DO UPDATE
+        SET workflow_state = EXCLUDED.workflow_state,
+            forced_read_state = COALESCE(EXCLUDED.forced_read_state, discussion_entry_reads.forced_read_state),
+            read_at = CASE WHEN EXCLUDED.workflow_state = 'read' THEN now() ELSE discussion_entry_reads.read_at END,
+            updated_at = now()
+        "#,
+    )
+    .bind(topic_id)
+    .bind(auth.id)
+    .bind(new_state)
+    .bind(forced)
+    .execute(pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Canvas `mark_all_topic_read`: every published topic of the context.
+async fn mark_all_ctx_topics_read(
+    pool: &PgPool,
+    ctx: TopicContext,
+    auth: &AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !check_ctx_read_access(pool, ctx, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let (sql, ctx_id) = match ctx {
+        TopicContext::Course(course_id) => (
+            r#"SELECT id FROM discussion_topics
+               WHERE course_id = $1 AND group_id IS NULL AND workflow_state = 'active'"#,
+            course_id,
+        ),
+        TopicContext::Group(group_id) => (
+            r#"SELECT id FROM discussion_topics
+               WHERE group_id = $1 AND workflow_state = 'active'"#,
+            group_id,
+        ),
+    };
+    sqlx::query(
+        r#"
+        INSERT INTO discussion_topic_reads (topic_id, user_id, workflow_state, read_at)
+        SELECT t.id, $2, 'read', now()
+        FROM discussion_topics t
+        WHERE t.id = ANY($1::BIGINT[])
+        ON CONFLICT (topic_id, user_id) DO UPDATE
+        SET workflow_state = 'read', read_at = now(), updated_at = now()
+        "#,
+    )
+    .bind(
+        sqlx::query_scalar::<_, i64>(sql)
+            .bind(ctx_id)
+            .fetch_all(pool)
+            .await?,
+    )
+    .bind(auth.id)
+    .execute(pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Canvas `change_subscribed_state` for either context (204, no-op safe).
+async fn set_ctx_subscription(
+    pool: &PgPool,
+    ctx: TopicContext,
+    topic_id: i64,
+    auth: &AuthUser,
+    subscribed: bool,
+) -> Result<StatusCode, ApiError> {
+    ensure_ctx_topic(pool, ctx, topic_id).await?;
+    if !check_ctx_read_access(pool, ctx, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    sqlx::query(
+        r#"
+        INSERT INTO discussion_subscriptions (topic_id, user_id, subscribed)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (topic_id, user_id) DO UPDATE
+        SET subscribed = EXCLUDED.subscribed, updated_at = now()
+        "#,
+    )
+    .bind(topic_id)
+    .bind(auth.id)
+    .bind(subscribed)
+    .execute(pool)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Nested (top-level with replies) entries of a topic.
+async fn load_nested_entries(
+    pool: &PgPool,
+    topic_id: i64,
+) -> Result<Vec<DiscussionEntry>, ApiError> {
+    let rows: Vec<DiscussionEntryRow> = sqlx::query_as(
+        r#"
+        SELECT id, topic_id, parent_id, user_id, message, workflow_state, created_at, updated_at
+        FROM discussion_entries
+        WHERE topic_id = $1 AND workflow_state <> 'deleted'
+        ORDER BY created_at ASC
+        "#,
+    )
+    .bind(topic_id)
+    .fetch_all(pool)
+    .await?;
+
+    let mut entries: Vec<DiscussionEntry> = rows.into_iter().map(DiscussionEntry::from).collect();
+    let mut children: HashMap<i64, Vec<usize>> = HashMap::new();
+    for (i, entry) in entries.iter().enumerate() {
+        if let Some(parent_id) = entry.parent_id {
+            children.entry(parent_id).or_default().push(i);
+        }
+    }
+    let top_level: Vec<usize> = entries
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.parent_id.is_none())
+        .map(|(i, _)| i)
+        .collect();
+
+    fn build_replies(
+        entries: &mut Vec<DiscussionEntry>,
+        children: &HashMap<i64, Vec<usize>>,
+        idx: usize,
+    ) {
+        if let Some(child_indices) = children.get(&entries[idx].id) {
+            let child_indices = child_indices.clone();
+            for child_idx in child_indices {
+                build_replies(entries, children, child_idx);
+                let reply = entries[child_idx].clone();
+                entries[idx].replies.push(reply);
+            }
+        }
+    }
+
+    for &idx in &top_level {
+        build_replies(&mut entries, &children, idx);
+    }
+    Ok(top_level.into_iter().map(|i| entries[i].clone()).collect())
+}
+
+// ---------------------------------------------------------------------------
+// Group-context topic/entry routes (Canvas group discussion parity)
+// ---------------------------------------------------------------------------
+
+/// GET /groups/{groupId}/discussion_topics/{topicId} — show (group read).
+async fn group_show_topic(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<DiscussionTopic>, ApiError> {
+    let ctx = TopicContext::Group(group_id);
+    ensure_ctx_topic(&state.db, ctx, topic_id).await?;
+    if !check_ctx_read_access(&state.db, ctx, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let row: Option<DiscussionTopic> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
+        FROM discussion_topics
+        WHERE id = $1 AND group_id = $2 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(topic_id)
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?;
+    row.ok_or(ApiError::NotFound).map(Json)
+}
+
+/// GET /groups/{groupId}/discussion_topics/{topicId}/entries.
+async fn group_list_entries(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<DiscussionEntry>>, ApiError> {
+    let ctx = TopicContext::Group(group_id);
+    ensure_ctx_topic(&state.db, ctx, topic_id).await?;
+    if !check_ctx_read_access(&state.db, ctx, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(load_nested_entries(&state.db, topic_id).await?))
+}
+
+/// POST /groups/{groupId}/discussion_topics/{topicId}/entries.
+async fn group_create_entry(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<CreateEntry>,
+) -> Result<(StatusCode, Json<DiscussionEntry>), ApiError> {
+    let ctx = TopicContext::Group(group_id);
+    ensure_ctx_topic(&state.db, ctx, topic_id).await?;
+    if !check_ctx_read_access(&state.db, ctx, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if payload.message.trim().is_empty() {
+        return Err(ApiError::Validation("message cannot be empty".into()));
+    }
+    if let Some(parent_id) = payload.parent_id {
+        let parent: Option<(i64,)> = sqlx::query_as(
+            "SELECT topic_id FROM discussion_entries WHERE id = $1 AND workflow_state <> 'deleted'",
+        )
+        .bind(parent_id)
+        .fetch_optional(&state.db)
+        .await?;
+        match parent {
+            Some((pt_id,)) if pt_id == topic_id => {}
+            _ => {
+                return Err(ApiError::Validation(
+                    "parent_id must belong to the same topic".into(),
+                ))
+            }
+        }
+    }
+    let row: DiscussionEntryRow = sqlx::query_as(
+        r#"
+        INSERT INTO discussion_entries (topic_id, parent_id, user_id, message, workflow_state)
+        VALUES ($1, $2, $3, $4, 'active')
+        RETURNING id, topic_id, parent_id, user_id, message, workflow_state, created_at, updated_at
+        "#,
+    )
+    .bind(topic_id)
+    .bind(payload.parent_id)
+    .bind(auth.id)
+    .bind(&payload.message)
+    .fetch_one(&state.db)
+    .await?;
+    Ok((StatusCode::CREATED, Json(DiscussionEntry::from(row))))
+}
+
+/// GET /groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}.
+async fn group_get_entry(
+    State(state): State<AppState>,
+    Path((group_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<DiscussionEntry>, ApiError> {
+    ensure_ctx_entry(
+        &state.db,
+        TopicContext::Group(group_id),
+        topic_id,
+        entry_id,
+        &auth,
+    )
+    .await?;
+    let row: Option<DiscussionEntryRow> = sqlx::query_as(
+        r#"
+        SELECT id, topic_id, parent_id, user_id, message, workflow_state, created_at, updated_at
+        FROM discussion_entries
+        WHERE id = $1 AND topic_id = $2 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(entry_id)
+    .bind(topic_id)
+    .fetch_optional(&state.db)
+    .await?;
+    row.map(|row| Json(DiscussionEntry::from(row)))
+        .ok_or(ApiError::NotFound)
+}
+
+/// PUT /groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}.
+async fn group_update_entry(
+    State(state): State<AppState>,
+    Path((group_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateEntry>,
+) -> Result<Json<DiscussionEntry>, ApiError> {
+    let ctx = TopicContext::Group(group_id);
+    ensure_ctx_topic(&state.db, ctx, topic_id).await?;
+    if !check_ctx_read_access(&state.db, ctx, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let existing: Option<(Option<i64>,)> = sqlx::query_as(
+        "SELECT user_id FROM discussion_entries WHERE id = $1 AND topic_id = $2 AND workflow_state <> 'deleted'",
+    )
+    .bind(entry_id)
+    .bind(topic_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (author_id,) = existing.ok_or(ApiError::NotFound)?;
+    if !check_ctx_entry_editor(&state.db, ctx, author_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let message = payload
+        .message
+        .filter(|message| !message.trim().is_empty())
+        .ok_or_else(|| ApiError::Validation("message cannot be empty".into()))?;
+    let row: DiscussionEntryRow = sqlx::query_as(
+        r#"
+        UPDATE discussion_entries
+        SET message = $1, updated_at = now()
+        WHERE id = $2 AND topic_id = $3 AND workflow_state <> 'deleted'
+        RETURNING id, topic_id, parent_id, user_id, message, workflow_state, created_at, updated_at
+        "#,
+    )
+    .bind(&message)
+    .bind(entry_id)
+    .bind(topic_id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(DiscussionEntry::from(row)))
+}
+
+/// DELETE /groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}.
+async fn group_delete_entry(
+    State(state): State<AppState>,
+    Path((group_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    let ctx = TopicContext::Group(group_id);
+    ensure_ctx_topic(&state.db, ctx, topic_id).await?;
+    if !check_ctx_read_access(&state.db, ctx, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let existing: Option<(Option<i64>,)> = sqlx::query_as(
+        "SELECT user_id FROM discussion_entries WHERE id = $1 AND topic_id = $2 AND workflow_state <> 'deleted'",
+    )
+    .bind(entry_id)
+    .bind(topic_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (author_id,) = existing.ok_or(ApiError::NotFound)?;
+    if !check_ctx_entry_editor(&state.db, ctx, author_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    sqlx::query(
+        r#"
+        UPDATE discussion_entries
+        SET workflow_state = 'deleted', user_id = NULL, message = NULL, updated_at = now()
+        WHERE id = $1 AND topic_id = $2
+        "#,
+    )
+    .bind(entry_id)
+    .bind(topic_id)
+    .execute(&state.db)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET .../entries/{entryId}/replies — all descendants, newest first (Canvas
+/// `flattened_discussion_subentries.newest_first`). The entry's topic is
+/// verified by `ensure_ctx_entry` first.
+async fn ctx_list_replies(
+    state: &AppState,
+    ctx: TopicContext,
+    topic_id: i64,
+    entry_id: i64,
+    auth: &AuthUser,
+) -> Result<Json<Vec<DiscussionEntry>>, ApiError> {
+    ensure_ctx_entry(state, ctx, topic_id, entry_id, auth).await?;
+    let rows: Vec<DiscussionEntryRow> = sqlx::query_as(
+        r#"
+        WITH RECURSIVE subtree AS (
+            SELECT id FROM discussion_entries WHERE id = $1
+            UNION ALL
+            SELECT e.id FROM discussion_entries e JOIN subtree s ON e.parent_id = s.id
+        )
+        SELECT id, topic_id, parent_id, user_id, message, workflow_state, created_at, updated_at
+        FROM discussion_entries
+        WHERE id IN (SELECT id FROM subtree) AND id <> $1 AND workflow_state <> 'deleted'
+        ORDER BY created_at DESC, id DESC
+        "#,
+    )
+    .bind(entry_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(rows.into_iter().map(DiscussionEntry::from).collect()))
+}
+
+/// GET /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/replies.
+async fn course_list_replies(
+    State(state): State<AppState>,
+    Path((course_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<DiscussionEntry>>, ApiError> {
+    ctx_list_replies(
+        &state,
+        TopicContext::Course(course_id),
+        topic_id,
+        entry_id,
+        &auth,
+    )
+    .await
+}
+
+/// GET /groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}/replies.
+async fn group_list_replies(
+    State(state): State<AppState>,
+    Path((group_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<DiscussionEntry>>, ApiError> {
+    ctx_list_replies(
+        &state,
+        TopicContext::Group(group_id),
+        topic_id,
+        entry_id,
+        &auth,
+    )
+    .await
+}
+
+/// POST /groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}/replies.
+async fn group_add_reply(
+    State(state): State<AppState>,
+    Path((group_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<CreateReply>,
+) -> Result<(StatusCode, Json<DiscussionEntry>), ApiError> {
+    let ctx = TopicContext::Group(group_id);
+    ensure_ctx_topic(&state.db, ctx, topic_id).await?;
+    if !check_ctx_read_access(&state.db, ctx, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let parent: Option<(i64,)> = sqlx::query_as(
+        "SELECT topic_id FROM discussion_entries WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(entry_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (parent_topic_id,) = parent.ok_or(ApiError::NotFound)?;
+    if parent_topic_id != topic_id {
+        return Err(ApiError::NotFound);
+    }
+    if payload.message.trim().is_empty() {
+        return Err(ApiError::Validation("message cannot be empty".into()));
+    }
+    let row: DiscussionEntryRow = sqlx::query_as(
+        r#"
+        INSERT INTO discussion_entries (topic_id, parent_id, user_id, message, workflow_state)
+        VALUES ($1, $2, $3, $4, 'active')
+        RETURNING id, topic_id, parent_id, user_id, message, workflow_state, created_at, updated_at
+        "#,
+    )
+    .bind(topic_id)
+    .bind(entry_id)
+    .bind(auth.id)
+    .bind(&payload.message)
+    .fetch_one(&state.db)
+    .await?;
+    Ok((StatusCode::CREATED, Json(DiscussionEntry::from(row))))
+}
+
+/// POST /groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}/rating.
+#[allow(clippy::result_large_err)]
+async fn group_rate_entry(
+    State(state): State<AppState>,
+    Path((group_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    Query(params): Query<RateEntryParams>,
+    auth: AuthUser,
+    payload: Option<Json<RateEntryBody>>,
+) -> Result<StatusCode, Response> {
+    ensure_ctx_entry(
+        &state.db,
+        TopicContext::Group(group_id),
+        topic_id,
+        entry_id,
+        &auth,
+    )
+    .await
+    .map_err(|e| e.into_response())?;
+
+    let rating = payload
+        .as_ref()
+        .and_then(|Json(body)| body.rating.as_ref())
+        .and_then(parse_rating)
+        .or_else(|| {
+            params
+                .rating
+                .as_deref()
+                .and_then(|raw| raw.trim().parse::<i64>().ok())
+        })
+        .unwrap_or(0);
+
+    if rating != 0 && rating != 1 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "message": "Invalid rating given" })),
+        )
+            .into_response());
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO discussion_entry_ratings (entry_id, user_id, rating)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (entry_id, user_id) DO UPDATE
+        SET rating = EXCLUDED.rating, updated_at = now()
+        "#,
+    )
+    .bind(entry_id)
+    .bind(auth.id)
+    .bind(rating as i32)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiError::from(e).into_response())?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Group read-state wrappers.
+async fn group_mark_topic_read(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    Query(params): Query<ReadStateParams>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_ctx_topic_read_state(
+        &state.db,
+        TopicContext::Group(group_id),
+        topic_id,
+        &auth,
+        "read",
+        value_to_boolean(params.forced_read_state.as_deref()),
+    )
+    .await
+}
+
+async fn group_mark_topic_unread(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    Query(params): Query<ReadStateParams>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_ctx_topic_read_state(
+        &state.db,
+        TopicContext::Group(group_id),
+        topic_id,
+        &auth,
+        "unread",
+        value_to_boolean(params.forced_read_state.as_deref()),
+    )
+    .await
+}
+
+async fn group_mark_entry_read(
+    State(state): State<AppState>,
+    Path((group_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    Query(params): Query<ReadStateParams>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_ctx_entry_read_state(
+        &state.db,
+        TopicContext::Group(group_id),
+        topic_id,
+        entry_id,
+        &auth,
+        "read",
+        value_to_boolean(params.forced_read_state.as_deref()),
+    )
+    .await
+}
+
+async fn group_mark_entry_unread(
+    State(state): State<AppState>,
+    Path((group_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    Query(params): Query<ReadStateParams>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_ctx_entry_read_state(
+        &state.db,
+        TopicContext::Group(group_id),
+        topic_id,
+        entry_id,
+        &auth,
+        "unread",
+        value_to_boolean(params.forced_read_state.as_deref()),
+    )
+    .await
+}
+
+/// Mark-all wrappers (topic level, both contexts).
+async fn course_mark_all_read(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    Query(params): Query<ReadStateParams>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_ctx_all_read_state(
+        &state.db,
+        TopicContext::Course(course_id),
+        topic_id,
+        &auth,
+        "read",
+        value_to_boolean(params.forced_read_state.as_deref()),
+    )
+    .await
+}
+
+async fn course_mark_all_unread(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    Query(params): Query<ReadStateParams>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_ctx_all_read_state(
+        &state.db,
+        TopicContext::Course(course_id),
+        topic_id,
+        &auth,
+        "unread",
+        value_to_boolean(params.forced_read_state.as_deref()),
+    )
+    .await
+}
+
+async fn group_mark_all_read(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    Query(params): Query<ReadStateParams>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_ctx_all_read_state(
+        &state.db,
+        TopicContext::Group(group_id),
+        topic_id,
+        &auth,
+        "read",
+        value_to_boolean(params.forced_read_state.as_deref()),
+    )
+    .await
+}
+
+async fn group_mark_all_unread(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    Query(params): Query<ReadStateParams>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_ctx_all_read_state(
+        &state.db,
+        TopicContext::Group(group_id),
+        topic_id,
+        &auth,
+        "unread",
+        value_to_boolean(params.forced_read_state.as_deref()),
+    )
+    .await
+}
+
+/// Context-level mark-all wrappers.
+async fn course_read_all_topics(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    mark_all_ctx_topics_read(&state.db, TopicContext::Course(course_id), &auth).await
+}
+
+async fn group_read_all_topics(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    mark_all_ctx_topics_read(&state.db, TopicContext::Group(group_id), &auth).await
+}
+
+/// Subscription wrappers (group context).
+async fn group_subscribe_topic(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_ctx_subscription(
+        &state.db,
+        TopicContext::Group(group_id),
+        topic_id,
+        &auth,
+        true,
+    )
+    .await
+}
+
+async fn group_unsubscribe_topic(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    set_ctx_subscription(
+        &state.db,
+        TopicContext::Group(group_id),
+        topic_id,
+        &auth,
+        false,
+    )
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// View + entry_list + duplicate (Canvas view / entry_list / duplicate)
+// ---------------------------------------------------------------------------
+
+/// Build the Canvas `view` response body for either context.
+async fn ctx_topic_view(
+    state: &AppState,
+    ctx: TopicContext,
+    topic_id: i64,
+    auth: &AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ensure_ctx_topic(&state.db, ctx, topic_id).await?;
+    if !check_ctx_read_access(&state.db, ctx, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let view = load_nested_entries(&state.db, topic_id).await?;
+    let entry_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM discussion_entries WHERE topic_id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(topic_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let participants: Vec<serde_json::Value> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT u.id, u.name
+        FROM users u
+        JOIN discussion_entries e ON e.user_id = u.id
+        WHERE e.topic_id = $1 AND e.workflow_state <> 'deleted'
+        ORDER BY u.id
+        "#,
+    )
+    .bind(topic_id)
+    .fetch_all(&state.db)
+    .await?
+    .into_iter()
+    .map(|(id, display_name)| serde_json::json!({ "id": id, "display_name": display_name }))
+    .collect();
+
+    let read_ids: Vec<i64> = if entry_ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_scalar(
+            r#"
+            SELECT entry_id FROM discussion_entry_reads
+            WHERE user_id = $1 AND workflow_state = 'read' AND entry_id = ANY($2)
+            "#,
+        )
+        .bind(auth.id)
+        .bind(&entry_ids)
+        .fetch_all(&state.db)
+        .await?
+    };
+    let unread_entries: Vec<i64> = entry_ids
+        .iter()
+        .copied()
+        .filter(|id| !read_ids.contains(id))
+        .collect();
+
+    let forced_entries: Vec<i64> = if entry_ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_scalar(
+            r#"
+            SELECT entry_id FROM discussion_entry_reads
+            WHERE user_id = $1 AND forced_read_state = TRUE AND entry_id = ANY($2)
+            "#,
+        )
+        .bind(auth.id)
+        .bind(&entry_ids)
+        .fetch_all(&state.db)
+        .await?
+    };
+
+    let ratings: Vec<(i64, i32)> = if entry_ids.is_empty() {
+        Vec::new()
+    } else {
+        sqlx::query_as(
+            "SELECT entry_id, rating FROM discussion_entry_ratings WHERE user_id = $1 AND entry_id = ANY($2)",
+        )
+        .bind(auth.id)
+        .bind(&entry_ids)
+        .fetch_all(&state.db)
+        .await?
+    };
+    let entry_ratings: serde_json::Map<String, serde_json::Value> = ratings
+        .into_iter()
+        .map(|(entry_id, rating)| (entry_id.to_string(), serde_json::json!(rating)))
+        .collect();
+
+    Ok(Json(serde_json::json!({
+        "view": view,
+        "participants": participants,
+        "unread_entries": unread_entries,
+        "forced_entries": forced_entries,
+        "entry_ratings": entry_ratings,
+        "new_entries": [],
+    })))
+}
+
+/// GET /courses/{courseId}/discussion_topics/{topicId}/view.
+async fn course_topic_view(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ctx_topic_view(&state, TopicContext::Course(course_id), topic_id, &auth).await
+}
+
+/// GET /groups/{groupId}/discussion_topics/{topicId}/view.
+async fn group_topic_view(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ctx_topic_view(&state, TopicContext::Group(group_id), topic_id, &auth).await
+}
+
+/// Query params of the entry_list endpoints: `ids[]=1&ids[]=2`.
+#[derive(Debug, Deserialize, Default)]
+pub struct EntryListParams {
+    #[serde(rename = "ids[]", default)]
+    pub ids_bracket: Vec<i64>,
+    #[serde(default)]
+    pub ids: Vec<i64>,
+}
+
+impl EntryListParams {
+    fn entry_ids(&self) -> Vec<i64> {
+        if !self.ids_bracket.is_empty() {
+            self.ids_bracket.clone()
+        } else {
+            self.ids.clone()
+        }
+    }
+}
+
+/// Canvas `entry_list`: the requested entries in id order; deleted entries
+/// are included and flagged with `deleted: true`.
+async fn ctx_entry_list(
+    state: &AppState,
+    ctx: TopicContext,
+    topic_id: i64,
+    params: &EntryListParams,
+    auth: &AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    ensure_ctx_topic(&state.db, ctx, topic_id).await?;
+    if !check_ctx_read_access(&state.db, ctx, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let ids = params.entry_ids();
+    if ids.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+
+    let rows: Vec<DiscussionEntryRow> = sqlx::query_as(
+        r#"
+        SELECT id, topic_id, parent_id, user_id, message, workflow_state, created_at, updated_at
+        FROM discussion_entries
+        WHERE topic_id = $1 AND id = ANY($2)
+        ORDER BY id
+        "#,
+    )
+    .bind(topic_id)
+    .bind(&ids)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(|row| {
+                let mut entry = DiscussionEntry::from(row);
+                entry.deleted = (entry.workflow_state == "deleted").then_some(true);
+                serde_json::to_value(entry).expect("entry serializes")
+            })
+            .collect(),
+    ))
+}
+
+/// GET /courses/{courseId}/discussion_topics/{topicId}/entry_list.
+async fn course_entry_list(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    Query(params): Query<EntryListParams>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    ctx_entry_list(
+        &state,
+        TopicContext::Course(course_id),
+        topic_id,
+        &params,
+        &auth,
+    )
+    .await
+}
+
+/// GET /groups/{groupId}/discussion_topics/{topicId}/entry_list.
+async fn group_entry_list(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    Query(params): Query<EntryListParams>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    ctx_entry_list(
+        &state,
+        TopicContext::Group(group_id),
+        topic_id,
+        &params,
+        &auth,
+    )
+    .await
+}
+
+/// Canvas `duplicate`: copies the topic into the same context. Course context
+/// requires the duplicate right (teacher/admin); a group member may duplicate
+/// their group's topics.
+async fn ctx_duplicate_topic(
+    state: &AppState,
+    ctx: TopicContext,
+    topic_id: i64,
+    auth: &AuthUser,
+) -> Result<(StatusCode, Json<DiscussionTopic>), ApiError> {
+    ensure_ctx_topic(&state.db, ctx, topic_id).await?;
+    let allowed = match ctx {
+        TopicContext::Course(_) => check_ctx_moderate_access(&state.db, ctx, auth).await?,
+        TopicContext::Group(_) => check_ctx_read_access(&state.db, ctx, auth).await?,
+    };
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    let row: DiscussionTopic = sqlx::query_as(
+        r#"
+        INSERT INTO discussion_topics (course_id, group_id, title, message, discussion_type, workflow_state, pinned, locked)
+        SELECT course_id, group_id, title, message, discussion_type, 'active', FALSE, FALSE
+        FROM discussion_topics
+        WHERE id = $1
+        RETURNING id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
+        "#,
+    )
+    .bind(topic_id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+/// POST /courses/{courseId}/discussion_topics/{topicId}/duplicate.
+async fn course_duplicate_topic(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<DiscussionTopic>), ApiError> {
+    ctx_duplicate_topic(&state, TopicContext::Course(course_id), topic_id, &auth).await
+}
+
+/// POST /groups/{groupId}/discussion_topics/{topicId}/duplicate.
+async fn group_duplicate_topic(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<DiscussionTopic>), ApiError> {
+    ctx_duplicate_topic(&state, TopicContext::Group(group_id), topic_id, &auth).await
+}
+
+// ---------------------------------------------------------------------------
+// Summary disable + feedback (Canvas disable_summary / summary_feedback)
+// ---------------------------------------------------------------------------
+
+/// PUT .../summaries/disable — Canvas `user_can_summarize?` holders only.
+async fn course_disable_summary(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_course_topic(&state.db, course_id, topic_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    sqlx::query(
+        "UPDATE discussion_topics SET summary_enabled = FALSE, updated_at = now() WHERE id = $1",
+    )
+    .bind(topic_id)
+    .execute(&state.db)
+    .await?;
+    Ok(Json(serde_json::json!({ "success": true })).into_response())
+}
+
+/// PUT /groups/.../summaries/disable — summaries do not exist in group
+/// contexts (`user_can_summarize?` is false), so 403 after the checks.
+async fn group_disable_summary(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    ensure_group_topic(&state.db, group_id, topic_id).await?;
+    Err(ApiError::Forbidden)
+}
+
+/// Body of the summary feedback endpoint: `_action` + optional `comment`.
+#[derive(Debug, Deserialize, Default)]
+pub struct SummaryFeedbackParams {
+    #[serde(rename = "_action", alias = "action", default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub comment: Option<String>,
+}
+
+/// POST .../summaries/{summaryId}/feedback (Canvas summary_feedback).
+async fn course_summary_feedback(
+    State(state): State<AppState>,
+    Path((course_id, topic_id, summary_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    payload: Option<Json<SummaryFeedbackParams>>,
+) -> Result<Response, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_course_topic(&state.db, course_id, topic_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas looks the summary up among the topic's summaries: 404 otherwise.
+    let summary: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM discussion_topic_summaries WHERE id = $1 AND discussion_topic_id = $2",
+    )
+    .bind(summary_id)
+    .bind(topic_id)
+    .fetch_optional(&state.db)
+    .await?;
+    summary.ok_or(ApiError::NotFound)?;
+
+    let body = payload.map(|Json(body)| body).unwrap_or_default();
+    let action = body.action.as_deref().unwrap_or_default();
+
+    let (liked, disliked, comment): (bool, bool, Option<String>) = match action {
+        "seen" => (false, false, None),
+        "like" => (true, false, None),
+        "dislike" => (false, true, None),
+        "add_comment" => {
+            // Canvas answers 400 with `{"error": ...}` for a blank or
+            // over-long comment.
+            let Some(comment) = body
+                .comment
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                return Ok(canvas_error(
+                    StatusCode::BAD_REQUEST,
+                    "Comment is required.",
+                ));
+            };
+            if comment.chars().count() > 1024 {
+                return Ok(canvas_error(
+                    StatusCode::BAD_REQUEST,
+                    "Comment is too long (maximum is 1024 characters).",
+                ));
+            }
+            (false, false, Some(comment.to_string()))
+        }
+        "reset_like" => (false, false, None),
+        "disable_summary" => (false, false, None),
+        _ => return Ok(canvas_error(StatusCode::BAD_REQUEST, "Invalid action.")),
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO discussion_topic_summary_feedback (summary_id, user_id, liked, disliked, comment)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (summary_id, user_id) DO UPDATE
+        SET liked = EXCLUDED.liked OR discussion_topic_summary_feedback.liked,
+            disliked = EXCLUDED.disliked OR discussion_topic_summary_feedback.disliked,
+            comment = COALESCE(EXCLUDED.comment, discussion_topic_summary_feedback.comment),
+            updated_at = now()
+        "#,
+    )
+    .bind(summary_id)
+    .bind(auth.id)
+    .bind(liked)
+    .bind(disliked)
+    .bind(&comment)
+    .execute(&state.db)
+    .await?;
+
+    let (liked, disliked, comment): (bool, bool, Option<String>) = sqlx::query_as(
+        "SELECT liked, disliked, comment FROM discussion_topic_summary_feedback WHERE summary_id = $1 AND user_id = $2",
+    )
+    .bind(summary_id)
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "liked": liked,
+        "disliked": disliked,
+        "comment": comment,
+    }))
+    .into_response())
+}
+
+/// POST /groups/.../summaries/{summaryId}/feedback — 403 like the other group
+/// summary routes.
+async fn group_summary_feedback(
+    State(state): State<AppState>,
+    Path((group_id, topic_id, _summary_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    _payload: Option<Json<SummaryFeedbackParams>>,
+) -> Result<Response, ApiError> {
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    ensure_group_topic(&state.db, group_id, topic_id).await?;
+    Err(ApiError::Forbidden)
+}
+
+// ---------------------------------------------------------------------------
+// Insights (Canvas insight / insight_generation / insight_entries /
+// insight_entry_update)
+// ---------------------------------------------------------------------------
+
+/// Canvas gates insights behind the `discussion_insights` course feature and
+/// restricts them to instructors / read-as-admin users. This workspace has no
+/// insight store, so authorized callers get the "no insight generated yet"
+/// shapes: `{"workflow_state": null}`, `[]` and `{}`.
+async fn check_ctx_insight_access(
+    state: &AppState,
+    ctx: TopicContext,
+    topic_id: i64,
+    auth: &AuthUser,
+) -> Result<(), ApiError> {
+    ensure_ctx_topic(&state.db, ctx, topic_id).await?;
+    if !check_ctx_read_access(&state.db, ctx, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if !check_ctx_moderate_access(&state.db, ctx, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(())
+}
+
+async fn course_insight(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check_ctx_insight_access(&state, TopicContext::Course(course_id), topic_id, &auth).await?;
+    Ok(Json(serde_json::json!({ "workflow_state": null })))
+}
+
+async fn course_insight_generation(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    check_ctx_insight_access(&state, TopicContext::Course(course_id), topic_id, &auth).await?;
+    Ok(Json(serde_json::json!({})))
+}
+
+async fn course_insight_entries(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    check_ctx_insight_access(&state, TopicContext::Course(course_id), topic_id, &auth).await?;
+    Ok(Json(Vec::new()))
+}
+
+/// Body of the insight entry feedback: `relevance_human_feedback_action` and
+/// `relevance_human_feedback_notes`.
+#[derive(Debug, Deserialize, Default)]
+pub struct InsightEntryFeedback {
+    #[serde(rename = "relevance_human_feedback_action", default)]
+    pub action: Option<String>,
+    #[serde(rename = "relevance_human_feedback_notes", default)]
+    pub notes: Option<String>,
+}
+
+async fn course_insight_entry_update(
+    State(state): State<AppState>,
+    Path((course_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    payload: Option<Json<InsightEntryFeedback>>,
+) -> Result<Response, ApiError> {
+    check_ctx_insight_access(&state, TopicContext::Course(course_id), topic_id, &auth).await?;
+
+    let entry: Option<(i64,)> =
+        sqlx::query_as("SELECT topic_id FROM discussion_entries WHERE id = $1 AND topic_id = $2")
+            .bind(entry_id)
+            .bind(topic_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if entry.is_none() {
+        return Ok(canvas_error(StatusCode::NOT_FOUND, "Entry not found."));
+    }
+
+    let body = payload.map(|Json(body)| body).unwrap_or_default();
+    let action = body.action.as_deref().unwrap_or_default();
+    if !["like", "dislike", "reset_like"].contains(&action) {
+        return Ok(canvas_error(StatusCode::BAD_REQUEST, "Invalid action."));
+    }
+    if body.notes.is_none() {
+        return Ok(canvas_error(StatusCode::BAD_REQUEST, "Missing notes."));
+    }
+    Ok(Json(serde_json::json!({})).into_response())
+}
+
+/// Group insight routes: a group topic has no course, so Canvas'
+/// `user_can_access_insights?` is false — 403 after the context checks.
+async fn group_insight_forbidden(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    ensure_group_topic(&state.db, group_id, topic_id).await?;
+    Err(ApiError::Forbidden)
+}
+
+/// PUT /groups/.../insights/entries/{entryId} — 403 like the other group
+/// insight routes; the entry id segment keeps this a three-param route, so it
+/// cannot share the two-param handler above.
+async fn group_insight_entry_update(
+    State(state): State<AppState>,
+    Path((group_id, topic_id, _entry_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    ensure_group_topic(&state.db, group_id, topic_id).await?;
+    Err(ApiError::Forbidden)
+}
+
+// ---------------------------------------------------------------------------
+// Accessibility scans (Canvas accessibility_scan / accessibility_queue_scan)
+// ---------------------------------------------------------------------------
+
+/// Canvas requires the topic :update right plus the account-level
+/// accessibility checker; the workspace has no checker, so authorized callers
+/// get Canvas' unauthorized response (401) like a checker-disabled account.
+async fn ctx_accessibility_scan(
+    state: &AppState,
+    ctx: TopicContext,
+    topic_id: i64,
+    auth: &AuthUser,
+) -> Result<StatusCode, ApiError> {
+    ensure_ctx_topic(&state.db, ctx, topic_id).await?;
+    if !check_ctx_moderate_access(&state.db, ctx, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Err(ApiError::Unauthorized)
+}
+
+async fn course_accessibility_scan(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    ctx_accessibility_scan(&state, TopicContext::Course(course_id), topic_id, &auth).await
+}
+
+async fn course_accessibility_queue_scan(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    ctx_accessibility_scan(&state, TopicContext::Course(course_id), topic_id, &auth).await
+}
+
+async fn group_accessibility_scan(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    ctx_accessibility_scan(&state, TopicContext::Group(group_id), topic_id, &auth).await
+}
+
+async fn group_accessibility_queue_scan(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    ctx_accessibility_scan(&state, TopicContext::Group(group_id), topic_id, &auth).await
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -1853,5 +3414,146 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/discussion_topics/migrate_disallow",
             put(migrate_disallow),
+        )
+        // Group-context topics and entries (Canvas group discussion parity).
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}",
+            get(group_show_topic),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/entries",
+            get(group_list_entries).post(group_create_entry),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}",
+            get(group_get_entry)
+                .put(group_update_entry)
+                .delete(group_delete_entry),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}/replies",
+            get(group_list_replies).post(group_add_reply),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}/read",
+            put(group_mark_entry_read).delete(group_mark_entry_unread),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}/rating",
+            post(group_rate_entry),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/read",
+            put(group_mark_topic_read).delete(group_mark_topic_unread),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/subscribed",
+            put(group_subscribe_topic).delete(group_unsubscribe_topic),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/replies",
+            get(course_list_replies),
+        )
+        // read_all variants (context-level and topic-level).
+        .route(
+            "/courses/{courseId}/discussion_topics/read_all",
+            put(course_read_all_topics),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/read_all",
+            put(group_read_all_topics),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/read_all",
+            put(course_mark_all_read).delete(course_mark_all_unread),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/read_all",
+            put(group_mark_all_read).delete(group_mark_all_unread),
+        )
+        // view + entry_list (both contexts).
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/view",
+            get(course_topic_view),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/view",
+            get(group_topic_view),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/entry_list",
+            get(course_entry_list),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/entry_list",
+            get(group_entry_list),
+        )
+        // duplicate (both contexts).
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/duplicate",
+            post(course_duplicate_topic),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/duplicate",
+            post(group_duplicate_topic),
+        )
+        // Summary disable + feedback (both contexts).
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/summaries/disable",
+            put(course_disable_summary),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/summaries/disable",
+            put(group_disable_summary),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/summaries/{summaryId}/feedback",
+            post(course_summary_feedback),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/summaries/{summaryId}/feedback",
+            post(group_summary_feedback),
+        )
+        // Insights (Canvas empty-state shapes).
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/insights",
+            get(course_insight).post(course_insight_generation),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/insights",
+            get(group_insight_forbidden).post(group_insight_forbidden),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/insights/entries",
+            get(course_insight_entries),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/insights/entries",
+            get(group_insight_forbidden),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/insights/entries/{entryId}",
+            put(course_insight_entry_update),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/insights/entries/{entryId}",
+            put(group_insight_entry_update),
+        )
+        // Accessibility scans (Canvas 401 shape).
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/accessibility/scan",
+            post(course_accessibility_scan),
+        )
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/accessibility/queue_scan",
+            post(course_accessibility_queue_scan),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/accessibility/scan",
+            post(group_accessibility_scan),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/accessibility/queue_scan",
+            post(group_accessibility_queue_scan),
         )
 }
