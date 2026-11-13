@@ -444,10 +444,7 @@ async fn list_course_tools(
                     return false;
                 }
             }
-            if params.selectable == Some(true) && tool.not_selectable {
-                return false;
-            }
-            true
+            !(params.selectable == Some(true) && tool.not_selectable)
         })
         .map(|tool| tool_json(tool, false))
         .collect();
