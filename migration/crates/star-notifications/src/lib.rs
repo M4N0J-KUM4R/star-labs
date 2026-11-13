@@ -13,6 +13,12 @@
 //! Canvas parity additions (migration 0074):
 //! - GET    /users/{userId}/notification_preferences
 //! - PUT    /users/{userId}/notification_preferences
+//!
+//! Canvas parity additions (migration 0093):
+//! - GET    /users/{userId}/communication_channels
+//! - POST   /users/{userId}/communication_channels
+//! - DELETE /users/{userId}/communication_channels/{id}
+//! - GET    /accounts/{accountId}/bounced_communication_channels
 
 use axum::{
     extract::{Path, State},
@@ -431,6 +437,24 @@ pub fn router() -> Router<AppState> {
         .route(
             "/users/{user_id}/notification_preferences",
             put(update_user_preferences),
+        )
+        // User-scoped communication channels (Canvas API v1)
+        .route(
+            "/users/{user_id}/communication_channels",
+            get(list_user_communication_channels),
+        )
+        .route(
+            "/users/{user_id}/communication_channels",
+            post(create_user_communication_channel),
+        )
+        .route(
+            "/users/{user_id}/communication_channels/{id}",
+            delete(delete_user_communication_channel),
+        )
+        // Account bounced-email report (Canvas `bouncing_channel_report`)
+        .route(
+            "/accounts/{account_id}/bounced_communication_channels",
+            get(bounced_communication_channels),
         )
 }
 
@@ -1041,13 +1065,245 @@ async fn update_user_preferences(
     }))
 }
 
+// --------------------------------------------------------------------------
+// Handlers — User-scoped Communication Channels (Canvas API v1)
+// --------------------------------------------------------------------------
+
+/// Authorize reading / writing another user's communication channels.
+/// Reads: self or admin. Writes: self only.
+fn authorize_channel_operation(
+    auth: &AuthUser,
+    target_user_id: i64,
+    writing: bool,
+) -> Result<(), ApiError> {
+    if target_user_id == auth.id {
+        return Ok(());
+    }
+    if !writing && auth.role == "admin" {
+        return Ok(());
+    }
+    Err(ApiError::Forbidden)
+}
+
+/// GET /users/{user_id}/communication_channels — list channels for a user.
+/// `self` maps to the authenticated user; admins can read any user's channels.
+async fn list_user_communication_channels(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<Vec<CommunicationChannel>>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_channel_operation(&auth, target_user_id, false)?;
+
+    let rows: Vec<CommunicationChannel> = sqlx::query_as(
+        r#"
+        SELECT id, path, path_type, position, user_id, workflow_state, created_at
+        FROM communication_channels
+        WHERE user_id = $1 AND workflow_state != 'retired'
+        ORDER BY position ASC, id ASC
+        "#,
+    )
+    .bind(target_user_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(rows))
+}
+
+/// POST /users/{user_id}/communication_channels — create a channel for a user.
+/// Only the user themselves can create a channel (admins cannot create on behalf
+/// of others in Canvas's model for this endpoint).
+async fn create_user_communication_channel(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+    Json(payload): Json<CreateCommunicationChannelRequest>,
+) -> Result<Json<CommunicationChannel>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_channel_operation(&auth, target_user_id, true)?;
+
+    let (address, channel_type, token, skip_confirmation) = payload.parts();
+    let (address, channel_type) = validate_new_channel(address, channel_type, token)?;
+
+    // Only admins can skip confirmation; non-admins always get 'unconfirmed'.
+    let workflow_state = if skip_confirmation && auth.role == "admin" {
+        "active"
+    } else {
+        "unconfirmed"
+    };
+
+    // Check for duplicate (non-retired) channel.
+    let existing: Option<(i64, String)> = sqlx::query_as(
+        r#"
+        SELECT id, workflow_state
+        FROM communication_channels
+        WHERE user_id = $1 AND path_type = $2 AND lower(path) = lower($3)
+        ORDER BY CASE WHEN workflow_state = 'retired' THEN 1 ELSE 0 END, id ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(target_user_id)
+    .bind(&channel_type)
+    .bind(&address)
+    .fetch_optional(&state.db)
+    .await?;
+
+    if let Some((id, existing_state)) = existing {
+        if existing_state != "retired" {
+            return Err(ApiError::BadRequest("path: unique!".into()));
+        }
+        // Reactivate retired channel.
+        let reactivated: CommunicationChannel = sqlx::query_as(
+            r#"
+            UPDATE communication_channels
+            SET workflow_state = $2, updated_at = NOW()
+            WHERE id = $1
+            RETURNING id, path, path_type, position, user_id, workflow_state, created_at
+            "#,
+        )
+        .bind(id)
+        .bind(workflow_state)
+        .fetch_one(&state.db)
+        .await?;
+        return Ok(Json(reactivated));
+    }
+
+    let position: (i32,) = sqlx::query_as(
+        "SELECT COALESCE(MAX(position) + 1, 0) FROM communication_channels WHERE user_id = $1",
+    )
+    .bind(target_user_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let channel: CommunicationChannel = sqlx::query_as(
+        r#"
+        INSERT INTO communication_channels (user_id, path, path_type, position, workflow_state)
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id, path, path_type, position, user_id, workflow_state, created_at
+        "#,
+    )
+    .bind(target_user_id)
+    .bind(&address)
+    .bind(&channel_type)
+    .bind(position.0)
+    .bind(workflow_state)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(channel))
+}
+
+/// DELETE /users/{user_id}/communication_channels/{id} — retire a channel.
+/// Only the channel owner can retire it.
+async fn delete_user_communication_channel(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, id)): Path<(String, i64)>,
+) -> Result<Json<CommunicationChannel>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_channel_operation(&auth, target_user_id, true)?;
+
+    let row: Option<CommunicationChannel> = sqlx::query_as(
+        r#"
+        UPDATE communication_channels
+        SET workflow_state = 'retired', updated_at = NOW()
+        WHERE id = $1 AND user_id = $2 AND workflow_state != 'retired'
+        RETURNING id, path, path_type, position, user_id, workflow_state, created_at
+        "#,
+    )
+    .bind(id)
+    .bind(target_user_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    row.map(Json).ok_or(ApiError::NotFound)
+}
+
+// --------------------------------------------------------------------------
+// Handlers — Account Bounced-Email Report (Canvas BulkActions)
+// --------------------------------------------------------------------------
+
+/// A bounced channel summary row as returned by Canvas' bounce report.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct BouncedChannelRow {
+    pub id: i64,
+    pub user_id: i64,
+    pub address: String,
+    #[sqlx(rename = "path_type")]
+    #[serde(rename = "type")]
+    pub channel_type: String,
+    pub bounce_count: i32,
+    pub last_bounce_at: Option<chrono::DateTime<Utc>>,
+    pub last_bounce_summary: Option<String>,
+}
+
+/// Response envelope for bounced channels list.
+#[derive(Debug, Serialize)]
+pub struct BouncedChannelsResponse {
+    #[serde(rename = "communication_channels")]
+    pub channels: Vec<BouncedChannelRow>,
+}
+
+/// GET /accounts/{account_id}/bounced_communication_channels — list all bounced
+/// channels for users in the account. Requires account-level :view_bounced_emails.
+async fn bounced_communication_channels(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(account_id): Path<i64>,
+) -> Result<Json<BouncedChannelsResponse>, ApiError> {
+    // Admins with site-wide or account-level read_bounced_emails can view this.
+    // star-lms uses account role 'admin' for site admins and account admins.
+    // Non-admins get 403.
+    if auth.role != "admin" {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Verify account exists.
+    let account_exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await?;
+
+    if account_exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    let rows: Vec<BouncedChannelRow> = sqlx::query_as(
+        r#"
+        SELECT
+            cc.id,
+            cc.user_id,
+            cc.path     AS address,
+            cc.path_type,
+            cc.bounce_count,
+            cc.last_bounce_at,
+            cc.last_bounce_summary
+        FROM communication_channels cc
+        JOIN account_users au ON au.user_id = cc.user_id
+        WHERE au.account_id = $1
+          AND cc.bounce_count > 0
+          AND cc.workflow_state != 'retired'
+        ORDER BY cc.last_bounce_at DESC NULLS LAST, cc.id DESC
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(BouncedChannelsResponse { channels: rows }))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        authorize_preferences_read, authorize_preferences_write, derive_category,
-        parse_preference_updates, parse_single_frequency, resolve_user_segment, router,
-        validate_new_channel, CommunicationChannelPreferencesResponse, NotificationPolicyRow,
-        NotificationPreference, NotificationPreferencesResponse,
+        authorize_channel_operation, authorize_preferences_read, authorize_preferences_write,
+        derive_category, parse_preference_updates, parse_single_frequency, resolve_user_segment,
+        router, validate_new_channel, BouncedChannelRow, BouncedChannelsResponse,
+        CommunicationChannelPreferencesResponse, NotificationPolicyRow, NotificationPreference,
+        NotificationPreferencesResponse,
     };
     use chrono::{DateTime, Utc};
     use star_auth::AuthUser;
@@ -1226,5 +1482,72 @@ mod tests {
         );
         assert_eq!(json["notification_preferences"][0]["frequency"], "daily");
         assert!(json["notification_preferences"][0].get("id").is_none());
+    }
+
+    // ------------------------------------------------------------------------
+    // Tests — User-scoped Communication Channels
+    // ------------------------------------------------------------------------
+
+    #[test]
+    fn channel_operation_auth_self_allowed_both_read_and_write() {
+        let auth = AuthUser {
+            id: 7,
+            role: "student".into(),
+        };
+        assert!(authorize_channel_operation(&auth, 7, false).is_ok());
+        assert!(authorize_channel_operation(&auth, 7, true).is_ok());
+    }
+
+    #[test]
+    fn channel_operation_auth_admin_can_read_other_users_channels() {
+        let admin = AuthUser {
+            id: 1,
+            role: "admin".into(),
+        };
+        assert!(authorize_channel_operation(&admin, 99, false).is_ok());
+        assert!(matches!(
+            authorize_channel_operation(&admin, 99, true),
+            Err(ApiError::Forbidden)
+        ));
+    }
+
+    #[test]
+    fn channel_operation_auth_student_cannot_read_or_write_other_users_channels() {
+        let student = AuthUser {
+            id: 5,
+            role: "student".into(),
+        };
+        assert!(matches!(
+            authorize_channel_operation(&student, 99, false),
+            Err(ApiError::Forbidden)
+        ));
+        assert!(matches!(
+            authorize_channel_operation(&student, 99, true),
+            Err(ApiError::Forbidden)
+        ));
+    }
+
+    #[test]
+    fn bounced_channels_response_serializes_with_canvas_key() {
+        let response = BouncedChannelsResponse { channels: vec![] };
+        let json = serde_json::to_value(&response).unwrap();
+        assert!(
+            json.get("communication_channels").is_some(),
+            "envelope key must be communication_channels"
+        );
+
+        let row = BouncedChannelRow {
+            id: 1,
+            user_id: 10,
+            address: "bounced@example.edu".into(),
+            channel_type: "email".into(),
+            bounce_count: 3,
+            last_bounce_at: None,
+            last_bounce_summary: Some("Mailbox full".into()),
+        };
+        let json_row = serde_json::to_value(&row).unwrap();
+        assert_eq!(json_row["type"], "email", "type field must be serialized");
+        assert_eq!(json_row["address"], "bounced@example.edu");
+        assert_eq!(json_row["bounce_count"], 3);
     }
 }
