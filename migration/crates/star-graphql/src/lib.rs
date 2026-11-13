@@ -32,6 +32,10 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod terms_sections;
+
+use terms_sections::{CourseSection, EnrollmentTerm};
+
 // ---------------------------------------------------------------------------
 // GraphQL context
 // ---------------------------------------------------------------------------
@@ -338,6 +342,38 @@ impl Query {
             sis_user_id: None,
             created_at: row.created_at,
         }))
+    }
+
+    /// `enrollmentTerm(id: ID!)` — any authenticated caller may read the
+    /// basic term shape; unknown ids resolve to null, like Canvas.
+    async fn enrollment_term(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+    ) -> Result<Option<EnrollmentTerm>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        let term_id: i64 =
+            id.0.parse()
+                .map_err(|_| async_graphql::Error::new("invalid term id"))?;
+
+        terms_sections::fetch_term(&gctx.pool, term_id).await
+    }
+
+    /// `courseSection(id: ID!)` — visible to enrolled users of the course
+    /// (any role), teachers of the course, and admins; everyone else gets
+    /// null, mirroring `course(id)` visibility.
+    async fn course_section(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+    ) -> Result<Option<CourseSection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        let section_id: i64 =
+            id.0.parse()
+                .map_err(|_| async_graphql::Error::new("invalid section id"))?;
+
+        terms_sections::fetch_section(&gctx.pool, gctx.auth_user.id, gctx.is_admin(), section_id)
+            .await
     }
 }
 
