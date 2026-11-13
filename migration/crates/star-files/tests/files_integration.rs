@@ -105,7 +105,10 @@ async fn seed_file_opt(
         r#"
         INSERT INTO files (course_id, uploader_id, filename, display_name,
                            content_type, size, folder, hidden, uuid)
-        VALUES ($1, $2, $3, $3, 'text/plain', 10, 'unfiled', $4, $5)
+        VALUES ($1, $2, $3, $3, 'text/plain', 10, 'unfiled', $4,
+                -- NULL must not override the uuid column default: Canvas
+                -- files always carry a download verifier.
+                CASE WHEN $5 IS NULL THEN md5(random()::text || clock_timestamp()::text) ELSE $5 END)
         RETURNING id
         "#,
     )
