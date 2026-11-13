@@ -350,3 +350,130 @@ async fn file_ref_resolves_uuid_and_404s_unknown() {
 
     cleanup(&pool, &prefix).await;
 }
+
+#[tokio::test]
+async fn remove_usage_rights_unsets_files_and_answers_canvas_shape() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "RmTeacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "RmStudent", "student").await;
+    let course = seed_course(&pool, &prefix, "RmCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let file = seed_file(&pool, course, teacher, "licensed.txt").await;
+
+    // Grant rights first via the existing PUT route.
+    let resp = server
+        .put(&format!("/courses/{course}/usage_rights"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({
+            "file_ids": [file],
+            "usage_rights": {
+                "use_justification": "creative_commons",
+                "license": "cc_by",
+                "legal_copyright": "(C) Test"
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let granted: Option<i64> =
+        sqlx::query_scalar("SELECT usage_rights_id FROM files WHERE id = $1")
+            .bind(file)
+            .fetch_one(&pool)
+            .await
+            .expect("granted row");
+    assert!(granted.is_some(), "usage_rights_id must be set after PUT");
+
+    // DELETE unsets usage_rights_id and answers { message, file_ids } (200).
+    let resp = server
+        .delete(&format!("/courses/{course}/usage_rights"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "file_ids": [file] }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["file_ids"], json!([file]));
+    assert_eq!(body["message"], "1 file updated");
+    assert_eq!(body.as_object().map(|o| o.len()), Some(2), "{body}");
+
+    let removed: Option<i64> =
+        sqlx::query_scalar("SELECT usage_rights_id FROM files WHERE id = $1")
+            .bind(file)
+            .fetch_one(&pool)
+            .await
+            .expect("removed row");
+    assert!(
+        removed.is_none(),
+        "usage_rights_id must be NULL after DELETE"
+    );
+
+    // Students lack manage_files_delete.
+    let resp = server
+        .delete(&format!("/courses/{course}/usage_rights"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "file_ids": [file] }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // Canvas requires file_ids and/or folder_ids.
+    let resp = server
+        .delete(&format!("/courses/{course}/usage_rights"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("file_ids")),
+        "{body}"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn content_licenses_matches_canvas_list() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "LicTeacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "LicStudent", "student").await;
+    let course = seed_course(&pool, &prefix, "LicCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    let resp = server
+        .get(&format!("/courses/{course}/content_licenses"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let list = body.as_array().expect("license array");
+    assert_eq!(list.len(), 8, "{body}");
+    assert_eq!(list[0]["id"], "private");
+    assert_eq!(list[0]["name"], "Private (Copyrighted)");
+    assert_eq!(list[0]["url"], "http://en.wikipedia.org/wiki/Copyright");
+    assert_eq!(list[1]["id"], "public_domain");
+    assert_eq!(list[1]["url"], "http://en.wikipedia.org/wiki/Public_domain");
+    assert_eq!(list[2]["id"], "cc_by");
+    assert_eq!(list[2]["url"], "http://creativecommons.org/licenses/by/4.0");
+    for entry in list {
+        for key in ["id", "name", "url"] {
+            assert!(entry[key].is_string(), "{entry}");
+        }
+    }
+
+    // Enrolled students may read the context (Canvas :read).
+    let resp = server
+        .get(&format!("/courses/{course}/content_licenses"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}

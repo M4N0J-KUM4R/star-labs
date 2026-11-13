@@ -39,6 +39,13 @@
 //!   files#api_show reads; hidden files 404 for students.
 //! - GET /courses/{courseId}/files/file_ref/{migrationId} translates a
 //!   course-copy file reference (files#file_ref) via the file's uuid.
+//!
+//! Usage rights removal + licenses (Phase 5, Canvas usage_rights_controller):
+//! - DELETE /courses|groups|users/{contextId}/usage_rights mirror
+//!   remove_usage_rights: unset files.usage_rights_id and answer
+//!   `{ message, file_ids }` with 200 (Canvas never sends 204 here).
+//! - GET /courses/{courseId}/content_licenses mirrors licenses: the fixed
+//!   UsageRights.licenses list (lib/content_licenses.rb).
 
 use axum::{
     extract::{Path, Query, State},
@@ -653,6 +660,20 @@ pub struct UsageRightsRequest {
     pub usage_rights: Option<UsageRightsParams>,
 }
 
+/// Request body for Canvas UsageRightsController#remove_usage_rights.
+#[derive(Debug, Default, Deserialize)]
+pub struct RemoveUsageRightsRequest {
+    pub file_ids: Option<Vec<i64>>,
+    pub folder_ids: Option<Vec<i64>>,
+}
+
+/// Canvas remove_usage_rights response: `{ message, file_ids }`.
+#[derive(Debug, Serialize)]
+pub struct RemoveUsageRightsResponse {
+    pub message: String,
+    pub file_ids: Vec<i64>,
+}
+
 /// Canvas usage_rights_json + message + file_ids.
 #[derive(Debug, Serialize)]
 pub struct UsageRightsResponse {
@@ -723,11 +744,21 @@ pub struct LicenseEntry {
     pub url: String,
 }
 
-/// Canvas UsageRights.licenses (app/models/usage_rights.rb ContentLicenses):
-/// id, readable name and license text URL for every supported license.
+/// Canvas UsageRights.licenses (lib/content_licenses.rb ContentLicenses
+/// ordered hash): id, readable name and license text URL for every supported
+/// license, in Canvas's exact order (private first, no cc0 in this checkout).
 pub fn canvas_licenses() -> Vec<LicenseEntry> {
     [
-        ("private", "Private (Copyrighted)", ""),
+        (
+            "private",
+            "Private (Copyrighted)",
+            "http://en.wikipedia.org/wiki/Copyright",
+        ),
+        (
+            "public_domain",
+            "Public Domain",
+            "http://en.wikipedia.org/wiki/Public_domain",
+        ),
         (
             "cc_by",
             "CC Attribution",
@@ -735,13 +766,8 @@ pub fn canvas_licenses() -> Vec<LicenseEntry> {
         ),
         (
             "cc_by_sa",
-            "CC Attribution Share-Alike",
+            "CC Attribution Share Alike",
             "http://creativecommons.org/licenses/by-sa/4.0",
-        ),
-        (
-            "cc_by_nd",
-            "CC Attribution No Derivatives",
-            "http://creativecommons.org/licenses/by-nd/4.0",
         ),
         (
             "cc_by_nc",
@@ -750,18 +776,18 @@ pub fn canvas_licenses() -> Vec<LicenseEntry> {
         ),
         (
             "cc_by_nc_sa",
-            "CC Attribution Non-Commercial Share-Alike",
+            "CC Attribution Non-Commercial Share Alike",
             "http://creativecommons.org/licenses/by-nc-sa/4.0",
+        ),
+        (
+            "cc_by_nd",
+            "CC Attribution No Derivatives",
+            "http://creativecommons.org/licenses/by-nd/4.0",
         ),
         (
             "cc_by_nc_nd",
             "CC Attribution Non-Commercial No Derivatives",
-            "http://creativecommons.org/licenses/by-nc-nd/4.0",
-        ),
-        (
-            "public_domain",
-            "Public Domain",
-            "http://creativecommons.org/licenses/publicdomain/",
+            "http://creativecommons.org/licenses/by-nc-nd/4.0/",
         ),
     ]
     .into_iter()
@@ -834,6 +860,24 @@ pub fn router() -> axum::Router<AppState> {
         .route(
             "/courses/{courseId}/usage_rights",
             put(set_course_usage_rights),
+        )
+        // Canvas UsageRightsController#remove_usage_rights.
+        .route(
+            "/courses/{courseId}/usage_rights",
+            delete(remove_course_usage_rights),
+        )
+        .route(
+            "/groups/{groupId}/usage_rights",
+            delete(remove_group_usage_rights),
+        )
+        .route(
+            "/users/{userId}/usage_rights",
+            delete(remove_user_usage_rights),
+        )
+        // Canvas UsageRightsController#licenses.
+        .route(
+            "/courses/{courseId}/content_licenses",
+            get(get_course_content_licenses),
         )
 }
 
@@ -2347,15 +2391,14 @@ async fn create_account_folder(
 /// Canvas usage_rights_json license_name.
 fn license_name(license: &str) -> Option<&'static str> {
     Some(match license {
-        "cc_by" => "CC Attribution",
-        "cc_by_sa" => "CC Attribution Share-Alike",
-        "cc_by_nd" => "CC Attribution No-Derivatives",
-        "cc_by_nc" => "CC Attribution Non-Commercial",
-        "cc_by_nc_sa" => "CC Attribution Non-Commercial Share-Alike",
-        "cc_by_nc_nd" => "CC Attribution Non-Commercial No-Derivatives",
-        "cc0" => "Public Domain",
-        "public_domain" => "Public Domain",
         "private" => "Private (Copyrighted)",
+        "public_domain" => "Public Domain",
+        "cc_by" => "CC Attribution",
+        "cc_by_sa" => "CC Attribution Share Alike",
+        "cc_by_nc" => "CC Attribution Non-Commercial",
+        "cc_by_nc_sa" => "CC Attribution Non-Commercial Share Alike",
+        "cc_by_nd" => "CC Attribution No Derivatives",
+        "cc_by_nc_nd" => "CC Attribution Non-Commercial No Derivatives",
         _ => return None,
     })
 }
@@ -2502,6 +2545,185 @@ async fn set_course_usage_rights(
         file_ids,
     })
     .into_response())
+}
+
+/// DELETE /courses/{courseId}/usage_rights — Canvas
+/// UsageRightsController#remove_usage_rights.
+///
+/// Canvas `assign_usage_rights(nil)`: usage_rights_id is unset on the addressed
+/// files (the rows themselves stay for other contexts' reuse) and the response
+/// is `{ message, file_ids }` with 200 — not 204.
+async fn remove_course_usage_rights(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    payload: Option<Json<RemoveUsageRightsRequest>>,
+) -> Result<Response, ApiError> {
+    // Canvas: manage_files_delete.
+    let allowed = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    let payload = payload.map(|Json(body)| body).unwrap_or_default();
+    let file_ids = payload.file_ids.unwrap_or_default();
+    let folder_ids = payload.folder_ids.unwrap_or_default();
+    if file_ids.is_empty() && folder_ids.is_empty() {
+        return Ok(canvas_error(
+            StatusCode::BAD_REQUEST,
+            "Must supply 'file_ids' and/or 'folder_ids' parameter",
+        ));
+    }
+
+    // Same file enumeration as Canvas assign_usage_rights: the given files
+    // plus everything under the given folders (recursively).
+    let file_ids = sqlx::query_scalar::<_, i64>(
+        r#"
+        WITH RECURSIVE tree AS (
+            SELECT id FROM folders
+            WHERE context_type = 'Course' AND context_id = $1
+              AND workflow_state <> 'deleted' AND id = ANY($2::bigint[])
+            UNION ALL
+            SELECT f.id FROM folders f JOIN tree t ON f.parent_folder_id = t.id
+        )
+        SELECT id FROM files
+        WHERE course_id = $1 AND workflow_state <> 'deleted'
+          AND (id = ANY($3::bigint[]) OR folder_id IN (SELECT id FROM tree))
+        ORDER BY id
+        "#,
+    )
+    .bind(course_id)
+    .bind(&folder_ids)
+    .bind(&file_ids)
+    .fetch_all(&state.db)
+    .await?;
+
+    sqlx::query(
+        r#"
+        UPDATE files SET usage_rights_id = NULL, updated_at = now()
+        WHERE course_id = $1 AND workflow_state <> 'deleted' AND id = ANY($2::bigint[])
+        "#,
+    )
+    .bind(course_id)
+    .bind(&file_ids)
+    .execute(&state.db)
+    .await?;
+
+    let count = file_ids.len();
+    let message = if count == 1 {
+        "1 file updated".to_string()
+    } else {
+        format!("{count} files updated")
+    };
+
+    Ok(Json(RemoveUsageRightsResponse { message, file_ids }).into_response())
+}
+
+/// DELETE /groups/{groupId}/usage_rights — Canvas remove_usage_rights for a
+/// Group context.
+///
+/// Deviation: star-lms file metadata is course-scoped (files.course_id NOT
+/// NULL) and group files live in the separate metadata-only group_files table,
+/// so there are no group-context attachments to unlink; the endpoint keeps the
+/// Canvas envelope (authorization + `{message, file_ids: []}` with 200).
+async fn remove_group_usage_rights(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+    payload: Option<Json<RemoveUsageRightsRequest>>,
+) -> Result<Response, ApiError> {
+    let group: Option<Option<i64>> = sqlx::query_scalar(
+        "SELECT course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let course_id = group.ok_or(ApiError::NotFound)?.flatten();
+
+    // Canvas: manage_files_delete on the group context (group managers are the
+    // parent course's teachers, plus admins).
+    let mut allowed = is_admin(&auth);
+    if !allowed {
+        if let Some(course_id) = course_id {
+            allowed = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+        }
+    }
+    if !allowed && !user_in_group(&state.db, auth.id, group_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    let payload = payload.map(|Json(body)| body).unwrap_or_default();
+    let file_ids = payload.file_ids.unwrap_or_default();
+    let folder_ids = payload.folder_ids.unwrap_or_default();
+    if file_ids.is_empty() && folder_ids.is_empty() {
+        return Ok(canvas_error(
+            StatusCode::BAD_REQUEST,
+            "Must supply 'file_ids' and/or 'folder_ids' parameter",
+        ));
+    }
+
+    // No group-scoped usage rights exist to remove (see the doc comment).
+    Ok(Json(RemoveUsageRightsResponse {
+        message: "0 files updated".to_string(),
+        file_ids: Vec::new(),
+    })
+    .into_response())
+}
+
+/// DELETE /users/{userId}/usage_rights — Canvas remove_usage_rights for a
+/// User context.
+///
+/// Deviation: star-lms file metadata is course-scoped, so a user context has
+/// no usage-rights rows of its own; the endpoint keeps the Canvas envelope
+/// (self or admin) and answers `{message, file_ids: []}` with 200.
+async fn remove_user_usage_rights(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>,
+    auth: AuthUser,
+    payload: Option<Json<RemoveUsageRightsRequest>>,
+) -> Result<Response, ApiError> {
+    // Canvas: a user context only authorizes the user themselves (or admin).
+    if auth.id != user_id && !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    let payload = payload.map(|Json(body)| body).unwrap_or_default();
+    let file_ids = payload.file_ids.unwrap_or_default();
+    let folder_ids = payload.folder_ids.unwrap_or_default();
+    if file_ids.is_empty() && folder_ids.is_empty() {
+        return Ok(canvas_error(
+            StatusCode::BAD_REQUEST,
+            "Must supply 'file_ids' and/or 'folder_ids' parameter",
+        ));
+    }
+
+    // No user-scoped usage rights exist to remove (see the doc comment).
+    Ok(Json(RemoveUsageRightsResponse {
+        message: "0 files updated".to_string(),
+        file_ids: Vec::new(),
+    })
+    .into_response())
+}
+
+/// GET /courses/{courseId}/content_licenses — Canvas
+/// UsageRightsController#licenses.
+///
+/// Canvas requires `:read` on the context; the list itself is context-free
+/// (UsageRights.licenses), so every context gets the same eight entries.
+async fn get_course_content_licenses(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<LicenseEntry>>, ApiError> {
+    let allowed = user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    Ok(Json(canvas_licenses()))
 }
 
 // ─── folder DB helpers ─────────────────────────────────────────────────────
@@ -3411,11 +3633,52 @@ mod tests {
 
     #[test]
     fn usage_rights_license_names_match_canvas() {
-        // Canvas UsageRights.licenses readable names.
-        assert_eq!(license_name("cc_by_sa"), Some("CC Attribution Share-Alike"));
-        assert_eq!(license_name("public_domain"), Some("Public Domain"));
+        // Canvas ContentLicenses readable names (lib/content_licenses.rb).
+        assert_eq!(license_name("cc_by_sa"), Some("CC Attribution Share Alike"));
         assert_eq!(license_name("private"), Some("Private (Copyrighted)"));
+        assert_eq!(license_name("public_domain"), Some("Public Domain"));
+        assert_eq!(
+            license_name("cc_by_nc_nd"),
+            Some("CC Attribution Non-Commercial No Derivatives")
+        );
         assert_eq!(license_name("not_a_license"), None);
+    }
+
+    #[test]
+    fn canvas_licenses_match_content_licenses_rb() {
+        // Canvas ContentLicenses ordered hash: private first, public_domain
+        // second, creativecommons URLs for the CC entries, wikipedia URLs for
+        // private/public_domain, and no cc0 in this Canvas checkout.
+        let licenses = canvas_licenses();
+        let ids: Vec<&str> = licenses.iter().map(|l| l.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec![
+                "private",
+                "public_domain",
+                "cc_by",
+                "cc_by_sa",
+                "cc_by_nc",
+                "cc_by_nc_sa",
+                "cc_by_nd",
+                "cc_by_nc_nd",
+            ]
+        );
+        assert_eq!(licenses[0].url, "http://en.wikipedia.org/wiki/Copyright");
+        assert_eq!(
+            licenses[1].url,
+            "http://en.wikipedia.org/wiki/Public_domain"
+        );
+        assert_eq!(
+            licenses[2].url,
+            "http://creativecommons.org/licenses/by/4.0"
+        );
+        assert_eq!(
+            licenses[7].url,
+            "http://creativecommons.org/licenses/by-nc-nd/4.0/"
+        );
+        assert_eq!(licenses[0].name, "Private (Copyrighted)");
+        assert_eq!(licenses[1].name, "Public Domain");
     }
 
     #[test]
