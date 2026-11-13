@@ -35,6 +35,7 @@ members = [
     "crates/star-learning-dates",
     "crates/star-audit",
     "crates/star-media",
+    "crates/star-graphql",
 ]
 
 [workspace.package]
