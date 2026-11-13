@@ -33,9 +33,12 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 mod assignment;
+mod discussion_topic;
+mod submission;
 mod terms_sections;
 
 use assignment::AssignmentConnection;
+use discussion_topic::DiscussionTopicConnection;
 use terms_sections::{CourseSection, EnrollmentTerm};
 
 // ---------------------------------------------------------------------------
@@ -47,12 +50,12 @@ use terms_sections::{CourseSection, EnrollmentTerm};
 /// runs, so the role is always fresh from the database (the JWT role claim is
 /// never trusted for authorization, matching the REST extractors).
 pub struct GraphQLContext {
-    pool: PgPool,
-    auth_user: AuthUser,
+    pub(crate) pool: PgPool,
+    pub(crate) auth_user: AuthUser,
 }
 
 impl GraphQLContext {
-    fn is_admin(&self) -> bool {
+    pub(crate) fn is_admin(&self) -> bool {
         self.auth_user.role == "admin"
     }
 }
@@ -188,6 +191,31 @@ impl Course {
         let gctx = ctx.data::<GraphQLContext>()?;
         Ok(Some(
             assignment::fetch_assignment_page(&gctx.pool, self.id, first, after.as_deref()).await?,
+        ))
+    }
+
+    /// Paginated, non-deleted discussion topics in this course (LIMIT first+1,
+    /// ORDER BY id — Canvas orders regular discussions by `id: asc`).
+    /// Everyone who can resolve the course sees the same set: parity with the
+    /// star-discussions REST list handler and Canvas's `DiscussionTopic.active`
+    /// scope (`workflow_state <> 'deleted'`). Canvas's per-viewer
+    /// section/availability scoping is a documented deviation
+    /// (`specs/gql/submissions-discussions.md`).
+    async fn discussions_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<DiscussionTopicConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            discussion_topic::fetch_discussion_topic_page(
+                &gctx.pool,
+                self.id,
+                first,
+                after.as_deref(),
+            )
+            .await?,
         ))
     }
 }

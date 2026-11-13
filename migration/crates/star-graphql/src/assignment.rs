@@ -1,4 +1,6 @@
-//! Assignment object type + `Course.assignmentsConnection` (issue #26).
+//! Assignment object type + `Course.assignmentsConnection` (issue #26), plus
+//! the `Assignment.submissionsConnection` field (issue #48) whose Submission
+//! type and page fetch live in `submission.rs`.
 //!
 //! Mirrors the conventions of the merged foundation slice in `lib.rs`:
 //! camelCase field names via the SimpleObject derive (`courseId`,
@@ -15,11 +17,15 @@
 //! assignment of the course. Deviation documented in
 //! `specs/gql/assignments.md`.
 
-use async_graphql::{SimpleObject, ID};
+use async_graphql::{Context, Object, SimpleObject, ID};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::{db_err, decode_cursor, encode_cursor, PageInfo, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE};
+use crate::submission::{self, SubmissionConnection};
+use crate::{
+    db_err, decode_cursor, encode_cursor, GraphQLContext, PageInfo, DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+};
 
 // ---------------------------------------------------------------------------
 // Database row (runtime sqlx::query_as + FromRow, like every other crate)
@@ -42,12 +48,13 @@ struct AssignmentRow {
 // ---------------------------------------------------------------------------
 
 /// Canvas GraphQL `Assignment` (subset of `app/graphql/types/assignment_type.rb`).
-/// Field names are camelCased by the SimpleObject derive: `id`, `courseId`,
-/// `name`, `description`, `pointsPossible`, `dueAt`, `createdAt`, `updatedAt`.
-#[derive(Debug, Clone, SimpleObject)]
+/// Method names are camelCased by the Object derive: `id`, `courseId`,
+/// `name`, `description`, `pointsPossible`, `dueAt`, `createdAt`, `updatedAt`,
+/// `submissionsConnection`.
+#[derive(Debug, Clone)]
 pub struct Assignment {
-    pub id: ID,
-    pub course_id: ID,
+    pub id: i64,
+    pub course_id: i64,
     pub name: String,
     pub description: Option<String>,
     pub points_possible: f64,
@@ -56,11 +63,72 @@ pub struct Assignment {
     pub updated_at: DateTime<Utc>,
 }
 
+#[Object]
+impl Assignment {
+    async fn id(&self) -> ID {
+        ID(self.id.to_string())
+    }
+
+    async fn course_id(&self) -> ID {
+        ID(self.course_id.to_string())
+    }
+
+    async fn name(&self) -> &str {
+        &self.name
+    }
+
+    async fn description(&self) -> Option<&str> {
+        self.description.as_deref()
+    }
+
+    async fn points_possible(&self) -> f64 {
+        self.points_possible
+    }
+
+    async fn due_at(&self) -> Option<DateTime<Utc>> {
+        self.due_at
+    }
+
+    async fn created_at(&self) -> DateTime<Utc> {
+        self.created_at
+    }
+
+    async fn updated_at(&self) -> DateTime<Utc> {
+        self.updated_at
+    }
+
+    /// Paginated submissions for this assignment (LIMIT first+1, ORDER BY
+    /// id). Roster parity with `Course.enrollmentsConnection`: admins and
+    /// course teachers see every submission, anyone else sees only their own.
+    /// A student with no submission gets empty edges — star-lms stores no
+    /// unsubmitted placeholder rows.
+    async fn submissions_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<SubmissionConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            submission::fetch_visible_submission_page(
+                &gctx.pool,
+                gctx.auth_user.id,
+                gctx.is_admin(),
+                self.id,
+                self.course_id,
+                first,
+                after.as_deref(),
+            )
+            .await?,
+        ))
+    }
+}
+
 impl From<AssignmentRow> for Assignment {
     fn from(row: AssignmentRow) -> Self {
         Assignment {
-            id: ID(row.id.to_string()),
-            course_id: ID(row.course_id.to_string()),
+            id: row.id,
+            course_id: row.course_id,
             name: row.name,
             description: row.description,
             points_possible: row.points_possible,
