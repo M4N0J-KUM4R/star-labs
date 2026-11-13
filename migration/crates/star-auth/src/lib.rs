@@ -12,7 +12,7 @@ use axum::{
         StatusCode,
     },
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use axum_core::extract::FromRequestParts;
@@ -705,16 +705,16 @@ async fn update_developer_key(
         "#,
     )
     .bind(id)
-    .bind(params.name.unwrap_or(existing.name))
-    .bind(params.email.unwrap_or(existing.email))
-    .bind(params.icon_url.unwrap_or(existing.icon_url))
-    .bind(params.notes.unwrap_or(existing.notes))
+    .bind(params.name.or(existing.name))
+    .bind(params.email.or(existing.email))
+    .bind(params.icon_url.or(existing.icon_url))
+    .bind(params.notes.or(existing.notes))
     .bind(redirect_uris)
     .bind(scopes)
     .bind(params.require_scopes.unwrap_or(existing.require_scopes))
     .bind(params.allow_includes.unwrap_or(existing.allow_includes))
     .bind(params.visible.unwrap_or(existing.visible))
-    .bind(params.vendor_code.unwrap_or(existing.vendor_code))
+    .bind(params.vendor_code.or(existing.vendor_code))
     .bind(
         params
             .auto_expire_tokens
@@ -723,7 +723,7 @@ async fn update_developer_key(
     .bind(
         params
             .client_credentials_audience
-            .unwrap_or(existing.client_credentials_audience),
+            .or(existing.client_credentials_audience),
     )
     .execute(&app.db)
     .await?;

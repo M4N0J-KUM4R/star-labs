@@ -2735,7 +2735,7 @@ async fn blueprint_unsynced_changes(
     ];
 
     let mut changes: Vec<Value> = Vec::new();
-    for (asset_type, table) in content_types {
+    for &(asset_type, table) in content_types {
         let name_column = match table {
             "discussion_topics" | "pages" | "quizzes" => "title",
             "files" => "filename",
