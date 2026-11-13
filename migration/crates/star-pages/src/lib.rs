@@ -8,20 +8,33 @@
 //!   {courseId}, otherwise 404)
 //! - GET /courses/{courseId}/pages/{url}/revisions             (page history)
 //! - GET /courses/{courseId}/pages/{url}/revisions/latest      (current version)
-//! - GET /courses/{courseId}/pages/{url}/revisions/{revisionId} (one version)
+//! - GET/POST /courses/{courseId}/pages/{url}/revisions/{revisionId}
+//!   (one version; POST reverts the page to it)
 //! - GET/PUT /courses/{courseId}/front_page                    (course front page)
 //! - POST /courses/{courseId}/pages/{urlOrId}/duplicate        (copy a page)
 //! - POST /courses/{courseId}/pages_ai/alt_text                (stub alt text)
+//! - GET/POST /groups/{groupId}/pages                          (group wiki; declined)
+//! - GET/PUT/DELETE /groups/{groupId}/pages/{urlOrId}          (group wiki; declined)
+//! - GET/PUT /groups/{groupId}/front_page                      (group wiki; declined)
 //!
 //! Canvas parity notes (wiki_page.rb, wiki_pages_api_controller.rb):
 //! - pages carry `url` (slug derived from title), `workflow_state`
 //!   ('published'/'unpublished'/'deleted') and `editing_roles`.
+//! - updates accept `published` and the deprecated `hidden` booleans besides
+//!   `workflow_state`, with Canvas precedence published > hidden >
+//!   workflow_state; 'active' is Canvas' name for the published state.
 //! - the list endpoint omits `body` (Canvas pages#index returns summaries).
 //! - DELETE soft-deletes: workflow_state = 'deleted'.
 //! - revisions mirror simply_versioned: every page save appends a version with
 //!   a per-page 1-based number, newest first; `show_revision` needs
 //!   `:read_revisions` (teacher/admin) while `/revisions/latest` only needs
 //!   read access (enrolled student/admin). `summary=true` drops content.
+//! - revert restores a prior version's title/body/url and appends the
+//!   restored state as a NEW revision (history is never rewritten).
+//! - Canvas serves group wikis through the same pages API, but wiki pages are
+//!   course-scoped in this schema (`pages` has no group column), so the group
+//!   routes run the context+auth checks and then decline with 403, mirroring
+//!   the star-discussions group-summaries pattern.
 
 use axum::{
     extract::{Path, Query, State},
@@ -84,6 +97,50 @@ pub struct UpdatePage {
     pub body: Option<String>,
     pub workflow_state: Option<String>,
     pub editing_roles: Option<String>,
+    /// Canvas `wiki_page[hidden]` (deprecated): inverse of `published`.
+    pub hidden: Option<bool>,
+    /// Canvas `wiki_page[published]`: boolean form of `workflow_state`.
+    pub published: Option<bool>,
+}
+
+impl UpdatePage {
+    /// True when the request carries no page attributes at all.
+    fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.body.is_none()
+            && self.workflow_state.is_none()
+            && self.editing_roles.is_none()
+            && self.hidden.is_none()
+            && self.published.is_none()
+    }
+
+    /// Requested workflow_state with Canvas precedence on update:
+    /// `published` > `hidden` > `workflow_state` (wiki_pages_api_controller
+    /// `get_update_params` turns `published` into the state). `hidden` is the
+    /// deprecated inverse of `published`, and workflow_state 'active' is
+    /// Canvas' name for the published state.
+    fn requested_workflow_state(&self) -> Option<&'static str> {
+        if let Some(published) = self.published {
+            return Some(if published {
+                "published"
+            } else {
+                "unpublished"
+            });
+        }
+        if let Some(hidden) = self.hidden {
+            return Some(if hidden { "unpublished" } else { "published" });
+        }
+        let requested = self
+            .workflow_state
+            .as_deref()
+            .map(str::trim)
+            .filter(|state| !state.is_empty())?;
+        Some(if matches!(requested, "published" | "active") {
+            "published"
+        } else {
+            "unpublished"
+        })
+    }
 }
 
 /// Request body for PUT /courses/{courseId}/front_page.
@@ -796,18 +853,16 @@ async fn update_page(
     }
 
     // At least one field must be provided
-    if payload.title.is_none()
-        && payload.body.is_none()
-        && payload.workflow_state.is_none()
-        && payload.editing_roles.is_none()
-    {
+    if payload.is_empty() {
         return Err(ApiError::Validation(
-            "at least title or body is required".into(),
+            "at least one page attribute is required".into(),
         ));
     }
 
     // If the title changed, Canvas regenerates the url slug (wiki_page.rb).
     let new_url = payload.title.as_ref().map(|t| generate_url_slug(t));
+    // Canvas precedence on update: published > hidden > workflow_state.
+    let workflow_state = payload.requested_workflow_state();
 
     let mut tx = state.db.begin().await?;
 
@@ -828,7 +883,7 @@ async fn update_page(
     .bind(&payload.title)
     .bind(&payload.body)
     .bind(&new_url)
-    .bind(&payload.workflow_state)
+    .bind(workflow_state)
     .bind(&payload.editing_roles)
     .bind(page_id_num)
     .fetch_one(&mut *tx)
@@ -1219,6 +1274,73 @@ async fn show_revision(
     Ok(Json(revision.detail(latest, with_content)))
 }
 
+/// POST /courses/{courseId}/pages/{urlOrId}/revisions/{revisionId} — revert.
+///
+/// Canvas `revert`: requires `:read_revisions` and `:update` on the page
+/// (teachers/admins), restores the revision's body/title/url and saves, which
+/// appends the restored state as a NEW revision (history is never rewritten).
+/// The response is the current version's revision JSON including content.
+async fn revert_page(
+    State(state): State<AppState>,
+    Path((course_id, page_ref, revision_ref)): Path<(i64, String, String)>,
+    auth: AuthUser,
+) -> Result<Json<RevisionDetail>, ApiError> {
+    let page = load_page_in_course(&state.db, course_id, &page_ref).await?;
+
+    // Canvas authorizes :read_revisions AND :update (teacher/admin).
+    if !user_teacher_of_course(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas does `params[:revision_id].to_i` then `first!` -> 404.
+    let revision_id = revision_ref
+        .parse::<i32>()
+        .map_err(|_| ApiError::NotFound)?;
+    let revision = fetch_revision(&state.db, page.id, revision_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let mut tx = state.db.begin().await?;
+
+    // Canvas sets body/title/url straight from the version's model.
+    let restored: PageDetail = sqlx::query_as(
+        r#"
+        UPDATE pages
+        SET title = $1, body = $2, url = $3, updated_at = now()
+        WHERE id = $4
+        RETURNING id, course_id, title, body, url, workflow_state, editing_roles,
+                  created_at, updated_at
+        "#,
+    )
+    .bind(&revision.title)
+    .bind(&revision.body)
+    .bind(&revision.url)
+    .bind(page.id)
+    .fetch_one(&mut tx)
+    .await?;
+
+    // simply_versioned: the revert save appends the restored state as the new
+    // current revision; the prior versions stay untouched.
+    let current_revision_id = insert_revision(
+        &mut tx,
+        restored.id,
+        auth.id,
+        &restored.title,
+        restored.body.as_deref(),
+        restored.url.as_deref(),
+    )
+    .await?;
+
+    tx.commit().await?;
+
+    // Canvas renders `wiki_page_revision_json(@page.versions.current, ...)`
+    // with include_content: true.
+    let current = fetch_revision(&state.db, page.id, current_revision_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(current.detail(current_revision_id, true)))
+}
+
 // ---------------------------------------------------------------------------
 // Page duplication (Canvas wiki_pages_api_controller#duplicate)
 // ---------------------------------------------------------------------------
@@ -1336,6 +1458,178 @@ async fn generate_alt_text(
 }
 
 // ---------------------------------------------------------------------------
+// Group wiki routes (Canvas group contexts, declined in this schema)
+// ---------------------------------------------------------------------------
+
+/// 404 unless the group context exists (Canvas `get_context` -> Group.find).
+async fn ensure_group(db: &PgPool, group_id: i64) -> Result<(), ApiError> {
+    let group: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM groups WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(group_id)
+            .fetch_optional(db)
+            .await?;
+    group.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+/// Canvas `require_context_and_read_access` for a group context: group
+/// members, the parent course's teachers and admins may read it.
+async fn ensure_group_read_access(
+    db: &PgPool,
+    group_id: i64,
+    auth: &AuthUser,
+) -> Result<(), ApiError> {
+    if is_admin(auth) {
+        return Ok(());
+    }
+    let membership: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM group_memberships
+        WHERE group_id = $1 AND user_id = $2 AND workflow_state <> 'deleted'
+        LIMIT 1
+        "#,
+    )
+    .bind(group_id)
+    .bind(auth.id)
+    .fetch_optional(db)
+    .await?;
+    if membership.is_some() {
+        return Ok(());
+    }
+    let teacher: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM enrollments e
+        JOIN groups g ON g.course_id = e.course_id
+        WHERE g.id = $1 AND e.user_id = $2 AND e.role = 'teacher'
+        LIMIT 1
+        "#,
+    )
+    .bind(group_id)
+    .bind(auth.id)
+    .fetch_optional(db)
+    .await?;
+    if teacher.is_some() {
+        return Ok(());
+    }
+    Err(ApiError::Forbidden)
+}
+
+/// Manage rights in a group context: the parent course's teachers and admins
+/// (Canvas wiki `manage` rights; group members cannot manage pages here).
+async fn ensure_group_manage_access(
+    db: &PgPool,
+    group_id: i64,
+    auth: &AuthUser,
+) -> Result<(), ApiError> {
+    if is_admin(auth) {
+        return Ok(());
+    }
+    let teacher: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM enrollments e
+        JOIN groups g ON g.course_id = e.course_id
+        WHERE g.id = $1 AND e.user_id = $2 AND e.role = 'teacher'
+        LIMIT 1
+        "#,
+    )
+    .bind(group_id)
+    .bind(auth.id)
+    .fetch_optional(db)
+    .await?;
+    if teacher.is_some() {
+        return Ok(());
+    }
+    Err(ApiError::Forbidden)
+}
+
+/// GET /groups/{groupId}/pages — Canvas group wiki pages#index.
+///
+/// Canvas serves group wikis through the same pages API, but wiki pages are
+/// course-scoped in this schema (`pages` has no group column), so no page can
+/// belong to a group context. After the context and read-access checks the
+/// endpoint therefore declines with 403, mirroring the star-discussions
+/// group-summaries pattern.
+async fn list_group_pages(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<PageSummary>>, ApiError> {
+    ensure_group(&state.db, group_id).await?;
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    Err(ApiError::Forbidden)
+}
+
+/// POST /groups/{groupId}/pages — Canvas group wiki pages#create (declined).
+async fn create_group_page(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<PageDetail>), ApiError> {
+    ensure_group(&state.db, group_id).await?;
+    ensure_group_manage_access(&state.db, group_id, &auth).await?;
+    Err(ApiError::Forbidden)
+}
+
+/// GET /groups/{groupId}/pages/{urlOrId} — Canvas group wiki pages#show
+/// (declined: no page can live in a group context in this schema).
+async fn show_group_page(
+    State(state): State<AppState>,
+    Path((group_id, _page_ref)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<PageDetail>, ApiError> {
+    ensure_group(&state.db, group_id).await?;
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    Err(ApiError::Forbidden)
+}
+
+/// PUT /groups/{groupId}/pages/{urlOrId} — Canvas group wiki pages#update
+/// (declined: no page can live in a group context in this schema).
+async fn update_group_page(
+    State(state): State<AppState>,
+    Path((group_id, _page_ref)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<PageDetail>, ApiError> {
+    ensure_group(&state.db, group_id).await?;
+    ensure_group_manage_access(&state.db, group_id, &auth).await?;
+    Err(ApiError::Forbidden)
+}
+
+/// DELETE /groups/{groupId}/pages/{urlOrId} — Canvas group wiki pages#destroy
+/// (declined: no page can live in a group context in this schema).
+async fn delete_group_page(
+    State(state): State<AppState>,
+    Path((group_id, _page_ref)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    ensure_group(&state.db, group_id).await?;
+    ensure_group_manage_access(&state.db, group_id, &auth).await?;
+    Err(ApiError::Forbidden)
+}
+
+/// GET /groups/{groupId}/front_page — Canvas group wiki `show_front_page`
+/// (declined: no page can live in a group context in this schema).
+async fn show_group_front_page(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<FrontPage>, ApiError> {
+    ensure_group(&state.db, group_id).await?;
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    Err(ApiError::Forbidden)
+}
+
+/// PUT /groups/{groupId}/front_page — Canvas group wiki `update_front_page`
+/// (declined: no page can live in a group context in this schema).
+async fn update_group_front_page(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<FrontPage>, ApiError> {
+    ensure_group(&state.db, group_id).await?;
+    ensure_group_manage_access(&state.db, group_id, &auth).await?;
+    Err(ApiError::Forbidden)
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -1366,7 +1660,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/pages/{url}/revisions/{revisionId}",
-            get(show_revision),
+            get(show_revision).post(revert_page),
         )
         .route(
             "/courses/{courseId}/front_page",
@@ -1379,6 +1673,20 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/pages_ai/alt_text",
             post(generate_alt_text),
+        )
+        .route(
+            "/groups/{groupId}/pages",
+            get(list_group_pages).post(create_group_page),
+        )
+        .route(
+            "/groups/{groupId}/pages/{urlOrId}",
+            get(show_group_page)
+                .put(update_group_page)
+                .delete(delete_group_page),
+        )
+        .route(
+            "/groups/{groupId}/front_page",
+            get(show_group_front_page).put(update_group_front_page),
         )
 }
 
