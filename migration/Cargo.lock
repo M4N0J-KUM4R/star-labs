@@ -3013,6 +3013,7 @@ dependencies = [
  "star-features",
  "star-files",
  "star-grading-standards",
+ "star-graphql",
  "star-groups",
  "star-jobs",
  "star-learning-dates",
