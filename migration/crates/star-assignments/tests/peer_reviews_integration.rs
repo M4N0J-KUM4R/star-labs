@@ -60,14 +60,22 @@ fn peer_reviews_router(state: AppState) -> axum::Router {
 }
 
 async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
+    // Populate sortable_name the way /auth/register computes it ("Last,
+    // First"): star-users decodes it as a non-Option String, and NULL rows
+    // leak into the shared test database break its GET /users.
+    let sortable_name = match name.rsplit_once(' ') {
+        Some((first, last)) => format!("{last}, {first}"),
+        None => name.to_string(),
+    };
     sqlx::query_scalar(
         r#"
-        INSERT INTO users (name, email, password_hash, role)
-        VALUES ($1, $2, 'x', $3)
+        INSERT INTO users (name, sortable_name, email, password_hash, role)
+        VALUES ($1, $2, $3, 'x', $4)
         RETURNING id
         "#,
     )
     .bind(name)
+    .bind(sortable_name)
     .bind(format!("{prefix}-{name}@test.local"))
     .bind(role)
     .fetch_one(pool)
