@@ -1532,17 +1532,25 @@ async fn list_student_submissions(
 /// GET /courses/{courseId}/assignments/{assignmentId}/submissions/{userId} —
 /// Canvas `show`. Students may only read their own submission; missing
 /// submissions come back as a synthesized unsubmitted record.
+///
+/// `include[]` accepts `submission_history`, `submission_comments`,
+/// `rubric_assessment`, `user`, and `read_status`. Like Canvas, including
+/// `read_status` reports the current state and then marks the submission
+/// read for the caller.
 async fn get_student_submission(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    RawQuery(raw_query): RawQuery,
     auth: AuthUser,
-) -> Result<Json<CanvasSubmission>, ApiError> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
     ensure_user_in_course(&state.db, course_id, user_id).await?;
 
     if auth.id != user_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
+
+    let query = parse_submission_includes(raw_query.as_deref());
 
     let row: Option<SubmissionRow> = sqlx::query_as(&format!(
         "{SUBMISSION_SELECT} WHERE s.assignment_id = $1 AND s.user_id = $2"
@@ -1553,16 +1561,465 @@ async fn get_student_submission(
     .await?;
 
     let Some(row) = row else {
-        return Ok(Json(CanvasSubmission::unsubmitted(
+        let mut unsubmitted = serde_json::to_value(CanvasSubmission::unsubmitted(
             course_id,
             assignment_id,
             user_id,
-        )));
+        ))
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        if query.include_user {
+            unsubmitted["user"] = user_display(&state.db, user_id).await?;
+        }
+        if query.include_read_status {
+            unsubmitted["read_state"] = serde_json::json!("read");
+        }
+        return Ok(Json(unsubmitted));
     };
 
     let mut attachments = load_submission_attachments(&state.db, &[row.id]).await?;
     let files = attachments.remove(&row.id).unwrap_or_default();
-    Ok(Json(CanvasSubmission::from_row(row, course_id, files)))
+    let submission_id = row.id;
+    let mut entry = serde_json::to_value(CanvasSubmission::from_row(row, course_id, files))
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    if query.include_submission_history {
+        entry["submission_history"] = submission_history_json(&state.db, submission_id).await?;
+    }
+    if query.include_submission_comments {
+        entry["submission_comments"] = submission_comments_json(&state.db, submission_id).await?;
+    }
+    if query.include_rubric_assessment {
+        entry["rubric_assessment"] = rubric_assessment_json(&state.db, submission_id).await?;
+    }
+    if query.include_user {
+        entry["user"] = user_display(&state.db, user_id).await?;
+    }
+    if query.include_read_status {
+        // Canvas reports the state, then marks the submission read.
+        let read_state: String = sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(
+                (SELECT read_state FROM submission_reads
+                 WHERE submission_id = $1 AND user_id = $2),
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM submission_comments c
+                    WHERE c.submission_id = $1 AND c.author_id <> $2
+                      AND c.workflow_state <> 'deleted'
+                ) OR EXISTS (
+                    SELECT 1 FROM submissions s WHERE s.id = $1 AND s.score IS NOT NULL
+                ) THEN 'unread' ELSE 'read' END
+            )
+            "#,
+        )
+        .bind(submission_id)
+        .bind(auth.id)
+        .fetch_one(&state.db)
+        .await?;
+        entry["read_state"] = serde_json::json!(read_state);
+        if read_state == "unread" {
+            sqlx::query(
+                r#"
+                INSERT INTO submission_reads
+                    (submission_id, user_id, read_state, read_at, source)
+                VALUES ($1, $2, 'read', now(), 'read_status')
+                ON CONFLICT (submission_id, user_id) DO UPDATE
+                SET read_state = 'read', read_at = now(), source = 'read_status',
+                    updated_at = now()
+                "#,
+            )
+            .bind(submission_id)
+            .bind(auth.id)
+            .execute(&state.db)
+            .await?;
+        }
+    }
+
+    Ok(Json(entry))
+}
+
+/// `include[]` values accepted by the single-submission `show` route.
+#[derive(Debug, Default)]
+struct SubmissionIncludes {
+    include_submission_history: bool,
+    include_submission_comments: bool,
+    include_rubric_assessment: bool,
+    include_user: bool,
+    include_read_status: bool,
+}
+
+/// Parse `include[]` from the raw query string (Canvas array spelling).
+fn parse_submission_includes(raw_query: Option<&str>) -> SubmissionIncludes {
+    let mut includes = SubmissionIncludes::default();
+    for pair in raw_query.unwrap_or_default().split('&') {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = decode_query_component(raw_key).to_ascii_lowercase();
+        let key = key.strip_suffix("[]").unwrap_or(key.as_str());
+        if key != "include" {
+            continue;
+        }
+        match decode_query_component(raw_value).as_str() {
+            "submission_history" => includes.include_submission_history = true,
+            "submission_comments" => includes.include_submission_comments = true,
+            "rubric_assessment" => includes.include_rubric_assessment = true,
+            "user" => includes.include_user = true,
+            "read_status" => includes.include_read_status = true,
+            _ => {}
+        }
+    }
+    includes
+}
+
+/// Canvas `submission_history`: one attempt-shaped entry per submission
+/// version. star-lms does not version submissions, so the current row is the
+/// single history entry, like a one-attempt Canvas submission.
+async fn submission_history_json(
+    pool: &PgPool,
+    submission_id: i64,
+) -> Result<serde_json::Value, ApiError> {
+    let row: Option<SubmissionRow> =
+        sqlx::query_as(&format!("{SUBMISSION_SELECT} WHERE s.id = $1"))
+            .bind(submission_id)
+            .fetch_optional(pool)
+            .await?;
+    let Some(row) = row else {
+        return Ok(serde_json::json!([]));
+    };
+    let mut attachments = load_submission_attachments(pool, &[row.id]).await?;
+    let files = attachments.remove(&row.id).unwrap_or_default();
+    // Canvas keys history entries by the attempt they represent; the course id
+    // only shapes `url`, which is reconstructed from the row's own ids.
+    let course_id: i64 = sqlx::query_scalar(
+        "SELECT a.course_id FROM submissions s JOIN assignments a ON a.id = s.assignment_id WHERE s.id = $1",
+    )
+    .bind(submission_id)
+    .fetch_one(pool)
+    .await?;
+    let entry = serde_json::to_value(CanvasSubmission::from_row(row, course_id, files))
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(serde_json::json!([entry]))
+}
+
+/// Canvas `submission_comments` include: the active comments on the
+/// submission (lib/api/v1/submission_comment.rb fields).
+async fn submission_comments_json(
+    pool: &PgPool,
+    submission_id: i64,
+) -> Result<serde_json::Value, ApiError> {
+    let rows: Vec<(
+        i64,
+        i64,
+        Option<String>,
+        String,
+        Option<DateTime<Utc>>,
+        DateTime<Utc>,
+    )> = sqlx::query_as(
+        r#"
+            SELECT c.id, c.author_id, u.name, c.comment, c.edited_at, c.created_at
+            FROM submission_comments c
+            LEFT JOIN users u ON u.id = c.author_id
+            WHERE c.submission_id = $1 AND c.workflow_state <> 'deleted'
+            ORDER BY c.created_at ASC, c.id ASC
+            "#,
+    )
+    .bind(submission_id)
+    .fetch_all(pool)
+    .await?;
+    let comments: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(
+            |(id, author_id, author_name, comment, edited_at, created_at)| {
+                serde_json::json!({
+                    "id": id,
+                    "author_id": author_id,
+                    "author_name": author_name,
+                    "comment": comment,
+                    "edited_at": edited_at,
+                    "created_at": created_at,
+                })
+            },
+        )
+        .collect();
+    Ok(serde_json::json!(comments))
+}
+
+/// Canvas `rubric_assessment` include: the grading assessment for the
+/// submission as `{criterion_id: {rating_id, comments, points}}`
+/// (indexed_rubric_assessment_json). `null` when there is none.
+async fn rubric_assessment_json(
+    pool: &PgPool,
+    submission_id: i64,
+) -> Result<serde_json::Value, ApiError> {
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        r#"
+        SELECT ra.data::text FROM rubric_assessments ra
+        WHERE ra.submission_id = $1 AND ra.assessment_type = 'grading'
+          AND ra.workflow_state = 'active'
+        ORDER BY ra.id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(submission_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((Some(data),)) = row else {
+        return Ok(serde_json::Value::Null);
+    };
+    let data: serde_json::Value = serde_json::from_str(&data)
+        .map_err(|e| ApiError::BadRequest(format!("invalid rubric assessment data: {e}")))?;
+    // rubric_assessments.data is a JSONB array of criterion assessments
+    // [{criterion_id, rating_id, points, comments}]; Canvas indexes it by
+    // criterion id, keeping only rating_id/comments/points.
+    let mut indexed = serde_json::Map::new();
+    if let Some(items) = data.as_array() {
+        for item in items {
+            let Some(criterion_id) = item.get("criterion_id") else {
+                continue;
+            };
+            let mut entry = serde_json::Map::new();
+            if let Some(rating_id) = item.get("rating_id") {
+                if !rating_id.is_null() {
+                    entry.insert("rating_id".to_string(), rating_id.clone());
+                }
+            }
+            if let Some(comments) = item.get("comments") {
+                if !comments.is_null() {
+                    entry.insert("comments".to_string(), comments.clone());
+                }
+            }
+            if let Some(points) = item.get("points") {
+                if !points.is_null() {
+                    entry.insert("points".to_string(), points.clone());
+                }
+            }
+            indexed.insert(criterion_id.to_string(), serde_json::Value::Object(entry));
+        }
+    }
+    Ok(serde_json::Value::Object(indexed))
+}
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/submission_summary —
+/// Canvas `submission_summary` (teacher-only): {graded, ungraded,
+/// not_submitted} counts over the course's active students. Canvas's
+/// needs_grading = submission_type NOT NULL AND not excused AND
+/// (workflow_state='pending_review' OR (state IN submitted,graded AND score
+/// IS NULL)); graded = score NOT NULL AND state='graded' OR excused.
+async fn submission_summary(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let (students, graded, ungraded): (i64, i64, i64) = sqlx::query_as(
+        r#"
+        SELECT
+            (SELECT COUNT(DISTINCT e.user_id)
+             FROM enrollments e
+             WHERE e.course_id = $1 AND e.role = 'student'
+               AND e.workflow_state <> 'deleted') AS students,
+            (SELECT COUNT(*) FROM submissions s
+             WHERE s.assignment_id = $2
+               AND ((s.score IS NOT NULL AND s.workflow_state = 'graded')
+                    OR s.excused = TRUE)) AS graded,
+            (SELECT COUNT(*) FROM submissions s
+             WHERE s.assignment_id = $2
+               AND s.submission_type IS NOT NULL
+               AND s.excused = FALSE
+               AND (s.workflow_state = 'pending_review'
+                    OR (s.workflow_state IN ('submitted', 'graded')
+                        AND s.score IS NULL))) AS ungraded
+        "#,
+    )
+    .bind(course_id)
+    .bind(assignment_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let not_submitted = (students - graded - ungraded).max(0);
+    Ok(Json(serde_json::json!({
+        "graded": graded,
+        "ungraded": ungraded,
+        "not_submitted": not_submitted,
+    })))
+}
+
+/// PUT/DELETE /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/read
+/// — Canvas mark_submission_read / mark_submission_unread. The owner of the
+/// submission or a teacher/admin may flip the state; 204 on success.
+async fn mark_submission_read_state(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    read: bool,
+) -> Result<StatusCode, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    ensure_user_in_course(&state.db, course_id, user_id).await?;
+
+    if auth.id != user_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas find_or_create_submission: the marker can exist even when the
+    // submission row does not yet, but a submission that never existed is a
+    // 404 (assignment-scoped lookup).
+    let submission_id: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM submissions WHERE assignment_id = $1 AND user_id = $2")
+            .bind(assignment_id)
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let submission_id = submission_id.ok_or(ApiError::NotFound)?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO submission_reads
+            (submission_id, user_id, read_state, read_at, source)
+        VALUES ($1, $2, $3, now(), 'read_state')
+        ON CONFLICT (submission_id, user_id) DO UPDATE
+        SET read_state = $3,
+            read_at = CASE WHEN $3 THEN now() ELSE submission_reads.read_at END,
+            source = 'read_state',
+            updated_at = now()
+        "#,
+    )
+    .bind(submission_id)
+    .bind(auth.id)
+    .bind(read)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// PUT .../submissions/{userId}/read — mark read.
+async fn mark_submission_read(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    mark_submission_read_state(
+        State(state),
+        Path((course_id, assignment_id, user_id)),
+        auth,
+        true,
+    )
+    .await
+}
+
+/// DELETE .../submissions/{userId}/read — mark unread.
+async fn mark_submission_unread(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    mark_submission_read_state(
+        State(state),
+        Path((course_id, assignment_id, user_id)),
+        auth,
+        false,
+    )
+    .await
+}
+
+/// POST /courses/{courseId}/assignments/{assignmentId}/submissions/update_grades
+/// — Canvas `bulk_update` (grade_data[<user_id>][posted_grade]).
+///
+/// Deviation: Canvas enqueues the work and returns a pending Progress
+/// (tag "submissions_update"); star-lms has no progresses table, so the
+/// grades are applied synchronously and a completed Progress-shaped body is
+/// returned ({id: 0, context_id, context_type, tag, completion: 100,
+/// workflow_state: "completed"}).
+async fn bulk_update_grades(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let payload: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|_| ApiError::BadRequest("'grade_data' parameter required".into()))?;
+    let grade_data = payload
+        .get("grade_data")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| ApiError::BadRequest("'grade_data' parameter required".into()))?;
+    if grade_data.is_empty() {
+        return Err(ApiError::BadRequest(
+            "'grade_data' parameter required".into(),
+        ));
+    }
+
+    for (raw_user_id, entry) in grade_data {
+        let user_id: i64 = raw_user_id
+            .parse()
+            .map_err(|_| ApiError::BadRequest("invalid grade_data user id".into()))?;
+        ensure_user_in_course(&state.db, course_id, user_id).await?;
+
+        let score = match entry.get("posted_grade") {
+            Some(value) => parse_grade_value(value)?,
+            None => match entry.get("excuse").and_then(|value| value.as_bool()) {
+                Some(true) => None,
+                _ => continue,
+            },
+        };
+
+        let graded_at = if score.is_some() {
+            Some(Utc::now())
+        } else {
+            None
+        };
+        let workflow_state = if score.is_some() {
+            "graded"
+        } else {
+            "submitted"
+        };
+        sqlx::query(
+            r#"
+            INSERT INTO submissions
+                (assignment_id, user_id, score, graded_at, grader_id, workflow_state)
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (assignment_id, user_id) DO UPDATE
+            SET score = EXCLUDED.score,
+                graded_at = EXCLUDED.graded_at,
+                grader_id = EXCLUDED.grader_id,
+                workflow_state = EXCLUDED.workflow_state,
+                updated_at = now()
+            "#,
+        )
+        .bind(assignment_id)
+        .bind(user_id)
+        .bind(score)
+        .bind(graded_at)
+        .bind(auth.id)
+        .bind(workflow_state)
+        .execute(&state.db)
+        .await?;
+    }
+
+    // Simplified synchronous Progress (see doc comment): the work is already
+    // done when the response is returned.
+    Ok(Json(serde_json::json!({
+        "id": 0,
+        "context_id": course_id,
+        "context_type": "Course",
+        "user_id": auth.id,
+        "tag": "submissions_update",
+        "completion": 100,
+        "workflow_state": "completed",
+        "created_at": Utc::now(),
+        "updated_at": Utc::now(),
+        "url": format!("/api/v1/progress/0"),
+    })))
 }
 
 /// PUT /courses/{courseId}/submissions/bulk_mark_read — marks the caller's
@@ -2792,6 +3249,23 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/files",
             post(create_submission_file),
+        )
+        // Canvas submissions API extras (Phase 5)
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submission_summary",
+            get(submission_summary),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/read",
+            put(mark_submission_read),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/read",
+            delete(mark_submission_unread),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/update_grades",
+            post(bulk_update_grades),
         )
         // Submission read states + anonymous submissions (Phase 4)
         .route(
