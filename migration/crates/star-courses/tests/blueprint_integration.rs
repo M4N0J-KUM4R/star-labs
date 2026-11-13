@@ -110,6 +110,34 @@ async fn seed_subscription(pool: &PgPool, template_id: i64, child_course_id: i64
     .expect("seed subscription")
 }
 
+/// Seed a master_migration row. Completed runs carry all three sync
+/// timestamps (mirroring the queue_migration insert); running ones leave
+/// them NULL until the sync progresses.
+async fn seed_migration(
+    pool: &PgPool,
+    template_id: i64,
+    user_id: i64,
+    workflow_state: &str,
+) -> i64 {
+    let stamped = (workflow_state == "completed").then(chrono::Utc::now);
+    sqlx::query_scalar(
+        r#"INSERT INTO master_migrations
+           (master_template_id, user_id, workflow_state, comment,
+            exports_started_at, imports_queued_at, imports_completed_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id"#,
+    )
+    .bind(template_id)
+    .bind(user_id)
+    .bind(workflow_state)
+    .bind(format!("seed-{workflow_state}"))
+    .bind(stamped)
+    .bind(stamped)
+    .bind(stamped)
+    .fetch_one(pool)
+    .await
+    .expect("seed migration")
+}
+
 fn auth(user_id: i64, role: &str) -> String {
     format!(
         "Bearer {}",
@@ -160,6 +188,12 @@ async fn blueprint_template_show_happy_path_and_non_admin_forbidden() {
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
     let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
 
+    // Sync history the show serializer reads: a completed run drives
+    // last_export_completed_at (latest completed migration's
+    // imports_completed_at) and a still-queued run drives latest_migration.
+    let completed_migration = seed_migration(&pool, template_id, admin, "completed").await;
+    let queued_migration = seed_migration(&pool, template_id, admin, "queued").await;
+
     // Teacher without account admin rights -> 403.
     let forbidden = server
         .get(&format!(
@@ -182,12 +216,26 @@ async fn blueprint_template_show_happy_path_and_non_admin_forbidden() {
     assert_eq!(body["course_id"].as_i64(), Some(blueprint_id));
     assert_eq!(body["associated_course_count"].as_i64(), Some(1));
     assert!(
-        body.get("last_export_completed_at").is_some(),
-        "key present (null before first sync)"
+        body["last_export_completed_at"].is_string(),
+        "completed sync stamps last_export_completed_at"
     );
-    assert!(
-        body.get("latest_migration").is_some(),
-        "key present (null without a running migration)"
+    assert_eq!(
+        body["latest_migration"]["id"].as_i64(),
+        Some(queued_migration),
+        "latest_migration is the running migration"
+    );
+    assert_ne!(
+        body["latest_migration"]["id"].as_i64(),
+        Some(completed_migration),
+        "the completed run surfaces via last_export_completed_at instead"
+    );
+    assert_eq!(
+        body["latest_migration"]["workflow_state"].as_str(),
+        Some("queued")
+    );
+    assert_eq!(
+        body["latest_migration"]["template_id"].as_i64(),
+        Some(template_id)
     );
 
     // `default` resolves the course's single template too.
