@@ -2416,7 +2416,7 @@ async fn ctx_list_replies(
     entry_id: i64,
     auth: &AuthUser,
 ) -> Result<Json<Vec<DiscussionEntry>>, ApiError> {
-    ensure_ctx_entry(state, ctx, topic_id, entry_id, auth).await?;
+    ensure_ctx_entry(&state.db, ctx, topic_id, entry_id, auth).await?;
     let rows: Vec<DiscussionEntryRow> = sqlx::query_as(
         r#"
         WITH RECURSIVE subtree AS (
@@ -2778,7 +2778,7 @@ async fn ctx_topic_view(
     .fetch_all(&state.db)
     .await?;
 
-    let participants: Vec<serde_json::Value> = sqlx::query_as(
+    let participants: Vec<serde_json::Value> = sqlx::query_as::<_, (i64, String)>(
         r#"
         SELECT DISTINCT u.id, u.name
         FROM users u
