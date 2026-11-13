@@ -355,7 +355,7 @@ async fn seed_review(
     .await
     .expect("seed reviewer submission");
 
-    sqlx::query_scalar(
+    sqlx::query_scalar::<_, i64>(
         r#"
         INSERT INTO assessment_requests (user_id, assessor_id, asset_id, asset_type, workflow_state)
         VALUES ($1, $2, $3, 'Submission', 'assigned')
@@ -437,7 +437,7 @@ async fn peer_review_create_assigns_reviewer_and_bumps_count() {
     assert_eq!(bob_submission, 1, "reviewer submission created lazily");
 
     // peer_review_count on the assignment reflects the assigned reviews.
-    let count: i64 = sqlx::query_scalar("SELECT peer_review_count FROM assignments WHERE id = $1")
+    let count: i32 = sqlx::query_scalar("SELECT peer_review_count FROM assignments WHERE id = $1")
         .bind(assignment)
         .fetch_one(&pool)
         .await
@@ -588,7 +588,7 @@ async fn peer_review_destroy_removes_review_and_recomputes_count() {
             .await
             .expect("count remaining");
     assert_eq!(remaining, 1);
-    let count: i64 = sqlx::query_scalar("SELECT peer_review_count FROM assignments WHERE id = $1")
+    let count: i32 = sqlx::query_scalar("SELECT peer_review_count FROM assignments WHERE id = $1")
         .bind(assignment)
         .fetch_one(&pool)
         .await

@@ -1701,20 +1701,24 @@ async fn submission_history_json(
     Ok(serde_json::json!([entry]))
 }
 
+/// Row shape for the `submission_comments` include (id, author_id, author
+/// name, comment, edited_at, created_at).
+type SubmissionCommentRow = (
+    i64,
+    i64,
+    Option<String>,
+    String,
+    Option<DateTime<Utc>>,
+    DateTime<Utc>,
+);
+
 /// Canvas `submission_comments` include: the active comments on the
 /// submission (lib/api/v1/submission_comment.rb fields).
 async fn submission_comments_json(
     pool: &PgPool,
     submission_id: i64,
 ) -> Result<serde_json::Value, ApiError> {
-    let rows: Vec<(
-        i64,
-        i64,
-        Option<String>,
-        String,
-        Option<DateTime<Utc>>,
-        DateTime<Utc>,
-    )> = sqlx::query_as(
+    let rows: Vec<SubmissionCommentRow> = sqlx::query_as(
         r#"
             SELECT c.id, c.author_id, u.name, c.comment, c.edited_at, c.created_at
             FROM submission_comments c
@@ -1876,21 +1880,24 @@ async fn mark_submission_read_state(
             .await?;
     let submission_id = submission_id.ok_or(ApiError::NotFound)?;
 
+    // Canvas change_read_state stores 'read'/'unread' for the submission's
+    // user (the path user), not the caller.
+    let new_state = if read { "read" } else { "unread" };
     sqlx::query(
         r#"
         INSERT INTO submission_reads
             (submission_id, user_id, read_state, read_at, source)
         VALUES ($1, $2, $3, now(), 'read_state')
         ON CONFLICT (submission_id, user_id) DO UPDATE
-        SET read_state = $3,
-            read_at = CASE WHEN $3 THEN now() ELSE submission_reads.read_at END,
-            source = 'read_state',
-            updated_at = now()
+            SET read_state = $3,
+                read_at = CASE WHEN $3 = 'read' THEN now() ELSE submission_reads.read_at END,
+                source = 'read_state',
+                updated_at = now()
         "#,
     )
     .bind(submission_id)
-    .bind(auth.id)
-    .bind(read)
+    .bind(user_id)
+    .bind(new_state)
     .execute(&state.db)
     .await?;
 
@@ -2018,7 +2025,7 @@ async fn bulk_update_grades(
         "workflow_state": "completed",
         "created_at": Utc::now(),
         "updated_at": Utc::now(),
-        "url": format!("/api/v1/progress/0"),
+        "url": String::from("/api/v1/progress/0"),
     })))
 }
 
@@ -2795,7 +2802,7 @@ async fn list_peer_reviews(
             entry["assessor"] = user_display(&state.db, review.assessor_id).await?;
         }
         if query.include_submission_comments {
-            let comments: Vec<serde_json::Value> = sqlx::query_as(
+            let rows: Vec<(i64, i64, String, DateTime<Utc>)> = sqlx::query_as(
                 r#"
                 SELECT id, author_id, comment, created_at
                 FROM submission_comments
@@ -2806,6 +2813,17 @@ async fn list_peer_reviews(
             .bind(review.asset_id)
             .fetch_all(&state.db)
             .await?;
+            let comments: Vec<serde_json::Value> = rows
+                .into_iter()
+                .map(|(id, author_id, comment, created_at)| {
+                    serde_json::json!({
+                        "id": id,
+                        "author_id": author_id,
+                        "comment": comment,
+                        "created_at": created_at,
+                    })
+                })
+                .collect();
             entry["submission_comments"] = serde_json::json!(comments);
         }
         entries.push(entry);
