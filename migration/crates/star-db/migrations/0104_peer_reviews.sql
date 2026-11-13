@@ -24,18 +24,18 @@ CREATE TABLE IF NOT EXISTS assessment_requests (
     user_id         BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     -- The assigned reviewer (AssessmentRequest#assessor).
     assessor_id     BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    -- The reviewed asset: always the assignment (the submission is resolved
-    -- per (assignment_id, user_id) in star-lms). Canvas names this column
-    -- `asset_id` with asset_type 'Submission'; keeping the FK on assignments
-    -- matches star-lms' single-row submissions model.
-    asset_id        BIGINT NOT NULL REFERENCES assignments(id) ON DELETE CASCADE,
+    -- The reviewed asset (AssessmentRequest#asset, polymorphic): always a
+    -- Submission for peer reviews. Canvas serializes this as asset_id with
+    -- asset_type 'Submission', so the FK targets submissions and the
+    -- submission's owner is denormalized into user_id. The reviewed
+    -- assignment is recovered through the submission's assignment_id.
+    asset_id        BIGINT NOT NULL REFERENCES submissions(id) ON DELETE CASCADE,
     asset_type      TEXT NOT NULL DEFAULT 'Submission',
     workflow_state  TEXT NOT NULL DEFAULT 'assigned',  -- assigned | completed
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (asset_id, assessor_id)
 );
-
 CREATE INDEX IF NOT EXISTS idx_assessment_requests_asset
     ON assessment_requests(asset_id);
 CREATE INDEX IF NOT EXISTS idx_assessment_requests_user
