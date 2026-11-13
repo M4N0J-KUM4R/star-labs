@@ -934,7 +934,7 @@ async fn list_users(
 
     let users: Vec<UserResponse> = sqlx::query_as(
         r#"
-        SELECT id, name, sortable_name, email, role, created_at
+        SELECT id, name, COALESCE(sortable_name, name) AS sortable_name, email, role, created_at
         FROM users
         ORDER BY created_at DESC
         LIMIT $1 OFFSET $2
@@ -963,7 +963,7 @@ async fn get_self(
 ) -> Result<Json<UserResponse>, ApiError> {
     let user: Option<UserResponse> = sqlx::query_as(
         r#"
-        SELECT id, name, sortable_name, email, role, created_at
+        SELECT id, name, COALESCE(sortable_name, name) AS sortable_name, email, role, created_at
         FROM users WHERE id = $1
         "#,
     )
@@ -1022,7 +1022,7 @@ async fn get_user(
 
     let user: Option<UserResponse> = sqlx::query_as(
         r#"
-        SELECT id, name, sortable_name, email, role, created_at
+        SELECT id, name, COALESCE(sortable_name, name) AS sortable_name, email, role, created_at
         FROM users WHERE id = $1
         "#,
     )
@@ -1052,7 +1052,7 @@ async fn update_user(
     // Verify the user exists.
     let existing: Option<UserResponse> = sqlx::query_as(
         r#"
-        SELECT id, name, sortable_name, email, role, created_at
+        SELECT id, name, COALESCE(sortable_name, name) AS sortable_name, email, role, created_at
         FROM users WHERE id = $1
         "#,
     )
