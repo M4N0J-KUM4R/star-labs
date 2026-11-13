@@ -101,6 +101,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let app = Router::new()
         .route("/health", get(health))
         .nest("/api/v1", api_router)
+        // Canvas serves its GraphQL API at /api/graphql (outside /api/v1).
+        .nest("/api/graphql", star_graphql::router())
         .with_state(state)
         .layer(TraceLayer::new_for_http());
 
