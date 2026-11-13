@@ -1,0 +1,6 @@
+{
+  "comment": "Coordinator-owned ledger of migration number reservations (protocol: issue #20). Agents never self-assign a number; the coordinator reserves one at dispatch time. Additive migrations only, no renumbering, no DROP/TRUNCATE.",
+  "max_merged": "0107",
+  "next_available": "0108",
+  "active": {}
+}
