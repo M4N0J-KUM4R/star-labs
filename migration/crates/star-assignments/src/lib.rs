@@ -2163,8 +2163,16 @@ async fn clear_unread(
 
 /// GET /courses/{courseId}/assignments/{assignmentId}/gradeable_students —
 /// Canvas `gradeable_students`: one `UserDisplay` per student with a
-/// submission row, or an `AnonymousUserDisplay` when anonymous grading is on
-/// and `allow_new_anonymous_id` is passed. Requires view-all-grades.
+/// submission row, or an `AnonymousUserDisplay` when the caller cannot view
+/// student names and `allow_new_anonymous_id` is passed. Requires
+/// manage_grades/view_all_grades (teachers/admins in star-lms).
+///
+/// `can_view_student_names?` parity (spec §6.1): names are hidden when the
+/// assignment `anonymize_students?` — anonymous grading on and (for the
+/// snapshot's non-moderated assignments) at least one active student has an
+/// unposted submission. Canvas models "unposted" as `posted_at IS NULL`; the
+/// Star snapshot has no `posted_at`, so an ungraded submission
+/// (`graded_at IS NULL`) is the equivalent gate.
 async fn gradeable_students(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -2180,18 +2188,22 @@ async fn gradeable_students(
     let (sort_by_name, descending, allow_new_anonymous_id) =
         parse_gradeable_students_query(raw_query.as_deref());
 
-    let anonymous_grading: bool =
-        sqlx::query_scalar("SELECT anonymous_grading FROM assignments WHERE id = $1")
-            .bind(assignment_id)
-            .fetch_one(&state.db)
-            .await?;
-    let anonymize = allow_new_anonymous_id && anonymous_grading;
+    // Canvas: can_view_student_names = allow_new_anonymous_id ?
+    // assignment.can_view_student_names?(user) : true. A teacher arriving
+    // without the flag always sees names.
+    let anonymize =
+        allow_new_anonymous_id && assignment_anonymize_students(&state.db, assignment_id).await?;
 
+    // Canvas: sort=name orders by sortable_name when names are visible and
+    // falls back to anonymous_id when hidden; the default order is user_id
+    // when visible and anonymous_id when hidden.
     let direction = if descending { "DESC" } else { "ASC" };
     let order_by = if anonymize {
         format!("s.anonymous_id {direction}")
     } else if sort_by_name {
-        format!("u.name {direction}, u.id {direction}")
+        // COALESCE mirrors Canvas' tolerance of users without a sortable
+        // name; the secondary id keeps the order deterministic.
+        format!("COALESCE(u.sortable_name, u.name) {direction}, u.id {direction}")
     } else {
         format!("s.user_id {direction}")
     };
@@ -2217,6 +2229,11 @@ async fn gradeable_students(
         .into_iter()
         .map(|(user_id, anonymous_id, name)| {
             if anonymize {
+                // Canvas AnonymousUserDisplay (lib/api/v1/user.rb):
+                // {anonymous_id, avatar_image_url (default fallback),
+                // display_name}. The snapshot has no per-student pseudonym
+                // table (spec open question 2), so display_name stays the
+                // placeholder "Student" and the fallback avatar is null.
                 serde_json::json!({
                     "id": anonymous_id.unwrap_or_default(),
                     "display_name": "Student",
@@ -2237,6 +2254,41 @@ async fn gradeable_students(
         .collect();
 
     Ok(Json(students))
+}
+
+/// Canvas `AbstractAssignment#anonymize_students?` for the Star snapshot:
+/// false unless `anonymous_grading` is on; moderated grading has no columns
+/// yet (slice F, #31), so the remaining rule is "any active student with an
+/// unposted submission" — `unposted_anonymous_submissions?`. The Star
+/// submissions table has no `posted_at`; `graded_at IS NULL` is the unposted
+/// proxy (grading in star-lms sets graded_at at the same time as the score).
+async fn assignment_anonymize_students(
+    pool: &PgPool,
+    assignment_id: i64,
+) -> Result<bool, ApiError> {
+    let anonymous_grading: bool =
+        sqlx::query_scalar("SELECT anonymous_grading FROM assignments WHERE id = $1")
+            .bind(assignment_id)
+            .fetch_one(pool)
+            .await?;
+    if !anonymous_grading {
+        return Ok(false);
+    }
+
+    let unposted: Option<i32> = sqlx::query_scalar(
+        r#"
+        SELECT 1 FROM submissions s
+        JOIN enrollments e ON e.user_id = s.user_id
+        WHERE s.assignment_id = $1 AND s.graded_at IS NULL
+          AND e.course_id = (SELECT course_id FROM assignments WHERE id = $1)
+          AND e.role = 'student' AND e.workflow_state <> 'deleted'
+        LIMIT 1
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(unposted.is_some())
 }
 
 /// Parse `sort`, `order`, and `allow_new_anonymous_id` from the query string.
@@ -2306,6 +2358,124 @@ async fn update_anonymous_submission(
     )
     .bind(assignment_id)
     .bind(&anonymous_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let submission_id = submission_id.ok_or(ApiError::NotFound)?;
+
+    sqlx::query(
+        r#"
+        UPDATE submissions
+        SET score = $2, graded_at = now(), grader_id = $3,
+            workflow_state = 'graded', updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(submission_id)
+    .bind(payload.score)
+    .bind(auth.id)
+    .execute(&state.db)
+    .await?;
+
+    let row: AnonymousSubmissionRow =
+        sqlx::query_as(&format!("{ANONYMOUS_SUBMISSION_SELECT} WHERE s.id = $1"))
+            .bind(submission_id)
+            .fetch_one(&state.db)
+            .await?;
+
+    Ok(Json(AnonymousSubmission::from_row(row, course_id)))
+}
+
+// ---------------------------------------------------------------------------
+// Anonymous submissions: section twins (spec p5 slice E, #30)
+// ---------------------------------------------------------------------------
+
+/// Minimal section row for the section-scoped anonymous submission routes.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct SectionRef {
+    course_id: i64,
+}
+
+/// Load a section and return its course. Canvas' `get_course_from_section`
+/// (`api_find(CourseSection, params[:section_id])`) makes an unknown section a
+/// 404 before any course-scoped lookup happens.
+async fn load_section_course(pool: &PgPool, section_id: i64) -> Result<i64, ApiError> {
+    let section: Option<SectionRef> =
+        sqlx::query_as("SELECT course_id FROM course_sections WHERE id = $1")
+            .bind(section_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(section.ok_or(ApiError::NotFound)?.course_id)
+}
+
+/// GET /sections/{sectionId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}
+/// — Canvas `show_anonymous`, section variant.
+///
+/// Canvas resolves the section to its course (`get_course_from_section`), then
+/// scopes the student lookup to the section via `get_user_considering_section`
+/// (`students.where(enrollments: { course_section_id: @section })`), so the
+/// submission must belong to a student enrolled in that section.
+async fn section_show_anonymous_submission(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, anonymous_id)): Path<(i64, i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<AnonymousSubmission>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    let row: Option<AnonymousSubmissionRow> = sqlx::query_as(&format!(
+        "{ANONYMOUS_SUBMISSION_SELECT} \
+         WHERE s.assignment_id = $1 AND s.anonymous_id = $2 \
+           AND s.user_id IN (SELECT user_id FROM enrollments \
+                              WHERE course_section_id = $3 \
+                                AND workflow_state <> 'deleted')"
+    ))
+    .bind(assignment_id)
+    .bind(&anonymous_id)
+    .bind(section_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let row = row.ok_or(ApiError::NotFound)?;
+
+    if auth.id != row.user_id
+        && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?
+    {
+        return Err(ApiError::Forbidden);
+    }
+
+    Ok(Json(AnonymousSubmission::from_row(row, course_id)))
+}
+
+/// PUT /sections/{sectionId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}
+/// — Canvas `update_anonymous`, section variant (grade update path).
+///
+/// Same resolution as the GET twin; Canvas `update_anonymous` funnels into the
+/// ordinary `update` action, whose `:grade` right means teachers/admins only.
+async fn section_update_anonymous_submission(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, anonymous_id)): Path<(i64, i64, String)>,
+    auth: AuthUser,
+    Json(payload): Json<GradeSubmission>,
+) -> Result<Json<AnonymousSubmission>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let submission_id: Option<i64> = sqlx::query_scalar(
+        r#"
+        SELECT s.id FROM submissions s
+        WHERE s.assignment_id = $1 AND s.anonymous_id = $2
+          AND s.user_id IN (SELECT user_id FROM enrollments
+                             WHERE course_section_id = $3
+                               AND workflow_state <> 'deleted')
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(&anonymous_id)
+    .bind(section_id)
     .fetch_optional(&state.db)
     .await?;
     let submission_id = submission_id.ok_or(ApiError::NotFound)?;
@@ -3301,6 +3471,15 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
             put(update_anonymous_submission),
+        )
+        // Anonymous submissions: section twins (spec p5 slice E, #30)
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
+            get(section_show_anonymous_submission),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
+            put(section_update_anonymous_submission),
         )
         // Canvas peer reviews API (PeerReviewsApiController)
         .route(
