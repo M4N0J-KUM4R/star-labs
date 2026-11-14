@@ -315,6 +315,7 @@ impl Course {
 /// Method names are camelCased by the Object derive: `id`, `name`, `email`,
 /// `sisUserId`, `sortableName`, `avatarUrl`, `createdAt`,
 /// `enrollmentsConnection`.
+#[derive(Debug, Clone)]
 pub struct User {
     id: i64,
     name: String,
