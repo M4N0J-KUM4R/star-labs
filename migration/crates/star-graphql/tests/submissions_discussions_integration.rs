@@ -279,7 +279,7 @@ async fn submissions_connection_returns_canvas_field_names() {
     let find = |uid: i64| {
         nodes
             .iter()
-            .find(|n| n["userId"] == uid.to_string())
+            .find(|n| n["userId"] == uid)
             .unwrap_or_else(|| panic!("no submission node for user {uid}: {body}"))
     };
     let graded = find(student_a);
