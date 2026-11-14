@@ -32,6 +32,12 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod assignment;
+mod terms_sections;
+
+use assignment::AssignmentConnection;
+use terms_sections::{CourseSection, EnrollmentTerm};
+
 // ---------------------------------------------------------------------------
 // GraphQL context
 // ---------------------------------------------------------------------------
@@ -53,7 +59,7 @@ impl GraphQLContext {
 
 /// Map a database failure to a GraphQL error. Resolvers never panic on DB
 /// trouble; failures surface as normal GraphQL `errors` entries.
-fn db_err(e: sqlx::Error) -> async_graphql::Error {
+pub(crate) fn db_err(e: sqlx::Error) -> async_graphql::Error {
     eprintln!("database error: {e}");
     async_graphql::Error::new("database error")
 }
@@ -64,11 +70,11 @@ fn db_err(e: sqlx::Error) -> async_graphql::Error {
 
 /// Encode an enrollment id as an opaque pagination cursor (fixed-width hex).
 /// Clients treat cursors as opaque tokens; `decode_cursor` is the only reader.
-fn encode_cursor(id: i64) -> String {
+pub(crate) fn encode_cursor(id: i64) -> String {
     format!("{id:016x}")
 }
 
-fn decode_cursor(cursor: &str) -> Option<i64> {
+pub(crate) fn decode_cursor(cursor: &str) -> Option<i64> {
     i64::from_str_radix(cursor, 16).ok()
 }
 
@@ -164,6 +170,24 @@ impl Course {
         Ok(Some(
             fetch_enrollment_page(&gctx.pool, Some(self.id), user_id, first, after.as_deref())
                 .await?,
+        ))
+    }
+
+    /// Paginated assignments in this course (LIMIT first+1, ORDER BY id).
+    /// Everyone who can resolve the course sees its assignments — parity
+    /// with the star-assignments REST list handler; the schema has no
+    /// `workflow_state` on assignments yet, so there is no
+    /// published/unpublished split to enforce (documented in
+    /// `specs/gql/assignments.md`).
+    async fn assignments_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<AssignmentConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            assignment::fetch_assignment_page(&gctx.pool, self.id, first, after.as_deref()).await?,
         ))
     }
 }
@@ -339,6 +363,38 @@ impl Query {
             created_at: row.created_at,
         }))
     }
+
+    /// `enrollmentTerm(id: ID!)` — any authenticated caller may read the
+    /// basic term shape; unknown ids resolve to null, like Canvas.
+    async fn enrollment_term(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+    ) -> Result<Option<EnrollmentTerm>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        let term_id: i64 =
+            id.0.parse()
+                .map_err(|_| async_graphql::Error::new("invalid term id"))?;
+
+        terms_sections::fetch_term(&gctx.pool, term_id).await
+    }
+
+    /// `courseSection(id: ID!)` — visible to enrolled users of the course
+    /// (any role), teachers of the course, and admins; everyone else gets
+    /// null, mirroring `course(id)` visibility.
+    async fn course_section(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+    ) -> Result<Option<CourseSection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        let section_id: i64 =
+            id.0.parse()
+                .map_err(|_| async_graphql::Error::new("invalid section id"))?;
+
+        terms_sections::fetch_section(&gctx.pool, gctx.auth_user.id, gctx.is_admin(), section_id)
+            .await
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -387,10 +443,10 @@ async fn user_teaches_course(
 // ---------------------------------------------------------------------------
 
 /// Default page size for connections when `first` is omitted.
-const DEFAULT_PAGE_SIZE: i32 = 10;
+pub(crate) const DEFAULT_PAGE_SIZE: i32 = 10;
 
 /// Maximum accepted page size for connections.
-const MAX_PAGE_SIZE: i32 = 100;
+pub(crate) const MAX_PAGE_SIZE: i32 = 100;
 
 /// Fetch one page of enrollments: `LIMIT first+1` ordered by id ascending,
 /// optionally scoped to one course and/or one user, optionally resuming
