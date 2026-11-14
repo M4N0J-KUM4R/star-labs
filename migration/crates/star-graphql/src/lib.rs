@@ -33,9 +33,11 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 mod assignment;
+mod quiz;
 mod terms_sections;
 
 use assignment::AssignmentConnection;
+use quiz::QuizConnection;
 use terms_sections::{CourseSection, EnrollmentTerm};
 
 // ---------------------------------------------------------------------------
@@ -188,6 +190,23 @@ impl Course {
         let gctx = ctx.data::<GraphQLContext>()?;
         Ok(Some(
             assignment::fetch_assignment_page(&gctx.pool, self.id, first, after.as_deref()).await?,
+        ))
+    }
+
+    /// Paginated quizzes in this course (LIMIT first+1, ORDER BY id).
+    /// Everyone who can resolve the course sees its quizzes — parity with
+    /// the star-quizzes REST list handler; unpublished quizzes are included
+    /// because course visibility already gates access (documented in the
+    /// quiz module doc comment).
+    async fn quizzes_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<QuizConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            quiz::fetch_quiz_page(&gctx.pool, self.id, first, after.as_deref()).await?,
         ))
     }
 }
