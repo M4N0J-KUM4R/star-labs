@@ -33,9 +33,11 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 mod assignment;
+mod outcome_group_types;
 mod terms_sections;
 
 use assignment::AssignmentConnection;
+use outcome_group_types::{GroupConnection, OutcomeConnection};
 use terms_sections::{CourseSection, EnrollmentTerm};
 
 // ---------------------------------------------------------------------------
@@ -188,6 +190,44 @@ impl Course {
         let gctx = ctx.data::<GraphQLContext>()?;
         Ok(Some(
             assignment::fetch_assignment_page(&gctx.pool, self.id, first, after.as_deref()).await?,
+        ))
+    }
+
+    /// Paginated outcomes linked into the course (star-outcomes list parity).
+    async fn outcomes_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<OutcomeConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            outcome_group_types::fetch_course_outcome_page(
+                &gctx.pool,
+                self.id,
+                first,
+                after.as_deref(),
+            )
+            .await?,
+        ))
+    }
+
+    /// Paginated groups of the course (star-groups list parity).
+    async fn groups_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<GroupConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            outcome_group_types::fetch_course_group_page(
+                &gctx.pool,
+                self.id,
+                first,
+                after.as_deref(),
+            )
+            .await?,
         ))
     }
 }
