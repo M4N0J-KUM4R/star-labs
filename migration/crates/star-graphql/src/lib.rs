@@ -221,19 +221,17 @@ impl Course {
         let is_admin = gctx.is_admin();
         let teaches = user_teaches_course(&gctx.pool, gctx.auth_user.id, self.id).await?;
         let manages = is_admin || teaches;
-        let become_user = if manages {
-            true
-        } else {
-            // Account admins on the course's account chain, like the REST
-            // become-user gate. NULL account ids fall back to the default
-            // account (1), matching the column default.
-            course_user_fields::is_account_admin_in_chain(
+        // becomeUser follows the account-admin chain (global admin or
+        // account_users row on the course's account or an ancestor), like
+        // the REST become-user gate — course teachers do NOT get it.
+        // NULL account ids fall back to the default account (1).
+        let become_user = is_admin
+            || course_user_fields::is_account_admin_in_chain(
                 &gctx.pool,
                 gctx.auth_user.id,
                 self.account_id.unwrap_or(1),
             )
-            .await?
-        };
+            .await?;
         Ok(CoursePermissions {
             manage_grades: manages,
             send_messages: manages
