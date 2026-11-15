@@ -113,6 +113,7 @@ struct QuizQuestionRow {
 /// `availableUntil`, `createdAt`, `updatedAt`, `submissionsConnection`,
 /// `questionsConnection`. Omitted Canvas fields without backing columns:
 /// `anonymousSubmissions` and the node/module-item interfaces.
+#[derive(Debug, Clone)]
 pub struct Quiz {
     id: i64,
     course_id: i64,
