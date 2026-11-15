@@ -276,13 +276,13 @@ async fn submissions_connection_returns_canvas_field_names() {
     let nodes = submission_nodes(&body);
     assert_eq!(nodes.len(), 2, "teacher sees both submissions: {body}");
 
-    let find = |uid: i64| {
+    let find = |uid: i64, uid_str: &str| {
         nodes
             .iter()
-            .find(|n| n["userId"] == uid)
+            .find(|n| n["userId"].as_str() == Some(uid_str))
             .unwrap_or_else(|| panic!("no submission node for user {uid}: {body}"))
     };
-    let graded = find(student_a);
+    let graded = find(student_a, &student_a.to_string());
     assert_eq!(graded["assignmentId"], assignment.to_string());
     assert_eq!(graded["attempt"], 1);
     assert_eq!(graded["body"], "My essay");
@@ -305,7 +305,7 @@ async fn submissions_connection_returns_canvas_field_names() {
         );
     }
 
-    let ungraded = find(student_b);
+    let ungraded = find(student_b, &student_b.to_string());
     assert!(ungraded["body"].is_null(), "body: {body}");
     assert!(ungraded["score"].is_null(), "score: {body}");
     assert!(ungraded["gradedAt"].is_null(), "gradedAt: {body}");
