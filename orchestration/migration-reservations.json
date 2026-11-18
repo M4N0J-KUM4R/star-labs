@@ -3,13 +3,13 @@
   "max_merged": "0107",
   "next_available": "0121",
   "free": [
-    "0110",
     "0111",
     "0115"
   ],
   "active": {
     "0108": "issue #31 provisional/moderated grading (tables + assignments columns)",
     "0109": "issue #32 gradebook-history support (only if spec requires new tables)",
+    "0110": "issue #29 gql assignment mutations batch A (PR #133, branch p5/gql-mutations-29)",
     "0112": "issue #33 outcome_groups deep parity (branch p5/rest-curriculum-33)",
     "0113": "issue #54 quiz submission tail (PR #130, branch p5/rest-assessments-54)",
     "0114": "issue #35 groups.non_collaborative (branch p5/rest-curriculum-35)",
