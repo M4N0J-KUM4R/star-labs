@@ -474,7 +474,7 @@ async fn duplicate_copies_assignment_with_canvas_title_rules() {
     let body: Value = resp.json();
     assert_eq!(body["title"], json!("Essay Copy"), "body: {body}");
     assert_eq!(body["course_id"], json!(course), "body: {body}");
-    assert_eq!(body["points_possible"], json!(10), "body: {body}");
+    assert_eq!(body["points_possible"], json!(10.0), "body: {body}");
     let copy_id = body["id"].as_i64().expect("copy id");
     // new_positions maps every assignment of the group (1-based, id order).
     let mut expected_positions = serde_json::Map::new();
@@ -688,17 +688,20 @@ async fn bulk_update_fails_progress_on_foreign_override_id() {
     let course = seed_course(&pool, &prefix, "BulkFail").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     let a1 = seed_assignment(&pool, course, "A1").await;
+    let a2 = seed_assignment(&pool, course, "A2").await;
     let other_course = seed_course(&pool, &prefix, "OtherCourse").await;
     let foreign = seed_assignment(&pool, other_course, "Foreign").await;
     let foreign_override = seed_override(&pool, foreign, "Foreign Ov", None).await;
 
+    // Two distinct assignments: Canvas raises RecordNotFound when one entry
+    // id repeats, and the foreign override belongs to neither.
     let resp = server
         .put(&format!("/courses/{course}/assignments/bulk_update"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .content_type("application/json")
         .json(&json!([
             { "id": a1, "all_dates": [ { "base": true, "due_at": "2027-06-01T00:00:00Z" } ]},
-            { "id": a1, "all_dates": [ { "id": foreign_override, "due_at": "2027-08-01T00:00:00Z" } ]},
+            { "id": a2, "all_dates": [ { "id": foreign_override, "due_at": "2027-08-01T00:00:00Z" } ]},
         ]))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -707,7 +710,7 @@ async fn bulk_update_fails_progress_on_foreign_override_id() {
     assert_eq!(
         body["results"]["message"],
         json!(format!(
-            "invalid assignment override id {foreign_override} for assignment {a1}"
+            "invalid assignment override id {foreign_override} for assignment {a2}"
         )),
         "body: {body}"
     );

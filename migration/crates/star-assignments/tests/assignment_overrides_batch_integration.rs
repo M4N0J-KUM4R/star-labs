@@ -709,7 +709,8 @@ async fn aliases_redirect_to_canonical_override_or_404() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, member, course, "student").await;
     seed_enrollment(&pool, outsider, course, "student").await;
-    seed_enrollment(&pool, section_student, course, "student").await;
+    // section_student's only enrollment carries the section (below): the
+    // (user, course, role) triplet is unique.
     let assignment = seed_assignment(&pool, course, "A1").await;
 
     let group = seed_group(&pool, course, "Group 1").await;
@@ -721,7 +722,8 @@ async fn aliases_redirect_to_canonical_override_or_404() {
         .expect("seed membership");
 
     let section = seed_section(&pool, course, "Section 1").await;
-    // Enroll the section student with the section id.
+    // Enroll the section student with the section id (one enrollment row:
+    // (user, course, role) is unique).
     sqlx::query(
         "INSERT INTO enrollments (user_id, course_id, role, workflow_state, course_section_id) \
          VALUES ($1, $2, 'student', 'active', $3)",

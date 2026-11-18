@@ -3714,7 +3714,7 @@ async fn resolve_batch_target(
     }
 
     if let Some(section_id) = entry.course_section_id {
-        let row: Option<()> = sqlx::query_scalar(
+        let row: Option<(i32,)> = sqlx::query_as(
             "SELECT 1 FROM course_sections WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'",
         )
         .bind(section_id)
@@ -4085,14 +4085,20 @@ async fn interpret_batch_entries(
             existing[index] = Some(row);
         }
 
-        // Target resolution. On update, non-adhoc overrides keep their target
-        // (Canvas passes the override's set_type, which skips the target
-        // branches entirely).
-        let is_adhoc_update = for_update
-            && existing[index]
+        // Target resolution. Creates need a target; updates only resolve a
+        // target when an adhoc override actually supplies a replacement
+        // `student_ids` set (Canvas passes the override's set_type, which
+        // skips the target branches — an adhoc update without student_ids
+        // keeps its set, and non-adhoc overrides keep theirs).
+        let needs_target = if for_update {
+            existing[index]
                 .as_ref()
-                .is_some_and(|row| !row.student_ids.is_empty());
-        if !for_update || is_adhoc_update {
+                .is_some_and(|row| !row.student_ids.is_empty())
+                && entry.student_ids.is_some()
+        } else {
+            true
+        };
+        if needs_target {
             match resolve_batch_target(pool, course_id, entry).await? {
                 Ok(target) => {
                     if let Some(target) = target {
