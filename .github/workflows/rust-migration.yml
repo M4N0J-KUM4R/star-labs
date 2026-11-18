@@ -1,5 +1,10 @@
 name: Rust migration validation
 
+# Fan-out validation: every job starts at once (no serial `needs:` chain).
+# The workspace test suite is sharded across 4 parallel runners, each with its
+# own PostgreSQL 16 service, then a cheap `test` gate job fans the shards in so
+# the required check name stays exactly `test` (protocol: issue #20).
+
 on:
   push:
     paths:
@@ -10,7 +15,9 @@ on:
       - 'specs/**'
       - 'migration/**'
       - 'orchestration/**'
+      - 'tools/ci/**'
       - '.github/workflows/rust-migration.yml'
+  merge_group:
   workflow_dispatch:
 
 permissions:
@@ -20,10 +27,45 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
 jobs:
-  test:
+  # ---------------------------------------------------------------------------
+  # Shard map: crates are partitioned by measured test count so all four shards
+  # finish at roughly the same time. Every crate appears exactly once; the
+  # `shard-coverage` job below asserts the partition stays complete.
+  # ---------------------------------------------------------------------------
+  test-shard:
+    name: Test shard ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: 1
+            crates: >-
+              -p star-assignments -p star-courses -p star-api -p star-common
+              -p star-db -p star-http -p star-announcements -p star-media
+          - shard: 2
+            crates: >-
+              -p star-notifications -p star-accounts -p star-enrollments
+              -p star-permissions -p star-groups -p star-assignment-groups
+              -p star-jobs
+          - shard: 3
+            crates: >-
+              -p star-auth -p star-users -p star-discussions -p star-quizzes
+              -p star-modules -p star-conversations -p star-submission-comments
+              -p star-features -p star-audit
+          - shard: 4
+            crates: >-
+              -p star-pages -p star-content -p star-grading-standards
+              -p star-files -p star-graphql -p star-learning-dates
+              -p star-rubrics -p star-dashboard -p star-calendar
+              -p star-outcomes -p star-lti
     services:
       postgres:
         image: postgres:16
@@ -50,4 +92,42 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: migration -> target
-      - run: cargo test --workspace --locked --no-fail-fast
+          shared-key: shard-${{ matrix.shard }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Run workspace shard ${{ matrix.shard }}
+        run: cargo test --locked --no-fail-fast ${{ matrix.crates }}
+
+  # ---------------------------------------------------------------------------
+  # Guards the shard map: a new crate that nobody added to a shard would
+  # otherwise be silently untested.
+  # ---------------------------------------------------------------------------
+  shard-coverage:
+    name: Shard coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every workspace member is assigned to exactly one shard
+        run: python3 tools/ci/shard_coverage.py
+
+  # ---------------------------------------------------------------------------
+  # Fan-in gate. This job's name is the required status check `test`.
+  # ---------------------------------------------------------------------------
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [test-shard, shard-coverage]
+    if: always()
+    steps:
+      - name: Require every shard to have passed
+        run: |
+          set -euo pipefail
+          echo "test-shard:      ${{ needs.test-shard.result }}"
+          echo "shard-coverage:  ${{ needs.shard-coverage.result }}"
+          if [ "${{ needs.test-shard.result }}" != "success" ] ||
+             [ "${{ needs.shard-coverage.result }}" != "success" ]; then
+            echo "::error::workspace test shards did not all pass"
+            exit 1
+          fi
+          echo "all shards green"
