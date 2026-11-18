@@ -4033,6 +4033,11 @@ async fn interpret_batch_entries(
             errors[index] = Some("may not specify an override id".to_string());
         }
     }
+    // Canvas returns before interpreting anything once a structure error
+    // exists (`return nil, all_errors unless all_errors.compact.blank?`).
+    if errors.iter().any(Option::is_some) {
+        return Ok((errors, parsed, targets, existing));
+    }
 
     // Assignments of this course.
     let assignment_ids: Vec<i64> = parsed.iter().filter_map(|e| e.assignment_id).collect();
