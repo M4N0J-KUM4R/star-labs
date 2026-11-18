@@ -4,6 +4,7 @@
   "next_available": "0110",
   "active": {
     "0108": "issue #31 provisional/moderated grading (tables + assignments columns)",
-    "0109": "issue #32 gradebook-history support (only if spec requires new tables)"
+    "0109": "issue #32 gradebook-history support (only if spec requires new tables)",
+    "0110": "issue #29 gql assignment mutations batch A (assignments.workflow_state)"
   }
 }

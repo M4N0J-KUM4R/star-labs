@@ -28,7 +28,7 @@
 //! backing resolvers and the documented omissions (fields with no backing
 //! column in star-db).
 
-use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Schema, SimpleObject, ID};
+use async_graphql::{Context, EmptySubscription, MergedObject, Object, Schema, SimpleObject, ID};
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 use axum::{
     extract::State,
@@ -43,6 +43,7 @@ use star_common::{ApiError, AppState};
 
 mod assignment;
 mod course_user_fields;
+mod mutations;
 mod terms_sections;
 
 use assignment::AssignmentConnection;
@@ -58,12 +59,12 @@ use terms_sections::{CourseSection, EnrollmentTerm};
 /// runs, so the role is always fresh from the database (the JWT role claim is
 /// never trusted for authorization, matching the REST extractors).
 pub struct GraphQLContext {
-    pool: PgPool,
-    auth_user: AuthUser,
+    pub(crate) pool: PgPool,
+    pub(crate) auth_user: AuthUser,
 }
 
 impl GraphQLContext {
-    fn is_admin(&self) -> bool {
+    pub(crate) fn is_admin(&self) -> bool {
         self.auth_user.role == "admin"
     }
 }
@@ -568,6 +569,25 @@ impl Query {
 }
 
 // ---------------------------------------------------------------------------
+// Mutation root (issue #29: Batch A — assignment create/update/delete)
+// ---------------------------------------------------------------------------
+
+/// Mutation root for the first batch. Canvas conventions (`base_mutation.rb`):
+/// exactly one `input` argument per mutation, payload carries
+/// `errors: [ValidationErrorType]`, authz failures are top-level execution
+/// errors with Canvas's exact strings. Deletion is `updateAssignment` with
+/// `state: deleted` — Canvas has no `deleteAssignment` mutation and neither
+/// do we (spec §2.1). Batches B–E land with their own issues.
+#[derive(MergedObject, Default)]
+pub struct Mutation(mutations::AssignmentMutations);
+
+impl Mutation {
+    fn new() -> Self {
+        Mutation(mutations::AssignmentMutations::default())
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Permission helpers (same DB checks as the star-enrollments REST handlers)
 // ---------------------------------------------------------------------------
 
@@ -589,7 +609,7 @@ async fn user_enrolled_in_course(
     Ok(row.is_some())
 }
 
-async fn user_teaches_course(
+pub(crate) async fn user_teaches_course(
     pool: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -737,7 +757,7 @@ async fn graphql_handler(
         Err(e) => return e.into_response(),
     };
 
-    let schema = Schema::build(Query, EmptyMutation, EmptySubscription)
+    let schema = Schema::build(Query, Mutation::new(), EmptySubscription)
         .data(GraphQLContext {
             pool: state.db.clone(),
             auth_user,

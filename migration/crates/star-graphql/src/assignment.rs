@@ -45,6 +45,7 @@ struct AssignmentRow {
 /// Field names are camelCased by the SimpleObject derive: `id`, `courseId`,
 /// `name`, `description`, `pointsPossible`, `dueAt`, `createdAt`, `updatedAt`.
 #[derive(Debug, Clone, SimpleObject)]
+#[allow(dead_code)] // fields constructed in From<AssignmentRow>; read by the schema via derive
 pub struct Assignment {
     pub id: ID,
     pub course_id: ID,
