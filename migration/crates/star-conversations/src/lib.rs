@@ -575,7 +575,7 @@ async fn list_conversations(
         WHERE cp.user_id = $1
           AND cp.workflow_state = 'active'
           AND c.workflow_state = 'active'
-        ORDER BY cp.last_message_at DESC NULL LAST, c.created_at DESC
+        ORDER BY cp.last_message_at DESC NULLS LAST, c.created_at DESC
         "#,
     )
     .bind(auth.id)
