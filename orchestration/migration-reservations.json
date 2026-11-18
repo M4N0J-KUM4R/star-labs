@@ -1,9 +1,15 @@
 {
   "comment": "Coordinator-owned ledger of migration number reservations (protocol: issue #20). Agents never self-assign a number; the coordinator reserves one at dispatch time. Additive migrations only, no renumbering, no DROP/TRUNCATE.",
   "max_merged": "0107",
-  "next_available": "0110",
+  "next_available": "0115",
   "active": {
     "0108": "issue #31 provisional/moderated grading (tables + assignments columns)",
-    "0109": "issue #32 gradebook-history support (only if spec requires new tables)"
+    "0109": "issue #32 gradebook-history support (only if spec requires new tables)",
+    "0110": "issue #36 wiki pages context polymorphism + revision extras (only if columns missing)",
+    "0111": "issue #37 module unlock/sequential + completion_requirement columns",
+    "0112": "issue #61 courses.timetable_data (platform spec M3)",
+    "0113": "issue #54 quiz_submissions.validation_token + quiz_statistics.generation_state",
+    "0114": "issue #51 rubric imports (rubric_imports table per assessments spec §484)",
+    "0115": "issue #59 groups non_collaborative + membership tail columns (only if absent; verify first)"
   }
 }
