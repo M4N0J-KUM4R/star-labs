@@ -320,8 +320,9 @@ async fn batch_retrieve_visibility_and_errors() {
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    let body: Value = resp.json();
     assert_eq!(
-        resp.json(),
+        body,
         json!({ "errors": ["no assignment_overrides values present"] })
     );
 
@@ -333,8 +334,9 @@ async fn batch_retrieve_visibility_and_errors() {
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    let body: Value = resp.json();
     assert_eq!(
-        resp.json(),
+        body,
         json!({ "errors": ["must specify an array with entry format { id, assignment_id }"] })
     );
 
@@ -497,8 +499,9 @@ async fn batch_create_creates_all_or_nothing() {
         .json(&json!({ "assignment_overrides": [] }))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    let body: Value = resp.json();
     assert_eq!(
-        resp.json(),
+        body,
         json!({ "errors": ["no assignment override data present"] })
     );
 
@@ -509,8 +512,9 @@ async fn batch_create_creates_all_or_nothing() {
         .json(&json!({ "assignment_overrides": 5 }))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    let body: Value = resp.json();
     assert_eq!(
-        resp.json(),
+        body,
         json!({ "errors": ["must specify an array of overrides"] })
     );
 
@@ -750,9 +754,11 @@ async fn aliases_redirect_to_canonical_override_or_404() {
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 302, "body: {}", resp.text());
+    let expected =
+        format!("/api/v1/courses/{course}/assignments/{assignment}/overrides/{group_override}");
     assert_eq!(
         resp.headers().get(axum::http::header::LOCATION).unwrap(),
-        format!("/api/v1/courses/{course}/assignments/{assignment}/overrides/{group_override}")
+        expected.as_str()
     );
 
     // Group member sees their group's override; an unaffiliated student does
@@ -784,9 +790,11 @@ async fn aliases_redirect_to_canonical_override_or_404() {
         )
         .await;
     assert_eq!(resp.status_code(), 302, "body: {}", resp.text());
+    let expected =
+        format!("/api/v1/courses/{course}/assignments/{assignment}/overrides/{section_override}");
     assert_eq!(
         resp.headers().get(axum::http::header::LOCATION).unwrap(),
-        format!("/api/v1/courses/{course}/assignments/{assignment}/overrides/{section_override}")
+        expected.as_str()
     );
 
     let resp = server

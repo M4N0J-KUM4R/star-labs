@@ -513,7 +513,8 @@ async fn duplicate_copies_assignment_with_canvas_title_rules() {
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
-    assert_eq!(resp.json(), json!({ "error": "assignment does not exist" }));
+    let body: Value = resp.json();
+    assert_eq!(body, json!({ "error": "assignment does not exist" }));
 
     // Students may not duplicate.
     let resp = server
@@ -753,7 +754,8 @@ async fn retry_alignment_clone_rejects_every_representable_state() {
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
-    assert_eq!(resp.json(), json!({ "error": "invalid status" }));
+    let body: Value = resp.json();
+    assert_eq!(body, json!({ "error": "invalid status" }));
 
     // Unknown assignment / course.
     let resp = server

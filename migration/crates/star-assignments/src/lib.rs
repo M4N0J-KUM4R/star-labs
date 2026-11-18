@@ -3427,13 +3427,11 @@ fn ruby_to_i(value: &serde_json::Value) -> i64 {
         serde_json::Value::String(s) => {
             let mut out = String::new();
             for (i, c) in s.trim().chars().enumerate() {
-                if i == 0 && (c == '-' || c == '+') {
-                    out.push(c);
-                } else if c.is_ascii_digit() {
-                    out.push(c);
-                } else {
+                let keep = c.is_ascii_digit() || (i == 0 && (c == '-' || c == '+'));
+                if !keep {
                     break;
                 }
+                out.push(c);
             }
             out.parse::<i64>().unwrap_or(0)
         }

@@ -247,8 +247,9 @@ async fn annotation_notification_site_admin_contract() {
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    let body: Value = resp.json();
     assert_eq!(
-        resp.json(),
+        body,
         json!({ "error": format!("Couldn't find Submission for user with API id {no_submission}") })
     );
 
