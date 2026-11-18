@@ -1,9 +1,37 @@
 {
   "comment": "Coordinator-owned ledger of migration number reservations (protocol: issue #20). Agents never self-assign a number; the coordinator reserves one at dispatch time. Additive migrations only, no renumbering, no DROP/TRUNCATE.",
   "max_merged": "0107",
-  "next_available": "0110",
+  "next_available": "0121",
+  "free": [
+    "0110",
+    "0111",
+    "0115"
+  ],
   "active": {
     "0108": "issue #31 provisional/moderated grading (tables + assignments columns)",
-    "0109": "issue #32 gradebook-history support (only if spec requires new tables)"
+    "0109": "issue #32 gradebook-history support (only if spec requires new tables)",
+    "0112": "issue #33 outcome_groups deep parity (branch p5/rest-curriculum-33)",
+    "0113": "issue #54 quiz submission tail (PR #130, branch p5/rest-assessments-54)",
+    "0114": "issue #35 groups.non_collaborative (branch p5/rest-curriculum-35)",
+    "0116": "issue #60 conversation participant flags (PR #131, branch p5/rest-platform-60)",
+    "0117": "issue #67 feature flags tail \u2014 lane A05 (branch p5/rest-admin-67)",
+    "0118": "issue #53 grade change audit tail \u2014 lane A06 (branch p5/rest-assessments-53)",
+    "0119": "issue #52 peer reviews tail \u2014 lane A07 (branch p5/rest-assessments-52)",
+    "0120": "issue #88 course nicknames + observee pairing \u2014 lane A08 (branch p5/rest-curriculum-88)"
+  },
+  "wave3": {
+    "dispatched": "2026-11-18",
+    "lanes": {
+      "A01": "#105 CI throughput",
+      "A02": "#102 CI migration guard",
+      "A03": "#82 gql conversation/calendar/account",
+      "A04": "#81 gql outcome/group",
+      "A05": "#67 feature flags",
+      "A06": "#53 grade change audit",
+      "A07": "#52 peer reviews",
+      "A08": "#88 nicknames/observees",
+      "A09": "#104 observability",
+      "A10": "#100 pagination/include[]"
+    }
   }
 }
