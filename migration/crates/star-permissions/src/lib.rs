@@ -947,9 +947,539 @@ async fn reject_builtin_or_missing(db: &PgPool, account_id: i64, role_id: i64) -
     }
 }
 
+/// One entry of the manageable-permissions catalog: a curated subset of
+/// Canvas `RoleOverride::KNOWN_PERMISSIONS` (the account/course permissions
+/// star-lms models), with the Canvas label and grouping.
+struct PermissionCatalogEntry {
+    key: &'static str,
+    label: &'static str,
+    /// `(group, group_label)` — Canvas omits both fields when the permission
+    /// belongs to no group.
+    group: Option<(&'static str, &'static str)>,
+    available_to: &'static [&'static str],
+    true_for: &'static [&'static str],
+}
+
+/// Canvas `RoleOverride::KNOWN_PERMISSIONS` subset (keys, labels and groups
+/// follow Canvas `lib/role_override.rb` / `app/models/permissions.rb`).
+const PERMISSION_CATALOG: &[PermissionCatalogEntry] = &[
+    PermissionCatalogEntry {
+        key: "manage_account_conclusions",
+        label: "Manage account course conclusions",
+        group: Some(("account", "Account")),
+        available_to: &["account_all", "account_admin"],
+        true_for: &["AccountAdmin"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_account_memberships",
+        label: "Manage account memberships",
+        group: Some(("account", "Account")),
+        available_to: &["account_all", "account_admin"],
+        true_for: &["AccountAdmin"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_courses",
+        label: "Manage (add / edit / delete) courses",
+        group: Some(("account", "Account")),
+        available_to: &["account_all", "account_admin"],
+        true_for: &["AccountAdmin"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_role_overrides",
+        label: "Manage role overrides",
+        group: Some(("account", "Account")),
+        available_to: &["account_all", "account_admin"],
+        true_for: &["AccountAdmin"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_sis",
+        label: "Manage SIS data",
+        group: Some(("account", "Account")),
+        available_to: &["account_all", "account_admin", "course_admin"],
+        true_for: &[],
+    },
+    PermissionCatalogEntry {
+        key: "import_sis",
+        label: "Import SIS data",
+        group: Some(("account", "Account")),
+        available_to: &["account_all", "account_admin"],
+        true_for: &[],
+    },
+    PermissionCatalogEntry {
+        key: "manage_alerts",
+        label: "Manage alerts",
+        group: Some(("account", "Account")),
+        available_to: &["account_all", "account_admin", "course_admin"],
+        true_for: &["AccountAdmin"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_job_queue",
+        label: "Manage background jobs",
+        group: Some(("account", "Account")),
+        available_to: &["account_all"],
+        true_for: &[],
+    },
+    PermissionCatalogEntry {
+        key: "manage_storage_overrides_users",
+        label: "Manage storage quotas for a user",
+        group: Some(("account", "Account")),
+        available_to: &["account_all", "account_admin"],
+        true_for: &["AccountAdmin"],
+    },
+    PermissionCatalogEntry {
+        key: "become_user",
+        label: "Act as user",
+        group: Some(("user", "User")),
+        available_to: &["account_all", "account_admin"],
+        true_for: &[],
+    },
+    PermissionCatalogEntry {
+        key: "manage_user_logins",
+        label: "Manage user logins",
+        group: Some(("user", "User")),
+        available_to: &["account_all", "account_admin"],
+        true_for: &["AccountAdmin"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_user_observers",
+        label: "Manage user observers",
+        group: Some(("user", "User")),
+        available_to: &["account_all", "account_admin"],
+        true_for: &[],
+    },
+    PermissionCatalogEntry {
+        key: "manage_email_addresses",
+        label: "Manage email addresses",
+        group: Some(("user", "User")),
+        available_to: &["account_all"],
+        true_for: &[],
+    },
+    PermissionCatalogEntry {
+        key: "manage_user_notes",
+        label: "Manage faculty journal entries",
+        group: Some(("user", "User")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_assignments",
+        label: "Manage (add / edit / delete) assignments and quizzes",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment", "DesignerEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_calendar",
+        label: "Manage course calendar",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment", "DesignerEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_content",
+        label: "Manage content",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment", "DesignerEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "change_course_state",
+        label: "Change course state",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_feature_flags",
+        label: "Manage feature flags",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin"],
+        true_for: &[],
+    },
+    PermissionCatalogEntry {
+        key: "manage_sections",
+        label: "Manage sections",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_settings",
+        label: "Manage course settings",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_tool_associations",
+        label: "Manage external tool associations",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_wiki",
+        label: "Manage wiki",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment", "DesignerEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_students",
+        label: "Manage students",
+        group: Some(("student", "Student")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_groups",
+        label: "Manage groups",
+        group: Some(("groups", "Groups")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_files_edit",
+        label: "Edit files",
+        group: Some(("files", "Files")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment", "DesignerEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_files_delete",
+        label: "Delete files",
+        group: Some(("files", "Files")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "view_media_comments",
+        label: "View media comments",
+        group: Some(("files", "Files")),
+        available_to: &["course_admin", "student"],
+        true_for: &[],
+    },
+    PermissionCatalogEntry {
+        key: "manage_grades",
+        label: "Manage grades",
+        group: Some(("grading", "Grades")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "read_grades",
+        label: "View grades",
+        group: Some(("grading", "Grades")),
+        available_to: &["course_admin", "student"],
+        true_for: &["TeacherEnrollment", "TaEnrollment", "ObserverEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "view_all_grades",
+        label: "View all grades",
+        group: Some(("grading", "Grades")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_outcomes",
+        label: "Manage outcomes",
+        group: Some(("outcomes", "Outcomes")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment", "DesignerEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "read_outcomes",
+        label: "View outcomes",
+        group: Some(("outcomes", "Outcomes")),
+        available_to: &["course_admin", "student"],
+        true_for: &[
+            "TeacherEnrollment",
+            "TaEnrollment",
+            "StudentEnrollment",
+            "ObserverEnrollment",
+            "DesignerEnrollment",
+        ],
+    },
+    PermissionCatalogEntry {
+        key: "manage_rubrics",
+        label: "Manage rubrics",
+        group: Some(("rubrics", "Rubrics")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "read_question_banks",
+        label: "View question banks",
+        group: Some(("quizzes", "Quizzes")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment", "DesignerEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "moderate_forum",
+        label: "Moderate forum (delete/unpin/lock/close/…)",
+        group: Some(("discussions", "Discussions")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "post_to_forum",
+        label: "Post to discussions",
+        group: Some(("discussions", "Discussions")),
+        available_to: &["course_admin", "student"],
+        true_for: &[
+            "TeacherEnrollment",
+            "TaEnrollment",
+            "StudentEnrollment",
+            "ObserverEnrollment",
+            "DesignerEnrollment",
+        ],
+    },
+    PermissionCatalogEntry {
+        key: "read_forum",
+        label: "View discussions",
+        group: Some(("discussions", "Discussions")),
+        available_to: &["course_admin", "student"],
+        true_for: &[
+            "TeacherEnrollment",
+            "TaEnrollment",
+            "StudentEnrollment",
+            "ObserverEnrollment",
+            "DesignerEnrollment",
+        ],
+    },
+    PermissionCatalogEntry {
+        key: "send_messages",
+        label: "Send messages to individual course members",
+        group: Some(("conversations", "Conversations")),
+        available_to: &["course_admin", "student"],
+        true_for: &[
+            "TeacherEnrollment",
+            "TaEnrollment",
+            "StudentEnrollment",
+            "ObserverEnrollment",
+            "DesignerEnrollment",
+        ],
+    },
+    PermissionCatalogEntry {
+        key: "submit_assignment",
+        label: "Submit assignments",
+        group: Some(("assignments", "Assignments")),
+        available_to: &["student"],
+        true_for: &["StudentEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "read_announcements",
+        label: "View announcements",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin", "student"],
+        true_for: &[
+            "TeacherEnrollment",
+            "TaEnrollment",
+            "StudentEnrollment",
+            "ObserverEnrollment",
+            "DesignerEnrollment",
+        ],
+    },
+    PermissionCatalogEntry {
+        key: "read_course_content",
+        label: "View course content",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin", "student"],
+        true_for: &[
+            "TeacherEnrollment",
+            "TaEnrollment",
+            "StudentEnrollment",
+            "ObserverEnrollment",
+            "DesignerEnrollment",
+        ],
+    },
+    PermissionCatalogEntry {
+        key: "read_course_list",
+        label: "View the courses list",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin", "student"],
+        true_for: &[],
+    },
+    PermissionCatalogEntry {
+        key: "read_reports",
+        label: "View usage reports for course",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment"],
+    },
+    PermissionCatalogEntry {
+        key: "see_unpublished_courses",
+        label: "View unpublished courses",
+        group: Some(("course", "Course")),
+        available_to: &["course_admin"],
+        true_for: &["TeacherEnrollment", "TaEnrollment", "DesignerEnrollment"],
+    },
+];
+
+/// `GET /accounts/{accountId}/roles/permissions` entry (Canvas
+/// `manageable_permissions`: `{ key, label, available_to, true_for, group?,
+/// group_label? }`).
+#[derive(Debug, Clone, Serialize)]
+pub struct ManageablePermissionView {
+    pub key: &'static str,
+    pub label: &'static str,
+    pub available_to: &'static [&'static str],
+    pub true_for: &'static [&'static str],
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_label: Option<&'static str>,
+}
+
+impl From<&PermissionCatalogEntry> for ManageablePermissionView {
+    fn from(entry: &PermissionCatalogEntry) -> Self {
+        ManageablePermissionView {
+            key: entry.key,
+            label: entry.label,
+            available_to: entry.available_to,
+            true_for: entry.true_for,
+            group: entry.group.map(|(group, _)| group),
+            group_label: entry.group.map(|(_, label)| label),
+        }
+    }
+}
+
+/// `GET /accounts/{accountId}/permissions/{permission}` response (spec
+/// §6.6): the permission name, the roles it can apply to in the account and
+/// the account's workflow state.
+#[derive(Debug, Clone, Serialize)]
+pub struct CheckAccountPermissionView {
+    pub permission: String,
+    pub applicable_roles: Vec<String>,
+    pub account_workflow_state: String,
+}
+
+/// `POST /accounts/{accountId}/roles/{id}/activate` — Canvas
+/// `RoleOverridesController#activate_role`: flips an inactive custom role back
+/// to `active`.
+///
+/// `400` when another active role with the same name already exists in the
+/// account, or when the role is not inactive (Canvas answers "Role not
+/// found"); `404` when the role does not exist.
+pub async fn role_activate(
+    db: &PgPool,
+    user_id: i64,
+    account_id: i64,
+    role_id: i64,
+) -> Result<RoleView, ApiError> {
+    require_roles_admin(db, user_id, account_id).await?;
+
+    let role = fetch_role(db, account_id, role_id).await?;
+
+    // Canvas refuses to activate when an active role with that name exists.
+    let active_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(
+             SELECT 1 FROM roles
+             WHERE account_id = $1 AND name = $2 AND workflow_state = 'active')",
+    )
+    .bind(account_id)
+    .bind(&role.name)
+    .fetch_one(db)
+    .await?;
+    if active_exists {
+        return Err(ApiError::BadRequest(
+            "An active role already exists with that name".to_string(),
+        ));
+    }
+
+    if role.workflow_state != "inactive" {
+        return Err(ApiError::BadRequest("Role not found".to_string()));
+    }
+
+    let activated: Option<RoleView> = sqlx::query_as(&format!(
+        "UPDATE roles SET workflow_state = 'active', updated_at = now()
+         WHERE id = $1 AND account_id = $2 AND workflow_state = 'inactive'
+         RETURNING {ROLE_COLUMNS}"
+    ))
+    .bind(role_id)
+    .bind(account_id)
+    .fetch_optional(db)
+    .await?;
+
+    activated.ok_or_else(|| ApiError::BadRequest("Role not found".to_string()))
+}
+
+/// `GET /accounts/{accountId}/roles/permissions` — Canvas
+/// `manageable_permissions`: the permission catalog for the account, filtered
+/// by `search_term` when supplied.
+pub async fn manageable_permissions(
+    db: &PgPool,
+    user_id: i64,
+    account_id: i64,
+    search_term: Option<&str>,
+) -> Result<Vec<ManageablePermissionView>, ApiError> {
+    require_roles_admin(db, user_id, account_id).await?;
+
+    let mut perms: Vec<ManageablePermissionView> = PERMISSION_CATALOG
+        .iter()
+        .map(ManageablePermissionView::from)
+        .collect();
+    if let Some(search) = search_term.map(str::trim).filter(|s| !s.is_empty()) {
+        let search = search.to_lowercase();
+        perms.retain(|perm| {
+            perm.key.contains(&search)
+                || perm.label.to_lowercase().contains(&search)
+                || perm.group.is_some_and(|group| group.contains(&search))
+                || perm
+                    .group_label
+                    .is_some_and(|label| label.to_lowercase().contains(&search))
+        });
+    }
+    Ok(perms)
+}
+
+/// `GET /accounts/{accountId}/permissions/{permission}` — Canvas
+/// `check_account_permission` (spec §6.6 shape): reports whether the
+/// permission exists, which roles of the account it applies to, and the
+/// account's workflow state. Unknown permission → `404`.
+pub async fn check_account_permission(
+    db: &PgPool,
+    user_id: i64,
+    account_id: i64,
+    permission: &str,
+) -> Result<CheckAccountPermissionView, ApiError> {
+    require_roles_admin(db, user_id, account_id).await?;
+
+    if !PERMISSION_CATALOG
+        .iter()
+        .any(|entry| entry.key == permission)
+    {
+        return Err(ApiError::NotFound);
+    }
+
+    let account_workflow_state: String =
+        sqlx::query_scalar("SELECT workflow_state FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_one(db)
+            .await?;
+
+    // The roles the permission can apply to: the account's custom roles plus
+    // the built-in roles (same set the roles index lists), oldest first.
+    let applicable_roles: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM roles
+         WHERE (account_id = $1 OR account_id IS NULL)
+           AND workflow_state <> 'deleted'
+         ORDER BY id ASC",
+    )
+    .bind(account_id)
+    .fetch_all(db)
+    .await?;
+
+    Ok(CheckAccountPermissionView {
+        permission: permission.to_string(),
+        applicable_roles,
+        account_workflow_state,
+    })
+}
+
 use axum::{
-    extract::{Path, State},
-    routing::get,
+    extract::{Path, Query, State},
+    routing::{get, post},
     Json, Router,
 };
 use star_auth::AuthUser;
@@ -975,6 +1505,18 @@ pub fn router() -> Router<AppState> {
             get(show_account_role)
                 .put(update_account_role)
                 .delete(delete_account_role),
+        )
+        .route(
+            "/accounts/{accountId}/roles/{id}/activate",
+            post(activate_account_role),
+        )
+        .route(
+            "/accounts/{accountId}/roles/permissions",
+            get(list_manageable_permissions),
+        )
+        .route(
+            "/accounts/{accountId}/permissions/{permission}",
+            get(check_account_permission_route),
         )
 }
 
@@ -1078,6 +1620,49 @@ async fn delete_account_role(
     auth: AuthUser,
 ) -> Result<Json<RoleView>, ApiError> {
     role_delete(&state.db, auth.id, account_id, role_id)
+        .await
+        .map(Json)
+}
+
+async fn activate_account_role(
+    State(state): State<AppState>,
+    Path((account_id, role_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<RoleView>, ApiError> {
+    role_activate(&state.db, auth.id, account_id, role_id)
+        .await
+        .map(Json)
+}
+
+/// Query params of the manageable-permissions list.
+#[derive(Debug, Default, Deserialize)]
+struct ManageablePermissionsQuery {
+    #[serde(default)]
+    search_term: Option<String>,
+}
+
+async fn list_manageable_permissions(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    Query(params): Query<ManageablePermissionsQuery>,
+    auth: AuthUser,
+) -> Result<Json<Vec<ManageablePermissionView>>, ApiError> {
+    manageable_permissions(
+        &state.db,
+        auth.id,
+        account_id,
+        params.search_term.as_deref(),
+    )
+    .await
+    .map(Json)
+}
+
+async fn check_account_permission_route(
+    State(state): State<AppState>,
+    Path((account_id, permission)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<CheckAccountPermissionView>, ApiError> {
+    check_account_permission(&state.db, auth.id, account_id, &permission)
         .await
         .map(Json)
 }
