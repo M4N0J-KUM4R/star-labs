@@ -630,7 +630,9 @@ pub struct Mutation(mutations::AssignmentMutations);
 
 impl Mutation {
     fn new() -> Self {
-        Mutation(mutations::AssignmentMutations::default())
+        // `AssignmentMutations` is a unit struct; clippy's
+        // default_constructed_unit_structs rejects `::default()` under -D warnings.
+        Mutation(mutations::AssignmentMutations)
     }
 }
 
