@@ -236,7 +236,7 @@ impl Quiz {
         after: Option<String>,
     ) -> Result<QuizQuestionConnection, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
-        Ok(fetch_quiz_question_page(&gctx.pool, self.id, first, after.as_deref()).await?)
+        fetch_quiz_question_page(&gctx.pool, self.id, first, after.as_deref()).await
     }
 }
 
