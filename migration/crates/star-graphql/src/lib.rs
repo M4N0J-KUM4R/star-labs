@@ -43,11 +43,16 @@ use star_common::{ApiError, AppState};
 
 mod assignment;
 mod course_user_fields;
+mod discussion_topic;
 mod mutations;
+mod quiz;
+mod submission;
 mod terms_sections;
 
 use assignment::AssignmentConnection;
 use course_user_fields::{CoursePermissions, UserConnection};
+use discussion_topic::DiscussionTopicConnection;
+use quiz::QuizConnection;
 use terms_sections::{CourseSection, EnrollmentTerm};
 
 // ---------------------------------------------------------------------------
@@ -306,6 +311,48 @@ impl Course {
         let gctx = ctx.data::<GraphQLContext>()?;
         Ok(Some(
             assignment::fetch_assignment_page(&gctx.pool, self.id, first, after.as_deref()).await?,
+        ))
+    }
+
+    /// Paginated quizzes in this course (LIMIT first+1, ORDER BY id).
+    /// Everyone who can resolve the course sees its quizzes — parity with
+    /// the star-quizzes REST list handler; unpublished quizzes are included
+    /// because course visibility already gates access (documented in the
+    /// quiz module doc comment).
+    async fn quizzes_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<QuizConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            quiz::fetch_quiz_page(&gctx.pool, self.id, first, after.as_deref()).await?,
+        ))
+    }
+
+    /// Paginated, non-deleted discussion topics in this course (LIMIT first+1,
+    /// ORDER BY id — Canvas orders regular discussions by `id: asc`).
+    /// Everyone who can resolve the course sees the same set: parity with the
+    /// star-discussions REST list handler and Canvas's `DiscussionTopic.active`
+    /// scope (`workflow_state <> 'deleted'`). Canvas's per-viewer
+    /// section/availability scoping is a documented deviation
+    /// (`specs/gql/submissions-discussions.md`).
+    async fn discussions_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<DiscussionTopicConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            discussion_topic::fetch_discussion_topic_page(
+                &gctx.pool,
+                self.id,
+                first,
+                after.as_deref(),
+            )
+            .await?,
         ))
     }
 }
