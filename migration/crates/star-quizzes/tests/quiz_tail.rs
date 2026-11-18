@@ -32,14 +32,24 @@ use star_common::AppState;
 // Harness (mirrors quiz_submissions_reports.rs)
 // ---------------------------------------------------------------------------
 
+/// Unique per `setup()` call and per CI run.
+///
+/// The usual `timestamp_millis() + counter` form collided under this suite's
+/// parallel tokio test threads: the counter is taken before the clock is read,
+/// so thread A (counter 5, clock `T + 3ms`) and thread B (counter 8, clock `T`)
+/// produced the same prefix and the second `seed_user` tripped the unique
+/// `users.email` constraint. The counter is now a fixed-width trailing
+/// segment, so no two prefixes are equal and none is a prefix of another —
+/// which also keeps every cleanup LIKE pattern scoped to its own rows.
 fn run_prefix() -> String {
     use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
     format!(
-        "quiz-tail-{}-{}",
+        "quiz-tail-{}-{}-{:03}",
         std::process::id(),
-        chrono::Utc::now().timestamp_millis() + n as i64
+        chrono::Utc::now().timestamp_millis(),
+        n
     )
 }
 
@@ -173,8 +183,13 @@ async fn seed_fixture(
     course_name: &str,
     quiz_payload: Value,
 ) -> (i64, i64, i64, i64) {
-    let teacher = seed_user(pool, prefix, "Teacher", "teacher").await;
-    let student = seed_user(pool, prefix, "Student", "student").await;
+    // Each fixture gets its own user scope: a test seeds two courses (a
+    // foreign-quiz / unlimited-quiz control) and `users.email` is unique, so
+    // reusing the run prefix verbatim made the second "Teacher" a 23505.
+    // Course codes stay under `prefix`, so one cleanup pass still covers both.
+    let user_scope = format!("{prefix}-{course_name}");
+    let teacher = seed_user(pool, &user_scope, "Teacher", "teacher").await;
+    let student = seed_user(pool, &user_scope, "Student", "student").await;
     let course = seed_course(pool, prefix, course_name).await;
     seed_enrollment(pool, teacher, course, "teacher").await;
     seed_enrollment(pool, student, course, "student").await;
@@ -637,7 +652,7 @@ async fn seed_group_with_questions(
 
 async fn question_order(server: &TestServer, teacher: i64, course: i64, quiz: i64) -> Vec<i64> {
     let body = get_ok(
-        &server,
+        server,
         &auth(teacher, "teacher"),
         &format!("/courses/{course}/quizzes/{quiz}/questions"),
     )
