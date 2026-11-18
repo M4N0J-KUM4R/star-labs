@@ -595,7 +595,8 @@ async fn bulk_updates_dates_and_answers_progress() {
             .await
             .expect("fetch a1");
     assert!(
-        due.is_some_and(|value| value.starts_with("2027-06-01")),
+        due.as_deref()
+            .is_some_and(|value| value.starts_with("2027-06-01")),
         "due: {due:?}"
     );
 
@@ -607,11 +608,13 @@ async fn bulk_updates_dates_and_answers_progress() {
     .await
     .expect("fetch override");
     assert!(
-        due.is_some_and(|v| v.starts_with("2027-07-01")),
+        due.as_deref().is_some_and(|v| v.starts_with("2027-07-01")),
         "due: {due:?}"
     );
     assert!(
-        unlock.is_some_and(|v| v.starts_with("2027-06-15")),
+        unlock
+            .as_deref()
+            .is_some_and(|v| v.starts_with("2027-06-15")),
         "unlock: {unlock:?}"
     );
     assert!(
