@@ -4448,8 +4448,715 @@ async fn section_assignment_override_alias(
 }
 
 // ---------------------------------------------------------------------------
-// Router
+// Assignments API tail (Canvas AssignmentsApiController#user_index /
+// student_group_members / duplicate / bulk_update / retry_alignment_clone /
+// accessibility_scan / accessibility_queue_scan; issue #55)
 // ---------------------------------------------------------------------------
+
+/// GET /users/{userId}/courses/{courseId}/assignments — Canvas `user_index`:
+/// the course's assignments as visible to the target user. Canvas
+/// `require_user_visibility` allows the caller when they are the target
+/// ("self" or matching id), a teacher/admin of the course viewing one of its
+/// students, or a global admin. (Observer pairings have no Star equivalent —
+/// the enrollments schema carries no `associated_user_id`.) The target user
+/// must then be able to read the course (Canvas
+/// `authorized_action(@context, @user, :read)`).
+async fn user_index_assignments(
+    State(state): State<AppState>,
+    Path((user_id, course_id)): Path<(String, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Assignment>>, ApiError> {
+    let course: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if course.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // Resolve the target user ("self" or an id).
+    let target_id = if user_id == "self" {
+        auth.id
+    } else {
+        user_id.parse::<i64>().map_err(|_| ApiError::NotFound)?
+    };
+    let target: Option<(String,)> = sqlx::query_as("SELECT role FROM users WHERE id = $1")
+        .bind(target_id)
+        .fetch_optional(&state.db)
+        .await?;
+    let Some((target_role,)) = target else {
+        return Err(ApiError::NotFound);
+    };
+
+    // Caller visibility: self, teacher of the course (viewing a student), or
+    // global admin.
+    let caller_is_teacher = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+    if target_id != auth.id && !is_admin(&auth) {
+        if !caller_is_teacher {
+            return Err(ApiError::Forbidden);
+        }
+        let student_row: Option<(i32,)> = sqlx::query_as(
+            r#"
+            SELECT 1 FROM enrollments
+            WHERE course_id = $1 AND user_id = $2
+              AND role = 'student' AND workflow_state <> 'deleted'
+            LIMIT 1
+            "#,
+        )
+        .bind(course_id)
+        .bind(target_id)
+        .fetch_optional(&state.db)
+        .await?;
+        if student_row.is_none() {
+            return Err(ApiError::Forbidden);
+        }
+    }
+
+    // The target user must be able to read the course (Canvas checks the
+    // target's rights, not the caller's).
+    let target_can_read = target_role == "admin"
+        || sqlx::query_as::<_, (i32,)>(
+            r#"
+            SELECT 1 FROM enrollments
+            WHERE course_id = $1 AND user_id = $2 AND workflow_state <> 'deleted'
+            LIMIT 1
+            "#,
+        )
+        .bind(course_id)
+        .bind(target_id)
+        .fetch_optional(&state.db)
+        .await?
+        .is_some();
+    if !target_can_read {
+        return Err(ApiError::Forbidden);
+    }
+
+    let rows: Vec<Assignment> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, title, description, points_possible::float8, due_at, created_at, updated_at
+        FROM assignments
+        WHERE course_id = $1
+        ORDER BY created_at ASC
+        "#,
+    )
+    .bind(course_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(rows))
+}
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/users/{userId}/group_members
+/// — Canvas `student_group_members`: `{id, name}` BasicUser entries for the
+/// group the student belongs to. Star assignments carry no
+/// `group_category_id`, so Canvas' `group_students` always falls to the
+/// `[student]` branch (rspec
+/// "returns an array with the student only if not a group assignment").
+async fn student_group_members(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas `@context.students.find(params[:user_id])`: the user must be an
+    // active student of the course, else 404.
+    let student: Option<(String,)> = sqlx::query_as(
+        r#"
+        SELECT u.name FROM enrollments e
+        JOIN users u ON u.id = e.user_id
+        WHERE e.course_id = $1 AND e.user_id = $2
+          AND e.role = 'student' AND e.workflow_state <> 'deleted'
+        LIMIT 1
+        "#,
+    )
+    .bind(course_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((name,)) = student else {
+        return Err(ApiError::NotFound);
+    };
+
+    // Canvas serializes BasicUser.id with `user.id.to_s`.
+    Ok(Json(vec![serde_json::json!({
+        "id": user_id.to_string(),
+        "name": name,
+    })]))
+}
+
+/// Canvas `get_copy_title(entity, "Copy", title)` against the course's
+/// conflicting titles: "Essay" -> "Essay Copy", "Essay Copy" -> "Essay Copy 2".
+fn duplicate_copy_title(title: &str, course_conflicts: &[String]) -> String {
+    let normalize = |value: &str| value.replace(' ', "-").to_lowercase();
+    let normalized = normalize(title);
+    // Ruby /copy-[0-9]*$/ — the digit run may be empty.
+    let is_multiple = normalized
+        .rsplit_once("copy-")
+        .is_some_and(|(_, digits)| digits.chars().all(|c| c.is_ascii_digit()));
+    let ends_with_copy = normalized.ends_with("copy");
+
+    let (potential, mut number) = if ends_with_copy || is_multiple {
+        let trailing = normalized
+            .chars()
+            .rev()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<Vec<_>>();
+        let number = if trailing.is_empty() {
+            2
+        } else {
+            trailing
+                .iter()
+                .rev()
+                .collect::<String>()
+                .parse::<u32>()
+                .unwrap_or(2)
+                + 1
+        };
+        (title.to_string(), number)
+    } else {
+        (format!("{title} Copy"), 2)
+    };
+
+    let title_base = if is_multiple {
+        // Strip the trailing digits for the base ("Essay Copy 2" -> "Essay Copy ").
+        let trimmed = title.trim_end_matches(|c: char| c.is_ascii_digit());
+        format!("{trimmed} ")
+    } else {
+        format!("{potential} ")
+    };
+
+    let conflicts: HashSet<String> = course_conflicts.iter().map(|c| normalize(c)).collect();
+    if !conflicts.contains(&normalize(&potential)) {
+        return potential;
+    }
+    loop {
+        let attempt = format!("{title_base}{number}");
+        number += 1;
+        if !conflicts.contains(&normalize(&attempt)) {
+            return attempt;
+        }
+    }
+}
+
+/// POST /courses/{courseId}/assignments/{assignmentId}/duplicate — Canvas
+/// `duplicate`: copies the assignment inside its course (or, with
+/// `target_course_id`, into another course the caller may add assignments
+/// to), answering the new assignment plus `new_positions` for its group.
+/// Star assignments have no `position` column, so positions are derived from
+/// id order within the group (Canvas moves the copy below the target
+/// assignment; the response keeps the documented shape).
+async fn duplicate_assignment(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let course: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if course.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // Canvas looks the source up with find_by and answers 400 when missing.
+    let source: Option<Assignment> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, title, description, points_possible::float8, due_at, created_at, updated_at
+        FROM assignments WHERE id = $1 AND course_id = $2
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some(source) = source else {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": "assignment does not exist" })),
+        ));
+    };
+
+    // Canvas authorized_action(source, :create).
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Optional cross-course duplicate target.
+    let mut target_course_id = course_id;
+    let mut target_assignment_id = Some(source.id);
+    if let Some(query) = raw_query.as_deref() {
+        for pair in query.split('&') {
+            let Some((raw_key, raw_value)) = pair.split_once('=') else {
+                continue;
+            };
+            let key = decode_query_component(raw_key);
+            let value = decode_query_component(raw_value);
+            if key == "target_course_id" {
+                if let Ok(parsed) = value.parse::<i64>() {
+                    target_course_id = parsed;
+                }
+            } else if key == "target_assignment_id" {
+                target_assignment_id = value.parse::<i64>().ok();
+            }
+        }
+    }
+    if target_course_id != course_id {
+        let target_course: Option<(i32,)> =
+            sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
+                .bind(target_course_id)
+                .fetch_optional(&state.db)
+                .await?;
+        if target_course.is_none() {
+            return Err(ApiError::NotFound);
+        }
+        // Canvas authorized_action(target_course, :manage_assignments_add).
+        if !check_teacher_or_admin(&state.db, auth.id, target_course_id, &auth).await? {
+            return Err(ApiError::Forbidden);
+        }
+    }
+
+    // The target assignment positions the copy and (on retry) names it.
+    let target_assignment: Option<Assignment> = match target_assignment_id {
+        Some(id) if id != source.id => {
+            sqlx::query_as(
+                r#"
+                SELECT id, course_id, title, description, points_possible::float8, due_at, created_at, updated_at
+                FROM assignments WHERE id = $1 AND course_id = $2
+                "#,
+            )
+            .bind(id)
+            .bind(target_course_id)
+            .fetch_optional(&state.db)
+            .await?
+        }
+        _ => Some(source.clone()),
+    };
+    let Some(target_assignment) = target_assignment else {
+        return Err(ApiError::NotFound);
+    };
+
+    // Title: on a failure retry Canvas reuses the failed copy's title.
+    let copy_title = if target_assignment.id != source.id {
+        target_assignment.title.clone()
+    } else {
+        let conflicts: Vec<String> =
+            sqlx::query_scalar("SELECT title FROM assignments WHERE course_id = $1")
+                .bind(course_id)
+                .fetch_all(&state.db)
+                .await?;
+        duplicate_copy_title(&source.title, &conflicts)
+    };
+
+    // Canvas keeps the source's assignment group on a plain duplicate and
+    // switches to the target assignment's group on a cross-course retry;
+    // `clone` also copies the anonymous grading and peer review flags while
+    // zeroing the peer review count (allocation feature off) and clearing
+    // unique identifiers (star's anonymous_id).
+    let (source_group, anonymous_grading, peer_reviews): (Option<i64>, bool, bool) = sqlx::query_as(
+        "SELECT assignment_group_id, anonymous_grading, peer_reviews FROM assignments WHERE id = $1",
+    )
+    .bind(source.id)
+    .fetch_one(&state.db)
+    .await?;
+    let group_id = if target_course_id != course_id {
+        sqlx::query_scalar::<_, Option<i64>>(
+            "SELECT assignment_group_id FROM assignments WHERE id = $1",
+        )
+        .bind(target_assignment.id)
+        .fetch_one(&state.db)
+        .await?
+    } else {
+        source_group
+    };
+
+    let mut tx = state.db.begin().await?;
+
+    let copy: Assignment = sqlx::query_as(
+        r#"
+        INSERT INTO assignments
+            (course_id, title, description, points_possible, due_at,
+             assignment_group_id, anonymous_grading, peer_reviews,
+             peer_review_count, peer_reviews_assign_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 0, NULL)
+        RETURNING id, course_id, title, description, points_possible::float8, due_at, created_at, updated_at
+        "#,
+    )
+    .bind(target_course_id)
+    .bind(&copy_title)
+    .bind(&source.description)
+    .bind(source.points_possible)
+    .bind(source.due_at)
+    .bind(group_id)
+    .bind(anonymous_grading)
+    .bind(peer_reviews)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // new_positions: every assignment of the copy's group keyed by id.
+    // Star has no stored positions, so they are derived from id order
+    // (Canvas moves the copy below the target assignment; the response
+    // keeps the documented shape).
+    let mut new_positions: HashMap<String, i64> = HashMap::new();
+    if let Some(group_id) = group_id {
+        let positions: Vec<(i64, i64)> = sqlx::query_as(
+            r#"
+            SELECT id, ROW_NUMBER() OVER (ORDER BY id)::bigint FROM assignments
+            WHERE assignment_group_id = $1
+            "#,
+        )
+        .bind(group_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        for (id, position) in positions {
+            new_positions.insert(id.to_string(), position);
+        }
+    }
+    tx.commit().await?;
+
+    let mut value = serde_json::to_value(&copy).unwrap_or_default();
+    if let Some(object) = value.as_object_mut() {
+        object.insert(
+            "new_positions".to_string(),
+            serde_json::to_value(&new_positions).unwrap_or_default(),
+        );
+    }
+    Ok((StatusCode::OK, Json(value)))
+}
+
+/// PUT /courses/{courseId}/assignments/bulk_update — Canvas `bulk_update`:
+/// date updates for a list of assignments, applied synchronously (Star has
+/// no job worker) and answered with the Canvas Progress shape — the same
+/// convention as the landed `update_grades` route. `all_dates` entries
+/// update the base assignment (`due_at`; Star assignments carry no
+/// unlock_at/lock_at columns) or the named override (full date triple).
+async fn bulk_update_assignments(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let course: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if course.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // Canvas manage_assignments_edit on the course.
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let payload: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|_| ApiError::BadRequest("expected array".into()))?;
+    let entries = payload
+        .as_array()
+        .ok_or_else(|| ApiError::BadRequest("expected array".into()))?;
+    if entries.is_empty() || !entries.iter().all(|entry| entry.get("id").is_some()) {
+        return Err(ApiError::BadRequest("missing assignment id".into()));
+    }
+
+    let requested: Vec<i64> = entries
+        .iter()
+        .map(|entry| entry.get("id").map(ruby_to_i).unwrap_or(0))
+        .collect();
+
+    let found: Vec<(i64,)> =
+        sqlx::query_as("SELECT id FROM assignments WHERE course_id = $1 AND id = ANY($2)")
+            .bind(course_id)
+            .bind(&requested)
+            .fetch_all(&state.db)
+            .await?;
+    // Canvas raises RecordNotFound when any requested id (or a duplicate
+    // entry) does not resolve to an active assignment of the course.
+    if found.len() != requested.len() {
+        return Err(ApiError::NotFound);
+    }
+
+    let mut tx = state.db.begin().await?;
+    let mut updated_count = 0i64;
+    for entry in entries {
+        let id = entry.get("id").map(ruby_to_i).unwrap_or(0);
+        let Some(dates) = entry.get("all_dates").and_then(serde_json::Value::as_array) else {
+            continue;
+        };
+        let mut changed = false;
+        for date in dates {
+            if date.get("base").and_then(serde_json::Value::as_bool) == Some(true) {
+                // Base date: update the assignment's due_at (Star assignments
+                // carry no unlock_at/lock_at columns).
+                let due_at = match date.get("due_at") {
+                    Some(serde_json::Value::Null) => None,
+                    Some(value) => value.as_str().and_then(parse_canvas_datetime),
+                    None => continue,
+                };
+                changed = true;
+                sqlx::query("UPDATE assignments SET due_at = $2, updated_at = now() WHERE id = $1")
+                    .bind(id)
+                    .bind(due_at)
+                    .execute(&mut *tx)
+                    .await?;
+            } else {
+                // Override date: update the named override's date triple;
+                // keys absent from the entry clear the override value
+                // (Canvas sets a value only when the key is present).
+                let Some(override_id) = date.get("id").map(ruby_to_i) else {
+                    continue;
+                };
+                let override_row: Option<(i64,)> = sqlx::query_as(
+                    "SELECT id FROM assignment_overrides \
+                     WHERE id = $1 AND assignment_id = $2 AND workflow_state <> 'deleted'",
+                )
+                .bind(override_id)
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+                if override_row.is_none() {
+                    // Canvas fails the queued progress without applying any
+                    // change; the open transaction is dropped (rolled back).
+                    let message =
+                        format!("invalid assignment override id {override_id} for assignment {id}");
+                    return Ok(Json(serde_json::json!({
+                        "id": 0,
+                        "context_id": course_id,
+                        "context_type": "Course",
+                        "user_id": auth.id,
+                        "tag": "assignment_bulk_update",
+                        "completion": 0,
+                        "workflow_state": "failed",
+                        "created_at": Utc::now(),
+                        "updated_at": Utc::now(),
+                        "url": "/api/v1/progress/0",
+                        "results": { "message": message },
+                    })));
+                }
+                let read_date = |field: &str| -> Option<DateTime<Utc>> {
+                    match date.get(field) {
+                        Some(serde_json::Value::Null) => None,
+                        Some(value) => value.as_str().and_then(parse_canvas_datetime),
+                        None => None,
+                    }
+                };
+                changed = true;
+                sqlx::query(
+                    r#"
+                    UPDATE assignment_overrides
+                    SET due_at = $2, unlock_at = $3, lock_at = $4, updated_at = now()
+                    WHERE id = $1
+                    "#,
+                )
+                .bind(override_id)
+                .bind(read_date("due_at"))
+                .bind(read_date("unlock_at"))
+                .bind(read_date("lock_at"))
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
+        if changed {
+            updated_count += 1;
+        }
+    }
+    tx.commit().await?;
+
+    Ok(Json(serde_json::json!({
+        "id": 0,
+        "context_id": course_id,
+        "context_type": "Course",
+        "user_id": auth.id,
+        "tag": "assignment_bulk_update",
+        "completion": 100,
+        "workflow_state": "completed",
+        "created_at": Utc::now(),
+        "updated_at": Utc::now(),
+        "url": "/api/v1/progress/0",
+        "results": { "updated_count": updated_count },
+    })))
+}
+
+/// POST /courses/{courseId}/assignments/{assignmentId}/retry_alignment_clone
+/// — Canvas `retry_alignment_clone` only proceeds when the target assignment
+/// sits in the `failed_to_clone_outcome_alignment` duplication state. Star
+/// assignments have no duplication workflow states (and no Outcomes service
+/// to re-clone alignments), so the state guard rejects every representable
+/// request with Canvas' exact error body.
+async fn retry_alignment_clone(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    RawQuery(raw_query): RawQuery,
+    _auth: AuthUser,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let course: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if course.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // Resolve the target assignment (Canvas: the assignment itself unless a
+    // target_assignment_id is given).
+    let mut target_id = assignment_id;
+    if let Some(query) = raw_query.as_deref() {
+        for pair in query.split('&') {
+            let Some((raw_key, raw_value)) = pair.split_once('=') else {
+                continue;
+            };
+            if decode_query_component(raw_key) == "target_assignment_id" {
+                if let Ok(parsed) = decode_query_component(raw_value).parse::<i64>() {
+                    target_id = parsed;
+                }
+            }
+        }
+    }
+    let target: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM assignments WHERE id = $1 AND course_id = $2")
+            .bind(target_id)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if target.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // No duplication workflow states exist in the Star schema, so the
+    // state guard can never pass.
+    Ok((
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "error": "invalid status" })),
+    ))
+}
+
+/// Shared accessibility-scan implementation (Canvas
+/// `accessibility_scan` / `accessibility_queue_scan`): course-content
+/// management rights, then the account's a11y checker flags, then the
+/// assignment — the same gate order as Canvas. Star has no a11y rule
+/// engine, so the completed scan reports zero issues (shape parity with
+/// `accessibility_resource_scan_json`; the scan id mirrors Canvas'
+/// one-scan-per-resource record).
+async fn assignment_accessibility_scan(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let course: Option<(i64, Option<i64>)> = sqlx::query_as(
+        "SELECT id, account_id FROM courses WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((_course, account_id)) = course else {
+        return Err(ApiError::NotFound);
+    };
+
+    // Granular manage-course-content rights decompose the teacher's
+    // manage_content in Canvas; teachers/admins hold them in star-lms.
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Course#a11y_checker_enabled?: the GA1 account flag, or the a11y_checker
+    // account flag plus the course's EAP flag.
+    let checker_enabled = match account_id {
+        Some(account) => {
+            let flags: Vec<(String, String)> = sqlx::query_as(
+                r#"
+                SELECT feature, state FROM feature_flags
+                WHERE context_type = 'Account' AND context_id = $1
+                  AND feature IN ('a11y_checker', 'a11y_checker_ga1')
+                "#,
+            )
+            .bind(account)
+            .fetch_all(&state.db)
+            .await?;
+            let account_flag = |name: &str| {
+                flags
+                    .iter()
+                    .any(|(feature, state)| feature == name && state == "enabled")
+            };
+            let ga1 = account_flag("a11y_checker_ga1");
+            let base = account_flag("a11y_checker");
+            let eap = if base {
+                sqlx::query_as::<_, (String, String)>(
+                    r#"
+                    SELECT feature, state FROM feature_flags
+                    WHERE context_type = 'Course' AND context_id = $1
+                      AND feature = 'a11y_checker_eap'
+                    "#,
+                )
+                .bind(course_id)
+                .fetch_optional(&state.db)
+                .await?
+                .is_some_and(|(_, state)| state == "enabled")
+            } else {
+                false
+            };
+            ga1 || (base && eap)
+        }
+        None => false,
+    };
+    if !checker_enabled {
+        return Err(ApiError::Forbidden);
+    }
+
+    let assignment: Option<(i64, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT id, title, updated_at FROM assignments WHERE id = $1 AND course_id = $2",
+    )
+    .bind(assignment_id)
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((id, title, updated_at)) = assignment else {
+        return Err(ApiError::NotFound);
+    };
+
+    Ok(Json(serde_json::json!({
+        "id": id,
+        "resource_id": id,
+        "resource_type": "Assignment",
+        "resource_name": title,
+        "resource_workflow_state": "published",
+        "resource_updated_at": updated_at.to_rfc3339(),
+        "resource_url": format!("/courses/{course_id}/assignments/{id}"),
+        "resource_scan_path": serde_json::Value::Null,
+        "workflow_state": "completed",
+        "error_message": "",
+        "issue_count": 0,
+        "issues": [],
+    })))
+}
+
+/// POST /courses/{courseId}/assignments/{assignmentId}/accessibility/scan
+/// — Canvas `accessibility_scan` (synchronous scan).
+async fn assignment_accessibility_scan_sync(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    assignment_accessibility_scan(State(state), Path((course_id, assignment_id)), auth).await
+}
+
+/// POST /courses/{courseId}/assignments/{assignmentId}/accessibility/queue_scan
+/// — Canvas `accessibility_queue_scan` (queued scan; Star applies it
+/// synchronously, like every other Progress-returning route).
+async fn assignment_accessibility_queue_scan(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    assignment_accessibility_scan(State(state), Path((course_id, assignment_id)), auth).await
+}
 
 /// Build the assignments router.
 pub fn router() -> Router<AppState> {
@@ -4629,6 +5336,35 @@ pub fn router() -> Router<AppState> {
         .route(
             "/sections/{sectionId}/assignments/{assignmentId}/override",
             get(section_assignment_override_alias),
+        )
+        // Assignments API tail (Canvas AssignmentsApiController, issue #55)
+        .route(
+            "/users/{userId}/courses/{courseId}/assignments",
+            get(user_index_assignments),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/users/{userId}/group_members",
+            get(student_group_members),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/duplicate",
+            post(duplicate_assignment),
+        )
+        .route(
+            "/courses/{courseId}/assignments/bulk_update",
+            put(bulk_update_assignments),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/retry_alignment_clone",
+            post(retry_alignment_clone),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/accessibility/scan",
+            post(assignment_accessibility_scan_sync),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/accessibility/queue_scan",
+            post(assignment_accessibility_queue_scan),
         )
 }
 
