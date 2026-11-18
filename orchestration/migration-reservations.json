@@ -1,7 +1,7 @@
 {
   "comment": "Coordinator-owned ledger of migration number reservations (protocol: issue #20). Agents never self-assign a number; the coordinator reserves one at dispatch time. Additive migrations only, no renumbering, no DROP/TRUNCATE.",
   "max_merged": "0107",
-  "next_available": "0121",
+  "next_available": "0122",
   "free": [
     "0111",
     "0115"
@@ -17,7 +17,8 @@
     "0117": "issue #67 feature flags tail \u2014 lane A05 (branch p5/rest-admin-67)",
     "0118": "issue #53 grade change audit tail \u2014 lane A06 (branch p5/rest-assessments-53)",
     "0119": "issue #52 peer reviews tail \u2014 lane A07 (branch p5/rest-assessments-52)",
-    "0120": "issue #88 course nicknames + observee pairing \u2014 lane A08 (branch p5/rest-curriculum-88)"
+    "0120": "issue #88 course nicknames + observee pairing \u2014 lane A08 (branch p5/rest-curriculum-88)",
+    "0121": "issue #51 rubrics_api remainder \u2014 account-context rubrics + rubric imports (branch p5/rest-assessments-51)"
   },
   "wave3": {
     "dispatched": "2026-11-18",
