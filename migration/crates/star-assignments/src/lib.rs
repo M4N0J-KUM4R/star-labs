@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -3399,6 +3399,1055 @@ async fn course_delete_assignment_override(
 }
 
 // ---------------------------------------------------------------------------
+// Assignment overrides — batch + alias routes (Canvas
+// AssignmentOverridesController#batch_retrieve / batch_create / batch_update /
+// group_alias / section_alias; issue #55)
+// ---------------------------------------------------------------------------
+
+/// Canvas `require_context` + `api_find(Course.active, ...)`: a missing or
+/// soft-deleted course is a 404 before any permission check runs.
+async fn ensure_course_not_deleted(pool: &PgPool, course_id: i64) -> Result<(), ApiError> {
+    let row: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(course_id)
+            .fetch_optional(pool)
+            .await?;
+
+    row.ok_or(ApiError::NotFound)?;
+    Ok(())
+}
+
+/// Ruby `to_i` semantics for JSON parameter values: numbers pass through,
+/// strings contribute their leading digits, anything else is 0.
+fn ruby_to_i(value: &serde_json::Value) -> i64 {
+    match value {
+        serde_json::Value::Number(n) => n
+            .as_i64()
+            .unwrap_or_else(|| n.as_f64().map(|f| f as i64).unwrap_or(0)),
+        serde_json::Value::String(s) => {
+            let mut out = String::new();
+            for (i, c) in s.trim().chars().enumerate() {
+                if i == 0 && (c == '-' || c == '+') {
+                    out.push(c);
+                } else if c.is_ascii_digit() {
+                    out.push(c);
+                } else {
+                    break;
+                }
+            }
+            out.parse::<i64>().unwrap_or(0)
+        }
+        _ => 0,
+    }
+}
+
+/// One `assignment_overrides[]` entry from a batch request (Canvas shape).
+///
+/// Dates keep the Canvas absent / null / value distinction: `None` = key not
+/// sent (clears the override on update), `Some(None)` = explicit null or
+/// blank string, `Some(Some(dt))` = parsed timestamp.
+#[derive(Debug, Default, Clone)]
+struct BatchOverrideEntry {
+    assignment_id: Option<i64>,
+    id: Option<i64>,
+    title: Option<String>,
+    student_ids: Option<Vec<i64>>,
+    group_id: Option<i64>,
+    course_section_id: Option<i64>,
+    due_at: Option<Option<DateTime<Utc>>>,
+    unlock_at: Option<Option<DateTime<Utc>>>,
+    lock_at: Option<Option<DateTime<Utc>>>,
+}
+
+/// Parse a Canvas timestamp like `Time.zone.parse`: RFC3339 first, then
+/// timezone-less ISO strings interpreted as UTC.
+fn parse_canvas_datetime(raw: &str) -> Option<DateTime<Utc>> {
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(raw) {
+        return Some(parsed.with_timezone(&Utc));
+    }
+    for format in ["%Y-%m-%dT%H:%M:%S%.f", "%Y-%m-%d %H:%M:%S%.f"] {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(raw, format) {
+            return Some(naive.and_utc());
+        }
+    }
+    // Date-only values resolve to midnight UTC (Canvas uses the course zone;
+    // star-lms is UTC-only).
+    chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+        .ok()
+        .map(|date| date.and_hms_opt(0, 0, 0).unwrap().and_utc())
+}
+
+/// Parse one date field of a batch entry. Returns the Canvas error string on
+/// unparseable values (`invalid due_at "foo"` — Ruby `inspect` quoting).
+fn parse_batch_date(
+    value: &serde_json::Value,
+    field: &str,
+) -> Result<Option<Option<DateTime<Utc>>>, String> {
+    match value {
+        serde_json::Value::Null => Ok(Some(None)),
+        serde_json::Value::String(s) => {
+            if s.trim().is_empty() {
+                Ok(Some(None))
+            } else {
+                parse_canvas_datetime(s)
+                    .map(|dt| Some(Some(dt)))
+                    .ok_or_else(|| format!("invalid {field} \"{s}\""))
+            }
+        }
+        other => Err(format!("invalid {field} {other}")),
+    }
+}
+
+/// Interpret one JSON entry into a [`BatchOverrideEntry`], mirroring Canvas
+/// `interpret_assignment_override_data`'s structure checks. Target semantics
+/// (student/group/section validation) run separately because they need the
+/// database.
+fn parse_batch_entry(value: &serde_json::Value) -> BatchOverrideEntry {
+    let mut entry = BatchOverrideEntry::default();
+    let Some(map) = value.as_object() else {
+        return entry;
+    };
+    if let Some(raw) = map.get("assignment_id") {
+        entry.assignment_id = Some(ruby_to_i(raw));
+    }
+    if let Some(raw) = map.get("id") {
+        entry.id = Some(ruby_to_i(raw));
+    }
+    if let Some(raw) = map.get("title") {
+        entry.title = raw.as_str().map(str::to_string);
+    }
+    if let Some(raw) = map.get("student_ids") {
+        // JSON null is falsy in Canvas and skips the ADHOC branch entirely.
+        if !raw.is_null() {
+            let ids = raw
+                .as_array()
+                .map(|items| items.iter().map(ruby_to_i).collect())
+                .unwrap_or_default();
+            entry.student_ids = Some(ids);
+        }
+    }
+    if let Some(raw) = map.get("group_id") {
+        if !raw.is_null() {
+            if let Some(number) = raw.as_i64() {
+                entry.group_id = Some(number);
+            } else if let Some(text) = raw.as_str() {
+                if !text.trim().is_empty() {
+                    entry.group_id = Some(ruby_to_i(raw));
+                }
+            } else {
+                entry.group_id = Some(ruby_to_i(raw));
+            }
+        }
+    }
+    if let Some(raw) = map.get("course_section_id") {
+        if !raw.is_null() {
+            if let Some(number) = raw.as_i64() {
+                entry.course_section_id = Some(number);
+            } else if let Some(text) = raw.as_str() {
+                if !text.trim().is_empty() {
+                    entry.course_section_id = Some(ruby_to_i(raw));
+                }
+            } else {
+                entry.course_section_id = Some(ruby_to_i(raw));
+            }
+        }
+    }
+    for (field, slot) in [
+        ("due_at", &mut entry.due_at),
+        ("unlock_at", &mut entry.unlock_at),
+        ("lock_at", &mut entry.lock_at),
+    ] {
+        if let Some(raw) = map.get(field) {
+            // Structure errors surface during validation; keep parsing lenient
+            // here so per-entry errors stay aligned with the request.
+            if let Ok(parsed) = parse_batch_date(raw, field) {
+                *slot = parsed;
+            }
+        }
+    }
+    entry
+}
+
+/// Outcome of Canvas `deserialize_overrides` for a JSON request.
+enum DeserializedOverrides {
+    /// Nothing usable was supplied.
+    Blank,
+    /// A truthy non-array (scalar / malformed map).
+    NotAnArray,
+    /// An ordered list of entries.
+    Entries(Vec<serde_json::Value>),
+}
+
+/// Port of Canvas `deserialize_overrides`: a bare array passes through, a map
+/// whose keys are exactly "0".."n-1" becomes an array, anything else is blank.
+fn deserialize_overrides(raw: &serde_json::Value) -> DeserializedOverrides {
+    match raw {
+        serde_json::Value::Null => DeserializedOverrides::Blank,
+        serde_json::Value::Array(items) => {
+            if items.is_empty() {
+                DeserializedOverrides::Blank
+            } else {
+                DeserializedOverrides::Entries(items.clone())
+            }
+        }
+        serde_json::Value::Object(map) => {
+            let numeric: Vec<i64> = map
+                .keys()
+                .map(|key| key.parse::<i64>().ok())
+                .collect::<Option<Vec<i64>>>()
+                .unwrap_or_default();
+            if numeric.len() == map.len() && !numeric.is_empty() && {
+                let mut sorted = numeric.clone();
+                sorted.sort_unstable();
+                sorted == (0..sorted.len() as i64).collect::<Vec<_>>()
+            } {
+                let ordered: Vec<serde_json::Value> = (0..numeric.len() as i64)
+                    .map(|index| map[&index.to_string()].clone())
+                    .collect();
+                DeserializedOverrides::Entries(ordered)
+            } else {
+                DeserializedOverrides::Blank
+            }
+        }
+        _ => DeserializedOverrides::NotAnArray,
+    }
+}
+
+/// Extract the `assignment_overrides` payload from a JSON request body:
+/// either a bare array or `{"assignment_overrides": [...]}`.
+fn body_override_payload(payload: &serde_json::Value) -> serde_json::Value {
+    match payload {
+        serde_json::Value::Array(_) => payload.clone(),
+        serde_json::Value::Object(map) => map
+            .get("assignment_overrides")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null),
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// Canvas error body for the batch endpoints: `{"errors": [...]}` with 400.
+fn batch_error_body(errors: serde_json::Value) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({ "errors": errors })),
+    )
+}
+
+/// The target set a batch entry resolves to, once validated against the
+/// course (Canvas `interpret_assignment_override_data`).
+#[derive(Debug, Clone)]
+enum ResolvedBatchTarget {
+    Adhoc(Vec<i64>),
+    Group(i64),
+    Section(i64),
+}
+
+/// Validate an ad-hoc `student_ids` list against active student enrollments
+/// (Canvas `api_find_all(learning_object.context.all_students, ...)`).
+async fn validate_batch_student_ids(
+    pool: &PgPool,
+    course_id: i64,
+    student_ids: &[i64],
+) -> Result<Result<Vec<i64>, String>, ApiError> {
+    let enrolled: Vec<i64> = sqlx::query_scalar(
+        r#"
+        SELECT DISTINCT user_id FROM enrollments
+        WHERE course_id = $1 AND user_id = ANY($2)
+          AND role = 'student' AND workflow_state <> 'deleted'
+        ORDER BY user_id
+        "#,
+    )
+    .bind(course_id)
+    .bind(student_ids)
+    .fetch_all(pool)
+    .await?;
+
+    // Unmatched ids report as `unknown student ids: [...]` (Ruby inspect
+    // quoting); duplicate ids in the request are fine (Canvas stores the
+    // distinct student set).
+    let bad: Vec<String> = student_ids
+        .iter()
+        .filter(|id| !enrolled.contains(id))
+        .map(|id| id.to_string())
+        .collect();
+    if !bad.is_empty() {
+        let inspected = bad
+            .iter()
+            .map(|id| format!("\"{id}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Ok(Err(format!("unknown student ids: [{inspected}]")));
+    }
+
+    Ok(Ok(enrolled))
+}
+
+/// Resolve the create-time target of a batch entry: `student_ids` >
+/// `group_id` > `course_section_id`, with Canvas' error strings. Dates are
+/// parsed separately and only their parse errors are reported here.
+async fn resolve_batch_target(
+    pool: &PgPool,
+    course_id: i64,
+    entry: &BatchOverrideEntry,
+) -> Result<Result<Option<ResolvedBatchTarget>, String>, ApiError> {
+    if let Some(ids) = &entry.student_ids {
+        if ids.is_empty() {
+            return Ok(Err("invalid student_ids []".to_string()));
+        }
+        return match validate_batch_student_ids(pool, course_id, ids).await? {
+            Ok(valid) => Ok(Ok(Some(ResolvedBatchTarget::Adhoc(valid)))),
+            Err(message) => Ok(Err(message)),
+        };
+    }
+
+    if let Some(group_id) = entry.group_id {
+        let row: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM groups WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'",
+        )
+        .bind(group_id)
+        .bind(course_id)
+        .fetch_optional(pool)
+        .await?;
+        if row.is_none() {
+            return Ok(Err(format!("unknown group id {group_id}")));
+        }
+        return Ok(Ok(Some(ResolvedBatchTarget::Group(group_id))));
+    }
+
+    if let Some(section_id) = entry.course_section_id {
+        let row: Option<()> = sqlx::query_scalar(
+            "SELECT 1 FROM course_sections WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'",
+        )
+        .bind(section_id)
+        .bind(course_id)
+        .fetch_optional(pool)
+        .await?;
+        if row.is_none() {
+            return Ok(Err(format!("unknown section id {section_id}")));
+        }
+        return Ok(Ok(Some(ResolvedBatchTarget::Section(section_id))));
+    }
+
+    Ok(Ok(None))
+}
+
+/// Canvas `title_from_students`: "1 student" / "N students".
+fn title_from_student_count(count: usize) -> String {
+    if count == 1 {
+        "1 student".to_string()
+    } else {
+        format!("{count} students")
+    }
+}
+
+/// Overrides of an assignment visible to the caller (Canvas
+/// `AssignmentOverrideApplicator.overrides_for_assignment_and_user`):
+/// teachers/admins see every active override; students only see overrides
+/// that target them (ad-hoc list, their groups, their sections).
+async fn visible_override_ids(
+    pool: &PgPool,
+    course_id: i64,
+    assignment_id: i64,
+    auth: &AuthUser,
+) -> Result<HashSet<i64>, ApiError> {
+    if check_teacher_or_admin(pool, auth.id, course_id, auth).await? {
+        let ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT id FROM assignment_overrides \
+             WHERE assignment_id = $1 AND workflow_state <> 'deleted'",
+        )
+        .bind(assignment_id)
+        .fetch_all(pool)
+        .await?;
+        return Ok(ids.into_iter().collect());
+    }
+
+    let ids: Vec<i64> = sqlx::query_scalar(
+        r#"
+        SELECT o.id FROM assignment_overrides o
+        WHERE o.assignment_id = $1 AND o.workflow_state <> 'deleted'
+          AND (
+            $2 = ANY(o.student_ids)
+            OR o.group_id IN (
+              SELECT gm.group_id FROM group_memberships gm
+              JOIN groups g ON g.id = gm.group_id
+              WHERE gm.user_id = $2 AND gm.workflow_state = 'accepted'
+                AND g.course_id = $3 AND g.workflow_state <> 'deleted'
+            )
+            OR o.course_section_id IN (
+              SELECT e.course_section_id FROM enrollments e
+              WHERE e.user_id = $2 AND e.course_id = $3
+                AND e.workflow_state <> 'deleted' AND e.course_section_id IS NOT NULL
+            )
+          )
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(auth.id)
+    .bind(course_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(ids.into_iter().collect())
+}
+
+/// Fetch active overrides by id.
+async fn fetch_overrides_by_ids(
+    pool: &PgPool,
+    ids: &[i64],
+) -> Result<HashMap<i64, AssignmentOverride>, ApiError> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let rows: Vec<AssignmentOverride> = sqlx::query_as(
+        r#"
+        SELECT id, assignment_id, title, due_at, unlock_at, lock_at,
+               student_ids, course_section_id, group_id, workflow_state
+        FROM assignment_overrides
+        WHERE id = ANY($1) AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(|row| (row.id, row)).collect())
+}
+
+/// GET /courses/{courseId}/assignments/overrides — Canvas
+/// `batch_retrieve`. Query entries arrive in Rails form encoding
+/// (`assignment_overrides[][id]=..&assignment_overrides[][assignment_id]=..`
+/// or the indexed `assignment_overrides[0][..]` spelling) and are answered
+/// in request order with `null` for unknown assignments, unknown overrides
+/// and overrides the caller cannot see.
+async fn batch_retrieve_assignment_overrides(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    ensure_course_not_deleted(&state.db, course_id).await?;
+
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Parse the query string the way Rails builds params for the `[][k]`
+    // and indexed `[0][k]` spellings.
+    let mut append_form: Vec<Vec<(String, i64)>> = Vec::new();
+    let mut indexed_form: HashMap<i64, Vec<(String, i64)>> = HashMap::new();
+    let mut hash_form = false;
+    let mut scalar_form = false;
+    if let Some(query) = raw_query.as_deref() {
+        for pair in query.split('&') {
+            let Some((raw_key, raw_value)) = pair.split_once('=') else {
+                continue;
+            };
+            let key = decode_query_component(raw_key);
+            if key == "assignment_overrides" {
+                scalar_form = true;
+                continue;
+            }
+            let Some(rest) = key.strip_prefix("assignment_overrides[") else {
+                continue;
+            };
+            // rest is `<middle>][<inner>]` for the array spellings, or
+            // `<key>]` for the hash spelling Rails parses as a plain map.
+            let Some(brace) = rest.strip_suffix(']') else {
+                continue;
+            };
+            let Some((middle, inner)) = brace.split_once("][") else {
+                hash_form = true;
+                continue;
+            };
+            let value = ruby_to_i(&serde_json::Value::String(decode_query_component(
+                raw_value,
+            )));
+            if middle.is_empty() {
+                // `[][k]`: a repeated key starts the next entry (Rails).
+                match append_form.last_mut() {
+                    Some(current) if !current.iter().any(|(existing, _)| existing == inner) => {
+                        current.push((inner.to_string(), value));
+                    }
+                    _ => append_form.push(vec![(inner.to_string(), value)]),
+                }
+            } else if !middle.is_empty() && middle.chars().all(|c| c.is_ascii_digit()) {
+                match middle.parse::<i64>() {
+                    Ok(index) if index >= 0 => {
+                        indexed_form
+                            .entry(index)
+                            .or_default()
+                            .push((inner.to_string(), value));
+                    }
+                    _ => hash_form = true,
+                }
+            } else {
+                hash_form = true;
+            }
+        }
+    }
+    if append_form.is_empty() && indexed_form.is_empty() {
+        // A hash with non-numeric keys deserializes to nil in Canvas
+        // ("no ... values present"); a bare scalar param is truthy but not
+        // an array ("must specify an array ...").
+        if !hash_form && scalar_form {
+            return Ok(batch_error_body(serde_json::json!([
+                "must specify an array with entry format { id, assignment_id }"
+            ])));
+        }
+        return Ok(batch_error_body(serde_json::json!([
+            "no assignment_overrides values present"
+        ])));
+    }
+
+    // Indexed maps must cover exactly 0..n-1 (Canvas deserialize_overrides).
+    let mut entries: Vec<Vec<(String, i64)>> = append_form;
+    if !indexed_form.is_empty() {
+        let mut indices: Vec<i64> = indexed_form.keys().copied().collect();
+        indices.sort_unstable();
+        if indices != (0..indices.len() as i64).collect::<Vec<_>>() {
+            return Ok(batch_error_body(serde_json::json!([
+                "no assignment_overrides values present"
+            ])));
+        }
+        entries = indices
+            .into_iter()
+            .map(|index| indexed_form.remove(&index).unwrap_or_default())
+            .collect();
+    }
+
+    // Every entry needs both keys.
+    if !entries
+        .iter()
+        .all(|entry| entry.iter().any(|(k, _)| k == "id"))
+        || !entries
+            .iter()
+            .all(|entry| entry.iter().any(|(k, _)| k == "assignment_id"))
+    {
+        return Ok(batch_error_body(serde_json::json!([
+            "must specify an array with entry format { id, assignment_id }"
+        ])));
+    }
+
+    // Active assignments of this course (unknown assignment ids silently
+    // drop to nulls, Canvas `next unless assignment`).
+    let requested_assignment_ids: Vec<i64> = entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .iter()
+                .find(|(k, _)| k == "assignment_id")
+                .map(|(_, v)| *v)
+        })
+        .collect();
+    let known_assignments: HashSet<i64> =
+        sqlx::query_scalar("SELECT id FROM assignments WHERE course_id = $1 AND id = ANY($2)")
+            .bind(course_id)
+            .bind(&requested_assignment_ids)
+            .fetch_all(&state.db)
+            .await?
+            .into_iter()
+            .collect();
+
+    // Visible override ids per requested assignment.
+    let mut visibility: HashMap<i64, HashSet<i64>> = HashMap::new();
+    for assignment_id in &known_assignments {
+        let ids = visible_override_ids(&state.db, course_id, *assignment_id, &auth).await?;
+        visibility.insert(*assignment_id, ids);
+    }
+
+    let requested_override_ids: Vec<i64> = entries
+        .iter()
+        .filter_map(|entry| entry.iter().find(|(k, _)| k == "id").map(|(_, v)| *v))
+        .collect();
+    let overrides = fetch_overrides_by_ids(&state.db, &requested_override_ids).await?;
+
+    // Response preserves request order; unknown/invisible entries are null.
+    let mut ordered: Vec<Option<&AssignmentOverride>> = Vec::with_capacity(entries.len());
+    for entry in &entries {
+        let assignment_id = entry
+            .iter()
+            .find(|(k, _)| k == "assignment_id")
+            .map(|(_, v)| *v);
+        let override_id = entry.iter().find(|(k, _)| k == "id").map(|(_, v)| *v);
+        let found = assignment_id
+            .filter(|aid| known_assignments.contains(aid))
+            .and_then(|aid| {
+                let visible = visibility.get(&aid)?;
+                let override_row = overrides.get(&override_id?)?;
+                if override_row.assignment_id == aid && visible.contains(&override_row.id) {
+                    Some(override_row)
+                } else {
+                    None
+                }
+            });
+        ordered.push(found);
+    }
+
+    let values: Vec<serde_json::Value> = ordered
+        .into_iter()
+        .map(|row| match row {
+            Some(override_row) => serde_json::to_value(override_row).unwrap_or_default(),
+            None => serde_json::Value::Null,
+        })
+        .collect();
+
+    Ok((StatusCode::OK, Json(serde_json::Value::Array(values))))
+}
+
+/// Shared validation for `batch_create` / `batch_update` (Canvas
+/// `interpret_batch_assignment_overrides_data`). Returns per-entry error
+/// strings aligned with the request (`None` marks a valid entry), the parsed
+/// entries, the resolved targets (create; or an adhoc update's replacement
+/// set), and — for updates — the current override rows.
+async fn interpret_batch_entries(
+    pool: &PgPool,
+    course_id: i64,
+    raw_entries: &[serde_json::Value],
+    for_update: bool,
+) -> Result<
+    (
+        Vec<Option<String>>,
+        Vec<BatchOverrideEntry>,
+        Vec<Option<ResolvedBatchTarget>>,
+        Vec<Option<AssignmentOverride>>,
+    ),
+    ApiError,
+> {
+    let parsed: Vec<BatchOverrideEntry> = raw_entries.iter().map(parse_batch_entry).collect();
+    let mut errors: Vec<Option<String>> = vec![None; parsed.len()];
+    let mut targets: Vec<Option<ResolvedBatchTarget>> = vec![None; parsed.len()];
+    let mut existing: Vec<Option<AssignmentOverride>> = vec![None; parsed.len()];
+
+    // Structure checks first (Canvas `check_property`), so a missing id is
+    // reported even when the assignment is also unknown.
+    for (index, entry) in parsed.iter().enumerate() {
+        if entry.assignment_id.is_none() {
+            errors[index] = Some("must specify an assignment id".to_string());
+        }
+        if for_update {
+            if entry.id.is_none() && errors[index].is_none() {
+                errors[index] = Some("must specify an override id".to_string());
+            }
+        } else if entry.id.is_some() && errors[index].is_none() {
+            errors[index] = Some("may not specify an override id".to_string());
+        }
+    }
+
+    // Assignments of this course.
+    let assignment_ids: Vec<i64> = parsed.iter().filter_map(|e| e.assignment_id).collect();
+    let known_assignments: HashSet<i64> = if assignment_ids.is_empty() {
+        HashSet::new()
+    } else {
+        sqlx::query_scalar("SELECT id FROM assignments WHERE course_id = $1 AND id = ANY($2)")
+            .bind(course_id)
+            .bind(&assignment_ids)
+            .fetch_all(pool)
+            .await?
+            .into_iter()
+            .collect()
+    };
+
+    for (index, entry) in parsed.iter().enumerate() {
+        if errors[index].is_some() {
+            continue;
+        }
+        let assignment_id = entry.assignment_id.unwrap_or(0);
+        if !known_assignments.contains(&assignment_id) {
+            errors[index] = Some("assignment not found".to_string());
+            continue;
+        }
+
+        let mut entry_errors: Vec<String> = Vec::new();
+
+        if for_update {
+            // The override must exist, be active and belong to the entry's
+            // assignment (teacher callers see every active override).
+            let row: Option<AssignmentOverride> = sqlx::query_as(
+                r#"
+                SELECT id, assignment_id, title, due_at, unlock_at, lock_at,
+                       student_ids, course_section_id, group_id, workflow_state
+                FROM assignment_overrides
+                WHERE id = $1 AND assignment_id = $2 AND workflow_state <> 'deleted'
+                "#,
+            )
+            .bind(entry.id.unwrap_or(0))
+            .bind(assignment_id)
+            .fetch_optional(pool)
+            .await?;
+            let Some(row) = row else {
+                errors[index] = Some("override not found".to_string());
+                continue;
+            };
+            existing[index] = Some(row);
+        }
+
+        // Target resolution. On update, non-adhoc overrides keep their target
+        // (Canvas passes the override's set_type, which skips the target
+        // branches entirely).
+        let is_adhoc_update = for_update
+            && existing[index]
+                .as_ref()
+                .is_some_and(|row| !row.student_ids.is_empty());
+        if !for_update || is_adhoc_update {
+            match resolve_batch_target(pool, course_id, entry).await? {
+                Ok(target) => {
+                    if let Some(target) = target {
+                        targets[index] = Some(target);
+                    } else {
+                        entry_errors.push(
+                            "one of student_ids, group_id, or course_section_id is required"
+                                .to_string(),
+                        );
+                    }
+                }
+                Err(message) => entry_errors.push(message),
+            }
+        }
+
+        // Date parse errors (unparseable values were treated as absent while
+        // parsing the entry; re-parse the raw value to surface the error).
+        for field in ["due_at", "unlock_at", "lock_at"] {
+            if let Some(raw) = raw_entries[index].get(field) {
+                if let Err(message) = parse_batch_date(raw, field) {
+                    entry_errors.push(message);
+                }
+            }
+        }
+
+        if !entry_errors.is_empty() {
+            errors[index] = Some(entry_errors.join(", "));
+        }
+    }
+
+    Ok((errors, parsed, targets, existing))
+}
+
+/// POST /courses/{courseId}/assignments/overrides — Canvas `batch_create`.
+/// Transactional: every override is created or none are.
+async fn batch_create_assignment_overrides(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    ensure_course_not_deleted(&state.db, course_id).await?;
+
+    // Canvas `require_all_assignments_edit`: course-level
+    // manage_assignments_edit.
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let payload: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|_| ApiError::BadRequest("invalid JSON body".into()))?;
+    let raw = body_override_payload(&payload);
+    let entries = match deserialize_overrides(&raw) {
+        DeserializedOverrides::Blank => {
+            return Ok(batch_error_body(serde_json::json!([
+                "no assignment override data present"
+            ])));
+        }
+        DeserializedOverrides::NotAnArray => {
+            return Ok(batch_error_body(serde_json::json!([
+                "must specify an array of overrides"
+            ])));
+        }
+        DeserializedOverrides::Entries(entries) => entries,
+    };
+
+    let (errors, parsed, targets, _) =
+        interpret_batch_entries(&state.db, course_id, &entries, false).await?;
+    if errors.iter().any(Option::is_some) {
+        let listed: Vec<serde_json::Value> = errors
+            .into_iter()
+            .map(|error| match error {
+                Some(message) => serde_json::json!([message]),
+                None => serde_json::Value::Null,
+            })
+            .collect();
+        return Ok(batch_error_body(serde_json::Value::Array(listed)));
+    }
+
+    let mut tx = state.db.begin().await?;
+    let mut created: Vec<AssignmentOverride> = Vec::with_capacity(parsed.len());
+    for (index, entry) in parsed.iter().enumerate() {
+        let target = targets[index].clone().expect("validated above");
+        // Canvas `set_title_if_needed` / `title_from_students`: adhoc titles
+        // default to the student count, group/section titles to the set name.
+        let (student_ids, course_section_id, group_id, title) = match &target {
+            ResolvedBatchTarget::Adhoc(ids) => (
+                ids.clone(),
+                None,
+                None,
+                entry
+                    .title
+                    .clone()
+                    .filter(|t| !t.trim().is_empty())
+                    .unwrap_or_else(|| title_from_student_count(ids.len())),
+            ),
+            ResolvedBatchTarget::Group(id) => {
+                let name: String = sqlx::query_scalar("SELECT name FROM groups WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                (Vec::new(), None, Some(*id), name)
+            }
+            ResolvedBatchTarget::Section(id) => {
+                let name: String =
+                    sqlx::query_scalar("SELECT name FROM course_sections WHERE id = $1")
+                        .bind(id)
+                        .fetch_one(&mut *tx)
+                        .await?;
+                (Vec::new(), Some(*id), None, name)
+            }
+        };
+
+        let row: AssignmentOverride = sqlx::query_as(
+            r#"
+            INSERT INTO assignment_overrides
+                (assignment_id, title, due_at, unlock_at, lock_at,
+                 student_ids, course_section_id, group_id)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING id, assignment_id, title, due_at, unlock_at, lock_at,
+                      student_ids, course_section_id, group_id, workflow_state
+            "#,
+        )
+        .bind(entry.assignment_id.unwrap_or(0))
+        .bind(&title)
+        .bind(entry.due_at.flatten())
+        .bind(entry.unlock_at.flatten())
+        .bind(entry.lock_at.flatten())
+        .bind(&student_ids)
+        .bind(course_section_id)
+        .bind(group_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        created.push(row);
+    }
+    tx.commit().await?;
+
+    let values: Vec<serde_json::Value> = created
+        .iter()
+        .map(|row| serde_json::to_value(row).unwrap_or_default())
+        .collect();
+    Ok((StatusCode::OK, Json(serde_json::Value::Array(values))))
+}
+
+/// PUT /courses/{courseId}/assignments/overrides — Canvas `batch_update`.
+/// Transactional: every override is updated or none are. Omitted date fields
+/// clear the override (Canvas `clear_*_override`); an adhoc override without
+/// `student_ids` keeps its target set.
+async fn batch_update_assignment_overrides(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    ensure_course_not_deleted(&state.db, course_id).await?;
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let payload: serde_json::Value = serde_json::from_slice(&body)
+        .map_err(|_| ApiError::BadRequest("invalid JSON body".into()))?;
+    let raw = body_override_payload(&payload);
+    let entries = match deserialize_overrides(&raw) {
+        DeserializedOverrides::Blank => {
+            return Ok(batch_error_body(serde_json::json!([
+                "no assignment override data present"
+            ])));
+        }
+        DeserializedOverrides::NotAnArray => {
+            return Ok(batch_error_body(serde_json::json!([
+                "must specify an array of overrides"
+            ])));
+        }
+        DeserializedOverrides::Entries(entries) => entries,
+    };
+
+    let (errors, parsed, targets, existing) =
+        interpret_batch_entries(&state.db, course_id, &entries, true).await?;
+    if errors.iter().any(Option::is_some) {
+        let listed: Vec<serde_json::Value> = errors
+            .into_iter()
+            .map(|error| match error {
+                Some(message) => serde_json::json!([message]),
+                None => serde_json::Value::Null,
+            })
+            .collect();
+        return Ok(batch_error_body(serde_json::Value::Array(listed)));
+    }
+
+    let mut tx = state.db.begin().await?;
+    let mut updated: Vec<AssignmentOverride> = Vec::with_capacity(parsed.len());
+    for (index, entry) in parsed.iter().enumerate() {
+        let current = existing[index].clone().expect("validated above");
+        let is_adhoc = !current.student_ids.is_empty();
+
+        // Target sets of group/section overrides cannot change; an adhoc
+        // override without student_ids keeps its set. A resolved target on
+        // an update entry is the adhoc replacement set (validated above).
+        let (student_ids, course_section_id, group_id) = if is_adhoc {
+            match &targets[index] {
+                Some(ResolvedBatchTarget::Adhoc(ids)) => (ids.clone(), None, None),
+                _ => (current.student_ids.clone(), None, None),
+            }
+        } else {
+            (Vec::new(), current.course_section_id, current.group_id)
+        };
+
+        let title = if is_adhoc {
+            entry
+                .title
+                .clone()
+                .filter(|t| !t.trim().is_empty())
+                .unwrap_or_else(|| current.title.clone())
+        } else {
+            current.title.clone()
+        };
+
+        let row: AssignmentOverride = sqlx::query_as(
+            r#"
+            UPDATE assignment_overrides
+            SET title = $3, due_at = $4, unlock_at = $5, lock_at = $6,
+                student_ids = $7, course_section_id = $8, group_id = $9,
+                updated_at = now()
+            WHERE id = $1 AND assignment_id = $2 AND workflow_state <> 'deleted'
+            RETURNING id, assignment_id, title, due_at, unlock_at, lock_at,
+                      student_ids, course_section_id, group_id, workflow_state
+            "#,
+        )
+        .bind(current.id)
+        .bind(current.assignment_id)
+        .bind(&title)
+        .bind(entry.due_at.flatten())
+        .bind(entry.unlock_at.flatten())
+        .bind(entry.lock_at.flatten())
+        .bind(&student_ids)
+        .bind(course_section_id)
+        .bind(group_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        updated.push(row);
+    }
+    tx.commit().await?;
+
+    let values: Vec<serde_json::Value> = updated
+        .iter()
+        .map(|row| serde_json::to_value(row).unwrap_or_default())
+        .collect();
+    Ok((StatusCode::OK, Json(serde_json::Value::Array(values))))
+}
+
+/// Shared alias implementation (Canvas `group_alias` / `section_alias`):
+/// resolve the set's course, require course read + assignment, then 302 to
+/// the canonical override URL — 404 when no visible override targets the set.
+async fn assignment_override_alias(
+    pool: &PgPool,
+    course_id: i64,
+    assignment_id: i64,
+    group_id: Option<i64>,
+    section_id: Option<i64>,
+    auth: &AuthUser,
+) -> Result<(StatusCode, [(axum::http::HeaderName, String); 1]), ApiError> {
+    ensure_course_not_deleted(pool, course_id).await?;
+
+    if !check_enrolled_or_admin(pool, auth.id, course_id, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM assignments WHERE id = $1 AND course_id = $2")
+            .bind(assignment_id)
+            .bind(course_id)
+            .fetch_optional(pool)
+            .await?;
+    row.ok_or(ApiError::NotFound)?;
+
+    let visible = visible_override_ids(pool, course_id, assignment_id, auth).await?;
+    let override_id: Option<i64> = sqlx::query_scalar(
+        r#"
+        SELECT id FROM assignment_overrides
+        WHERE assignment_id = $1 AND workflow_state <> 'deleted'
+          AND (($2::bigint IS NOT NULL AND group_id = $2)
+            OR ($3::bigint IS NOT NULL AND course_section_id = $3))
+        ORDER BY id ASC
+        LIMIT 1
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(group_id)
+    .bind(section_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some(override_id) = override_id.filter(|id| visible.contains(id)) else {
+        return Err(ApiError::NotFound);
+    };
+
+    let location =
+        format!("/api/v1/courses/{course_id}/assignments/{assignment_id}/overrides/{override_id}");
+    Ok((
+        StatusCode::FOUND,
+        [(axum::http::header::LOCATION, location)],
+    ))
+}
+
+/// GET /groups/{groupId}/assignments/{assignmentId}/override — Canvas
+/// `group_alias`: 302 to the override for that group, 404 otherwise.
+async fn group_assignment_override_alias(
+    State(state): State<AppState>,
+    Path((group_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<(StatusCode, [(axum::http::HeaderName, String); 1]), ApiError> {
+    let course_id: Option<i64> = sqlx::query_scalar(
+        "SELECT course_id FROM groups WHERE id = $1 AND course_id IS NOT NULL AND workflow_state <> 'deleted'",
+    )
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let course_id = course_id.ok_or(ApiError::NotFound)?;
+
+    assignment_override_alias(
+        &state.db,
+        course_id,
+        assignment_id,
+        Some(group_id),
+        None,
+        &auth,
+    )
+    .await
+}
+
+/// GET /sections/{sectionId}/assignments/{assignmentId}/override — Canvas
+/// `section_alias`: 302 to the override for that section, 404 otherwise.
+async fn section_assignment_override_alias(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<(StatusCode, [(axum::http::HeaderName, String); 1]), ApiError> {
+    let course_id: Option<i64> = sqlx::query_scalar(
+        "SELECT course_id FROM course_sections WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(section_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let course_id = course_id.ok_or(ApiError::NotFound)?;
+
+    assignment_override_alias(
+        &state.db,
+        course_id,
+        assignment_id,
+        None,
+        Some(section_id),
+        &auth,
+    )
+    .await
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -3557,6 +4606,29 @@ pub fn router() -> Router<AppState> {
         .route(
             "/assignment_overrides/{id}",
             delete(delete_assignment_override),
+        )
+        // Assignment overrides — batch routes (Canvas
+        // AssignmentOverridesController#batch_*, issue #55)
+        .route(
+            "/courses/{courseId}/assignments/overrides",
+            get(batch_retrieve_assignment_overrides),
+        )
+        .route(
+            "/courses/{courseId}/assignments/overrides",
+            post(batch_create_assignment_overrides),
+        )
+        .route(
+            "/courses/{courseId}/assignments/overrides",
+            put(batch_update_assignment_overrides),
+        )
+        // Assignment overrides — group/section aliases (#55)
+        .route(
+            "/groups/{groupId}/assignments/{assignmentId}/override",
+            get(group_assignment_override_alias),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/override",
+            get(section_assignment_override_alias),
         )
 }
 
