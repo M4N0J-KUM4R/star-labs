@@ -3646,6 +3646,9 @@ mod calendar_deep_tests {
         };
 
         let db = PgPool::connect(&database_url).await.expect("connect");
+        // Self-sufficient under CI sharding: never rely on another crate's
+        // tests having migrated the shared database first.
+        star_db::MIGRATOR.run(&db).await.expect("run migrations");
         let prefix = format!(
             "caldeep-{}-{}",
             std::process::id(),
