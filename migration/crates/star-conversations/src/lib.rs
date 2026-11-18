@@ -1232,6 +1232,20 @@ fn ensure_site_admin(auth: &AuthUser) -> Result<(), ApiError> {
 /// index lists those rows. Filters: `user_id`, `conversation_id`; pagination
 /// via `limit` (default 50) / `offset`. Serialized like
 /// `deleted_conversation_json` minus the shard/collab fields star-lms lacks.
+/// One row of the admin deleted-messages index: `conversation_message_removals`
+/// joined with its message — (id, user_id, conversation_id, author_id, body,
+/// created_at, deleted_at, message_id). Named to satisfy `clippy::type_complexity`.
+type RemovalRow = (
+    i64,
+    i64,
+    i64,
+    i64,
+    String,
+    DateTime<Utc>,
+    DateTime<Utc>,
+    i64,
+);
+
 async fn deleted_index(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
@@ -1252,16 +1266,7 @@ async fn deleted_index(
         .unwrap_or(0)
         .max(0);
 
-    let rows: Vec<(
-        i64,
-        i64,
-        i64,
-        i64,
-        String,
-        DateTime<Utc>,
-        DateTime<Utc>,
-        i64,
-    )> = sqlx::query_as(
+    let rows: Vec<RemovalRow> = sqlx::query_as(
         r#"
         SELECT r.id, r.user_id, r.conversation_id, cm.author_id, cm.body, cm.created_at,
                r.deleted_at, r.message_id
