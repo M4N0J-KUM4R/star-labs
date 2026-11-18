@@ -94,6 +94,8 @@ jobs:
           workspaces: migration -> target
           shared-key: shard-${{ matrix.shard }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Migrate schema (shards are order-independent)
+        run: cargo test -p star-db --locked
       - name: Run workspace shard ${{ matrix.shard }}
         run: cargo test --locked --no-fail-fast ${{ matrix.crates }}
 
