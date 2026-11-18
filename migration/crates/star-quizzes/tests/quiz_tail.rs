@@ -350,7 +350,7 @@ async fn complete_is_owner_only_and_scoped_to_the_path_quiz() {
     )
     .await;
     let resp = server
-        .post(format!(
+        .post(&format!(
             "/courses/{course}/quizzes/{}/submissions/{submission}/complete",
             other.3
         ))
@@ -600,10 +600,10 @@ async fn abort_distinguishes_running_and_failed_reports() {
 // ---------------------------------------------------------------------------
 
 async fn seed_group_with_questions(
-    server: &TestServer,
+    _server: &TestServer,
     pool: &PgPool,
     teacher: i64,
-    course: i64,
+    _course: i64,
     quiz: i64,
 ) -> (i64, Vec<i64>) {
     let group: i64 = sqlx::query_scalar(
@@ -740,7 +740,7 @@ async fn group_reorder_validation_matrix() {
 
     // A group outside the path quiz is 404 too.
     let resp = server
-        .post(format!(
+        .post(&format!(
             "/courses/{course}/quizzes/{quiz2}/groups/{group}/reorder"
         ))
         .add_header(axum::http::header::AUTHORIZATION, teacher_auth.clone())
