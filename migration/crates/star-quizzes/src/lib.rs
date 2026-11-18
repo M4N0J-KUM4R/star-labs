@@ -46,7 +46,7 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
 // Auth (mirrors star-assignments — reads x-user-id / x-user-role headers)
@@ -713,13 +713,14 @@ async fn start_quiz(
 
     let submission: QuizSubmission = sqlx::query_as(
         r#"
-        INSERT INTO quiz_submissions (quiz_id, user_id, started_at)
-        VALUES ($1, $2, now())
+        INSERT INTO quiz_submissions (quiz_id, user_id, started_at, validation_token)
+        VALUES ($1, $2, now(), $3)
         RETURNING id, quiz_id, user_id, score, completed_at, started_at, created_at, updated_at
         "#,
     )
     .bind(quiz_id)
     .bind(auth.id)
+    .bind(generate_validation_token())
     .fetch_one(&state.db)
     .await?;
 
@@ -1299,6 +1300,9 @@ struct QuizSubmissionRow {
     workflow_state: String,
     allowed_attempts: i32,
     submission_data: String,
+    /// Canvas issues this at take time (`generate_validation_token`); `#complete`
+    /// must echo it. NULL on rows created before migration 0113.
+    validation_token: Option<String>,
 }
 
 const SUBMISSION_COLUMNS: &str = "qs.id, qs.quiz_id, qs.user_id, qs.submission_id, \
@@ -1309,7 +1313,7 @@ const SUBMISSION_COLUMNS: &str = "qs.id, qs.quiz_id, qs.user_id, qs.submission_i
      qs.kept_score::float8 AS kept_score, qs.score::float8 AS score, \
      qs.score_before_regrade::float8 AS score_before_regrade, \
      qs.has_seen_results, qs.workflow_state, qs.submission_data, \
-     q.allowed_attempts";
+     q.allowed_attempts, qs.validation_token";
 
 impl QuizSubmissionRow {
     /// Canvas `completed?`: complete or pending review. The legacy
@@ -1686,10 +1690,14 @@ struct QuizReportRow {
     anonymous: bool,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    /// Canvas report lifecycle (queued → running → completed / failed).
+    /// star-lms generates synchronously, so rows created through the API are
+    /// always `completed`; the other states exist for abort-semantics parity.
+    generation_state: String,
 }
 
 const QUIZ_REPORT_COLUMNS: &str = "id, quiz_id, report_type, includes_all_versions, \
-     includes_sis_ids, anonymous, created_at, updated_at";
+     includes_sis_ids, anonymous, created_at, updated_at, generation_state";
 
 fn readable_report_type(report_type: &str) -> &'static str {
     QUIZ_REPORT_TYPES
@@ -1886,6 +1894,341 @@ async fn create_quiz_report(
     let report = ensure_quiz_report(&state.db, &quiz, report_type, all_versions).await?;
 
     Ok(Json(report_json(&report, &quiz)))
+}
+
+// ---------------------------------------------------------------------------
+// Quiz submission tail: complete / time (Canvas quiz_submissions_api #complete
+// and #time, slice G, issue #54) plus report show/abort and group reorder.
+// ---------------------------------------------------------------------------
+
+/// Canvas `QuizSubmission#generate_validation_token` is `SecureRandom.hex(10)`
+/// (20 hex chars). The workspace deliberately avoids extra crypto dependencies,
+/// so entropy comes from `RandomState` (OS-seeded per instance) mixed with the
+/// clock. Tokens are single-use take secrets, not credentials.
+fn generate_validation_token() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let mut out = String::with_capacity(32);
+    for _ in 0..2 {
+        let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
+        hasher.write_i64(chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default());
+        out.push_str(&format!("{:016x}", hasher.finish()));
+    }
+    out.truncate(20);
+    out
+}
+
+/// `complete` accepts Canvas' flat params (`attempt`, `validation_token`) or
+/// the JSON-API `quiz_submissions[0]{...}` wrapper.
+fn complete_payload(body: &Value) -> (Option<i64>, Option<String>) {
+    let source = body
+        .get("quiz_submissions")
+        .and_then(Value::as_array)
+        .and_then(|items| items.first())
+        .unwrap_or(body);
+    let attempt = source.get("attempt").and_then(value_to_i64);
+    let token = source
+        .get("validation_token")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    (attempt, token)
+}
+
+/// POST /courses/{courseId}/quizzes/{quizId}/submissions/{submissionId}/complete
+///
+/// Canvas `complete`: turn in the attempt. Only the owning student may call it
+/// (Canvas `quiz_submission_allowed?` — students only, admins get no bypass).
+/// A missing/stale `attempt` is 400 (Canvas "invalid_attempt"); a missing or
+/// mismatched `validation_token` is 403 (`invalid_validation_token`); a second
+/// complete on a finished attempt is 400. On success the attempt flips to
+/// `complete` and the turn-in timestamps are stamped.
+///
+/// Deviation (pinned by tests): Star rows are created by `POST .../submissions`
+/// with attempt 0 (no multi-attempt bookkeeping yet), so "latest attempt"
+/// means the stored `attempt` value.
+async fn complete_quiz_submission(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id, submission_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    let row = load_quiz_submission(&state.db, quiz_id, submission_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    if row.user_id != auth.id {
+        return Err(ApiError::Forbidden);
+    }
+
+    let (attempt, token) = complete_payload(&body);
+    let attempt = attempt.ok_or_else(|| ApiError::BadRequest("invalid attempt".into()))?;
+    if attempt != i64::from(row.attempt) {
+        return Err(ApiError::BadRequest("invalid attempt".into()));
+    }
+
+    let token_ok = match (row.validation_token.as_deref(), token.as_deref()) {
+        (Some(stored), Some(provided)) => stored == provided,
+        _ => false,
+    };
+    if !token_ok {
+        return Err(ApiError::Forbidden);
+    }
+
+    if row.completed() {
+        return Err(ApiError::BadRequest(
+            "quiz submission already completed".into(),
+        ));
+    }
+
+    sqlx::query(
+        "UPDATE quiz_submissions \
+         SET workflow_state = 'complete', completed_at = now(), finished_at = now(), \
+             end_at = COALESCE(end_at, now()), \
+             time_spent = EXTRACT(EPOCH FROM (now() - started_at))::int \
+                 + COALESCE(extra_time, 0), \
+             updated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(row.id)
+    .execute(&state.db)
+    .await?;
+
+    let row = load_quiz_submission(&state.db, quiz_id, submission_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    Ok(Json(submissions_envelope(&[row], course_id)))
+}
+
+/// GET /courses/{courseId}/quizzes/{quizId}/submissions/{submissionId}/time
+///
+/// Canvas `time`: the attempt clock as `{end_at, time_left}` (seconds).
+/// Requires Canvas `authorized_action(submission, :record_events)` — the owning
+/// student or a quiz manager; the crate convention for authorization failures
+/// is 403 (Canvas emits 401; documented deviation, pinned by tests).
+///
+/// Canvas stores `end_at` when the attempt begins. star-lms starts attempts
+/// without it, so the remaining time is derived from the quiz `time_limit`
+/// (seconds) plus `extra_time` from `started_at`, matching Canvas' own
+/// fallback for legacy attempts.
+async fn get_quiz_submission_time(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id, submission_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+
+    let row = load_quiz_submission(&state.db, quiz_id, submission_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let can_record = row.user_id == auth.id
+        || check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+    if !can_record {
+        return Err(ApiError::Forbidden);
+    }
+
+    if row.completed() {
+        // Canvas returns the frozen clock for finished attempts.
+        return Ok(Json(json!({"end_at": row.end_at, "time_left": 0})));
+    }
+
+    let (time_limit,): (Option<i32>,) =
+        sqlx::query_as("SELECT time_limit FROM quizzes WHERE id = $1")
+            .bind(quiz_id)
+            .fetch_one(&state.db)
+            .await?;
+    let limit_seconds = time_limit.unwrap_or(0) + row.extra_time.unwrap_or(0);
+    let end_at = row.end_at.or_else(|| {
+        if limit_seconds > 0 {
+            Some(row.started_at + chrono::Duration::seconds(i64::from(limit_seconds)))
+        } else {
+            None
+        }
+    });
+
+    let time_left = end_at.map(|end| (end - Utc::now()).num_seconds().max(0));
+    Ok(Json(json!({"end_at": end_at, "time_left": time_left})))
+}
+
+// ---------------------------------------------------------------------------
+// Quiz reports tail: show / abort (Canvas quiz_reports #show and #abort, #54)
+// ---------------------------------------------------------------------------
+
+/// GET /courses/{courseId}/quizzes/{quizId}/reports/{reportId}
+///
+/// Canvas `show` under `read_statistics` (the crate convention renders that
+/// as 403, like index/create). A report id outside the path quiz is 404
+/// (nested find). The payload adds the generation `progress` percent;
+/// `file_url` is always null because binary report attachments depend on
+/// MIG-04 (#45) — Canvas links the generated CSV.
+async fn show_quiz_report(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id, report_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let report: Option<QuizReportRow> = sqlx::query_as(&format!(
+        "SELECT {QUIZ_REPORT_COLUMNS} FROM quiz_statistics WHERE id = $1 AND quiz_id = $2"
+    ))
+    .bind(report_id)
+    .bind(quiz_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let report = report.ok_or(ApiError::NotFound)?;
+
+    let quiz = load_report_context(&state.db, quiz_id).await?;
+    let mut value = report_json(&report, &quiz);
+    if let Some(object) = value.as_object_mut() {
+        let progress = match report.generation_state.as_str() {
+            "completed" => 100,
+            "running" => 50,
+            _ => 0,
+        };
+        object.insert("progress".into(), json!(progress));
+        object.insert("file_url".into(), Value::Null);
+    }
+    Ok(Json(value))
+}
+
+/// DELETE /courses/{courseId}/quizzes/{quizId}/reports/{reportId}
+///
+/// Canvas `abort` (spec contract, §6.3 slice G): a report whose generation
+/// finished (Star: synchronously generated `completed` rows are the CSV
+/// equivalent) is destroyed — attachment cleanup is pending MIG-04 — and a
+/// `queued` report has its generation aborted; both answer 204. A failed
+/// report answers 422 "report is not being generated"; an in-flight one
+/// answers 422 "report generation can not be aborted" (Canvas only aborts
+/// before the worker grabs the job).
+async fn abort_quiz_report(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id, report_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let state_row: Option<(String,)> = sqlx::query_as(
+        "SELECT generation_state FROM quiz_statistics WHERE id = $1 AND quiz_id = $2",
+    )
+    .bind(report_id)
+    .bind(quiz_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (generation_state,) = state_row.ok_or(ApiError::NotFound)?;
+
+    match generation_state.as_str() {
+        "completed" | "queued" => {
+            sqlx::query("DELETE FROM quiz_statistics WHERE id = $1")
+                .bind(report_id)
+                .execute(&state.db)
+                .await?;
+            Ok(StatusCode::NO_CONTENT)
+        }
+        "running" => Err(ApiError::Validation(
+            "report generation can not be aborted".into(),
+        )),
+        _ => Err(ApiError::Validation("report is not being generated".into())),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Quiz groups tail: reorder (Canvas quizzes/quiz_groups #reorder, #54)
+// ---------------------------------------------------------------------------
+
+/// POST /courses/{courseId}/quizzes/{quizId}/groups/{groupId}/reorder
+///
+/// Canvas `reorder`: `order` lists question ids in the wanted sequence.
+/// Requires quiz `:update` (403 per crate convention). A group id outside the
+/// quiz is 404 (`require_group_in_quiz`), a missing `order` array is 400, and
+/// duplicate ids are 400. Ids that are not questions of this group are 404
+/// (Canvas treats them as `RecordNotFound` through the association scope).
+/// Ordered questions get positions 1..n (matching the existing whole-quiz
+/// `#reorder`); questions the caller left out keep their relative order and
+/// land after the reordered block. 204 on success.
+async fn reorder_quiz_group(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id, group_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<Value>,
+) -> Result<StatusCode, ApiError> {
+    require_quiz_in_course(&state.db, quiz_id, course_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    require_group_in_quiz(&state.db, group_id, quiz_id).await?;
+
+    let order = body
+        .get("order")
+        .and_then(Value::as_array)
+        .ok_or_else(|| ApiError::BadRequest("order array is required".into()))?;
+
+    let mut ids: Vec<i64> = Vec::with_capacity(order.len());
+    for item in order {
+        let id = item
+            .as_i64()
+            .or_else(|| item.as_str().and_then(|text| text.parse().ok()))
+            .or_else(|| item.get("id").and_then(value_to_i64))
+            .ok_or_else(|| {
+                ApiError::BadRequest("each order entry must be a question id".into())
+            })?;
+        ids.push(id);
+    }
+    if ids.len() != ids.iter().copied().collect::<HashSet<_>>().len() {
+        return Err(ApiError::BadRequest(
+            "duplicate question ids in order".into(),
+        ));
+    }
+
+    let in_group: Vec<i64> = sqlx::query_as(
+        "SELECT id FROM quiz_questions \
+         WHERE quiz_id = $1 AND quiz_group_id = $2 AND workflow_state <> 'deleted' \
+         ORDER BY position, id",
+    )
+    .bind(quiz_id)
+    .bind(group_id)
+    .fetch_all(&state.db)
+    .await?;
+    let members: HashSet<i64> = in_group.iter().copied().collect();
+    if ids.iter().any(|id| !members.contains(id)) {
+        return Err(ApiError::NotFound);
+    }
+
+    let mut position = 1i32;
+    for id in &ids {
+        sqlx::query(
+            "UPDATE quiz_questions SET position = $2, updated_at = now() \
+             WHERE id = $1 AND quiz_group_id = $3",
+        )
+        .bind(id)
+        .bind(position)
+        .bind(group_id)
+        .execute(&state.db)
+        .await?;
+        position += 1;
+    }
+    let chosen: HashSet<i64> = ids.iter().copied().collect();
+    for id in in_group.iter().filter(|id| !chosen.contains(id)) {
+        sqlx::query(
+            "UPDATE quiz_questions SET position = $2, updated_at = now() \
+             WHERE id = $1 AND quiz_group_id = $3",
+        )
+        .bind(id)
+        .bind(position)
+        .bind(group_id)
+        .execute(&state.db)
+        .await?;
+        position += 1;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------------------------------------------------------
@@ -2152,6 +2495,27 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/quizzes/{quizId}/reports",
             post(create_quiz_report),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/reports/{reportId}",
+            get(show_quiz_report),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/reports/{reportId}",
+            delete(abort_quiz_report),
+        )
+        // Slice G tail (#54): attempt completion + clock, group reorder
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/submissions/{submissionId}/complete",
+            post(complete_quiz_submission),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/submissions/{submissionId}/time",
+            get(get_quiz_submission_time),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/groups/{groupId}/reorder",
+            post(reorder_quiz_group),
         )
         // Quiz questions CRUD (Canvas quizzes/quiz_questions)
         .route(
