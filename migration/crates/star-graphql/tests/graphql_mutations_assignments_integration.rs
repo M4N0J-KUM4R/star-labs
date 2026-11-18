@@ -231,13 +231,16 @@ async fn create_assignment_positive_teacher() {
     .await;
 
     assert!(
-        body["errors"].is_null() || body["errors"].as_array().map_or(true, |e| e.is_empty()),
+        body["errors"].is_null() || body["errors"].as_array().is_none_or(|e| e.is_empty()),
         "unexpected top-level errors: {}",
         body
     );
     let payload = &body["data"]["createAssignment"];
     // async-graphql omits null fields; the payload must carry no errors.
-    assert!(payload.get("errors").map_or(true, |e| e.is_null()), "body: {body}");
+    assert!(
+        payload.get("errors").is_none_or(|e| e.is_null()),
+        "body: {body}"
+    );
     let a = &payload["assignment"];
     assert_eq!(a["name"], "Essay 1");
     assert_eq!(a["description"], "write it");
@@ -447,13 +450,12 @@ async fn update_assignment_delete_via_state_deleted() {
     assert_eq!(db_workflow_state(&pool, assignment).await, "deleted");
 
     // Idempotent second call returns early, still deleted.
-    let updated_at_before: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
-        "SELECT updated_at FROM assignments WHERE id = $1",
-    )
-    .bind(assignment)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let updated_at_before: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT updated_at FROM assignments WHERE id = $1")
+            .bind(assignment)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     let body = gql_post(
         &server,
         &auth(teacher, "teacher"),
@@ -461,16 +463,18 @@ async fn update_assignment_delete_via_state_deleted() {
         json!({ "input": { "id": assignment.to_string(), "state": "DELETED" } }),
     )
     .await;
-    assert!(body["errors"].is_null() || body["errors"].as_array().map_or(true, |e| e.is_empty()));
+    assert!(body["errors"].is_null() || body["errors"].as_array().is_none_or(|e| e.is_empty()));
     assert_eq!(db_workflow_state(&pool, assignment).await, "deleted");
-    let updated_at_after: chrono::DateTime<chrono::Utc> = sqlx::query_scalar(
-        "SELECT updated_at FROM assignments WHERE id = $1",
-    )
-    .bind(assignment)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(updated_at_before, updated_at_after, "idempotent delete must not touch updated_at");
+    let updated_at_after: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT updated_at FROM assignments WHERE id = $1")
+            .bind(assignment)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        updated_at_before, updated_at_after,
+        "idempotent delete must not touch updated_at"
+    );
 
     // Restore through published state (ensure_restored path).
     let body = gql_post(
@@ -543,7 +547,10 @@ async fn update_assignment_validation_name_required() {
     let payload = &body["data"]["updateAssignment"];
     assert!(payload["assignment"].is_null());
     assert_eq!(payload["errors"][0]["attribute"].as_str(), Some("name"));
-    assert_eq!(payload["errors"][0]["message"].as_str(), Some("can't be blank"));
+    assert_eq!(
+        payload["errors"][0]["message"].as_str(),
+        Some("can't be blank")
+    );
 
     // Negative points: payload error on points_possible.
     let body = gql_post(

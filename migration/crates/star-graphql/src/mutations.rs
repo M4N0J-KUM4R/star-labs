@@ -230,7 +230,10 @@ const ASSIGN_COLUMNS: &str = r#"
                due_at, created_at, updated_at, workflow_state
         FROM assignments WHERE id = $1"#;
 
-async fn fetch_assignment(pool: &PgPool, id: i64) -> Result<Option<AssignRow>, async_graphql::Error> {
+async fn fetch_assignment(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<AssignRow>, async_graphql::Error> {
     let row: Option<AssignRow> = sqlx::query_as(ASSIGN_COLUMNS)
         .bind(id)
         .fetch_optional(pool)
@@ -388,8 +391,7 @@ pub async fn update_assignment(
     // :update derives from manage_assignments_edit; :delete (destroy/
     // restore paths) from manage_assignments_delete. Both collapse onto
     // check_teacher_or_admin in the star-lms role model.
-    let manages =
-        is_admin || crate::user_teaches_course(pool, user_id, existing.course_id).await?;
+    let manages = is_admin || crate::user_teaches_course(pool, user_id, existing.course_id).await?;
     if !manages {
         return Err(async_graphql::Error::new("insufficient permission"));
     }
@@ -423,7 +425,9 @@ pub async fn update_assignment(
         }
         let row = fetch_assignment(pool, assignment_id)
             .await?
-            .ok_or_else(|| async_graphql::Error::new(format!("assignment not found: {assignment_id}")))?;
+            .ok_or_else(|| {
+                async_graphql::Error::new(format!("assignment not found: {assignment_id}"))
+            })?;
         return Ok(UpdateAssignmentPayload {
             assignment: Some(row.into_assignment()),
             errors: None,
