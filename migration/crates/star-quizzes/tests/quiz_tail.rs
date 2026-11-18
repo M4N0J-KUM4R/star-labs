@@ -190,21 +190,29 @@ async fn seed_fixture(
 }
 
 /// Start the quiz as the student and return (submission id, validation token).
-async fn take_quiz(server: &TestServer, pool: &PgPool, student: i64, quiz_id: i64) -> (i64, String) {
+async fn take_quiz(
+    server: &TestServer,
+    pool: &PgPool,
+    student: i64,
+    quiz_id: i64,
+) -> (i64, String) {
     let resp = server
         .post(&format!("/quizzes/{quiz_id}/start"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 201, "start quiz: {}", resp.text());
     let submission = resp.json::<Value>()["id"].as_i64().expect("submission id");
-    let token: String = sqlx::query_scalar(
-        "SELECT validation_token FROM quiz_submissions WHERE id = $1",
-    )
-    .bind(submission)
-    .fetch_one(pool)
-    .await
-    .expect("take issues a validation token");
-    assert_eq!(token.len(), 20, "Canvas token is SecureRandom.hex(10): {token}");
+    let token: String =
+        sqlx::query_scalar("SELECT validation_token FROM quiz_submissions WHERE id = $1")
+            .bind(submission)
+            .fetch_one(pool)
+            .await
+            .expect("take issues a validation token");
+    assert_eq!(
+        token.len(),
+        20,
+        "Canvas token is SecureRandom.hex(10): {token}"
+    );
     (submission, token)
 }
 
@@ -229,8 +237,14 @@ async fn complete_enforces_attempt_then_token_and_flips_state() {
         return;
     };
 
-    let (_teacher, student, course, quiz) =
-        seed_fixture(&server, &pool, &prefix, "CmpQ", json!({"title": "Done Quiz"})).await;
+    let (_teacher, student, course, quiz) = seed_fixture(
+        &server,
+        &pool,
+        &prefix,
+        "CmpQ",
+        json!({"title": "Done Quiz"}),
+    )
+    .await;
     let (submission, token) = take_quiz(&server, &pool, student, quiz).await;
     let path = format!("/courses/{course}/quizzes/{quiz}/submissions/{submission}/complete");
 
@@ -280,7 +294,10 @@ async fn complete_enforces_attempt_then_token_and_flips_state() {
     let entry = &body["quiz_submissions"][0];
     assert_eq!(entry["id"].as_i64(), Some(submission));
     assert_eq!(entry["workflow_state"], "complete");
-    assert!(entry.get("finished_at").is_some(), "turn-in stamps finished_at");
+    assert!(
+        entry.get("finished_at").is_some(),
+        "turn-in stamps finished_at"
+    );
     assert!(
         entry["time_spent"].as_i64().unwrap_or(-1) >= 0,
         "time_spent is stamped: {entry}"
@@ -304,8 +321,14 @@ async fn complete_is_owner_only_and_scoped_to_the_path_quiz() {
         return;
     };
 
-    let (teacher, student, course, quiz) =
-        seed_fixture(&server, &pool, &prefix, "CmpOwn", json!({"title": "Owner Quiz"})).await;
+    let (teacher, student, course, quiz) = seed_fixture(
+        &server,
+        &pool,
+        &prefix,
+        "CmpOwn",
+        json!({"title": "Owner Quiz"}),
+    )
+    .await;
     let (submission, token) = take_quiz(&server, &pool, student, quiz).await;
     let path = format!("/courses/{course}/quizzes/{quiz}/submissions/{submission}/complete");
 
@@ -318,7 +341,14 @@ async fn complete_is_owner_only_and_scoped_to_the_path_quiz() {
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
     // A submission outside the path quiz is 404 (nested find).
-    let other = seed_fixture(&server, &pool, &prefix, "CmpOther", json!({"title": "Other"})).await;
+    let other = seed_fixture(
+        &server,
+        &pool,
+        &prefix,
+        "CmpOther",
+        json!({"title": "Other"}),
+    )
+    .await;
     let resp = server
         .post(format!(
             "/courses/{course}/quizzes/{}/submissions/{submission}/complete",
@@ -356,9 +386,15 @@ async fn time_reports_clock_for_timed_and_unlimited_quizzes() {
     let path = format!("/courses/{course}/quizzes/{quiz}/submissions/{submission}/time");
 
     let body = get_ok(&server, &auth(student, "student"), &path).await;
-    assert!(body["end_at"].is_string(), "timed quiz reports an end_at: {body}");
+    assert!(
+        body["end_at"].is_string(),
+        "timed quiz reports an end_at: {body}"
+    );
     let left = body["time_left"].as_i64().expect("time_left");
-    assert!((1600..=1800).contains(&left), "time_left should be ~1800s: {left}");
+    assert!(
+        (1600..=1800).contains(&left),
+        "time_left should be ~1800s: {left}"
+    );
 
     // Grade managers may record events too; strangers may not.
     let body = get_ok(&server, &auth(teacher, "teacher"), &path).await;
@@ -371,8 +407,14 @@ async fn time_reports_clock_for_timed_and_unlimited_quizzes() {
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
     // Unlimited quiz: null clock (Canvas emits nulls, not zeros).
-    let (_t2, student2, course2, quiz2) =
-        seed_fixture(&server, &pool, &prefix, "NoLimit", json!({"title": "Untimed"})).await;
+    let (_t2, student2, course2, quiz2) = seed_fixture(
+        &server,
+        &pool,
+        &prefix,
+        "NoLimit",
+        json!({"title": "Untimed"}),
+    )
+    .await;
     let (sub2, _tok2) = take_quiz(&server, &pool, student2, quiz2).await;
     let body = get_ok(
         &server,
@@ -414,7 +456,10 @@ async fn time_freezes_after_completion() {
 
     let body = get_ok(&server, &auth(student, "student"), &format!("{base}/time")).await;
     assert_eq!(body["time_left"].as_i64(), Some(0));
-    assert!(body["end_at"].is_string(), "end_at frozen by complete: {body}");
+    assert!(
+        body["end_at"].is_string(),
+        "end_at frozen by complete: {body}"
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -440,8 +485,14 @@ async fn report_show_exposes_progress_and_abort_destroys() {
         return;
     };
 
-    let (teacher, student, course, quiz) =
-        seed_fixture(&server, &pool, &prefix, "RptQ", json!({"title": "Report Quiz"})).await;
+    let (teacher, student, course, quiz) = seed_fixture(
+        &server,
+        &pool,
+        &prefix,
+        "RptQ",
+        json!({"title": "Report Quiz"}),
+    )
+    .await;
     let report = create_report(&server, teacher, course, quiz).await;
     let path = format!("/courses/{course}/quizzes/{quiz}/reports/{report}");
 
@@ -490,8 +541,14 @@ async fn abort_distinguishes_running_and_failed_reports() {
         return;
     };
 
-    let (teacher, _student, course, quiz) =
-        seed_fixture(&server, &pool, &prefix, "RptSt", json!({"title": "States Quiz"})).await;
+    let (teacher, _student, course, quiz) = seed_fixture(
+        &server,
+        &pool,
+        &prefix,
+        "RptSt",
+        json!({"title": "States Quiz"}),
+    )
+    .await;
 
     for (state_name, expect_status, expect_text) in [
         ("running", 422, "report generation can not be aborted"),
@@ -516,7 +573,12 @@ async fn abort_distinguishes_running_and_failed_reports() {
             ))
             .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
             .await;
-        assert_eq!(resp.status_code(), expect_status, "{state_name}: {}", resp.text());
+        assert_eq!(
+            resp.status_code(),
+            expect_status,
+            "{state_name}: {}",
+            resp.text()
+        );
         if !expect_text.is_empty() {
             assert!(resp.text().contains(expect_text), "body: {}", resp.text());
             // A refused abort keeps the report.
@@ -573,12 +635,7 @@ async fn seed_group_with_questions(
     (group, questions)
 }
 
-async fn question_order(
-    server: &TestServer,
-    teacher: i64,
-    course: i64,
-    quiz: i64,
-) -> Vec<i64> {
+async fn question_order(server: &TestServer, teacher: i64, course: i64, quiz: i64) -> Vec<i64> {
     let body = get_ok(
         &server,
         &auth(teacher, "teacher"),
@@ -599,8 +656,14 @@ async fn group_reorder_sets_positions_and_appends_the_rest() {
         return;
     };
 
-    let (teacher, _student, course, quiz) =
-        seed_fixture(&server, &pool, &prefix, "RdrQ", json!({"title": "Reorder Quiz"})).await;
+    let (teacher, _student, course, quiz) = seed_fixture(
+        &server,
+        &pool,
+        &prefix,
+        "RdrQ",
+        json!({"title": "Reorder Quiz"}),
+    )
+    .await;
     let seeded = seed_group_with_questions(&server, &pool, teacher, course, quiz).await;
     let group = seeded.0;
     let questions = seeded.1;
@@ -615,10 +678,7 @@ async fn group_reorder_sets_positions_and_appends_the_rest() {
 
     // third first, first second, the untouched second keeps its relative place.
     let order = question_order(&server, teacher, course, quiz).await;
-    assert_eq!(
-        order,
-        vec![questions[2], questions[0], questions[1]]
-    );
+    assert_eq!(order, vec![questions[2], questions[0], questions[1]]);
 
     cleanup(&pool, &prefix).await;
 }
@@ -630,8 +690,14 @@ async fn group_reorder_validation_matrix() {
         return;
     };
 
-    let (teacher, student, course, quiz) =
-        seed_fixture(&server, &pool, &prefix, "RdrV", json!({"title": "Rereorder"})).await;
+    let (teacher, student, course, quiz) = seed_fixture(
+        &server,
+        &pool,
+        &prefix,
+        "RdrV",
+        json!({"title": "Rereorder"}),
+    )
+    .await;
     let seeded = seed_group_with_questions(&server, &pool, teacher, course, quiz).await;
     let group = seeded.0;
     let questions = seeded.1;

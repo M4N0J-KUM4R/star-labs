@@ -2176,9 +2176,7 @@ async fn reorder_quiz_group(
             .as_i64()
             .or_else(|| item.as_str().and_then(|text| text.parse().ok()))
             .or_else(|| item.get("id").and_then(value_to_i64))
-            .ok_or_else(|| {
-                ApiError::BadRequest("each order entry must be a question id".into())
-            })?;
+            .ok_or_else(|| ApiError::BadRequest("each order entry must be a question id".into()))?;
         ids.push(id);
     }
     if ids.len() != ids.iter().copied().collect::<HashSet<_>>().len() {
