@@ -12,9 +12,16 @@
 //! - GET    /conversations/batches              — running bulk-message batches
 //! - POST   /conversations/{id}/remove_messages — hide messages for this user
 //! - GET    /conversations/unread_count         — unread conversation counter
+//! - PUT    /conversations/{id}                 — star/subscribe/archive/read state (§5.1)
+//! - PUT    /conversations                      — batch update events (§5.2)
+//! - POST   /conversations/mark_all_as_read     — read everything (§5.3)
+//! - GET    /conversations/deleted              — admin deleted-message index (§5.4)
+//! - PUT    /conversations/restore              — admin restore a deleted message (§5.5)
+//! - DELETE /conversations/{id}/delete_for_all  — admin hard delete (§5.6)
+//! - GET    /conversations/find_recipients      — deprecated recipient search (§5.7)
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -22,7 +29,9 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 use sqlx::PgPool;
+use std::collections::HashMap;
 
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
@@ -944,6 +953,576 @@ async fn unread_count(
 }
 
 // ---------------------------------------------------------------------------
+// Conversations tail (#60, platform spec §5.1–5.7)
+// ---------------------------------------------------------------------------
+
+/// PUT /conversations/{id} body — Canvas `update` (API_ALLOWED_FIELDS only;
+/// unknown fields are ignored by strong params).
+#[derive(Debug, Deserialize)]
+struct ConversationUpdateBody {
+    #[serde(default)]
+    conversation: ConversationUpdateFields,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ConversationUpdateFields {
+    #[serde(default)]
+    workflow_state: Option<String>,
+    #[serde(default)]
+    subscribed: Option<bool>,
+    #[serde(default)]
+    starred: Option<bool>,
+}
+
+/// The caller's participant row plus the conversation fields the update
+/// response needs.
+#[derive(Debug, sqlx::FromRow)]
+struct ParticipantTailRow {
+    workflow_state: String,
+    read_at: Option<DateTime<Utc>>,
+    starred: bool,
+    subscribed: bool,
+    last_message_at: Option<DateTime<Utc>>,
+    subject: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    message_count: i64,
+    participant_count: i64,
+}
+
+/// PUT /conversations/{id} — Canvas `update` (§5.1).
+///
+/// Touches only the CALLER's participant row. `workflow_state` accepts the
+/// enumerated `read|unread|archived` values (anything else is 400).
+/// `subscribed` is silently ignored on private threads — Canvas applies it to
+/// group conversations only, and star-lms treats threads with fewer than
+/// three active participants as private. 404 for non-participants and for
+/// conversations with no visible messages, matching Canvas.
+///
+/// Deviation (pinned by tests): the response is the Canvas
+/// conversation_json surface (no message bodies) plus the per-user flags;
+/// `visible` is always true because the scope/filter params belong to the
+/// already-landed index route.
+async fn update_conversation(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<ConversationUpdateBody>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let row: Option<ParticipantTailRow> = sqlx::query_as(
+        r#"
+        SELECT cp.workflow_state, cp.read_at, cp.starred, cp.subscribed, cp.last_message_at,
+               c.subject, c.created_at, c.updated_at,
+               (
+                   SELECT COUNT(*) FROM conversation_messages cm
+                   WHERE cm.conversation_id = cp.conversation_id
+                     AND NOT EXISTS (
+                         SELECT 1 FROM conversation_message_removals r
+                         WHERE r.message_id = cm.id AND r.user_id = cp.user_id
+                     )
+               ) AS message_count,
+               (
+                   SELECT COUNT(*) FROM conversation_participants p2
+                   WHERE p2.conversation_id = cp.conversation_id
+                     AND p2.workflow_state = 'active'
+               ) AS participant_count
+        FROM conversation_participants cp
+        JOIN conversations c ON c.id = cp.conversation_id
+        WHERE cp.conversation_id = $1 AND cp.user_id = $2
+        "#,
+    )
+    .bind(id)
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let row = row.ok_or(ApiError::NotFound)?;
+    if row.workflow_state == "deleted" || row.message_count == 0 {
+        return Err(ApiError::NotFound);
+    }
+
+    let fields = payload.conversation;
+    let mut workflow_state = row.workflow_state;
+    let mut read_at = row.read_at;
+    let mut starred = row.starred;
+    let mut subscribed = row.subscribed;
+
+    if let Some(state_name) = fields.workflow_state.as_deref() {
+        match state_name {
+            "read" => read_at = Some(Utc::now()),
+            "unread" => read_at = None,
+            "archived" => workflow_state = "archived".to_string(),
+            _ => return Err(ApiError::BadRequest("invalid workflow_state".into())),
+        }
+    }
+    if row.participant_count >= 3 {
+        if let Some(flag) = fields.subscribed {
+            subscribed = flag;
+        }
+    }
+    if let Some(flag) = fields.starred {
+        starred = flag;
+    }
+
+    sqlx::query(
+        "UPDATE conversation_participants \
+         SET workflow_state = $3, read_at = $4, starred = $5, subscribed = $6 \
+         WHERE conversation_id = $1 AND user_id = $2",
+    )
+    .bind(id)
+    .bind(auth.id)
+    .bind(&workflow_state)
+    .bind(read_at)
+    .bind(starred)
+    .bind(subscribed)
+    .execute(&state.db)
+    .await?;
+
+    let participants: Vec<i64> = sqlx::query_as(
+        "SELECT user_id FROM conversation_participants \
+         WHERE conversation_id = $1 AND workflow_state = 'active' ORDER BY id",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?
+    .into_iter()
+    .map(|(user_id,)| user_id)
+    .collect();
+
+    Ok(Json(json!({
+        "id": id,
+        "subject": row.subject,
+        "workflow_state": workflow_state,
+        "message_count": row.message_count,
+        "last_message": null,
+        "last_message_at": row.last_message_at,
+        "starred": starred,
+        "subscribed": subscribed,
+        "visible": true,
+        "unread": read_at.is_none(),
+        "participants": participants,
+        "created_at": row.created_at,
+        "updated_at": row.updated_at,
+    })))
+}
+
+/// Rails-style `Array(params[:conversation_ids])` coercion: a scalar wraps
+/// into a one-element array; anything non-scalar yields an empty vec.
+fn coerce_ids(value: &Value) -> Vec<i64> {
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .filter_map(|item| match item {
+                Value::Number(n) => n.as_i64(),
+                Value::String(text) => text.trim().parse().ok(),
+                _ => None,
+            })
+            .collect(),
+        Value::Number(n) => n.as_i64().into_iter().collect(),
+        Value::String(text) => text.trim().parse::<i64>().ok().into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// PUT /conversations — Canvas `batch_update` (§5.2).
+///
+/// Validation messages are Canvas' literal strings and validation order:
+/// "conversation_ids not specified" (missing, non-scalar, or blank),
+/// "conversation batch size limit (500) exceeded", "event not specified",
+/// "invalid event".
+///
+/// Deviation (pinned by tests): star-lms applies the event synchronously over
+/// the caller's own participant rows (Canvas enqueues a ConversationBatch
+/// job), so the returned Progress reports `completed` / completion 1.0 and no
+/// persisted id — progress persistence lands with MIG-04 (#45).
+async fn batch_update_conversations(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(body): Json<Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let object = body.as_object();
+    let raw_ids = object.and_then(|fields| fields.get("conversation_ids"));
+    let ids = raw_ids.map(coerce_ids).unwrap_or_default();
+    if ids.is_empty() {
+        return Err(ApiError::BadRequest(
+            "conversation_ids not specified".into(),
+        ));
+    }
+    if ids.len() > 500 {
+        return Err(ApiError::BadRequest(
+            "conversation batch size limit (500) exceeded".into(),
+        ));
+    }
+
+    let event = object
+        .and_then(|fields| fields.get("event"))
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if event.is_empty() {
+        return Err(ApiError::BadRequest("event not specified".into()));
+    }
+    let set_clause = match event {
+        "mark_as_read" => "read_at = now()",
+        "mark_as_unread" => "read_at = NULL",
+        "star" => "starred = true",
+        "unstar" => "starred = false",
+        "archive" => "workflow_state = 'archived'",
+        "destroy" => "workflow_state = 'deleted'",
+        _ => return Err(ApiError::BadRequest("invalid event".into())),
+    };
+
+    // Canvas applies the event only to participants of the current user;
+    // foreign conversation ids are silently skipped.
+    sqlx::query(&format!(
+        "UPDATE conversation_participants SET {set_clause} \
+         WHERE user_id = $1 AND conversation_id = ANY($2::BIGINT[])"
+    ))
+    .bind(auth.id)
+    .bind(ids.as_slice())
+    .execute(&state.db)
+    .await?;
+
+    let now = Utc::now();
+    Ok(Json(json!({
+        "id": Value::Null,
+        "context_id": Value::Null,
+        "context_type": "ConversationBatch",
+        "user_id": auth.id,
+        "workflow_state": "completed",
+        "completion": 1.0,
+        "tag": "conversation_batch",
+        "updated_at": now,
+        "created_at": now,
+    })))
+}
+
+/// POST /conversations/mark_all_as_read — Canvas `mark_all_as_read` (§5.3).
+/// Marks every ACTIVE conversation of the caller read. 200 with an empty
+/// object; the unread counter cache is derived, so no extra bookkeeping.
+async fn mark_all_as_read(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    sqlx::query(
+        "UPDATE conversation_participants SET read_at = now() \
+         WHERE user_id = $1 AND workflow_state = 'active'",
+    )
+    .bind(auth.id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(Json(json!({})))
+}
+
+/// Site-admin gate for the admin-only tail routes. Canvas answers 401
+/// (`unauthorized_action`), which is what these routes return — unlike the
+/// participant routes' 403/404 convention.
+fn ensure_site_admin(auth: &AuthUser) -> Result<(), ApiError> {
+    if auth.role == "admin" {
+        Ok(())
+    } else {
+        Err(ApiError::Unauthorized)
+    }
+}
+
+/// GET /conversations/deleted — Canvas `deleted_index` (§5.4).
+///
+/// Star models per-user message deletion through `conversation_message_removals`
+/// (the snapshot has no ConversationMessageParticipant table), so the deleted
+/// index lists those rows. Filters: `user_id`, `conversation_id`; pagination
+/// via `limit` (default 50) / `offset`. Serialized like
+/// `deleted_conversation_json` minus the shard/collab fields star-lms lacks.
+async fn deleted_index(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    ensure_site_admin(&auth)?;
+
+    let user_id: Option<i64> = params.get("user_id").and_then(|v| v.parse().ok());
+    let conversation_id: Option<i64> = params.get("conversation_id").and_then(|v| v.parse().ok());
+    let limit: i64 = params
+        .get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50)
+        .clamp(1, 100);
+    let offset: i64 = params
+        .get("offset")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+        .max(0);
+
+    let rows: Vec<(
+        i64,
+        i64,
+        i64,
+        i64,
+        String,
+        DateTime<Utc>,
+        DateTime<Utc>,
+        i64,
+    )> = sqlx::query_as(
+        r#"
+        SELECT r.id, r.user_id, r.conversation_id, cm.author_id, cm.body, cm.created_at,
+               r.deleted_at, r.message_id
+        FROM conversation_message_removals r
+        JOIN conversation_messages cm ON cm.id = r.message_id
+        WHERE ($1::BIGINT IS NULL OR r.user_id = $1)
+          AND ($2::BIGINT IS NULL OR r.conversation_id = $2)
+        ORDER BY r.deleted_at DESC, r.id DESC
+        LIMIT $3 OFFSET $4
+        "#,
+    )
+    .bind(user_id)
+    .bind(conversation_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    let out = rows
+        .into_iter()
+        .map(
+            |(
+                id,
+                user_id,
+                conversation_id,
+                author_id,
+                body,
+                created_at,
+                deleted_at,
+                message_id,
+            )| {
+                json!({
+                    "id": id,
+                    "message_id": message_id,
+                    "conversation_id": conversation_id,
+                    "user_id": user_id,
+                    "author_id": author_id,
+                    "body": body,
+                    "created_at": created_at,
+                    "deleted_at": deleted_at,
+                    "workflow_state": "deleted",
+                })
+            },
+        )
+        .collect();
+
+    Ok(Json(out))
+}
+
+/// PUT /conversations/restore — Canvas `restore_message` (§5.5).
+///
+/// Site-admin only; `message_id`, `user_id` and `conversation_id` are all
+/// required — each missing one appends the Canvas `[{attribute, message:
+/// "required"}]` error. Accepts JSON or query params (Canvas reads both
+/// alike). Restores the removal row, recomputes the participant's
+/// `last_message_at`, and answers with `conversation_message_json` for the
+/// restored messages.
+async fn restore_message(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    body: Option<Json<Value>>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    ensure_site_admin(&auth)?;
+
+    let read_param = |name: &str| -> Option<i64> {
+        if let Some(value) = params.get(name).and_then(|v| v.parse().ok()) {
+            return Some(value);
+        }
+        body.as_ref()
+            .and_then(|Json(value)| value.get(name).cloned())
+            .and_then(|value| match value {
+                Value::Number(n) => n.as_i64(),
+                Value::String(text) => text.parse().ok(),
+                _ => None,
+            })
+    };
+
+    let mut missing: Vec<serde_json::Value> = Vec::new();
+    for name in ["message_id", "user_id", "conversation_id"] {
+        if read_param(name).is_none() {
+            missing.push(json!({"attribute": name, "message": "required"}));
+        }
+    }
+    if !missing.is_empty() {
+        return Ok((StatusCode::BAD_REQUEST, Json(missing)).into_response());
+    }
+
+    let message_id = read_param("message_id").expect("checked above");
+    let user_id = read_param("user_id").expect("checked above");
+    let conversation_id = read_param("conversation_id").expect("checked above");
+
+    let removed: Option<(i64,)> = sqlx::query_as(
+        "DELETE FROM conversation_message_removals \
+         WHERE message_id = $1 AND user_id = $2 AND conversation_id = $3 RETURNING message_id",
+    )
+    .bind(message_id)
+    .bind(user_id)
+    .bind(conversation_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    if removed.is_some() {
+        // Recompute the participant's last_message_at over visible messages,
+        // mirroring Canvas' participant touch on restore.
+        sqlx::query(
+            "UPDATE conversation_participants \
+             SET last_message_at = COALESCE(( \
+                 SELECT MAX(cm.created_at) FROM conversation_messages cm \
+                 WHERE cm.conversation_id = $1 \
+                   AND NOT EXISTS ( \
+                       SELECT 1 FROM conversation_message_removals r \
+                       WHERE r.message_id = cm.id AND r.user_id = $2)), \
+                 conversation_participants.last_message_at) \
+             WHERE conversation_id = $1 AND user_id = $2",
+        )
+        .bind(conversation_id)
+        .bind(user_id)
+        .execute(&state.db)
+        .await?;
+    }
+
+    // Canvas answers with the restored message's conversation_message_json;
+    // restoring a non-removed message answers an empty array (no-op).
+    let message: Option<(i64, i64, String, DateTime<Utc>)> = sqlx::query_as(
+        "SELECT id, author_id, body, created_at FROM conversation_messages \
+         WHERE id = $1 AND conversation_id = $2",
+    )
+    .bind(message_id)
+    .bind(conversation_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let out = match message {
+        // Only a real restore (a removal row was deleted) echoes the message.
+        Some((id, author_id, body, created_at)) if removed.is_some() => {
+            let participants: Vec<i64> = sqlx::query_as(
+                "SELECT user_id FROM conversation_participants \
+                 WHERE conversation_id = $1 AND workflow_state = 'active' ORDER BY id",
+            )
+            .bind(conversation_id)
+            .fetch_all(&state.db)
+            .await?
+            .into_iter()
+            .map(|(user_id,)| user_id)
+            .collect();
+            vec![json!({
+                "id": id,
+                "created_at": created_at,
+                "body": body,
+                "author_id": author_id,
+                "generated": false,
+                "media_comment": Value::Null,
+                "forwarded_messages": [],
+                "attachments": [],
+                "participating_user_ids": participants,
+            })]
+        }
+        _ => Vec::new(),
+    };
+
+    Ok((StatusCode::OK, Json(out)).into_response())
+}
+
+/// DELETE /conversations/{id}/delete_for_all — Canvas `delete_for_all` (§5.6).
+///
+/// Site-admin hard delete of the conversation for EVERY participant (unlike
+/// the per-user soft `DELETE /conversations/{id}`). Canvas additionally
+/// requires `manage_students`; star-lms models site admins only, so the role
+/// check stands in for both (documented deviation). 401 for non-admins,
+/// 404 for an unknown conversation, 200 `{}` on success.
+async fn delete_conversation_for_all(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ensure_site_admin(&auth)?;
+
+    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM conversations WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?;
+    if exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // conversation_messages / participants / removals all cascade.
+    sqlx::query("DELETE FROM conversations WHERE id = $1")
+        .bind(id)
+        .execute(&state.db)
+        .await?;
+
+    Ok(Json(json!({})))
+}
+
+/// GET /conversations/find_recipients — deprecated Canvas alias (§5.7).
+///
+/// Canvas routes this through SearchController#recipients; the star-search
+/// crate (#91) has not landed, so star-conversations serves the same
+/// recipient index directly: name/email/sortable-name substring match with
+/// `limit` (default 50) / `offset` and Canvas' recipient hash shape
+/// (`avatar_url` stays null — profile pictures depend on MIG-04).
+async fn find_recipients(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let search = params.get("search").cloned().unwrap_or_default();
+    let limit: i64 = params
+        .get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(50)
+        .clamp(1, 100);
+    let offset: i64 = params
+        .get("offset")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0)
+        .max(0);
+    let pattern = format!("%{search}%");
+
+    let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT id, name, sortable_name
+        FROM users
+        WHERE name ILIKE $1 OR email ILIKE $1 OR COALESCE(sortable_name, name) ILIKE $1
+        ORDER BY COALESCE(sortable_name, name), id
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(&pattern)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+    let _ = auth.id;
+
+    let out = rows
+        .into_iter()
+        .map(|(id, name, sortable_name)| {
+            json!({
+                "id": id,
+                "name": name,
+                "full_name": name,
+                "sortable_name": sortable_name.clone().unwrap_or_else(|| name.clone()),
+                "short_name": name,
+                "common_name": {
+                    "model": "User",
+                    "id": id,
+                    "short_name": name,
+                    "sortable_name": sortable_name.unwrap_or_else(|| name.clone()),
+                    "name": name,
+                },
+                "avatar_url": Value::Null,
+            })
+        })
+        .collect();
+
+    Ok(Json(out))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -960,6 +1539,17 @@ pub fn router() -> Router<AppState> {
         .route("/conversations/{id}/add_recipients", post(add_recipients))
         .route("/conversations/{id}/remove_messages", post(remove_messages))
         .route("/conversations/{id}/read", put(mark_read))
+        // Conversations tail (#60, platform spec §5.1–5.7)
+        .route("/conversations", put(batch_update_conversations))
+        .route("/conversations/{id}", put(update_conversation))
+        .route(
+            "/conversations/{id}/delete_for_all",
+            delete(delete_conversation_for_all),
+        )
+        .route("/conversations/mark_all_as_read", post(mark_all_as_read))
+        .route("/conversations/deleted", get(deleted_index))
+        .route("/conversations/restore", put(restore_message))
+        .route("/conversations/find_recipients", get(find_recipients))
 }
 
 #[cfg(test)]
