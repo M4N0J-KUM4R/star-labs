@@ -1322,8 +1322,8 @@ async fn deleted_index(
 async fn restore_message(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
-    body: Option<Json<Value>>,
     auth: AuthUser,
+    body: Option<Json<Value>>,
 ) -> Result<Response, ApiError> {
     ensure_site_admin(&auth)?;
 
