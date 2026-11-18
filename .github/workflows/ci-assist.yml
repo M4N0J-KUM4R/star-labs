@@ -1,0 +1,109 @@
+name: CI assist
+
+# Coordinator tooling for the "no local builds" rule (issue #20): agents cannot
+# run cargo locally, so formatting, lockfile refreshes and mechanical clippy
+# fixes are performed here, on GitHub Actions, and pushed back to the lane
+# branch. Nothing runs on an operator workstation.
+#
+# Usage (dispatch against the lane branch, never main):
+#   gh workflow run "CI assist" --ref p5/infra-105 -f branch=p5/infra-105 -f task=fmt+lock
+#
+# The push uses GITHUB_TOKEN, so the resulting commit re-triggers the normal
+# validation workflows on the lane branch.
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Lane branch to repair (never main)'
+        required: true
+        type: string
+      task:
+        description: 'What to run'
+        required: true
+        type: choice
+        default: fmt+lock
+        options:
+          - fmt
+          - lock
+          - fmt+lock
+          - clippy-fix
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ci-assist-${{ inputs.branch }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  assist:
+    name: Assist ${{ inputs.task }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Refuse to touch main
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.branch }}" = "main" ] || [ "${{ inputs.branch }}" = "refs/heads/main" ]; then
+            echo "::error::CI assist never writes to main"; exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: migration -> target
+          shared-key: assist
+          save-if: false
+
+      - name: Refresh Cargo.lock (minimal, no dependency upgrades)
+        if: inputs.task == 'lock' || inputs.task == 'fmt+lock'
+        working-directory: migration
+        run: |
+          set -euo pipefail
+          # `cargo fetch` resolves the manifests and rewrites Cargo.lock with the
+          # smallest possible change; it never upgrades already-pinned versions.
+          cargo fetch
+          cargo metadata --locked --format-version 1 > /dev/null
+          echo "Cargo.lock is consistent with the manifests"
+
+      - name: cargo fmt
+        if: inputs.task == 'fmt' || inputs.task == 'fmt+lock'
+        working-directory: migration
+        run: cargo fmt --all
+
+      - name: cargo clippy --fix (mechanical lints only)
+        if: inputs.task == 'clippy-fix'
+        working-directory: migration
+        run: |
+          set -euo pipefail
+          cargo clippy --workspace --all-targets --fix --allow-dirty --allow-staged || true
+          cargo fmt --all
+
+      - name: Commit and push repairs
+        run: |
+          set -euo pipefail
+          git config user.name "star-labs-ci-assist"
+          git config user.email "ci-assist@star-labs.local"
+          if git diff --quiet; then
+            echo "nothing to repair — branch already clean for task '${{ inputs.task }}'"
+            exit 0
+          fi
+          git add -A migration
+          git commit -m "chore(ci-assist): ${{ inputs.task }} on ${{ inputs.branch }}
+
+          Applied on GitHub Actions (no local toolchain), per issue #20."
+          git push origin HEAD:"${{ inputs.branch }}"

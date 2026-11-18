@@ -1,5 +1,11 @@
 name: Production build
 
+# Fan-out: quality, security and the two release builds all start immediately.
+# The workspace test suite lives in `rust-migration.yml` (sharded, 4 runners) —
+# it is deliberately NOT duplicated here, which used to double every push's
+# test cost. Release builds run on `main` and on demand; PRs get the full
+# compile via clippy --all-targets plus the sharded test suite.
+
 on:
   push:
     branches: [main]
@@ -12,7 +18,13 @@ on:
       - 'migration/**'
       - 'orchestration/**'
       - '.github/workflows/production-build.yml'
+  merge_group:
   workflow_dispatch:
+    inputs:
+      release:
+        description: 'Run the release build matrix on this ref'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -23,10 +35,12 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Quality gates: formatting and linting must pass before any build.
+  # Quality gates: formatting, linting, migration-file hygiene. Runs in parallel
+  # with everything else — it is no longer a serial prerequisite.
   # ---------------------------------------------------------------------------
   quality:
     name: Format and lint
@@ -43,6 +57,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: migration -> target
+          shared-key: quality
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Enforce rustfmt
         run: cargo fmt --all -- --check
       - name: Enforce clippy
@@ -77,53 +93,31 @@ jobs:
         run: cargo audit --file Cargo.lock
 
   # ---------------------------------------------------------------------------
-  # Tests against a real PostgreSQL service (debug profile; fastest feedback).
-  # ---------------------------------------------------------------------------
-  test:
-    name: Test (debug, PostgreSQL)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    needs: quality
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: star
-          POSTGRES_PASSWORD: star-test-only
-          POSTGRES_DB: star_lms_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U star -d star_lms_test"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-    env:
-      DATABASE_URL: postgres://star:star-test-only@localhost:5432/star_lms_test
-      STAR_JWT_SECRET: github-actions-test-secret
-    defaults:
-      run:
-        working-directory: migration
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: migration -> target
-      - name: Run workspace tests
-        run: cargo test --workspace --exclude star-http --locked --no-fail-fast
-      - name: Verify star-http builds with tests
-        run: cargo test -p star-http --no-run --locked
-
-  # ---------------------------------------------------------------------------
-  # Production release builds (glibc + static musl) with a boot smoke test.
-  # The glibc binary matches lab-deploy.sh; the musl binary is the portable one.
+  # Production release builds. glibc and musl are separate parallel jobs (they
+  # used to run back-to-back in one 45-minute job). Each boots its own binary
+  # and smoke-tests /health against a real PostgreSQL service.
   # ---------------------------------------------------------------------------
   release-build:
-    name: Release build (production, glibc + musl)
+    name: Release build (${{ matrix.target }})
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      (github.event_name == 'workflow_dispatch' && inputs.release)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    needs: [quality, test]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: glibc
+            triple: x86_64-unknown-linux-gnu
+            cargo_target_flag: ''
+            binary: target/release/star-http
+            artifact: star-lms-release
+          - target: musl
+            triple: x86_64-unknown-linux-musl
+            cargo_target_flag: '--target x86_64-unknown-linux-musl'
+            binary: target/x86_64-unknown-linux-musl/release/star-http
+            artifact: star-lms-release-musl
     services:
       postgres:
         image: postgres:16
@@ -145,58 +139,51 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-unknown-linux-musl
+          targets: ${{ matrix.triple }}
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: migration -> target
+          shared-key: release-${{ matrix.target }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Install musl toolchain
+        if: matrix.target == 'musl'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
-      - name: Build release binary (glibc)
-        run: cargo build --release --locked --manifest-path migration/Cargo.toml
-      - name: Build release binary (static musl)
-        run: cargo build --release --locked --target x86_64-unknown-linux-musl --manifest-path migration/Cargo.toml
+      - name: Build release binary
+        run: cargo build --release --locked ${{ matrix.cargo_target_flag }} --manifest-path migration/Cargo.toml
       - name: Record metadata
         run: |
-          printf 'branch=%s\ncommit=%s\ndate=%s\n' \
-            "${GITHUB_REF_NAME}" "${GITHUB_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            > migration/target/release/BUILD_INFO
-          cp migration/target/release/BUILD_INFO migration/target/x86_64-unknown-linux-musl/release/BUILD_INFO
-          cp migration/target/x86_64-unknown-linux-musl/release/star-http migration/target/x86_64-unknown-linux-musl/release/star-http-musl
-      - name: Smoke test release binaries
+          printf 'branch=%s\ncommit=%s\ndate=%s\ntarget=%s\n' \
+            "${GITHUB_REF_NAME}" "${GITHUB_SHA}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${{ matrix.triple }}" \
+            > "$(dirname migration/${{ matrix.binary }})/BUILD_INFO"
+      - name: Smoke test release binary
         working-directory: migration
         run: |
           set -euo pipefail
-          for bin in target/release/star-http target/x86_64-unknown-linux-musl/release/star-http-musl; do
-            port=$((18080 + RANDOM % 500))
-            STAR_PORT=$port "$bin" &
-            pid=$!
-            ok=
-            for _ in $(seq 1 30); do
-              if curl -fsS "http://127.0.0.1:$port/health" > /dev/null 2>&1; then ok=1; break; fi
-              sleep 1
-            done
-            kill "$pid" 2>/dev/null || true
-            wait "$pid" 2>/dev/null || true
-            if [ -z "$ok" ]; then
-              echo "::error::$bin did not answer /health"; exit 1
-            fi
-            echo "$bin answered /health"
+          bin="${{ matrix.binary }}"
+          port=$((18080 + RANDOM % 500))
+          STAR_PORT=$port "$bin" &
+          pid=$!
+          ok=
+          for _ in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:$port/health" > /dev/null 2>&1; then ok=1; break; fi
+            sleep 1
           done
-      - name: Upload release artifact (glibc)
+          kill "$pid" 2>/dev/null || true
+          wait "$pid" 2>/dev/null || true
+          if [ -z "$ok" ]; then
+            echo "::error::$bin did not answer /health"; exit 1
+          fi
+          echo "$bin answered /health"
+      - name: Stage artifact
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          cp "migration/${{ matrix.binary }}" artifact/star-http
+          cp "$(dirname migration/${{ matrix.binary }})/BUILD_INFO" artifact/BUILD_INFO
+      - name: Upload release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: star-lms-release-${{ github.sha }}
-          path: |
-            migration/target/release/star-http
-            migration/target/release/BUILD_INFO
-          if-no-files-found: error
-          retention-days: 14
-      - name: Upload release artifact (musl)
-        uses: actions/upload-artifact@v4
-        with:
-          name: star-lms-release-musl-${{ github.sha }}
-          path: |
-            migration/target/x86_64-unknown-linux-musl/release/star-http-musl
-            migration/target/x86_64-unknown-linux-musl/release/BUILD_INFO
+          name: ${{ matrix.artifact }}-${{ github.sha }}
+          path: artifact/
           if-no-files-found: error
           retention-days: 14
