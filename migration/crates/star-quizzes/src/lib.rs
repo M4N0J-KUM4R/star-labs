@@ -2193,7 +2193,10 @@ async fn reorder_quiz_group(
     .bind(quiz_id)
     .bind(group_id)
     .fetch_all(&state.db)
-    .await?;
+    .await?
+    .into_iter()
+    .map(|(id,)| id)
+    .collect();
     let members: HashSet<i64> = in_group.iter().copied().collect();
     if ids.iter().any(|id| !members.contains(id)) {
         return Err(ApiError::NotFound);
