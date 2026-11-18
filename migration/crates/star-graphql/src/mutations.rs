@@ -212,8 +212,10 @@ impl AssignRow {
     /// Assignment-type parity issue).
     fn into_assignment(self) -> Assignment {
         Assignment {
-            id: async_graphql::ID(self.id.to_string()),
-            course_id: async_graphql::ID(self.course_id.to_string()),
+            // `Assignment` stores raw i64 ids and exposes them as GraphQL IDs
+            // through its #[Object] resolvers (main pattern since #26/#28).
+            id: self.id,
+            course_id: self.course_id,
             name: self.name,
             description: self.description,
             points_possible: self.points_possible,
