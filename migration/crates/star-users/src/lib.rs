@@ -2158,18 +2158,29 @@ async fn asset_type_exists(
 // --------------------------------------------------------------------------
 
 /// Request body for POST /accounts/{account_id}/self_registration. Canvas
-/// wraps the fields (`user[name]`, `pseudonym[unique_id]`,
-/// `communication_channel[...]`) but the API also accepts the flattened
-/// `unique_id` form used by the mobile self-registration screen.
+/// wraps the fields (`user[name]`, `user[initial_enrollment_type]`,
+/// `pseudonym[unique_id]`, `communication_channel[...]`) but the API also
+/// accepts the flattened `unique_id` form used by the mobile
+/// self-registration screen.
 #[derive(Debug, Default, Deserialize)]
 pub struct SelfRegistrationRequest {
     #[serde(default)]
-    pub user: AccountUserFields,
+    pub user: SelfRegistrationUserFields,
     #[serde(default)]
     pub pseudonym: AccountPseudonym,
     /// Flattened fallback for `pseudonym[unique_id]`.
     pub unique_id: Option<String>,
     pub password: Option<String>,
+}
+
+/// `user[...]` fields for self registration. `initial_enrollment_type`
+/// (e.g. "observer") participates in the
+/// `self_registration_allowed_for?` check.
+#[derive(Debug, Default, Deserialize)]
+pub struct SelfRegistrationUserFields {
+    pub name: Option<String>,
+    pub sortable_name: Option<String>,
+    pub initial_enrollment_type: Option<String>,
 }
 
 /// Canvas `Account#self_registration?` / `#self_registration_allowed_for?`
@@ -2216,7 +2227,9 @@ async fn self_registration_allowed(
     Ok(reg_type == "all" || Some(reg_type) == initial_enrollment_type.filter(|t| !t.is_empty()))
 }
 
-/// Resolve an account id to its root account (Canvas `@domain_root_account`).
+/// Resolve an account id to its root account. Unknown ids fall back to the
+/// site root account, mirroring Canvas `require_self_registration`'s
+/// `@context = @domain_root_account unless @context.is_a?(Account)`.
 async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, ApiError> {
     let mut current = account_id;
     for _ in 0..16 {
@@ -2227,7 +2240,16 @@ async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, ApiError
                 .await
                 .map_err(ApiError::from)?;
         match row {
-            None => return Ok(current),
+            None => {
+                // Unknown id: Canvas substitutes the domain root account.
+                let root: Option<(i64,)> = sqlx::query_as(
+                    "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id LIMIT 1",
+                )
+                .fetch_optional(pool)
+                .await
+                .map_err(ApiError::from)?;
+                return Ok(root.map(|(id,)| id).unwrap_or(current));
+            }
             Some((Some(parent),)) if parent != current => current = parent,
             Some(_) => return Ok(current),
         }
@@ -2255,18 +2277,16 @@ async fn create_self_registered_user(
     if !self_registration_allowed(
         &state.db,
         root,
-        payload
-            .user
-            .name
-            .as_deref()
-            .map(|_| None::<&str>)
-            .unwrap_or(None),
+        payload.user.initial_enrollment_type.as_deref(),
     )
     .await?
     {
         return Err(ApiError::Forbidden);
     }
 
+    // Canvas' require_self_registration falls back to the root account when
+    // the id does not name an Account, so the gate above ran against the
+    // root; the creation itself still needs a real account row.
     let account: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM accounts WHERE id = $1")
         .bind(account_id)
         .fetch_optional(&state.db)
@@ -2339,7 +2359,7 @@ async fn expire_mobile_sessions_all(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    expire_mobile_sessions_impl(&state, &auth, None).await
+    expire_mobile_sessions_impl(&state, &auth).await
 }
 
 /// DELETE /users/{id}/mobile_sessions — per-user variant of the same action.
@@ -2350,13 +2370,12 @@ async fn expire_mobile_sessions(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user_id = resolve_path_user(&raw_user_id, auth.id)?;
     ensure_user_exists(&state.db, user_id).await?;
-    expire_mobile_sessions_impl(&state, &auth, Some(user_id)).await
+    expire_mobile_sessions_impl(&state, &auth).await
 }
 
 async fn expire_mobile_sessions_impl(
     state: &AppState,
     auth: &AuthUser,
-    user_id: Option<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     // Canvas checks `manage_user_logins` on the root account (account 1).
     if !is_admin(&auth.role) {
@@ -2371,7 +2390,6 @@ async fn expire_mobile_sessions_impl(
             return Err(ApiError::Forbidden);
         }
     }
-    let _ = user_id; // token invalidation is the sns_arn-scoped no-op (see doc comment)
     Ok(Json(
         serde_json::json!({ "message": "All mobile sessions terminated" }),
     ))
@@ -2384,8 +2402,7 @@ async fn expire_mobile_sessions_impl(
 /// (`@access_token`); bearer JWTs are not one, so the action's first guard
 /// fires: 400 `{"message": "Access token required"}`. This is a faithful
 /// pin, not a stub — the star-lms API has no access-token auth path.
-async fn pandata_events_token(auth: AuthUser) -> Result<Json<serde_json::Value>, ApiError> {
-    let _ = auth; // authenticated caller; the access-token guard below is unconditional
+async fn pandata_events_token(_auth: AuthUser) -> Result<Json<serde_json::Value>, ApiError> {
     Err(ApiError::BadRequest("Access token required".into()))
 }
 
@@ -2481,7 +2498,8 @@ async fn k5_setting_accounts(pool: &PgPool, key: &str) -> Result<Vec<i64>, ApiEr
 }
 
 /// Canvas K5::UserService#user_has_association?: the user is enrolled in a
-/// course whose account (or its chain) is in `account_ids`, or is an active
+/// course whose account (or any k5 account in its chain, via
+/// Account#multi_account_chain_ids) is in `account_ids`, or is an active
 /// account admin of one of them.
 async fn user_associated_with_accounts(
     pool: &PgPool,
@@ -2493,22 +2511,19 @@ async fn user_associated_with_accounts(
     }
     let enrolled: Option<(i32,)> = sqlx::query_as(
         r#"
+        WITH RECURSIVE chain AS (
+            SELECT id, parent_account_id FROM accounts WHERE id = ANY($2)
+            UNION ALL
+            SELECT a.id, a.parent_account_id
+            FROM accounts a
+            JOIN chain ch ON a.parent_account_id = ch.id
+        )
         SELECT 1
         FROM enrollments e
         JOIN courses c ON c.id = e.course_id
         WHERE e.user_id = $1
           AND e.workflow_state = 'active'
-          AND (
-              c.account_id = ANY($2)
-              OR c.account_id IN (
-                  SELECT descendant.id
-                  FROM accounts descendant
-                  JOIN accounts ancestor
-                    ON descendant.parent_account_id = ancestor.id
-                   OR descendant.id = ancestor.id
-                  WHERE ancestor.id = ANY($2)
-              )
-          )
+          AND c.account_id IN (SELECT id FROM chain)
         LIMIT 1
         "#,
     )
