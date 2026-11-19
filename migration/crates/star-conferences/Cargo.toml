@@ -9,5 +9,6 @@ axum = { workspace = true }
 
 [dev-dependencies]
 star-db = { path = "../star-db" }
+sqlx = { workspace = true }
 tokio = { workspace = true }
 axum-test = { workspace = true }
