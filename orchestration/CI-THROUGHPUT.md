@@ -137,14 +137,31 @@ Waste identified:
    `Format and lint` also reports on CI-tooling-only PRs (gap: it did not
    before, which would have left the required check missing on such PRs).
 
-## Expected after
+## After (measured)
+
+Rust-classified round — this branch @ `f49f905a` (test run 404, production
+build 210, bootstrap 233), i.e. the full suite including the new `changes`
+jobs:
+
+| Workflow | Critical path | Notes |
+|---|---:|---|
+| Rust migration validation | 2.5 min | changes 6 s → 4 shards (1.6–2.3 min) → gate 4 s |
+| Production build (PR) | 0.9 min | fmt+clippy 0.8 min ∥ audit |
+| Bootstrap validation | 0.7 min | lab fast path: shellcheck/cfn-lint installs skipped |
+
+The Rust-changing PR path is therefore neutral-to-slightly-better (the removed
+pre-step and faster DB polling roughly pay for the added `changes` hop); the
+wins are the docs-only path below and the halved runner usage per lane push.
 
 | PR type | Before | After |
 |---|---:|---:|
-| docs-only (specs/orchestration) | ~2.4 min | ~0.5–0.8 min (changes + gates only) |
-| Rust-changing | ~2.4 min | ~2.0–2.2 min (no pre-step, faster DB ready) |
-| lane push (PR open) | 2 suites | 1 suite (pull_request only) |
+| Rust-changing | ~2.4 min | ~2.5 min (measured; neutral within noise) |
+| docs-only (specs/orchestration) | ~2.4 min | measured by the docs-only validation round on this branch — see PR #145 |
+| lane push (PR open) | 2 suites per SHA | 1 suite (pull_request only) |
 | main push | unchanged | unchanged (full verification by design) |
 
-Filled in by the coordinator from the Actions API once runs complete on this
-branch and on `main` post-merge.
+The docs-only fast path is exercised by the doc-update commits on this very
+branch: their only changed file is `orchestration/CI-THROUGHPUT.md`, so the
+shard matrix, fmt/clippy, and the shellcheck/cfn-lint installs all skip while
+the three required checks stay green. `main` post-merge numbers to be filled
+in by the coordinator from the Actions API.
