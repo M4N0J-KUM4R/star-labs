@@ -557,7 +557,7 @@ async fn fetch_current_grades(
         .bind(student_id)
         .fetch_optional(pool)
         .await?;
-        let grade = grade.map(|(g,)| g).flatten();
+        let grade = grade.and_then(|(g,)| g);
         grades.insert((assignment_id, student_id), grade);
     }
     Ok(grades)

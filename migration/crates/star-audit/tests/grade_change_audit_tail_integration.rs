@@ -168,6 +168,11 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
         .bind(format!("{prefix}%"))
         .execute(pool)
         .await;
+    // Test-local foreign root accounts (never the seeded "Root Account").
+    let _ = sqlx::query("DELETE FROM accounts WHERE name LIKE $1")
+        .bind(format!("{prefix}-%"))
+        .execute(pool)
+        .await;
 }
 
 #[tokio::test]
@@ -266,6 +271,14 @@ async fn for_student_and_for_grader_are_admin_only() {
         Some(1),
     )
     .await;
+    // A second (foreign) root account: its events must not surface in
+    // root-account-scoped queries.
+    let foreign_account: i64 =
+        sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+            .bind(format!("{prefix}-ForeignRoot"))
+            .fetch_one(&pool)
+            .await
+            .expect("seed foreign account");
     seed_event_full(
         &pool,
         &format!("{prefix}-event-2"),
@@ -274,7 +287,7 @@ async fn for_student_and_for_grader_are_admin_only() {
         outsider,
         teacher,
         "7",
-        Some(999_999),
+        Some(foreign_account),
     )
     .await;
 
@@ -529,8 +542,12 @@ async fn render_events_override_and_current_grade() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
-    let event = &body["events"].as_array().unwrap()[0];
-    assert_eq!(event["id"], format!("{prefix}-event-1"));
+    let event = body["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == format!("{prefix}-event-1"))
+        .expect("assignment event present");
     assert_eq!(event["grade_current"], "N/A");
 
     // With a graded submission the current grade is the submission's score.
@@ -671,6 +688,15 @@ async fn section_limited_teacher_sees_only_own_sections() {
     .execute(&pool)
     .await
     .expect("put student A in section");
+    sqlx::query(
+        "UPDATE enrollments SET course_section_id = $1 WHERE user_id = $2 AND course_id = $3",
+    )
+    .bind(section_a)
+    .bind(teacher)
+    .bind(course)
+    .execute(&pool)
+    .await
+    .expect("put teacher in section");
     sqlx::query("UPDATE enrollments SET limit_privileges_to_course_section = TRUE WHERE user_id = $1 AND course_id = $2")
         .bind(teacher)
         .bind(course)
@@ -751,6 +777,13 @@ async fn advanced_query_override_literal_and_time_windows() {
         None,
     )
     .await;
+    // Canvas serves override events only while the course allows final grade
+    // overrides (`include_override_grades?`).
+    sqlx::query("UPDATE courses SET allow_final_grade_override = TRUE WHERE id = $1")
+        .bind(course)
+        .execute(&pool)
+        .await
+        .expect("allow override");
 
     // assignment_id=override selects only override events.
     let resp = server
@@ -793,16 +826,19 @@ async fn advanced_query_override_literal_and_time_windows() {
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
     let events = body["events"].as_array().unwrap();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0]["id"], format!("{prefix}-event-1"));
+    assert_eq!(events.len(), 2, "body: {body}");
+    assert!(events
+        .iter()
+        .any(|e| e["id"] == format!("{prefix}-event-1")));
 
-    // Cross-check: for_course with the same default shows the same single event.
+    // Cross-check: for_course with the same default shows both events too
+    // (the course allows overrides now).
     let resp = server
         .get(&format!("/audit/grade_change/courses/{course}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     let body: Value = resp.json();
-    assert_eq!(body["events"].as_array().unwrap().len(), 1);
+    assert_eq!(body["events"].as_array().unwrap().len(), 2);
 
     cleanup(&pool, &prefix).await;
 }
