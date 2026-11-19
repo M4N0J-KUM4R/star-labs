@@ -134,34 +134,40 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run shard ${{ matrix.shard }} against Supabase
         run: |
-          # GitHub runs steps with `bash -e`; this script must survive a
-          # failing cargo invocation to classify and retry, so -e goes off
-          # and every failure is handled explicitly.
+          # GitHub runs steps with `bash -e`; this script must survive failing
+          # cargo invocations to classify and retry, so -e goes off and every
+          # failure is handled explicitly.
           set +e
           set -u
-          log="$(mktemp)"
-          cargo test --locked --no-fail-fast ${{ matrix.crates }} -- --test-threads=2 2>&1 | tee "$log"
+          attempt_log="$(mktemp)"
+          cargo test --locked --no-fail-fast ${{ matrix.crates }} -- --test-threads=2 2>&1 | tee "$attempt_log"
           rc="${PIPESTATUS[0]}"
-          if [ "$rc" -eq 0 ]; then exit 0; fi
           # 4 legs peak at ~8-12 pooler clients but transient churn spikes can
           # still graze the 15-client session-pooler ceiling (measured: ~2% of
-          # tests across the 2026-11-19 validation run, 100% of all failures).
-          # When every failed test looks like infrastructure noise, retry just
-          # those tests once; real failures exit here and fail the shard.
-          if ! names="$(python3 ../tools/ci/nightly_retry.py "$log")"; then
-            echo "::error::shard ${{ matrix.shard }} has real test failures — no retry"
-            exit "$rc"
-          fi
-          if [ -z "$names" ]; then
-            echo "::error::shard ${{ matrix.shard }} failed with no retriable tests (build error?)"
-            exit "$rc"
-          fi
-          # shellcheck disable=SC2086
-          count="$(printf '%s\n' $names | wc -l)"
-          echo "::warning::shard ${{ matrix.shard }}: $count test(s) hit session-pooler saturation; retrying once after 60s"
-          sleep 60
-          # shellcheck disable=SC2086
-          cargo test --locked ${{ matrix.crates }} -- --exact $names --test-threads=2
+          # tests per run, 100% of failures). When every failed test looks like
+          # infrastructure noise, retry just those tests — up to 3 rounds,
+          # single-threaded to halve the retry's own connection footprint
+          # while the other legs are still running. Real failures exit here
+          # and fail the shard; the gate can only retry, never mask.
+          for round in 1 2 3; do
+            if [ "$rc" -eq 0 ]; then break; fi
+            if ! names="$(python3 ../tools/ci/nightly_retry.py "$attempt_log")"; then
+              echo "::error::shard ${{ matrix.shard }} has real test failures — no retry"
+              exit "$rc"
+            fi
+            if [ -z "$names" ]; then
+              echo "::error::shard ${{ matrix.shard }} failed with no retriable tests (build error?)"
+              exit "$rc"
+            fi
+            # shellcheck disable=SC2086
+            count="$(printf '%s\n' $names | wc -l)"
+            echo "::warning::shard ${{ matrix.shard }}: $count test(s) hit session-pooler saturation; retry round $round after 60s"
+            sleep 60
+            # shellcheck disable=SC2086
+            cargo test --locked ${{ matrix.crates }} -- --exact $names --test-threads=1 2>&1 | tee "$attempt_log"
+            rc="${PIPESTATUS[0]}"
+          done
+          exit "$rc"
 
       - name: Summarize shard
         if: always()
