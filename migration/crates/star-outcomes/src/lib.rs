@@ -170,6 +170,59 @@ pub struct OutcomeResultsQuery {
 }
 
 // ---------------------------------------------------------------------------
+// Global context helpers
+// ---------------------------------------------------------------------------
+
+/// Check whether a global (context_type = "Global") outcome group exists and
+/// is not soft-deleted.
+async fn fetch_global_outcome_group(
+    pool: &PgPool,
+    group_id: i64,
+) -> Result<LearningOutcomeGroup, ApiError> {
+    let row: Option<LearningOutcomeGroup> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, context_type, context_id, parent_outcome_group_id,
+               title, description, vendor_guid, workflow_state, created_at, updated_at
+        FROM outcome_groups
+        WHERE id = $1 AND workflow_state <> 'deleted'
+          AND context_type = 'Global'
+        "#,
+    )
+    .bind(group_id)
+    .fetch_optional(pool)
+    .await?;
+    row.ok_or(ApiError::NotFound)
+}
+
+/// Check whether the auth user is a global admin.
+fn is_global_admin(auth: &AuthUser) -> bool {
+    auth.role == "admin"
+}
+
+/// Check global outcome group manage access: global admin only.
+async fn check_global_group_manage_access(
+    pool: &PgPool,
+    user_id: i64,
+    _group: &LearningOutcomeGroup,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    if is_global_admin(auth) {
+        return Ok(true);
+    }
+    Ok(false)
+}
+
+/// Check global outcome group read access: global admin only.
+async fn check_global_group_read_access(
+    _pool: &PgPool,
+    _user_id: i64,
+    _group: &LearningOutcomeGroup,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    Ok(is_global_admin(auth))
+}
+
+// ---------------------------------------------------------------------------
 // Permission helpers
 // ---------------------------------------------------------------------------
 
@@ -1491,6 +1544,539 @@ async fn list_outcome_results(
     }
 }
 
+// --- Global root redirect ---
+
+/// GET /global/root_outcome_group — 302 redirect to the global root group.
+/// Only global admins can access this route.
+async fn global_root_outcome_group(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    if !is_global_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    let group = ensure_root_outcome_group(&state.db, "Global", 0, "Global Root").await?;
+    let location = format!("/api/v1/global/outcome_groups/{}", group.id);
+
+    Ok((
+        StatusCode::FOUND,
+        [(LOCATION, location)],
+        Json(group_json(&group, true)),
+    )
+        .into_response())
+}
+
+// --- Account chain ---
+
+/// GET /global/outcome_groups/account_chain — list the root global group only.
+async fn global_outcome_group_account_chain(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    if !is_global_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    // There is only one global root group (context_type = 'Global', context_id = 0).
+    let rows: Vec<LearningOutcomeGroup> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, context_type, context_id, parent_outcome_group_id,
+               title, description, vendor_guid, workflow_state, created_at, updated_at
+        FROM outcome_groups
+        WHERE context_type = 'Global' AND context_id = 0 AND workflow_state = 'active'
+        ORDER BY id ASC
+        "#,
+    )
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(
+        rows.iter()
+            .map(|g| group_json(g, true))
+            .collect(),
+    ))
+}
+
+/// GET /accounts/{accountId}/outcome_groups/account_chain
+async fn account_outcome_group_account_chain(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
+    if !can_manage {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Return the account's own groups only (account chain = this account's groups).
+    let rows: Vec<LearningOutcomeGroup> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, context_type, context_id, parent_outcome_group_id,
+               title, description, vendor_guid, workflow_state, created_at, updated_at
+        FROM outcome_groups
+        WHERE context_type = 'Account' AND context_id = $1 AND workflow_state = 'active'
+        ORDER BY id ASC
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(
+        rows.iter()
+            .map(|g| group_json(g, can_manage))
+            .collect(),
+    ))
+}
+
+/// GET /courses/{courseId}/outcome_groups/account_chain
+async fn course_outcome_group_account_chain(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Return the course's own groups only.
+    let rows: Vec<LearningOutcomeGroup> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, context_type, context_id, parent_outcome_group_id,
+               title, description, vendor_guid, workflow_state, created_at, updated_at
+        FROM outcome_groups
+        WHERE course_id = $1 AND workflow_state = 'active'
+        ORDER BY id ASC
+        "#,
+    )
+    .bind(course_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let can_manage = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+    Ok(Json(
+        rows.iter()
+            .map(|g| group_json(g, can_manage))
+            .collect(),
+    ))
+}
+
+// --- Global outcome group show / update / destroy ---
+
+/// GET /global/outcome_groups/{id} (global admin)
+async fn show_global_outcome_group(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let group = fetch_global_outcome_group(&state.db, group_id).await?;
+    if !check_global_group_read_access(&state.db, auth.id, &group, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let can_edit = check_global_group_manage_access(&state.db, auth.id, &group, &auth).await?;
+    Ok(Json(group_json(&group, can_edit)))
+}
+
+/// PUT /global/outcome_groups/{id} (global admin)
+async fn update_global_outcome_group(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+    payload: Option<Json<UpdateOutcomeGroup>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let group = fetch_global_outcome_group(&state.db, group_id).await?;
+    if !check_global_group_manage_access(&state.db, auth.id, &group, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let payload = payload.map(|Json(fields)| fields).unwrap_or_default();
+    apply_outcome_group_update(&state.db, group, payload).await
+}
+
+/// DELETE /global/outcome_groups/{id} (global admin) — 204
+async fn delete_global_outcome_group(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    let group = fetch_global_outcome_group(&state.db, group_id).await?;
+    if !check_global_group_manage_access(&state.db, auth.id, &group, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let result = sqlx::query(
+        "UPDATE outcome_groups SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(group_id)
+    .execute(&state.db)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Subgroups ---
+
+/// GET /global/outcome_groups/{id}/subgroups (global admin)
+async fn list_global_outcome_subgroups(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let group = fetch_global_outcome_group(&state.db, group_id).await?;
+    if !check_global_group_read_access(&state.db, auth.id, &group, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let can_manage = check_global_group_manage_access(&state.db, auth.id, &group, &auth).await?;
+
+    let rows: Vec<LearningOutcomeGroup> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, context_type, context_id, parent_outcome_group_id,
+               title, description, vendor_guid, workflow_state, created_at, updated_at
+        FROM outcome_groups
+        WHERE parent_outcome_group_id = $1 AND workflow_state = 'active'
+        ORDER BY title ASC, id ASC
+        "#,
+    )
+    .bind(group_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(
+        rows.iter()
+            .map(|child| group_json(child, can_manage))
+            .collect(),
+    ))
+}
+
+/// POST /global/outcome_groups/{id}/subgroups → 201
+async fn create_global_outcome_subgroup(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CreateOutcomeGroup>,
+) -> Result<(StatusCode, Json<LearningOutcomeGroup>), ApiError> {
+    let parent = fetch_global_outcome_group(&state.db, group_id).await?;
+    if !check_global_group_manage_access(&state.db, auth.id, &parent, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if payload.title.trim().is_empty() {
+        return Err(ApiError::Validation("title is required".into()));
+    }
+
+    let row: LearningOutcomeGroup = sqlx::query_as(
+        r#"
+        INSERT INTO outcome_groups
+            (course_id, context_type, context_id, parent_outcome_group_id, title, description, vendor_guid)
+        VALUES (NULL, 'Global', 0, $1, $2, $3, $4)
+        RETURNING id, course_id, context_type, context_id, parent_outcome_group_id,
+                  title, description, vendor_guid, workflow_state, created_at, updated_at
+        "#,
+    )
+    .bind(group_id)
+    .bind(&payload.title)
+    .bind(&payload.description)
+    .bind(&payload.vendor_guid)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+/// GET /courses/{courseId}/outcome_groups/{id}/subgroups (enrolled)
+async fn list_course_outcome_subgroups(
+    State(state): State<AppState>,
+    Path((course_id, group_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let group = fetch_course_outcome_group(&state.db, course_id, group_id).await?;
+    let can_manage = check_group_manage_access(&state.db, auth.id, &group, &auth).await?;
+
+    let rows: Vec<LearningOutcomeGroup> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, context_type, context_id, parent_outcome_group_id,
+               title, description, vendor_guid, workflow_state, created_at, updated_at
+        FROM outcome_groups
+        WHERE parent_outcome_group_id = $1 AND workflow_state = 'active'
+        ORDER BY title ASC, id ASC
+        "#,
+    )
+    .bind(group_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(
+        rows.iter()
+            .map(|child| group_json(child, can_manage))
+            .collect(),
+    ))
+}
+
+/// POST /courses/{courseId}/outcome_groups/{id}/subgroups → 201 (teacher)
+async fn create_course_outcome_subgroup(
+    State(state): State<AppState>,
+    Path((course_id, group_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<CreateOutcomeGroup>,
+) -> Result<(StatusCode, Json<LearningOutcomeGroup>), ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let parent = fetch_course_outcome_group(&state.db, course_id, group_id).await?;
+    if payload.title.trim().is_empty() {
+        return Err(ApiError::Validation("title is required".into()));
+    }
+
+    let row: LearningOutcomeGroup = sqlx::query_as(
+        r#"
+        INSERT INTO outcome_groups
+            (course_id, context_type, context_id, parent_outcome_group_id, title, description, vendor_guid)
+        VALUES ($1, 'Course', $1, $2, $3, $4, $5)
+        RETURNING id, course_id, context_type, context_id, parent_outcome_group_id,
+                  title, description, vendor_guid, workflow_state, created_at, updated_at
+        "#,
+    )
+    .bind(course_id)
+    .bind(group_id)
+    .bind(&payload.title)
+    .bind(&payload.description)
+    .bind(&payload.vendor_guid)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+// --- Import (no-op, returns empty) ---
+
+/// POST /global/outcome_groups/{id}/import — returns empty JSON array.
+async fn import_global_outcome_group(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let group = fetch_global_outcome_group(&state.db, group_id).await?;
+    if !check_global_group_manage_access(&state.db, auth.id, &group, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(Vec::new()))
+}
+
+/// POST /accounts/{accountId}/outcome_groups/{id}/import — returns empty JSON array.
+async fn import_account_outcome_group(
+    State(state): State<AppState>,
+    Path((account_id, group_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    fetch_account_outcome_group(&state.db, account_id, group_id).await?;
+    Ok(Json(Vec::new()))
+}
+
+/// POST /courses/{courseId}/outcome_groups/{id}/import — returns empty JSON array.
+async fn import_course_outcome_group(
+    State(state): State<AppState>,
+    Path((course_id, group_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    fetch_course_outcome_group(&state.db, course_id, group_id).await?;
+    Ok(Json(Vec::new()))
+}
+
+// --- Unlink ---
+
+/// DELETE /global/outcome_groups/{id}/outcomes/{outcomeId} — global admin.
+async fn unlink_global_outcome(
+    State(state): State<AppState>,
+    Path((group_id, outcome_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    let group = fetch_global_outcome_group(&state.db, group_id).await?;
+    if !check_global_group_manage_access(&state.db, auth.id, &group, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let result = sqlx::query(
+        "UPDATE outcome_links SET workflow_state = 'deleted', updated_at = now() WHERE outcome_group_id = $1 AND outcome_id = $2 AND workflow_state = 'active'",
+    )
+    .bind(group_id)
+    .bind(outcome_id)
+    .execute(&state.db)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// DELETE /accounts/{accountId}/outcome_groups/{id}/outcomes/{outcomeId} — account admin.
+async fn unlink_account_outcome(
+    State(state): State<AppState>,
+    Path((account_id, group_id, outcome_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    fetch_account_outcome_group(&state.db, account_id, group_id).await?;
+
+    let result = sqlx::query(
+        "UPDATE outcome_links SET workflow_state = 'deleted', updated_at = now() WHERE outcome_group_id = $1 AND outcome_id = $2 AND workflow_state = 'active'",
+    )
+    .bind(group_id)
+    .bind(outcome_id)
+    .execute(&state.db)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// DELETE /courses/{courseId}/outcome_groups/{id}/outcomes/{outcomeId} — teacher.
+async fn unlink_course_outcome(
+    State(state): State<AppState>,
+    Path((course_id, group_id, outcome_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    fetch_course_outcome_group(&state.db, course_id, group_id).await?;
+
+    let result = sqlx::query(
+        "UPDATE outcome_links SET workflow_state = 'deleted', updated_at = now() WHERE outcome_group_id = $1 AND outcome_id = $2 AND workflow_state = 'active'",
+    )
+    .bind(group_id)
+    .bind(outcome_id)
+    .execute(&state.db)
+    .await?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --- Account outcome_group_links ---
+
+/// GET /accounts/{accountId}/outcome_group_links (account admin)
+async fn list_account_outcome_group_links(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
+    if !can_manage {
+        return Err(ApiError::Forbidden);
+    }
+
+    let links: Vec<LearningOutcomeLink> = sqlx::query_as(
+        r#"
+        SELECT ol.id, ol.outcome_id, ol.outcome_group_id,
+               ol.context_type, ol.context_id, ol.workflow_state
+        FROM outcome_links ol
+        JOIN outcome_groups og ON og.id = ol.outcome_group_id
+        WHERE og.context_type = 'Account'
+          AND og.context_id = $1
+          AND og.workflow_state = 'active'
+          AND ol.workflow_state = 'active'
+        ORDER BY ol.id ASC
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    if links.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+
+    let group_ids: Vec<i64> = links.iter().map(|l| l.outcome_group_id).collect();
+    let groups: Vec<LearningOutcomeGroup> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, context_type, context_id, parent_outcome_group_id,
+               title, description, vendor_guid, workflow_state, created_at, updated_at
+        FROM outcome_groups
+        WHERE id = ANY($1) AND workflow_state = 'active'
+        "#,
+    )
+    .bind(&group_ids)
+    .fetch_all(&state.db)
+    .await?;
+    let groups: HashMap<i64, LearningOutcomeGroup> =
+        groups.into_iter().map(|g| (g.id, g)).collect();
+
+    let outcome_ids: Vec<i64> = links.iter().map(|l| l.outcome_id).collect();
+    let outcomes: Vec<LearningOutcome> = sqlx::query_as(
+        r#"
+        SELECT id, title, description, display_name, workflow_state, created_at, updated_at
+        FROM learning_outcomes
+        WHERE id = ANY($1) AND workflow_state = 'active'
+        "#,
+    )
+    .bind(&outcome_ids)
+    .fetch_all(&state.db)
+    .await?;
+    let outcomes: HashMap<i64, LearningOutcome> =
+        outcomes.into_iter().map(|o| (o.id, o)).collect();
+
+    let assessed_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT outcome_id FROM learning_outcome_results WHERE outcome_id = ANY($1)",
+    )
+    .bind(&outcome_ids)
+    .fetch_all(&state.db)
+    .await?;
+    let assessed: HashSet<i64> = assessed_ids.into_iter().collect();
+
+    let rows: Vec<serde_json::Value> = links
+        .iter()
+        .filter_map(|link| {
+            let group = groups.get(&link.outcome_group_id)?;
+            let outcome = outcomes.get(&link.outcome_id)?;
+            Some(link_json(
+                link,
+                &group_json(group, can_manage),
+                outcome,
+                can_manage,
+                assessed.contains(&outcome.id),
+            ))
+        })
+        .collect();
+
+    Ok(Json(rows))
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -1536,6 +2122,76 @@ pub fn router() -> Router<AppState> {
         .route(
             "/accounts/{accountId}/outcome_groups/{id}/subgroups",
             get(list_account_outcome_subgroups),
+        )
+        // global root redirect
+        .route(
+            "/global/root_outcome_group",
+            get(global_root_outcome_group),
+        )
+        // global outcome groups
+        .route(
+            "/global/outcome_groups/{id}",
+            get(show_global_outcome_group)
+                .put(update_global_outcome_group)
+                .delete(delete_global_outcome_group),
+        )
+        .route(
+            "/global/outcome_groups/{id}/subgroups",
+            get(list_global_outcome_subgroups).post(create_global_outcome_subgroup),
+        )
+        .route(
+            "/global/outcome_groups/{id}/outcomes",
+            get(list_group_outcome_links).post(link_outcome_by_group_id),
+        )
+        .route(
+            "/global/outcome_groups/{id}/outcomes/{outcomeId}",
+            put(link_outcome_by_group_id).delete(unlink_global_outcome),
+        )
+        .route(
+            "/global/outcome_groups/{id}/import",
+            post(import_global_outcome_group),
+        )
+        .route(
+            "/global/outcome_groups/account_chain",
+            get(global_outcome_group_account_chain),
+        )
+        // account chain
+        .route(
+            "/accounts/{accountId}/outcome_groups/account_chain",
+            get(account_outcome_group_account_chain),
+        )
+        .route(
+            "/accounts/{accountId}/outcome_group_links",
+            get(list_account_outcome_group_links),
+        )
+        .route(
+            "/accounts/{accountId}/outcome_groups/{id}/outcomes",
+            get(list_group_outcome_links).post(link_outcome_by_group_id),
+        )
+        .route(
+            "/accounts/{accountId}/outcome_groups/{id}/outcomes/{outcomeId}",
+            put(link_outcome_by_group_id).delete(unlink_account_outcome),
+        )
+        .route(
+            "/accounts/{accountId}/outcome_groups/{id}/import",
+            post(import_account_outcome_group),
+        )
+        // course subgroups and account chain
+        .route(
+            "/courses/{courseId}/outcome_groups/{id}/subgroups",
+            get(list_course_outcome_subgroups).post(create_course_outcome_subgroup),
+        )
+        .route(
+            "/courses/{courseId}/outcome_groups/account_chain",
+            get(course_outcome_group_account_chain),
+        )
+        .route(
+            "/courses/{courseId}/outcome_groups/{id}/outcomes/{outcomeId}",
+            put(link_outcome_to_group).delete(unlink_course_outcome),
+        )
+        .route(
+            "/courses/{courseId}/outcome_groups/{id}/import",
+            post(import_course_outcome_group),
         )
         // outcomes
         .route(
