@@ -43,8 +43,8 @@ Canvas runs the async parts of these families on **Delayed::Job**:
 
 star-lms has **no worker process**. The two in-repo precedents are:
 
-1. **`star-jobs`** (migrations ~0057): a durable `jobs` table with Delayed::Job-compatible columns (`tag, strand, singleton, priority, attempts, max_attempts, run_at, handler, workflow_state, progress, context_type, context_id, ...`) plus `enqueue_job`, and Jobs V1/V2 read/cancel APIs. The crate doc states the intended pattern explicitly: "No worker runs in this workspace: `enqueue_job` records the durable row and an external worker (or a later phase) is expected to advance `workflow_state` / `progress`."
-2. **`content_migrations`** (migration `0062_content_migrations.sql`): domain rows carry a `workflow_state TEXT` column with a `CHECK` constraint enumerating the Canvas states, and "the API layer maps them to the Canvas JSON states".
+1. **`star-jobs`** (the jobs migrations): a durable `jobs` table with Delayed::Job-compatible columns (`tag, strand, singleton, priority, attempts, max_attempts, run_at, handler, workflow_state, progress, context_type, context_id, ...`) plus `enqueue_job`, and Jobs V1/V2 read/cancel APIs. The crate doc states the intended pattern explicitly: "No worker runs in this workspace: `enqueue_job` records the durable row and an external worker (or a later phase) is expected to advance `workflow_state` / `progress`."
+2. **`content_migrations`** (the `content_migrations` migration): domain rows carry a `workflow_state TEXT` column with a `CHECK` constraint enumerating the Canvas states, and "the API layer maps them to the Canvas JSON states".
 
 **Recommendation (uniform across all misc families): the "domain row + jobs row" pattern.**
 
@@ -56,7 +56,7 @@ star-lms has **no worker process**. The two in-repo precedents are:
 
 ## 4. Migration numbering
 
-All migrations in these specs are **additive only** and use numbers **assigned by the coordinator** through `orchestration/migration-reservations.json` (protocol: issue #20; `next_available: 0108`, `max_merged: 0107` at the time of writing). Every migration listed below is marked **"010x, coordinator-assigned"** — agents must never self-assign. Approximate need: one migration per family (7 total), detailed in each file.
+All migrations in these specs are **additive only**. MIGRATION: coordinator-assigned — see orchestration/migration-reservations.json. Every migration listed below is **coordinator-assigned** — agents must never self-assign. Approximate need: one migration per family (7 total), detailed in each file.
 
 ## 5. Testing conventions (shared)
 

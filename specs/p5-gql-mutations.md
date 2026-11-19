@@ -159,7 +159,7 @@ type CreateSubmissionPayload { submission: SubmissionType errors: [ValidationErr
   | `No attachments found for the following ids: {ids}` | `file_ids` | some `fileIds` unresolvable |
   | `Invalid file type` | `file_ids` | extension not in `allowedExtensions` |
 - star-lms mapping: own-submission upsert from `create_submission` (`src/lib.rs:1244`, INSERT …
-  ON CONFLICT), `online_upload` via the `submission_files` table (migration 0060); attachments
+  ON CONFLICT), `online_upload` via the `submission_files` table; attachments
   must belong to the submitting user. `online_url`/`basic_lti_launch` are **deferred** — the
   `submissions.url` column does not exist (§4). Proxy submissions (`studentId`) may ship later in
   the batch behind `check_teacher_or_admin` (§7).
@@ -397,15 +397,16 @@ conflates via `"invalid course: {id}"`).
 ## 4. Data model needs
 
 Existing columns are complete unless listed. All changes are additive `ALTER TABLE … ADD COLUMN
-IF NOT EXISTS` migrations following the star-db conventions (latest: 0107).
+IF NOT EXISTS` migrations following the star-db conventions (see
+`orchestration/migration-reservations.json`).
 
 | Batch | Table | Gap | Migration needed |
 | --- | --- | --- | --- |
-| A | `assignments` (0001) | **no `published`/`workflow_state` column** — biggest gap in this spec; blocks `state` input, soft delete, restore | add `workflow_state TEXT NOT NULL DEFAULT 'unpublished' CHECK (… IN ('unpublished','published','deleted'))` (Canvas semantics: `published` bool ⇄ state; `deleted` for destroy) |
-| B | `submissions` (0001 + 0060) | no `url` column — blocks `online_url` and `basic_lti_launch` submission types | add `url TEXT` when those types ship; `online_text_entry` + `online_upload` (via `submission_files`) + grading (`graded_at`, `grader_id`, `workflow_state`) already exist |
-| C | `discussion_topics` (0017) | no `user_id` (author) — blocks student own-topic update/delete and anonymity; no anonymous columns | add `user_id BIGINT REFERENCES users(id) ON DELETE SET NULL` with the student-editing path; anonymous columns deferred with `anonymous_state` |
-| D | `enrollments` (0001 + 0010) | role strings `student|teacher|ta` only, no Canvas `type` distinction (5 types) and no custom-role support | widen role whitelist / add `type` column when Designer/Observer ship; `workflow_state` (0010) already covers concluded/active |
-| E | `conversations` (0020) | no `context_type`/`context_id` — blocks context-scoped sends and their error paths | add `context_type TEXT`, `context_id BIGINT` (nullable) when contextCode ships; participants/messages tables already sufficient |
+| A | `assignments` | **no `published`/`workflow_state` column** — biggest gap in this spec; blocks `state` input, soft delete, restore | add `workflow_state TEXT NOT NULL DEFAULT 'unpublished' CHECK (… IN ('unpublished','published','deleted'))` (Canvas semantics: `published` bool ⇄ state; `deleted` for destroy) |
+| B | `submissions` | no `url` column — blocks `online_url` and `basic_lti_launch` submission types | add `url TEXT` when those types ship; `online_text_entry` + `online_upload` (via `submission_files`) + grading (`graded_at`, `grader_id`, `workflow_state`) already exist |
+| C | `discussion_topics` | no `user_id` (author) — blocks student own-topic update/delete and anonymity; no anonymous columns | add `user_id BIGINT REFERENCES users(id) ON DELETE SET NULL` with the student-editing path; anonymous columns deferred with `anonymous_state` |
+| D | `enrollments` | role strings `student|teacher|ta` only, no Canvas `type` distinction (5 types) and no custom-role support | widen role whitelist / add `type` column when Designer/Observer ship; `workflow_state` already covers concluded/active |
+| E | `conversations` | no `context_type`/`context_id` — blocks context-scoped sends and their error paths | add `context_type TEXT`, `context_id BIGINT` (nullable) when contextCode ships; participants/messages tables already sufficient |
 
 ## 5. Test plan
 
@@ -479,8 +480,8 @@ Recommended order: **C → B → A → E → D**.
    `workflow_state` (soft delete + published mapping) and `discussion_type`. Only the student
    own-topic path waits on `user_id`. Best ratio of Canvas parity per unit of work.
 2. **B (submissions) second** — handlers exist (`create_submission`, `grade_submission`,
-   star-submission-comments); `online_text_entry`, `online_upload` (via `submission_files`,
-   migration 0060) and grading need no schema change. Only `url`-typed submissions wait on one
+   star-submission-comments); `online_text_entry`, `online_upload` (via `submission_files`)
+   and grading need no schema change. Only `url`-typed submissions wait on one
    column.
 3. **A (assignments) third** — highest-value surface and complete handlers, but **blocked on the
    `published`/`workflow_state` column** (§4): the `state` input, soft delete and restore all
