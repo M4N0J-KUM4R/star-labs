@@ -2248,7 +2248,7 @@ async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, ApiError
                 .fetch_optional(pool)
                 .await
                 .map_err(ApiError::from)?;
-                return Ok(root.map(|(id,)| id).unwrap_or(current));
+                return Ok(root.map(|(root_id,)| root_id).unwrap_or(current));
             }
             Some((Some(parent),)) if parent != current => current = parent,
             Some(_) => return Ok(current),
@@ -2453,6 +2453,7 @@ async fn show_k5_dashboard(
     // Only admins and teachers can opt out (K5::UserService::ROLES_THAT_CAN_DISABLE_K5).
     let can_disable = is_admin(&auth.role) || user_has_role(&state.db, auth.id, "teacher").await?;
 
+    let associated = user_associated_with_accounts(&state.db, auth.id, &k5_accounts).await?;
     let k5 = if can_disable {
         let disabled: Option<(bool,)> = sqlx::query_as(
             "SELECT elementary_dashboard_disabled FROM user_settings WHERE user_id = $1",
@@ -2461,13 +2462,9 @@ async fn show_k5_dashboard(
         .fetch_optional(&state.db)
         .await
         .map_err(ApiError::from)?;
-        if disabled.map(|(d,)| d).unwrap_or(false) {
-            false
-        } else {
-            user_associated_with_accounts(&state.db, auth.id, &k5_accounts).await?
-        }
+        !disabled.map(|(disabled,)| disabled).unwrap_or(false) && associated
     } else {
-        user_associated_with_accounts(&state.db, auth.id, &k5_accounts).await?
+        associated
     };
 
     let classic =
