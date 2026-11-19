@@ -79,3 +79,95 @@ change and would replace the coordinator's serialized `--match-head-commit`
 merges. Both workflows already accept `merge_group`, so enabling it later is a
 settings-only change. What this lane delivers is the measurable cycle-time
 reduction plus the concurrency/caching work from the issue scope.
+
+# CI throughput — wave 4 (issue #144)
+
+## Baseline (measured from the Actions API, 2026-11-19)
+
+Warm-cache runs; `p5/infra-135 @ 69e6f515` is the representative lane PR
+(test workflow runs 402/403, production build 209, bootstrap 232, parity 357).
+
+| Workflow | Job | Wall time |
+|---|---|---:|
+| Rust migration validation (pull_request) | `Test shard 1` (slowest) | 2.1–2.3 min |
+| Rust migration validation (pull_request) | other shards | 1.6–2.2 min |
+| Rust migration validation (**push**, same SHA) | all four shards | 2.4 min |
+| Production build (PR) | `Format and lint` (clippy) | 0.7 min |
+| Production build (PR) | `Dependency audit` | 0.2 min |
+| Bootstrap validation | `shell-and-lab-constraints` | 0.3–0.4 min |
+| Parity scoreboard (PR **and** push, same SHA) | `parity` | 0.1 + 0.1 min |
+
+Step-level breakdown inside a shard job (run 403): service-container init
+18–26 s, checkout 1 s, toolchain 8–10 s, cache restore 5–7 s, the
+`Migrate schema` pre-step 3–13 s, actual shard tests 60–85 s.
+
+Waste identified:
+
+1. **Docs-only PRs paid the full Rust suite.** `specs/**` and
+   `orchestration/**` PRs (a large share of lanes) ran the 4-shard matrix and
+   clippy although no Rust source changed: ~2.4 min critical path for nothing.
+2. **Every lane push ran the suite twice.** With an open PR, the same SHA was
+   tested by the `push` event and again by `pull_request` (rust-migration
+   2.4 + 2.3 min, parity 0.1 + 0.1 min of runner time per push).
+3. **`star-db` suite ran 5× per push.** Each shard ran
+   `cargo test -p star-db` as a pre-step, and shard 1 also lists `-p star-db`.
+   Redundant: all 88 DB-backed test files apply `star_db::MIGRATOR` themselves
+   (checksummed, idempotent) and star-http migrates at startup.
+4. **`bootstrap.yml` installed shellcheck + cfn-lint on every PR**, even
+   README-only ones (apt/pip time and a classic flake source).
+
+## Changes
+
+1. **Change-class fast path.** A `changes` job in `rust-migration.yml`,
+   `production-build.yml`, and `bootstrap.yml` classifies the PR diff with
+   `tools/ci/change_class.py` (single source of truth for the rules; reads the
+   compare API, degrades to a full run on truncation/hiccups — never to a
+   wrong skip). Docs-only PRs skip the shard matrix, fmt/clippy, and the
+   shellcheck/cfn-lint installs; the required checks (`test`,
+   `Format and lint`, `shell-and-lab-constraints`) still run on every PR and
+   report green with an explicit skip reason. `merge_group`, `push` to main,
+   and dispatch always run everything — the exact-SHA safety net is intact.
+2. **Push runs restricted to `main`** for `rust-migration.yml` and `parity.yml`
+   (production-build and bootstrap were already main-only). Lane pushes are
+   validated through their pull_request runs; no more double testing per SHA.
+3. **Dropped the per-shard `Migrate schema` pre-step** (see waste #3).
+4. **Postgres health polling 10 s → 5 s** (retries 5 → 10) in the shard and
+   release jobs: the service-init wait was 18–26 s of a ~2 min job.
+5. **`tools/ci/**` added to `production-build.yml` PR paths** so
+   `Format and lint` also reports on CI-tooling-only PRs (gap: it did not
+   before, which would have left the required check missing on such PRs).
+
+## After (measured)
+
+Rust-classified round — this branch @ `f49f905a` (test run 404, production
+build 210, bootstrap 233), i.e. the full suite including the new `changes`
+jobs:
+
+| Workflow | Critical path | Notes |
+|---|---:|---|
+| Rust migration validation | 2.5 min | changes 6 s → 4 shards (1.6–2.3 min) → gate 4 s |
+| Production build (PR) | 0.9 min | fmt+clippy 0.8 min ∥ audit |
+| Bootstrap validation | 0.7 min | lab fast path: shellcheck/cfn-lint installs skipped |
+
+The Rust-changing PR path is therefore neutral-to-slightly-better (the removed
+pre-step and faster DB polling roughly pay for the added `changes` hop); the
+wins are the docs-only path below and the halved runner usage per lane push.
+
+| PR type | Before | After |
+|---|---:|---:|
+| Rust-changing | ~2.4 min | ~2.5 min (measured; neutral within noise) |
+| docs-only (specs/orchestration) | ~2.4 min | **4–6 s per required check** (measured on demo PR #146; PR green in well under a minute) |
+| lane push (PR open) | 2 suites per SHA | 1 suite (pull_request only) |
+| main push | unchanged | unchanged (full verification by design) |
+
+Classification is **PR-cumulative** (`base...head`): a PR that changes Rust
+source anywhere in its diff runs the full suite on every push — conservative
+by design. The docs-only fast path therefore applies to PRs whose entire diff
+is specs/orchestration/docs (the common spec-lane shape). Validated on a
+dedicated docs-only demo PR (#146, draft, base `p5/infra-144`, closed after
+measurement): `test` 4 s (shards skipping), `Format and lint` 6 s (fmt/clippy
+skipped, migration hygiene still ran), `shell-and-lab-constraints` 4 s
+(installs skipped, bash -n + AWS Academy guard still ran); gate log confirms
+`rust-changes: false` → "no Rust-source changes in this PR — suite skipped by
+design". `main` post-merge numbers to be filled in by the coordinator from
+the Actions API.

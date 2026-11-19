@@ -6,87 +6,133 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 244 | 1403 | 17.4% |
-| REST routes referenced from `ui/` | 149 | 503 | 29.6% |
-| GraphQL files | 0 | 390 | 0.0% |
-| GraphQL object types | 0 | 170 | 0.0% |
+| REST API routes | 502 | 1403 | 35.8% |
+| REST routes referenced from `ui/` | 262 | 503 | 52.1% |
+| GraphQL files | 1 | 390 | 0.3% |
+| GraphQL object types | 14 | 170 | 8.2% |
 | GraphQL mutations | 0 | 110 | 0.0% |
 | UI feature directories | 0 | 232 | 0.0% |
 | JS/JSX/TS/TSX files | 0 | 5459 | 0.0% |
 | ERB views | 0 | 475 | 0.0% |
 | js_env files | 0 | 124 | 0.0% |
-| Schema tables (vs 688 Canvas models) | 93 | 688 | n/a |
+| Schema tables (vs 688 Canvas models) | 119 | 688 | n/a |
 
-Implemented REST route count: **244 / 1403** (17.4%).
+Implemented REST route count: **502 / 1403** (35.8%).
 
-Star registrations: 387 route/method pairs from 344 `.route(...)` calls (0 unparsed); 145 have no Canvas match and are listed as extras below.
+Star registrations: 654 route/method pairs from 561 `.route(...)` calls (0 unparsed); 157 have no Canvas match and are listed as extras below.
 
 Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 
-## Controllers with coverage (54)
+## Controllers with coverage (73)
 
 | Controller | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| `discussion_topics_api` | 11 | 58 | 19.0% |
-| `courses` | 10 | 38 | 26.3% |
-| `users` | 10 | 39 | 25.6% |
-| `wiki_pages_api` | 10 | 29 | 34.5% |
-| `conversations` | 9 | 16 | 56.2% |
-| `enrollments_api` | 9 | 14 | 64.3% |
-| `folders` | 9 | 34 | 26.5% |
+| `discussion_topics_api` | 58 | 58 | 100.0% |
+| `users` | 25 | 39 | 64.1% |
+| `wiki_pages_api` | 20 | 29 | 69.0% |
+| `conversations` | 16 | 16 | 100.0% |
+| `submissions_api` | 16 | 44 | 36.4% |
+| `accounts` | 14 | 22 | 63.6% |
+| `courses` | 14 | 38 | 36.8% |
+| `folders` | 14 | 34 | 41.2% |
+| `master_courses/master_templates` | 13 | 13 | 100.0% |
+| `outcome_groups_api` | 13 | 40 | 32.5% |
+| `assignments_api` | 12 | 12 | 100.0% |
+| `enrollments_api` | 12 | 14 | 85.7% |
+| `files` | 12 | 26 | 46.2% |
+| `assignment_overrides` | 10 | 10 | 100.0% |
+| `calendar_events_api` | 10 | 15 | 66.7% |
+| `group_categories` | 10 | 16 | 62.5% |
+| `groups` | 9 | 17 | 52.9% |
 | `context_module_items_api` | 8 | 12 | 66.7% |
-| `groups` | 8 | 17 | 47.1% |
-| `accounts` | 7 | 22 | 31.8% |
-| `outcome_groups_api` | 7 | 40 | 17.5% |
+| `external_tools` | 8 | 25 | 32.0% |
+| `learning_object_dates` | 8 | 15 | 53.3% |
+| `role_overrides` | 8 | 8 | 100.0% |
+| `authentication_providers` | 7 | 8 | 87.5% |
+| `quizzes/quiz_submissions_api` | 7 | 7 | 100.0% |
+| `quizzes/quizzes_api` | 7 | 7 | 100.0% |
 | `appointment_groups` | 6 | 8 | 75.0% |
-| `files` | 6 | 26 | 23.1% |
-| `group_categories` | 6 | 16 | 37.5% |
+| `blackout_dates` | 6 | 13 | 46.2% |
+| `content_migrations` | 6 | 25 | 24.0% |
+| `notification_preferences` | 6 | 10 | 60.0% |
+| `quizzes/quiz_groups` | 6 | 6 | 100.0% |
+| `release_notes` | 6 | 8 | 75.0% |
+| `rubrics_api` | 6 | 15 | 40.0% |
 | `sections` | 6 | 9 | 66.7% |
-| `submissions_api` | 6 | 44 | 13.6% |
-| `assignment_overrides` | 5 | 10 | 50.0% |
-| `assignments_api` | 5 | 12 | 41.7% |
-| `calendar_events_api` | 5 | 15 | 33.3% |
+| `account_notifications` | 5 | 8 | 62.5% |
 | `context_modules_api` | 5 | 8 | 62.5% |
+| `grade_change_audit_api` | 5 | 12 | 41.7% |
 | `group_memberships` | 5 | 11 | 45.5% |
 | `planner_notes` | 5 | 5 | 100.0% |
-| `quizzes/quiz_groups` | 5 | 6 | 83.3% |
 | `quizzes/quiz_questions` | 5 | 5 | 100.0% |
-| `quizzes/quiz_submissions_api` | 5 | 7 | 71.4% |
-| `quizzes/quizzes_api` | 5 | 7 | 71.4% |
+| `usage_rights` | 5 | 9 | 55.6% |
+| `admins` | 4 | 4 | 100.0% |
 | `assignment_groups_api` | 4 | 5 | 80.0% |
-| `content_migrations` | 4 | 25 | 16.0% |
+| `communication_channels` | 4 | 12 | 33.3% |
+| `discussion_entries` | 4 | 4 | 100.0% |
 | `discussion_topics` | 4 | 10 | 40.0% |
+| `favorites` | 4 | 8 | 50.0% |
 | `grading_standards_api` | 4 | 10 | 40.0% |
 | `jobs_v2` | 4 | 12 | 33.3% |
 | `lti/registrations` | 4 | 20 | 20.0% |
-| `account_notifications` | 3 | 8 | 37.5% |
-| `admins` | 3 | 4 | 75.0% |
+| `peer_reviews_api` | 4 | 9 | 44.4% |
+| `quizzes/quiz_reports` | 4 | 4 | 100.0% |
+| `submission_comments_api` | 4 | 4 | 100.0% |
 | `content_exports_api` | 3 | 14 | 21.4% |
+| `feature_flags` | 3 | 17 | 17.6% |
+| `media_objects` | 3 | 10 | 30.0% |
+| `migration_issues` | 3 | 16 | 18.8% |
 | `rubrics` | 3 | 3 | 100.0% |
-| `rubrics_api` | 3 | 15 | 20.0% |
-| `submission_comments_api` | 3 | 4 | 75.0% |
 | `terms` | 3 | 3 | 100.0% |
-| `discussion_entries` | 2 | 4 | 50.0% |
+| `developer_keys` | 2 | 5 | 40.0% |
 | `jobs` | 2 | 3 | 66.7% |
+| `lti/account_external_tools` | 2 | 4 | 50.0% |
 | `lti/deployments` | 2 | 5 | 40.0% |
-| `notification_preferences` | 2 | 10 | 20.0% |
-| `quizzes/quiz_reports` | 2 | 4 | 50.0% |
+| `sub_accounts` | 2 | 2 | 100.0% |
 | `terms_api` | 2 | 2 | 100.0% |
 | `assignment_groups` | 1 | 1 | 100.0% |
 | `assignments` | 1 | 1 | 100.0% |
-| `developer_keys` | 1 | 5 | 20.0% |
 | `grading_periods` | 1 | 8 | 12.5% |
 | `lti/account_lookup` | 1 | 1 | 100.0% |
+| `media_tracks` | 1 | 6 | 16.7% |
 | `profile` | 1 | 2 | 50.0% |
-| `sub_accounts` | 1 | 2 | 50.0% |
+| `quizzes/quiz_statistics` | 1 | 1 | 100.0% |
+| `search` | 1 | 4 | 25.0% |
 | `submissions` | 1 | 2 | 50.0% |
 | `tabs` | 1 | 5 | 20.0% |
 
-## Star routes with no Canvas match (145)
+## GraphQL operation coverage
+
+Names are matched exactly: star-graphql type names (mapped through the documented renames below) against Canvas `graphql_name`s from `app/graphql/types/*_type.rb`, and mutation field names against the operations of `app/graphql/mutations/**` (classes whose superclass chain reaches `Mutations::BaseMutation`).
+
+### Implemented types (14 of 170 Canvas names)
+
+`Account`, `Assignment`, `Course`, `CoursePermissions`, `Discussion`, `Enrollment`, `Query`, `Quiz`, `QuizItem`, `QuizSubmission`, `Section`, `Submission`, `Term`, `User`
+
+Renames mapped to Canvas names: `CourseSection` -> `Section`, `DiscussionTopic` -> `Discussion`, `EnrollmentTerm` -> `Term`, `QuizQuestion` -> `QuizItem`.
+
+### Missing types (232)
+
+`AIGradeCriterionResult`, `AIGradeRating`, `AIGradeResult`, `AccountNotification`, `AccountUsersFilter`, `AccountUsersSortField`, `AccountUsersSortInput`, `ActivityStream`, `AdhocStudents`, `AllocationRule`, `AllocationRulesFilterInput`, `AllowProvisionalGradingType`, `AnonymousStudentIdentity`, `AnonymousUser`, `AssessmentRequest`, `AssessmentType`, `AssignedStudentsFilter`, `AssignmentAllocationRules`, `AssignmentGroup`, `AssignmentGroupRules`, `AssignmentGroupState`, `AssignmentOverride`, `AssignmentOverrideSet`, `AssignmentRubricAssessment`, `AssignmentScoreStatistic`, `AssignmentState`, `AssignmentTargetSortField`, `AssignmentTargetSortOrder`, `AuditEvent`, `AuditEventExternalTool`, `AuditEventQuiz`, `AuditEventRole`, `AuditEventType`, `AuditEventUser`, `AuditLogs`, `AutoGradeEligibility`, `AutoGradeIssue`, `AutoLeaderPolicy`, `Checkpoint`, `CommentBankItem`, `CommunicationChannel`, `ContentTag`, `ContentTagContent`, `Conversation`, `ConversationMessage`, `ConversationParticipant`, `CourseDashboardCard`, `CourseDashboardCardLink`, `CourseFilterableEnrollmentState`, `CourseFilterableEnrollmentType`, `CourseGradeStatus`, `CourseOutcomeAlignmentStats`, `CourseProgression`, `CourseRequirements`, `CourseSectionsFilter`, `CourseSettings`, `CourseUsersFilter`, `CourseUsersSortDirectionType`, `CourseUsersSortFieldType`, `CourseUsersSortInputType`, `CourseWorkSubmissionsOrderField`, `CourseWorkflowState`, `CustomGradeStatus`, `DashboardObserveeFilter`, `DateHash`, `DateHashSet`, `DateTime`, `DateTimeRange`, `DiscussionEntry`, `DiscussionEntryCounts`, `DiscussionEntryPermissions`, `DiscussionEntryPinningType`, `DiscussionEntryReportTypeCounts`, `DiscussionEntryVersion`, `DiscussionFilterType`, `DiscussionParticipant`, `DiscussionParticipantFilter`, `DiscussionPermissions`, `DiscussionSortOrderType`, `DiscussionTopicAnonymousStateType`, `DiscussionTopicDiscussionType`, `DraftableSubmissionType`, `EligibilityIssue`, `EligibilityIssueLevel`, `EnrollmentFilterInput`, `EnrollmentRole`, `EnrollmentType`, `EnrollmentWorkflowState`, `EnrollmentsSortDirectionType`, `EnrollmentsSortFieldType`, `EnrollmentsSortInputType`, `EntryParticipant`, `ExternalTool`, `ExternalToolPlacement`, `ExternalToolPlacements`, `ExternalToolSettings`, `ExternalToolState`, `ExternalUrl`, `File`, `Folder`, `GradeState`, `GraderIdentity`, `Grades`, `GradesEnrollmentFilter`, `GradingPeriod`, `GradingPeriodGroup`, `GradingRole`, `GradingStandard`, `GradingStandardItem`, `GradingType`, `Group`, `GroupMembership`, `GroupMembershipState`, `GroupSet`, `GroupState`, `InboxSettings`, `InstitutionalTag`, `InstitutionalTagAssociation`, `InstitutionalTagCategory`, `InstitutionalTagUsersSortDirection`, `InstitutionalTagUsersSortField`, `InstitutionalTagUsersSortInput`, `InstitutionalTagWorkflowState`, `InstructorCourseInfo`, `InstructorEnrollmentInfo`, `InstructorUserInfo`, `InstructorWithEnrollments`, `InternalSetting`, `LearningOutcome`, `LearningOutcomeGroup`, `LockInfo`, `Lockable`, `LtiAsset`, `LtiAssetProcessor`, `LtiAssetProcessorIframe`, `LtiAssetProcessorWindowSettings`, `LtiAssetReport`, `MediaObject`, `MediaSource`, `MediaTrack`, `MediaTrackWorkflowState`, `MediaType`, `MessagePermissions`, `MessageableContext`, `MessageableUser`, `ModeratedGrading`, `Module`, `ModuleCompletionRequirement`, `ModuleCompletionStatus`, `ModuleExternalTool`, `ModuleFilterInput`, `ModuleItem`, `ModuleItemFilter`, `ModuleItemMasterCourseRestriction`, `ModulePrerequisite`, `ModuleProgression`, `ModuleProgressionStatistics`, `ModuleStatistics`, `Mutation`, `MutationLog`, `NodeType`, `Noop`, `Notification`, `NotificationPolicy`, `NotificationPreferences`, `NotificationPreferencesContextType`, `OrderDirection`, `OutcomeAlignment`, `OutcomeCalculationMethod`, `OutcomeFriendlyDescriptionType`, `OutcomeProficiency`, `Page`, `PageViewAnalysis`, `PeerReviewDates`, `PeerReviewStatus`, `PeerReviewSubAssignment`, `PeerReviews`, `PostPolicy`, `PreferredLanguageType`, `ProficiencyRating`, `ProficiencyRatingInput`, `Progress`, `ProgressContext`, `ProgressState`, `ProvisionalGrade`, `Recipients`, `Requirement`, `Rubric`, `RubricAssessment`, `RubricAssessmentRating`, `RubricAssociation`, `RubricCriterion`, `RubricRating`, `ScheduledPost`, `SelfSignupPolicy`, `SpeedGraderSettings`, `StandardGradeStatus`, `Sticker`, `StreamSummaryItem`, `StringMap`, `StudentSummaryAnalytics`, `SubAssignmentSubmission`, `SubHeader`, `SubmissionComment`, `SubmissionCommentFilterInput`, `SubmissionCommentStatusType`, `SubmissionDraft`, `SubmissionFilterInput`, `SubmissionGradingStatus`, `SubmissionHistory`, `SubmissionHistoryFilterInput`, `SubmissionHistoryOrder`, `SubmissionHistoryOrderField`, `SubmissionOrderCriteria`, `SubmissionOrderField`, `SubmissionPostingStatus`, `SubmissionSearchFilterInput`, `SubmissionSearchOrder`, `SubmissionSearchOrderField`, `SubmissionState`, `SubmissionStatistics`, `SubmissionStatusTagType`, `SubmissionType`, `TardinessBreakdown`, `TurnitinContext`, `TurnitinData`, `URL`, `UsageRights`, `UserGroupMembershipsFilterInput`, `ValidationError`, `VericiteContext`, `VericiteData`
+
+### Implemented mutations (0 of 110 Canvas operations)
+
+(none)
+
+### Missing mutations (100)
+
+`acceptEnrollmentInvitation`, `addConversationMessage`, `applyInstitutionalTag`, `autoGradeSubmission`, `createAllocationRule`, `createAssignment`, `createCommentBankItem`, `createConversation`, `createDiscussionEntry`, `createDiscussionTopic`, `createGroupInSet`, `createGroupSet`, `createInstitutionalTag`, `createInstitutionalTagCategory`, `createInternalSetting`, `createLearningOutcome`, `createLearningOutcomeGroup`, `createModule`, `createOutcomeCalculationMethod`, `createOutcomeProficiency`, `createSubmission`, `createSubmissionComment`, `createSubmissionDraft`, `createUserInboxLabel`, `deleteAllocationRule`, `deleteCommentBankItem`, `deleteConversationMessages`, `deleteConversations`, `deleteCustomGradeStatus`, `deleteDiscussionEntry`, `deleteDiscussionTopic`, `deleteInternalSetting`, `deleteOutcomeCalculationMethod`, `deleteOutcomeLinks`, `deleteOutcomeProficiency`, `deleteSubmissionComment`, `deleteSubmissionDraft`, `deleteUserInboxLabel`, `dismissAccountNotification`, `hideAssignmentGrades`, `hideAssignmentGradesForSections`, `importOutcomes`, `markSubmissionCommentsRead`, `moveOutcomeLinks`, `postAssignmentGrades`, `postAssignmentGradesForSections`, `postDraftSubmissionComment`, `rejectEnrollmentInvitation`, `removeInstitutionalTag`, `reorderModuleItems`, `restoreDeletedDiscussionEntry`, `saveRubricAssessment`, `selectProvisionalGrade`, `setAssignmentPostPolicy`, `setCoursePostPolicy`, `setFriendlyDescription`, `setModuleItemCompletion`, `setOverrideScore`, `setOverrideStatus`, `setRubricSelfAssessment`, `submitAutoGradeFeedback`, `subscribeToDiscussionTopic`, `updateAllocationRule`, `updateAssignment`, `updateCommentBankItem`, `updateConversationParticipants`, `updateDiscussionEntriesReadState`, `updateDiscussionEntry`, `updateDiscussionEntryParticipant`, `updateDiscussionReadState`, `updateDiscussionThreadReadState`, `updateDiscussionTopic`, `updateDiscussionTopicParticipant`, `updateGradebookGroupFilter`, `updateInstitutionalTag`, `updateInstitutionalTagArchivedState`, `updateInstitutionalTagCategory`, `updateInstitutionalTagCategoryArchivedState`, `updateInternalSetting`, `updateLearnerDashboardTabSelection`, `updateLearningOutcome`, `updateLearningOutcomeGroup`, `updateMyInboxSettings`, `updateNotificationPreferences`, `updateOutcomeCalculationMethod`, `updateOutcomeProficiency`, `updateRubricArchivedState`, `updateRubricAssessmentReadState`, `updateSpeedGraderSettings`, `updateSplitScreenViewDeeplyNestedAlert`, `updateSubmissionGrade`, `updateSubmissionGradeStatus`, `updateSubmissionSticker`, `updateSubmissionStudentEnteredScore`, `updateSubmissionsReadState`, `updateUserDiscussionsSplitscreenView`, `updateWidgetDashboardConfig`, `updateWidgetDashboardLayout`, `upsertCustomGradeStatus`, `upsertStandardGradeStatus`
+
+Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `AssignmentEdge`, `DiscussionTopicConnection`, `DiscussionTopicEdge`, `EnrollmentConnection`, `EnrollmentEdge`, `PageInfo`, `QuizConnection`, `QuizEdge`, `QuizQuestionConnection`, `QuizQuestionEdge`, `QuizSubmissionConnection`, `QuizSubmissionEdge`, `SubmissionConnection`, `SubmissionEdge`, `UserConnection`, `UserEdge`.
+
+## Star routes with no Canvas match (157)
 
 | Verb | Path | Crate |
 |---|---|---|
+| GET | `/` | `star-graphql` |
+| POST | `/` | `star-graphql` |
 | DELETE | `/account_notifications/{id}` | `star-accounts` |
+| PUT | `/accounts/{accountId}/features/{feature}` | `star-features` |
 | POST | `/accounts/{accountId}/grading_periods` | `star-grading-standards` |
 | GET | `/accounts/{accountId}/grading_schemes` | `star-grading-standards` |
 | POST | `/accounts/{accountId}/grading_schemes` | `star-grading-standards` |
@@ -130,6 +176,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | GET | `/courses/{courseId}/calendar_events` | `star-calendar` |
 | POST | `/courses/{courseId}/calendar_events` | `star-calendar` |
 | GET | `/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}` | `star-discussions` |
+| PUT | `/courses/{courseId}/features/{feature}` | `star-features` |
 | GET | `/courses/{courseId}/final_grade` | `star-grading-standards` |
 | GET | `/courses/{courseId}/folders/root` | `star-files` |
 | GET | `/courses/{courseId}/gradebook` | `star-assignments` |
@@ -148,6 +195,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | GET | `/dashboard` | `star-dashboard` |
 | GET | `/developer_keys` | `star-auth` |
 | POST | `/developer_keys` | `star-auth` |
+| GET | `/developer_keys/{id}` | `star-auth` |
 | GET | `/enrollments` | `star-enrollments` |
 | POST | `/enrollments` | `star-enrollments` |
 | DELETE | `/enrollments/{id}` | `star-enrollments` |
@@ -162,6 +210,8 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | PUT | `/grading_schemes/{id}` | `star-grading-standards` |
 | DELETE | `/grading_standards/{id}` | `star-grading-standards` |
 | GET | `/grading_standards/{id}` | `star-grading-standards` |
+| GET | `/groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}` | `star-discussions` |
+| POST | `/groups/{groupId}/pages/{urlOrId}` | `star-pages` |
 | POST | `/groups/{groupId}/users` | `star-groups` |
 | GET | `/health` | `star-http` |
 | POST | `/jobs/{id}/cancel` | `star-jobs` |
@@ -224,11 +274,16 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | POST | `/users/self/communication_channels` | `star-notifications` |
 | DELETE | `/users/self/communication_channels/{id}` | `star-notifications` |
 | GET | `/users/self/communication_channels/{communication_channel_id}/notification_preferences` | `star-notifications` |
+| GET | `/users/self/communication_channels/{communication_channel_id}/notification_preferences/{notification}` | `star-notifications` |
 | GET | `/users/self/notification_preferences` | `star-notifications` |
 | PUT | `/users/self/notification_preferences` | `star-notifications` |
 | GET | `/users/self/notifications` | `star-notifications` |
 | GET | `/users/self/profile` | `star-users` |
 | PUT | `/users/self/profile` | `star-users` |
+| PUT | `/users/{user_id}/communication_channels/{type}/{address}/notification_preferences` | `star-notifications` |
+| PUT | `/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}` | `star-notifications` |
+| GET | `/users/{user_id}/notification_preference_categories` | `star-notifications` |
+| PUT | `/users/{user_id}/notification_preference_categories/{category}` | `star-notifications` |
 | GET | `/users/{user_id}/notification_preferences` | `star-notifications` |
 | PUT | `/users/{user_id}/notification_preferences` | `star-notifications` |
 
@@ -237,6 +292,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 - Canvas routes are verb declarations inside `ApiRouteSet.draw` blocks, plus Rails `resources` declarations (API defaults: index/create/show/update/destroy, honoring `only:`, `except:`, `path:`, `controller:`, and nesting) and `%w[...].each` context loops, which are expanded for every value.
 - Conditional context prefixes assigned from `var == "literal" ? var : "..."` are evaluated per loop binding, and `if`/`unless var == "literal"` guards filter bindings; this expands the `outcome_groups_api` routes to `courses/...`, `accounts/...`, and `global/...`. Other runtime interpolations are left as `{}` and cannot match concrete Rust paths.
 - UI references are `/api/v1/...` string literals in `ui/`; runtime-built paths and hard-coded ids that cannot be normalized are missed.
+- GraphQL type names come from `graphql_name` declarations (or the class name minus a trailing `Type`) in `app/graphql/types/*_type.rb`, and mutation operations from classes whose superclass chain reaches `Mutations::BaseMutation` in `app/graphql/mutations/**`; the denominators remain the file counts (170 type files, 110 mutation files). star-graphql names are extracted from `#[Object]` impls and async-graphql derives, with documented renames (CourseSection->Section, EnrollmentTerm->Term, DiscussionTopic->Discussion, QuizQuestion->QuizItem) mapped to their Canvas graphql_names before matching. Connection and edge helpers (e.g. `PageInfo`, `*Edge`, `*Connection`) only count when Canvas defines a type of the same name.
 - Rust paths are matched by `(verb, normalized path)`; axum's `nest("/api/v1", ...)` mount is assumed for all crate routers.
 - Extras include deliberate flat-path deviations (for example `/assignments/{id}` where Canvas uses `/courses/{course_id}/assignments/{id}`) and auth/dashboard/health routes Canvas does not expose.
 - The schema row counts `CREATE TABLE` statements in `star-db` migrations (36 authored tables); sqlx adds `_sqlx_migrations`, so a live database has 37 tables.
