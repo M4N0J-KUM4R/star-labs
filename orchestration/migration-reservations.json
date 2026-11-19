@@ -1,7 +1,7 @@
 {
   "comment": "Coordinator-owned ledger of migration number reservations (protocol: issue #20). Agents never self-assign a number; the coordinator reserves one at dispatch time. Additive migrations only, no renumbering, no DROP/TRUNCATE. status 'merged' = a NNNN_*.sql file exists in migration/crates/star-db/migrations/ on main; status 'open' = reserved for an open issue (verify the issue is still open before reuse). 'issue' is the GitHub issue number; null marks pre-protocol merges that predate issue-linked PRs. 'free' lists unallocated holes below next_available (0011/0100 never existed; 0111/0115 were released). Validate with: python3 orchestration/check-migration-ledger.py",
-  "max_merged": "0113",
-  "next_available": "0121",
+  "max_merged": "0121",
+  "next_available": "0123",
   "free": [
     "0011",
     "0100",
@@ -588,6 +588,16 @@
       "issue": 88,
       "status": "open",
       "note": "course nicknames + observee pairing (wave-3 lane A08); issue open, branch not pushed yet"
+    },
+    "0121": {
+      "issue": 56,
+      "status": "merged",
+      "note": "discussion_topics position + user_id; merged via PR #131 follow-up (file on main)"
+    },
+    "0122": {
+      "issue": 57,
+      "status": "open",
+      "note": "users tail group B: user_preferences + user_merges; PR #153 (p5/rest-platform-57) adds 0122_user_preferences_and_merges.sql"
     }
   }
 }
