@@ -271,14 +271,38 @@ Consequences for the design:
 
 Validation dispatches on this lane (cold cache — dispatches never save caches;
 `save-if: main` means steady-state numbers arrive after the first merge to
-main):
+main). The iteration history is part of the record:
 
-| Run | Wall time | Notes |
-|---|---:|---|
-| 4 legs, pre-retry (v1 map) | 30.5 min | shard 4 hit the 30-min timeout; 20 grazes failed the run |
-| 4 legs, retry dead (`bash -e` bug) | 37.7 min | shard 4 37.2 min on the v1 map; grazes un retried |
-| 4 legs, rebalanced + retry fixed | _final dispatch_ | 21.2 min of tests per leg by design |
+| Run | Wall time | Result | What it taught |
+|---|---:|---|---|
+| 8 legs (v0 map) | 12.8 min* | failure | session pooler ceiling: 15 clients, 505/508 failures EMAXCONNSESSION |
+| 4 legs (v1 map) | 30.5 min | failure | ~2%/test graze rate at 4 legs; shard 4 hit the 30-min timeout |
+| 4 legs, retry dead | 37.7 min | failure | GitHub's `bash -e` killed the step before the retry could run |
+| 4 legs, 1 retry round | 36.4 min | failure | retry works (3 shards recovered); one test grazed again mid-retry |
+| **4 legs, rebalanced, 3 serial retry rounds** | **30.7 min** | **success** | run 44588001951 @ `cd327ef`, all jobs green |
 
-| Workflow | Wall time | Notes |
-|---|---:|---|
-| Nightly compatibility | _final dispatch number_ | 4 shard legs ∥ coverage (10.5-12.2 min) |
+*8-leg wall clock is meaningless (every test failed fast); the point of the row is the failure mode.
+
+Final run 44588001951 (`cd327ef`, 2026-11-19, cold cache):
+
+| Job | Wall time |
+|---|---:|
+| `Supabase preflight` | 0.2 min |
+| `Supabase shard 1` | 24.7 min |
+| `Supabase shard 2` | 20.1 min |
+| `Supabase shard 3` | 30.2 min (critical path; includes retry rounds) |
+| `Supabase shard 4` | 22.3 min |
+| `Coverage (llvm-cov)` | 9.9 min (parallel lane) |
+| `Supabase compatibility` (gate) | 0.05 min |
+| **Workflow wall clock** | **30.7 min** |
+
+- **Baseline 74.98 min -> 30.7 min cold (2.4x).** Steady state after the first
+  merge to main saves each leg's compile (~4-6 min on the critical shard):
+  expected ~25-27 min (~2.8x). The path to ~12 min is documented above:
+  raise the Supabase pooler client limit, then re-widen the matrix.
+- **Runner-time cost is honest:** 107.5 min of billed runner time per nightly
+  vs ~86.6 min before (4 legs re-compile shared deps cold; retry rounds
+  re-run). The optimization buys signal latency (wall clock), not runner
+  minutes — the right trade for a nightly whose value decays with delay.
+- The scheduled 06:00 UTC run on `main` will exercise the merged version and
+  populate the steady-state cache keys on its first night.
