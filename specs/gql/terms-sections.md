@@ -9,8 +9,8 @@
 
 `enrollmentTerm(id)` and `courseSection(id)` root queries with their
 Canvas-shaped object types, on top of the merged course/user/enrollments
-foundation slice (`migration/crates/star-graphql`). DB tables come from
-migrations `0034_terms_sections.sql` and `0047_enrollment_sections.sql`:
+foundation slice (`migration/crates/star-graphql`). DB tables come from the
+terms/sections and enrollment-sections migrations:
 the term table is named `terms` (not `enrollment_terms`), and
 `course_sections` requires `course_id` + `name` with nullable `start_at` /
 `end_at`. No new migration was needed.
