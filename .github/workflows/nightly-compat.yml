@@ -1,5 +1,34 @@
 name: Nightly compatibility
 
+# Nightly signal, not a merge gate. Two independent lanes:
+#
+# 1. Supabase compatibility: the workspace suite (minus star-http) against the
+#    remote Supabase test schema. The suite is sharded across 4 parallel legs,
+#    balanced by measured per-crate wall time (see orchestration/CI-THROUGHPUT.md
+#    wave 5): a single serial `cargo test --workspace` invocation ran test
+#    binaries one at a time, each capped at --test-threads=2 over the session
+#    pooler, and summed to ~75 min. Concurrent legs are safe by the repo ground
+#    rule: every DB-backed test seeds under a unique-per-run prefix (pid +
+#    millis) with full teardown, so parallel legs never collide on data — the
+#    measured failure mode of the first 8-leg attempt was purely connection
+#    saturation, zero data races.
+#
+#    SHARD COUNT IS POOLER-BOUND, not runner-bound: the Supabase session
+#    pooler rejects connections beyond its client ceiling
+#    (EMAXCONNSESSION "max clients reached in session mode - max clients are
+#    limited to pool_size: 15", measured on the 8-leg attempt, 2026-11-19).
+#    Each leg holds ~2-3 clients at --test-threads=2 (one pool per test,
+#    2 tests in flight, pool churn between tests), so 4 legs peak at ~8-12
+#    clients. Do not widen the matrix without raising the pooler limit
+#    (Supabase dashboard) or switching DATABASE_URL to the transaction pooler
+#    (needs re-validating sqlx migrate advisory locks first).
+#
+#    A preflight job checks the secret and Supabase connectivity once (plus the
+#    shard-map coverage guard), then a fan-in gate keeps the single
+#    `Supabase compatibility` name for the run summary.
+#
+# 2. Coverage against PostgreSQL 16 (llvm-cov), unchanged.
+
 on:
   schedule:
     - cron: '0 6 * * *'
@@ -17,17 +46,18 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Run the suite against the Supabase test schema (session pooler, 2 threads).
-  # Configure SUPABASE_DATABASE_URL as a repository secret; the job skips
-  # cleanly when the secret is absent.
+  # Preflight: secret gate, one-shot connectivity check, shard-map guard.
+  # Runs the apt/psql install once instead of once per shard, and fails the
+  # workflow in ~1 min on bad credentials instead of after 8 shard setups.
   # ---------------------------------------------------------------------------
-  supabase:
-    name: Supabase compatibility
+  preflight:
+    name: Supabase preflight
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 10
+    outputs:
+      available: ${{ steps.gate.outputs.available }}
     env:
       DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
-      STAR_JWT_SECRET: nightly-supabase-test-secret
     steps:
       - name: Check secret
         id: gate
@@ -39,13 +69,8 @@ jobs:
             echo "available=true" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/checkout@v4
-        if: steps.gate.outputs.available == 'true'
-      - uses: dtolnay/rust-toolchain@stable
-        if: steps.gate.outputs.available == 'true'
-      - uses: Swatinem/rust-cache@v2
-        if: steps.gate.outputs.available == 'true'
-        with:
-          workspaces: migration -> target
+      - name: Nightly shard map covers every crate exactly once
+        run: python3 tools/ci/shard_coverage.py --workflow .github/workflows/nightly-compat.yml --exclude star-http
       - name: Verify Supabase connectivity
         if: steps.gate.outputs.available == 'true'
         run: |
@@ -53,18 +78,95 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends postgresql-client
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT current_schema()"
-      - name: Run workspace tests against Supabase
-        if: steps.gate.outputs.available == 'true'
+
+  # ---------------------------------------------------------------------------
+  # Shard map: every workspace crate except star-http is assigned to exactly
+  # one of 4 legs (asserted by the preflight guard). Legs are balanced by the
+  # per-crate wall times measured from nightly run #11's job log (LPT packing,
+  # ~16.1 min of tests per leg). fail-fast stays off: the nightly run's value
+  # is the full signal, so one failing leg must not cancel the others.
+  # Shard count rationale: see the pooler ceiling note in the header comment.
+  # ---------------------------------------------------------------------------
+  supabase-shard:
+    name: Supabase shard ${{ matrix.shard }} of 4
+    needs: preflight
+    if: needs.preflight.outputs.available == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: 1
+            crates: >-
+              -p star-assignments -p star-auth -p star-calendar -p star-features
+              -p star-grading-standards -p star-lti -p star-rubrics
+          - shard: 2
+            crates: >-
+              -p star-accounts -p star-api -p star-common -p star-dashboard
+              -p star-learning-dates -p star-modules -p star-notifications
+              -p star-pages
+          - shard: 3
+            crates: >-
+              -p star-audit -p star-content -p star-courses -p star-db
+              -p star-enrollments -p star-graphql -p star-outcomes
+              -p star-permissions
+          - shard: 4
+            crates: >-
+              -p star-account-reports -p star-announcements
+              -p star-assignment-groups -p star-collaborations
+              -p star-conferences -p star-conversations -p star-discussions
+              -p star-eportfolios -p star-files -p star-groups -p star-jobs
+              -p star-media -p star-polling -p star-quizzes -p star-search
+              -p star-sis -p star-submission-comments -p star-users
+    env:
+      DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+      STAR_JWT_SECRET: nightly-supabase-test-secret
+    defaults:
+      run:
         working-directory: migration
-        run: cargo test --workspace --exclude star-http --locked --no-fail-fast -- --test-threads=2
-      - name: Summarize
-        if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: migration -> target
+          shared-key: nightly-shard-${{ matrix.shard }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Run shard ${{ matrix.shard }} against Supabase
+        run: cargo test --locked --no-fail-fast ${{ matrix.crates }} -- --test-threads=2
+
+  # ---------------------------------------------------------------------------
+  # Fan-in gate: keeps the single `Supabase compatibility` job name (and the
+  # step summary) that the pre-shard workflow exposed. Skips green when the
+  # secret is absent; fails when any shard or the preflight failed.
+  # ---------------------------------------------------------------------------
+  supabase:
+    name: Supabase compatibility
+    needs: [preflight, supabase-shard]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every Supabase shard to have passed
         run: |
-          if [ "${{ steps.gate.outputs.available }}" = "true" ]; then
-            echo "Supabase compatibility suite completed." >> "$GITHUB_STEP_SUMMARY"
-          else
+          set -euo pipefail
+          echo "preflight:  ${{ needs.preflight.result }}"
+          echo "available:  ${{ needs.preflight.outputs.available }}"
+          echo "shards:     ${{ needs.supabase-shard.result }}"
+          if [ "${{ needs.preflight.outputs.available }}" != "true" ]; then
             echo "Supabase compatibility suite skipped: SUPABASE_DATABASE_URL not configured." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
           fi
+          if [ "${{ needs.preflight.result }}" != "success" ]; then
+            echo "::error::Supabase preflight failed (secret gate, shard-map guard, or connectivity check)"
+            exit 1
+          fi
+          if [ "${{ needs.supabase-shard.result }}" != "success" ]; then
+            echo "::error::Supabase shards did not all pass"
+            exit 1
+          fi
+          echo "Supabase compatibility suite completed (4 parallel shards)." >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
   # Coverage against PostgreSQL 16 (non-blocking nightly signal).
