@@ -30,7 +30,9 @@ async fn setup() -> Option<TestServer> {
     };
 
     // Same merge pattern as star-http::build_api_router.
-    let app = axum::Router::new().merge(star_eportfolios::router()).with_state(state);
+    let app = axum::Router::new()
+        .merge(star_eportfolios::router())
+        .with_state(state);
     Some(TestServer::new(app).expect("build TestServer"))
 }
 
