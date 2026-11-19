@@ -1,0 +1,13 @@
+[package]
+name = "star-conferences"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+star-common = { path = "../star-common" }
+axum = { workspace = true }
+
+[dev-dependencies]
+star-db = { path = "../star-db" }
+tokio = { workspace = true }
+axum-test = { workspace = true }
