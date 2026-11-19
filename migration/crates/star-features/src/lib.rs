@@ -7,6 +7,7 @@
 //! - GET    /{context}s/{id}/features/flags/{feature} — show resolved flag
 //! - PUT    /{context}s/{id}/features/flags/{feature} — set flag (update)
 //! - DELETE /{context}s/{id}/features/flags/{feature} — remove direct flag
+//!
 //! plus:
 //! - POST /accounts/{accountId}/features/early_access_program — accept the
 //!   Early Access Program terms (root accounts only)
