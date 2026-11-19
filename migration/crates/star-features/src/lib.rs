@@ -279,12 +279,16 @@ impl FlagContext {
     }
 
     /// The root account of this context, if any (Canvas `#root_account`;
-    /// users have none).
+    /// users have none, and a root account is its own root).
     fn root_account_id(&self) -> Option<i64> {
         match self {
-            FlagContext::Account { chain, .. } | FlagContext::Course { chain, .. } => {
-                chain.first().map(|node| node.context_id)
-            }
+            FlagContext::Account { .. } => Some(
+                self.chain()
+                    .first()
+                    .map(|node| node.context_id)
+                    .unwrap_or_else(|| self.id()),
+            ),
+            FlagContext::Course { .. } => self.chain().first().map(|node| node.context_id),
             FlagContext::User { .. } => None,
         }
     }
