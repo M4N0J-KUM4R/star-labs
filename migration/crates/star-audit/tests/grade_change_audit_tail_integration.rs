@@ -805,7 +805,7 @@ async fn advanced_query_override_literal_and_time_windows() {
     let resp = server
         .get(&format!(
             "/audit/grade_change?course_id={course}&start_time={}",
-            future.to_rfc3339()
+            future.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         ))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
@@ -818,8 +818,8 @@ async fn advanced_query_override_literal_and_time_windows() {
     let resp = server
         .get(&format!(
             "/audit/grade_change?course_id={course}&start_time={}&end_time={}",
-            past.to_rfc3339(),
-            future.to_rfc3339()
+            past.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            future.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         ))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;

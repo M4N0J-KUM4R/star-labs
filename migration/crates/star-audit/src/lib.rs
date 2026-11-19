@@ -477,8 +477,11 @@ async fn render_events(
             let grade = match current_grades
                 .get(&(row.assignment_id.unwrap_or(0), row.student_id.unwrap_or(0)))
             {
+                // No submission row: Canvas renders "N/A".
                 None => Some("N/A".to_string()),
-                Some(grade) => grade.clone(),
+                // Submission exists but ungraded: Canvas omits the field.
+                Some(None) => None,
+                Some(Some(grade)) => Some(grade.clone()),
             };
             (row.uuid.clone(), grade)
         })
@@ -540,16 +543,20 @@ async fn course_allows_override(pool: &PgPool, course_id: i64) -> Result<bool, A
 /// `submissions.grade` by submission id; Star stores the numeric score and
 /// renders it as text — like the rest of the snapshot — and events carry no
 /// submission id, so the lookup keys on (assignment_id, student_id)).
+///
+/// Value is two-layered: outer `None` = no submission row (Canvas renders
+/// "N/A"), inner `None` = submission exists but ungraded (Canvas omits the
+/// field).
 async fn fetch_current_grades(
     pool: &PgPool,
     rows: &[EventRow],
-) -> Result<std::collections::HashMap<(i64, i64), Option<String>>, ApiError> {
+) -> Result<std::collections::HashMap<(i64, i64), Option<Option<String>>>, ApiError> {
     let mut grades = std::collections::HashMap::new();
     for row in rows {
         let (Some(assignment_id), Some(student_id)) = (row.assignment_id, row.student_id) else {
             continue;
         };
-        let grade: Option<(Option<String>,)> = sqlx::query_as(
+        let submission: Option<(Option<String>,)> = sqlx::query_as(
             r#"SELECT score::float8::text FROM submissions
                WHERE assignment_id = $1 AND user_id = $2"#,
         )
@@ -557,7 +564,7 @@ async fn fetch_current_grades(
         .bind(student_id)
         .fetch_optional(pool)
         .await?;
-        let grade = grade.and_then(|(g,)| g);
+        let grade = submission.map(|(g,)| g);
         grades.insert((assignment_id, student_id), grade);
     }
     Ok(grades)
