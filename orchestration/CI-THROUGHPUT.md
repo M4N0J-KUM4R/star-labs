@@ -79,3 +79,62 @@ change and would replace the coordinator's serialized `--match-head-commit`
 merges. Both workflows already accept `merge_group`, so enabling it later is a
 settings-only change. What this lane delivers is the measurable cycle-time
 reduction plus the concurrency/caching work from the issue scope.
+
+# CI throughput — wave 5 (issue #149)
+
+## Baseline (measured from the Actions API + job log, 2026-11-19)
+
+Nightly compatibility run #11 (2026-11-18, `main`, warm cache): **1 h 14 m 59 s**
+end to end.
+
+| Job | Wall time | Notes |
+|---|---:|---|
+| `Supabase compatibility` | 74.9 min | 74.35 min inside the single `cargo test --workspace --exclude star-http` step |
+| `Coverage (llvm-cov)` | 11.6 min | parallel lane, not the bottleneck |
+
+Root cause: the 41-crate suite ran as **one serial cargo invocation**. Cargo
+executes test binaries one at a time, each capped at `--test-threads=2` over the
+remote Supabase session pooler. Per-binary wall times parsed from the job log
+(timestamps between consecutive `Running` lines):
+
+| Crate | Minutes | Crate | Minutes |
+|---|---:|---|---:|
+| star-assignments | 8.58 | star-learning-dates | 1.66 |
+| star-accounts | 4.84 | star-rubrics | 1.52 |
+| star-courses | 4.59 | star-groups | 1.47 |
+| star-quizzes | 4.56 | star-permissions | 1.46 |
+| star-discussions | 4.48 | star-dashboard | 1.37 |
+| star-enrollments | 4.15 | star-lti | 1.27 |
+| star-modules | 3.03 | star-outcomes | 1.05 |
+| star-notifications | 2.48 | 17 more crates | 0.06–0.68 each |
+
+Summed: ~64.5 min of per-binary wall time across 34 DB-backed crates (the other
+7 are ~0-cost smoke suites), plus binary startup/migration overhead and link.
+
+## Changes
+
+1. **Sharded the Supabase suite 8 ways.** Matrix legs balanced by the measured
+   per-crate times above (LPT packing): 7.87–8.58 min of tests per leg. Each leg
+   keeps `--locked --no-fail-fast -- --test-threads=2`; `fail-fast: false` so a
+   failing leg does not cancel the nightly signal.
+2. **Preflight job** gates the matrix: secret check, the psql connectivity probe
+   (apt/`postgresql-client` installed once instead of once per shard), and the
+   shard-map coverage guard — `tools/ci/shard_coverage.py` is now parameterized
+   (`--workflow`, `--exclude`) and asserts the nightly map covers all 41 crates
+   exactly once with `star-http` intentionally outside it.
+3. **Fan-in gate** keeps the `Supabase compatibility` job name (and step
+   summary) the pre-shard workflow exposed.
+4. **Per-shard cache keys** (`shared-key: nightly-shard-N`, `save-if: main`)
+   following the wave-3 cache discipline. The first run after merge pays a cold
+   compile per leg (~3–5 min); steady state restores each leg's own artifacts.
+5. **Safety of concurrent legs against the shared Supabase project:** repo
+   ground rule — every DB-backed test seeds under a unique-per-run prefix
+   (pid + millis) with full teardown. Connections: ≤2–3 pooler clients per leg
+   (2 test threads, pool max 5, binaries serial within a leg), ≤24 across 8
+   legs vs 2 today — well inside session-pooler limits.
+
+## After (measured)
+
+| Workflow | Wall time | Notes |
+|---|---:|---|
+| Nightly compatibility | _recorded from a `workflow_dispatch` run on this lane before merge_ | 8 shard legs ∥ coverage; coverage (~11.6 min) becomes the floor |
