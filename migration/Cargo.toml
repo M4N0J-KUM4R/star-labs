@@ -36,6 +36,13 @@ members = [
     "crates/star-audit",
     "crates/star-media",
     "crates/star-graphql",
+    "crates/star-account-reports",
+    "crates/star-collaborations",
+    "crates/star-conferences",
+    "crates/star-eportfolios",
+    "crates/star-polling",
+    "crates/star-search",
+    "crates/star-sis",
 ]
 
 [workspace.package]

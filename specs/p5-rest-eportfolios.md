@@ -10,7 +10,7 @@
 |---|---:|---:|---:|
 | `eportfolios_api` | 0 | 7 | 0.0% |
 
-ePortfolios are user-owned collections of category-organized pages with spam moderation on top. The API is small and synchronous: list a user's portfolios, show one, list its pages, soft-delete, restore, and the two spam-moderation actions. Guards (verified): `reject_student_view_student` and `verified_user_check` on every action — the acting user must have a **verified communication channel** (star-lms equivalent: a confirmed `communication_channels` row, which the schema already models via migration 0093).
+ePortfolios are user-owned collections of category-organized pages with spam moderation on top. The API is small and synchronous: list a user's portfolios, show one, list its pages, soft-delete, restore, and the two spam-moderation actions. Guards (verified): `reject_student_view_student` and `verified_user_check` on every action — the acting user must have a **verified communication channel** (star-lms equivalent: a confirmed `communication_channels` row, which the schema already models).
 
 ## 2. Route inventory (7 routes, all todo)
 

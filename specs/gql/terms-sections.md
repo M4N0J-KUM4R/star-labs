@@ -1,5 +1,7 @@
 # GraphQL: terms and sections queries (issue #27)
 
+> Inherits transport rules from specs/gql/CONTRACT.md.
+
 > Area spec for the gql-foundation epic. The issue text references
 > `specs/p5-gql-foundation.md`, which was never merged; this per-area file is
 > the agreed workaround and carries the same contract weight (same approach
@@ -9,8 +11,8 @@
 
 `enrollmentTerm(id)` and `courseSection(id)` root queries with their
 Canvas-shaped object types, on top of the merged course/user/enrollments
-foundation slice (`migration/crates/star-graphql`). DB tables come from
-migrations `0034_terms_sections.sql` and `0047_enrollment_sections.sql`:
+foundation slice (`migration/crates/star-graphql`). DB tables come from the
+terms/sections and enrollment-sections migrations:
 the term table is named `terms` (not `enrollment_terms`), and
 `course_sections` requires `course_id` + `name` with nullable `start_at` /
 `end_at`. No new migration was needed.
@@ -52,9 +54,6 @@ so no cursor pagination is involved.
 
 ## Authorization
 
-- Unauthenticated requests are rejected with HTTP 401 before GraphQL
-  execution (shared `AuthUser` extractor in the router) — unchanged from the
-  foundation slice.
 - `enrollmentTerm(id: ID!): EnrollmentTerm` — any authenticated caller may
   read the term shape; unknown ids resolve to null. **Documented deviation
   from REST**: `GET /api/v1/terms/{id}` is account-admin-only, but Canvas's

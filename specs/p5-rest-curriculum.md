@@ -116,7 +116,7 @@ Quirk: Canvas exposes both a global-id form (`/outcome_groups/:id`, already done
 | DELETE | `/courses/:id` | done UI | destroy |
 | GET | `/courses/:id` | done UI | show — **deep `include[]` gaps, see §5.3** |
 | PUT | `/courses/:id` | done UI | update |
-| GET | `/courses/:course_id/activity_stream` | **missing** | stream items (0106 exists) |
+| GET | `/courses/:course_id/activity_stream` | **missing** | stream items (stream-items migration exists) |
 | GET | `/courses/:course_id/activity_stream/summary` | done UI | |
 | GET | `/courses/:course_id/bulk_user_progress` | **missing** | all users' progress CSV/JSON |
 | GET | `/courses/:course_id/content_share_users` | done UI | |
@@ -281,23 +281,23 @@ SIS note (from controller): `sis_*`/integration params on group create/update ar
 ## 4. Data model & migration needs (additive only)
 
 Existing coverage (verified in `crates/star-db/migrations/`):
-- `outcome_groups` (0044; deepened 0081 with `source_outcome_group_id` + parent/state index), `outcome_links` (0044), `outcome_alignments` (0044), legacy `learning_outcomes`/`learning_outcome_groups`/`learning_outcome_links`/`learning_outcome_results` (0022).
-- `groups` + `group_memberships` (0018), `group_categories` (0043, deepened 0096 with `account_id` and `non_collaborative` on categories), `group_invitations`/`group_files` (0064).
-- `courses.syllabus_body` (0009), `courses.storage_quota` (0061), `grading_period_groups`/`grading_periods` (0050), enrollment terms (0101), stream items (0106).
+- `outcome_groups` (deepened by the outcomes-groups-deep migration with `source_outcome_group_id` + parent/state index), `outcome_links`, `outcome_alignments`, legacy `learning_outcomes`/`learning_outcome_groups`/`learning_outcome_links`/`learning_outcome_results`.
+- `groups` + `group_memberships`, `group_categories` (deepened by the group-categories-deep migration with `account_id` and `non_collaborative` on categories), `group_invitations`/`group_files`.
+- `courses.syllabus_body`, `courses.storage_quota`, `grading_period_groups`/`grading_periods`, enrollment terms (enrollment-terms-deep migration), stream items (stream-items migration).
 
-Additive needs — **all numbers coordinator-assigned via `orchestration/migration-reservations.json` (next available 0108); never self-assign**:
+Additive needs — **MIGRATION: coordinator-assigned — see orchestration/migration-reservations.json; never self-assign**:
 
 | Need | Why | Migration |
 |---|---|---|
-| `learning_outcomes`: add `mastery_points NUMERIC`, `calculation_method TEXT`, `calculation_int INT`, `vendor_guid TEXT`, `ratings JSONB` (embedded rubric criterion: `[{description, points}]`) | `outcomes_api` show/update require the full Outcome JSON incl. ratings + calculation method; 0022 has only title/description/display_name | needs 010x (coordinator-assigned) |
-| `outcomes_friendly_descriptions` (learning_outcome_id, account_id, course_id, description, unique per outcome+context) | friendly descriptions on `outcomes` include (FF `outcomes_friendly_description`) — can be deferred | needs 010x (coordinator-assigned), defer acceptable |
-| `groups.non_collaborative BOOLEAN DEFAULT false` | `collaboration_state` filter and `bulk_user_tags`; 0096 indexed it on `group_categories` — **verify whether the `groups` column already exists; add only if absent** | needs 010x (coordinator-assigned) if absent |
-| `courses.hide_final_grades BOOLEAN DEFAULT false` (if absent — in-memory struct exists in star-courses, column does not appear in migrations) | student-visible totals suppression in show/index/enrollments | needs 010x (coordinator-assigned) |
-| `accounts.parent_account_id` — **verify star-accounts schema**; `account_chain` walks it | `outcome_groups_api#account_chain` builds the ancestor list | needs 010x (coordinator-assigned) if absent |
-| Assignment overrides / differentiation dates for `effective_due_dates` — **verify whether `assignment_overrides`-equivalent tables exist** | effective due dates are computed from base + student/section/override dates | needs 010x (coordinator-assigned) if absent; defer route otherwise |
-| Course versions for `restore_version` — check whether course snapshots exist (likely absent) | `POST /courses/:course_id/restore/:version_id` restores a prior course state | needs 010x (coordinator-assigned); propose deferring route |
+| `learning_outcomes`: add `mastery_points NUMERIC`, `calculation_method TEXT`, `calculation_int INT`, `vendor_guid TEXT`, `ratings JSONB` (embedded rubric criterion: `[{description, points}]`) | `outcomes_api` show/update require the full Outcome JSON incl. ratings + calculation method; the initial outcomes migration has only title/description/display_name | needs a coordinator-assigned migration |
+| `outcomes_friendly_descriptions` (learning_outcome_id, account_id, course_id, description, unique per outcome+context) | friendly descriptions on `outcomes` include (FF `outcomes_friendly_description`) — can be deferred | needs a coordinator-assigned migration, defer acceptable |
+| `groups.non_collaborative BOOLEAN DEFAULT false` | `collaboration_state` filter and `bulk_user_tags`; the group-categories-deep migration indexed it on `group_categories` — **verify whether the `groups` column already exists; add only if absent** | needs a coordinator-assigned migration if absent |
+| `courses.hide_final_grades BOOLEAN DEFAULT false` (if absent — in-memory struct exists in star-courses, column does not appear in migrations) | student-visible totals suppression in show/index/enrollments | needs a coordinator-assigned migration |
+| `accounts.parent_account_id` — **verify star-accounts schema**; `account_chain` walks it | `outcome_groups_api#account_chain` builds the ancestor list | needs a coordinator-assigned migration if absent |
+| Assignment overrides / differentiation dates for `effective_due_dates` — **verify whether `assignment_overrides`-equivalent tables exist** | effective due dates are computed from base + student/section/override dates | needs a coordinator-assigned migration if absent; defer route otherwise |
+| Course versions for `restore_version` — check whether course snapshots exist (likely absent) | `POST /courses/:course_id/restore/:version_id` restores a prior course state | needs a coordinator-assigned migration; propose deferring route |
 
-No new tables needed for: link/unlink (use `outcome_links`), import (deep-copy rows within existing tables; `source_outcome_group_id` already present), account_chain response (derived), account-context index fan-outs, `permissions`/`preview_html`/`todo`/`recent_students`/`students`/`search_users` (computed), CSV import/export (attachment-based), groups streams (0106), student_view_student (create a user row per course with existing `users`/`enrollments`).
+No new tables needed for: link/unlink (use `outcome_links`), import (deep-copy rows within existing tables; `source_outcome_group_id` already present), account_chain response (derived), account-context index fan-outs, `permissions`/`preview_html`/`todo`/`recent_students`/`students`/`search_users` (computed), CSV import/export (attachment-based), groups streams (stream-items migration), student_view_student (create a user row per course with existing `users`/`enrollments`).
 
 ---
 
@@ -349,7 +349,7 @@ No new tables needed for: link/unlink (use `outcome_links`), import (deep-copy r
 - **`GET /accounts/:account_id/groups`** — same contract as the done course `context_index` (`filter`, `user_id`, `collaboration_state`, `only_own_groups`, `include[]`, `page`), against account groups + account-level categories.
 - **`GET /courses/:course_id/bulk_user_tags`** — returns all differentiation tags (non-collaborative categories) with their user memberships in bulk: `{tags: [...], user_tags: {user_id: [tag_id...]}}`-shape for the tags UI.
 - **`POST /group_categories/:group_category_id/groups`** — create a group inside the category (name, members); `manage_groups_add` on the context.
-- **`GET /groups/:group_id/activity_stream`** + **`/summary`** — group-scoped stream items for the current user (mirror the done course summary handler; stream tables exist via 0106).
+- **`GET /groups/:group_id/activity_stream`** + **`/summary`** — group-scoped stream items for the current user (mirror the done course summary handler; stream tables exist via the stream-items migration).
 - **`GET /groups/:group_id/permissions`** — `{can_manage, ...}` hash derived from `manage` on the group (mirror the courses settings permissions shape).
 - **`POST /groups/:group_id/preview_html`** — as courses but `manage` on group.
 - **`POST /groups/:group_id/files`** — step 1 of the group file upload contract (mirror the done course `create_file`: returns `{upload_url, upload_params}` / upload session); then `files` crate completes it.
@@ -413,7 +413,7 @@ Dependencies:
 - `specs/p5-ui-shell.md` — `account_chain` and `outcome_alignments` are UI-driven despite being undocumented in the public API docs.
 - PR #16 (discussion_topics group-context/read-all) — owns group-context *discussion* routes; this spec's groups tail touches the same context-resolution helpers.
 - `star-jobs` — link_validation, reset_content, batch_update progress reporting.
-- Migration reservations protocol (issue #20): every schema need in §4 is "needs 010x (coordinator-assigned)"; this spec never self-assigns.
+- Migration reservations protocol (issue #20): every schema need in §4 is "needs a coordinator-assigned migration"; this spec never self-assigns.
 
 Open questions:
 1. **Global outcomes context:** does `star-permissions` model `Account.site_admin` (a virtual root) for `read_global_outcomes`/`manage_global_outcomes`, or should global routes check a site-admin flag on the user? Affects all 11 `/global/...` routes.
