@@ -1179,12 +1179,16 @@ async fn accept_early_access_terms(
     if !can_manage_flags(&state.db, &auth, &ctx).await? {
         return Err(ApiError::Forbidden);
     }
-    // Canvas stores settings[:early_access_program] = { value: true }.
+    // Canvas stores settings[:early_access_program] = { value: true }. A
+    // top-level merge replaces the whole entry (jsonb_set cannot create the
+    // nested intermediate key).
     sqlx::query(
-        "UPDATE accounts \
-         SET settings = jsonb_set(settings, '{early_access_program,value}', 'true'::jsonb), \
-             updated_at = now() \
-         WHERE id = $1",
+        r#"
+        UPDATE accounts
+        SET settings = settings || '{"early_access_program": {"value": true}}'::jsonb,
+            updated_at = now()
+        WHERE id = $1
+        "#,
     )
     .bind(account_id)
     .execute(&state.db)

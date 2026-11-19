@@ -209,7 +209,8 @@ async fn account_index_shape_and_permissions() {
     assert_eq!(flag["parent_state"], "allowed");
     assert_eq!(flag["transitions"]["off"]["locked"], false);
     assert_eq!(flag["transitions"]["on"]["locked"], false);
-    assert_eq!(flag["transitions"]["allowed"]["locked"], false);
+    // The flag's current state is excluded from the transition table.
+    assert!(flag["transitions"].get("allowed").is_none());
     assert_eq!(flag["transitions"]["allowed_on"]["locked"], false);
 
     // Root accounts also see RootAccount features as a virtual off flag.
