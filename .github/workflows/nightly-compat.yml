@@ -82,10 +82,10 @@ jobs:
   # ---------------------------------------------------------------------------
   # Shard map: every workspace crate except star-http is assigned to exactly
   # one of 4 legs (asserted by the preflight guard). Legs are balanced by the
-  # per-crate wall times measured from nightly run #11's job log (LPT packing,
-  # ~16.1 min of tests per leg). fail-fast stays off: the nightly run's value
-  # is the full signal, so one failing leg must not cancel the others.
-  # Shard count rationale: see the pooler ceiling note in the header comment.
+  # per-crate wall times measured from the 2026-11-19 4-leg validation run
+  # (LPT packing, ~21.2 min of tests per leg). fail-fast stays off: the nightly
+  # run's value is the full signal, so one failing leg must not cancel the
+  # others. Shard count rationale: see the pooler ceiling note in the header.
   # ---------------------------------------------------------------------------
   supabase-shard:
     name: Supabase shard ${{ matrix.shard }} of 4
@@ -99,26 +99,25 @@ jobs:
         include:
           - shard: 1
             crates: >-
-              -p star-assignments -p star-auth -p star-calendar -p star-features
-              -p star-grading-standards -p star-lti -p star-rubrics
+              -p star-announcements -p star-assignment-groups -p star-assignments
+              -p star-calendar -p star-common -p star-conferences
+              -p star-conversations -p star-dashboard -p star-features
+              -p star-learning-dates -p star-modules -p star-permissions
           - shard: 2
             crates: >-
-              -p star-accounts -p star-api -p star-common -p star-dashboard
-              -p star-learning-dates -p star-modules -p star-notifications
-              -p star-pages
+              -p star-account-reports -p star-collaborations -p star-discussions
+              -p star-eportfolios -p star-grading-standards -p star-graphql
+              -p star-jobs -p star-media -p star-notifications -p star-pages
           - shard: 3
             crates: >-
-              -p star-audit -p star-content -p star-courses -p star-db
-              -p star-enrollments -p star-graphql -p star-outcomes
-              -p star-permissions
+              -p star-audit -p star-auth -p star-courses -p star-files
+              -p star-lti -p star-quizzes -p star-rubrics -p star-search
+              -p star-users
           - shard: 4
             crates: >-
-              -p star-account-reports -p star-announcements
-              -p star-assignment-groups -p star-collaborations
-              -p star-conferences -p star-conversations -p star-discussions
-              -p star-eportfolios -p star-files -p star-groups -p star-jobs
-              -p star-media -p star-polling -p star-quizzes -p star-search
-              -p star-sis -p star-submission-comments -p star-users
+              -p star-accounts -p star-api -p star-content -p star-db
+              -p star-enrollments -p star-groups -p star-outcomes
+              -p star-polling -p star-sis -p star-submission-comments
     env:
       DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
       STAR_JWT_SECRET: nightly-supabase-test-secret
@@ -135,11 +134,15 @@ jobs:
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run shard ${{ matrix.shard }} against Supabase
         run: |
-          set -uo pipefail
+          # GitHub runs steps with `bash -e`; this script must survive a
+          # failing cargo invocation to classify and retry, so -e goes off
+          # and every failure is handled explicitly.
+          set +e
+          set -u
           log="$(mktemp)"
           cargo test --locked --no-fail-fast ${{ matrix.crates }} -- --test-threads=2 2>&1 | tee "$log"
           rc="${PIPESTATUS[0]}"
-          [ "$rc" -eq 0 ] && exit 0
+          if [ "$rc" -eq 0 ]; then exit 0; fi
           # 4 legs peak at ~8-12 pooler clients but transient churn spikes can
           # still graze the 15-client session-pooler ceiling (measured: ~2% of
           # tests across the 2026-11-19 validation run, 100% of all failures).

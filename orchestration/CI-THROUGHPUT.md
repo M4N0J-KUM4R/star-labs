@@ -205,8 +205,8 @@ Summed: ~64.5 min of per-binary wall time across 34 DB-backed crates (the other
 
 ## Changes
 
-1. **Sharded the Supabase suite 4 ways.** Matrix legs balanced by the measured
-   per-crate times above (LPT packing): 16.07/16.09/16.32/16.07 min of tests
+1. **Sharded the Supabase suite 4 ways.** Matrix legs balanced by measured
+   per-crate wall time (LPT packing): 21.15/21.20/21.17/21.17 min of tests
    per leg. Each leg keeps `--locked --no-fail-fast -- --test-threads=2`;
    `fail-fast: false` so a failing leg does not cancel the nightly signal.
 2. **Preflight job** gates the matrix: secret check, the psql connectivity probe
@@ -219,6 +219,18 @@ Summed: ~64.5 min of per-binary wall time across 34 DB-backed crates (the other
 4. **Per-shard cache keys** (`shared-key: nightly-shard-N`, `save-if: main`)
    following the wave-3 cache discipline. The first run after merge pays a cold
    compile per leg (~3–5 min); steady state restores each leg's own artifacts.
+   Note: `workflow_dispatch` validation runs never save caches, so they always
+   measure the cold case.
+5. **Grazed-test retry** (`tools/ci/nightly_retry.py`): the 4-leg validation
+   runs showed a ~2% per-test graze rate against the pooler ceiling (see
+   below). When a leg fails, every failed test's stdout section must look like
+   infrastructure noise (EMAXCONNSESSION / database error / connect / pool
+   timeout) for a retry to be allowed; those tests alone are then re-run once
+   (`--exact <names>`) after a 60 s cool-down. The gate can only cause a
+   pointless retry, never mask a failure — whatever it lets through is re-run,
+   and a persistent failure fails the retry too. Real failures exit before the
+   retry and fail the leg immediately. Shard timeout raised 30 -> 45 min for
+   the cold-cache + retry case.
 
 ## The binding constraint: the session pooler's 15-client ceiling
 
@@ -237,22 +249,36 @@ one sqlx pool per test with churn between tests).
 Consequences for the design:
 
 - **4 legs x ~2-3 clients = 8-12 peak** against the 15-client ceiling — the
-  widest safe matrix at the current pooler limit.
+  widest safe matrix at the current pooler limit. Even so, transient pool-churn
+  spikes graze it: the 4-leg validation runs measured **2-5 failed tests per
+  leg (~2%), 100% of them EMAXCONNSESSION** and zero data races. That is what
+  the grazed-test retry (change 5) absorbs.
+- **Shared-DB contention is real:** running 4 legs concurrently slows the
+  aggregate suite ~28% (66.5 -> 84.7 min of summed test-binary wall on the
+  identical test set) — the small Supabase compute is the bottleneck, not the
+  runners. The shard map is balanced on the contended numbers, so the legs
+  stay level in practice (measured 26.2/19.9/19.8/19.0 before this rebalance,
+  designed 21.2 +- 0.1 after).
 - The ceiling is documented in the workflow header; widening the matrix
   requires raising the Supabase pooler limit (dashboard) or moving
   `SUPABASE_DATABASE_URL` to the transaction pooler (port 6543, much higher
   client ceiling) — the latter needs re-validating `sqlx migrate` advisory
   locks under transaction pooling first.
-- If the pooler limit is raised to ~60: an 8-leg map (7.9–8.6 min/leg) brings
-  the workflow to ~12 min, at which point the coverage lane (11.6 min) becomes
-  the floor.
+- If the pooler limit is raised to ~60: an 8-leg map brings the workflow to
+  the coverage lane's floor (~11-12 min).
 
 ## After (measured)
 
-Workflow-dispatch run on this lane (4 legs, cold cache on the first attempt;
+Validation dispatches on this lane (cold cache — dispatches never save caches;
 `save-if: main` means steady-state numbers arrive after the first merge to
 main):
 
+| Run | Wall time | Notes |
+|---|---:|---|
+| 4 legs, pre-retry (v1 map) | 30.5 min | shard 4 hit the 30-min timeout; 20 grazes failed the run |
+| 4 legs, retry dead (`bash -e` bug) | 37.7 min | shard 4 37.2 min on the v1 map; grazes un retried |
+| 4 legs, rebalanced + retry fixed | _final dispatch_ | 21.2 min of tests per leg by design |
+
 | Workflow | Wall time | Notes |
 |---|---:|---|
-| Nightly compatibility | _recorded from the dispatch run before merge_ | 4 shard legs ∥ coverage (11.6 min) |
+| Nightly compatibility | _final dispatch number_ | 4 shard legs ∥ coverage (10.5-12.2 min) |
