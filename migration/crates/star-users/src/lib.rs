@@ -2785,11 +2785,8 @@ async fn set_new_user_tutorial_status(
     if !TUTORIAL_PAGE_NAMES.contains(&page_name.as_str()) {
         return Err(ApiError::BadRequest("Invalid Page Name Provided".into()));
     }
-    let collapsed = payload
-        .collapsed
-        .as_ref()
-        .and_then(canvas_boolean)
-        .unwrap_or(false);
+    // The deserializer already applies Canvas' value_to_boolean coercion.
+    let collapsed = payload.collapsed.unwrap_or(false);
 
     let mut statuses = get_user_preference(&state.db, user_id, "new_user_tutorial_statuses")
         .await?
@@ -2835,6 +2832,27 @@ async fn can_merge_users(state: &AppState, auth: &AuthUser) -> Result<bool, ApiE
     .await
     .map_err(ApiError::from)?;
     Ok(admin.is_some())
+}
+
+/// Snapshot of the merged-away user recorded at merge time (Canvas
+/// UserMergeDataItem `user_name` / pseudonym data).
+#[derive(Debug, sqlx::FromRow)]
+struct MergeSnapshot {
+    name: Option<String>,
+    email: Option<String>,
+    sortable_name: Option<String>,
+    password_hash: Option<String>,
+}
+
+/// A splitable `user_merges` row (Canvas UserMergeData active + splitable).
+#[derive(Debug, sqlx::FromRow)]
+struct SplitCandidate {
+    id: i64,
+    from_user_id: i64,
+    name: Option<String>,
+    email: Option<String>,
+    sortable_name: Option<String>,
+    password_hash: Option<String>,
 }
 
 /// Path params for the simple merge form
@@ -2934,18 +2952,18 @@ async fn merge_into_impl(
         .map_err(|e| ApiError::Db(e.to_string()))?;
 
     // Snapshot the merged-away user for split (Canvas UserMergeDataItem).
-    let snapshot: Option<(
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> =
+    let snapshot: Option<MergeSnapshot> =
         sqlx::query_as("SELECT name, email, sortable_name, password_hash FROM users WHERE id = $1")
             .bind(from_user)
             .fetch_optional(&mut *tx)
             .await
             .map_err(ApiError::from)?;
-    let (from_name, from_email, from_sortable, from_hash) = snapshot.ok_or(ApiError::NotFound)?;
+    let MergeSnapshot {
+        name: from_name,
+        email: from_email,
+        sortable_name: from_sortable,
+        password_hash: from_hash,
+    } = snapshot.ok_or(ApiError::NotFound)?;
     sqlx::query(
         r#"
         INSERT INTO user_merges
@@ -3042,17 +3060,15 @@ async fn merge_into_impl(
     .await
     .map_err(ApiError::from)?;
 
-    // Stream items, todo ignores, dashboard positions, colors, settings and
-    // files move with the user.
+    // Per-user rows move with the user. Tables with a uniqueness tied to
+    // user_id + a context column (dashboard_positions, user_colors,
+    // favorites, todo_ignores) or user_id alone (user_settings) skip rows
+    // the survivor already has — Canvas soft-deletes those losers.
     for table in [
         "stream_items",
         "todo_ignores",
-        "dashboard_positions",
-        "user_colors",
-        "user_settings",
         "user_files",
         "access_tokens",
-        "favorites",
         "planner_notes",
     ] {
         sqlx::query(&format!(
@@ -3064,6 +3080,107 @@ async fn merge_into_impl(
         .await
         .map_err(ApiError::from)?;
     }
+    sqlx::query(
+        r#"
+        UPDATE dashboard_positions dp
+        SET user_id = $2, updated_at = now()
+        WHERE dp.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM dashboard_positions dp2
+               WHERE dp2.user_id = $2 AND dp2.course_id = dp.course_id)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        r#"
+        UPDATE user_colors uc
+        SET user_id = $2, updated_at = now()
+        WHERE uc.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM user_colors uc2
+               WHERE uc2.user_id = $2 AND uc2.context = uc.context)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        r#"
+        UPDATE favorites f
+        SET user_id = $2, updated_at = now()
+        WHERE f.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM favorites f2
+               WHERE f2.user_id = $2 AND f2.context_type = f.context_type
+                 AND f2.context_id = f.context_id)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        r#"
+        UPDATE todo_ignores ti
+        SET user_id = $2, updated_at = now()
+        WHERE ti.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM todo_ignores ti2
+               WHERE ti2.user_id = $2 AND ti2.asset_type = ti.asset_type
+                 AND ti2.asset_id = ti.asset_id AND ti2.purpose = ti.purpose
+                 AND ti2.permanent = ti.permanent)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        r#"
+        UPDATE user_settings us
+        SET manual_mark_as_read = us.manual_mark_as_read OR victim.manual_mark_as_read,
+            collapse_global_nav = us.collapse_global_nav OR victim.collapse_global_nav,
+            collapse_course_nav = us.collapse_course_nav OR victim.collapse_course_nav,
+            hide_dashcard_color_overlays =
+                us.hide_dashcard_color_overlays OR victim.hide_dashcard_color_overlays,
+            release_notes_badge_disabled =
+                us.release_notes_badge_disabled OR victim.release_notes_badge_disabled,
+            comment_library_suggestions_enabled =
+                us.comment_library_suggestions_enabled
+                OR victim.comment_library_suggestions_enabled,
+            elementary_dashboard_disabled =
+                us.elementary_dashboard_disabled OR victim.elementary_dashboard_disabled,
+            default_to_block_editor =
+                us.default_to_block_editor OR victim.default_to_block_editor,
+            widget_dashboard_user_preference =
+                us.widget_dashboard_user_preference OR victim.widget_dashboard_user_preference,
+            widget_dashboard_dark_mode =
+                us.widget_dashboard_dark_mode OR victim.widget_dashboard_dark_mode,
+            updated_at = now()
+        FROM (
+            SELECT * FROM user_settings WHERE user_id = $1
+        ) victim
+        WHERE us.user_id = $2
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query("DELETE FROM user_settings WHERE user_id = $1")
+        .bind(from_user)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
 
     // Preferences merge (survivor's keys win, Canvas merges the hashes).
     sqlx::query(
@@ -3121,14 +3238,7 @@ async fn split_user(
     ensure_user_exists(&state.db, user_id).await?;
 
     // Canvas: active (not deleted/failed) AND splitable (< 180 days old).
-    let merge: Option<(
-        i64,
-        i64,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = sqlx::query_as(
+    let merge: Option<SplitCandidate> = sqlx::query_as(
         r#"
             SELECT id, from_user_id, from_name, from_email, from_sortable_name, from_password_hash
             FROM user_merges
@@ -3143,7 +3253,14 @@ async fn split_user(
     .fetch_optional(&state.db)
     .await
     .map_err(ApiError::from)?;
-    let Some((merge_id, from_user_id, from_name, from_email, from_sortable, from_hash)) = merge
+    let Some(SplitCandidate {
+        id: merge_id,
+        from_user_id,
+        name: from_name,
+        email: from_email,
+        sortable_name: from_sortable,
+        password_hash: from_hash,
+    }) = merge
     else {
         return Err(ApiError::BadRequest(
             "Nothing to split off of this user".into(),
