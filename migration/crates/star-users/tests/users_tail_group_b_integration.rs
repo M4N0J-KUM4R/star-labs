@@ -565,12 +565,15 @@ async fn split_restores_merged_user_and_marks_ledger_deleted() {
     assert_eq!(enrollment.0, restored.0, "enrollment moved back");
 
     // The ledger entry is marked deleted -> a second split is the 400.
-    let ledger_state: (String,) =
-        sqlx::query_as("SELECT workflow_state FROM user_merges WHERE from_user_id = $1")
-            .bind(restored.0)
-            .fetch_one(&pool)
-            .await
-            .expect("ledger row");
+    // (The row is keyed to the surviving user; the restored user got a new id.)
+    let ledger_state: (String,) = sqlx::query_as(
+        "SELECT workflow_state FROM user_merges WHERE user_id = $1 AND from_email = $2",
+    )
+    .bind(into)
+    .bind(format!("{prefix}-Split From@test.local"))
+    .fetch_one(&pool)
+    .await
+    .expect("ledger row");
     assert_eq!(ledger_state.0, "deleted");
 
     let second = server
