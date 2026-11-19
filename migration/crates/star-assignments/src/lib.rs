@@ -292,6 +292,7 @@ struct StudentSubmissionsQuery {
     graded_since: Option<String>,
     order: Option<String>,
     order_direction: Option<String>,
+    include_provisional_grades: bool,
 }
 
 /// Request body for POST .../submissions/{userId}/files (metadata only).
@@ -753,6 +754,11 @@ fn parse_student_submissions_query(
                 }
             }
             "grouped" => query.grouped = parse_bool(&value),
+            "include" => {
+                if value == "provisional_grades" {
+                    query.include_provisional_grades = true;
+                }
+            }
             "workflow_state" => query.workflow_state = Some(value).filter(|v| !v.is_empty()),
             "submitted_since" => query.submitted_since = Some(value).filter(|v| !v.is_empty()),
             "graded_since" => query.graded_since = Some(value).filter(|v| !v.is_empty()),
@@ -1478,14 +1484,45 @@ async fn list_student_submissions(
     let row_ids: Vec<i64> = rows.iter().map(|row| row.id).collect();
     let mut attachments = load_submission_attachments(&state.db, &row_ids).await?;
 
+    // Canvas: include[]=provisional_grades is honored per submission, and
+    // only for moderated assignments.
+    let moderated_includes: HashMap<i64, ModeratedAssignment> = if query.include_provisional_grades
+    {
+        let mut map = HashMap::new();
+        for id in &assignment_ids {
+            if let Some(assignment) = load_moderated_assignment(&state.db, course_id, *id)
+                .await
+                .ok()
+            {
+                if assignment.moderated_grading {
+                    map.insert(*id, assignment);
+                }
+            }
+        }
+        map
+    } else {
+        HashMap::new()
+    };
+
     if !query.grouped {
-        let submissions: Vec<CanvasSubmission> = rows
-            .into_iter()
-            .map(|row| {
-                let files = attachments.remove(&row.id).unwrap_or_default();
-                CanvasSubmission::from_row(row, course_id, files)
-            })
-            .collect();
+        let mut submissions: Vec<serde_json::Value> = Vec::new();
+        for row in rows {
+            let files = attachments.remove(&row.id).unwrap_or_default();
+            let rendered = CanvasSubmission::from_row(row, course_id, files);
+            let mut value =
+                serde_json::to_value(&rendered).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+            append_provisional_grades_include(
+                &state.db,
+                &moderated_includes,
+                rendered.id,
+                course_id,
+                auth.id,
+                &auth,
+                &mut value,
+            )
+            .await?;
+            submissions.push(value);
+        }
         return Ok(Json(serde_json::json!(submissions)));
     }
 
@@ -1507,13 +1544,26 @@ async fn list_student_submissions(
     .fetch_all(&state.db)
     .await?;
 
-    let mut submissions_by_user: HashMap<i64, Vec<CanvasSubmission>> = HashMap::new();
+    let mut submissions_by_user: HashMap<i64, Vec<serde_json::Value>> = HashMap::new();
     for row in rows {
         let files = attachments.remove(&row.id).unwrap_or_default();
+        let rendered = CanvasSubmission::from_row(row, course_id, files);
+        let mut value =
+            serde_json::to_value(&rendered).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+        append_provisional_grades_include(
+            &state.db,
+            &moderated_includes,
+            rendered.id,
+            course_id,
+            auth.id,
+            &auth,
+            &mut value,
+        )
+        .await?;
         submissions_by_user
-            .entry(row.user_id)
+            .entry(rendered.user_id)
             .or_default()
-            .push(CanvasSubmission::from_row(row, course_id, files));
+            .push(value);
     }
 
     let grouped: Vec<serde_json::Value> = grouped_student_ids
@@ -1634,6 +1684,29 @@ async fn get_student_submission(
             .await?;
         }
     }
+    if query.include_provisional_grades {
+        // Canvas: the include is only honored for moderated assignments.
+        let assignment = load_moderated_assignment(&state.db, course_id, assignment_id).await?;
+        if assignment.moderated_grading {
+            let submission_ref: ProvisionalSubmissionRef = sqlx::query_as(
+                r#"SELECT id, user_id, anonymous_id, submitted_at FROM submissions WHERE id = $1"#,
+            )
+            .bind(submission_id)
+            .fetch_one(&state.db)
+            .await?;
+            entry["provisional_grades"] = serde_json::json!(
+                submission_provisional_grades_json(
+                    &state.db,
+                    course_id,
+                    &assignment,
+                    &submission_ref,
+                    auth.id,
+                    &auth,
+                )
+                .await?
+            );
+        }
+    }
 
     Ok(Json(entry))
 }
@@ -1646,6 +1719,7 @@ struct SubmissionIncludes {
     include_rubric_assessment: bool,
     include_user: bool,
     include_read_status: bool,
+    include_provisional_grades: bool,
 }
 
 /// Parse `include[]` from the raw query string (Canvas array spelling).
@@ -1666,6 +1740,7 @@ fn parse_submission_includes(raw_query: Option<&str>) -> SubmissionIncludes {
             "rubric_assessment" => includes.include_rubric_assessment = true,
             "user" => includes.include_user = true,
             "read_status" => includes.include_read_status = true,
+            "provisional_grades" => includes.include_provisional_grades = true,
             _ => {}
         }
     }
@@ -2180,20 +2255,26 @@ async fn gradeable_students(
     RawQuery(raw_query): RawQuery,
     auth: AuthUser,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    let assignment = load_moderated_assignment(&state.db, course_id, assignment_id).await?;
 
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
-    let (sort_by_name, descending, allow_new_anonymous_id) =
+    let (sort_by_name, descending, allow_new_anonymous_id, include_provisional_grades) =
         parse_gradeable_students_query(raw_query.as_deref());
+
+    // Canvas: include[]=provisional_grades additionally requires
+    // permits_moderation? (render_unauthorized_action otherwise).
+    if include_provisional_grades && !permits_moderation(&state.db, &assignment, auth.id).await? {
+        return Err(ApiError::Unauthorized);
+    }
 
     // Canvas: can_view_student_names = allow_new_anonymous_id ?
     // assignment.can_view_student_names?(user) : true. A teacher arriving
     // without the flag always sees names.
-    let anonymize =
-        allow_new_anonymous_id && assignment_anonymize_students(&state.db, assignment_id).await?;
+    let anonymize = allow_new_anonymous_id
+        && assignment_anonymize_students_moderated(&state.db, &assignment).await?;
 
     // Canvas: sort=name orders by sortable_name when names are visible and
     // falls back to anonymous_id when hidden; the default order is user_id
@@ -2211,7 +2292,7 @@ async fn gradeable_students(
 
     let sql = format!(
         r#"
-        SELECT s.user_id, s.anonymous_id, u.name
+        SELECT s.id, s.user_id, s.anonymous_id, u.name
         FROM submissions s
         JOIN assignments a ON a.id = s.assignment_id
         JOIN users u ON u.id = s.user_id
@@ -2221,82 +2302,106 @@ async fn gradeable_students(
         "#
     );
 
-    let rows: Vec<(i64, Option<String>, String)> = sqlx::query_as(&sql)
+    let rows: Vec<(i64, i64, Option<String>, String)> = sqlx::query_as(&sql)
         .bind(assignment_id)
         .fetch_all(&state.db)
         .await?;
 
-    let students = rows
-        .into_iter()
-        .map(|(user_id, anonymous_id, name)| {
-            if anonymize {
-                // Canvas AnonymousUserDisplay (lib/api/v1/user.rb):
-                // {anonymous_id, avatar_image_url (default fallback),
-                // display_name}. The snapshot has no per-student pseudonym
-                // table (spec open question 2), so display_name stays the
-                // placeholder "Student" and the fallback avatar is null.
-                serde_json::json!({
-                    "id": anonymous_id.unwrap_or_default(),
-                    "display_name": "Student",
-                    "avatar_image_url": serde_json::Value::Null,
-                    "html_url": serde_json::Value::Null,
-                    "pronouns": serde_json::Value::Null,
-                })
-            } else {
-                serde_json::json!({
-                    "id": user_id,
-                    "display_name": name,
-                    "avatar_image_url": serde_json::Value::Null,
-                    "html_url": format!("/courses/{course_id}/users/{user_id}"),
-                    "pronouns": serde_json::Value::Null,
-                })
-            }
-        })
-        .collect();
+    let display = |submission_id: i64, user_id: i64, anonymous_id: &Option<String>, name: &str| {
+        if anonymize {
+            // Canvas AnonymousUserDisplay (lib/api/v1/user.rb):
+            // {anonymous_id, avatar_image_url (default fallback),
+            // display_name}. The snapshot has no per-student pseudonym table
+            // (spec open question 2), so display_name stays the placeholder
+            // "Student" and the fallback avatar is null.
+            let _ = (submission_id, name);
+            serde_json::json!({
+                "id": anonymous_id.clone().unwrap_or_default(),
+                "display_name": "Student",
+                "avatar_image_url": serde_json::Value::Null,
+                "html_url": serde_json::Value::Null,
+                "pronouns": serde_json::Value::Null,
+            })
+        } else {
+            serde_json::json!({
+                "id": user_id,
+                "display_name": name,
+                "avatar_image_url": serde_json::Value::Null,
+                "html_url": format!("/courses/{course_id}/users/{user_id}"),
+                "pronouns": serde_json::Value::Null,
+            })
+        }
+    };
 
-    Ok(Json(students))
-}
-
-/// Canvas `AbstractAssignment#anonymize_students?` for the Star snapshot:
-/// false unless `anonymous_grading` is on; moderated grading has no columns
-/// yet (slice F, #31), so the remaining rule is "any active student with an
-/// unposted submission" — `unposted_anonymous_submissions?`. The Star
-/// submissions table has no `posted_at`; `graded_at IS NULL` is the unposted
-/// proxy (grading in star-lms sets graded_at at the same time as the score).
-async fn assignment_anonymize_students(
-    pool: &PgPool,
-    assignment_id: i64,
-) -> Result<bool, ApiError> {
-    let anonymous_grading: bool =
-        sqlx::query_scalar("SELECT anonymous_grading FROM assignments WHERE id = $1")
-            .bind(assignment_id)
-            .fetch_one(pool)
-            .await?;
-    if !anonymous_grading {
-        return Ok(false);
+    if !include_provisional_grades {
+        let students = rows
+            .into_iter()
+            .map(|(submission_id, user_id, anonymous_id, name)| {
+                display(submission_id, user_id, &anonymous_id, &name)
+            })
+            .collect();
+        return Ok(Json(students));
     }
 
-    let unposted: Option<i32> = sqlx::query_scalar(
-        r#"
-        SELECT 1 FROM submissions s
-        JOIN enrollments e ON e.user_id = s.user_id
-        WHERE s.assignment_id = $1 AND s.graded_at IS NULL
-          AND e.course_id = (SELECT course_id FROM assignments WHERE id = $1)
-          AND e.role = 'student' AND e.workflow_state <> 'deleted'
-        LIMIT 1
-        "#,
-    )
-    .bind(assignment_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(unposted.is_some())
+    // Canvas: in_moderation_set is true when a selection exists that points
+    // at one of this submission's provisional grades (the quirk from
+    // `submission.provisional_grades.find(&:selection)`); the pg list is
+    // role-filtered like every other provisional include.
+    let mut enriched: Vec<serde_json::Value> = Vec::new();
+    for (submission_id, user_id, anonymous_id, name) in rows {
+        let mut json = display(submission_id, user_id, &anonymous_id, &name);
+
+        let submission_ref = ProvisionalSubmissionRef {
+            id: submission_id,
+            user_id,
+            anonymous_id: anonymous_id.clone(),
+            submitted_at: None,
+        };
+
+        // The selection whose selected pg belongs to this submission.
+        let selected: Option<Option<i64>> = sqlx::query_scalar(
+            r#"
+            SELECT sel.selected_provisional_grade_id
+            FROM moderated_grading_selections sel
+            WHERE sel.assignment_id = $1 AND sel.student_id = $2
+              AND sel.selected_provisional_grade_id IN (
+                  SELECT id FROM provisional_grades WHERE submission_id = $3
+              )
+            "#,
+        )
+        .bind(assignment_id)
+        .bind(user_id)
+        .bind(submission_id)
+        .fetch_optional(&state.db)
+        .await?
+        .flatten();
+
+        json["in_moderation_set"] = serde_json::json!(selected.is_some());
+        json["selected_provisional_grade_id"] = serde_json::json!(selected);
+        json["provisional_grades"] = serde_json::json!(
+            submission_provisional_grades_json(
+                &state.db,
+                course_id,
+                &assignment,
+                &submission_ref,
+                auth.id,
+                &auth,
+            )
+            .await?
+        );
+        enriched.push(json);
+    }
+
+    Ok(Json(enriched))
 }
 
-/// Parse `sort`, `order`, and `allow_new_anonymous_id` from the query string.
-fn parse_gradeable_students_query(raw_query: Option<&str>) -> (bool, bool, bool) {
+/// Parse `sort`, `order`, `allow_new_anonymous_id`, and `include[]` from
+/// the query string.
+fn parse_gradeable_students_query(raw_query: Option<&str>) -> (bool, bool, bool, bool) {
     let mut sort_by_name = false;
     let mut descending = false;
     let mut allow_new_anonymous_id = false;
+    let mut include_provisional_grades = false;
 
     for pair in raw_query.unwrap_or_default().split('&') {
         let mut parts = pair.splitn(2, '=');
@@ -2306,11 +2411,19 @@ fn parse_gradeable_students_query(raw_query: Option<&str>) -> (bool, bool, bool)
             "sort" => sort_by_name = value == "name",
             "order" => descending = value.eq_ignore_ascii_case("desc"),
             "allow_new_anonymous_id" => allow_new_anonymous_id = value == "true" || value == "1",
+            "include[]" | "include" => {
+                include_provisional_grades = value == "provisional_grades";
+            }
             _ => {}
         }
     }
 
-    (sort_by_name, descending, allow_new_anonymous_id)
+    (
+        sort_by_name,
+        descending,
+        allow_new_anonymous_id,
+        include_provisional_grades,
+    )
 }
 
 /// GET /courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}
@@ -2771,18 +2884,60 @@ async fn course_get_my_submission(
 /// `{score}` payload and Canvas' `{submission: {posted_grade}}` shape, and
 /// creates the submission row when the student has not submitted yet
 /// (Canvas `find_or_create_submission`).
+///
+/// Canvas `submissions_api#update` moderation params (spec p5 slice F, #31):
+/// `submission[provisional]=true` routes the grade into a provisional grade
+/// row instead of the submission; `submission[final]` is honored only for
+/// moderators; a non-provisional `posted_grade` on a moderated, unpublished
+/// assignment is a 401 before any grading happens.
 async fn course_grade_submission(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
     auth: AuthUser,
     Json(payload): Json<serde_json::Value>,
-) -> Result<Json<Submission>, ApiError> {
-    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let assignment = load_moderated_assignment(&state.db, course_id, assignment_id).await?;
+
+    let submission_params = payload
+        .get("submission")
+        .and_then(|value| value.as_object());
+    let posted_grade = submission_params.and_then(|params| params.get("posted_grade"));
+    let provisional =
+        json_value_to_boolean(submission_params.and_then(|params| params.get("provisional")));
+    let final_flag =
+        json_value_to_boolean(submission_params.and_then(|params| params.get("final")));
+
+    // Canvas rejects a non-provisional posted_grade on a moderated,
+    // unpublished assignment (render_unauthorized_action) before resolving
+    // the user.
+    if let Some(grade) = posted_grade {
+        if !grade.is_null()
+            && !provisional
+            && assignment.moderated_grading
+            && !assignment.grades_published()
+        {
+            return Err(ApiError::Unauthorized);
+        }
+    }
+
     ensure_user_in_course(&state.db, course_id, user_id).await?;
 
     // Canvas requires :grade, i.e. manage_grades: teachers and admins only.
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
+    }
+
+    if provisional {
+        return grade_submission_provisional(
+            state,
+            assignment,
+            user_id,
+            auth,
+            &payload,
+            posted_grade,
+            final_flag,
+        )
+        .await;
     }
 
     let score = resolve_grade_payload(&payload)?
@@ -2818,7 +2973,418 @@ async fn course_grade_submission(
     .fetch_one(&state.db)
     .await?;
 
-    Ok(Json(submission))
+    let value =
+        serde_json::to_value(&submission).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    Ok(Json(value))
+}
+
+/// The provisional branch of `PUT .../submissions/{userId}` (Canvas
+/// `Assignment#grade_student` with `provisional: true`): the submission row
+/// is created but never scored; the grade lands in a `provisional_grades`
+/// row owned by the scorer (or the single final grade for moderators).
+async fn grade_submission_provisional(
+    state: AppState,
+    assignment: ModeratedAssignment,
+    user_id: i64,
+    auth: AuthUser,
+    payload: &serde_json::Value,
+    posted_grade: Option<&serde_json::Value>,
+    final_flag: bool,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // find_or_create_submission — the row exists afterwards, ungraded.
+    let inserted: Option<Submission> = sqlx::query_as(
+        r#"
+        INSERT INTO submissions (assignment_id, user_id)
+        VALUES ($1, $2)
+        ON CONFLICT (assignment_id, user_id) DO NOTHING
+        RETURNING id, assignment_id, user_id, body, score::float8, submitted_at,
+                  created_at, updated_at
+        "#,
+    )
+    .bind(assignment.id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let submission: Submission = match inserted {
+        Some(submission) => submission,
+        None => {
+            sqlx::query_as(
+                r#"
+                SELECT id, assignment_id, user_id, body, score::float8, submitted_at,
+                       created_at, updated_at
+                FROM submissions WHERE assignment_id = $1 AND user_id = $2
+                "#,
+            )
+            .bind(assignment.id)
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await?
+        }
+    };
+    let submission_id = submission.id;
+
+    // Canvas: submission[:final] = value_to_boolean(final) &&
+    // permits_moderation? — silently downgraded without the right.
+    let wants_final = final_flag && permits_moderation(&state.db, &assignment, auth.id).await?;
+
+    // The grade itself (posted_grade path); `None` means a comment-only or
+    // empty provisional request.
+    let score = match posted_grade {
+        None => None,
+        Some(value) => parse_grade_value(value)?,
+    };
+
+    // ensure_grader_can_adjudicate: every provisional grade occupies a grader
+    // slot on a moderated assignment (moderation_graders row, slot_taken).
+    if assignment.moderated_grading {
+        ensure_grader_slot(&state.db, &assignment, auth.id).await?;
+    }
+
+    let comment_text = payload
+        .get("comment")
+        .and_then(|value| value.get("text_comment"))
+        .and_then(|value| value.as_str());
+
+    if score.is_some() || comment_text.is_some() {
+        if let Some(score_value) = score {
+            // find_or_create_provisional_grade!(grader, grade:, score:,
+            // final:) — grade defaults to the points-form string (Canvas
+            // score_to_grade for grading_type "points").
+            let grade_text = format_points_grade(score_value);
+            upsert_provisional_grade(
+                &state.db,
+                &assignment,
+                auth,
+                submission_id,
+                wants_final,
+                Some(score_value),
+                Some(grade_text),
+            )
+            .await?;
+        } else {
+            // Comment-only provisional: a gradeless provisional row owned by
+            // the commenter (graded_at stays NULL), with the comment attached.
+            let pg = upsert_provisional_grade(
+                &state.db,
+                &assignment,
+                auth,
+                submission_id,
+                false,
+                None,
+                None,
+            )
+            .await?;
+            if let Some(text) = comment_text {
+                sqlx::query(
+                    r#"
+                    INSERT INTO submission_comments
+                        (submission_id, author_id, comment, provisional_grade_id)
+                    VALUES ($1, $2, $3, $4)
+                    "#,
+                )
+                .bind(submission_id)
+                .bind(auth.id)
+                .bind(text)
+                .bind(pg.id)
+                .execute(&state.db)
+                .await?;
+            }
+        }
+        // Canvas touches the submission when a provisional grade is saved.
+        sqlx::query("UPDATE submissions SET updated_at = now() WHERE id = $1")
+            .bind(submission_id)
+            .execute(&state.db)
+            .await?;
+    }
+
+    // Response: the submission plus provisional_grades when the assignment is
+    // moderated (Canvas adds the include when the request was provisional).
+    let mut value =
+        serde_json::to_value(&submission).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    if assignment.moderated_grading {
+        let submission_ref = ProvisionalSubmissionRef {
+            id: submission_id,
+            user_id,
+            anonymous_id: None,
+            submitted_at: submission.submitted_at,
+        };
+        // The anonymous id matters when names are hidden; fetch it.
+        let anonymous_id: Option<String> =
+            sqlx::query_scalar("SELECT anonymous_id FROM submissions WHERE id = $1")
+                .bind(submission_id)
+                .fetch_one(&state.db)
+                .await?;
+        let submission_ref = ProvisionalSubmissionRef {
+            anonymous_id,
+            ..submission_ref
+        };
+        value["provisional_grades"] = serde_json::json!(
+            submission_provisional_grades_json(
+                &state.db,
+                assignment.course_id,
+                &assignment,
+                &submission_ref,
+                auth.id,
+                &auth,
+            )
+            .await?
+        );
+    }
+    Ok(Json(value))
+}
+
+/// Canvas `Assignment#ensure_grader_can_adjudicate` (provisional path):
+/// create or occupy the grader's moderation_graders slot; the grader limit
+/// rejects new graders once the slots are full.
+async fn ensure_grader_slot(
+    pool: &PgPool,
+    assignment: &ModeratedAssignment,
+    grader_id: i64,
+) -> Result<(), ApiError> {
+    let existing: Option<(bool,)> = sqlx::query_as(
+        "SELECT slot_taken FROM moderation_graders WHERE assignment_id = $1 AND user_id = $2",
+    )
+    .bind(assignment.id)
+    .bind(grader_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let limit_reached = moderated_grader_limit_reached(pool, assignment).await?;
+
+    match existing {
+        None => {
+            // create_moderation_grader(occupy_slot: true) with a fresh
+            // 5-char anonymous id (Canvas Anonymity.generate_id).
+            if limit_reached && assignment.final_grader_id != Some(grader_id) {
+                return Err(ApiError::BadRequest(
+                    "The maximum number of graders has been reached for this assignment.".into(),
+                ));
+            }
+            insert_moderation_grader_slot(pool, assignment.id, grader_id).await?;
+        }
+        Some((slot_taken,)) => {
+            if !slot_taken {
+                if limit_reached && assignment.final_grader_id != Some(grader_id) {
+                    return Err(ApiError::BadRequest(
+                        "The maximum number of graders has been reached for this assignment."
+                            .into(),
+                    ));
+                }
+                sqlx::query(
+                    "UPDATE moderation_graders SET slot_taken = TRUE, updated_at = now() \
+                     WHERE assignment_id = $1 AND user_id = $2",
+                )
+                .bind(assignment.id)
+                .bind(grader_id)
+                .execute(pool)
+                .await?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Insert a moderation_graders row with a random 5-char alphanumeric
+/// anonymous id (Canvas `Anonymity.generate_id`), retrying on collisions.
+async fn insert_moderation_grader_slot(
+    pool: &PgPool,
+    assignment_id: i64,
+    grader_id: i64,
+) -> Result<(), ApiError> {
+    // Simple deterministic-enough generator without a dependency: mix the
+    // assignment/grader ids and time into 5 chars of [A-Za-z0-9].
+    for _ in 0..5 {
+        let entropy = format!(
+            "{}-{}-{}",
+            assignment_id,
+            grader_id,
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+        );
+        let hash = format!("{:x}", md5_like_hash(&entropy));
+        let candidate: String = hash.chars().take(5).collect();
+        if candidate.len() == 5 && candidate.is_ascii_alphanumeric() {
+            let inserted = sqlx::query(
+                r#"
+                INSERT INTO moderation_graders (assignment_id, user_id, anonymous_id, slot_taken)
+                VALUES ($1, $2, $3, TRUE)
+                ON CONFLICT (assignment_id, user_id) DO NOTHING
+                "#,
+            )
+            .bind(assignment_id)
+            .bind(grader_id)
+            .bind(&candidate)
+            .execute(pool)
+            .await?;
+            if inserted.rows_affected() > 0 {
+                return Ok(());
+            }
+        }
+    }
+    Err(ApiError::Db(
+        "could not allocate grader anonymous id".into(),
+    ))
+}
+
+/// A tiny FNV-1a-based hex digest standing in for a random id source.
+fn md5_like_hash(input: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in input.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+/// Canvas `round_if_whole(score).to_s` for the default points grading type:
+/// whole numbers lose the decimal ("90"), others keep it ("88.5").
+fn format_points_grade(score: f64) -> String {
+    if score.trunc() == score && score.abs() < 1e15 {
+        format!("{}", score as i64)
+    } else {
+        format!("{score}")
+    }
+}
+
+/// Canvas `Submission#find_or_create_provisional_grade!` for the update
+/// route: upsert the scorer's non-final grade, or (for moderators) the
+/// submission's single final grade, enforcing the Canvas validations.
+async fn upsert_provisional_grade(
+    pool: &PgPool,
+    assignment: &ModeratedAssignment,
+    auth: &AuthUser,
+    submission_id: i64,
+    final_grade: bool,
+    score: Option<f64>,
+    grade: Option<String>,
+) -> Result<ProvisionalGradeRow, ApiError> {
+    if final_grade {
+        // must_have_non_final_provisional_grade_to_create_final
+        let non_final: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM provisional_grades WHERE submission_id = $1 AND NOT final",
+        )
+        .bind(submission_id)
+        .fetch_optional(pool)
+        .await?;
+        if non_final.is_none() {
+            return Err(ApiError::BadRequest(
+                "Cannot give a final mark for a student with no other provisional grades".into(),
+            ));
+        }
+    }
+
+    let existing: Option<ProvisionalGradeRow> = if final_grade {
+        sqlx::query_as(
+            r#"
+            SELECT id, submission_id, scorer_id, score::float8, grade, graded_at,
+                   final AS is_final, graded_anonymously, created_at
+            FROM provisional_grades WHERE submission_id = $1 AND final
+            "#,
+        )
+        .bind(submission_id)
+        .fetch_optional(pool)
+        .await?
+    } else {
+        sqlx::query_as(
+            r#"
+            SELECT id, submission_id, scorer_id, score::float8, grade, graded_at,
+                   final AS is_final, graded_anonymously, created_at
+            FROM provisional_grades WHERE submission_id = $1 AND NOT final AND scorer_id = $2
+            "#,
+        )
+        .bind(submission_id)
+        .bind(auth.id)
+        .fetch_optional(pool)
+        .await?
+    };
+
+    // set_graded_at: graded_at is set whenever a grade or score is recorded.
+    let graded_at = if score.is_some() || grade.is_some() {
+        Some(Utc::now())
+    } else {
+        None
+    };
+
+    let saved: ProvisionalGradeRow = match existing {
+        Some(existing) => {
+            // update_provisional_grade: a selected provisional grade cannot
+            // be modified by its scorer (only the final grader may).
+            if score.is_some() || grade.is_some() {
+                let selected: Option<(i32,)> = sqlx::query_as(
+                    r#"
+                    SELECT 1 FROM moderated_grading_selections
+                    WHERE selected_provisional_grade_id = $1
+                    "#,
+                )
+                .bind(existing.id)
+                .fetch_optional(pool)
+                .await?;
+                if selected.is_some() && assignment.final_grader_id != Some(auth.id) {
+                    return Err(ApiError::BadRequest(
+                        "provisional grade has already been selected".into(),
+                    ));
+                }
+            }
+            sqlx::query_as(
+                r#"
+                UPDATE provisional_grades
+                SET score = $2, grade = $3, graded_at = $4, final = $5, updated_at = now()
+                WHERE id = $1
+                RETURNING id, submission_id, scorer_id, score::float8, grade, graded_at,
+                          final AS is_final, graded_anonymously, created_at
+                "#,
+            )
+            .bind(existing.id)
+            .bind(score)
+            .bind(&grade)
+            .bind(graded_at)
+            .bind(final_grade)
+            .fetch_one(pool)
+            .await?
+        }
+        None => {
+            // must_be_final_or_student_in_need_of_provisional_grade: a new
+            // non-final grade requires a moderated-grader slot for the scorer.
+            if !final_grade && !can_be_moderated_grader(pool, assignment, auth.id, auth).await? {
+                return Err(ApiError::BadRequest(
+                    "Student already has the maximum number of provisional grades".into(),
+                ));
+            }
+            sqlx::query_as(
+                r#"
+                INSERT INTO provisional_grades
+                    (submission_id, scorer_id, score, grade, graded_at, final)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                RETURNING id, submission_id, scorer_id, score::float8, grade, graded_at,
+                          final AS is_final, graded_anonymously, created_at
+                "#,
+            )
+            .bind(submission_id)
+            .bind(auth.id)
+            .bind(score)
+            .bind(&grade)
+            .bind(graded_at)
+            .bind(final_grade)
+            .fetch_one(pool)
+            .await?
+        }
+    };
+
+    let event_type = if existing.is_some() {
+        "provisional_grade_updated"
+    } else {
+        "provisional_grade_created"
+    };
+    create_provisional_grade_event(
+        pool,
+        assignment.id,
+        auth.id,
+        submission_id,
+        event_type,
+        provisional_grade_event_payload(&saved),
+    )
+    .await?;
+
+    Ok(saved)
 }
 
 // ---------------------------------------------------------------------------
@@ -3271,6 +3837,54 @@ async fn visible_student_ids(pool: &PgPool, course_id: i64) -> Result<Vec<i64>, 
     .fetch_all(pool)
     .await?;
     Ok(ids)
+}
+
+/// Attach `provisional_grades` to a serialized submission when the
+/// assignment is a moderated one present in the include map (Canvas
+/// `submission_json`: the include is only honored for moderated
+/// assignments).
+async fn append_provisional_grades_include(
+    pool: &PgPool,
+    moderated_includes: &HashMap<i64, ModeratedAssignment>,
+    submission_id: Option<i64>,
+    course_id: i64,
+    current_user_id: i64,
+    auth: &AuthUser,
+    value: &mut serde_json::Value,
+) -> Result<(), ApiError> {
+    let Some(submission_id) = submission_id else {
+        return Ok(());
+    };
+    let submission_ref: Option<ProvisionalSubmissionRef> = sqlx::query_as(
+        r#"SELECT id, user_id, anonymous_id, submitted_at FROM submissions WHERE id = $1"#,
+    )
+    .bind(submission_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(submission_ref) = submission_ref else {
+        return Ok(());
+    };
+    // The submission's assignment must be one of the moderated ones.
+    let assignment_id: Option<i64> =
+        sqlx::query_scalar("SELECT assignment_id FROM submissions WHERE id = $1")
+            .bind(submission_id)
+            .fetch_one(pool)
+            .await?;
+    let Some(assignment) = assignment_id.and_then(|id| moderated_includes.get(&id)) else {
+        return Ok(());
+    };
+    value["provisional_grades"] = serde_json::json!(
+        submission_provisional_grades_json(
+            pool,
+            course_id,
+            assignment,
+            &submission_ref,
+            current_user_id,
+            auth,
+        )
+        .await?
+    );
+    Ok(())
 }
 
 /// Parse `student_ids[]` from a JSON or form-encoded moderation-set body
