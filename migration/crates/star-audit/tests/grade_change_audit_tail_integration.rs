@@ -179,7 +179,7 @@ async fn for_assignment_permission_and_shape() {
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "CourseAsg");
+    let course = seed_course(&pool, &prefix, "CourseAsg").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
     let assignment = seed_assignment(&pool, course, &format!("{prefix}-Essay")).await;
@@ -249,7 +249,7 @@ async fn for_student_and_for_grader_are_admin_only() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
-    let course = seed_course(&pool, &prefix, "CourseAdmin");
+    let course = seed_course(&pool, &prefix, "CourseAdmin").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
     let assignment = seed_assignment(&pool, course, &format!("{prefix}-Final")).await;
@@ -342,7 +342,7 @@ async fn combo_routes_permissions_and_scoping() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
-    let course = seed_course(&pool, &prefix, "CourseCombo");
+    let course = seed_course(&pool, &prefix, "CourseCombo").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
     let assignment = seed_assignment(&pool, course, &format!("{prefix}-Quiz")).await;
@@ -374,7 +374,7 @@ async fn combo_routes_permissions_and_scoping() {
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
     // Assignment from outside the course -> 404.
-    let other_course = seed_course(&pool, &prefix, "CourseOther");
+    let other_course = seed_course(&pool, &prefix, "CourseOther").await;
     let other_assignment =
         seed_assignment(&pool, other_course, &format!("{prefix}-OtherQuiz")).await;
     let resp = server
@@ -457,7 +457,7 @@ async fn render_events_override_and_current_grade() {
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "CourseOverride");
+    let course = seed_course(&pool, &prefix, "CourseOverride").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
     let assignment = seed_assignment(&pool, course, &format!("{prefix}-Essay")).await;
@@ -584,7 +584,7 @@ async fn anonymous_and_muted_assignments_hide_students() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
-    let course = seed_course(&pool, &prefix, "CourseAnon");
+    let course = seed_course(&pool, &prefix, "CourseAnon").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
     let assignment = seed_assignment(&pool, course, &format!("{prefix}-Anon")).await;
@@ -648,7 +648,7 @@ async fn section_limited_teacher_sees_only_own_sections() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student_a = seed_user(&pool, &prefix, "StudentA", "student").await;
     let student_b = seed_user(&pool, &prefix, "StudentB", "student").await;
-    let course = seed_course(&pool, &prefix, "CourseSections");
+    let course = seed_course(&pool, &prefix, "CourseSections").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student_a, course, "student").await;
     seed_enrollment(&pool, student_b, course, "student").await;
@@ -725,7 +725,7 @@ async fn advanced_query_override_literal_and_time_windows() {
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "CourseQuery");
+    let course = seed_course(&pool, &prefix, "CourseQuery").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
     let assignment = seed_assignment(&pool, course, &format!("{prefix}-Final")).await;
