@@ -127,20 +127,6 @@ async fn enroll(pool: &PgPool, user_id: i64, course_id: i64, role: &str) {
     .expect("seed enrollment");
 }
 
-/// Give a user an account-admin membership (the star-lms stand-in for the
-/// Canvas root-account rights like manage_user_logins / manage_site_settings).
-async fn seed_account_admin(pool: &PgPool, account_id: i64, user_id: i64) {
-    sqlx::query(
-        "INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, 'admin') \
-         ON CONFLICT DO NOTHING",
-    )
-    .bind(account_id)
-    .bind(user_id)
-    .execute(pool)
-    .await
-    .expect("seed account admin");
-}
-
 /// Delete everything this run created. The dedicated account cascades its
 /// courses/enrollments/account_users; users cascade the rest.
 async fn cleanup(pool: &PgPool, prefix: &str) {
