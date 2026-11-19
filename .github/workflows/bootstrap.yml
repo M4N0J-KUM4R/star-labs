@@ -1,5 +1,12 @@
 name: Bootstrap validation
 
+# Runs on every PR (no path filter) because `shell-and-lab-constraints` is a
+# required check. Wave-4 fast path: the apt-installed checks (shellcheck,
+# cfn-lint) only run when the PR actually changes lab files (infra/**,
+# scripts/**, or this workflow — classified by tools/ci/change_class.py).
+# `bash -n` and the AWS Academy resource-limit guard always run; neither
+# needs any installation.
+
 on:
   push:
     branches: [main]
@@ -14,7 +21,60 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # ---------------------------------------------------------------------------
+  # Fast-path gate: classify the diff so non-lab PRs can skip the
+  # apt/pip-installed checks. Non-pull_request events short-circuit to a full
+  # run. Rules live in tools/ci/change_class.py (single source of truth).
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Change class
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.class.outputs.rust }}
+      lab: ${{ steps.class.outputs.lab }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Classify the diff
+        id: class
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            {
+              echo "rust=true"
+              echo "lab=true"
+            } >> "$GITHUB_OUTPUT"
+            echo "event '${{ github.event_name }}' — full run by design"
+            exit 0
+          fi
+          # base...head compare: exactly this PR's changes. API hiccups and
+          # truncated lists (>=300 files) degrade to a full run, never to a
+          # wrong skip.
+          payload=""
+          for attempt in 1 2 3; do
+            if payload="$(gh api "repos/$REPO/compare/$BASE...$HEAD")"; then
+              break
+            fi
+            echo "compare API attempt $attempt failed; retrying in 5s"
+            sleep 5
+          done
+          if [ -z "$payload" ]; then
+            echo "::warning::compare unavailable — defaulting to full run"
+            {
+              echo "rust=true"
+              echo "lab=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$payload" | python3 tools/ci/change_class.py --github-output "$GITHUB_OUTPUT"
+
   shell-and-lab-constraints:
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -22,11 +82,13 @@ jobs:
       - name: Validate shell syntax
         run: bash -n infra/user-data.sh infra/user-data-migration.sh scripts/lab-up.sh scripts/lab-compute-up.sh scripts/lab-data-up.sh scripts/lab-deploy.sh scripts/lab-down.sh scripts/lab-workers-up.sh scripts/lab-workers-remote.sh
       - name: Check shell scripts
+        if: needs.changes.outputs.lab == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y shellcheck
           shellcheck -S warning infra/user-data.sh infra/user-data-migration.sh scripts/lab-up.sh scripts/lab-compute-up.sh scripts/lab-data-up.sh scripts/lab-deploy.sh scripts/lab-down.sh scripts/lab-workers-up.sh scripts/lab-workers-remote.sh
       - name: Lint CloudFormation
+        if: needs.changes.outputs.lab == 'true'
         run: |
           python3 -m pip install --user cfn-lint
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -54,3 +116,8 @@ jobs:
           assert 'VolumeSize: 100' in compute and 'VolumeType: gp3' in compute
           assert '8766' not in compute and '0.0.0.0/0' not in compute
           PY
+      - name: Report fast path
+        if: needs.changes.outputs.lab != 'true'
+        run: |
+          echo "no lab-file changes in this PR — shellcheck/cfn-lint skipped by design."
+          echo "bash -n and the AWS Academy guard still ran (no installs needed)."
