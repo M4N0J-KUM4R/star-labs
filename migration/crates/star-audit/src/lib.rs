@@ -465,11 +465,12 @@ async fn render_events(
     //    step 4: anonymization nulls `student_id` afterwards, but the grade
     //    still keys on the original student.
     let wants_grades = ctx.includes.wants_current_grade();
-    let current_grades: std::collections::HashMap<(i64, i64), Option<String>> = if wants_grades {
-        fetch_current_grades(pool, &rows).await?
-    } else {
-        Default::default()
-    };
+    let current_grades: std::collections::HashMap<(i64, i64), Option<Option<String>>> =
+        if wants_grades {
+            fetch_current_grades(pool, &rows).await?
+        } else {
+            Default::default()
+        };
     // uuid -> grade_current to render (`None` = omit the field).
     let grade_current_by_uuid: std::collections::HashMap<String, Option<String>> = rows
         .iter()
