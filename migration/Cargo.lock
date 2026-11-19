@@ -2637,6 +2637,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-account-reports"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "sqlx",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
 name = "star-accounts"
 version = "0.1.0"
 dependencies = [
@@ -2771,6 +2783,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-collaborations"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "sqlx",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
 name = "star-common"
 version = "0.1.0"
 dependencies = [
@@ -2783,6 +2807,18 @@ dependencies = [
  "sqlx",
  "star-db",
  "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "star-conferences"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "sqlx",
+ "star-common",
+ "star-db",
  "tokio",
 ]
 
@@ -2900,6 +2936,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-eportfolios"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "sqlx",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
 name = "star-features"
 version = "0.1.0"
 dependencies = [
@@ -3000,6 +3048,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "star-account-reports",
  "star-accounts",
  "star-announcements",
  "star-assignment-groups",
@@ -3007,7 +3056,9 @@ dependencies = [
  "star-audit",
  "star-auth",
  "star-calendar",
+ "star-collaborations",
  "star-common",
+ "star-conferences",
  "star-content",
  "star-conversations",
  "star-courses",
@@ -3015,6 +3066,7 @@ dependencies = [
  "star-db",
  "star-discussions",
  "star-enrollments",
+ "star-eportfolios",
  "star-features",
  "star-files",
  "star-grading-standards",
@@ -3029,8 +3081,11 @@ dependencies = [
  "star-outcomes",
  "star-pages",
  "star-permissions",
+ "star-polling",
  "star-quizzes",
  "star-rubrics",
+ "star-search",
+ "star-sis",
  "star-submission-comments",
  "star-users",
  "tokio",
@@ -3190,6 +3245,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-polling"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "sqlx",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
 name = "star-quizzes"
 version = "0.1.0"
 dependencies = [
@@ -3218,6 +3285,30 @@ dependencies = [
  "serde_json",
  "sqlx",
  "star-auth",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
+name = "star-search"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "sqlx",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
+name = "star-sis"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "sqlx",
  "star-common",
  "star-db",
  "tokio",
