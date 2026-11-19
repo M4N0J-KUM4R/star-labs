@@ -3,7 +3,7 @@
 - **Issue:** #23 (epic:specs)
 - **Branch:** `p5/specs-23` (documentation only — no Rust code, no migrations, no cargo)
 - **Sources verified:** `canvas-lms` checkout at `/home/z/my-project/repos/canvas-lms` (`config/routes.rb`, `app/controllers/lti/**`, `app/controllers/master_courses/master_templates_controller.rb`, `app/controllers/role_overrides_controller.rb`, `app/controllers/usage_rights_controller.rb`) and the star-labs workspace at `migration/` (fresh parity run, see §1).
-- **Migration numbers:** reserved by the coordinator per the issue #20 protocol; ledger `orchestration/migration-reservations.json` (max merged `0107`, next available `0108`). Additive only — no renumbering, no DROP/TRUNCATE.
+- **Migration numbers:** MIGRATION: coordinator-assigned — see orchestration/migration-reservations.json. Additive only — no renumbering, no DROP/TRUNCATE.
 
 ## 1. Overview
 
@@ -31,7 +31,7 @@ the committed `migration/parity/coverage.json` is stale):
 
 Notable:
 
-- **master_courses is fully covered** by `star-courses` (PR #18, commit `621ef9f` + migration `d946f85`/0107). Do **not** redo it; it appears here only as a verification anchor and for the §4 isolation notes.
+- **master_courses is fully covered** by `star-courses` (PR #18, commit `621ef9f`). Do **not** redo it; it appears here only as a verification anchor and for the §4 isolation notes.
 - The roles API lives in `star-permissions` (not a dedicated crate); the role-overrides *value* routes (`GET/PUT /accounts|courses/{id}/role_overrides`) already exist as flat aliases.
 - `usage_rights` group/user **PUT**s plus group/user `content_licenses` are the only real gap in `star-files`.
 - `lti/ims/*` routes are mounted under **`/api/lti`** (not `/api/v1`), which is a new mount prefix for `star-http`.
@@ -48,20 +48,20 @@ Status legend: **done** = matched by the parity tool (routes registered by PR #1
 | POST | `/api/v1/accounts/:account_id/lti_registrations` | done | star-lti | `create`; 201 Created |
 | GET | `/api/v1/accounts/:account_id/lti_registrations/:id` | done | star-lti | `show` |
 | DELETE | `/api/v1/accounts/:account_id/lti_registrations/:id` | done | star-lti | `destroy` |
-| PUT | `/api/v1/accounts/:account_id/lti_registrations/:id` | missing | star-lti | `update`; blocked on 0109 (update requests) semantics |
-| POST | `/api/v1/accounts/:account_id/lti_registrations/:id/bind` | missing | star-lti | `bind`; needs binding state (0109) |
+| PUT | `/api/v1/accounts/:account_id/lti_registrations/:id` | missing | star-lti | `update`; blocked on update-requests semantics (coordinator-assigned migration) |
+| POST | `/api/v1/accounts/:account_id/lti_registrations/:id/bind` | missing | star-lti | `bind`; needs binding state (coordinator-assigned migration) |
 | DELETE | `/api/v1/accounts/:account_id/lti_registrations/:id/bind` | missing | star-lti | `unbind` |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/history` | missing | star-lti | `history`; needs 0110 overlays history |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/overlay_history` | missing | star-lti | `overlay_history`; needs 0110 |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/history` | missing | star-lti | `history`; needs overlays-history tables (coordinator-assigned migration) |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/overlay_history` | missing | star-lti | `overlay_history`; needs overlays history (coordinator-assigned migration) |
 | PUT | `/api/v1/accounts/:account_id/lti_registrations/:id/reset` | missing | star-lti | `reset` to template/previous overlay |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/latest_update_request` | missing | star-lti | needs 0109 table |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/update_requests/:update_request_id` | missing | star-lti | needs 0109 |
-| PUT | `/api/v1/accounts/:account_id/lti_registrations/:id/update_requests/:update_request_id/apply` | missing | star-lti | needs 0109 |
-| GET | `/api/v1/accounts/:account_id/lti_registration_by_client_id/:client_id` | missing | star-lti | `show_by_client_id`; needs developer-key linkage (0112) |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/latest_update_request` | missing | star-lti | needs update-requests table (coordinator-assigned migration) |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/update_requests/:update_request_id` | missing | star-lti | needs update-requests table (coordinator-assigned migration) |
+| PUT | `/api/v1/accounts/:account_id/lti_registrations/:id/update_requests/:update_request_id/apply` | missing | star-lti | needs update-requests table (coordinator-assigned migration) |
+| GET | `/api/v1/accounts/:account_id/lti_registration_by_client_id/:client_id` | missing | star-lti | `show_by_client_id`; needs developer-key linkage (coordinator-assigned migration) |
 | GET | `/api/v1/accounts/:account_id/lti_registrations/by_utid/:utid` | missing | star-lti | `show_by_utid` |
 | GET | `/api/v1/accounts/:account_id/lti_registrations/check_domain_duplicates` | missing | star-lti | pure read; no migration needed |
 | POST | `/api/v1/accounts/:account_id/lti_registrations/configuration/validate` | missing | star-lti | validates JSON config/URL; returns `{ configuration }` |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/install_status/:client_id` | missing | star-lti | needs 0112 DR columns |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/install_status/:client_id` | missing | star-lti | needs DR columns (coordinator-assigned migration) |
 | POST | `/api/v1/accounts/:account_id/lti_registrations/:id/install_from_template` | missing | star-lti | template install |
 | GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments/:deployment_id/context_search` | missing | star-lti | `context_search` lives in this controller in Canvas |
 
@@ -73,7 +73,7 @@ Status legend: **done** = matched by the parity tool (routes registered by PR #1
 | POST | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments` | done | star-lti | `create` (`for_subaccount_id` / `for_course_id` / `available`) |
 | GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments/:id` | missing | star-lti | `show` |
 | DELETE | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments/:id` | missing | star-lti | `destroy` |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments/:id/controls` | missing | star-lti | `list_controls`; joins context controls (0108) |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments/:id/controls` | missing | star-lti | `list_controls`; joins context-controls tables (coordinator-assigned migration) |
 
 ### 2.3 `lti/context_controls` (routes.rb 2198–2205)
 
@@ -107,12 +107,12 @@ Status legend: **done** = matched by the parity tool (routes registered by PR #1
 
 | Method | Canvas path | Status | Target crate | Notes |
 |---|---|---|---|---|
-| GET | `/api/lti/accounts/:account_id/registration_token` | missing | star-lti | needs 0112 `registration_tokens` |
-| GET | `/api/lti/accounts/:account_id/registrations/uuid/:registration_uuid` | missing | star-lti | `ims_registration_by_uuid`; needs 0112 uuid column |
+| GET | `/api/lti/accounts/:account_id/registration_token` | missing | star-lti | needs `registration_tokens` (coordinator-assigned migration) |
+| GET | `/api/lti/accounts/:account_id/registrations/uuid/:registration_uuid` | missing | star-lti | `ims_registration_by_uuid`; needs registration uuid column (coordinator-assigned migration) |
 | GET | `/api/lti/accounts/:account_id/lti_registrations/uuid/:registration_uuid` | missing | star-lti | `lti_registration_by_uuid` |
-| GET | `/api/lti/accounts/:account_id/lti_registration_update_request/uuid/:registration_uuid` | missing | star-lti | needs 0109 |
+| GET | `/api/lti/accounts/:account_id/lti_registration_update_request/uuid/:registration_uuid` | missing | star-lti | needs update-requests table (coordinator-assigned migration) |
 | GET | `/api/lti/accounts/:account_id/registrations/:registration_id` | missing | star-lti | `show` (IMS shape) |
-| PUT | `/api/lti/accounts/:account_id/registrations/:registration_id/overlay` | missing | star-lti | needs 0110 |
+| PUT | `/api/lti/accounts/:account_id/registrations/:registration_id/overlay` | missing | star-lti | needs overlays history (coordinator-assigned migration) |
 | GET | `/api/lti/accounts/:account_id/dr_iframe` | missing | star-lti | iframe bootstrap page |
 | GET | `/api/lti/accounts/:account_id/registrations/:registration_id/view` | missing | star-lti | `registration_view` |
 | POST | `/api/lti/registrations` | missing | star-lti | `create` — **no user session** (token-authenticated) |
@@ -196,17 +196,17 @@ Note on blueprint reads: `require_course_level_manage_rights` in Canvas maps to 
 
 ## 5. Data model & migration needs
 
-Coordinator reserves numbers at dispatch (ledger `orchestration/migration-reservations.json`); the proposed allocation below assumes the next available block starting at **0108** (additive only, `CREATE TABLE IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`):
+Coordinator reserves numbers at dispatch (ledger `orchestration/migration-reservations.json`); the proposed allocation below assumes coordinator-assigned numbers (additive only, `CREATE TABLE IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`):
 
-| Number | Name (proposal) | Contents |
+| Slot | Name (proposal) | Contents |
 |---|---|---|
-| 0108 | `lti_context_controls` | `CREATE TABLE lti_context_controls (id BIGSERIAL PK, deployment_id BIGINT NOT NULL REFERENCES lti_deployments(id) ON DELETE CASCADE, registration_id BIGINT NOT NULL REFERENCES lti_registrations(id) ON DELETE CASCADE, context_type TEXT NOT NULL ('Account'\|'Course'), context_id BIGINT NOT NULL, state TEXT NOT NULL ('off'\|'on'\|'default'), workflow_state TEXT NOT NULL DEFAULT 'active', created_at/updated_at TIMESTAMPTZ DEFAULT now())` + unique index `(deployment_id, context_type, context_id)` + index on `registration_id`. Backs §2.3 and `deployments/:id/controls`. |
-| 0109 | `lti_registration_update_requests` + binding state | `CREATE TABLE lti_registration_update_requests (id BIGSERIAL PK, registration_id BIGINT NOT NULL REFERENCES lti_registrations(id) ON DELETE CASCADE, uuid TEXT NOT NULL UNIQUE, status TEXT NOT NULL ('pending'\|'applied'\|'dismissed'), update_payload JSONB NOT NULL DEFAULT '{}', created_by_id BIGINT REFERENCES users(id), created_at/updated_at)`; plus `ALTER TABLE lti_registration_account_bindings ADD COLUMN IF NOT EXISTS workflow_state TEXT NOT NULL DEFAULT 'active'` (bind/unbind state machine: `on`\|`off`\|`deleted`) if 0078 lacks it. Backs update_requests/*, latest_update_request, unbind, and the DR uuid lookup. |
-| 0110 | `lti_registration_overlays` (history) | `CREATE TABLE lti_registration_overlays (id BIGSERIAL PK, registration_id BIGINT NOT NULL REFERENCES lti_registrations(id) ON DELETE CASCADE, version INT NOT NULL, overlay JSONB NOT NULL DEFAULT '{}', created_by_id BIGINT REFERENCES users(id), created_at TIMESTAMPTZ DEFAULT now())` + unique `(registration_id, version)`. Backs `history`, `overlay_history`, `reset`, and DR `PUT .../overlay`. |
-| 0111 | `tool_settings` (LTI 2) | `CREATE TABLE lti_tool_settings (id BIGSERIAL PK, tool_proxy_id TEXT NOT NULL, context_type TEXT NULL, context_id BIGINT NULL, resource_link_id TEXT NULL, custom JSONB NOT NULL DEFAULT '{}', created_at/updated_at, UNIQUE (tool_proxy_id, context_type, context_id, resource_link_id))` — nullable tuple mirrors Canvas (ToolProxy row has all NULLs; binding has context only; LtiLink has all three). Backs §2.4. |
-| 0112 | DR columns + registration_tokens | `ALTER TABLE lti_registrations ADD COLUMN IF NOT EXISTS registration_uuid TEXT UNIQUE, ADD COLUMN IF NOT EXISTS vendor_domain TEXT, ADD COLUMN IF NOT EXISTS client_id BIGINT, ADD COLUMN IF NOT EXISTS installed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS source_lti_registration_id BIGINT REFERENCES lti_registrations(id)`; `CREATE TABLE lti_registration_tokens (token TEXT PRIMARY KEY, account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, expires_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT now())`. Backs by_client_id/by_utid/install_status and the whole §2.5 family. |
+| LTI-1 | `lti_context_controls` | `CREATE TABLE lti_context_controls (id BIGSERIAL PK, deployment_id BIGINT NOT NULL REFERENCES lti_deployments(id) ON DELETE CASCADE, registration_id BIGINT NOT NULL REFERENCES lti_registrations(id) ON DELETE CASCADE, context_type TEXT NOT NULL ('Account'\|'Course'), context_id BIGINT NOT NULL, state TEXT NOT NULL ('off'\|'on'\|'default'), workflow_state TEXT NOT NULL DEFAULT 'active', created_at/updated_at TIMESTAMPTZ DEFAULT now())` + unique index `(deployment_id, context_type, context_id)` + index on `registration_id`. Backs §2.3 and `deployments/:id/controls`. |
+| LTI-2 | `lti_registration_update_requests` + binding state | `CREATE TABLE lti_registration_update_requests (id BIGSERIAL PK, registration_id BIGINT NOT NULL REFERENCES lti_registrations(id) ON DELETE CASCADE, uuid TEXT NOT NULL UNIQUE, status TEXT NOT NULL ('pending'\|'applied'\|'dismissed'), update_payload JSONB NOT NULL DEFAULT '{}', created_by_id BIGINT REFERENCES users(id), created_at/updated_at)`; plus `ALTER TABLE lti_registration_account_bindings ADD COLUMN IF NOT EXISTS workflow_state TEXT NOT NULL DEFAULT 'active'` (bind/unbind state machine: `on`\|`off`\|`deleted`) if the base lti-registrations migration lacks it. Backs update_requests/*, latest_update_request, unbind, and the DR uuid lookup. |
+| LTI-3 | `lti_registration_overlays` (history) | `CREATE TABLE lti_registration_overlays (id BIGSERIAL PK, registration_id BIGINT NOT NULL REFERENCES lti_registrations(id) ON DELETE CASCADE, version INT NOT NULL, overlay JSONB NOT NULL DEFAULT '{}', created_by_id BIGINT REFERENCES users(id), created_at TIMESTAMPTZ DEFAULT now())` + unique `(registration_id, version)`. Backs `history`, `overlay_history`, `reset`, and DR `PUT .../overlay`. |
+| LTI-4 | `tool_settings` (LTI 2) | `CREATE TABLE lti_tool_settings (id BIGSERIAL PK, tool_proxy_id TEXT NOT NULL, context_type TEXT NULL, context_id BIGINT NULL, resource_link_id TEXT NULL, custom JSONB NOT NULL DEFAULT '{}', created_at/updated_at, UNIQUE (tool_proxy_id, context_type, context_id, resource_link_id))` — nullable tuple mirrors Canvas (ToolProxy row has all NULLs; binding has context only; LtiLink has all three). Backs §2.4. |
+| LTI-5 | DR columns + registration_tokens | `ALTER TABLE lti_registrations ADD COLUMN IF NOT EXISTS registration_uuid TEXT UNIQUE, ADD COLUMN IF NOT EXISTS vendor_domain TEXT, ADD COLUMN IF NOT EXISTS client_id BIGINT, ADD COLUMN IF NOT EXISTS installed_at TIMESTAMPTZ, ADD COLUMN IF NOT EXISTS source_lti_registration_id BIGINT REFERENCES lti_registrations(id)`; `CREATE TABLE lti_registration_tokens (token TEXT PRIMARY KEY, account_id BIGINT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE, expires_at TIMESTAMPTZ NOT NULL, used_at TIMESTAMPTZ, created_at TIMESTAMPTZ DEFAULT now())`. Backs by_client_id/by_utid/install_status and the whole §2.5 family. |
 
-**No new migrations** for roles (table `roles` exists since 0099, `role_overrides` since 0031 with 0066 indexes) or usage_rights (`usage_rights` table + `files.usage_rights_id` since 0084).
+**No new migrations** for roles (tables `roles` and `role_overrides` already exist from earlier migrations, with indexes) or usage_rights (`usage_rights` table + `files.usage_rights_id` already exist).
 
 ## 6. Behavior contracts for missing routes
 
