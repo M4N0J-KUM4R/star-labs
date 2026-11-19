@@ -354,13 +354,19 @@ async fn destroy_by_type_address_retires_and_returns_channel() {
 }
 
 #[tokio::test]
-async fn destroy_by_type_address_admin_can_retire_others_channel() {
+async fn destroy_by_type_address_admin_follows_crate_convention_403() {
     let Some((server, pool, prefix)) = setup().await else {
         eprintln!("SKIP: DATABASE_URL not set");
         return;
     };
     let account_id = seed_account(&pool, &prefix, "destroy-acct-2").await;
 
+    // Canvas allows admins via :manage_user_details, but the crate's
+    // pre-existing convention for CommunicationChannelsController#destroy —
+    // locked by delete_channel_other_user_returns_403 and shared by the
+    // by-id route — is write = self only. The by-address route reuses
+    // authorize_channel_operation so both forms of the same Canvas action
+    // stay consistent (divergence documented in the PR body).
     let admin = seed_user(&pool, &prefix, "destroy-admin", "admin").await;
     let user = seed_user(&pool, &prefix, "destroy-target", "student").await;
     seed_channel(&pool, user, "target@example.edu", "email", "active").await;
@@ -376,10 +382,19 @@ async fn destroy_by_type_address_admin_can_retire_others_channel() {
         .await;
     assert_eq!(
         resp.status_code(),
-        200,
-        "admin manage_user_details: {}",
+        403,
+        "crate convention: destroy is self-only, same as by-id: {}",
         resp.text()
     );
+
+    // the channel is untouched
+    let (state,): (String,) =
+        sqlx::query_as("SELECT workflow_state FROM communication_channels WHERE user_id = $1")
+            .bind(user)
+            .fetch_one(&pool)
+            .await
+            .expect("reload channel");
+    assert_eq!(state, "active");
 
     cleanup(&pool, &[admin, user], account_id).await;
 }
