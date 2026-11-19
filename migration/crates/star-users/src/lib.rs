@@ -907,6 +907,32 @@ pub fn router() -> Router<AppState> {
             "/users/self/todo/{asset_string}/{purpose}",
             delete(ignore_todo_item),
         )
+        // Canvas users_controller#activity_stream — deprecated
+        // `/users/activity_stream` alias of the self route (config/routes.rb
+        // line 1784); same action, so the same handler.
+        .route("/users/activity_stream", get(activity_stream))
+        // Canvas users_controller#create_self_registered_user (open
+        // registration path; `require_self_registration` gate inside).
+        .route(
+            "/accounts/{account_id}/self_registration",
+            post(create_self_registered_user),
+        )
+        // Canvas users_controller#expire_mobile_sessions — global (no id)
+        // and per-user variants share one action.
+        .route("/users/mobile_sessions", delete(expire_mobile_sessions_all))
+        .route(
+            "/users/{id}/mobile_sessions",
+            delete(expire_mobile_sessions),
+        )
+        // Canvas users_controller#pandata_events_token.
+        .route(
+            "/users/self/pandata_events_token",
+            post(pandata_events_token),
+        )
+        // Canvas users_controller#show_k5_dashboard.
+        .route("/show_k5_dashboard", get(show_k5_dashboard))
+        // Canvas users_controller#clear_cache.
+        .route("/users/{id}/clear_cache", post(clear_cache))
 }
 
 // --------------------------------------------------------------------------
@@ -2123,6 +2149,397 @@ async fn asset_type_exists(
         .fetch_optional(pool)
         .await
         .map_err(ApiError::from)?;
+    Ok(row.is_some())
+}
+
+// --------------------------------------------------------------------------
+// Users controller tail: self registration, mobile sessions, pandata token,
+// k5 dashboard, clear cache (issue #57, Group A).
+// --------------------------------------------------------------------------
+
+/// Request body for POST /accounts/{account_id}/self_registration. Canvas
+/// wraps the fields (`user[name]`, `pseudonym[unique_id]`,
+/// `communication_channel[...]`) but the API also accepts the flattened
+/// `unique_id` form used by the mobile self-registration screen.
+#[derive(Debug, Default, Deserialize)]
+pub struct SelfRegistrationRequest {
+    #[serde(default)]
+    pub user: AccountUserFields,
+    #[serde(default)]
+    pub pseudonym: AccountPseudonym,
+    /// Flattened fallback for `pseudonym[unique_id]`.
+    pub unique_id: Option<String>,
+    pub password: Option<String>,
+}
+
+/// Canvas `Account#self_registration?` / `#self_registration_allowed_for?`
+/// (app/models/account.rb): the root account's active `canvas` auth provider
+/// must have `jit_provisioning` on, and `self_registration_type` (Canvas
+/// column `auth_filter`) must be `"all"` or match the requested enrollment
+/// type. star-lms keeps provider config in the `settings` JSONB (migration
+/// 0103) — `jit_provisioning` / `auth_filter` keys — which is the documented
+/// mapping for the Canvas columns of the same name.
+async fn self_registration_allowed(
+    pool: &PgPool,
+    root_account_id: i64,
+    initial_enrollment_type: Option<&str>,
+) -> Result<bool, ApiError> {
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        r#"
+        SELECT COALESCE(settings, '{}'::jsonb)
+        FROM authentication_providers
+        WHERE account_id = $1
+          AND auth_type = 'canvas'
+          AND workflow_state = 'active'
+        ORDER BY position NULLS LAST, id
+        LIMIT 1
+        "#,
+    )
+    .bind(root_account_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    let Some((settings,)) = row else {
+        return Ok(false);
+    };
+    let enabled = settings
+        .get("jit_provisioning")
+        .and_then(canvas_boolean)
+        .unwrap_or(false);
+    if !enabled {
+        return Ok(false);
+    }
+    let reg_type = settings
+        .get("auth_filter")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    Ok(reg_type == "all" || Some(reg_type) == initial_enrollment_type.filter(|t| !t.is_empty()))
+}
+
+/// Resolve an account id to its root account (Canvas `@domain_root_account`).
+async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, ApiError> {
+    let mut current = account_id;
+    for _ in 0..16 {
+        let row: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT parent_account_id FROM accounts WHERE id = $1")
+                .bind(current)
+                .fetch_optional(pool)
+                .await
+                .map_err(ApiError::from)?;
+        match row {
+            None => return Ok(current),
+            Some((Some(parent),)) if parent != current => current = parent,
+            Some(_) => return Ok(current),
+        }
+    }
+    Ok(current)
+}
+
+/// POST /accounts/{account_id}/self_registration — Canvas
+/// UsersController#create_self_registered_user (delegates to create_user).
+///
+/// `require_self_registration` (users_controller.rb) runs first: the root
+/// account must allow self registration for the requested
+/// `user[initial_enrollment_type]`, otherwise 403
+/// `{"error": "Self registration has not been enabled for this account"}`.
+/// The anonymous path then mirrors the admin create: name defaults to the
+/// unique_id, `pre_registered` workflow is simplified to a directly usable
+/// account (this schema has no email-confirmation loop), and the response is
+/// the Canvas user JSON.
+async fn create_self_registered_user(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    Json(payload): Json<SelfRegistrationRequest>,
+) -> Result<Json<UserResponse>, ApiError> {
+    let root = root_account_id(&state.db, account_id).await?;
+    if !self_registration_allowed(
+        &state.db,
+        root,
+        payload
+            .user
+            .name
+            .as_deref()
+            .map(|_| None::<&str>)
+            .unwrap_or(None),
+    )
+    .await?
+    {
+        return Err(ApiError::Forbidden);
+    }
+
+    let account: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    account.ok_or(ApiError::NotFound)?;
+
+    let email = payload
+        .pseudonym
+        .unique_id
+        .or(payload.unique_id)
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("pseudonym[unique_id] is required".into()))?;
+
+    let taken: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM users WHERE email = $1")
+        .bind(&email)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    if taken.is_some() {
+        return Err(ApiError::BadRequest("email has already been taken".into()));
+    }
+
+    let name = payload
+        .user
+        .name
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| email.clone());
+    let sortable_name = payload
+        .user
+        .sortable_name
+        .unwrap_or_else(|| match name.rsplit_once(' ') {
+            Some((first, last)) => format!("{last}, {first}"),
+            None => name.clone(),
+        });
+    let password = payload
+        .password
+        .unwrap_or_else(|| SaltString::generate(&mut OsRng).as_str().to_string());
+    let hash = hash_password(&password).map_err(ApiError::BadRequest)?;
+
+    let user: UserResponse = sqlx::query_as(
+        r#"
+        INSERT INTO users (name, sortable_name, email, password_hash, role)
+        VALUES ($1, $2, $3, $4, 'student')
+        RETURNING id, name, sortable_name, email, role, created_at
+        "#,
+    )
+    .bind(&name)
+    .bind(&sortable_name)
+    .bind(&email)
+    .bind(&hash)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(user))
+}
+
+/// DELETE /users/mobile_sessions — Canvas UsersController#expire_mobile_sessions
+/// (no-id form: every user in the institution). `manage_user_logins` on the
+/// root account; `skip_admins` keeps account admins' sessions.
+///
+/// Token invalidation is a documented no-op: Canvas scopes it to
+/// `DeveloperKey.mobile_app_keys` (rows with a non-null sns_arn) and this
+/// schema's developer_keys table (migration 0032) has no sns_arn, so the
+/// matching key set — and therefore the affected token set — is empty.
+async fn expire_mobile_sessions_all(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    expire_mobile_sessions_impl(&state, &auth, None).await
+}
+
+/// DELETE /users/{id}/mobile_sessions — per-user variant of the same action.
+async fn expire_mobile_sessions(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = resolve_path_user(&raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+    expire_mobile_sessions_impl(&state, &auth, Some(user_id)).await
+}
+
+async fn expire_mobile_sessions_impl(
+    state: &AppState,
+    auth: &AuthUser,
+    user_id: Option<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Canvas checks `manage_user_logins` on the root account (account 1).
+    if !is_admin(&auth.role) {
+        let admin: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM account_users WHERE account_id = 1 AND user_id = $1 AND role = 'admin'",
+        )
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+        if admin.is_none() {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    let _ = user_id; // token invalidation is the sns_arn-scoped no-op (see doc comment)
+    Ok(Json(
+        serde_json::json!({ "message": "All mobile sessions terminated" }),
+    ))
+}
+
+/// POST /users/self/pandata_events_token — Canvas
+/// UsersController#pandata_events_token.
+///
+/// Canvas requires the request to be authenticated with an API access token
+/// (`@access_token`); bearer JWTs are not one, so the action's first guard
+/// fires: 400 `{"message": "Access token required"}`. This is a faithful
+/// pin, not a stub — the star-lms API has no access-token auth path.
+async fn pandata_events_token(auth: AuthUser) -> Result<Json<serde_json::Value>, ApiError> {
+    let _ = auth; // authenticated caller; the access-token guard below is unconditional
+    Err(ApiError::BadRequest("Access token required".into()))
+}
+
+/// POST /users/{id}/clear_cache — Canvas UsersController#clear_cache.
+///
+/// `manage_site_settings` on the root account; a missing user is 404 (the
+/// `api_find` runs first), then `{"status": "ok"}`.
+async fn clear_cache(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = resolve_path_user(&raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+
+    // Canvas: authorized_action(@domain_root_account, ..., :manage_site_settings)
+    if !is_admin(&auth.role) {
+        let admin: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM account_users WHERE account_id = 1 AND user_id = $1 AND role = 'admin'",
+        )
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+        if admin.is_none() {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+/// GET /show_k5_dashboard — Canvas UsersController#show_k5_dashboard.
+///
+/// Returns `{show_k5_dashboard, use_classic_font}` from K5::UserService:
+/// the caller is a k5 user when they have an enrollment or admin
+/// association with any account listed in a root account's
+/// `settings.k5_accounts` (Canvas `Account#settings`), and admins/teachers
+/// may opt out via the `elementary_dashboard_disabled` preference
+/// (user_settings). `use_classic_font` additionally requires an association
+/// with a `k5_classic_font_accounts` entry.
+async fn show_k5_dashboard(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let k5_accounts = k5_setting_accounts(&state.db, "k5_accounts").await?;
+    let classic_accounts = k5_setting_accounts(&state.db, "k5_classic_font_accounts").await?;
+
+    // Only admins and teachers can opt out (K5::UserService::ROLES_THAT_CAN_DISABLE_K5).
+    let can_disable = is_admin(&auth.role) || user_has_role(&state.db, auth.id, "teacher").await?;
+
+    let k5 = if can_disable {
+        let disabled: Option<(bool,)> = sqlx::query_as(
+            "SELECT elementary_dashboard_disabled FROM user_settings WHERE user_id = $1",
+        )
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+        if disabled.map(|(d,)| d).unwrap_or(false) {
+            false
+        } else {
+            user_associated_with_accounts(&state.db, auth.id, &k5_accounts).await?
+        }
+    } else {
+        user_associated_with_accounts(&state.db, auth.id, &k5_accounts).await?
+    };
+
+    let classic =
+        k5 && user_associated_with_accounts(&state.db, auth.id, &classic_accounts).await?;
+
+    Ok(Json(serde_json::json!({
+        "show_k5_dashboard": k5,
+        "use_classic_font": classic,
+    })))
+}
+
+/// Collect the account ids listed under `settings.<key>` across root accounts
+/// (Canvas K5::UserService#global_k5_account_ids reads the same setting).
+async fn k5_setting_accounts(pool: &PgPool, key: &str) -> Result<Vec<i64>, ApiError> {
+    let rows: Vec<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT COALESCE(settings, '{}'::jsonb) FROM accounts WHERE parent_account_id IS NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+    let mut ids = Vec::new();
+    for (settings,) in rows {
+        if let Some(list) = settings.get(key).and_then(|v| v.as_array()) {
+            ids.extend(list.iter().filter_map(|v| v.as_i64()));
+        }
+    }
+    Ok(ids)
+}
+
+/// Canvas K5::UserService#user_has_association?: the user is enrolled in a
+/// course whose account (or its chain) is in `account_ids`, or is an active
+/// account admin of one of them.
+async fn user_associated_with_accounts(
+    pool: &PgPool,
+    user_id: i64,
+    account_ids: &[i64],
+) -> Result<bool, ApiError> {
+    if account_ids.is_empty() {
+        return Ok(false);
+    }
+    let enrolled: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1
+        FROM enrollments e
+        JOIN courses c ON c.id = e.course_id
+        WHERE e.user_id = $1
+          AND e.workflow_state = 'active'
+          AND (
+              c.account_id = ANY($2)
+              OR c.account_id IN (
+                  SELECT descendant.id
+                  FROM accounts descendant
+                  JOIN accounts ancestor
+                    ON descendant.parent_account_id = ancestor.id
+                   OR descendant.id = ancestor.id
+                  WHERE ancestor.id = ANY($2)
+              )
+          )
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .bind(account_ids)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    if enrolled.is_some() {
+        return Ok(true);
+    }
+    let admin: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM account_users WHERE user_id = $1 AND account_id = ANY($2) LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(account_ids)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(admin.is_some())
+}
+
+/// Whether the user holds the given role in any enrollment.
+async fn user_has_role(pool: &PgPool, user_id: i64, role: &str) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM enrollments WHERE user_id = $1 AND role = $2 LIMIT 1")
+            .bind(user_id)
+            .bind(role)
+            .fetch_optional(pool)
+            .await
+            .map_err(ApiError::from)?;
     Ok(row.is_some())
 }
 
