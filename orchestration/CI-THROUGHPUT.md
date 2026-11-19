@@ -156,14 +156,18 @@ wins are the docs-only path below and the halved runner usage per lane push.
 | PR type | Before | After |
 |---|---:|---:|
 | Rust-changing | ~2.4 min | ~2.5 min (measured; neutral within noise) |
-| docs-only (specs/orchestration) | ~2.4 min | measured by the docs-only validation round on this branch — see PR #145 |
+| docs-only (specs/orchestration) | ~2.4 min | **4–6 s per required check** (measured on demo PR #146; PR green in well under a minute) |
 | lane push (PR open) | 2 suites per SHA | 1 suite (pull_request only) |
 | main push | unchanged | unchanged (full verification by design) |
 
 Classification is **PR-cumulative** (`base...head`): a PR that changes Rust
 source anywhere in its diff runs the full suite on every push — conservative
 by design. The docs-only fast path therefore applies to PRs whose entire diff
-is specs/orchestration/docs (the common spec-lane shape), and was validated on
-a dedicated docs-only demo PR (draft, closed after measurement); its measured
-numbers are recorded in PR #145. `main` post-merge numbers to be filled in by
-the coordinator from the Actions API.
+is specs/orchestration/docs (the common spec-lane shape). Validated on a
+dedicated docs-only demo PR (#146, draft, base `p5/infra-144`, closed after
+measurement): `test` 4 s (shards skipping), `Format and lint` 6 s (fmt/clippy
+skipped, migration hygiene still ran), `shell-and-lab-constraints` 4 s
+(installs skipped, bash -n + AWS Academy guard still ran); gate log confirms
+`rust-changes: false` → "no Rust-source changes in this PR — suite skipped by
+design". `main` post-merge numbers to be filled in by the coordinator from
+the Actions API.
