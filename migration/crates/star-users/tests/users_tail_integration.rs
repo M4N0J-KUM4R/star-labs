@@ -295,7 +295,7 @@ async fn self_registration_is_403_when_provider_disables_it() {
 }
 
 #[tokio::test]
-async fn self_registration_missing_unique_id_is_400_and_unknown_account_404() {
+async fn self_registration_missing_unique_id_is_400() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -318,6 +318,10 @@ async fn self_registration_missing_unique_id_is_400_and_unknown_account_404() {
         .await;
     assert_eq!(missing.status_code(), 400, "unique_id required");
 
+    // Unknown account: Canvas' require_self_registration substitutes the
+    // domain root account for the gate, and the root account has no
+    // self-registration provider in this environment, so the gate rejects
+    // with 403 before any 404 could apply.
     let unknown = server
         .post("/accounts/999999999/self_registration")
         .json(&json!({
@@ -325,7 +329,11 @@ async fn self_registration_missing_unique_id_is_400_and_unknown_account_404() {
             "pseudonym": { "unique_id": format!("{prefix}-ghost@test.local") },
         }))
         .await;
-    assert_eq!(unknown.status_code(), 404, "unknown account");
+    assert_eq!(
+        unknown.status_code(),
+        403,
+        "gate runs against the domain root account first"
+    );
 
     cleanup(&pool, &prefix).await;
 }
