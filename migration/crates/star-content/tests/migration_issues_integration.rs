@@ -156,7 +156,7 @@ async fn seed_account_admin(pool: &PgPool, account_id: i64, user_id: i64) {
     .bind(user_id)
     .execute(pool)
     .await
-    .expect("seed account admin")
+    .expect("seed account admin");
 }
 
 async fn seed_group(pool: &PgPool, course_id: i64, name: &str, state: &str) -> i64 {
