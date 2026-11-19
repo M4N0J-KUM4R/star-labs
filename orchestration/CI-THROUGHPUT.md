@@ -167,3 +167,5 @@ is specs/orchestration/docs (the common spec-lane shape), and was validated on
 a dedicated docs-only demo PR (draft, closed after measurement); its measured
 numbers are recorded in PR #145. `main` post-merge numbers to be filled in by
 the coordinator from the Actions API.
+
+<!-- fast-path demo marker for issue #144 validation, 2026-11-19 -->
