@@ -40,11 +40,16 @@ still writes `coverage.json` and `report.md` but leaves the baseline untouched.
 - `canvas_manifest.json` — `routes[]` (`verb`, `path`, `normalized_path`,
   `controller`, `action`, `ui_referenced`) plus `counts` for API routes,
   controllers, GraphQL files/types/mutations, models, UI feature dirs, JS/TSX
-  files, ERB views, js_env files/call sites, and UI `/api/v1` references.
+  files, ERB views, js_env files/call sites, and UI `/api/v1` references;
+  plus `graphql_type_names[]` and `graphql_mutation_names[]` (the Canvas
+  GraphQL operation-name inventories, see below).
 - `coverage.json` — `summary` (implemented/total and 0.1%-rounded percentages),
-  `controllers` (only controllers with coverage), `implemented_routes`, and
-  `unmatched_star_routes` (extras).
-- `report.md` — human-readable summary, per-controller table, extras table,
+  `controllers` (only controllers with coverage), `implemented_routes`,
+  `unmatched_star_routes` (extras), and `graphql` (per-name coverage:
+  implemented/missing type and mutation names, the rename map, and star
+  names with no Canvas counterpart).
+- `report.md` — human-readable summary, per-controller table, GraphQL
+  operation coverage (implemented + missing name lists), extras table,
   limitations.
 - `baseline.json` — `implemented_rest_routes` and the ratchet policy.
 
@@ -73,5 +78,22 @@ still writes `coverage.json` and `report.md` but leaves the baseline untouched.
   reported as extras; many are deliberate flat-path deviations (for example
   `/assignments/{id}` where Canvas uses `/courses/{course_id}/assignments/{id}`)
   or auth/dashboard/health routes Canvas does not expose.
+- GraphQL parity is measured by operation name. Canvas names come from
+  `app/graphql/types/*_type.rb` (the `graphql_name` when declared, else the
+  class name minus a trailing `Type` — graphql-ruby's default) and from
+  `app/graphql/mutations/**` (classes whose superclass chain reaches
+  `Mutations::BaseMutation`, camelCased to their mutation field names). A
+  Canvas type file can define several GraphQL types, so the inventories are
+  per-name while the denominators stay the file counts (170 / 110). Rust names
+  come from `crates/star-graphql/src/*.rs`: `#[Object]` impl targets and
+  async-graphql derives (`SimpleObject`, `Interface`, `Union`, `InputObject`,
+  `Enum`, `MergedObject`), and mutation fields from `#[Object]` impls on the
+  `Mutation` root or `*Mutations` containers. Four deliberate star renames are
+  mapped to their Canvas graphql_names before matching: `CourseSection` ->
+  `Section`, `EnrollmentTerm` -> `Term`, `DiscussionTopic` -> `Discussion`,
+  `QuizQuestion` -> `QuizItem` (each documented in the star-graphql module doc
+  comments). Canvas's committed `schema.graphql` is NOT used as a source: it
+  drifts from the source tree (it still lists the removed
+  `*AccountDomainLookup` mutations).
 - UI is 0 because the Rust workspace has no frontend; schema tables count
   `CREATE TABLE` in `star-db` migrations (sqlx bookkeeping excluded).
