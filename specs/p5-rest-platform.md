@@ -2,7 +2,7 @@
 
 - **Issue:** #46 (epic `specs`)
 - **Branch / worktree:** `p5/specs-46` at `origin/main` `3dc34f6`
-- **Status:** SPECIFICATION ONLY — no Rust code, no migrations, no cargo. Additive migration numbers 0108+ are proposals; agents never self-assign numbers (protocol: issue #20, coordinator reserves via `orchestration/migration-reservations.json`, current `max_merged` = `0107`, `next_available` = `0108`).
+- **Status:** SPECIFICATION ONLY — no Rust code, no migrations, no cargo. MIGRATION: coordinator-assigned — see orchestration/migration-reservations.json.
 - **Canvas source read:** `canvas-lms` at `app/controllers/{conversations,calendar_events_api,appointment_groups,blackout_dates,learning_object_dates,communication_channels,favorites,profile,release_notes,tabs,admins,sub_accounts}_controller.rb` plus `config/routes.rb` API v1 blocks (conversation scope lines 2033–2049, communication_channels 2051–2064, calendar_events_api 2089–2110, appointment_groups 2108–2117, favorites 2287–2295, release_notes 2801–2810, blackout_dates 2965–2979, tabs 1361–1366, learning_object_dates 1857–1876, sub_accounts 1959–1962, admins 1995–2000, profile 2026–2027, conversations find_recipients 2028–2029).
 
 ## 1. Overview
@@ -35,7 +35,7 @@ Per-controller (implemented / total, from `/tmp/parity-fresh/report.md`):
 | `admins` | 4/4 | 100% | 0 |
 | `sub_accounts` | 2/2 | 100% | 0 |
 
-Existing star-labs implementations live in: `star-conversations` (conversations), `star-calendar` (calendar events, appointment groups; blackout-date flag on calendar events), `star-learning-dates` (date details), `star-notifications` (communication channels, bounce report), `star-dashboard` (favorites courses, release notes), `star-users` (profile), `star-courses` (course tabs), `star-accounts` (admins, sub_accounts). DB: favorites + release notes in `star-db` migration `0097`, communication channels `0045` + `0093`, blackout dates `0091`, course settings (incl. tab_configuration JSON) `0055`, learning object dates `0090`, calendar events deep `0095`.
+Existing star-labs implementations live in: `star-conversations` (conversations), `star-calendar` (calendar events, appointment groups; blackout-date flag on calendar events), `star-learning-dates` (date details), `star-notifications` (communication channels, bounce report), `star-dashboard` (favorites courses, release notes), `star-users` (profile), `star-courses` (course tabs), `star-accounts` (admins, sub_accounts). DB: favorites + release notes, communication channels (incl. bounce columns), blackout dates, course settings (incl. tab_configuration JSON), learning object dates, and calendar-events-deep columns all live in existing `star-db` migrations.
 
 Completion of the 47 missing routes would move the scope to 108/108 (100%) and the workspace to 518/1403 (36.9%), with 17 of the 47 being `ui_referenced` (batch_update, next_appointment, .csv bounce report, tabs×3, release publish/unpublish, convert_tag_overrides×4, groups favorites list/add/remove, find_recipients, timetable set).
 
@@ -309,19 +309,19 @@ create: `manage_account_settings` on the parent account (SIS id additionally nee
 
 ## 4. Data model & migration needs
 
-All additive, 0108+ proposals, contingent on verifying existing columns at implementation time (per protocol the coordinator reserves the number; nothing below may renumber or drop):
+All additive, numbers coordinator-assigned via `orchestration/migration-reservations.json`, contingent on verifying existing columns at implementation time (per protocol the coordinator reserves the number; nothing below may renumber or drop):
 
 | # | Need | Proposal | Verification required |
 |---|---|---|---|
-| M1 | `favorites` rows with `context_type = 'Group'` | none — migration `0097` already defines `context_type TEXT` with default `'Course'` and a unique key on `(user_id, context_type, context_id)`; verify no CHECK constraint restricts to Course | `0097_favorites_release_notes.sql` |
-| M2 | tabs for account/group/user contexts | none — tabs are computed; per-course `tab_configuration` already stored as JSON on course settings (`0055`); account-level tab customization is not in Canvas's update API (course-only), so read-only listings need no DDL | `0055_course_settings.sql` |
+| M1 | `favorites` rows with `context_type = 'Group'` | none — the favorites/release-notes migration already defines `context_type TEXT` with default `'Course'` and a unique key on `(user_id, context_type, context_id)`; verify no CHECK constraint restricts to Course | favorites/release-notes migration |
+| M2 | tabs for account/group/user contexts | none — tabs are computed; per-course `tab_configuration` already stored as JSON on course settings (course-settings migration); account-level tab customization is not in Canvas's update API (course-only), so read-only listings need no DDL | course-settings migration |
 | M3 | timetable data | `courses.timetable_data JSONB` (Canvas keeps `Course#timetable_data` as a serialized hash keyed by section id / `"all"`) | confirm no existing column on `courses` |
 | M4 | conversations batch update | reuse existing progress/job infrastructure (`star-jobs`); no DDL expected | check whether `conversation_batches`/progress tables exist; prior conversations migrations |
 | M5 | `conversations` update (star/subscribe/workflow_state) | none expected — participant columns should exist for the DONE show/index routes | confirm `conversation_participants` has `subscribed`, `starred`, `workflow_state` |
-| M6 | comm-channel `unconfirmed` bulk report + `reset_bounce_count` | none — `0045` has `workflow_state unconfirmed|active|retired`, `0093` added bounce columns; the report is a query | `0045`, `0093` |
-| M7 | release note publish/unpublish | none — `published BOOLEAN` already in `0097` | `0097` |
-| M8 | profile avatars | avatar tokens are derived; if persisted avatars are wanted, `user_attachments`/profile pics may already be covered by files migrations — verify before proposing 0108+ | files track migrations |
-| M9 | learning-object dates for modules/files | module date details read from context modules' existing date columns; files date details reuse `attachments` unlock/lock columns added for differentiated files — verify; overrides themselves already exist (`0090`) | `0090_learning_object_dates.sql`, attachments migrations |
+| M6 | comm-channel `unconfirmed` bulk report + `reset_bounce_count` | none — the base channels migration has `workflow_state unconfirmed|active|retired` and the channels-deep migration added bounce columns; the report is a query | channels migrations |
+| M7 | release note publish/unpublish | none — `published BOOLEAN` already on release notes | favorites/release-notes migration |
+| M8 | profile avatars | avatar tokens are derived; if persisted avatars are wanted, `user_attachments`/profile pics may already be covered by files migrations — verify before proposing a new migration | files track migrations |
+| M9 | learning-object dates for modules/files | module date details read from context modules' existing date columns; files date details reuse `attachments` unlock/lock columns added for differentiated files — verify; overrides themselves already exist (learning-object-dates migration) | learning-object-dates migration, attachments migrations |
 | M10 | appointment-group groups listing / next_appointment | none — group memberships already modeled in the groups track | groups migrations |
 
 Net: **at most one new migration (M3 timetable_data, plus M8/M9 only if verification fails)**; everything else is served by existing tables. Implementers must verify the listed migrations before reserving any number.
@@ -432,7 +432,7 @@ Conventions: all bodies are JSON unless noted; "Link pagination" means Canvas `A
 
 - Params: `id`.
 - Behavior: granular manage-course-content **read** family on the context. Loads the blackout date scoped to the context (`context.blackout_dates.find`), so an id belonging to another context 404s.
-- Success: 200 BlackoutDate JSON: `{id, context_id, context_type, start_date, end_date, event_title}` (dates as ISO dates; Canvas renders the raw model attributes — note the JSON key is `event_title` even though star-labs migration `0091` names the column `title`, so map it).
+- Success: 200 BlackoutDate JSON: `{id, context_id, context_type, start_date, end_date, event_title}` (dates as ISO dates; Canvas renders the raw model attributes — note the JSON key is `event_title` even though the star-labs blackout-dates migration names the column `title`, so map it).
 - Failure: 401; 404 (wrong context or unknown id).
 
 ### 5.16 GET /api/v1/{courses/:course_id,accounts/:account_id}/blackout_dates/new — new
@@ -586,7 +586,7 @@ Conventions: all bodies are JSON unless noted; "Link pagination" means Canvas `A
 ### 5.38 PUT /api/v1/courses/:course_id/tabs/:tab_id — update
 
 - Params: `tab_id` (the tab's string id, e.g. `context_external_tool_4`), `position` (1-based int), `hidden` (boolean). Only `hidden=true` or explicit `hidden=false`/absence semantics per Canvas: `hidden` set truthy → hidden true; key present falsy → unhide.
-- Behavior: **Course contexts only** (`manage_course_content_edit`). Home and Settings tabs are not manageable → 400. Position must satisfy `1 < position < tab_count + 1` → else 400. Persists to the course's `tab_configuration` (JSON on course settings, migration `0055`).
+- Behavior: **Course contexts only** (`manage_course_content_edit`). Home and Settings tabs are not manageable → 400. Position must satisfy `1 < position < tab_count + 1` → else 400. Persists to the course's `tab_configuration` (JSON on course settings).
 - Success: 200 tab JSON (with new position/hidden).
 - Failure: 400 `{"error": "<css_class> is not manageable"}`; 400 `{"error": "That tab location is invalid"}`; 401; 404 (course or, arguably, unknown tab — Canvas raises on `.with_indifferent_access` of nil, i.e. 500; star-labs should 404 the unknown tab, note in §7).
 

@@ -50,11 +50,13 @@ jobs:
             crates: >-
               -p star-assignments -p star-courses -p star-api -p star-common
               -p star-db -p star-http -p star-announcements -p star-media
+              -p star-account-reports -p star-collaborations -p star-conferences
           - shard: 2
             crates: >-
               -p star-notifications -p star-accounts -p star-enrollments
               -p star-permissions -p star-groups -p star-assignment-groups
               -p star-jobs
+              -p star-eportfolios -p star-polling -p star-search -p star-sis
           - shard: 3
             crates: >-
               -p star-auth -p star-users -p star-discussions -p star-quizzes

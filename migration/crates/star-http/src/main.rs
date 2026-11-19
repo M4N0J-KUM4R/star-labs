@@ -156,4 +156,14 @@ fn build_api_router() -> Router<AppState> {
         .merge(star_learning_dates::router())
         .merge(star_audit::router())
         .merge(star_media::router())
+        // Scaffold crates (issue #138) — routers are empty until the feature
+        // workers land their routes; merged here once so they never have to
+        // touch this file.
+        .merge(star_account_reports::router())
+        .merge(star_collaborations::router())
+        .merge(star_conferences::router())
+        .merge(star_eportfolios::router())
+        .merge(star_polling::router())
+        .merge(star_search::router())
+        .merge(star_sis::router())
 }

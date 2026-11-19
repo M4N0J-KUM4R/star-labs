@@ -209,7 +209,7 @@ deviations from the issue research notes are flagged.
 | 10 | Course home (modules view) | `GET /courses/:id` | modules | `GET /api/v1/courses/:course_id/modules` | **exists** — ui-referenced |
 | 11 | Course home (assignments view) | `GET /courses/:id` | assignments | `GET /api/v1/courses/:course_id/assignments` | **exists** — ui-referenced |
 | 12 | Course home (announcements) | `GET /courses/:id` | announcements | `GET /api/v1/courses/:course_id/announcements` | **exists** — star-announcements; parity lists it as a star extra (Canvas exposes course announcements via the `announcements` controller layout) |
-| 13 | Course home (wiki view) | `GET /courses/:id` | front page | `GET /api/v1/courses/:course_id/front_page` | **exists** — `wiki_pages_api` match in coverage.json. **Correction:** the issue research listed this as missing; coverage.json and `crates/star-pages/src/lib.rs` (GET/PUT `/courses/{courseId}/front_page`, migration 0075 `pages.front_page`) show it implemented |
+| 13 | Course home (wiki view) | `GET /courses/:id` | front page | `GET /api/v1/courses/:course_id/front_page` | **exists** — `wiki_pages_api` match in coverage.json. **Correction:** the issue research listed this as missing; coverage.json and `crates/star-pages/src/lib.rs` (GET/PUT `/courses/{courseId}/front_page`, `pages.front_page` columns) show it implemented |
 | 14 | Course home (activity) | `GET /courses/:id` | missing submissions | `GET /api/v1/users/self/missing_submissions` | **missing — phase 2** |
 | 15 | Dashboard (activity view) | `GET /dashboard` | planner items | `GET /api/v1/planner/items` | **missing — phase 2** (only `planner_notes` CRUD exists, 5/5) |
 | 16 | Dashboard (activity view) | `GET /dashboard` | stream items | `GET /api/v1/dashboard/stream_items` | **missing — phase 2** |
@@ -336,7 +336,8 @@ One new job (`browser-smoke`) — a new workflow
 1. **User preferences storage does not exist yet.** `PREFERENCES.*` and
    `SETTINGS.collapse_global_nav` / `use_high_contrast` have no backing
    column (no `users.preferences`). A follow-up issue must add one
-   (next migration number is 0079+); until then the shell serves documented
+   (migration numbers are coordinator-assigned — see
+   `orchestration/migration-reservations.json`); until then the shell serves documented
    defaults (`dashboard_view: "cards"`, `custom_colors: {}`, both booleans
    false) and criterion 3 tests the defaults.
 2. **Parity-tooling drift on journey endpoints.** `users/self/favorites/*`

@@ -1,37 +1,593 @@
 {
-  "comment": "Coordinator-owned ledger of migration number reservations (protocol: issue #20). Agents never self-assign a number; the coordinator reserves one at dispatch time. Additive migrations only, no renumbering, no DROP/TRUNCATE.",
-  "max_merged": "0107",
+  "comment": "Coordinator-owned ledger of migration number reservations (protocol: issue #20). Agents never self-assign a number; the coordinator reserves one at dispatch time. Additive migrations only, no renumbering, no DROP/TRUNCATE. status 'merged' = a NNNN_*.sql file exists in migration/crates/star-db/migrations/ on main; status 'open' = reserved for an open issue (verify the issue is still open before reuse). 'issue' is the GitHub issue number; null marks pre-protocol merges that predate issue-linked PRs. 'free' lists unallocated holes below next_available (0011/0100 never existed; 0111/0115 were released). Validate with: python3 orchestration/check-migration-ledger.py",
+  "max_merged": "0113",
   "next_available": "0121",
   "free": [
+    "0011",
+    "0100",
     "0111",
     "0115"
   ],
-  "active": {
-    "0108": "issue #31 provisional/moderated grading (tables + assignments columns)",
-    "0109": "issue #32 gradebook-history support (only if spec requires new tables)",
-    "0110": "issue #29 gql assignment mutations batch A (PR #133, branch p5/gql-mutations-29)",
-    "0112": "issue #33 outcome_groups deep parity (branch p5/rest-curriculum-33)",
-    "0113": "issue #54 quiz submission tail (PR #130, branch p5/rest-assessments-54)",
-    "0114": "issue #35 groups.non_collaborative (branch p5/rest-curriculum-35)",
-    "0116": "issue #60 conversation participant flags (PR #131, branch p5/rest-platform-60)",
-    "0117": "issue #67 feature flags tail \u2014 lane A05 (branch p5/rest-admin-67)",
-    "0118": "issue #53 grade change audit tail \u2014 lane A06 (branch p5/rest-assessments-53)",
-    "0119": "issue #52 peer reviews tail \u2014 lane A07 (branch p5/rest-assessments-52)",
-    "0120": "issue #88 course nicknames + observee pairing \u2014 lane A08 (branch p5/rest-curriculum-88)"
-  },
-  "wave3": {
-    "dispatched": "2026-11-18",
-    "lanes": {
-      "A01": "#105 CI throughput",
-      "A02": "#102 CI migration guard",
-      "A03": "#82 gql conversation/calendar/account",
-      "A04": "#81 gql outcome/group",
-      "A05": "#67 feature flags",
-      "A06": "#53 grade change audit",
-      "A07": "#52 peer reviews",
-      "A08": "#88 nicknames/observees",
-      "A09": "#104 observability",
-      "A10": "#100 pagination/include[]"
+  "reservations": {
+    "0001": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0002": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0003": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0004": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0005": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0006": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0007": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0008": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0009": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0010": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0012": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0013": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0014": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0015": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0016": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0017": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0018": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0019": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0020": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0021": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0022": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0023": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0024": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0025": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0026": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0027": {
+      "issue": null,
+      "status": "merged",
+      "note": "initial snapshot (pre-protocol)"
+    },
+    "0028": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #1"
+    },
+    "0029": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: fix/modules-items"
+    },
+    "0030": {
+      "issue": null,
+      "status": "merged",
+      "note": "direct commit (pre-protocol): schema scoping fix"
+    },
+    "0031": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/permissions"
+    },
+    "0032": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/auth-oauth"
+    },
+    "0033": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/jobs"
+    },
+    "0034": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/courses-terms"
+    },
+    "0035": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/accounts-admins"
+    },
+    "0036": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/files-folders"
+    },
+    "0037": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/quizzes-questions"
+    },
+    "0038": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/assignments-overrides"
+    },
+    "0039": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/modules-completion"
+    },
+    "0040": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/pages-revisions"
+    },
+    "0041": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/discussions-read"
+    },
+    "0042": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/calendar-planner"
+    },
+    "0043": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/groups-categories"
+    },
+    "0044": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/outcomes-groups"
+    },
+    "0045": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/notifications-channels"
+    },
+    "0046": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/conversations-participants"
+    },
+    "0047": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/enrollments-sections"
+    },
+    "0048": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/rubrics-assessments"
+    },
+    "0049": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/assignment-groups-rules"
+    },
+    "0050": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/grading-periods"
+    },
+    "0051": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/users-profile"
+    },
+    "0052": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/announcements-read"
+    },
+    "0053": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/content-exports"
+    },
+    "0054": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p2/submission-comments-thread"
+    },
+    "0055": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/courses-settings"
+    },
+    "0056": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/users-settings"
+    },
+    "0057": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/jobs-v2"
+    },
+    "0058": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/accounts-settings"
+    },
+    "0059": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/outcomes-extras"
+    },
+    "0060": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/submissions-api"
+    },
+    "0061": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/files-folders-extras"
+    },
+    "0062": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/content-migrations"
+    },
+    "0063": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/calendar-appointments"
+    },
+    "0064": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/groups-memberships"
+    },
+    "0065": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/modules-items"
+    },
+    "0066": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/permissions-role-overrides"
+    },
+    "0067": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/auth-tokens"
+    },
+    "0068": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/quizzes-submissions"
+    },
+    "0069": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/discussions-extras"
+    },
+    "0070": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/enrollments-extras"
+    },
+    "0071": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/rubrics-associations"
+    },
+    "0072": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/grading-schemes"
+    },
+    "0073": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/dashboard-todo"
+    },
+    "0074": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/notifications-preferences"
+    },
+    "0075": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/pages-front-page"
+    },
+    "0076": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/conversations-batches"
+    },
+    "0077": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/submission-comments-files"
+    },
+    "0078": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol merge: p3/lti-registrations"
+    },
+    "0079": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #4"
+    },
+    "0080": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol: Merge p4/submissions-deep: submission read states parity (0080)"
+    },
+    "0081": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol: Merge p4/outcomes-groups-deep: Phase 4 parity"
+    },
+    "0082": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #2"
+    },
+    "0083": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol: Merge p4/courses-deep: Phase 4 parity"
+    },
+    "0084": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol: Merge p4/files-folders-deep: Phase 4 parity"
+    },
+    "0085": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #3"
+    },
+    "0086": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #5"
+    },
+    "0087": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol: Merge p4/pages-deep: Phase 4 parity"
+    },
+    "0088": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol: Merge p4/feature-flags: Phase 4 parity"
+    },
+    "0089": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #7"
+    },
+    "0090": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #8"
+    },
+    "0091": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol: Merge p4/blackout-dates: Phase 4 parity"
+    },
+    "0092": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol: Merge p4/grade-change-audit: Phase 4 parity"
+    },
+    "0093": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #9"
+    },
+    "0094": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol: Merge p4/rubrics-deep: Phase 4 parity"
+    },
+    "0095": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol: Merge p4/calendar-deep: Phase 4 parity"
+    },
+    "0096": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol: Merge p4/groups-categories-deep: Phase 4 parity"
+    },
+    "0097": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol: Merge p4/favorites-release-notes: favorites and release notes parity ("
+    },
+    "0098": {
+      "issue": null,
+      "status": "merged",
+      "note": "pre-protocol: Merge p4/media-objects: Phase 4 parity"
+    },
+    "0099": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #10"
+    },
+    "0101": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #12"
+    },
+    "0102": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #13"
+    },
+    "0103": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #11"
+    },
+    "0104": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #15"
+    },
+    "0105": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #16"
+    },
+    "0106": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #19"
+    },
+    "0107": {
+      "issue": null,
+      "status": "merged",
+      "note": "PR #18"
+    },
+    "0108": {
+      "issue": 31,
+      "status": "open",
+      "note": "provisional/moderated grading (tables + assignments columns); issue open, branch not pushed yet"
+    },
+    "0109": {
+      "issue": 32,
+      "status": "open",
+      "note": "gradebook-history support, only if spec requires new tables; issue open, branch not pushed yet"
+    },
+    "0110": {
+      "issue": 29,
+      "status": "open",
+      "note": "gql assignment mutations batch A; open PR #133 (p5/gql-mutations-29) adds 0110_assignment_workflow_state.sql"
+    },
+    "0112": {
+      "issue": 33,
+      "status": "open",
+      "note": "outcome_groups deep parity; branch p5/rest-curriculum-33 has 0112_outcomes_deep.sql, PR not opened yet"
+    },
+    "0113": {
+      "issue": 54,
+      "status": "merged",
+      "note": "quiz submission tail; PR #130 (p5/rest-assessments-54)"
+    },
+    "0114": {
+      "issue": 35,
+      "status": "open",
+      "note": "groups.non_collaborative; branch p5/rest-curriculum-35 has 0114_groups_non_collaborative.sql, PR not opened yet"
+    },
+    "0116": {
+      "issue": 60,
+      "status": "open",
+      "note": "conversation participant flags; open PR #131 (p5/rest-platform-60) adds 0116_conversation_participant_flags.sql"
+    },
+    "0117": {
+      "issue": 67,
+      "status": "open",
+      "note": "feature flags tail (wave-3 lane A05); issue open, branch not pushed yet"
+    },
+    "0118": {
+      "issue": 53,
+      "status": "open",
+      "note": "grade change audit tail (wave-3 lane A06); issue open, branch not pushed yet"
+    },
+    "0119": {
+      "issue": 52,
+      "status": "open",
+      "note": "peer reviews tail (wave-3 lane A07); issue open, branch not pushed yet"
+    },
+    "0120": {
+      "issue": 88,
+      "status": "open",
+      "note": "course nicknames + observee pairing (wave-3 lane A08); issue open, branch not pushed yet"
     }
   }
 }

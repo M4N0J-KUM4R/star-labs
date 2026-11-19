@@ -1,0 +1,14 @@
+[package]
+name = "star-sis"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+star-common = { path = "../star-common" }
+axum = { workspace = true }
+
+[dev-dependencies]
+star-db = { path = "../star-db" }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+axum-test = { workspace = true }
