@@ -3202,7 +3202,7 @@ async fn insert_moderation_grader_slot(
         );
         let hash = format!("{:x}", fnv1a_hash(&entropy));
         let candidate: String = hash.chars().take(5).collect();
-        if candidate.len() == 5 && candidate.chars().all(char::is_ascii_alphanumeric) {
+        if candidate.len() == 5 && candidate.chars().all(|c| c.is_ascii_alphanumeric()) {
             let inserted = sqlx::query(
                 r#"
                 INSERT INTO moderation_graders (assignment_id, user_id, anonymous_id, slot_taken)
