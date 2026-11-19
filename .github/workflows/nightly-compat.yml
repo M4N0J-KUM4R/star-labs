@@ -3,13 +3,26 @@ name: Nightly compatibility
 # Nightly signal, not a merge gate. Two independent lanes:
 #
 # 1. Supabase compatibility: the workspace suite (minus star-http) against the
-#    remote Supabase test schema. The suite is sharded across 8 parallel legs,
+#    remote Supabase test schema. The suite is sharded across 4 parallel legs,
 #    balanced by measured per-crate wall time (see orchestration/CI-THROUGHPUT.md
 #    wave 5): a single serial `cargo test --workspace` invocation ran test
 #    binaries one at a time, each capped at --test-threads=2 over the session
 #    pooler, and summed to ~75 min. Concurrent legs are safe by the repo ground
 #    rule: every DB-backed test seeds under a unique-per-run prefix (pid +
-#    millis) with full teardown, so parallel legs never collide on data.
+#    millis) with full teardown, so parallel legs never collide on data — the
+#    measured failure mode of the first 8-leg attempt was purely connection
+#    saturation, zero data races.
+#
+#    SHARD COUNT IS POOLER-BOUND, not runner-bound: the Supabase session
+#    pooler rejects connections beyond its client ceiling
+#    (EMAXCONNSESSION "max clients reached in session mode - max clients are
+#    limited to pool_size: 15", measured on the 8-leg attempt, 2026-11-19).
+#    Each leg holds ~2-3 clients at --test-threads=2 (one pool per test,
+#    2 tests in flight, pool churn between tests), so 4 legs peak at ~8-12
+#    clients. Do not widen the matrix without raising the pooler limit
+#    (Supabase dashboard) or switching DATABASE_URL to the transaction pooler
+#    (needs re-validating sqlx migrate advisory locks first).
+#
 #    A preflight job checks the secret and Supabase connectivity once (plus the
 #    shard-map coverage guard), then a fan-in gate keeps the single
 #    `Supabase compatibility` name for the run summary.
@@ -68,13 +81,14 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Shard map: every workspace crate except star-http is assigned to exactly
-  # one of 8 legs (asserted by the preflight guard). Legs are balanced by the
+  # one of 4 legs (asserted by the preflight guard). Legs are balanced by the
   # per-crate wall times measured from nightly run #11's job log (LPT packing,
-  # 7.9-8.6 min of tests per leg). fail-fast stays off: the nightly run's value
+  # ~16.1 min of tests per leg). fail-fast stays off: the nightly run's value
   # is the full signal, so one failing leg must not cancel the others.
+  # Shard count rationale: see the pooler ceiling note in the header comment.
   # ---------------------------------------------------------------------------
   supabase-shard:
-    name: Supabase shard ${{ matrix.shard }} of 8
+    name: Supabase shard ${{ matrix.shard }} of 4
     needs: preflight
     if: needs.preflight.outputs.available == 'true'
     runs-on: ubuntu-latest
@@ -85,36 +99,26 @@ jobs:
         include:
           - shard: 1
             crates: >-
-              -p star-assignments
+              -p star-assignments -p star-auth -p star-calendar -p star-features
+              -p star-grading-standards -p star-lti -p star-rubrics
           - shard: 2
             crates: >-
-              -p star-accounts -p star-users -p star-lti -p star-calendar
+              -p star-accounts -p star-api -p star-common -p star-dashboard
+              -p star-learning-dates -p star-modules -p star-notifications
+              -p star-pages
           - shard: 3
             crates: >-
-              -p star-courses -p star-grading-standards -p star-permissions
-              -p star-db
+              -p star-audit -p star-content -p star-courses -p star-db
+              -p star-enrollments -p star-graphql -p star-outcomes
+              -p star-permissions
           - shard: 4
             crates: >-
-              -p star-quizzes -p star-content -p star-outcomes -p star-features
-          - shard: 5
-            crates: >-
-              -p star-discussions -p star-pages -p star-dashboard
-          - shard: 6
-            crates: >-
-              -p star-enrollments -p star-submission-comments -p star-groups
-              -p star-media
-          - shard: 7
-            crates: >-
-              -p star-modules -p star-graphql -p star-rubrics -p star-jobs
-              -p star-audit -p star-common
-          - shard: 8
-            crates: >-
-              -p star-notifications -p star-auth -p star-learning-dates
-              -p star-files -p star-api -p star-announcements
-              -p star-conversations -p star-assignment-groups
-              -p star-account-reports -p star-collaborations
-              -p star-conferences -p star-eportfolios -p star-polling
-              -p star-search -p star-sis
+              -p star-account-reports -p star-announcements
+              -p star-assignment-groups -p star-collaborations
+              -p star-conferences -p star-conversations -p star-discussions
+              -p star-eportfolios -p star-files -p star-groups -p star-jobs
+              -p star-media -p star-polling -p star-quizzes -p star-search
+              -p star-sis -p star-submission-comments -p star-users
     env:
       DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
       STAR_JWT_SECRET: nightly-supabase-test-secret
@@ -162,7 +166,7 @@ jobs:
             echo "::error::Supabase shards did not all pass"
             exit 1
           fi
-          echo "Supabase compatibility suite completed (8 parallel shards)." >> "$GITHUB_STEP_SUMMARY"
+          echo "Supabase compatibility suite completed (4 parallel shards)." >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
   # Coverage against PostgreSQL 16 (non-blocking nightly signal).
