@@ -3106,7 +3106,7 @@ async fn grade_submission_provisional(
             id: submission_id,
             user_id,
             anonymous_id: None,
-            submitted_at: submission.submitted_at,
+            submitted_at: Some(submission.submitted_at),
         };
         // The anonymous id matters when names are hidden; fetch it.
         let anonymous_id: Option<String> =
@@ -3200,7 +3200,7 @@ async fn insert_moderation_grader_slot(
             grader_id,
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
         );
-        let hash = format!("{:x}", md5_like_hash(&entropy));
+        let hash = format!("{:x}", fnv1a_hash(&entropy));
         let candidate: String = hash.chars().take(5).collect();
         if candidate.len() == 5 && candidate.is_ascii_alphanumeric() {
             let inserted = sqlx::query(
@@ -3225,8 +3225,8 @@ async fn insert_moderation_grader_slot(
     ))
 }
 
-/// A tiny FNV-1a-based hex digest standing in for a random id source.
-fn md5_like_hash(input: &str) -> u64 {
+/// A tiny FNV-1a hash standing in for a random id source.
+fn fnv1a_hash(input: &str) -> u64 {
     let mut hash: u64 = 0xcbf29ce484222325;
     for byte in input.bytes() {
         hash ^= u64::from(byte);
@@ -3304,6 +3304,7 @@ async fn upsert_provisional_grade(
         None
     };
 
+    let was_existing = existing.is_some();
     let saved: ProvisionalGradeRow = match existing {
         Some(existing) => {
             // update_provisional_grade: a selected provisional grade cannot
@@ -3369,7 +3370,7 @@ async fn upsert_provisional_grade(
         }
     };
 
-    let event_type = if existing.is_some() {
+    let event_type = if was_existing {
         "provisional_grade_updated"
     } else {
         "provisional_grade_created"
@@ -3855,6 +3856,9 @@ async fn append_provisional_grades_include(
     let Some(submission_id) = submission_id else {
         return Ok(());
     };
+    if moderated_includes.is_empty() {
+        return Ok(());
+    }
     let submission_ref: Option<ProvisionalSubmissionRef> = sqlx::query_as(
         r#"SELECT id, user_id, anonymous_id, submitted_at FROM submissions WHERE id = $1"#,
     )
