@@ -6,8 +6,8 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 481 | 1403 | 34.3% |
-| REST routes referenced from `ui/` | 258 | 503 | 51.3% |
+| REST API routes | 502 | 1403 | 35.8% |
+| REST routes referenced from `ui/` | 262 | 503 | 52.1% |
 | GraphQL files | 1 | 390 | 0.3% |
 | GraphQL object types | 14 | 170 | 8.2% |
 | GraphQL mutations | 0 | 110 | 0.0% |
@@ -17,30 +17,32 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | js_env files | 0 | 124 | 0.0% |
 | Schema tables (vs 688 Canvas models) | 119 | 688 | n/a |
 
-Implemented REST route count: **481 / 1403** (34.3%).
+Implemented REST route count: **502 / 1403** (35.8%).
 
-Star registrations: 634 route/method pairs from 541 `.route(...)` calls (0 unparsed); 157 have no Canvas match and are listed as extras below.
+Star registrations: 654 route/method pairs from 561 `.route(...)` calls (0 unparsed); 157 have no Canvas match and are listed as extras below.
 
 Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 
-## Controllers with coverage (72)
+## Controllers with coverage (73)
 
 | Controller | Implemented | Total | Coverage |
 |---|---:|---:|---:|
 | `discussion_topics_api` | 58 | 58 | 100.0% |
 | `users` | 25 | 39 | 64.1% |
 | `wiki_pages_api` | 20 | 29 | 69.0% |
+| `conversations` | 16 | 16 | 100.0% |
 | `submissions_api` | 16 | 44 | 36.4% |
 | `accounts` | 14 | 22 | 63.6% |
 | `courses` | 14 | 38 | 36.8% |
 | `folders` | 14 | 34 | 41.2% |
 | `master_courses/master_templates` | 13 | 13 | 100.0% |
 | `outcome_groups_api` | 13 | 40 | 32.5% |
+| `assignments_api` | 12 | 12 | 100.0% |
 | `enrollments_api` | 12 | 14 | 85.7% |
 | `files` | 12 | 26 | 46.2% |
+| `assignment_overrides` | 10 | 10 | 100.0% |
 | `calendar_events_api` | 10 | 15 | 66.7% |
 | `group_categories` | 10 | 16 | 62.5% |
-| `conversations` | 9 | 16 | 56.2% |
 | `groups` | 9 | 17 | 52.9% |
 | `context_module_items_api` | 8 | 12 | 66.7% |
 | `external_tools` | 8 | 25 | 32.0% |
@@ -58,8 +60,6 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `rubrics_api` | 6 | 15 | 40.0% |
 | `sections` | 6 | 9 | 66.7% |
 | `account_notifications` | 5 | 8 | 62.5% |
-| `assignment_overrides` | 5 | 10 | 50.0% |
-| `assignments_api` | 5 | 12 | 41.7% |
 | `context_modules_api` | 5 | 8 | 62.5% |
 | `grade_change_audit_api` | 5 | 12 | 41.7% |
 | `group_memberships` | 5 | 11 | 45.5% |
@@ -77,12 +77,12 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `lti/registrations` | 4 | 20 | 20.0% |
 | `peer_reviews_api` | 4 | 9 | 44.4% |
 | `quizzes/quiz_reports` | 4 | 4 | 100.0% |
+| `submission_comments_api` | 4 | 4 | 100.0% |
 | `content_exports_api` | 3 | 14 | 21.4% |
 | `feature_flags` | 3 | 17 | 17.6% |
 | `media_objects` | 3 | 10 | 30.0% |
 | `migration_issues` | 3 | 16 | 18.8% |
 | `rubrics` | 3 | 3 | 100.0% |
-| `submission_comments_api` | 3 | 4 | 75.0% |
 | `terms` | 3 | 3 | 100.0% |
 | `developer_keys` | 2 | 5 | 40.0% |
 | `jobs` | 2 | 3 | 66.7% |
@@ -97,6 +97,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `media_tracks` | 1 | 6 | 16.7% |
 | `profile` | 1 | 2 | 50.0% |
 | `quizzes/quiz_statistics` | 1 | 1 | 100.0% |
+| `search` | 1 | 4 | 25.0% |
 | `submissions` | 1 | 2 | 50.0% |
 | `tabs` | 1 | 5 | 20.0% |
 

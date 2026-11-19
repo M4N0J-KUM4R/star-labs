@@ -31,8 +31,8 @@
       "total": 5
     },
     "assignment_overrides": {
-      "implemented": 5,
-      "pct": 50.0,
+      "implemented": 10,
+      "pct": 100.0,
       "total": 10
     },
     "assignments": {
@@ -41,8 +41,8 @@
       "total": 1
     },
     "assignments_api": {
-      "implemented": 5,
-      "pct": 41.7,
+      "implemented": 12,
+      "pct": 100.0,
       "total": 12
     },
     "authentication_providers": {
@@ -86,8 +86,8 @@
       "total": 8
     },
     "conversations": {
-      "implemented": 9,
-      "pct": 56.2,
+      "implemented": 16,
+      "pct": 100.0,
       "total": 16
     },
     "courses": {
@@ -305,6 +305,11 @@
       "pct": 40.0,
       "total": 15
     },
+    "search": {
+      "implemented": 1,
+      "pct": 25.0,
+      "total": 4
+    },
     "sections": {
       "implemented": 6,
       "pct": 66.7,
@@ -316,8 +321,8 @@
       "total": 2
     },
     "submission_comments_api": {
-      "implemented": 3,
-      "pct": 75.0,
+      "implemented": 4,
+      "pct": 100.0,
       "total": 4
     },
     "submissions": {
@@ -1216,6 +1221,46 @@
       "verb": "DELETE"
     },
     {
+      "action": "section_alias",
+      "controller": "assignment_overrides",
+      "normalized_path": "sections/{}/assignments/{}/override",
+      "path": "/api/v1/sections/:course_section_id/assignments/:assignment_id/override",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "group_alias",
+      "controller": "assignment_overrides",
+      "normalized_path": "groups/{}/assignments/{}/override",
+      "path": "/api/v1/groups/:group_id/assignments/:assignment_id/override",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "batch_retrieve",
+      "controller": "assignment_overrides",
+      "normalized_path": "courses/{}/assignments/overrides",
+      "path": "/api/v1/courses/:course_id/assignments/overrides",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "batch_update",
+      "controller": "assignment_overrides",
+      "normalized_path": "courses/{}/assignments/overrides",
+      "path": "/api/v1/courses/:course_id/assignments/overrides",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "batch_create",
+      "controller": "assignment_overrides",
+      "normalized_path": "courses/{}/assignments/overrides",
+      "path": "/api/v1/courses/:course_id/assignments/overrides",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
       "action": "index",
       "controller": "assignments_api",
       "normalized_path": "courses/{}/assignments",
@@ -1232,10 +1277,34 @@
       "verb": "GET"
     },
     {
+      "action": "user_index",
+      "controller": "assignments_api",
+      "normalized_path": "users/{}/courses/{}/assignments",
+      "path": "/api/v1/users/:user_id/courses/:course_id/assignments",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "bulk_update",
+      "controller": "assignments_api",
+      "normalized_path": "courses/{}/assignments/bulk_update",
+      "path": "/api/v1/courses/:course_id/assignments/bulk_update",
+      "ui_referenced": true,
+      "verb": "PUT"
+    },
+    {
       "action": "show",
       "controller": "assignments_api",
       "normalized_path": "courses/{}/assignments/{}",
       "path": "/api/v1/courses/:course_id/assignments/:id",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "student_group_members",
+      "controller": "assignments_api",
+      "normalized_path": "courses/{}/assignments/{}/users/{}/group_members",
+      "path": "/api/v1/courses/:course_id/assignments/:assignment_id/users/:user_id/group_members",
       "ui_referenced": true,
       "verb": "GET"
     },
@@ -1256,12 +1325,44 @@
       "verb": "PUT"
     },
     {
+      "action": "duplicate",
+      "controller": "assignments_api",
+      "normalized_path": "courses/{}/assignments/{}/duplicate",
+      "path": "/api/v1/courses/:course_id/assignments/:assignment_id/duplicate",
+      "ui_referenced": true,
+      "verb": "POST"
+    },
+    {
+      "action": "retry_alignment_clone",
+      "controller": "assignments_api",
+      "normalized_path": "courses/{}/assignments/{}/retry_alignment_clone",
+      "path": "/api/v1/courses/:course_id/assignments/:assignment_id/retry_alignment_clone",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
       "action": "destroy",
       "controller": "assignments",
       "normalized_path": "courses/{}/assignments/{}",
       "path": "/api/v1/courses/:course_id/assignments/:id",
       "ui_referenced": true,
       "verb": "DELETE"
+    },
+    {
+      "action": "accessibility_scan",
+      "controller": "assignments_api",
+      "normalized_path": "courses/{}/assignments/{}/accessibility/scan",
+      "path": "/api/v1/courses/:course_id/assignments/:assignment_id/accessibility/scan",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "accessibility_queue_scan",
+      "controller": "assignments_api",
+      "normalized_path": "courses/{}/assignments/{}/accessibility/queue_scan",
+      "path": "/api/v1/courses/:course_id/assignments/:assignment_id/accessibility/queue_scan",
+      "ui_referenced": false,
+      "verb": "POST"
     },
     {
       "action": "index",
@@ -1454,6 +1555,14 @@
       "path": "/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/comments/:id",
       "ui_referenced": false,
       "verb": "DELETE"
+    },
+    {
+      "action": "annotation_notification",
+      "controller": "submission_comments_api",
+      "normalized_path": "courses/{}/assignments/{}/submissions/{}/annotation_notification",
+      "path": "/courses/:course_id/assignments/:assignment_id/submissions/:user_id/annotation_notification",
+      "ui_referenced": false,
+      "verb": "POST"
     },
     {
       "action": "index",
@@ -2720,6 +2829,22 @@
       "verb": "GET"
     },
     {
+      "action": "recipients",
+      "controller": "search",
+      "normalized_path": "conversations/find_recipients",
+      "path": "/api/v1/conversations/find_recipients",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "find_recipients",
+      "controller": "conversations",
+      "normalized_path": "conversations/find_recipients",
+      "path": "/api/v1/conversations/find_recipients",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
       "action": "index",
       "controller": "conversations",
       "normalized_path": "conversations",
@@ -2733,6 +2858,30 @@
       "normalized_path": "conversations",
       "path": "/api/v1/conversations",
       "ui_referenced": true,
+      "verb": "POST"
+    },
+    {
+      "action": "deleted_index",
+      "controller": "conversations",
+      "normalized_path": "conversations/deleted",
+      "path": "/api/v1/conversations/deleted",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "restore_message",
+      "controller": "conversations",
+      "normalized_path": "conversations/restore",
+      "path": "/api/v1/conversations/restore",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "mark_all_as_read",
+      "controller": "conversations",
+      "normalized_path": "conversations/mark_all_as_read",
+      "path": "/api/v1/conversations/mark_all_as_read",
+      "ui_referenced": false,
       "verb": "POST"
     },
     {
@@ -2758,6 +2907,14 @@
       "path": "/api/v1/conversations/:id",
       "ui_referenced": false,
       "verb": "GET"
+    },
+    {
+      "action": "update",
+      "controller": "conversations",
+      "normalized_path": "conversations/{}",
+      "path": "/api/v1/conversations/:id",
+      "ui_referenced": false,
+      "verb": "PUT"
     },
     {
       "action": "destroy",
@@ -2790,6 +2947,22 @@
       "path": "/api/v1/conversations/:id/remove_messages",
       "ui_referenced": false,
       "verb": "POST"
+    },
+    {
+      "action": "batch_update",
+      "controller": "conversations",
+      "normalized_path": "conversations",
+      "path": "/api/v1/conversations",
+      "ui_referenced": true,
+      "verb": "PUT"
+    },
+    {
+      "action": "delete_for_all",
+      "controller": "conversations",
+      "normalized_path": "conversations/{}/delete_for_all",
+      "path": "/api/v1/conversations/:id/delete_for_all",
+      "ui_referenced": false,
+      "verb": "DELETE"
     },
     {
       "action": "index",
@@ -4604,22 +4777,22 @@
     "graphql_mutations_implemented": 0,
     "graphql_types": 170,
     "graphql_types_implemented": 14,
-    "implemented_rest_pct": 34.3,
-    "implemented_rest_routes": 481,
+    "implemented_rest_pct": 35.8,
+    "implemented_rest_routes": 502,
     "js_env_call_sites": 490,
     "js_env_files": 124,
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
     "star_extras": 157,
-    "star_route_calls": 541,
-    "star_route_registrations": 634,
+    "star_route_calls": 561,
+    "star_route_registrations": 654,
     "star_tables": 119,
     "star_unparsed_calls": 0,
     "ui_feature_dirs": 232,
     "ui_feature_dirs_implemented": 0,
-    "ui_referenced_implemented": 258,
-    "ui_referenced_pct": 51.3,
+    "ui_referenced_implemented": 262,
+    "ui_referenced_pct": 52.1,
     "ui_referenced_routes": 503
   },
   "unmatched_star_routes": [
