@@ -11,6 +11,7 @@
 //! - update_assignment_delete_via_state_deleted (soft delete + idempotent)
 //! - update_assignment_state_deleted_student_insufficient_permission
 //! - update_assignment_validation_name_required (payload errors, HTTP 200)
+//!
 //! plus the shared-extractor 401 check on a mutation.
 //!
 //! Harness conventions are copied from `graphql_integration.rs`: skip
