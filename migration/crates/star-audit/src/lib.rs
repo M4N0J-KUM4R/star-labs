@@ -463,13 +463,30 @@ async fn render_events(
     }
 
     // 2. include[]=current_grade — Canvas reads the CURRENT submission grade
-    //    for the event's (assignment, student) pair ("N/A" when absent).
-    let current_grades: std::collections::HashMap<(i64, i64), Option<String>> =
-        if ctx.includes.wants_current_grade() {
-            fetch_current_grades(pool, &rows).await?
-        } else {
-            Default::default()
-        };
+    //    for the event's (assignment, student) pair: "N/A" when there is no
+    //    submission, and the field is omitted when the submission's grade is
+    //    NULL (`current_grade_for_event` + `if present?`). Resolved before
+    //    step 4: anonymization nulls `student_id` afterwards, but the grade
+    //    still keys on the original student.
+    let wants_grades = ctx.includes.wants_current_grade();
+    let current_grades: std::collections::HashMap<(i64, i64), Option<String>> = if wants_grades {
+        fetch_current_grades(pool, &rows).await?
+    } else {
+        Default::default()
+    };
+    // uuid -> grade_current to render (`None` = omit the field).
+    let grade_current_by_uuid: std::collections::HashMap<String, Option<String>> = rows
+        .iter()
+        .map(|row| {
+            let grade = match current_grades
+                .get(&(row.assignment_id.unwrap_or(0), row.student_id.unwrap_or(0)))
+            {
+                None => Some("N/A".to_string()),
+                Some(grade) => grade.clone(),
+            };
+            (row.uuid.clone(), grade)
+        })
+        .collect();
 
     // 3. events_visible_to_current_user — course-scoped queries only.
     if let Some(course_id) = ctx.course_id {
@@ -498,16 +515,14 @@ async fn render_events(
     }
 
     // Serialize with optional grade_current.
-    let wants_grades = ctx.includes.wants_current_grade();
     let event_values: Vec<Value> = rows
         .into_iter()
         .map(|row| {
-            let grade_current = wants_grades.then(|| {
-                current_grades
-                    .get(&(row.assignment_id.unwrap_or(0), row.student_id.unwrap_or(0)))
-                    .map(|grade| grade.clone().unwrap_or_else(|| "N/A".to_string()))
-                    .unwrap_or_else(|| "N/A".to_string())
-            });
+            let grade_current = if wants_grades {
+                grade_current_by_uuid.get(&row.uuid).cloned().flatten()
+            } else {
+                None
+            };
             event_json(row, grade_current.as_deref())
         })
         .collect();
