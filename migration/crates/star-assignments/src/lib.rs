@@ -3888,9 +3888,10 @@ async fn append_provisional_grades_include(
     Ok(())
 }
 
-/// Parse `student_ids[]` from a JSON or form-encoded moderation-set body
-/// (Canvas accepts both; same approach as `parse_submission_id_list`).
-fn parse_moderated_student_ids(body: &[u8]) -> Result<Vec<i64>, ApiError> {
+/// Parse an id array (`student_ids[]`, `provisional_grade_ids[]`) from a
+/// JSON or form-encoded body (Canvas accepts both shapes; same approach as
+/// `parse_submission_id_list`). Form values repeat the key or use commas.
+fn parse_body_id_list(body: &[u8], key_name: &str) -> Result<Vec<i64>, ApiError> {
     if body.is_empty() {
         return Ok(Vec::new());
     }
@@ -3899,7 +3900,7 @@ fn parse_moderated_student_ids(body: &[u8]) -> Result<Vec<i64>, ApiError> {
         let Some(object) = json.as_object() else {
             return Ok(Vec::new());
         };
-        if let Some(value) = object.get("student_ids") {
+        if let Some(value) = object.get(key_name) {
             let items: Vec<&serde_json::Value> = match value {
                 serde_json::Value::Array(items) => items.iter().collect(),
                 other => vec![other],
@@ -3917,7 +3918,7 @@ fn parse_moderated_student_ids(body: &[u8]) -> Result<Vec<i64>, ApiError> {
         };
         let key = decode_query_component(raw_key).to_ascii_lowercase();
         let key = key.strip_suffix("[]").unwrap_or(key.as_str()).to_string();
-        if key != "student_ids" {
+        if key != key_name {
             continue;
         }
         for part in decode_query_component(raw_value).split(',') {
@@ -4001,7 +4002,7 @@ async fn moderation_set_create(
         return Err(ApiError::Unauthorized);
     }
 
-    let student_ids = parse_moderated_student_ids(&body)?;
+    let student_ids = parse_body_id_list(&body, "student_ids")?;
     if student_ids.is_empty() {
         // Canvas: render json: [], status: :bad_request
         return Ok((StatusCode::BAD_REQUEST, Json(Vec::<i64>::new())).into_response());
@@ -4259,7 +4260,7 @@ async fn provisional_grades_bulk_select(
         return Err(ApiError::Unauthorized);
     }
 
-    let requested_ids = parse_moderated_student_ids(&body)?;
+    let requested_ids = parse_body_id_list(&body, "provisional_grade_ids")?;
     // Canvas: @assignment.provisional_grades.where(id: ids) — ids from other
     // assignments are simply absent from the map.
     let mut grades: Vec<ProvisionalGradeRow> = Vec::new();

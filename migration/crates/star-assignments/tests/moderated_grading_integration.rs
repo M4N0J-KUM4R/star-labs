@@ -269,6 +269,7 @@ async fn put_json(
 }
 
 /// PUT .../submissions/{userId} with a Canvas submission payload.
+#[allow(clippy::too_many_arguments)]
 async fn grade_provisional(
     server: &TestServer,
     token: &str,
