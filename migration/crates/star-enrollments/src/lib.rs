@@ -1535,7 +1535,10 @@ async fn create_bulk_enrollment(
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let account = load_account(&state.db, account_id).await?;
 
-    let enrollment_type = payload.enrollment_type.as_deref().unwrap_or("StudentEnrollment");
+    let enrollment_type = payload
+        .enrollment_type
+        .as_deref()
+        .unwrap_or("StudentEnrollment");
     if !BULK_ENROLLMENT_TYPES.contains(&enrollment_type) {
         return Err(ApiError::BadRequest("Invalid enrollment type.".into()));
     }
@@ -1546,7 +1549,9 @@ async fn create_bulk_enrollment(
         && !payload.course_ids.is_empty()
         && payload.user_ids.len() * payload.course_ids.len() > 500
     {
-        return Err(ApiError::BadRequest("Too many users to enroll at once.".into()));
+        return Err(ApiError::BadRequest(
+            "Too many users to enroll at once.".into(),
+        ));
     }
 
     // Canvas `api_find(Course, course_id)` per target: unknown course -> 404,

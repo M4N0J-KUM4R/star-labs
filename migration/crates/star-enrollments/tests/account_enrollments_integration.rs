@@ -93,12 +93,7 @@ async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
 
 /// Seed a course hanging under a dedicated account (not the root account), so
 /// sub-account visibility can be exercised.
-async fn seed_course_in_account(
-    pool: &PgPool,
-    prefix: &str,
-    name: &str,
-    account_id: i64,
-) -> i64 {
+async fn seed_course_in_account(pool: &PgPool, prefix: &str, name: &str, account_id: i64) -> i64 {
     sqlx::query_scalar(
         r#"
         INSERT INTO courses (name, course_code, account_id)
@@ -176,10 +171,12 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     .bind(format!("{prefix}%@test.local"))
     .execute(pool)
     .await;
-    let _ = sqlx::query("DELETE FROM account_users WHERE user_id IN (SELECT id FROM users WHERE email LIKE $1)")
-        .bind(format!("{prefix}%@test.local"))
-        .execute(pool)
-        .await;
+    let _ = sqlx::query(
+        "DELETE FROM account_users WHERE user_id IN (SELECT id FROM users WHERE email LIKE $1)",
+    )
+    .bind(format!("{prefix}%@test.local"))
+    .execute(pool)
+    .await;
     let _ = sqlx::query("DELETE FROM users WHERE email LIKE $1")
         .bind(format!("{prefix}%@test.local"))
         .execute(pool)
@@ -470,7 +467,10 @@ async fn bulk_enrollment_creates_enrollments_and_returns_progress() {
         .fetch_one(&pool)
         .await
         .expect("count enrollments");
-        assert_eq!(found.0, 1, "expected exactly one enrollment for ({user}, {course})");
+        assert_eq!(
+            found.0, 1,
+            "expected exactly one enrollment for ({user}, {course})"
+        );
     }
 
     cleanup(&pool, &prefix).await;
@@ -723,14 +723,13 @@ async fn bulk_enrollment_is_idempotent_for_existing_pairs() {
     // The UNIQUE (user_id, course_id, role) constraint makes the second run a
     // no-op rather than an error, matching Canvas's
     // allow_multiple_enrollments handling in Enrollment::BulkUpdate.
-    let found: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM enrollments WHERE user_id = $1 AND course_id = $2",
-    )
-    .bind(student)
-    .bind(course)
-    .fetch_one(&pool)
-    .await
-    .expect("count enrollments");
+    let found: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM enrollments WHERE user_id = $1 AND course_id = $2")
+            .bind(student)
+            .bind(course)
+            .fetch_one(&pool)
+            .await
+            .expect("count enrollments");
     assert_eq!(found.0, 1);
 
     cleanup(&pool, &prefix).await;
@@ -778,10 +777,13 @@ async fn bulk_enrollment_without_token_is_401() {
         return;
     };
 
-    let resp = server.post("/accounts/1/bulk_enrollment").json(&json!({
-        "user_ids": [1],
-        "course_ids": [1]
-    })).await;
+    let resp = server
+        .post("/accounts/1/bulk_enrollment")
+        .json(&json!({
+            "user_ids": [1],
+            "course_ids": [1]
+        }))
+        .await;
     assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
