@@ -92,7 +92,7 @@ jobs:
     needs: preflight
     if: needs.preflight.outputs.available == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -134,7 +134,36 @@ jobs:
           shared-key: nightly-shard-${{ matrix.shard }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run shard ${{ matrix.shard }} against Supabase
-        run: cargo test --locked --no-fail-fast ${{ matrix.crates }} -- --test-threads=2
+        run: |
+          set -uo pipefail
+          log="$(mktemp)"
+          cargo test --locked --no-fail-fast ${{ matrix.crates }} -- --test-threads=2 2>&1 | tee "$log"
+          rc="${PIPESTATUS[0]}"
+          [ "$rc" -eq 0 ] && exit 0
+          # 4 legs peak at ~8-12 pooler clients but transient churn spikes can
+          # still graze the 15-client session-pooler ceiling (measured: ~2% of
+          # tests across the 2026-11-19 validation run, 100% of all failures).
+          # When every failed test looks like infrastructure noise, retry just
+          # those tests once; real failures exit here and fail the shard.
+          if ! names="$(python3 ../tools/ci/nightly_retry.py "$log")"; then
+            echo "::error::shard ${{ matrix.shard }} has real test failures — no retry"
+            exit "$rc"
+          fi
+          if [ -z "$names" ]; then
+            echo "::error::shard ${{ matrix.shard }} failed with no retriable tests (build error?)"
+            exit "$rc"
+          fi
+          # shellcheck disable=SC2086
+          count="$(printf '%s\n' $names | wc -l)"
+          echo "::warning::shard ${{ matrix.shard }}: $count test(s) hit session-pooler saturation; retrying once after 60s"
+          sleep 60
+          # shellcheck disable=SC2086
+          cargo test --locked ${{ matrix.crates }} -- --exact $names --test-threads=2
+
+      - name: Summarize shard
+        if: always()
+        run: |
+          echo "Supabase shard ${{ matrix.shard }}: done." >> "$GITHUB_STEP_SUMMARY"
 
   # ---------------------------------------------------------------------------
   # Fan-in gate: keeps the single `Supabase compatibility` job name (and the
