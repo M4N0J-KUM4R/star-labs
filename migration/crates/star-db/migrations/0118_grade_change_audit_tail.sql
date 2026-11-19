@@ -25,6 +25,10 @@
 --   `muted` had no Star column yet (`anonymous_grading` landed in 0080).
 -- - Canvas `Course#allow_final_grade_override?` is a course column; Star
 --   needs it to reproduce the override visibility rule.
+-- - `events_visible_to_current_user` hides other sections' students from
+--   teachers/TAs whose enrollment carries
+--   `Enrollment#limit_privileges_to_course_section`; the Star `enrollments`
+--   table had no such flag.
 
 ALTER TABLE grade_change_events
     ADD COLUMN IF NOT EXISTS root_account_id BIGINT REFERENCES accounts(id) ON DELETE SET NULL;
@@ -40,3 +44,6 @@ CREATE INDEX IF NOT EXISTS idx_grade_change_events_root_account_grader
 ALTER TABLE assignments ADD COLUMN IF NOT EXISTS muted BOOLEAN NOT NULL DEFAULT FALSE;
 
 ALTER TABLE courses ADD COLUMN IF NOT EXISTS allow_final_grade_override BOOLEAN NOT NULL DEFAULT FALSE;
+
+ALTER TABLE enrollments
+    ADD COLUMN IF NOT EXISTS limit_privileges_to_course_section BOOLEAN NOT NULL DEFAULT FALSE;
