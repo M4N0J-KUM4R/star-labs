@@ -25,7 +25,7 @@ through `course(id)` like the rest of the foundation.
 
 ### Submission (Canvas `app/graphql/types/submission_type.rb` + `interfaces/submission_interface.rb`)
 
-| Canvas field | DB column (`submissions`, 0001 + 0060) | Status |
+| Canvas field | DB column (`submissions` table) | Status |
 |---|---|---|
 | `id` | `id` | exposed |
 | `assignmentId` | `assignment_id` | exposed |
@@ -54,7 +54,7 @@ not the table).
 
 ### DiscussionTopic (Canvas `app/graphql/types/discussion_type.rb`)
 
-| Canvas field | DB column (`discussion_topics`, 0017 + 0105) | Status |
+| Canvas field | DB column (`discussion_topics` table) | Status |
 |---|---|---|
 | `id` | `id` | exposed |
 | `contextId` | `course_id` | exposed (renamed; star-lms topics are course-scoped only) |
@@ -69,7 +69,7 @@ not the table).
 | `author`, `editor`, `anonymousAuthor` | — | **omitted**: no `user_id` column on `discussion_topics` |
 | `anonymousState`, `isAnonymousAuthor` | — | **omitted**: no anonymous columns |
 | `delayedPostAt`, `lockAt`, `editedAt`, `lastReplyAt`, `postedAt`, `todoDate`, `position`, `expanded`, … | — | omitted: no columns |
-| `pinned` (column exists, 0105) | — | not exposed: Canvas's `DiscussionType` has no `pinned` field — REST-only in star-lms, as `specs/p5-gql-mutations.md` §2.3 also notes |
+| `pinned` (column exists) | — | not exposed: Canvas's `DiscussionType` has no `pinned` field — REST-only in star-lms, as `specs/p5-gql-mutations.md` §2.3 also notes |
 | `discussionEntriesConnection`, `entryCounts`, `subscribed`, `permissions`, `author` gates, … | — | omitted: later slices |
 | (type name) | — | Canvas's `graphql_name` is `"Discussion"`; star-lms exposes `"DiscussionTopic"` per the issue's terminology. Field shapes are unaffected — type names never appear in queries |
 
