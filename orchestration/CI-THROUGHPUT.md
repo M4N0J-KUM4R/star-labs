@@ -160,8 +160,10 @@ wins are the docs-only path below and the halved runner usage per lane push.
 | lane push (PR open) | 2 suites per SHA | 1 suite (pull_request only) |
 | main push | unchanged | unchanged (full verification by design) |
 
-The docs-only fast path is exercised by the doc-update commits on this very
-branch: their only changed file is `orchestration/CI-THROUGHPUT.md`, so the
-shard matrix, fmt/clippy, and the shellcheck/cfn-lint installs all skip while
-the three required checks stay green. `main` post-merge numbers to be filled
-in by the coordinator from the Actions API.
+Classification is **PR-cumulative** (`base...head`): a PR that changes Rust
+source anywhere in its diff runs the full suite on every push — conservative
+by design. The docs-only fast path therefore applies to PRs whose entire diff
+is specs/orchestration/docs (the common spec-lane shape), and was validated on
+a dedicated docs-only demo PR (draft, closed after measurement); its measured
+numbers are recorded in PR #145. `main` post-merge numbers to be filled in by
+the coordinator from the Actions API.
