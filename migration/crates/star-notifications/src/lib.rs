@@ -1781,7 +1781,7 @@ const CHANNEL_TYPE_PUSH: &str = "push";
 /// extras (lib/api/v1/communication_channel.rb) — full field set with the
 /// `path_description` → `address` and `path_type` → `type` renames. Push
 /// channels render `address` as the "For All Devices" label.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct CommunicationChannelDetail {
     pub id: i64,
     pub user_id: i64,
@@ -1789,8 +1789,10 @@ pub struct CommunicationChannelDetail {
     pub workflow_state: String,
     pub created_at: Option<DateTime<Utc>>,
     /// Canvas `#path_description`: "For All Devices" for push, else the path.
+    #[sqlx(rename = "path")]
     pub address: String,
     #[serde(rename = "type")]
+    #[sqlx(rename = "path_type")]
     pub channel_type: String,
     pub bounce_count: i32,
     pub last_bounce_at: Option<DateTime<Utc>>,
@@ -1822,14 +1824,29 @@ async fn reset_bounce_count(
     auth: AuthUser,
     Path((raw_user_id, id)): Path<(String, i64)>,
 ) -> Result<Json<CommunicationChannelDetail>, ApiError> {
-    if !is_site_admin(&auth) {
-        return Err(ApiError::Unauthorized);
-    }
+    // Canvas order: api_find(User) → unretired.find(id) → grants_right? —
+    // so 404s for unknown user/channel fire before the 401.
     let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
     user_exists(&state.db, target_user_id).await?;
 
-    // `@user.communication_channels.unretired.find(params[:id])` then
-    // `reset_bounce_count!` (bounce_count = 0 + save), 404 when missing.
+    let exists: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM communication_channels WHERE id = $1 AND user_id = $2 AND workflow_state != 'retired'",
+    )
+    .bind(id)
+    .bind(target_user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // Policy: `given { |user| Account.site_admin.grants_right?(user,
+    // :read_messages) } can :reset_bounce_count` — site admins only.
+    if !is_site_admin(&auth) {
+        return Err(ApiError::Unauthorized);
+    }
+
+    // `reset_bounce_count!` (bounce_count = 0 + save).
     let row: Option<CommunicationChannelDetail> = sqlx::query_as(
         r#"
         UPDATE communication_channels
@@ -2148,6 +2165,24 @@ impl BulkAction {
             BulkAction::Confirm => "cc.created_at",
         }
     }
+
+    /// The `matching_channels` scope with a single-column `cc.id` projection
+    /// for the set-based bulk actions (`query_scalar` needs one column).
+    fn ids_sql(self) -> String {
+        self.select_sql()
+            .replacen(
+                "SELECT cc.user_id, u.name AS user_name, cc.id, cc.path_type, cc.path,
+                       cc.last_bounce_at, cc.last_bounce_summary, NULL::timestamptz AS created_at",
+                "SELECT cc.id",
+                1,
+            )
+            .replacen(
+                "SELECT cc.user_id, u.name AS user_name, cc.id, cc.path_type, cc.path,
+                       cc.last_bounce_at, cc.last_bounce_summary, cc.created_at",
+                "SELECT cc.id",
+                1,
+            )
+    }
 }
 
 /// Parse a timestamp filter; `None` on unparseable input, matching Rails
@@ -2325,12 +2360,14 @@ async fn bulk_confirm_channels(
     let query = ChannelReportQuery::from_pairs(&pairs);
 
     // Set-based update_all over the same matching_channels scope; the report
-    // ORDER BY is irrelevant to the result, so the plain select SQL is reused.
+    // ORDER BY is irrelevant to the result, so only the matching ids are
+    // fetched (`ids_sql` is the same scope with a single-column projection,
+    // because `query_scalar` needs exactly one column).
     let before = parse_filter_time(&query.before)?;
     let after = parse_filter_time(&query.after)?;
     let sql = format!(
         "{}{}",
-        BulkAction::Confirm.select_sql(),
+        BulkAction::Confirm.ids_sql(),
         query.email_validity_clause(),
     );
     let ids: Vec<i64> = sqlx::query_scalar(&sql)

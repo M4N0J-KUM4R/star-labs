@@ -588,7 +588,7 @@ async fn bounced_csv_report_returns_text_csv_with_headers() {
         "CSV report renders: {}",
         resp.text()
     );
-    let content_type = resp.content_type().unwrap_or_default().to_string();
+    let content_type = resp.content_type();
     assert!(
         content_type.starts_with("text/csv"),
         "content-type must be text/csv, got {content_type}"
@@ -793,7 +793,7 @@ async fn unconfirmed_csv_report_matches_json_rows() {
         )
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let content_type = resp.content_type().unwrap_or_default().to_string();
+    let content_type = resp.content_type();
     assert!(
         content_type.starts_with("text/csv"),
         "content-type must be text/csv, got {content_type}"
