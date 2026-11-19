@@ -1414,7 +1414,7 @@ async fn can_read_account_roster(
         .fetch_optional(pool)
         .await
         .map_err(ApiError::from)?;
-    if role.as_deref() == Some("admin") {
+    if role.map(|(r,)| r).as_deref() == Some("admin") {
         return Ok(true);
     }
     let admin: Option<(i32,)> = sqlx::query_as(
