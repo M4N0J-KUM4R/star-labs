@@ -703,6 +703,7 @@ async fn reorder_pinned_topics_course_context() {
         .add_header(axum::http::header::AUTHORIZATION, teacher_header.clone())
         .json(&json!({ "title": format!("{prefix}-Unpinned") }))
         .await;
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
     let unpinned: Value = resp.json();
     let unpinned_id = unpinned["id"].as_i64().expect("topic id");
     let resp = server
@@ -712,13 +713,16 @@ async fn reorder_pinned_topics_course_context() {
     assert_eq!(resp.status_code(), 400);
     assert_eq!(resp.json::<Value>()["message"], "topics not found");
 
-    // A pinned topic of another course is foreign.
+    // A pinned topic of another course is foreign (the teacher belongs to
+    // both courses, so the create itself succeeds there).
     let other_course = seed_course(&pool, &prefix, "ForeignCourse").await;
+    seed_enrollment(&pool, teacher, other_course, "teacher").await;
     let resp = server
         .post(&format!("/courses/{other_course}/discussion_topics"))
         .add_header(axum::http::header::AUTHORIZATION, teacher_header.clone())
         .json(&json!({ "title": format!("{prefix}-Foreign"), "pinned": true }))
         .await;
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
     let foreign: Value = resp.json();
     let foreign_id = foreign["id"].as_i64().expect("topic id");
     let resp = server
