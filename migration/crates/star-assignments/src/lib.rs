@@ -1490,10 +1490,7 @@ async fn list_student_submissions(
     {
         let mut map = HashMap::new();
         for id in &assignment_ids {
-            if let Some(assignment) = load_moderated_assignment(&state.db, course_id, *id)
-                .await
-                .ok()
-            {
+            if let Ok(assignment) = load_moderated_assignment(&state.db, course_id, *id).await {
                 if assignment.moderated_grading {
                     map.insert(*id, assignment);
                 }
@@ -3934,6 +3931,34 @@ fn parse_moderated_student_ids(body: &[u8]) -> Result<Vec<i64>, ApiError> {
     Ok(ids)
 }
 
+/// A user row of the moderation set (Canvas users_json payload in the
+/// snapshot's user shape).
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct ModerationSetUser {
+    id: i64,
+    name: String,
+    sortable_name: Option<String>,
+    email: String,
+    role: String,
+    created_at: DateTime<Utc>,
+}
+
+impl ModerationSetUser {
+    fn to_json(&self) -> serde_json::Value {
+        serde_json::json!({
+            "id": self.id,
+            "name": self.name,
+            "sortable_name": self.sortable_name.clone().unwrap_or_else(|| self.name.clone()),
+            "email": self.email,
+            "role": self.role,
+            "created_at": self.created_at,
+        })
+    }
+}
+
+const MODERATION_SET_USER_SELECT: &str =
+    "SELECT u.id, u.name, u.sortable_name, u.email, u.role, u.created_at FROM users u";
+
 /// GET /courses/{courseId}/assignments/{assignmentId}/moderated_students —
 /// Canvas `ModerationSetController#index`: the students selected for
 /// moderation, ordered by id.
@@ -3947,33 +3972,17 @@ async fn moderation_set_index(
         return Err(ApiError::Unauthorized);
     }
 
-    let rows: Vec<(i64, String, Option<String>, String, String, DateTime<Utc>)> = sqlx::query_as(
-        r#"
-            SELECT u.id, u.name, u.sortable_name, u.email, u.role, u.created_at
-            FROM users u
-            WHERE u.id IN (
-                SELECT student_id FROM moderated_grading_selections WHERE assignment_id = $1
-            )
-            ORDER BY u.id
-            "#,
-    )
+    let rows: Vec<ModerationSetUser> = sqlx::query_as(&format!(
+        "{MODERATION_SET_USER_SELECT} \
+         WHERE u.id IN (
+             SELECT student_id FROM moderated_grading_selections WHERE assignment_id = $1
+         ) ORDER BY u.id"
+    ))
     .bind(assignment_id)
     .fetch_all(&state.db)
     .await?;
 
-    let users = rows
-        .into_iter()
-        .map(|(id, name, sortable_name, email, role, created_at)| {
-            serde_json::json!({
-                "id": id,
-                "name": name,
-                "sortable_name": sortable_name.unwrap_or(name),
-                "email": email,
-                "role": role,
-                "created_at": created_at,
-            })
-        })
-        .collect();
+    let users = rows.iter().map(ModerationSetUser::to_json).collect();
     Ok(Json(users))
 }
 
@@ -4020,31 +4029,14 @@ async fn moderation_set_create(
     .execute(&state.db)
     .await?;
 
-    let rows: Vec<(i64, String, Option<String>, String, String, DateTime<Utc>)> = sqlx::query_as(
-        r#"
-            SELECT u.id, u.name, u.sortable_name, u.email, u.role, u.created_at
-            FROM users u
-            WHERE u.id = ANY($1)
-            ORDER BY u.id
-            "#,
-    )
+    let rows: Vec<ModerationSetUser> = sqlx::query_as(&format!(
+        "{MODERATION_SET_USER_SELECT} WHERE u.id = ANY($1) ORDER BY u.id"
+    ))
     .bind(&visible_requested)
     .fetch_all(&state.db)
     .await?;
 
-    let users: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|(id, name, sortable_name, email, role, created_at)| {
-            serde_json::json!({
-                "id": id,
-                "name": name,
-                "sortable_name": sortable_name.unwrap_or(name),
-                "email": email,
-                "role": role,
-                "created_at": created_at,
-            })
-        })
-        .collect();
+    let users: Vec<serde_json::Value> = rows.iter().map(ModerationSetUser::to_json).collect();
     Ok(Json(users).into_response())
 }
 
@@ -4620,7 +4612,6 @@ struct PublishGrade {
     submission_id: i64,
     scorer_id: i64,
     score: Option<f64>,
-    grade: Option<String>,
     graded_at: Option<DateTime<Utc>>,
 }
 
@@ -4683,7 +4674,7 @@ async fn provisional_grades_publish(
     for (submission_id, user_id) in &rows {
         let pgs: Vec<PublishGrade> = sqlx::query_as(
             r#"
-            SELECT id, submission_id, scorer_id, score::float8, grade, graded_at
+            SELECT id, submission_id, scorer_id, score::float8, graded_at
             FROM provisional_grades WHERE submission_id = $1 ORDER BY id
             "#,
         )

@@ -306,7 +306,7 @@ async fn moderation_routes_require_final_grader_or_select_final_grade() {
     let moderator = seed_user(&pool, &prefix, "Moderator", "teacher").await;
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "Perms");
+    let course = seed_course(&pool, &prefix, "Perms").await;
     seed_enrollment(&pool, moderator, course, "teacher").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
@@ -407,7 +407,7 @@ async fn account_admin_with_membership_can_moderate() {
 
     let admin = seed_user(&pool, &prefix, "Admin", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "AdminCourse");
+    let course = seed_course(&pool, &prefix, "AdminCourse").await;
     sqlx::query("UPDATE courses SET account_id = $1 WHERE id = $2")
         .bind(account)
         .bind(course)
@@ -453,7 +453,7 @@ async fn moderation_set_create_blank_ids_is_400_empty_array() {
     };
 
     let moderator = seed_user(&pool, &prefix, "Moderator", "teacher").await;
-    let course = seed_course(&pool, &prefix, "Blank");
+    let course = seed_course(&pool, &prefix, "Blank").await;
     seed_enrollment(&pool, moderator, course, "teacher").await;
     let assignment = seed_assignment(&pool, course, "Essay", true, Some(moderator), false).await;
 
@@ -484,7 +484,7 @@ async fn moderation_set_lifecycle_is_incremental() {
     let alice = seed_user(&pool, &prefix, "Alice", "student").await;
     let bob = seed_user(&pool, &prefix, "Bob", "student").await;
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
-    let course = seed_course(&pool, &prefix, "Lifecycle");
+    let course = seed_course(&pool, &prefix, "Lifecycle").await;
     seed_enrollment(&pool, moderator, course, "teacher").await;
     seed_enrollment(&pool, alice, course, "student").await;
     seed_enrollment(&pool, bob, course, "student").await;
@@ -554,7 +554,7 @@ async fn non_provisional_grade_on_unpublished_moderated_assignment_is_401() {
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "Reject");
+    let course = seed_course(&pool, &prefix, "Reject").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
     let assignment = seed_assignment(&pool, course, "Essay", true, None, false).await;
@@ -625,7 +625,7 @@ async fn final_flag_silently_downgraded_without_moderation_right() {
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "Downgrade");
+    let course = seed_course(&pool, &prefix, "Downgrade").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
     let assignment = seed_assignment(&pool, course, "Essay", true, None, false).await;
@@ -672,7 +672,7 @@ async fn final_grader_gives_final_grade_after_provisional() {
     let moderator = seed_user(&pool, &prefix, "Moderator", "teacher").await;
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "Final");
+    let course = seed_course(&pool, &prefix, "Final").await;
     seed_enrollment(&pool, moderator, course, "teacher").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
@@ -764,7 +764,7 @@ async fn select_route_shapes_and_moderation_set_gate() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let alice = seed_user(&pool, &prefix, "Alice", "student").await;
     let bob = seed_user(&pool, &prefix, "Bob", "student").await;
-    let course = seed_course(&pool, &prefix, "Select");
+    let course = seed_course(&pool, &prefix, "Select").await;
     seed_enrollment(&pool, moderator, course, "teacher").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, alice, course, "student").await;
@@ -867,7 +867,7 @@ async fn bulk_select_returns_only_changed_selections() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let alice = seed_user(&pool, &prefix, "Alice", "student").await;
     let bob = seed_user(&pool, &prefix, "Bob", "student").await;
-    let course = seed_course(&pool, &prefix, "Bulk");
+    let course = seed_course(&pool, &prefix, "Bulk").await;
     seed_enrollment(&pool, moderator, course, "teacher").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, alice, course, "student").await;
@@ -965,7 +965,7 @@ async fn status_short_circuits_and_401s_for_non_moderators() {
     let moderator = seed_user(&pool, &prefix, "Moderator", "teacher").await;
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "Status");
+    let course = seed_course(&pool, &prefix, "Status").await;
     seed_enrollment(&pool, moderator, course, "teacher").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
@@ -1068,7 +1068,7 @@ async fn status_rejects_non_moderated_and_published_assignments() {
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "Status400");
+    let course = seed_course(&pool, &prefix, "Status400").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
 
@@ -1118,7 +1118,7 @@ async fn anonymous_status_locates_submission_by_anonymous_id() {
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "AnonStatus");
+    let course = seed_course(&pool, &prefix, "AnonStatus").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
     let assignment = seed_assignment(&pool, course, "Essay", true, None, false).await;
@@ -1161,7 +1161,7 @@ async fn publish_uses_selection_and_fallback_and_is_irreversible() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let alice = seed_user(&pool, &prefix, "Alice", "student").await;
     let bob = seed_user(&pool, &prefix, "Bob", "student").await;
-    let course = seed_course(&pool, &prefix, "Publish");
+    let course = seed_course(&pool, &prefix, "Publish").await;
     seed_enrollment(&pool, moderator, course, "teacher").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, alice, course, "student").await;
@@ -1293,7 +1293,7 @@ async fn publish_422_when_no_resolvable_grade() {
     let moderator = seed_user(&pool, &prefix, "Moderator", "teacher").await;
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "Publish422");
+    let course = seed_course(&pool, &prefix, "Publish422").await;
     seed_enrollment(&pool, moderator, course, "teacher").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
@@ -1355,7 +1355,7 @@ async fn show_include_provisional_grades_filters_by_role() {
     let moderator = seed_user(&pool, &prefix, "Moderator", "teacher").await;
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "ShowInc");
+    let course = seed_course(&pool, &prefix, "ShowInc").await;
     seed_enrollment(&pool, moderator, course, "teacher").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
@@ -1436,7 +1436,7 @@ async fn gradeable_students_include_gated_by_permits_moderation() {
     let moderator = seed_user(&pool, &prefix, "Moderator", "teacher").await;
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let alice = seed_user(&pool, &prefix, "Alice", "student").await;
-    let course = seed_course(&pool, &prefix, "GradeableInc");
+    let course = seed_course(&pool, &prefix, "GradeableInc").await;
     seed_enrollment(&pool, moderator, course, "teacher").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, alice, course, "student").await;
@@ -1520,7 +1520,7 @@ async fn anonymity_swaps_student_and_grader_ids() {
     let moderator = seed_user(&pool, &prefix, "Moderator", "teacher").await;
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let alice = seed_user(&pool, &prefix, "Alice", "student").await;
-    let course = seed_course(&pool, &prefix, "Anon");
+    let course = seed_course(&pool, &prefix, "Anon").await;
     seed_enrollment(&pool, moderator, course, "teacher").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, alice, course, "student").await;
@@ -1647,7 +1647,7 @@ async fn for_students_index_includes_provisional_grades() {
 
     let moderator = seed_user(&pool, &prefix, "Moderator", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "IndexInc");
+    let course = seed_course(&pool, &prefix, "IndexInc").await;
     seed_enrollment(&pool, moderator, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
     let assignment = seed_assignment(&pool, course, "Essay", true, Some(moderator), false).await;
