@@ -465,6 +465,16 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/users/{userId}/last_attended",
             put(update_last_attended),
         )
+        // Canvas: GET /api/v1/accounts/:account_id/enrollments/:id (#show).
+        .route(
+            "/accounts/{accountId}/enrollments/{id}",
+            get(show_account_enrollment),
+        )
+        // Canvas: POST /api/v1/accounts/:account_id/bulk_enrollment.
+        .route(
+            "/accounts/{accountId}/bulk_enrollment",
+            post(create_bulk_enrollment),
+        )
 }
 
 // --------------------------------------------------------------------------
@@ -1343,4 +1353,273 @@ async fn update_last_attended(
     .map_err(ApiError::from)?;
 
     Ok(Json(json!({ "date": date })))
+}
+
+// --------------------------------------------------------------------------
+// Canvas: GET /api/v1/accounts/:account_id/enrollments/:id (#show) and
+// POST /api/v1/accounts/:account_id/bulk_enrollment (#bulk_enrollment)
+// --------------------------------------------------------------------------
+
+/// Minimal account row: id plus parent, enough to walk the account chain.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct AccountRef {
+    id: i64,
+    parent_account_id: Option<i64>,
+}
+
+/// Load an account. 404 when it does not exist, matching Canvas
+/// `require_context` raising `ActiveRecord::RecordNotFound`.
+async fn load_account(pool: &PgPool, account_id: i64) -> Result<AccountRef, ApiError> {
+    sqlx::query_as("SELECT id, parent_account_id FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or(ApiError::NotFound)
+}
+
+/// Ids of `account_id` and every ancestor (Canvas `Account#account_chain_ids`).
+///
+/// Cycle-safe through `UNION` de-duplication, mirroring the recursive walks in
+/// star-accounts.
+async fn account_chain_ids(pool: &PgPool, account_id: i64) -> Result<Vec<i64>, ApiError> {
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        r#"
+        WITH RECURSIVE chain AS (
+            SELECT id, parent_account_id FROM accounts WHERE id = $1
+          UNION
+            SELECT a.id, a.parent_account_id
+            FROM accounts a JOIN chain c ON a.id = c.parent_account_id
+        )
+        SELECT id FROM chain
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// Whether the caller can read an account roster (Canvas `:read_roster` on the
+/// context account). Star's approximation: site admins (`users.role`) and
+/// `account_users` admins on the account or any of its ancestors.
+async fn can_read_account_roster(
+    pool: &PgPool,
+    user_id: i64,
+    account_chain: &[i64],
+) -> Result<bool, ApiError> {
+    let role: Option<(String,)> = sqlx::query_as("SELECT role FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(ApiError::from)?;
+    if role.as_deref() == Some("admin") {
+        return Ok(true);
+    }
+    let admin: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM account_users
+        WHERE user_id = $1 AND account_id = ANY($2) AND role = 'admin'
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .bind(account_chain)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(admin.is_some())
+}
+
+/// GET /accounts/{accountId}/enrollments/{id} — Canvas
+/// `EnrollmentsApiController#show`.
+///
+/// Canvas looks the enrollment up through the context account's root
+/// (`all_enrollments`, which includes soft-deleted rows), then renders it when
+/// the caller is the enrolled user or can `:read_roster` on the context. A
+/// sub-account context additionally 404s unless the enrollment's course hangs
+/// under it (`course.account_chain_ids.include?(@context.id)`).
+async fn show_account_enrollment(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((account_id, enrollment_id)): Path<(i64, i64)>,
+) -> Result<Json<EnrollmentJson>, ApiError> {
+    let account = load_account(&state.db, account_id).await?;
+
+    // Canvas `all_enrollments.find(params[:id])`: by primary key, no
+    // workflow_state filter — deleted enrollments are still visible here.
+    let enrollment: EnrollmentJson = sqlx::query_as(
+        r#"
+        SELECT id, user_id, course_id, course_section_id, role, workflow_state,
+               created_at, updated_at, start_at, end_at,
+               last_activity_at, last_attended_at, total_activity_time
+        FROM enrollments WHERE id = $1
+        "#,
+    )
+    .bind(enrollment_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?
+    .ok_or(ApiError::NotFound)?;
+
+    // Canvas: own enrollment renders without any roster right; others need
+    // `:read_roster` on the context account (unauthorized -> 401).
+    if enrollment.user_id != auth.id {
+        let chain = account_chain_ids(&state.db, account.id).await?;
+        if !can_read_account_roster(&state.db, auth.id, &chain).await? {
+            return Err(ApiError::Unauthorized);
+        }
+
+        // Sub-account guard: the enrollment's course must hang under the
+        // context account. The root account passes everything under it.
+        if account.parent_account_id.is_some() {
+            let course_account: Option<(Option<i64>,)> =
+                sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+                    .bind(enrollment.course_id)
+                    .fetch_optional(&state.db)
+                    .await
+                    .map_err(ApiError::from)?;
+            let course_chain = match course_account {
+                Some((Some(ca),)) => account_chain_ids(&state.db, ca).await?,
+                _ => Vec::new(),
+            };
+            if !course_chain.contains(&account.id) {
+                return Err(ApiError::NotFound);
+            }
+        }
+    }
+
+    Ok(Json(enrollment))
+}
+
+/// Body for POST /accounts/{accountId}/bulk_enrollment. Canvas takes
+/// `user_ids[]`, `course_ids[]`, `enrollment_type`, `start_at` and `end_at`
+/// (`enrollment_role_id` custom-role support is omitted with the rest of the
+/// custom-role surface).
+#[derive(Debug, Deserialize)]
+pub struct BulkEnrollmentRequest {
+    #[serde(default)]
+    pub user_ids: Vec<i64>,
+    #[serde(default)]
+    pub course_ids: Vec<i64>,
+    pub enrollment_type: Option<String>,
+    pub start_at: Option<DateTime<Utc>>,
+    pub end_at: Option<DateTime<Utc>>,
+}
+
+/// The enrollment types Canvas validates through `Enrollment.valid_type?`.
+const BULK_ENROLLMENT_TYPES: [&str; 5] = [
+    "StudentEnrollment",
+    "TeacherEnrollment",
+    "TaEnrollment",
+    "ObserverEnrollment",
+    "DesignerEnrollment",
+];
+
+/// POST /accounts/{accountId}/bulk_enrollment — Canvas
+/// `EnrollmentsApiController#bulk_enrollment`.
+///
+/// Canvas validates the enrollment type, rejects user×course products above
+/// 500 with 400 "Too many users to enroll at once.", checks
+/// `can_create_enrollment_for?` on every target course (401 on the first
+/// failure), then enqueues `Enrollment::BulkUpdate` and answers the Progress
+/// JSON. Star has no progresses table, so the enrollments are inserted
+/// synchronously and a completed Progress-shaped body is returned (the same
+/// deviation star-assignments documents for `bulk_update_grades`).
+async fn create_bulk_enrollment(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(account_id): Path<i64>,
+    Json(payload): Json<BulkEnrollmentRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let account = load_account(&state.db, account_id).await?;
+
+    let enrollment_type = payload.enrollment_type.as_deref().unwrap_or("StudentEnrollment");
+    if !BULK_ENROLLMENT_TYPES.contains(&enrollment_type) {
+        return Err(ApiError::BadRequest("Invalid enrollment type.".into()));
+    }
+
+    // Canvas: `user_ids.size * course_ids.size > 500` -> 400 (empty lists
+    // short-circuit the check, matching `!user_ids.empty? && ...`).
+    if !payload.user_ids.is_empty()
+        && !payload.course_ids.is_empty()
+        && payload.user_ids.len() * payload.course_ids.len() > 500
+    {
+        return Err(ApiError::BadRequest("Too many users to enroll at once.".into()));
+    }
+
+    // Canvas `api_find(Course, course_id)` per target: unknown course -> 404,
+    // and `can_create_enrollment_for?` -> 401 for non teachers/admins.
+    let auth_role = get_user_role(&state.db, auth.id)
+        .await?
+        .unwrap_or_else(|| "student".to_string());
+    for course_id in &payload.course_ids {
+        let course: Option<(i64,)> = sqlx::query_as("SELECT id FROM courses WHERE id = $1")
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+        if course.is_none() {
+            return Err(ApiError::NotFound);
+        }
+        if !is_admin(&auth_role)
+            && !is_teacher_in_course(&state.db, auth.id, *course_id, &auth_role).await?
+        {
+            return Err(ApiError::Unauthorized);
+        }
+    }
+
+    // `Enrollment::BulkUpdate` creates one enrollment per (user, course) pair,
+    // keeping existing ones (`allow_multiple_enrollments` + upsert semantics:
+    // the same pair is not created twice, matching the UNIQUE constraint).
+    for course_id in &payload.course_ids {
+        for user_id in &payload.user_ids {
+            sqlx::query(
+                r#"
+                INSERT INTO enrollments
+                    (user_id, course_id, role, workflow_state, start_at, end_at)
+                VALUES ($1, $2, $3, 'active', $4, $5)
+                ON CONFLICT (user_id, course_id, role) DO NOTHING
+                "#,
+            )
+            .bind(user_id)
+            .bind(course_id)
+            .bind(enrollment_role_column(enrollment_type))
+            .bind(payload.start_at)
+            .bind(payload.end_at)
+            .execute(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+        }
+    }
+
+    // Progress-shaped response (synchronous deviation, see doc comment).
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": 0,
+            "context_id": account.id,
+            "context_type": "Account",
+            "user_id": auth.id,
+            "tag": "bulk_enrollment",
+            "completion": 100,
+            "workflow_state": "completed",
+            "created_at": Utc::now(),
+            "updated_at": Utc::now(),
+            "url": format!("/api/v1/accounts/{}/enrollments/bulk_enrollment", account.id),
+        })),
+    ))
+}
+
+/// Map a Canvas enrollment type to the star `enrollments.role` value used by
+/// the rest of the crate (`create_enrollment`'s default is "student").
+fn enrollment_role_column(enrollment_type: &str) -> &'static str {
+    match enrollment_type {
+        "TeacherEnrollment" => "teacher",
+        "TaEnrollment" => "ta",
+        "ObserverEnrollment" => "observer",
+        "DesignerEnrollment" => "designer",
+        _ => "student",
+    }
 }
