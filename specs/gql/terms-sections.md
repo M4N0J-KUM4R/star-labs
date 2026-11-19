@@ -1,5 +1,7 @@
 # GraphQL: terms and sections queries (issue #27)
 
+> Inherits transport rules from specs/gql/CONTRACT.md.
+
 > Area spec for the gql-foundation epic. The issue text references
 > `specs/p5-gql-foundation.md`, which was never merged; this per-area file is
 > the agreed workaround and carries the same contract weight (same approach
@@ -52,9 +54,6 @@ so no cursor pagination is involved.
 
 ## Authorization
 
-- Unauthenticated requests are rejected with HTTP 401 before GraphQL
-  execution (shared `AuthUser` extractor in the router) — unchanged from the
-  foundation slice.
 - `enrollmentTerm(id: ID!): EnrollmentTerm` — any authenticated caller may
   read the term shape; unknown ids resolve to null. **Documented deviation
   from REST**: `GET /api/v1/terms/{id}` is account-admin-only, but Canvas's

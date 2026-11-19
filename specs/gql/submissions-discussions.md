@@ -1,5 +1,7 @@
 # GraphQL: Submission and DiscussionTopic types + connections (issue #48)
 
+> Inherits transport rules from specs/gql/CONTRACT.md.
+
 > Area spec for the gql-foundation epic. The issue text references
 > `specs/p5-gql-foundation.md`, which was never merged; this per-area file is
 > the agreed workaround and carries the same contract weight (same approach as
@@ -91,8 +93,7 @@ ordered by id ascending.
 
 - Both connections are reachable only through `course(id)`, which is null for
   callers without an enrollment (any role) and non-admins — the connections
-  inherit that gate, and unauthenticated requests stay HTTP 401 pre-execution
-  (router `AuthUser` extractor, unchanged).
+  inherit that gate.
 - `Assignment.submissionsConnection` mirrors the `enrollmentsConnection`
   roster rule: admins and course teachers see every submission of the
   assignment; anyone else (enrolled students, TAs) sees only their own. A

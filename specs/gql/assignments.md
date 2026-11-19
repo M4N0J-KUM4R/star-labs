@@ -1,5 +1,7 @@
 # GraphQL: Assignment type + assignmentsConnection (issue #26)
 
+> Inherits transport rules from specs/gql/CONTRACT.md.
+
 > Area spec for the gql-foundation epic. The issue text references
 > `specs/p5-gql-foundation.md`, which was never merged; this per-area file is
 > the agreed workaround and carries the same contract weight.
