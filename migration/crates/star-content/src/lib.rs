@@ -18,9 +18,11 @@
 //! - `/content_migrations/{id}`                          — flat show
 //! - `/content_migrations/migrators`                     — flat migrators
 //!
-//! and the migration_issues routes (`migration_issues.rs`):
-//! - `/courses/{courseId}/content_migrations/{id}/migration_issues`            — list / create
-//! - `/courses/{courseId}/content_migrations/{id}/migration_issues/{issueId}` — update
+//! and the migration_issues routes (`migration_issues.rs`), one Canvas route
+//! block per context (course, account, group, user):
+//! - `/{context}/{contextId}/content_migrations/{id}/migration_issues`            — list / create
+//! - `/{context}/{contextId}/content_migrations/{id}/migration_issues/{issueId}` — show / update
+//! where `{context}` is one of `courses`, `accounts`, `groups`, `users`.
 //!
 //! The sub-crates own all handlers and domain logic; this crate only
 //! provides a single merged `Router<AppState>` for inclusion in `star-http`.
