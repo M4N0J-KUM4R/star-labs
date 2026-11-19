@@ -934,7 +934,7 @@ pub fn router() -> Router<AppState> {
         // Canvas users_controller#clear_cache.
         .route("/users/{id}/clear_cache", post(clear_cache))
         // Canvas users_controller#set_text_editor_preference /
-        // #set_files_ui_version_preference (user preferences, migration 0122).
+        // #set_files_ui_version_preference (user preferences, migration 0123).
         .route(
             "/users/{id}/text_editor_preference",
             put(set_text_editor_preference),
@@ -2588,11 +2588,11 @@ async fn user_has_role(pool: &PgPool, user_id: i64, role: &str) -> Result<bool, 
 
 // --------------------------------------------------------------------------
 // Users controller tail group B: preferences, merge_into, split (#57,
-// migration 0122: user_preferences + user_merges).
+// migration 0123: user_preferences + user_merges).
 // --------------------------------------------------------------------------
 
 /// Canvas `User#set_preference` / `#get_preference` backed by the
-/// `user_preferences` JSONB document (migration 0122). Setting None removes
+/// `user_preferences` JSONB document (migration 0123). Setting None removes
 /// the key so it reads back as null, mirroring Canvas' serialized hash.
 async fn set_user_preference(
     pool: &PgPool,

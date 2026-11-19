@@ -7,7 +7,7 @@
 //! - PUT /users/{id}/merge_into/accounts/{acct}/users/{dest} (cross-account form)
 //! - POST /users/{id}/split                        (split)
 //!
-//! Migration 0122 (user_preferences + user_merges) is exercised end-to-end.
+//! Migration 0123 (user_preferences + user_merges) is exercised end-to-end.
 //!
 //! Conventions (mirrors users_integration.rs):
 //! - Skipped cleanly when DATABASE_URL is not set (prints SKIP and returns).

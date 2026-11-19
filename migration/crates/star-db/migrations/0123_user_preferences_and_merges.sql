@@ -1,4 +1,4 @@
--- Migration 0122: users controller tail — user preferences + user merge ledger (#57).
+-- Migration 0123: users controller tail — user preferences + user merge ledger (#57).
 --
 -- Canvas parity:
 --   - PUT /users/:id/text_editor_preference          (set_text_editor_preference)
