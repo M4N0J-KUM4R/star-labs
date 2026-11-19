@@ -434,7 +434,7 @@ async fn account_admin_with_membership_can_moderate() {
         .json(&json!({ "student_ids": [student] }))
         .await;
     assert_eq!(resp.status_code(), 200, "{}", resp.text());
-    let created = resp.json();
+    let created: Value = resp.json();
     assert_eq!(created.as_array().unwrap().len(), 1, "{created}");
     assert_eq!(created[0]["id"], student);
 
@@ -502,7 +502,7 @@ async fn moderation_set_lifecycle_is_incremental() {
         .json(&json!({ "student_ids": [alice, outsider] }))
         .await;
     assert_eq!(resp.status_code(), 200, "{}", resp.text());
-    let created = resp.json();
+    let created: Value = resp.json();
     assert_eq!(created.as_array().unwrap().len(), 1, "{created}");
     assert_eq!(created[0]["id"], alice);
     assert!(created[0].get("name").is_some(), "user JSON shape");
