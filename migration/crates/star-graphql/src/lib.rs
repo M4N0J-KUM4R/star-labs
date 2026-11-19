@@ -28,7 +28,7 @@
 //! backing resolvers and the documented omissions (fields with no backing
 //! column in star-db).
 
-use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Schema, SimpleObject, ID};
+use async_graphql::{Context, EmptySubscription, MergedObject, Object, Schema, SimpleObject, ID};
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 use axum::{
     extract::State,
@@ -44,6 +44,7 @@ use star_common::{ApiError, AppState};
 mod assignment;
 mod course_user_fields;
 mod discussion_topic;
+mod mutations;
 mod quiz;
 mod submission;
 mod terms_sections;
@@ -615,6 +616,27 @@ impl Query {
 }
 
 // ---------------------------------------------------------------------------
+// Mutation root (issue #29: Batch A — assignment create/update/delete)
+// ---------------------------------------------------------------------------
+
+/// Mutation root for the first batch. Canvas conventions (`base_mutation.rb`):
+/// exactly one `input` argument per mutation, payload carries
+/// `errors: [ValidationErrorType]`, authz failures are top-level execution
+/// errors with Canvas's exact strings. Deletion is `updateAssignment` with
+/// `state: deleted` — Canvas has no `deleteAssignment` mutation and neither
+/// do we (spec §2.1). Batches B–E land with their own issues.
+#[derive(MergedObject, Default)]
+pub struct Mutation(mutations::AssignmentMutations);
+
+impl Mutation {
+    fn new() -> Self {
+        // `AssignmentMutations` is a unit struct; clippy's
+        // default_constructed_unit_structs rejects `::default()` under -D warnings.
+        Mutation(mutations::AssignmentMutations)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Permission helpers (same DB checks as the star-enrollments REST handlers)
 // ---------------------------------------------------------------------------
 
@@ -636,7 +658,7 @@ async fn user_enrolled_in_course(
     Ok(row.is_some())
 }
 
-async fn user_teaches_course(
+pub(crate) async fn user_teaches_course(
     pool: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -784,7 +806,7 @@ async fn graphql_handler(
         Err(e) => return e.into_response(),
     };
 
-    let schema = Schema::build(Query, EmptyMutation, EmptySubscription)
+    let schema = Schema::build(Query, Mutation::new(), EmptySubscription)
         .data(GraphQLContext {
             pool: state.db.clone(),
             auth_user,
