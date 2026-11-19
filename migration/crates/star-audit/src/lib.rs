@@ -27,10 +27,6 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
-/// Raw query pairs (`Query<Vec<(String, String)>>`) so repeated `include[]`
-/// params survive, exactly as Rails parses them.
-type QueryPairs = Query<Vec<(String, String)>>;
-
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -752,7 +748,7 @@ async fn for_course(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     Query(params): Query<AuditQuery>,
-    QueryPairs(raw_query): QueryPairs,
+    Query(raw_query): Query<Vec<(String, String)>>,
     auth: AuthUser,
 ) -> Result<Json<Compound>, ApiError> {
     ensure_course(&state.db, course_id).await?;
@@ -786,7 +782,7 @@ async fn for_course_assignment(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
     Query(params): Query<AuditQuery>,
-    QueryPairs(raw_query): QueryPairs,
+    Query(raw_query): Query<Vec<(String, String)>>,
     auth: AuthUser,
 ) -> Result<Json<Compound>, ApiError> {
     ensure_course(&state.db, course_id).await?;
@@ -830,7 +826,7 @@ async fn for_course_student(
     State(state): State<AppState>,
     Path((course_id, student_id)): Path<(i64, i64)>,
     Query(params): Query<AuditQuery>,
-    QueryPairs(raw_query): QueryPairs,
+    Query(raw_query): Query<Vec<(String, String)>>,
     auth: AuthUser,
 ) -> Result<Json<Compound>, ApiError> {
     ensure_course(&state.db, course_id).await?;
@@ -866,7 +862,7 @@ async fn for_course_grader(
     State(state): State<AppState>,
     Path((course_id, grader_id)): Path<(i64, i64)>,
     Query(params): Query<AuditQuery>,
-    QueryPairs(raw_query): QueryPairs,
+    Query(raw_query): Query<Vec<(String, String)>>,
     auth: AuthUser,
 ) -> Result<Json<Compound>, ApiError> {
     ensure_course(&state.db, course_id).await?;
@@ -902,7 +898,7 @@ async fn for_course_grader(
 async fn advanced_query(
     State(state): State<AppState>,
     Query(params): Query<AdvancedQuery>,
-    QueryPairs(raw_query): QueryPairs,
+    Query(raw_query): Query<Vec<(String, String)>>,
     auth: AuthUser,
 ) -> Result<Json<Compound>, ApiError> {
     let mut filter = EventFilter {
@@ -1003,7 +999,7 @@ async fn for_assignment(
     State(state): State<AppState>,
     Path(assignment_id): Path<i64>,
     Query(params): Query<AuditQuery>,
-    QueryPairs(raw_query): QueryPairs,
+    Query(raw_query): Query<Vec<(String, String)>>,
     auth: AuthUser,
 ) -> Result<Json<Compound>, ApiError> {
     let assignment: Option<(i64,)> =
@@ -1051,7 +1047,7 @@ async fn for_student(
     State(state): State<AppState>,
     Path(student_id): Path<i64>,
     Query(params): Query<AuditQuery>,
-    QueryPairs(raw_query): QueryPairs,
+    Query(raw_query): Query<Vec<(String, String)>>,
     auth: AuthUser,
 ) -> Result<Json<Compound>, ApiError> {
     if !check_view_grade_changes(&state.db, &auth).await? {
@@ -1092,7 +1088,7 @@ async fn for_grader(
     State(state): State<AppState>,
     Path(grader_id): Path<i64>,
     Query(params): Query<AuditQuery>,
-    QueryPairs(raw_query): QueryPairs,
+    Query(raw_query): Query<Vec<(String, String)>>,
     auth: AuthUser,
 ) -> Result<Json<Compound>, ApiError> {
     if !check_view_grade_changes(&state.db, &auth).await? {
@@ -1190,7 +1186,7 @@ async fn for_course_assignment_grader(
     State(state): State<AppState>,
     Path((course_id, assignment_id, grader_id)): Path<(i64, i64, i64)>,
     Query(params): Query<AuditQuery>,
-    QueryPairs(raw_query): QueryPairs,
+    Query(raw_query): Query<Vec<(String, String)>>,
     auth: AuthUser,
 ) -> Result<Json<Compound>, ApiError> {
     let includes = parse_includes(&raw_query);
@@ -1212,7 +1208,7 @@ async fn for_course_assignment_student(
     State(state): State<AppState>,
     Path((course_id, assignment_id, student_id)): Path<(i64, i64, i64)>,
     Query(params): Query<AuditQuery>,
-    QueryPairs(raw_query): QueryPairs,
+    Query(raw_query): Query<Vec<(String, String)>>,
     auth: AuthUser,
 ) -> Result<Json<Compound>, ApiError> {
     let includes = parse_includes(&raw_query);
@@ -1234,7 +1230,7 @@ async fn for_course_grader_student(
     State(state): State<AppState>,
     Path((course_id, grader_id, student_id)): Path<(i64, i64, i64)>,
     Query(params): Query<AuditQuery>,
-    QueryPairs(raw_query): QueryPairs,
+    Query(raw_query): Query<Vec<(String, String)>>,
     auth: AuthUser,
 ) -> Result<Json<Compound>, ApiError> {
     let includes = parse_includes(&raw_query);
@@ -1256,7 +1252,7 @@ async fn for_course_assignment_grader_student(
     State(state): State<AppState>,
     Path((course_id, assignment_id, grader_id, student_id)): Path<(i64, i64, i64, i64)>,
     Query(params): Query<AuditQuery>,
-    QueryPairs(raw_query): QueryPairs,
+    Query(raw_query): Query<Vec<(String, String)>>,
     auth: AuthUser,
 ) -> Result<Json<Compound>, ApiError> {
     let includes = parse_includes(&raw_query);
