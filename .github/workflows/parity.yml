@@ -2,6 +2,7 @@ name: Parity scoreboard
 
 on:
   push:
+    branches: [main]
     paths:
       - 'migration/**'
       - '.github/workflows/parity.yml'
