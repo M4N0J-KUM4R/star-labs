@@ -2359,7 +2359,7 @@ async fn gradeable_students(
         };
 
         // The selection whose selected pg belongs to this submission.
-        let selected: Option<Option<i64>> = sqlx::query_scalar(
+        let selected: Option<i64> = sqlx::query_scalar(
             r#"
             SELECT sel.selected_provisional_grade_id
             FROM moderated_grading_selections sel
@@ -3054,7 +3054,7 @@ async fn grade_submission_provisional(
             upsert_provisional_grade(
                 &state.db,
                 &assignment,
-                auth,
+                &auth,
                 submission_id,
                 wants_final,
                 Some(score_value),
@@ -3067,7 +3067,7 @@ async fn grade_submission_provisional(
             let pg = upsert_provisional_grade(
                 &state.db,
                 &assignment,
-                auth,
+                &auth,
                 submission_id,
                 false,
                 None,
@@ -3202,7 +3202,7 @@ async fn insert_moderation_grader_slot(
         );
         let hash = format!("{:x}", fnv1a_hash(&entropy));
         let candidate: String = hash.chars().take(5).collect();
-        if candidate.len() == 5 && candidate.is_ascii_alphanumeric() {
+        if candidate.len() == 5 && candidate.chars().all(char::is_ascii_alphanumeric) {
             let inserted = sqlx::query(
                 r#"
                 INSERT INTO moderation_graders (assignment_id, user_id, anonymous_id, slot_taken)
@@ -4368,7 +4368,7 @@ async fn provisional_grades_bulk_select(
         .await?;
 
         changed_submission_ids.push(submission_id);
-        let submission = submissions_by_id[&submission_id];
+        let submission = submissions_by_id[&submission_id].clone();
         json.push(selection_json(
             assignment_id,
             student_id,
@@ -4412,7 +4412,7 @@ fn parse_query_value(raw_query: Option<&str>, key: &str) -> Option<String> {
 /// status — Canvas `ProvisionalGradesBaseController#status` (the two
 /// controllers differ only in how the submission is located).
 async fn provisional_grades_status_common(
-    state: State<AppState>,
+    state: AppState,
     course_id: i64,
     assignment_id: i64,
     student_ref: StudentRef,
@@ -4493,7 +4493,7 @@ async fn provisional_grades_status_common(
         return Err(ApiError::Unauthorized);
     }
 
-    let selection: Option<Option<i64>> = sqlx::query_scalar(
+    let selection: Option<i64> = sqlx::query_scalar(
         r#"
         SELECT selected_provisional_grade_id
         FROM moderated_grading_selections
@@ -4692,7 +4692,7 @@ async fn provisional_grades_publish(
         .await?;
 
         // A selection row pointing at one of this submission's grades wins.
-        let selected_id: Option<Option<i64>> = sqlx::query_scalar(
+        let selected_id: Option<i64> = sqlx::query_scalar(
             r#"
             SELECT selected_provisional_grade_id
             FROM moderated_grading_selections
