@@ -3240,7 +3240,10 @@ async fn split_user(
     // Canvas: active (not deleted/failed) AND splitable (< 180 days old).
     let merge: Option<SplitCandidate> = sqlx::query_as(
         r#"
-            SELECT id, from_user_id, from_name, from_email, from_sortable_name, from_password_hash
+            SELECT id, from_user_id,
+                   from_name AS name, from_email AS email,
+                   from_sortable_name AS sortable_name,
+                   from_password_hash AS password_hash
             FROM user_merges
             WHERE user_id = $1
               AND workflow_state = 'active'
