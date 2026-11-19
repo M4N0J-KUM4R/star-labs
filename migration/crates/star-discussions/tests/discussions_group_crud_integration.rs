@@ -685,9 +685,9 @@ async fn reorder_pinned_topics_course_context() {
     assert_eq!(resp.json::<Value>()["message"], "order parameter required");
 
     for query in [
-        format!("order=999999"),
+        "order=999999".to_string(),
         format!("order={alpha}&order[]={alpha}"),
-        format!("order=abc"),
+        "order=abc".to_string(),
     ] {
         let resp = server
             .post(&format!("{base}/reorder?{query}"))
