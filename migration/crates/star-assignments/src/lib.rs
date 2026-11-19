@@ -2883,19 +2883,17 @@ async fn load_moderated_assignment(
     .fetch_optional(pool)
     .await?;
 
-    let Some(
-        (
-            id,
-            final_grader_id,
-            moderated_grading,
-            grades_published_at,
-            grader_count,
-            grader_names_visible_to_final_grader,
-            grader_comments_visible_to_graders,
-            graders_anonymous_to_graders,
-            anonymous_grading,
-        ),
-    ) = row
+    let Some((
+        id,
+        final_grader_id,
+        moderated_grading,
+        grades_published_at,
+        grader_count,
+        grader_names_visible_to_final_grader,
+        grader_comments_visible_to_graders,
+        graders_anonymous_to_graders,
+        anonymous_grading,
+    )) = row
     else {
         return Err(ApiError::NotFound);
     };
@@ -3095,11 +3093,12 @@ async fn grader_ids_to_anonymous_ids(
     pool: &PgPool,
     assignment_id: i64,
 ) -> Result<HashMap<i64, String>, ApiError> {
-    let rows: Vec<(i64, String)> =
-        sqlx::query_as("SELECT user_id, anonymous_id FROM moderation_graders WHERE assignment_id = $1")
-            .bind(assignment_id)
-            .fetch_all(pool)
-            .await?;
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT user_id, anonymous_id FROM moderation_graders WHERE assignment_id = $1",
+    )
+    .bind(assignment_id)
+    .fetch_all(pool)
+    .await?;
     Ok(rows.into_iter().collect())
 }
 
@@ -3190,8 +3189,7 @@ fn provisional_grade_json(
     if can_view_grader_identities {
         json["scorer_id"] = serde_json::json!(pg.scorer_id);
     } else {
-        json["anonymous_grader_id"] =
-            serde_json::json!(grader_anonymous_ids.get(&pg.scorer_id));
+        json["anonymous_grader_id"] = serde_json::json!(grader_anonymous_ids.get(&pg.scorer_id));
     }
 
     json
@@ -3219,17 +3217,14 @@ async fn submission_provisional_grades_json(
     .fetch_all(pool)
     .await?;
 
-    let is_moderator =
-        permits_moderation(pool, assignment, current_user_id).await?;
+    let is_moderator = permits_moderation(pool, assignment, current_user_id).await?;
     if is_moderator {
         // sort_by { |pg| pg.final ? CanvasSort::Last : pg.created_at }:
         // created_at ascending with the final grade moved to the end.
-        rows.sort_by(|a, b| {
-            match (a.final_grade, b.final_grade) {
-                (true, false) => std::cmp::Ordering::Greater,
-                (false, true) => std::cmp::Ordering::Less,
-                _ => a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)),
-            }
+        rows.sort_by(|a, b| match (a.final_grade, b.final_grade) {
+            (true, false) => std::cmp::Ordering::Greater,
+            (false, true) => std::cmp::Ordering::Less,
+            _ => a.created_at.cmp(&b.created_at).then(a.id.cmp(&b.id)),
         });
     } else {
         rows.retain(|pg| pg.scorer_id == current_user_id);
@@ -3334,9 +3329,8 @@ async fn moderation_set_index(
         return Err(ApiError::Unauthorized);
     }
 
-    let rows: Vec<(i64, String, Option<String>, String, String, DateTime<Utc>)> =
-        sqlx::query_as(
-            r#"
+    let rows: Vec<(i64, String, Option<String>, String, String, DateTime<Utc>)> = sqlx::query_as(
+        r#"
             SELECT u.id, u.name, u.sortable_name, u.email, u.role, u.created_at
             FROM users u
             WHERE u.id IN (
@@ -3344,10 +3338,10 @@ async fn moderation_set_index(
             )
             ORDER BY u.id
             "#,
-        )
-        .bind(assignment_id)
-        .fetch_all(&state.db)
-        .await?;
+    )
+    .bind(assignment_id)
+    .fetch_all(&state.db)
+    .await?;
 
     let users = rows
         .into_iter()
@@ -3408,18 +3402,17 @@ async fn moderation_set_create(
     .execute(&state.db)
     .await?;
 
-    let rows: Vec<(i64, String, Option<String>, String, String, DateTime<Utc>)> =
-        sqlx::query_as(
-            r#"
+    let rows: Vec<(i64, String, Option<String>, String, String, DateTime<Utc>)> = sqlx::query_as(
+        r#"
             SELECT u.id, u.name, u.sortable_name, u.email, u.role, u.created_at
             FROM users u
             WHERE u.id = ANY($1)
             ORDER BY u.id
             "#,
-        )
-        .bind(&visible_requested)
-        .fetch_all(&state.db)
-        .await?;
+    )
+    .bind(&visible_requested)
+    .fetch_all(&state.db)
+    .await?;
 
     let users: Vec<serde_json::Value> = rows
         .into_iter()
