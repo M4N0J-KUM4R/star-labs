@@ -479,10 +479,10 @@ async fn render_events(
                 .get(&(row.assignment_id.unwrap_or(0), row.student_id.unwrap_or(0)))
             {
                 // No submission row: Canvas renders "N/A".
-                None => Some("N/A".to_string()),
+                None | Some(None) => Some("N/A".to_string()),
                 // Submission exists but ungraded: Canvas omits the field.
-                Some(None) => None,
-                Some(Some(grade)) => Some(grade.clone()),
+                Some(Some(None)) => None,
+                Some(Some(Some(grade))) => Some(grade.clone()),
             };
             (row.uuid.clone(), grade)
         })
