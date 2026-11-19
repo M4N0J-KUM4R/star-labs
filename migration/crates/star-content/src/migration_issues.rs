@@ -6,6 +6,7 @@
 //! - POST /courses/{courseId}/content_migrations/{id}/migration_issues
 //! - GET  /courses/{courseId}/content_migrations/{id}/migration_issues/{issueId}
 //! - PUT  /courses/{courseId}/content_migrations/{id}/migration_issues/{issueId}
+//!
 //! and the same four actions under /accounts/{accountId},
 //! /groups/{groupId} and /users/{userId} (16 routes total).
 //!

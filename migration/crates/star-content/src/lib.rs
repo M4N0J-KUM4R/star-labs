@@ -22,6 +22,7 @@
 //! block per context (course, account, group, user):
 //! - `/{context}/{contextId}/content_migrations/{id}/migration_issues`            — list / create
 //! - `/{context}/{contextId}/content_migrations/{id}/migration_issues/{issueId}` — show / update
+//!
 //! where `{context}` is one of `courses`, `accounts`, `groups`, `users`.
 //!
 //! The sub-crates own all handlers and domain logic; this crate only
