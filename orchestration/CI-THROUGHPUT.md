@@ -171,3 +171,88 @@ skipped, migration hygiene still ran), `shell-and-lab-constraints` 4 s
 `rust-changes: false` → "no Rust-source changes in this PR — suite skipped by
 design". `main` post-merge numbers to be filled in by the coordinator from
 the Actions API.
+
+# CI throughput — wave 5 (issue #149)
+
+## Baseline (measured from the Actions API + job log, 2026-11-19)
+
+Nightly compatibility run #11 (2026-11-18, `main`, warm cache): **1 h 14 m 59 s**
+end to end.
+
+| Job | Wall time | Notes |
+|---|---:|---|
+| `Supabase compatibility` | 74.9 min | 74.35 min inside the single `cargo test --workspace --exclude star-http` step |
+| `Coverage (llvm-cov)` | 11.6 min | parallel lane, not the bottleneck |
+
+Root cause: the 41-crate suite ran as **one serial cargo invocation**. Cargo
+executes test binaries one at a time, each capped at `--test-threads=2` over the
+remote Supabase session pooler. Per-binary wall times parsed from the job log
+(timestamps between consecutive `Running` lines):
+
+| Crate | Minutes | Crate | Minutes |
+|---|---:|---|---:|
+| star-assignments | 8.58 | star-learning-dates | 1.66 |
+| star-accounts | 4.84 | star-rubrics | 1.52 |
+| star-courses | 4.59 | star-groups | 1.47 |
+| star-quizzes | 4.56 | star-permissions | 1.46 |
+| star-discussions | 4.48 | star-dashboard | 1.37 |
+| star-enrollments | 4.15 | star-lti | 1.27 |
+| star-modules | 3.03 | star-outcomes | 1.05 |
+| star-notifications | 2.48 | 17 more crates | 0.06–0.68 each |
+
+Summed: ~64.5 min of per-binary wall time across 34 DB-backed crates (the other
+7 are ~0-cost smoke suites), plus binary startup/migration overhead and link.
+
+## Changes
+
+1. **Sharded the Supabase suite 4 ways.** Matrix legs balanced by the measured
+   per-crate times above (LPT packing): 16.07/16.09/16.32/16.07 min of tests
+   per leg. Each leg keeps `--locked --no-fail-fast -- --test-threads=2`;
+   `fail-fast: false` so a failing leg does not cancel the nightly signal.
+2. **Preflight job** gates the matrix: secret check, the psql connectivity probe
+   (apt/`postgresql-client` installed once instead of once per shard), and the
+   shard-map coverage guard — `tools/ci/shard_coverage.py` is now parameterized
+   (`--workflow`, `--exclude`) and asserts the nightly map covers all 41 crates
+   exactly once with `star-http` intentionally outside it.
+3. **Fan-in gate** keeps the `Supabase compatibility` job name (and step
+   summary) the pre-shard workflow exposed.
+4. **Per-shard cache keys** (`shared-key: nightly-shard-N`, `save-if: main`)
+   following the wave-3 cache discipline. The first run after merge pays a cold
+   compile per leg (~3–5 min); steady state restores each leg's own artifacts.
+
+## The binding constraint: the session pooler's 15-client ceiling
+
+The first attempt shipped **8 legs** (7.9–8.6 min of tests each, projected
+~12 min wall clock). The validation dispatch on this branch failed all 8 legs
+with 505 of 508 test failures reporting:
+
+    (EMAXCONNSESSION) max clients reached in session mode -
+    max clients are limited to pool_size: 15
+
+Zero failures were data races — the per-run-prefix isolation held perfectly
+under full concurrency; the suite simply exceeded the Supabase session
+pooler's hard client ceiling (8 legs x ~2-3 clients at `--test-threads=2`,
+one sqlx pool per test with churn between tests).
+
+Consequences for the design:
+
+- **4 legs x ~2-3 clients = 8-12 peak** against the 15-client ceiling — the
+  widest safe matrix at the current pooler limit.
+- The ceiling is documented in the workflow header; widening the matrix
+  requires raising the Supabase pooler limit (dashboard) or moving
+  `SUPABASE_DATABASE_URL` to the transaction pooler (port 6543, much higher
+  client ceiling) — the latter needs re-validating `sqlx migrate` advisory
+  locks under transaction pooling first.
+- If the pooler limit is raised to ~60: an 8-leg map (7.9–8.6 min/leg) brings
+  the workflow to ~12 min, at which point the coverage lane (11.6 min) becomes
+  the floor.
+
+## After (measured)
+
+Workflow-dispatch run on this lane (4 legs, cold cache on the first attempt;
+`save-if: main` means steady-state numbers arrive after the first merge to
+main):
+
+| Workflow | Wall time | Notes |
+|---|---:|---|
+| Nightly compatibility | _recorded from the dispatch run before merge_ | 4 shard legs ∥ coverage (11.6 min) |
