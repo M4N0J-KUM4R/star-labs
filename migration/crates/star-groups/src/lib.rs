@@ -700,7 +700,15 @@ pub fn router() -> Router<AppState> {
         .route("/group_categories/{id}", put(update_group_category))
         .route("/group_categories/{id}", patch(update_group_category))
         .route("/group_categories/{id}", delete(delete_group_category))
-        .route("/group_categories/{id}/groups", get(list_category_groups))
+        // GET (group_categories#groups, canvas config/routes.rb:2595) and
+        // POST (groups#create, canvas config/routes.rb:2129) share one Canvas
+        // path. They must share one axum registration too: identical path
+        // string so the disjoint methods merge — a different param name here
+        // (e.g. {groupCategoryId}) panics the router at startup.
+        .route(
+            "/group_categories/{id}/groups",
+            get(list_category_groups).post(create_group_in_category),
+        )
         // Canvas group categories in an account context (accounts/group_categories)
         .route(
             "/accounts/{accountId}/group_categories",
@@ -726,11 +734,6 @@ pub fn router() -> Router<AppState> {
         .route("/groups/{groupId}/files", post(create_group_file))
         // G4: preview html
         .route("/groups/{groupId}/preview_html", post(preview_html))
-        // G5: create group inside category
-        .route(
-            "/group_categories/{groupCategoryId}/groups",
-            post(create_group_in_category),
-        )
         // G6/G7: activity stream
         .route("/groups/{groupId}/activity_stream", get(activity_stream))
         .route(
@@ -2297,7 +2300,9 @@ async fn preview_html(
     })))
 }
 
-// POST /group_categories/{groupCategoryId}/groups — create a group inside a category
+// POST /group_categories/{id}/groups — create a group inside a category
+// (Canvas groups#create, config/routes.rb:2129). Registered on the same path
+// as the GET list handler; see the router note above.
 async fn create_group_in_category(
     State(state): State<AppState>,
     Path(category_id): Path<i64>,

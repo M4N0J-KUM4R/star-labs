@@ -454,6 +454,56 @@ async fn delete_group_category_soft_deletes_it_and_protects_builtin_roles() {
     cleanup(&pool, &prefix).await;
 }
 
+// POST /group_categories/{id}/groups (Canvas groups#create, config/routes.rb:2129)
+// shares its path with GET (group_categories#groups, config/routes.rb:2595).
+// Regression: registering the POST under a differently named param
+// ({groupCategoryId} vs {id}) panicked the router at startup.
+#[tokio::test]
+async fn create_group_in_category_shares_path_with_list_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let category = seed_category(&pool, course, "Study Groups", Some("student")).await;
+
+    // Teacher creates a group inside the category (Canvas 201).
+    let resp = server
+        .post(&format!("/group_categories/{category}/groups"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "name": "Blue Team" }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["name"], "Blue Team");
+    assert_eq!(body["group_category_id"].as_i64(), Some(category));
+    assert_eq!(body["course_id"].as_i64(), Some(course));
+    let group_id = body["id"].as_i64().expect("group id");
+
+    // Creating groups in a category requires manage permissions.
+    let resp = server
+        .post(&format!("/group_categories/{category}/groups"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "name": "Nope" }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // GET on the same path still lists the category's groups.
+    let resp = server
+        .get(&format!("/group_categories/{category}/groups"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let groups: Value = resp.json();
+    let groups = groups.as_array().expect("groups array");
+    assert!(groups.iter().any(|g| g["id"].as_i64() == Some(group_id)));
+
+    cleanup(&pool, &prefix).await;
+}
+
 // ---------------------------------------------------------------------------
 // Canvas group users / invitations / files — GET/POST/DELETE /groups/{groupId}/users,
 // POST /groups/{groupId}/invite, GET /groups/{groupId}/files,
@@ -917,8 +967,15 @@ async fn export_tags_forbidden_for_student() {
 // POST /groups/{groupId}/preview_html — auth check
 // ---------------------------------------------------------------------------
 
+// Canvas groups#preview_html (config/routes.rb:2128) is guarded by
+// `authorized_action(@group, @current_user, :read)` (groups_controller.rb,
+// preview_html action). Canvas's own API specs show a teacher of the group's
+// course — without being a group member — succeeding
+// (spec/apis/v1/groups_api_spec.rb, "/preview_html" → "sanitizes html and
+// process links"), while a user with no enrollment and no membership is
+// forbidden (same spec, "requires permission to preview" → 403).
 #[tokio::test]
-async fn preview_html_forbidden_for_non_member() {
+async fn preview_html_allows_course_teacher_but_forbids_unaffiliated_user() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -928,9 +985,8 @@ async fn preview_html_forbidden_for_non_member() {
     let course = seed_course(&pool, &prefix, "Course").await;
     seed_teacher(&pool, teacher, course).await;
     let group = seed_group(&pool, course, &format!("{prefix}-PreviewGroup")).await;
-    // Teacher is enrolled as teacher but not a group member.
-    // Student is NOT enrolled in course at all — also not a group member.
-    // Both should get 403.
+    // Teacher is enrolled as teacher but not a group member: Canvas still
+    // grants group :read through the course context, so preview succeeds.
     let resp = server
         .post(&format!("/groups/{group}/preview_html"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
@@ -938,8 +994,27 @@ async fn preview_html_forbidden_for_non_member() {
         .await;
     assert_eq!(
         resp.status_code(),
+        200,
+        "course teacher should get 200: {}",
+        resp.text()
+    );
+    let body: Value = resp.json();
+    assert_eq!(
+        body.get("html").and_then(|v| v.as_str()),
+        Some("<p>test</p>")
+    );
+
+    // Student is not enrolled in the course and not a group member: 403,
+    // like Canvas's "requires permission to preview" spec.
+    let resp = server
+        .post(&format!("/groups/{group}/preview_html"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "html": "<p>test</p>" }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
         403,
-        "teacher non-member should get 403: {}",
+        "unaffiliated user should get 403: {}",
         resp.text()
     );
 
