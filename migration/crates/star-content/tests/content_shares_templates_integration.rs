@@ -268,6 +268,8 @@ async fn a_content_share_is_created_for_the_sender_and_the_receivers() {
         .as_array()
         .expect("receivers")
         .is_empty());
+    // The receiver has its own share row.
+    let received_id = list[0]["id"].as_i64().expect("received share id");
 
     // The unread count of the receiver.
     let resp = server
@@ -279,7 +281,7 @@ async fn a_content_share_is_created_for_the_sender_and_the_receivers() {
 
     // Marking the share read lowers the count.
     let resp = server
-        .put(&format!("/users/{receiver}/content_shares/{share_id}"))
+        .put(&format!("/users/{receiver}/content_shares/{received_id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(receiver, "student"))
         .json(&json!({ "read_state": "read" }))
         .await;
@@ -429,9 +431,20 @@ async fn the_block_editor_templates_need_the_account_features() {
     assert_eq!(template["editor_version"], "0.2");
     let template_id = template["id"].as_i64().expect("template id");
 
-    // The index lists it.
+    // The index lists the active templates; a new one is unpublished and is
+    // only listed for a template editor that asks for the drafts.
     let resp = server
         .get(&format!("/courses/{course}/block_editor_templates"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let list: Value = resp.json();
+    assert_eq!(list.as_array().map(|items| items.len()), Some(0));
+
+    let resp = server
+        .get(&format!(
+            "/courses/{course}/block_editor_templates?drafts=true"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());

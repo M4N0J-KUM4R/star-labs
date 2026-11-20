@@ -467,6 +467,22 @@ async fn an_epub_export_is_created_with_a_progress() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
 
+    // Canvas `EpubExportsController#check_feature_enabled`: the root account
+    // has to allow the epub export feature.
+    let root_account: i64 = sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read the root account");
+    sqlx::query(
+        "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state)          VALUES ('Account', $1, 'epub_export', 'epub_export', 'enabled')          ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
+    )
+    .bind(root_account)
+    .execute(&pool)
+    .await
+    .expect("enable the epub export feature");
+
     // A student may not create an export.
     let resp = server
         .post(&format!("/courses/{course}/epub_exports"))

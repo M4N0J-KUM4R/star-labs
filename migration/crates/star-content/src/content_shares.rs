@@ -850,13 +850,13 @@ mod tests {
             Some("module".to_string())
         );
 
-        // A module item wins over a module.
+        // Canvas checks "module" before "module_item".
         let settings = json!({
             "selected_content": { "context_modules": ["2"], "content_tags": ["3"] }
         });
         assert_eq!(
             content_type_from_export_settings(&settings),
-            Some("module_item".to_string())
+            Some("module".to_string())
         );
 
         // Without a selection there is no content type.
