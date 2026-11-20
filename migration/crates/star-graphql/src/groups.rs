@@ -229,8 +229,7 @@ impl Group {
         } else if !gctx.is_admin() {
             return Ok(None);
         }
-        let conn =
-            fetch_membership_page(&gctx.pool, self.id, first, after.as_deref()).await?;
+        let conn = fetch_membership_page(&gctx.pool, self.id, first, after.as_deref()).await?;
         Ok(Some(conn))
     }
 
@@ -273,10 +272,7 @@ impl GroupMembership {
     }
 
     /// Canvas `GroupMembership.user` (group_membership_type.rb:36).
-    async fn user(
-        &self,
-        ctx: &Context<'_>,
-    ) -> Result<Option<crate::User>, async_graphql::Error> {
+    async fn user(&self, ctx: &Context<'_>) -> Result<Option<crate::User>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         crate::fetch_user(&gctx.pool, self.user_id).await
     }
@@ -640,10 +636,7 @@ pub(crate) async fn fetch_group_set_page(
 }
 
 /// Fetch a single group by id, deleted groups excluded.
-async fn fetch_group(
-    pool: &PgPool,
-    group_id: i64,
-) -> Result<Option<Group>, async_graphql::Error> {
+async fn fetch_group(pool: &PgPool, group_id: i64) -> Result<Option<Group>, async_graphql::Error> {
     let row: Option<GroupRow> = sqlx::query_as(
         r#"
         SELECT id, course_id, group_category_id, name, workflow_state, created_at, updated_at

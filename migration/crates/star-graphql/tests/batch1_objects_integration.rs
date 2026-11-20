@@ -367,7 +367,11 @@ async fn folders_files_and_root_folder_query() {
     .await;
 
     let node = &body["data"]["course"]["foldersConnection"]["edges"][0]["node"];
-    assert_eq!(node["name"], json!(format!("{prefix}-docs")), "body: {body}");
+    assert_eq!(
+        node["name"],
+        json!(format!("{prefix}-docs")),
+        "body: {body}"
+    );
     assert_eq!(node["rootFolder"], json!(true));
     assert_eq!(node["filesCount"], json!(1));
     let file = &node["files"][0];
@@ -450,11 +454,18 @@ async fn groups_group_sets_and_members() {
     .await;
 
     let set_node = &body["data"]["course"]["groupSetsConnection"]["edges"][0]["node"];
-    assert_eq!(set_node["name"], json!(format!("{prefix}-set")), "body: {body}");
+    assert_eq!(
+        set_node["name"],
+        json!(format!("{prefix}-set")),
+        "body: {body}"
+    );
     assert_eq!(set_node["memberLimit"], json!(4));
     assert_eq!(set_node["selfSignup"], json!("enabled"));
     assert_eq!(set_node["autoLeader"], json!("random"));
-    assert_eq!(set_node["groups"][0]["name"], json!(format!("{prefix}-team")));
+    assert_eq!(
+        set_node["groups"][0]["name"],
+        json!(format!("{prefix}-team"))
+    );
     assert_eq!(set_node["groups"][0]["membersCount"], json!(1));
 
     let group_node = &body["data"]["course"]["groupsConnection"]["edges"][0]["node"];

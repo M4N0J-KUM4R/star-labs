@@ -209,10 +209,7 @@ impl ModuleItem {
     }
 
     /// Canvas `ModuleItem.module` (module_item_type.rb:56).
-    async fn module(
-        &self,
-        ctx: &Context<'_>,
-    ) -> Result<Option<Module>, async_graphql::Error> {
+    async fn module(&self, ctx: &Context<'_>) -> Result<Option<Module>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         fetch_module(&gctx.pool, self.module_id).await
     }

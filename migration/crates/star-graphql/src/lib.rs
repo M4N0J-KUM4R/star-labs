@@ -769,10 +769,9 @@ impl Query {
         id: ID,
     ) -> Result<Option<modules::ModuleItem>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
-        let item_id: i64 = id
-            .0
-            .parse()
-            .map_err(|_| async_graphql::Error::new("invalid module item id"))?;
+        let item_id: i64 =
+            id.0.parse()
+                .map_err(|_| async_graphql::Error::new("invalid module item id"))?;
         modules::fetch_module_item(&gctx.pool, gctx.auth_user.id, gctx.is_admin(), item_id).await
     }
 
@@ -785,10 +784,9 @@ impl Query {
         id: ID,
     ) -> Result<Option<files::Folder>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
-        let folder_id: i64 = id
-            .0
-            .parse()
-            .map_err(|_| async_graphql::Error::new("invalid folder id"))?;
+        let folder_id: i64 =
+            id.0.parse()
+                .map_err(|_| async_graphql::Error::new("invalid folder id"))?;
         files::fetch_folder_authorized(&gctx.pool, gctx.auth_user.id, gctx.is_admin(), folder_id)
             .await
     }
@@ -805,10 +803,9 @@ impl Query {
         id: ID,
     ) -> Result<Option<pages::Progress>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
-        let progress_id: i64 = id
-            .0
-            .parse()
-            .map_err(|_| async_graphql::Error::new("invalid progress id"))?;
+        let progress_id: i64 =
+            id.0.parse()
+                .map_err(|_| async_graphql::Error::new("invalid progress id"))?;
         let progress = pages::fetch_progress(&gctx.pool, progress_id).await?;
         match progress {
             Some(p) if gctx.is_admin() || p.owner_is(gctx.auth_user.id) => Ok(Some(p)),

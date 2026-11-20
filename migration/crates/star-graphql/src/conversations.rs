@@ -124,8 +124,7 @@ impl Conversation {
         if !caller_participates(&gctx.pool, gctx.auth_user.id, self.id).await? {
             return Ok(None);
         }
-        let conn =
-            fetch_message_page(&gctx.pool, self.id, first, after.as_deref()).await?;
+        let conn = fetch_message_page(&gctx.pool, self.id, first, after.as_deref()).await?;
         Ok(Some(conn))
     }
 
@@ -134,13 +133,12 @@ impl Conversation {
         ctx: &Context<'_>,
     ) -> Result<i64, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
-        let (count,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = $1",
-        )
-        .bind(self.id)
-        .fetch_one(&gctx.pool)
-        .await
-        .map_err(db_err)?;
+        let (count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM conversation_messages WHERE conversation_id = $1")
+                .bind(self.id)
+                .fetch_one(&gctx.pool)
+                .await
+                .map_err(db_err)?;
         Ok(count)
     }
 
@@ -156,8 +154,7 @@ impl Conversation {
         if !caller_participates(&gctx.pool, gctx.auth_user.id, self.id).await? {
             return Ok(None);
         }
-        let conn =
-            fetch_participant_page(&gctx.pool, self.id, first, after.as_deref()).await?;
+        let conn = fetch_participant_page(&gctx.pool, self.id, first, after.as_deref()).await?;
         Ok(Some(conn))
     }
 
@@ -203,10 +200,7 @@ impl ConversationMessage {
 
     /// Canvas `ConversationMessage.author`
     /// (conversation_message_type.rb:31).
-    async fn author(
-        &self,
-        ctx: &Context<'_>,
-    ) -> Result<Option<crate::User>, async_graphql::Error> {
+    async fn author(&self, ctx: &Context<'_>) -> Result<Option<crate::User>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         crate::fetch_user(&gctx.pool, self.author_id).await
     }
@@ -245,10 +239,7 @@ impl ConversationParticipant {
 
     /// Canvas `ConversationParticipant.user`
     /// (conversation_participant_type.rb:33).
-    async fn user(
-        &self,
-        ctx: &Context<'_>,
-    ) -> Result<Option<crate::User>, async_graphql::Error> {
+    async fn user(&self, ctx: &Context<'_>) -> Result<Option<crate::User>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         crate::fetch_user(&gctx.pool, self.user_id).await
     }
