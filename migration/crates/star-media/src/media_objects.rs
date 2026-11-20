@@ -82,6 +82,7 @@ pub struct MediaObjectRow {
     pub title: Option<String>,
     pub user_entered_title: Option<String>,
     pub user_id: i64,
+    pub workflow_state: String,
     pub context_type: Option<String>,
     pub context_id: Option<i64>,
     pub old_media_id: Option<String>,
@@ -597,7 +598,7 @@ async fn find_context(db: &PgPool, context_code: &str) -> Result<Option<MediaCon
 // ---------------------------------------------------------------------------
 
 const MEDIA_OBJECT_COLUMNS: &str = r#"
-    id, media_id, media_type, title, user_entered_title, user_id,
+    id, media_id, media_type, title, user_entered_title, user_id, workflow_state,
     context_type, context_id, old_media_id, attachment_id,
     viewer_restrictions, auto_caption_status, created_at, updated_at
 "#;

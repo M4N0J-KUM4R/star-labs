@@ -26,7 +26,7 @@ use sqlx::PgPool;
 use star_common::AppState;
 
 /// The DDL of the two tables the page views routes need.
-const PAGE_VIEWS_DDL: [&str; 8] = [
+const PAGE_VIEWS_DDL: [&str; 7] = [
     r#"
     CREATE TABLE IF NOT EXISTS page_views (
         request_id           TEXT PRIMARY KEY,
