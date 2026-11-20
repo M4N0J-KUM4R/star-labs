@@ -589,14 +589,26 @@ async fn the_query_routes_validate_their_parameters() {
         "Parameter start_date is missing."
     );
 
-    // A malformed request is a 400.
+    // An unknown format is a 400 (the months are valid here).
+    let resp = server
+        .post(&format!("/users/{user}/page_views/query"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .json(&json!({
+            "start_date": "2024-12-01",
+            "end_date": "2025-01-01",
+            "results_format": "xml",
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+
+    // A month interval that is not a full month is a 400 as well.
     let resp = server
         .post(&format!("/users/{user}/page_views/query"))
         .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
         .json(&json!({
             "start_date": "2024-12-01",
             "end_date": "2025-01-10",
-            "results_format": "xml",
+            "results_format": "csv",
         }))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());

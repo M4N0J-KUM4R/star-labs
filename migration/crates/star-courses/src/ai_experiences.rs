@@ -1141,9 +1141,9 @@ async fn update_experience(
     }
 
     if let Some(new_state) = fields.workflow_state.clone().flatten() {
-        let errors = validate_workflow_state_change(&state.db, &row, &new_state).await?;
-        if !errors.is_empty() {
-            return Ok(validation_errors(errors));
+        let state_errors = validate_workflow_state_change(&state.db, &row, &new_state).await;
+        if !state_errors.is_empty() {
+            return Ok(validation_errors(state_errors));
         }
     }
 

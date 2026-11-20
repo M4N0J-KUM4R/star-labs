@@ -471,11 +471,7 @@ async fn site_admin_account_id(pool: &PgPool) -> Result<i64, ApiError> {
 }
 
 /// Canvas `Account#feature_enabled?`.
-async fn feature_enabled(
-    pool: &PgPool,
-    account_id: i64,
-    feature: &str,
-) -> Result<bool, ApiError> {
+async fn feature_enabled(pool: &PgPool, account_id: i64, feature: &str) -> Result<bool, ApiError> {
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT state FROM feature_flags \
          WHERE context_type = 'Account' AND context_id = $1 AND feature = $2 LIMIT 1",
@@ -508,11 +504,7 @@ async fn account_context(pool: &PgPool, account_id: i64) -> Result<Ctx, ApiError
 
 /// Canvas `require_manage_lti_registrations` — `403` without the account
 /// admin right.
-async fn require_manage(
-    pool: &PgPool,
-    auth: &AuthUser,
-    account_id: i64,
-) -> Result<(), ApiError> {
+async fn require_manage(pool: &PgPool, auth: &AuthUser, account_id: i64) -> Result<(), ApiError> {
     if can_manage_account(pool, auth, account_id).await? {
         Ok(())
     } else {
@@ -692,7 +684,11 @@ async fn user_summary(pool: &PgPool, user_id: Option<i64>) -> Result<Option<Valu
 }
 
 /// Canvas `lti_registration_account_binding_json` shape.
-fn binding_json(binding: &BindingRow, created_by: Option<Value>, updated_by: Option<Value>) -> Value {
+fn binding_json(
+    binding: &BindingRow,
+    created_by: Option<Value>,
+    updated_by: Option<Value>,
+) -> Value {
     let mut json = json!({
         "id": binding.id,
         "account_id": binding.account_id,
@@ -889,7 +885,10 @@ fn apply_overlay(config: &Value, overlay: &Value) -> Value {
         }
     }
     if !launch_settings.is_empty() {
-        result_map.insert("launch_settings".to_string(), Value::Object(launch_settings));
+        result_map.insert(
+            "launch_settings".to_string(),
+            Value::Object(launch_settings),
+        );
     }
 
     // disabled_scopes takes precedence over scopes.
@@ -901,7 +900,10 @@ fn apply_overlay(config: &Value, overlay: &Value) -> Value {
 
     // The per-placement overlay wins over the base placement.
     if let Some(placements_overlay) = overlay_map.get("placements").and_then(Value::as_object) {
-        if let Some(placements) = result_map.get_mut("placements").and_then(Value::as_array_mut) {
+        if let Some(placements) = result_map
+            .get_mut("placements")
+            .and_then(Value::as_array_mut)
+        {
             for placement in placements.iter_mut() {
                 let Some(placement_map) = placement.as_object_mut() else {
                     continue;
@@ -921,8 +923,14 @@ fn apply_overlay(config: &Value, overlay: &Value) -> Value {
     }
 
     // disabled_placements takes precedence over placements.
-    if let Some(disabled) = overlay_map.get("disabled_placements").and_then(Value::as_array) {
-        if let Some(placements) = result_map.get_mut("placements").and_then(Value::as_array_mut) {
+    if let Some(disabled) = overlay_map
+        .get("disabled_placements")
+        .and_then(Value::as_array)
+    {
+        if let Some(placements) = result_map
+            .get_mut("placements")
+            .and_then(Value::as_array_mut)
+        {
             for placement in placements.iter_mut() {
                 let Some(placement_map) = placement.as_object_mut() else {
                     continue;
@@ -1004,7 +1012,9 @@ fn required_error(pointer: &str, missing: &str) -> String {
 
 /// JSONSchemer's message for a type mismatch.
 fn type_error(pointer: &str, actual: &str, expected: &str) -> String {
-    format!("The property '{pointer}' of type {actual} did not match the following type: {expected}.")
+    format!(
+        "The property '{pointer}' of type {actual} did not match the following type: {expected}."
+    )
 }
 
 /// The JSON type name of a value, as JSONSchemer reports it.
@@ -1042,7 +1052,12 @@ fn lti_configuration_errors(config: &Value) -> Vec<String> {
         return errors;
     };
 
-    for required in ["title", "description", "target_link_uri", "oidc_initiation_url"] {
+    for required in [
+        "title",
+        "description",
+        "target_link_uri",
+        "oidc_initiation_url",
+    ] {
         if !map.contains_key(required) {
             errors.push(required_error("#/", required));
         }
@@ -1069,7 +1084,13 @@ fn lti_configuration_errors(config: &Value) -> Vec<String> {
     }
     if let Some(value) = map.get("scopes") {
         if check_type(&mut errors, "#/scopes", value, &["array"]) {
-            for (index, item) in value.as_array().unwrap_or_default().iter().enumerate() {
+            for (index, item) in value
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+            {
                 check_type(&mut errors, &format!("#/scopes/{index}"), item, &["string"]);
             }
         }
@@ -1088,7 +1109,13 @@ fn validate_extensions(errors: &mut Vec<String>, extensions: &Value) {
         return;
     }
 
-    for (index, extension) in extensions.as_array().unwrap_or_default().iter().enumerate() {
+    for (index, extension) in extensions
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+    {
         let pointer = format!("#/extensions/{index}");
         let Some(extension) = extension.as_object() else {
             errors.push(type_error(&pointer, json_type(extension), "object"));
@@ -1168,27 +1195,44 @@ fn internal_configuration_errors(config: &Value) -> Vec<String> {
     }
     if let Some(value) = map.get("redirect_uris") {
         if check_type(&mut errors, "#/redirect_uris", value, &["array"]) {
-            let items = value.as_array().unwrap_or_default();
+            let items = value.as_array().map(Vec::as_slice).unwrap_or_default();
             if items.is_empty() {
                 errors.push(
                     "The property '#/redirect_uris' did not have a minimum of 1 items.".to_string(),
                 );
             }
             for (index, item) in items.iter().enumerate() {
-                check_type(&mut errors, &format!("#/redirect_uris/{index}"), item, &["string"]);
+                check_type(
+                    &mut errors,
+                    &format!("#/redirect_uris/{index}"),
+                    item,
+                    &["string"],
+                );
             }
         }
     }
     if let Some(value) = map.get("scopes") {
         if check_type(&mut errors, "#/scopes", value, &["array"]) {
-            for (index, item) in value.as_array().unwrap_or_default().iter().enumerate() {
+            for (index, item) in value
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+            {
                 check_type(&mut errors, &format!("#/scopes/{index}"), item, &["string"]);
             }
         }
     }
     if let Some(value) = map.get("placements") {
         if check_type(&mut errors, "#/placements", value, &["array"]) {
-            for (index, placement) in value.as_array().unwrap_or_default().iter().enumerate() {
+            for (index, placement) in value
+                .as_array()
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+            {
                 let pointer = format!("#/placements/{index}");
                 let Some(placement) = placement.as_object() else {
                     errors.push(type_error(&pointer, json_type(placement), "object"));
@@ -1201,12 +1245,16 @@ fn internal_configuration_errors(config: &Value) -> Vec<String> {
         }
     }
     if let Some(value) = map.get("launch_settings") {
-        if !check_type(&mut errors, "#/launch_settings", value, &["object"]) {
-            continue;
-        }
-        let settings = value.as_object().unwrap();
-        if let Some(icon_url) = settings.get("icon_url") {
-            check_type(&mut errors, "#/launch_settings/icon_url", icon_url, &["string"]);
+        if check_type(&mut errors, "#/launch_settings", value, &["object"]) {
+            let settings = value.as_object().unwrap();
+            if let Some(icon_url) = settings.get("icon_url") {
+                check_type(
+                    &mut errors,
+                    "#/launch_settings/icon_url",
+                    icon_url,
+                    &["string"],
+                );
+            }
         }
     }
 
@@ -1241,8 +1289,19 @@ fn overlay_errors(overlay: &Value) -> Vec<String> {
     for property in ["disabled_scopes", "disabled_placements"] {
         if let Some(value) = map.get(property) {
             if check_type(&mut errors, &format!("#/{property}"), value, &["array"]) {
-                for (index, item) in value.as_array().unwrap_or_default().iter().enumerate() {
-                    check_type(&mut errors, &format!("#/{property}/{index}"), item, &["string"]);
+                for (index, item) in value
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_default()
+                    .iter()
+                    .enumerate()
+                {
+                    check_type(
+                        &mut errors,
+                        &format!("#/{property}/{index}"),
+                        item,
+                        &["string"],
+                    );
                 }
             }
         }
@@ -1256,7 +1315,12 @@ fn overlay_errors(overlay: &Value) -> Vec<String> {
                 }
                 for property in ["text", "target_link_uri", "icon_url"] {
                     if let Some(value) = placement.as_object().unwrap().get(property) {
-                        check_type(&mut errors, &format!("{pointer}/{property}"), value, &["string"]);
+                        check_type(
+                            &mut errors,
+                            &format!("{pointer}/{property}"),
+                            value,
+                            &["string"],
+                        );
                     }
                 }
             }
@@ -1269,9 +1333,10 @@ fn overlay_errors(overlay: &Value) -> Vec<String> {
 /// Canvas `Schemas::InternalLtiConfiguration.from_lti_configuration(config)`.
 fn from_lti_configuration(config: &Value) -> Value {
     let mut result = config.clone();
-    let Some(map) = result.as_object_mut() else {
+    if !result.is_object() {
         return result;
-    };
+    }
+    let map = result.as_object_mut().expect("checked above");
 
     let extensions = map
         .remove("extensions")
@@ -1320,7 +1385,10 @@ fn from_lti_configuration(config: &Value) -> Value {
     for (key, value) in canvas_map {
         map.insert(key, value);
     }
-    map.insert("launch_settings".to_string(), Value::Object(launch_settings));
+    map.insert(
+        "launch_settings".to_string(),
+        Value::Object(launch_settings),
+    );
     map.insert("placements".to_string(), placements);
 
     result
@@ -1418,7 +1486,7 @@ pub async fn validate_configuration(
         // has no HTTP client dependency, so the URL branch cannot be served.
         None => {
             return Ok(configuration_errors(vec![
-                "invalid configuration url".to_string(),
+                "invalid configuration url".to_string()
             ]))
         }
     };
@@ -1468,8 +1536,12 @@ pub async fn check_domain_duplicates(
     }
     let normalized = domain.trim().to_lowercase();
 
-    let templates_enabled =
-        feature_enabled(&state.db, ctx.root_account_id, "lti_registrations_templates").await?;
+    let templates_enabled = feature_enabled(
+        &state.db,
+        ctx.root_account_id,
+        "lti_registrations_templates",
+    )
+    .await?;
 
     let mut duplicates: Vec<Value> = Vec::new();
 
@@ -1530,9 +1602,7 @@ pub async fn check_domain_duplicates(
             inherited
                 .into_iter()
                 .filter(|entry| {
-                    !forced_on_ids.contains(
-                        &entry.get("id").and_then(Value::as_i64).unwrap_or(-1),
-                    )
+                    !forced_on_ids.contains(&entry.get("id").and_then(Value::as_i64).unwrap_or(-1))
                 })
                 .collect::<Vec<Value>>(),
         );
@@ -1641,7 +1711,12 @@ pub async fn context_search(
         }
     }
 
-    let search_term = params.search_term.as_deref().unwrap_or("").trim().to_string();
+    let search_term = params
+        .search_term
+        .as_deref()
+        .unwrap_or("")
+        .trim()
+        .to_string();
     let search_term_int = search_term.parse::<i64>().ok().filter(|id| *id > 0);
 
     // The accounts.
@@ -1659,7 +1734,8 @@ pub async fn context_search(
     .await?;
 
     // The courses.
-    let course_rows: Vec<(i64, String, String, i64)> = if let Some(children_of) = &only_children_of {
+    let course_rows: Vec<(i64, String, String, i64)> = if let Some(children_of) = &only_children_of
+    {
         let children_of_id = children_of.parse::<i64>().unwrap_or(0);
         sqlx::query_as(
             "SELECT id, name, course_code, account_id FROM courses \
@@ -1854,7 +1930,10 @@ pub async fn history(
     }
 
     let page = params.page.unwrap_or(1).max(1);
-    let per_page = params.per_page.unwrap_or(DEFAULT_PER_PAGE).clamp(1, MAX_PER_PAGE);
+    let per_page = params
+        .per_page
+        .unwrap_or(DEFAULT_PER_PAGE)
+        .clamp(1, MAX_PER_PAGE);
     let offset = (page - 1) * per_page;
 
     if !table_exists(&state.db, "lti_registration_history_entries").await? {
@@ -1957,7 +2036,8 @@ pub async fn show_by_client_id(
 
     // The registration must be active and owned by the context or the site
     // admin.
-    if !(registration.account_id == ctx.account_id || registration.account_id == ctx.site_admin_id) {
+    if !(registration.account_id == ctx.account_id || registration.account_id == ctx.site_admin_id)
+    {
         return Ok(errors_string(
             StatusCode::NOT_FOUND,
             "LTI registration not found",
@@ -2239,10 +2319,12 @@ pub async fn apply_update_request(
         let target = find_active_registration(&state.db, request.lti_registration_id).await?;
         apply_registration_update_request(&state.db, &target, &request, payload.overlay).await?;
     } else {
-        sqlx::query("UPDATE lti_registration_update_requests SET rejected_at = now() WHERE id = $1")
-            .bind(request.id)
-            .execute(&state.db)
-            .await?;
+        sqlx::query(
+            "UPDATE lti_registration_update_requests SET rejected_at = now() WHERE id = $1",
+        )
+        .bind(request.id)
+        .execute(&state.db)
+        .await?;
     }
 
     let registration = find_active_registration(&state.db, registration.id).await?;
@@ -2414,7 +2496,12 @@ async fn apply_registration_update_request(
         .bind(developer_key_id)
         .bind(client_name.as_ref().and_then(Value::as_str))
         .bind(logo_uri.as_ref().and_then(Value::as_str))
-        .bind(scopes_value.split(',').map(str::to_string).collect::<Vec<String>>())
+        .bind(
+            scopes_value
+                .split(',')
+                .map(str::to_string)
+                .collect::<Vec<String>>(),
+        )
         .execute(pool)
         .await?;
     }
@@ -2479,7 +2566,9 @@ pub async fn update_registration(
     }
     if let Some(overlay) = payload.overlay.as_ref() {
         if !overlay.is_object() {
-            return Ok(configuration_errors(vec!["overlay must be an object".to_string()]));
+            return Ok(configuration_errors(vec![
+                "overlay must be an object".to_string()
+            ]));
         }
     }
 
@@ -2491,7 +2580,10 @@ pub async fn update_registration(
         }
     });
 
-    if let Some(configuration) = configuration_params.as_ref() {
+    // Canvas validates the raw parameters: a configuration carrying the
+    // `extensions` array is checked against the LTI configuration schema,
+    // everything else against the internal configuration schema.
+    if let Some(configuration) = payload.configuration.as_ref() {
         let errors = if configuration.get("extensions").is_some() {
             lti_configuration_errors(configuration)
         } else {
@@ -2560,25 +2652,33 @@ pub async fn update_registration(
     // The workflow state resolution.
     let (binding_state, registration_state) =
         match resolve_workflow_state(payload.workflow_state.as_deref()) {
-            Some(states) => states,
+            Some((binding, registration)) => (binding.to_string(), registration.to_string()),
             None => (
-                registration.workflow_state.as_str(),
-                registration.workflow_state.as_str(),
+                registration.workflow_state.clone(),
+                registration.workflow_state.clone(),
             ),
         };
 
-    let name = payload.name.clone().unwrap_or_else(|| registration.name.clone());
+    let name = payload
+        .name
+        .clone()
+        .unwrap_or_else(|| registration.name.clone());
     let admin_nickname = payload
         .admin_nickname
         .clone()
         .or_else(|| registration.admin_nickname.clone());
-    let vendor = payload.vendor.clone().or_else(|| registration.vendor.clone());
+    let vendor = payload
+        .vendor
+        .clone()
+        .or_else(|| registration.vendor.clone());
     let description = payload
         .description
         .clone()
         .or_else(|| registration.description.clone());
     let lock_deploying = if lock_deploying_permitted {
-        payload.lock_deploying.unwrap_or(registration.lock_deploying)
+        payload
+            .lock_deploying
+            .unwrap_or(registration.lock_deploying)
     } else {
         registration.lock_deploying
     };
@@ -2595,7 +2695,7 @@ pub async fn update_registration(
     .bind(admin_nickname.as_deref())
     .bind(vendor.as_deref())
     .bind(description.as_deref())
-    .bind(registration_state)
+    .bind(registration_state.as_str())
     .bind(&new_configuration)
     .bind(&new_overlay)
     .bind(lock_deploying)
@@ -2605,7 +2705,14 @@ pub async fn update_registration(
 
     // The account binding follows the workflow state.
     if payload.workflow_state.is_some() {
-        upsert_binding(&state.db, &registration, &ctx, binding_state, auth.id).await?;
+        upsert_binding(
+            &state.db,
+            &registration,
+            &ctx,
+            binding_state.as_str(),
+            auth.id,
+        )
+        .await?;
     }
 
     let registration = find_active_registration(&state.db, registration.id).await?;
@@ -2773,7 +2880,8 @@ pub async fn bind(
         ));
     }
 
-    match install_template_registration(&state.db, &ctx, &registration, workflow_state, auth.id).await
+    match install_template_registration(&state.db, &ctx, &registration, workflow_state, auth.id)
+        .await
     {
         Ok((_local_copy, binding)) => {
             let created_by = user_summary(&state.db, binding.created_by_id).await?;
@@ -2795,7 +2903,13 @@ pub async fn unbind(
     let ctx = account_context(&state.db, account_id).await?;
 
     // require_lti_deactivate_registrations_flag
-    if !feature_enabled(&state.db, ctx.root_account_id, "lti_deactivate_registrations").await? {
+    if !feature_enabled(
+        &state.db,
+        ctx.root_account_id,
+        "lti_deactivate_registrations",
+    )
+    .await?
+    {
         return Ok(not_found_render_error());
     }
 
@@ -2934,8 +3048,7 @@ async fn install_template_registration(
         Ok(Some(local_copy)) => local_copy,
         Ok(None) => {
             // The local copy starts from the overlaid template configuration.
-            let configuration =
-                apply_overlay(&template.configuration, &overlay_data(template));
+            let configuration = apply_overlay(&template.configuration, &overlay_data(template));
 
             let sql = format!(
                 "INSERT INTO lti_registrations \
@@ -3053,11 +3166,10 @@ async fn deploy_registration(
         return Ok(());
     }
 
-    let context_name: Option<(String,)> =
-        sqlx::query_as("SELECT name FROM accounts WHERE id = $1")
-            .bind(ctx.account_id)
-            .fetch_optional(pool)
-            .await?;
+    let context_name: Option<(String,)> = sqlx::query_as("SELECT name FROM accounts WHERE id = $1")
+        .bind(ctx.account_id)
+        .fetch_optional(pool)
+        .await?;
     let deployment_id = format!("{}:{}", ctx.account_id, uuid::Uuid::new_v4());
 
     sqlx::query(
