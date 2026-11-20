@@ -200,8 +200,6 @@ struct RegistrationRow {
 /// A row of `lti_registration_account_bindings`.
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct BindingRow {
-    id: i64,
-    registration_id: i64,
     account_id: i64,
     root_account_id: Option<i64>,
     workflow_state: String,
@@ -219,7 +217,6 @@ struct ImsRow {
     developer_key_id: Option<i64>,
     registration_url: Option<String>,
     unified_tool_id: Option<String>,
-    lti_registration_id: Option<i64>,
 }
 
 /// A row of `lti_registration_update_requests`.
@@ -1500,13 +1497,13 @@ pub async fn validate_configuration(
 
     // Canvas adds the redirect URIs so the UI can display them.
     {
-        let map = configuration.as_object_mut().unwrap();
+        let map = configuration.as_object_mut().expect("checked above");
         let target_link_uri = map.get("target_link_uri").cloned().unwrap_or(Value::Null);
-        match map.get("redirect_uris") {
+        let redirect_uris = map.get("redirect_uris").cloned();
+        match redirect_uris {
             Some(Value::Array(_)) => {}
             Some(Value::String(value)) => {
-                let single = value.clone();
-                map.insert("redirect_uris".to_string(), json!([single]));
+                map.insert("redirect_uris".to_string(), json!([value]));
             }
             _ => {
                 map.insert("redirect_uris".to_string(), json!([target_link_uri]));
@@ -2318,6 +2315,25 @@ pub async fn apply_update_request(
     if accepted {
         let target = find_active_registration(&state.db, request.lti_registration_id).await?;
         apply_registration_update_request(&state.db, &target, &request, payload.overlay).await?;
+
+        // Canvas writes a history entry for the applied update request.
+        if table_exists(&state.db, "lti_registration_history_entries").await? {
+            sqlx::query(
+                "INSERT INTO lti_registration_history_entries \
+                 (root_account_id, lti_registration_id, created_by_id, diff, update_type, comment) \
+                 VALUES ($1, $2, $3, $4, 'update', $5)",
+            )
+            .bind(ctx.root_account_id)
+            .bind(request.lti_registration_id)
+            .bind(auth.id)
+            .bind(json!({
+                "update_request_id": request.id,
+                "overlay": payload.overlay,
+            }))
+            .bind(payload.comment.as_deref())
+            .execute(&state.db)
+            .await?;
+        }
     } else {
         sqlx::query(
             "UPDATE lti_registration_update_requests SET rejected_at = now() WHERE id = $1",
@@ -2473,16 +2489,21 @@ async fn apply_registration_update_request(
 
     // The developer key follows the new configuration.
     if let Some(developer_key_id) = ims.developer_key_id {
-        let scopes_value = scopes
+        let scopes_value: Vec<String> = scopes
             .as_ref()
             .map(|value| match value {
                 Value::Array(items) => items
                     .iter()
                     .filter_map(Value::as_str)
-                    .collect::<Vec<&str>>()
-                    .join(","),
-                Value::String(value) => value.clone(),
-                _ => String::new(),
+                    .map(str::to_string)
+                    .collect(),
+                Value::String(value) => value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|scope| !scope.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+                _ => Vec::new(),
             })
             .unwrap_or_default();
         sqlx::query(
@@ -2496,12 +2517,7 @@ async fn apply_registration_update_request(
         .bind(developer_key_id)
         .bind(client_name.as_ref().and_then(Value::as_str))
         .bind(logo_uri.as_ref().and_then(Value::as_str))
-        .bind(
-            scopes_value
-                .split(',')
-                .map(str::to_string)
-                .collect::<Vec<String>>(),
-        )
+        .bind(scopes_value)
         .execute(pool)
         .await?;
     }
@@ -2702,6 +2718,36 @@ pub async fn update_registration(
     .bind(auth.id)
     .execute(&state.db)
     .await?;
+
+    // Canvas writes a history entry for the change
+    // (`Lti::RegistrationHistoryEntry.create!`).
+    if table_exists(&state.db, "lti_registration_history_entries").await? {
+        let diff = json!({
+            "workflow_state": {
+                "old": registration.workflow_state,
+                "new": registration_state,
+            },
+            "configuration": {
+                "old": registration.configuration,
+                "new": new_configuration,
+            },
+        });
+        sqlx::query(
+            "INSERT INTO lti_registration_history_entries \
+             (root_account_id, lti_registration_id, created_by_id, diff, update_type, comment, \
+              old_configuration, new_configuration) \
+             VALUES ($1, $2, $3, $4, 'update', $5, $6, $7)",
+        )
+        .bind(ctx.root_account_id)
+        .bind(registration.id)
+        .bind(auth.id)
+        .bind(diff)
+        .bind(payload.comment.as_deref())
+        .bind(&registration.configuration)
+        .bind(&new_configuration)
+        .execute(&state.db)
+        .await?;
+    }
 
     // The account binding follows the workflow state.
     if payload.workflow_state.is_some() {
