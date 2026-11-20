@@ -63,7 +63,7 @@ test.describe('quiz-taking journey (#109)', () => {
 
     // Results: MC + TF auto-graded (20/30), essay pending review.
     await expect(page).toHaveURL(
-      new RegExp(`/courses/${COURSE_ID}/quizzes/${QUIZ_ID}/submissions/\d+$`),
+      new RegExp(`/courses/${COURSE_ID}/quizzes/${QUIZ_ID}/submissions/\\d+$`),
     );
     await expect(page.locator('#score_summary')).toContainText(
       'Score for this attempt: 20 / 30',
@@ -87,7 +87,7 @@ test.describe('quiz-taking journey (#109)', () => {
     // Teacher can open the student's results.
     await row.locator('a.submission-link').click();
     await expect(page).toHaveURL(
-      new RegExp(`/courses/${COURSE_ID}/quizzes/${QUIZ_ID}/submissions/\d+$`),
+      new RegExp(`/courses/${COURSE_ID}/quizzes/${QUIZ_ID}/submissions/\\d+$`),
     );
     await expect(page.locator('#score_summary')).toContainText(
       'Score for this attempt: 20 / 30',

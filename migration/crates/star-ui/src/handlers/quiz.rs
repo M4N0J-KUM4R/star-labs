@@ -32,8 +32,11 @@ use sqlx::PgPool;
 use star_common::{ApiError, AppState};
 
 use crate::handlers::error::from_api_error;
-use crate::session::{check_csrf, ensure_csrf_cookie, SessionUser};
-use crate::{assets, env::JsEnv, queries};
+use crate::handlers::course_context::{
+    course_breadcrumb, course_context, course_env, ensure_csrf,
+};
+use crate::session::{check_csrf, SessionUser};
+use crate::assets;
 
 // ---------------------------------------------------------------------------
 // View models
@@ -608,79 +611,6 @@ fn decode_answers(
 // Shared shell plumbing
 // ---------------------------------------------------------------------------
 
-/// Build the AuthUser view of a session user for the domain-crate loaders.
-fn auth_of(user: &SessionUser) -> star_auth::AuthUser {
-    star_auth::AuthUser {
-        id: user.id,
-        role: user.role.clone(),
-    }
-}
-
-/// Common course-page context (gates + tabs + ENV + CSRF), shared by every
-/// quiz handler. `Err` carries the error-page response.
-struct CourseContext {
-    course_name: String,
-    course_id: i64,
-    user_name: String,
-    tabs: Vec<star_courses::CourseTab>,
-    env: JsEnv,
-    csrf_token: String,
-    jar: CookieJar,
-}
-
-async fn course_context(
-    app: &AppState,
-    course_id: i64,
-    user: &SessionUser,
-    jar: CookieJar,
-    active_tab: &str,
-) -> Result<CourseContext, Response> {
-    let origin = crate::request_origin();
-
-    let course: star_courses::Course =
-        match star_courses::load_course_for_viewer(&app.db, course_id, &auth_of(user)).await {
-            Ok(course) => course,
-            Err(e) => return Err(from_api_error(&e, &origin).into_response()),
-        };
-
-    let tabs = match star_courses::load_course_tabs(&app.db, course_id, &auth_of(user)).await {
-        Ok(tabs) => tabs,
-        Err(e) => return Err(from_api_error(&e, &origin).into_response()),
-    };
-
-    let (preferences, use_high_contrast) = match queries::load_preferences(&app.db, user.id).await {
-        Ok(loaded) => loaded,
-        Err(e) => return Err(from_api_error(&e, &origin).into_response()),
-    };
-    let user_name = match queries::load_user_name(&app.db, user.id).await {
-        Ok(name) => name.unwrap_or_default(),
-        Err(e) => return Err(from_api_error(&e, &origin).into_response()),
-    };
-
-    let context_asset_string = format!("course_{course_id}");
-    let env = JsEnv::for_user(
-        user.id,
-        &user.role,
-        preferences,
-        use_high_contrast,
-        &origin,
-        Some(active_tab),
-        &context_asset_string,
-        Vec::new(),
-    );
-    let (jar, csrf_token) = ensure_csrf_cookie(jar);
-
-    Ok(CourseContext {
-        course_name: course.name,
-        course_id,
-        user_name,
-        tabs,
-        env,
-        csrf_token,
-        jar,
-    })
-}
-
 /// Render an HTML page with the shell content type.
 fn html_response(template_result: Result<String, askama::Error>, page: &str) -> Response {
     match template_result {
@@ -854,15 +784,14 @@ pub async fn quiz_list(
     user: SessionUser,
     jar: CookieJar,
 ) -> Response {
-    let ctx = match course_context(&app, course_id, &user, jar, "quizzes").await {
-        Ok(ctx) => ctx,
-        Err(response) => return response,
-    };
+    let origin = crate::request_origin();
 
-    let is_teacher =
-        star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
-            .await
-            .unwrap_or(false);
+    let ctx = match course_context(&app, &user, course_id, &origin).await {
+        Ok(ctx) => ctx,
+        Err(resp) => return *resp,
+    };
+    let env = course_env(&ctx, &user, &origin, "quizzes", course_id);
+    let (jar, csrf_token) = ensure_csrf(jar);
 
     let rows = match load_quiz_list(&app.db, course_id).await {
         Ok(rows) => rows,
@@ -871,7 +800,7 @@ pub async fn quiz_list(
 
     let quizzes: Vec<QuizListView> = rows
         .into_iter()
-        .filter(|row| is_teacher || row.published)
+        .filter(|row| ctx.is_teacher || row.published)
         .map(|row| {
             let (availability, locked) =
                 availability_label(&row.available_from, &row.available_until);
@@ -888,28 +817,25 @@ pub async fn quiz_list(
         .collect();
 
     let page = QuizzesPage {
-        title: format!("{} - Quizzes", ctx.course_name),
+        title: format!("{} - Quizzes", ctx.course.name),
         body_class: format!(
             "with-left-side course-menu-expanded context-course_{course_id} quizzes"
         ),
         css_url: assets::app_css_url(),
-        env_json: ctx.env.to_json_string(),
+        env_json: env.to_json_string(),
         notices: Vec::new(),
         user_name: ctx.user_name,
         active_path: "courses",
-        breadcrumb: vec![
-            ("Dashboard".to_string(), "/dashboard".to_string()),
-            (ctx.course_name.clone(), format!("/courses/{course_id}")),
-        ],
-        csrf_token: ctx.csrf_token,
+        breadcrumb: course_breadcrumb(&ctx, course_id),
+        csrf_token: csrf_token.clone(),
         tabs: ctx.tabs,
         active_context_tab: "quizzes".to_string(),
-        course_name: ctx.course_name,
+        course_name: ctx.course.name,
         course_id,
         quizzes,
-        is_teacher,
+        is_teacher: ctx.is_teacher,
     };
-    (ctx.jar, html_response(page.render(), "quiz list")).into_response()
+    (jar, html_response(page.render(), "quiz list")).into_response()
 }
 
 /// GET /courses/{id}/quizzes/new — teacher-only minimal creation form.
@@ -922,48 +848,45 @@ pub async fn quiz_new(
     user: SessionUser,
     jar: CookieJar,
 ) -> Response {
-    let ctx = match course_context(&app, course_id, &user, jar, "quizzes").await {
-        Ok(ctx) => ctx,
-        Err(response) => return response,
-    };
+    let origin = crate::request_origin();
 
-    let is_teacher =
-        match star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
-            .await
-        {
-            Ok(teacher) => teacher,
-            Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
-        };
-    if !is_teacher {
+    let ctx = match course_context(&app, &user, course_id, &origin).await {
+        Ok(ctx) => ctx,
+        Err(resp) => return *resp,
+    };
+    let env = course_env(&ctx, &user, &origin, "quizzes", course_id);
+    let (jar, csrf_token) = ensure_csrf(jar);
+
+    if !ctx.is_teacher {
         return from_api_error(&ApiError::Forbidden, &crate::request_origin()).into_response();
     }
 
     let page = QuizNewPage {
-        title: format!("{} - New Quiz", ctx.course_name),
+        title: format!("{} - New Quiz", ctx.course.name),
         body_class: format!(
             "with-left-side course-menu-expanded context-course_{course_id} quizzes"
         ),
         css_url: assets::app_css_url(),
-        env_json: ctx.env.to_json_string(),
+        env_json: env.to_json_string(),
         notices: Vec::new(),
         user_name: ctx.user_name,
         active_path: "courses",
         breadcrumb: vec![
             ("Dashboard".to_string(), "/dashboard".to_string()),
-            (ctx.course_name.clone(), format!("/courses/{course_id}")),
+            (ctx.course.name.clone(), format!("/courses/{course_id}")),
             (
                 "Quizzes".to_string(),
                 format!("/courses/{course_id}/quizzes"),
             ),
         ],
-        csrf_token: ctx.csrf_token,
+        csrf_token: csrf_token.clone(),
         tabs: ctx.tabs,
         active_context_tab: "quizzes".to_string(),
-        course_name: ctx.course_name,
+        course_name: ctx.course.name,
         course_id,
         error: String::new(),
     };
-    (ctx.jar, html_response(page.render(), "quiz new")).into_response()
+    (jar, html_response(page.render(), "quiz new")).into_response()
 }
 
 #[derive(Deserialize)]
@@ -1001,45 +924,43 @@ pub async fn quiz_create(
             .into_response();
     }
 
-    let is_teacher =
-        match star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
-            .await
-        {
-            Ok(teacher) => teacher,
-            Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
-        };
-    if !is_teacher {
-        return from_api_error(&ApiError::Forbidden, &crate::request_origin()).into_response();
+    let origin = crate::request_origin();
+
+    let ctx = match course_context(&app, &user, course_id, &origin).await {
+        Ok(ctx) => ctx,
+        Err(resp) => return *resp,
+    };
+    let env = course_env(&ctx, &user, &origin, "quizzes", course_id);
+    let (jar, csrf_token) = ensure_csrf(jar);
+
+    if !ctx.is_teacher {
+        return from_api_error(&ApiError::Forbidden, &origin).into_response();
     }
 
     // Same validation as the REST create handler.
     if form.title.trim().is_empty() {
-        let ctx = match course_context(&app, course_id, &user, jar, "quizzes").await {
-            Ok(ctx) => ctx,
-            Err(response) => return response,
-        };
         let page = QuizNewPage {
-            title: format!("{} - New Quiz", ctx.course_name),
+            title: format!("{} - New Quiz", ctx.course.name),
             body_class: format!(
                 "with-left-side course-menu-expanded context-course_{course_id} quizzes"
             ),
             css_url: assets::app_css_url(),
-            env_json: ctx.env.to_json_string(),
+            env_json: env.to_json_string(),
             notices: Vec::new(),
             user_name: ctx.user_name,
             active_path: "courses",
             breadcrumb: vec![
                 ("Dashboard".to_string(), "/dashboard".to_string()),
-                (ctx.course_name.clone(), format!("/courses/{course_id}")),
+                (ctx.course.name.clone(), format!("/courses/{course_id}")),
                 (
                     "Quizzes".to_string(),
                     format!("/courses/{course_id}/quizzes"),
                 ),
             ],
-            csrf_token: ctx.csrf_token,
+            csrf_token: csrf_token.clone(),
             tabs: ctx.tabs,
             active_context_tab: "quizzes".to_string(),
-            course_name: ctx.course_name,
+            course_name: ctx.course.name,
             course_id,
             error: "Title is required.".to_string(),
         };
@@ -1110,27 +1031,23 @@ pub async fn quiz_show(
     user: SessionUser,
     jar: CookieJar,
 ) -> Response {
-    let ctx = match course_context(&app, course_id, &user, jar, "quizzes").await {
+    let origin = crate::request_origin();
+
+    let ctx = match course_context(&app, &user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(response) => return response,
+        Err(resp) => return *resp,
     };
+    let env = course_env(&ctx, &user, &origin, "quizzes", course_id);
+    let (jar, csrf_token) = ensure_csrf(jar);
 
     let quiz = match quiz_in_course(&app.db, course_id, quiz_id).await {
         Ok(quiz) => quiz,
         Err(response) => return response,
     };
 
-    let is_teacher =
-        match star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
-            .await
-        {
-            Ok(teacher) => teacher,
-            Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
-        };
-
     // Students cannot open unpublished quizzes (404, not 403 — matches the
     // course gate's 404-before-403 posture).
-    if !is_teacher && !quiz.published {
+    if !ctx.is_teacher && !quiz.published {
         return from_api_error(&ApiError::NotFound, &crate::request_origin()).into_response();
     }
 
@@ -1144,7 +1061,7 @@ pub async fn quiz_show(
     let take_url = format!("/courses/{course_id}/quizzes/{quiz_id}/take");
 
     let (has_submission, submission_state, submission_score, results_url, can_take, submissions) =
-        if is_teacher {
+        if ctx.is_teacher {
             let rows = match load_submission_rows(&app.db, quiz_id).await {
                 Ok(rows) => rows,
                 Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
@@ -1183,27 +1100,27 @@ pub async fn quiz_show(
         };
 
     let page = QuizShowPage {
-        title: format!("{} - {}", ctx.course_name, quiz.title),
+        title: format!("{} - {}", ctx.course.name, quiz.title),
         body_class: format!(
             "with-left-side course-menu-expanded context-course_{course_id} quizzes"
         ),
         css_url: assets::app_css_url(),
-        env_json: ctx.env.to_json_string(),
+        env_json: env.to_json_string(),
         notices: Vec::new(),
         user_name: ctx.user_name,
         active_path: "courses",
         breadcrumb: vec![
             ("Dashboard".to_string(), "/dashboard".to_string()),
-            (ctx.course_name.clone(), format!("/courses/{course_id}")),
+            (ctx.course.name.clone(), format!("/courses/{course_id}")),
             (
                 "Quizzes".to_string(),
                 format!("/courses/{course_id}/quizzes"),
             ),
         ],
-        csrf_token: ctx.csrf_token,
+        csrf_token: csrf_token.clone(),
         tabs: ctx.tabs,
         active_context_tab: "quizzes".to_string(),
-        course_name: ctx.course_name,
+        course_name: ctx.course.name,
         course_id,
         quiz_id,
         quiz_title: quiz.title,
@@ -1215,7 +1132,7 @@ pub async fn quiz_show(
         availability,
         locked,
         allowed_attempts: quiz.allowed_attempts,
-        is_teacher,
+        is_teacher: ctx.is_teacher,
         take_url,
         can_take,
         has_submission,
@@ -1224,7 +1141,7 @@ pub async fn quiz_show(
         results_url,
         submissions,
     };
-    (ctx.jar, html_response(page.render(), "quiz show")).into_response()
+    (jar, html_response(page.render(), "quiz show")).into_response()
 }
 
 /// Teacher's submissions summary row.
@@ -1314,10 +1231,14 @@ pub async fn quiz_take(
     user: SessionUser,
     jar: CookieJar,
 ) -> Response {
-    let ctx = match course_context(&app, course_id, &user, jar, "quizzes").await {
+    let origin = crate::request_origin();
+
+    let ctx = match course_context(&app, &user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(response) => return response,
+        Err(resp) => return *resp,
     };
+    let env = course_env(&ctx, &user, &origin, "quizzes", course_id);
+    let (jar, csrf_token) = ensure_csrf(jar);
 
     let quiz = match quiz_in_course(&app.db, course_id, quiz_id).await {
         Ok(quiz) => quiz,
@@ -1365,18 +1286,18 @@ pub async fn quiz_take(
     };
 
     let page = QuizTakePage {
-        title: format!("{} - Take: {}", ctx.course_name, quiz.title),
+        title: format!("{} - Take: {}", ctx.course.name, quiz.title),
         body_class: format!(
             "with-left-side course-menu-expanded context-course_{course_id} quizzes"
         ),
         css_url: assets::app_css_url(),
-        env_json: ctx.env.to_json_string(),
+        env_json: env.to_json_string(),
         notices: Vec::new(),
         user_name: ctx.user_name,
         active_path: "courses",
         breadcrumb: vec![
             ("Dashboard".to_string(), "/dashboard".to_string()),
-            (ctx.course_name.clone(), format!("/courses/{course_id}")),
+            (ctx.course.name.clone(), format!("/courses/{course_id}")),
             (
                 "Quizzes".to_string(),
                 format!("/courses/{course_id}/quizzes"),
@@ -1386,10 +1307,10 @@ pub async fn quiz_take(
                 format!("/courses/{course_id}/quizzes/{quiz_id}"),
             ),
         ],
-        csrf_token: ctx.csrf_token,
+        csrf_token: csrf_token.clone(),
         tabs: ctx.tabs,
         active_context_tab: "quizzes".to_string(),
-        course_name: ctx.course_name,
+        course_name: ctx.course.name,
         course_id,
         quiz_id,
         submission_id: submission.id,
@@ -1401,7 +1322,7 @@ pub async fn quiz_take(
             submission.id
         ),
     };
-    (ctx.jar, html_response(page.render(), "quiz take")).into_response()
+    (jar, html_response(page.render(), "quiz take")).into_response()
 }
 
 /// POST /courses/{id}/quizzes/{qid}/submissions/{sid}/submit — bulk submit.
@@ -1569,10 +1490,14 @@ pub async fn quiz_results(
     user: SessionUser,
     jar: CookieJar,
 ) -> Response {
-    let ctx = match course_context(&app, course_id, &user, jar, "quizzes").await {
+    let origin = crate::request_origin();
+
+    let ctx = match course_context(&app, &user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(response) => return response,
+        Err(resp) => return *resp,
     };
+    let env = course_env(&ctx, &user, &origin, "quizzes", course_id);
+    let (jar, csrf_token) = ensure_csrf(jar);
 
     let quiz = match quiz_in_course(&app.db, course_id, quiz_id).await {
         Ok(quiz) => quiz,
@@ -1587,14 +1512,7 @@ pub async fn quiz_results(
         Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
     };
 
-    let is_teacher =
-        match star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
-            .await
-        {
-            Ok(teacher) => teacher,
-            Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
-        };
-    if !is_teacher && submission.user_id != user.id {
+    if !ctx.is_teacher && submission.user_id != user.id {
         return from_api_error(&ApiError::Forbidden, &crate::request_origin()).into_response();
     }
 
@@ -1642,18 +1560,18 @@ pub async fn quiz_results(
     }
 
     let page = QuizResultsPage {
-        title: format!("{} - Results: {}", ctx.course_name, quiz.title),
+        title: format!("{} - Results: {}", ctx.course.name, quiz.title),
         body_class: format!(
             "with-left-side course-menu-expanded context-course_{course_id} quizzes"
         ),
         css_url: assets::app_css_url(),
-        env_json: ctx.env.to_json_string(),
+        env_json: env.to_json_string(),
         notices: Vec::new(),
         user_name: ctx.user_name,
         active_path: "courses",
         breadcrumb: vec![
             ("Dashboard".to_string(), "/dashboard".to_string()),
-            (ctx.course_name.clone(), format!("/courses/{course_id}")),
+            (ctx.course.name.clone(), format!("/courses/{course_id}")),
             (
                 "Quizzes".to_string(),
                 format!("/courses/{course_id}/quizzes"),
@@ -1663,10 +1581,10 @@ pub async fn quiz_results(
                 format!("/courses/{course_id}/quizzes/{quiz_id}"),
             ),
         ],
-        csrf_token: ctx.csrf_token,
+        csrf_token: csrf_token.clone(),
         tabs: ctx.tabs,
         active_context_tab: "quizzes".to_string(),
-        course_name: ctx.course_name,
+        course_name: ctx.course.name,
         course_id,
         quiz_id,
         quiz_title: quiz.title,
@@ -1677,7 +1595,7 @@ pub async fn quiz_results(
         workflow_state: submission.workflow_state,
         questions: breakdown,
     };
-    (ctx.jar, html_response(page.render(), "quiz results")).into_response()
+    (jar, html_response(page.render(), "quiz results")).into_response()
 }
 
 /// Rehydrate a `StudentAnswer` from the stored `submission_data` snapshot.

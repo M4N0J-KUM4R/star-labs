@@ -1178,7 +1178,7 @@ async fn quiz_take_starts_and_resumes() {
         .await;
     assert_eq!(resp.status_code(), 303, "start: {}", resp.text());
     assert_eq!(
-        resp.headers().get("location").unwrap(),
+        resp.headers().get("location").unwrap().to_str().unwrap(),
         format!("/courses/{course}/quizzes/{quiz}/take")
     );
 
@@ -1319,12 +1319,12 @@ async fn quiz_submit_grades_and_results() {
         ))
         .add_cookie(session_cookie(student, "student"))
         .add_cookie(csrf_cookie)
-        .header("content-type", "application/x-www-form-urlencoded")
+        .add_header("content-type", "application/x-www-form-urlencoded")
         .raw_body(body)
         .await;
     assert_eq!(resp.status_code(), 303, "submit: {}", resp.text());
     assert_eq!(
-        resp.headers().get("location").unwrap(),
+        resp.headers().get("location").unwrap().to_str().unwrap(),
         format!("/courses/{course}/quizzes/{quiz}/submissions/{submission_id}")
     );
 
