@@ -100,7 +100,7 @@ fn test_create_assignment_extension() {
     assert_eq!(body.assignment_extensions.len(), 1);
     assert_eq!(
         body.assignment_extensions[0].user_id,
-        user_id.parse().unwrap()
+        user_id.parse::<i64>().unwrap()
     );
     assert_eq!(body.assignment_extensions[0].extra_attempts, 2);
 }
@@ -191,6 +191,6 @@ fn test_section_create_submission() {
 
     let body: SubmissionResponse = serde_json::from_str(&resp.text().unwrap())
         .expect("response should parse as SubmissionResponse");
-    assert_eq!(body.assignment_id, assignment_id.parse().unwrap());
+    assert_eq!(body.assignment_id, assignment_id.parse::<i64>().unwrap());
     assert!(body.id > 0);
 }
