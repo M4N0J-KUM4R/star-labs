@@ -317,7 +317,7 @@ async fn the_course_and_horizon_account_lists_answer_the_accounts_of_the_caller(
     sqlx::query(
         "UPDATE accounts SET settings = settings || \
             jsonb_build_object('horizon_account_ids', jsonb_build_array($1::bigint)) \
-         WHERE id = (SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1)",
+         WHERE parent_account_id IS NULL",
     )
     .bind(account)
     .execute(&pool)
