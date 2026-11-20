@@ -75,7 +75,7 @@ test.describe('quiz-taking journey (#109)', () => {
     );
     await expect(page.locator('#pending_review_note')).toBeVisible();
     await expect(
-      page.locator(`#question_${MC_ID}.correct, #question_${MC_ID} .outcome_correct`),
+      page.locator(`#question_${MC_ID} .outcome_correct`),
     ).toBeVisible();
     await expect(page.locator('#quiz_results')).toContainText('My essay answer');
   });

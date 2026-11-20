@@ -184,7 +184,6 @@ fn format_ts(ts: &chrono::DateTime<chrono::Utc>) -> String {
 /// Load one quiz (id, course check, fields the pages need).
 #[derive(sqlx::FromRow)]
 struct QuizRow {
-    id: i64,
     course_id: i64,
     title: String,
     description: Option<String>,
@@ -199,7 +198,7 @@ struct QuizRow {
 async fn load_quiz(db: &PgPool, quiz_id: i64) -> Result<Option<QuizRow>, ApiError> {
     Ok(sqlx::query_as(
         r#"
-        SELECT id, course_id, title, description, quiz_type, published,
+        SELECT course_id, title, description, quiz_type, published,
                points_possible::float8 AS points_possible, allowed_attempts,
                available_from, available_until
         FROM quizzes WHERE id = $1
@@ -296,13 +295,11 @@ fn renderable_type(question_type: &str) -> bool {
 #[derive(sqlx::FromRow)]
 struct SubmissionRow {
     id: i64,
-    quiz_id: i64,
     user_id: i64,
     attempt: i32,
     score: Option<f64>,
     workflow_state: String,
     submission_data: String,
-    started_at: chrono::DateTime<chrono::Utc>,
 }
 
 async fn load_submission(
@@ -312,8 +309,8 @@ async fn load_submission(
 ) -> Result<Option<SubmissionRow>, ApiError> {
     Ok(sqlx::query_as(
         r#"
-        SELECT id, quiz_id, user_id, attempt, score::float8 AS score,
-               workflow_state, submission_data, started_at
+        SELECT id, user_id, attempt, score::float8 AS score,
+               workflow_state, submission_data
         FROM quiz_submissions
         WHERE id = $1 AND quiz_id = $2
         "#,
@@ -624,11 +621,19 @@ fn html_response(template_result: Result<String, askama::Error>, page: &str) -> 
 
 /// Load the quiz and verify it belongs to the path course (404 otherwise,
 /// mirroring the REST nested find).
-async fn quiz_in_course(db: &PgPool, course_id: i64, quiz_id: i64) -> Result<QuizRow, Response> {
+async fn quiz_in_course(
+    db: &PgPool,
+    course_id: i64,
+    quiz_id: i64,
+) -> Result<QuizRow, Box<Response>> {
     match load_quiz(db, quiz_id).await {
         Ok(Some(quiz)) if quiz.course_id == course_id => Ok(quiz),
-        Ok(_) => Err(from_api_error(&ApiError::NotFound, &crate::request_origin()).into_response()),
-        Err(e) => Err(from_api_error(&e, &crate::request_origin()).into_response()),
+        Ok(_) => Err(Box::new(
+            from_api_error(&ApiError::NotFound, &crate::request_origin()).into_response(),
+        )),
+        Err(e) => Err(Box::new(
+            from_api_error(&e, &crate::request_origin()).into_response(),
+        )),
     }
 }
 
@@ -1041,7 +1046,7 @@ pub async fn quiz_show(
 
     let quiz = match quiz_in_course(&app.db, course_id, quiz_id).await {
         Ok(quiz) => quiz,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     // Students cannot open unpublished quizzes (404, not 403 — matches the
@@ -1201,7 +1206,7 @@ pub async fn quiz_take_start(
     }
 
     if let Err(response) = quiz_in_course(&app.db, course_id, quiz_id).await {
-        return response;
+        return *response;
     }
 
     match star_quizzes::start_or_resume_submission(&app.db, quiz_id, user.id).await {
@@ -1241,7 +1246,7 @@ pub async fn quiz_take(
 
     let quiz = match quiz_in_course(&app.db, course_id, quiz_id).await {
         Ok(quiz) => quiz,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     let submission = match load_my_submission(&app.db, quiz_id, user.id).await {
@@ -1358,7 +1363,7 @@ pub async fn quiz_submit(
     }
 
     if let Err(response) = quiz_in_course(&app.db, course_id, quiz_id).await {
-        return response;
+        return *response;
     }
 
     let submission = match load_submission(&app.db, quiz_id, submission_id).await {
@@ -1500,7 +1505,7 @@ pub async fn quiz_results(
 
     let quiz = match quiz_in_course(&app.db, course_id, quiz_id).await {
         Ok(quiz) => quiz,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     let submission = match load_submission(&app.db, quiz_id, submission_id).await {
