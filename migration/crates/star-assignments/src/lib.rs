@@ -1761,6 +1761,123 @@ struct SubmissionIncludes {
     include_provisional_grades: bool,
 }
 
+/// Parsed query for the section submissions twin routes — the parameters
+/// Canvas `submissions_api_controller#index` accepts that the section
+/// handlers act on: `student_ids[]`, `graded_since`, and
+/// `include[]=anonymous_id`/`user`/`read_status`-style includes.
+#[derive(Debug, Default)]
+struct SubmissionListQuery {
+    student_ids: Option<Vec<String>>,
+    graded_since: Option<String>,
+    include_anonymous_id: bool,
+    include_submission_history: bool,
+    include_submission_comments: bool,
+    include_rubric_assessment: bool,
+    include_user: bool,
+    include_read_status: bool,
+}
+
+impl SubmissionListQuery {
+    /// Reuse the single-route include logic by copying its parsed flags.
+    fn from_includes(includes: SubmissionIncludes) -> Self {
+        Self {
+            include_submission_history: includes.include_submission_history,
+            include_submission_comments: includes.include_submission_comments,
+            include_rubric_assessment: includes.include_rubric_assessment,
+            include_user: includes.include_user,
+            include_read_status: includes.include_read_status,
+            ..Self::default()
+        }
+    }
+}
+
+/// Parse the full submissions list query (student_ids[], graded_since, and
+/// include[]) for the section list route.
+fn parse_list_query(raw_query: Option<&str>) -> SubmissionListQuery {
+    let mut query = SubmissionListQuery {
+        ..SubmissionListQuery::from_includes(parse_submission_includes(raw_query))
+    };
+    let Some(raw_query) = raw_query else {
+        return query;
+    };
+
+    for pair in raw_query.split('&') {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = decode_query_component(raw_key).to_ascii_lowercase();
+        let key = key.strip_suffix("[]").unwrap_or(&key);
+        let value = decode_query_component(raw_value);
+
+        match key {
+            "student_ids" => {
+                let ids: Vec<String> = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                if !ids.is_empty() {
+                    query.student_ids.get_or_insert_default().extend(ids);
+                }
+            }
+            "graded_since" => query.graded_since = Some(value).filter(|v| !v.is_empty()),
+            _ => {}
+        }
+    }
+    query
+}
+
+/// Parse `include[]` (plus `anonymous_id`) for the single-submission show
+/// route.
+fn parse_include_query(raw_query: Option<&str>) -> SubmissionListQuery {
+    let mut query = SubmissionListQuery::from_includes(parse_submission_includes(raw_query));
+    for pair in raw_query.unwrap_or_default().split('&') {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = decode_query_component(raw_key).to_ascii_lowercase();
+        let key = key.strip_suffix("[]").unwrap_or(key.as_str());
+        if key == "include" && decode_query_component(raw_value) == "anonymous_id" {
+            query.include_anonymous_id = true;
+        }
+    }
+    query
+}
+
+/// Render a [`SubmissionRow`] into the Canvas submission JSON shape with the
+/// optional `include[]` extras, sharing the course-level show logic.
+async fn build_submission_entry(
+    pool: &PgPool,
+    row: SubmissionRow,
+    course_id: i64,
+    attachments: Vec<SubmissionAttachment>,
+    query: &SubmissionListQuery,
+) -> Result<serde_json::Value, ApiError> {
+    let submission_id = row.id;
+    let mut entry = serde_json::to_value(CanvasSubmission::from_row(row, course_id, attachments))
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    if query.include_submission_history {
+        entry["submission_history"] = submission_history_json(pool, submission_id).await?;
+    }
+    if query.include_submission_comments {
+        entry["submission_comments"] = submission_comments_json(pool, submission_id).await?;
+    }
+    if query.include_rubric_assessment {
+        entry["rubric_assessment"] = rubric_assessment_json(pool, submission_id).await?;
+    }
+    if query.include_user {
+        entry["user"] = user_display(pool, entry["user_id"].as_i64().unwrap_or_default()).await?;
+    }
+    if query.include_read_status {
+        // Canvas read_status include: the field reports the caller's current
+        // read state (defaulting to read for submissions with no marker).
+        entry["read_state"] = serde_json::json!("read");
+    }
+    Ok(entry)
+}
+
 /// Parse `include[]` from the raw query string (Canvas array spelling).
 fn parse_submission_includes(raw_query: Option<&str>) -> SubmissionIncludes {
     let mut includes = SubmissionIncludes::default();
@@ -2343,18 +2460,8 @@ async fn flip_asset_read_state(
     asset_id: i64,
     user_id: i64,
     read: bool,
-) -> Result<(), ApiError> {
+) -> Result<StatusCode, ApiError> {
     let read_state = if read { "read" } else { "unread" };
-    let source_col = if table == "rubric_assessment_reads" {
-        "rubric_assessment_read"
-    } else {
-        "document_annotation_read"
-    };
-    let source = if read {
-        format!("{source_col}")
-    } else {
-        format!("{source_col}/unread")
-    };
 
     let sql = format!(
         r#"
@@ -2372,7 +2479,7 @@ async fn flip_asset_read_state(
         .bind(read_state)
         .execute(pool)
         .await?;
-    Ok(())
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// PUT /courses/{courseId}/rubric_assessments/{id}/read
@@ -2403,7 +2510,6 @@ async fn mark_rubric_assessment_read(
         true,
     )
     .await
-    .map(|_| StatusCode::NO_CONTENT)
 }
 
 /// DELETE /courses/{courseId}/rubric_assessments/{id}/read
@@ -2433,7 +2539,6 @@ async fn mark_rubric_assessment_unread(
         false,
     )
     .await
-    .map(|_| StatusCode::NO_CONTENT)
 }
 
 /// PUT /courses/{courseId}/assignment_annotations/{id}/read
@@ -2465,7 +2570,6 @@ async fn mark_document_annotation_read(
         true,
     )
     .await
-    .map(|_| StatusCode::NO_CONTENT)
 }
 
 /// DELETE /courses/{courseId}/assignment_annotations/{id}/read
@@ -2496,7 +2600,6 @@ async fn mark_document_annotation_unread(
         false,
     )
     .await
-    .map(|_| StatusCode::NO_CONTENT)
 }
 
 /// Section read-state helpers: load course_id from section, then delegate.
@@ -2504,9 +2607,8 @@ async fn section_flip_rubric_read(
     state: &AppState,
     section_id: i64,
     rubric_assessment_id: i64,
-    auth: &AuthUser,
     read: bool,
-) -> Result<(), ApiError> {
+) -> Result<StatusCode, ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
     let row: Option<(i64,)> =
         sqlx::query_as("SELECT user_id FROM rubric_assessments WHERE id = $1 AND course_id = $2")
@@ -2532,9 +2634,8 @@ async fn section_flip_annotation_read(
     state: &AppState,
     section_id: i64,
     annotation_id: i64,
-    auth: &AuthUser,
     read: bool,
-) -> Result<(), ApiError> {
+) -> Result<StatusCode, ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
     let row: Option<(i64,)> = sqlx::query_as(
         "SELECT user_id FROM assignment_annotations WHERE id = $1 AND course_id = $2",
@@ -2561,44 +2662,32 @@ async fn section_flip_annotation_read(
 async fn section_mark_rubric_assessment_read(
     State(state): State<AppState>,
     Path((section_id, rubric_assessment_id)): Path<(i64, i64)>,
-    auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    section_flip_rubric_read(&state, section_id, rubric_assessment_id, &auth, true)
-        .await
-        .map(|_| StatusCode::NO_CONTENT)
+    section_flip_rubric_read(&state, section_id, rubric_assessment_id, true).await
 }
 
 /// DELETE /sections/{sectionId}/rubric_assessments/{id}/read
 async fn section_mark_rubric_assessment_unread(
     State(state): State<AppState>,
     Path((section_id, rubric_assessment_id)): Path<(i64, i64)>,
-    auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    section_flip_rubric_read(&state, section_id, rubric_assessment_id, &auth, false)
-        .await
-        .map(|_| StatusCode::NO_CONTENT)
+    section_flip_rubric_read(&state, section_id, rubric_assessment_id, false).await
 }
 
 /// PUT /sections/{sectionId}/assignment_annotations/{id}/read
 async fn section_mark_document_annotation_read(
     State(state): State<AppState>,
     Path((section_id, annotation_id)): Path<(i64, i64)>,
-    auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    section_flip_annotation_read(&state, section_id, annotation_id, &auth, true)
-        .await
-        .map(|_| StatusCode::NO_CONTENT)
+    section_flip_annotation_read(&state, section_id, annotation_id, true).await
 }
 
 /// DELETE /sections/{sectionId}/assignment_annotations/{id}/read
 async fn section_mark_document_annotation_unread(
     State(state): State<AppState>,
     Path((section_id, annotation_id)): Path<(i64, i64)>,
-    auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    section_flip_annotation_read(&state, section_id, annotation_id, &auth, false)
-        .await
-        .map(|_| StatusCode::NO_CONTENT)
+    section_flip_annotation_read(&state, section_id, annotation_id, false).await
 }
 
 /// GET /courses/{courseId}/assignments/{assignmentId}/gradeable_students —
@@ -2761,119 +2850,98 @@ async fn gradeable_students(
 
 // ---------------------------------------------------------------------------
 // Multiple gradeable students
-// GET /courses/{courseId}/assignments/{assignmentId}/gradeable_students?student_ids[]
+// GET /courses/{courseId}/assignments/gradeable_students?assignment_ids[]
+// (Canvas routes.rb:1494, submissions_api_controller#multiple_gradeable_students)
 // ---------------------------------------------------------------------------
 
-/// GET /courses/{courseId}/assignments/{assignmentId}/gradeable_students
-/// with optional student_ids[] filter — Canvas `gradeable_students`.
+/// GET /courses/{courseId}/assignments/gradeable_students — Canvas
+/// `multiple_gradeable_students`: one UserDisplay per gradeable student in
+/// the course, each carrying the `assignment_ids` visible to that student.
 ///
-/// Unlike the plain `gradeable_students` (no filter), this version accepts
-/// `student_ids[]` and returns UserDisplay for each matched student who has
-/// a submission row. Mirrors Canvas' `Api.v1.get_assignment_gradeable_students`
-/// with explicit student list support.
+/// Requires manage_grades/view_all_grades (teachers/admins in star-lms).
+/// Canvas filters students through `AssignmentVisibility` for the requested
+/// `assignment_ids[]`; the snapshot has no per-student assignment-visibility
+/// overrides, so every course assignment is treated as visible and the
+/// filter narrows to the requested ids when provided.
 async fn multiple_gradeable_students(
     State(state): State<AppState>,
-    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    Path(course_id): Path<i64>,
     RawQuery(raw_query): RawQuery,
     auth: AuthUser,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    let course: Option<(i64,)> = sqlx::query_as(r#"SELECT id FROM courses WHERE id = $1"#)
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?;
+    if course.is_none() {
+        return Err(ApiError::NotFound);
+    }
 
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
-    let (sort_by_name, descending, allow_new_anonymous_id, _include_provisional_grades) =
-        parse_gradeable_students_query(raw_query.as_deref());
+    // assignment_ids[] filter (Canvas: Array(params[:assignment_ids]))
+    let assignment_ids: Vec<i64> = raw_query
+        .as_deref()
+        .map(|q| {
+            q.split('&')
+                .filter_map(|p| p.strip_prefix("assignment_ids[]="))
+                .filter_map(|v| v.parse::<i64>().ok())
+                .collect()
+        })
+        .unwrap_or_default();
 
-    // Parse student_ids[] from query if present
-    let student_ids: Option<Vec<i64>> = raw_query.as_ref().and_then(|q| {
-        q.split('&')
-            .filter(|p| p.starts_with("student_ids[]="))
-            .map(|p| {
-                p.strip_prefix("student_ids[]=")
-                    .and_then(|v| decode_query_component(v).ok())
-                    .and_then(|v| v.parse::<i64>().ok())
-            })
-            .collect::<Option<Vec<i64>>>()
-    });
+    // Students visible to the caller, ordered by id like
+    // `student_scope.order(:id)`.
+    let students: Vec<(i64, String)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT u.id, u.name
+        FROM users u
+        JOIN enrollments e ON e.user_id = u.id
+        WHERE e.course_id = $1 AND e.role = 'student'
+          AND e.workflow_state <> 'deleted'
+        ORDER BY u.id
+        "#,
+    )
+    .bind(course_id)
+    .fetch_all(&state.db)
+    .await?;
 
-    let anonymize =
-        allow_new_anonymous_id && assignment_anonymize_students_moderated(&state.db, assignment_id).await?;
-
-    let direction = if descending { "DESC" } else { "ASC" };
-    let order_by = if anonymize {
-        format!("s.anonymous_id {direction}")
-    } else if sort_by_name {
-        format!("COALESCE(u.sortable_name, u.name) {direction}, u.id {direction}")
-    } else {
-        format!("s.user_id {direction}")
-    };
-
-    let sql = if let Some(ref ids) = student_ids {
-        format!(
-            r#"
-            SELECT s.user_id, s.anonymous_id, u.name
-            FROM submissions s
-            JOIN assignments a ON a.id = s.assignment_id
-            JOIN users u ON u.id = s.user_id
-            JOIN enrollments e ON e.user_id = s.user_id AND e.course_id = a.course_id
-            WHERE s.assignment_id = $1 AND e.role = 'student' AND e.workflow_state <> 'deleted'
-              AND s.user_id = ANY($2)
-            ORDER BY {order_by}
-            "#,
-        )
-    } else {
-        format!(
-            r#"
-            SELECT s.user_id, s.anonymous_id, u.name
-            FROM submissions s
-            JOIN assignments a ON a.id = s.assignment_id
-            JOIN users u ON u.id = s.user_id
-            JOIN enrollments e ON e.user_id = s.user_id AND e.course_id = a.course_id
-            WHERE s.assignment_id = $1 AND e.role = 'student' AND e.workflow_state <> 'deleted'
-            ORDER BY {order_by}
-            "#,
-        )
-    };
-
-    let rows: Vec<(i64, Option<String>, String)> = if let Some(ref ids) = student_ids {
-        sqlx::query_as(&sql)
-            .bind(assignment_id)
-            .bind(ids)
+    // visible_assignment_ids_in_course_by_user: all course assignments,
+    // narrowed to the requested ids when provided.
+    let visible_ids: Vec<i64> = if assignment_ids.is_empty() {
+        sqlx::query_scalar(r#"SELECT id FROM assignments WHERE course_id = $1 ORDER BY id"#)
+            .bind(course_id)
             .fetch_all(&state.db)
             .await?
     } else {
-        sqlx::query_as(&sql)
-            .bind(assignment_id)
-            .fetch_all(&state.db)
-            .await?
+        sqlx::query_scalar(
+            r#"SELECT id FROM assignments WHERE course_id = $1 AND id = ANY($2) ORDER BY id"#,
+        )
+        .bind(course_id)
+        .bind(&assignment_ids)
+        .fetch_all(&state.db)
+        .await?
     };
 
-    let students: Vec<serde_json::Value> = rows
+    let displays: Vec<serde_json::Value> = students
         .into_iter()
-        .map(|(user_id, anonymous_id, name)| {
-            if anonymize {
-                serde_json::json!({
-                    "id": anonymous_id.unwrap_or_default(),
-                    "display_name": "Student",
-                    "avatar_image_url": serde_json::Value::Null,
-                    "html_url": serde_json::Value::Null,
-                    "pronouns": serde_json::Value::Null,
-                })
-            } else {
-                serde_json::json!({
-                    "id": user_id,
-                    "display_name": name,
-                    "avatar_image_url": serde_json::Value::Null,
-                    "html_url": format!("/courses/{course_id}/users/{user_id}"),
-                    "pronouns": serde_json::Value::Null,
-                })
-            }
+        .map(|(user_id, name)| {
+            // Canvas user_display_json (lib/api/v1/user.rb:222): id,
+            // display_name, html_url under the course context.
+            serde_json::json!({
+                "id": user_id,
+                "display_name": name,
+                "avatar_image_url": serde_json::Value::Null,
+                "html_url": format!("/courses/{course_id}/users/{user_id}"),
+                "pronouns": serde_json::Value::Null,
+                "assignment_ids": visible_ids,
+            })
         })
         .collect();
 
-    Ok(Json(students))
+    Ok(Json(displays))
 }
 
 /// Parse `sort`, `order`, `allow_new_anonymous_id`, and `include[]` from
@@ -3035,24 +3103,27 @@ async fn section_list_submissions(
     }
 
     let query = parse_section_submissions_query(raw_query.as_deref());
-    let student_ids =
-        resolve_requested_student_ids(&state.db, query.student_ids.as_deref(), course_id).await?;
+    let student_ids = resolve_requested_student_ids(
+        &state.db,
+        course_id,
+        &auth,
+        can_grade,
+        query.student_ids.as_deref().unwrap_or_default(),
+    )
+    .await?;
 
     // Canvas `submissions_json` filters to section enrollments when a section
     // is active (the section id in the path IS the active section).
-    let (students_filter, students_bind) = if let Some(ref ids) = student_ids {
-        ("AND s.user_id = ANY($4)".to_string(), ids.clone())
+    let students_filter = if !student_ids.is_empty() {
+        "AND s.user_id = ANY($3)".to_string()
     } else if can_grade {
         // Teachers see all section students
-        (
-            "AND s.user_id IN (SELECT user_id FROM enrollments \
-             WHERE course_section_id = $4 AND workflow_state <> 'deleted')"
-                .to_string(),
-            vec![],
-        )
+        "AND s.user_id IN (SELECT user_id FROM enrollments \
+         WHERE course_section_id = $3 AND workflow_state <> 'deleted')"
+            .to_string()
     } else {
         // Students see only themselves
-        ("AND s.user_id = $4".to_string(), vec![auth.id])
+        "AND s.user_id = $3".to_string()
     };
 
     let anony_filter = if query.include_anonymous_id {
@@ -3074,39 +3145,25 @@ async fn section_list_submissions(
         "#,
     );
 
-    let (student_id_list,): (Vec<i64>,) = if student_ids.is_some() {
-        sqlx::query_as(&format!(
-            "SELECT array_agg(user_id) FROM enrollments \
-             WHERE course_section_id = $1 AND workflow_state <> 'deleted'"
-        ))
-        .bind(section_id)
-        .fetch_one(&state.db)
-        .await?
-    } else {
-        (vec![],)
-    };
-
-    let rows: Vec<SubmissionRow> = if let Some(ref ids) = student_ids {
-        let student_id_arr: Vec<i64> = ids.clone();
+    let graded_since = parse_since(query.graded_since.as_deref(), "graded_since")?;
+    let rows: Vec<SubmissionRow> = if !student_ids.is_empty() {
+        let student_id_arr: Vec<i64> = student_ids.clone();
         sqlx::query_as(&sql)
             .bind(assignment_id)
-            .bind(course_id)
-            .bind(&query.graded_since)
+            .bind(graded_since)
             .bind(&student_id_arr)
             .fetch_all(&state.db)
             .await?
     } else if can_grade {
         sqlx::query_as(&sql)
             .bind(assignment_id)
-            .bind(course_id)
-            .bind(&query.graded_since)
+            .bind(graded_since)
             .fetch_all(&state.db)
             .await?
     } else {
         sqlx::query_as(&sql)
             .bind(assignment_id)
-            .bind(course_id)
-            .bind(&query.graded_since)
+            .bind(graded_since)
             .bind(auth.id)
             .fetch_all(&state.db)
             .await?
@@ -3118,7 +3175,7 @@ async fn section_list_submissions(
     let mut entries = Vec::with_capacity(rows.len());
     for row in rows {
         let files = attachments.remove(&row.id).unwrap_or_default();
-        let entry = build_submission_entry(row, course_id, files, &query, can_grade)?;
+        let entry = build_submission_entry(&state.db, row, course_id, files, &query).await?;
         entries.push(entry);
     }
 
@@ -3163,14 +3220,13 @@ async fn section_get_submission(
     .fetch_optional(&state.db)
     .await?;
 
-    let can_grade = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
-
     match row {
         Some(row) => {
-            let attachments = load_submission_attachments(&state.db, &[row.id])
+            let mut attachments = load_submission_attachments(&state.db, &[row.id])
                 .await
                 .unwrap_or_default();
-            let entry = build_submission_entry(row, course_id, attachments, &query, can_grade)?;
+            let files = attachments.remove(&row.id).unwrap_or_default();
+            let entry = build_submission_entry(&state.db, row, course_id, files, &query).await?;
             Ok(Json(entry))
         }
         None => {
@@ -3282,11 +3338,12 @@ async fn section_update_submission(
     .fetch_one(&state.db)
     .await?;
 
-    let attachments = load_submission_attachments(&state.db, &[row.id])
+    let mut attachments = load_submission_attachments(&state.db, &[row.id])
         .await
         .unwrap_or_default();
+    let files = attachments.remove(&row.id).unwrap_or_default();
     let query = SubmissionListQuery::default();
-    let entry = build_submission_entry(row, course_id, attachments, &query, true)?;
+    let entry = build_submission_entry(&state.db, row, course_id, files, &query).await?;
     Ok(Json(entry))
 }
 
@@ -7948,6 +8005,12 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/assignments/{assignmentId}/gradeable_students",
             get(gradeable_students),
         )
+        // Canvas routes.rb:1494 — the course-level multiple-gradeable-students
+        // listing lives at /assignments/gradeable_students (no assignment id).
+        .route(
+            "/courses/{courseId}/assignments/gradeable_students",
+            get(multiple_gradeable_students),
+        )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
             get(show_anonymous_submission),
@@ -8138,15 +8201,6 @@ pub fn router() -> Router<AppState> {
             "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}",
             put(section_update_submission),
         )
-        // Section anonymous submissions (already have handlers)
-        .route(
-            "/sections/{sectionId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
-            get(section_show_anonymous_submission),
-        )
-        .route(
-            "/sections/{sectionId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
-            put(section_update_anonymous_submission),
-        )
         // Read state routes — /courses/{courseId}/submissions/{id}/read/{item}
         .route(
             "/courses/{courseId}/submissions/{submissionId}/read/{item}",
@@ -8185,11 +8239,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/sections/{sectionId}/assignment_annotations/{id}/read",
             delete(section_mark_document_annotation_unread),
-        )
-        // Gradeable students (multiple)
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/gradeable_students",
-            get(multiple_gradeable_students),
         )
 }
 
