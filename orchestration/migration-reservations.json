@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0215",
- "next_available": "0216",
+ "max_merged": "0216",
+ "next_available": "0217",
  "reservations": {
   "0001": {
    "issue": null,
@@ -665,6 +665,11 @@
   "0215": {
    "issue": null,
    "note": "merged by wave (no issue)",
+   "status": "merged"
+  },
+  "0216": {
+   "issue": null,
+   "note": "star-calendar: planner overrides (planner_overrides_controller)",
    "status": "merged"
   }
  }
