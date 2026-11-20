@@ -257,6 +257,16 @@ async fn can_read_settings(
     }
 }
 
+/// Whether the account exists.  Canvas resolves the context first, so a
+/// missing account is a 404 before any permission check.
+async fn account_exists(pool: &PgPool, account_id: i64) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.is_some())
+}
+
 /// Canvas `require_permissions`: `authorized_action(account, @current_user,
 /// :manage_account_settings)`.
 async fn can_manage_settings(
@@ -373,9 +383,12 @@ struct CspSettingBody {
 }
 
 /// Canvas `params.require(:settings_locked)` for `set_csp_lock`.
+///
+/// Canvas runs the value through `value_to_boolean`, which accepts the
+/// string "true" as well as a JSON boolean, so both are decoded here.
 #[derive(Debug, Deserialize)]
 struct CspLockBody {
-    settings_locked: Option<String>,
+    settings_locked: Option<Value>,
 }
 
 /// Canvas `params.require(:domain)` for `add_domain` and `remove_domain`.
@@ -404,6 +417,17 @@ fn value_to_boolean(value: Option<&str>) -> bool {
             .collect::<String>()
             .parse::<i64>()
             .is_ok_and(|n| n != 0),
+    }
+}
+
+/// The same rule for a JSON value: Canvas accepts a boolean as well as the
+/// usual truthy strings.
+fn json_value_to_boolean(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::Bool(flag)) => *flag,
+        Some(Value::String(text)) => value_to_boolean(Some(text.as_str())),
+        Some(Value::Number(number)) => number.as_i64().is_some_and(|n| n != 0),
+        _ => false,
     }
 }
 
@@ -485,10 +509,10 @@ async fn get_account_settings(
     auth: AuthUser,
     Path(account_id): Path<i64>,
 ) -> Result<Json<Value>, ApiError> {
-    let chain = account_ancestry(&state.db, account_id).await?;
-    if chain.is_empty() {
+    if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
+    let chain = account_ancestry(&state.db, account_id).await?;
     if !can_read_settings(&state.db, &auth, &chain, None).await? {
         return Err(ApiError::Forbidden);
     }
@@ -522,10 +546,10 @@ async fn set_account_setting(
     Path(account_id): Path<i64>,
     body: Option<Json<CspSettingBody>>,
 ) -> Result<Response, ApiError> {
-    let chain = account_ancestry(&state.db, account_id).await?;
-    if chain.is_empty() {
+    if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
+    let chain = account_ancestry(&state.db, account_id).await?;
     if !can_manage_settings(&state.db, &auth, &chain).await? {
         return Err(ApiError::Forbidden);
     }
@@ -717,10 +741,10 @@ async fn set_csp_lock(
     Path(account_id): Path<i64>,
     body: Option<Json<CspLockBody>>,
 ) -> Result<Response, ApiError> {
-    let chain = account_ancestry(&state.db, account_id).await?;
-    if chain.is_empty() {
+    if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
+    let chain = account_ancestry(&state.db, account_id).await?;
     if !can_manage_settings(&state.db, &auth, &chain).await? {
         return Err(ApiError::Forbidden);
     }
@@ -755,7 +779,7 @@ async fn set_csp_lock(
             "CSP must be explicitly set on this account",
         ));
     }
-    let locked = value_to_boolean(body.settings_locked.as_deref());
+    let locked = json_value_to_boolean(body.settings_locked.as_ref());
     write_account_csp_lock(&state.db, account_id, locked).await?;
 
     let csp = account_csp(&state.db, account_id).await?;
@@ -769,10 +793,10 @@ async fn add_domain_action(
     Path(account_id): Path<i64>,
     body: Option<Json<DomainBody>>,
 ) -> Result<Response, ApiError> {
-    let chain = account_ancestry(&state.db, account_id).await?;
-    if chain.is_empty() {
+    if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
+    let chain = account_ancestry(&state.db, account_id).await?;
     if !can_manage_settings(&state.db, &auth, &chain).await? {
         return Err(ApiError::Forbidden);
     }
@@ -803,10 +827,10 @@ async fn add_multiple_domains(
     Path(account_id): Path<i64>,
     body: Option<Json<DomainBatchBody>>,
 ) -> Result<Response, ApiError> {
-    let chain = account_ancestry(&state.db, account_id).await?;
-    if chain.is_empty() {
+    if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
+    let chain = account_ancestry(&state.db, account_id).await?;
     if !can_manage_settings(&state.db, &auth, &chain).await? {
         return Err(ApiError::Forbidden);
     }
@@ -857,10 +881,10 @@ async fn remove_domain_action(
     Query(params): Query<DomainBody>,
     body: Option<Json<DomainBody>>,
 ) -> Result<Response, ApiError> {
-    let chain = account_ancestry(&state.db, account_id).await?;
-    if chain.is_empty() {
+    if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
+    let chain = account_ancestry(&state.db, account_id).await?;
     if !can_manage_settings(&state.db, &auth, &chain).await? {
         return Err(ApiError::Forbidden);
     }

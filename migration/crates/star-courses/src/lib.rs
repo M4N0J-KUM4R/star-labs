@@ -4248,7 +4248,6 @@ async fn blueprint_import_details(
 // Router
 // ---------------------------------------------------------------------------
 
-/// Build the courses router.
 // ---------------------------------------------------------------------------
 // Navigation tabs for accounts, groups and users (Canvas `tabs_controller.rb`)
 // ---------------------------------------------------------------------------
@@ -4532,7 +4531,7 @@ async fn update_course_tab(
 
     let count = tabs.len() as i64;
     if let Some(new_position) = payload.position {
-        if new_position <= 1 || new_position >= count + 1 {
+        if new_position <= 1 || new_position > count {
             return Ok(tab_error(
                 StatusCode::BAD_REQUEST,
                 "That tab location is invalid",
@@ -4626,6 +4625,7 @@ async fn update_course_tab(
 // Router
 // ---------------------------------------------------------------------------
 
+/// Build the courses router.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/courses", get(list_courses))
