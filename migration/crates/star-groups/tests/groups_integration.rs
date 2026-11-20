@@ -912,3 +912,75 @@ async fn export_tags_forbidden_for_student() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// POST /groups/{groupId}/preview_html — auth check
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn preview_html_forbidden_for_non_member() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let group = seed_group(&pool, course, &format!("{prefix}-PreviewGroup")).await;
+    // Teacher is enrolled as teacher but not a group member.
+    // Student is NOT enrolled in course at all — also not a group member.
+    // Both should get 403.
+    let resp = server
+        .post(&format!("/groups/{group}/preview_html"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "html": "<p>test</p>" }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        403,
+        "teacher non-member should get 403: {}",
+        resp.text()
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn preview_html_succeeds_for_group_member() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let group = seed_group(&pool, course, &format!("{prefix}-PreviewGroup2")).await;
+    // Add student as a group membership.
+    sqlx::query("INSERT INTO group_memberships (group_id, user_id, workflow_state) VALUES ($1, $2, 'invited')")
+        .bind(group)
+        .bind(student)
+        .execute(&pool)
+        .await
+        .expect("seed group membership");
+
+    let resp = server
+        .post(&format!("/groups/{group}/preview_html"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "html": "<p>hello</p>" }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "member should get 200: {}",
+        resp.text()
+    );
+    let body: Value = resp.json();
+    assert_eq!(
+        body.get("html").and_then(|v| v.as_str()),
+        Some("<p>hello</p>")
+    );
+
+    cleanup(&pool, &prefix).await;
+}

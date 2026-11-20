@@ -2230,12 +2230,14 @@ async fn create_group_file(
     auth: AuthUser,
     body: Bytes,
 ) -> Result<(StatusCode, Json<GroupFile>), ApiError> {
-    let group: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM groups WHERE id = $1 AND workflow_state != 'deleted'")
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM groups WHERE id = $1 AND workflow_state != 'deleted'")
             .bind(group_id)
             .fetch_optional(&state.db)
-            .await?
-            .ok_or(ApiError::NotFound)?;
+            .await?;
+    if exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
 
     if !is_teacher_in_group(&state.db, auth.id, group_id, &auth).await? {
         return Err(ApiError::Forbidden);
@@ -2274,19 +2276,28 @@ async fn create_group_file(
 
 /// POST /groups/{groupId}/preview_html — render HTML preview (stub)
 async fn preview_html(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     Path(group_id): Path<i64>,
     auth: AuthUser,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let _ = auth;
-    let _ = group_id;
+    let exists: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM groups WHERE id = $1 AND workflow_state != 'deleted'")
+            .bind(group_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    if !can_read_group(&state.db, auth.id, group_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
     Ok(Json(serde_json::json!({
         "html": body.get("html").and_then(|v| v.as_str()).unwrap_or("")
     })))
 }
 
-/// POST /group_categories/{groupCategoryId}/groups — create a group inside a category
+// POST /group_categories/{groupCategoryId}/groups — create a group inside a category
 async fn create_group_in_category(
     State(state): State<AppState>,
     Path(category_id): Path<i64>,
@@ -2739,7 +2750,7 @@ fn export_tags_headers(include_sis_id: bool) -> Vec<&'static str> {
     h
 }
 
-use axum::{body::Body, extract::Query, response::IntoResponse};
+use axum::response::{IntoResponse, Response};
 use std::collections::HashMap;
 
 /// GET /courses/{courseId}/group_categories/export_tags — CSV export of diff tags.
