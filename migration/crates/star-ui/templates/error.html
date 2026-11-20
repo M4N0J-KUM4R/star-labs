@@ -1,0 +1,11 @@
+{% extends "layouts/base.html" %}
+{# Error page — Canvas shared/errors style; public (no session required). #}
+{% block shell %}
+  <div class="ic-Error">
+    <div class="ic-Error__content">
+      <h1 class="ic-Error__code">{{ status }}</h1>
+      <p class="ic-Error__message">{{ message }}</p>
+      <p class="ic-Error__actions"><a href="/dashboard">Go to the dashboard</a> or <a href="/login">log in again</a>.</p>
+    </div>
+  </div>
+{% endblock shell %}

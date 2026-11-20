@@ -100,6 +100,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // -------------------------------------------------------------------------
     let app = Router::new()
         .route("/health", get(health))
+        // Server-rendered UI shell (star-ui, spec p5): top level, NOT under
+        // /api/v1 — /, /login, /logout, /dashboard, /courses/:id, /static.
+        .merge(star_ui::router())
         .nest("/api/v1", api_router)
         // Canvas serves its GraphQL API at /api/graphql (outside /api/v1).
         .nest("/api/graphql", star_graphql::router())

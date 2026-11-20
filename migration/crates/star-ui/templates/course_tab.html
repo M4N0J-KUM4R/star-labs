@@ -1,0 +1,11 @@
+{% extends "layouts/course.html" %}
+{# Generic tab landing page (announcements, assignments, discussions, ...).
+   Phase 1 renders the tab chrome plus a link back to course home; the data
+   views themselves are the per-feature journey work. #}
+{% block content %}
+  <div id="course_tab_content">
+    <h1>{{ tab_label }}</h1>
+    <p class="tab-placeholder">{{ tab_label }} for {{ course_name }} load here.</p>
+    <p><a href="/courses/{{ course_id }}">Back to course home</a></p>
+  </div>
+{% endblock content %}

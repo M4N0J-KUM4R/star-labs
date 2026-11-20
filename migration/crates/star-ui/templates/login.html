@@ -1,0 +1,37 @@
+{% extends "layouts/base.html" %}
+{# Login page — Canvas login/canvas/new_login with the "bare" layout:
+   body class no-headers (Canvas: full-width ic-Login-Body), no global nav. #}
+{% block shell %}
+  <div class="ic-Login">
+    <div class="ic-Login__container">
+      <div class="ic-Login__content">
+        <div class="ic-Login__innerContent">
+          <div class="ic-Login-header">
+            <h1 class="screenreader-only">Log In</h1>
+            <p class="ic-Login__subtitle">star-lms</p>
+          </div>
+          <div class="ic-Login__body">
+            {% if !error.is_empty() %}
+            <div class="ic-flash error" role="alert">{{ error }}</div>
+            {% endif %}
+            <form id="login_form" method="post" action="/login">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <input type="hidden" name="next" value="{{ next }}">
+              <div class="ic-Form-control ic-Form-control--login">
+                <label class="ic-Label" for="pseudonym_session_unique_id">Email</label>
+                <input class="ic-Input text" type="email" id="pseudonym_session_unique_id" name="email" value="{{ email }}" autofocus autocomplete="username" required>
+              </div>
+              <div class="ic-Form-control ic-Form-control--login">
+                <label class="ic-Label" for="pseudonym_session_password">Password</label>
+                <input class="ic-Input text" type="password" id="pseudonym_session_password" name="password" autocomplete="current-password" required>
+              </div>
+              <div class="ic-Login__actions">
+                <button type="submit" class="Button Button--login">Log In</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock shell %}

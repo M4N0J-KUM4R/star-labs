@@ -649,6 +649,19 @@ async fn get_course(
     Path(course_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<Course>, ApiError> {
+    let course = load_course_for_viewer(&state.db, course_id, &auth).await?;
+    Ok(Json(course))
+}
+
+/// Load one course behind the same visibility gate as `GET /courses/{id}`
+/// (404 before 403, then the enrolled-or-admin check). Extracted as a pub
+/// loader so the server-rendered UI shell (star-ui) course home page cannot
+/// bypass `/api/v1` course authorization.
+pub async fn load_course_for_viewer(
+    db: &PgPool,
+    course_id: i64,
+    auth: &AuthUser,
+) -> Result<Course, ApiError> {
     let course: Option<Course> = sqlx::query_as(
         r#"
         SELECT id, name, course_code, description, workflow_state, start_at, end_at, syllabus_body, created_at, updated_at
@@ -656,16 +669,16 @@ async fn get_course(
         "#,
     )
     .bind(course_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(db)
     .await?;
 
     let course = course.ok_or(ApiError::NotFound)?;
 
-    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+    if !check_enrolled_or_admin(db, auth.id, course_id, auth).await? {
         return Err(ApiError::Forbidden);
     }
 
-    Ok(Json(course))
+    Ok(course)
 }
 
 /// PUT /courses/{id} — update a course (course teacher or admin)
@@ -2980,17 +2993,17 @@ const SETTINGS_COURSE_TAB: (&str, &str, &str) = ("settings", "Settings", "/setti
 
 /// One persisted row from `course_tabs`.
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct CourseTabConfig {
-    tab_id: String,
-    position: i32,
-    hidden: bool,
+pub struct CourseTabConfig {
+    pub tab_id: String,
+    pub position: i32,
+    pub hidden: bool,
 }
 
 /// Merge persisted tab configuration into the defaults the way Canvas does:
 /// Home is pinned first and Settings last, Home/Settings cannot be hidden or
 /// moved, and other tabs are ordered by configured position then default
 /// order.
-fn build_course_tabs(
+pub fn build_course_tabs(
     course_id: i64,
     include_settings: bool,
     configs: &[CourseTabConfig],
@@ -3048,13 +3061,26 @@ async fn list_course_tabs(
     Path(course_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<Vec<CourseTab>>, ApiError> {
-    if !course_exists(&state.db, course_id).await? {
+    let tabs = load_course_tabs(&state.db, course_id, &auth).await?;
+    Ok(Json(tabs))
+}
+
+/// Load the course navigation tabs exactly as the `/courses/{id}/tabs` API
+/// does (same 404-before-403 gate, same ordering and renumbering). Extracted
+/// as a pub loader so the server-rendered UI shell renders the same tab list
+/// the API serves instead of duplicating the gate and the SQL.
+pub async fn load_course_tabs(
+    db: &PgPool,
+    course_id: i64,
+    auth: &AuthUser,
+) -> Result<Vec<CourseTab>, ApiError> {
+    if !course_exists(db, course_id).await? {
         return Err(ApiError::NotFound);
     }
-    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+    if !check_enrolled_or_admin(db, auth.id, course_id, auth).await? {
         return Err(ApiError::Forbidden);
     }
-    let include_settings = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+    let include_settings = check_teacher_or_admin(db, auth.id, course_id, auth).await?;
 
     let configs: Vec<CourseTabConfig> = sqlx::query_as(
         r#"
@@ -3065,14 +3091,10 @@ async fn list_course_tabs(
         "#,
     )
     .bind(course_id)
-    .fetch_all(&state.db)
+    .fetch_all(db)
     .await?;
 
-    Ok(Json(build_course_tabs(
-        course_id,
-        include_settings,
-        &configs,
-    )))
+    Ok(build_course_tabs(course_id, include_settings, &configs))
 }
 
 // ---------------------------------------------------------------------------

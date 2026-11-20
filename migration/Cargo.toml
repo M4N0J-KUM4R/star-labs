@@ -43,6 +43,7 @@ members = [
     "crates/star-polling",
     "crates/star-search",
     "crates/star-sis",
+    "crates/star-ui",
 ]
 
 [workspace.package]
@@ -70,6 +71,10 @@ futures = "0.3"
 uuid = { version = "1", features = ["v4", "serde"] }
 url = "2"
 rand = "0.8"
+askama = "0.16"
+axum-extra = { version = "0.12", features = ["form", "cookie"] }
+sha2 = "0.10"
+time = "0.3"
 
 [profile.dev]
 debug = 1
