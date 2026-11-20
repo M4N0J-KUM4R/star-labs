@@ -1,0 +1,130 @@
+name: Browser smoke
+
+# End-to-end smoke of the server-rendered star-ui shell (spec
+# p5-ui-shell.md §6): boot the real star-http binary against a real
+# PostgreSQL 16 service, seed a small fixture, drive the three §4 journeys
+# with Playwright/Chromium. No mocks, no route interception.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'migration/**'
+      - 'specs/**'
+      - '.github/workflows/browser-smoke.yml'
+      - 'browser-smoke/**'
+  pull_request:
+    paths:
+      - 'migration/**'
+      - 'specs/**'
+      - '.github/workflows/browser-smoke.yml'
+      - 'browser-smoke/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  browser-smoke:
+    name: browser-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      # Same service block as the rust-migration.yml test job.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: star
+          POSTGRES_PASSWORD: star-test-only
+          POSTGRES_DB: star_lms_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U star -d star_lms_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://star:star-test-only@localhost:5432/star_lms_test
+      STAR_JWT_SECRET: github-actions-test-secret
+      STAR_PORT: '18089'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: migration -> target
+          key: browser-smoke
+
+      - name: Build star-http (debug)
+        working-directory: migration
+        run: cargo build --locked -p star-http
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          # The lockfile pins the @playwright/test version, hence the browser build.
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('browser-smoke/package-lock.json') }}
+
+      - name: Install Playwright test runner
+        working-directory: browser-smoke
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: browser-smoke
+        run: npx playwright install --with-deps chromium
+
+      # star-http runs star_db::MIGRATOR at startup, so the schema exists by
+      # the time the health check passes; the seed step below only adds rows.
+      - name: Start star-http
+        working-directory: migration
+        run: |
+          nohup env DATABASE_URL="$DATABASE_URL" STAR_JWT_SECRET="$STAR_JWT_SECRET" STAR_PORT="$STAR_PORT" \
+            ./target/debug/star-http > server.log 2>&1 &
+          echo "star-http started, pid $!"
+
+      - name: Wait for health
+        working-directory: migration
+        run: |
+          for i in $(seq 1 90); do
+            if curl -sf --max-time 2 "http://localhost:${STAR_PORT}/health" | grep -q '"status":"ok"'; then
+              echo "star-http healthy after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::star-http did not become healthy within 90s"
+          cat server.log || true
+          exit 1
+
+      - name: Seed smoke fixture
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f browser-smoke/fixtures/seed.sql
+
+      - name: Run Playwright
+        working-directory: browser-smoke
+        env:
+          STAR_BASE_URL: http://localhost:${{ env.STAR_PORT }}
+        run: npx playwright test
+
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-smoke-failure
+          path: |
+            migration/server.log
+            browser-smoke/test-results/
+            browser-smoke/playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
