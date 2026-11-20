@@ -22,7 +22,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -139,7 +139,7 @@ pub struct CreateToolRequest {
     pub lti_version: Option<String>,
     pub developer_key_id: Option<i64>,
     pub lti_registration_id: Option<i64>,
-    pub deployment_id: Option<i64>,
+    pub deployment_id: Option<String>,
     pub tool_configuration: Option<Value>,
     pub custom_fields: Option<Value>,
     pub selection_width: Option<i32>,
@@ -156,9 +156,59 @@ pub struct VisibleNavToolsQuery {
     pub context_codes_brackets: Option<String>,
 }
 
-// ---------------------------------------------------------------------------
+/// Body for `PUT /courses/{course_id}/external_tools/{id}` and
+/// `PUT /accounts/{account_id}/external_tools/{id}`.
+#[derive(Debug, Deserialize, Default)]
+pub struct UpdateToolRequest {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub url: Option<String>,
+    pub domain: Option<String>,
+    pub consumer_id: Option<String>,
+    pub consumer_key: Option<String>,
+    pub shared_secret: Option<String>,
+    pub privacy_level: Option<String>,
+    pub workflow_state: Option<String>,
+    pub icon_url: Option<String>,
+    pub text: Option<String>,
+    pub enabled: Option<bool>,
+    pub visible: Option<bool>,
+    pub open_in_new_tab: Option<bool>,
+    pub root_url: Option<String>,
+    pub ownership_type: Option<String>,
+    pub tool_type: Option<String>,
+    pub lti_version: Option<String>,
+    pub developer_key_id: Option<i64>,
+    pub lti_registration_id: Option<i64>,
+    pub deployment_id: Option<String>,
+    pub tool_configuration: Option<Value>,
+    pub custom_fields: Option<Value>,
+    pub selection_width: Option<i32>,
+    pub selection_height: Option<i32>,
+    pub not_selectable: Option<bool>,
+}
+
+/// Body for `POST /courses/{course_id}/create_tool_with_verification` and
+/// `POST /accounts/{account_id}/create_tool_with_verification`.
+///
+/// Canvas external_tools_controller.rb:1594-1602 permits exactly these 7
+/// params: consumer_key, shared_secret, name, app_center_id, context_id,
+/// context_type, config_settings. Everything else is ignored, so the
+/// request struct carries nothing more.
+#[derive(Debug, Deserialize, Default)]
+pub struct CreateToolWithVerificationRequest {
+    pub consumer_key: Option<String>,
+    pub shared_secret: Option<String>,
+    pub name: Option<String>,
+    pub app_center_id: Option<String>,
+    pub context_id: Option<i64>,
+    pub context_type: Option<String>,
+    pub config_settings: Option<String>,
+}
+
+// --------------------------------------------------------------------------
 // Permission helpers
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------
 
 /// The account a course belongs to (`courses.account_id`).
 async fn course_account_id(pool: &PgPool, course_id: i64) -> Result<Option<i64>, ApiError> {
@@ -253,8 +303,35 @@ async fn can_manage_course_tools(
 // ---------------------------------------------------------------------------
 
 /// Canvas `external_tool_json` shape.
-fn tool_json(tool: &ExternalToolRow, is_rce_favorite: bool) -> Value {
-    json!({
+/// `top_nav_favorite` is Option so existing callers don't break; pass `Some(true)`
+/// from contexts that have checked `context_settings`.
+fn tool_json(
+    tool: &ExternalToolRow,
+    is_rce_favorite: bool,
+    is_top_nav_favorite: Option<bool>,
+) -> Value {
+    // Canvas serializes placements as an array of
+    // {placement: "<name>", ...} objects (Lti::IMS::Registration#placements,
+    // lti/ims/registration.rb:231). The stored tool_configuration uses the
+    // map form {name: settings}, so convert; a configuration that already
+    // carries the array form passes through unchanged.
+    let placements = match tool.tool_configuration.get("placements") {
+        Some(Value::Object(map)) => json!(map
+            .iter()
+            .map(|(name, settings)| {
+                let mut entry = json!({ "placement": name });
+                if let Value::Object(fields) = settings {
+                    for (key, value) in fields {
+                        entry[key] = value.clone();
+                    }
+                }
+                entry
+            })
+            .collect::<Vec<_>>()),
+        Some(Value::Array(items)) => json!(items),
+        _ => json!([]),
+    };
+    let mut json = json!({
         "id": tool.id,
         "name": tool.name,
         "description": tool.description,
@@ -289,7 +366,15 @@ fn tool_json(tool: &ExternalToolRow, is_rce_favorite: bool) -> Value {
         "selection_height": tool.selection_height,
         "not_selectable": tool.not_selectable,
         "is_rce_favorite": is_rce_favorite,
-    })
+        "placements": placements,
+    });
+    // Canvas external_tools.rb:44 only emits is_top_nav_favorite when the
+    // tool can be a top-nav favorite (top_navigation placement); it never
+    // renders `false`, so the key is added conditionally.
+    if let Some(fav) = is_top_nav_favorite {
+        json["is_top_nav_favorite"] = json!(fav);
+    }
+    json
 }
 
 /// Canvas `400 {"message": ...}` response.
@@ -379,6 +464,7 @@ async fn find_account_tool(
 /// Build the external tools router.
 pub fn router() -> Router<AppState> {
     Router::new()
+        // Existing
         .route(
             "/courses/{course_id}/external_tools",
             get(list_course_tools).post(create_course_tool),
@@ -398,6 +484,62 @@ pub fn router() -> Router<AppState> {
         .route(
             "/external_tools/visible_course_nav_tools",
             get(all_visible_nav_tools),
+        )
+        // New: update / delete (routes 1-4)
+        .route(
+            "/courses/{course_id}/external_tools/{id}",
+            put(update_course_tool).delete(delete_course_tool),
+        )
+        .route(
+            "/accounts/{account_id}/external_tools/{id}",
+            put(update_account_tool).delete(delete_account_tool),
+        )
+        // New: create_tool_with_verification (routes 5-6)
+        .route(
+            "/courses/{course_id}/create_tool_with_verification",
+            post(create_course_tool_with_verification),
+        )
+        .route(
+            "/accounts/{account_id}/create_tool_with_verification",
+            post(create_account_tool_with_verification),
+        )
+        // New: sessionless_launch (routes 7-8, stub 503)
+        .route(
+            "/courses/{course_id}/external_tools/sessionless_launch",
+            get(course_sessionless_launch),
+        )
+        .route(
+            "/accounts/{account_id}/external_tools/sessionless_launch",
+            get(account_sessionless_launch),
+        )
+        // Canvas routes.rb:1695-1696 — top_nav_favorites exist only for
+        // accounts, and only POST (add) + DELETE (remove). There is no list
+        // route and no course-scoped variant.
+        .route(
+            "/accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}",
+            post(add_account_top_nav_favorite).delete(remove_account_top_nav_favorite),
+        )
+        // New: migration_info (routes 12-13) — Canvas routes.rb:1707 nests
+        // it under the tool: .../external_tools/:external_tool_id/migration_info
+        .route(
+            "/courses/{course_id}/external_tools/{id}/migration_info",
+            get(course_migration_info),
+        )
+        .route(
+            "/accounts/{account_id}/external_tools/{id}/migration_info",
+            get(account_migration_info),
+        )
+        // New: group tools (route 16)
+        .route("/groups/{group_id}/external_tools", get(list_group_tools))
+        .route(
+            "/groups/{group_id}/external_tools/{id}",
+            get(show_group_tool),
+        )
+        // New: eula_launch (route 17, stub) — Canvas routes.rb:1216 is
+        // GET .../external_tools/:context_external_tool_id/eula_launch
+        .route(
+            "/courses/{course_id}/external_tools/{id}/eula_launch",
+            get(eula_launch),
         )
 }
 
@@ -446,7 +588,7 @@ async fn list_course_tools(
             }
             !(params.selectable == Some(true) && tool.not_selectable)
         })
-        .map(|tool| tool_json(tool, false))
+        .map(|tool| tool_json(tool, false, None))
         .collect();
 
     Ok(Json(data))
@@ -463,7 +605,7 @@ async fn show_course_tool(
         return Err(ApiError::Forbidden);
     }
     let tool = find_course_tool(&state.db, course_id, id).await?;
-    Ok(Json(tool_json(&tool, false)))
+    Ok(Json(tool_json(&tool, false, None)))
 }
 
 /// `GET /accounts/{account_id}/external_tools` — list the tools configured for
@@ -508,7 +650,7 @@ async fn list_account_tools(
             }
             true
         })
-        .map(|tool| tool_json(tool, favorites.contains(&tool.id)))
+        .map(|tool| tool_json(tool, favorites.contains(&tool.id), None))
         .collect();
 
     Ok(Json(data))
@@ -542,7 +684,7 @@ async fn create_course_tool(
         Ok(tool) => tool,
         Err(response) => return Ok(response),
     };
-    Ok(Json(tool_json(&tool, false)).into_response())
+    Ok(Json(tool_json(&tool, false, None)).into_response())
 }
 
 /// `POST /accounts/{account_id}/external_tools` — create an account tool.
@@ -572,7 +714,7 @@ async fn create_account_tool(
         Ok(tool) => tool,
         Err(response) => return Ok(response),
     };
-    Ok(Json(tool_json(&tool, false)).into_response())
+    Ok(Json(tool_json(&tool, false, None)).into_response())
 }
 
 /// Shared create path for both contexts. `Err(Response)` carries a Canvas
@@ -832,7 +974,7 @@ async fn all_visible_nav_tools(
             if has_placements && !has_placement(&tool.tool_configuration, "course_navigation") {
                 continue;
             }
-            let mut value = tool_json(&tool, false);
+            let mut value = tool_json(&tool, false, None);
             value["context_id"] = json!(course_id);
             value["context_name"] = json!(course_name);
             data.push(value);
@@ -840,4 +982,567 @@ async fn all_visible_nav_tools(
     }
 
     Ok(Json(data).into_response())
+}
+
+// --------------------------------------------------------------------------
+// New handlers: update / delete (routes 1-4)
+// --------------------------------------------------------------------------
+
+/// `PUT /courses/{course_id}/external_tools/{id}` — update a course tool.
+async fn update_course_tool(
+    State(state): State<AppState>,
+    Path((course_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateToolRequest>,
+) -> Result<Json<Value>, ApiError> {
+    require_course(&state.db, course_id).await?;
+    if !can_manage_course_tools(&state.db, &auth, course_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    // The lookup is the 404 guard for a tool outside this course.
+    find_course_tool(&state.db, course_id, id).await?;
+    let updated = apply_update(&state.db, id, payload).await?;
+    Ok(Json(tool_json(&updated, false, None)))
+}
+
+/// `DELETE /courses/{course_id}/external_tools/{id}` — soft-delete a course tool.
+async fn delete_course_tool(
+    State(state): State<AppState>,
+    Path((course_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    require_course(&state.db, course_id).await?;
+    if !can_manage_course_tools(&state.db, &auth, course_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let tool = find_course_tool(&state.db, course_id, id).await?;
+    // Canvas delete_tool renders the destroyed tool's JSON (controller.rb:
+    // 2143-2149), with workflow_state 'deleted' on the returned record.
+    sqlx::query(
+        "UPDATE external_tools SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await?;
+    let mut deleted = tool_json(&tool, false, None);
+    deleted["workflow_state"] = json!("deleted");
+    Ok(Json(deleted))
+}
+
+/// `PUT /accounts/{account_id}/external_tools/{id}` — update an account tool.
+async fn update_account_tool(
+    State(state): State<AppState>,
+    Path((account_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateToolRequest>,
+) -> Result<Json<Value>, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let _ = find_account_tool(&state.db, account_id, id).await?;
+    let updated = apply_update(&state.db, id, payload).await?;
+    let favorites = rce_favorite_ids(&state.db, "Account", account_id).await?;
+    Ok(Json(tool_json(
+        &updated,
+        favorites.contains(&updated.id),
+        None,
+    )))
+}
+
+/// `DELETE /accounts/{account_id}/external_tools/{id}` — soft-delete an account tool.
+async fn delete_account_tool(
+    State(state): State<AppState>,
+    Path((account_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let tool = find_account_tool(&state.db, account_id, id).await?;
+    // Canvas delete_tool renders the destroyed tool's JSON (controller.rb:
+    // 2143-2149).
+    sqlx::query(
+        "UPDATE external_tools SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await?;
+    let mut deleted = tool_json(&tool, false, None);
+    deleted["workflow_state"] = json!("deleted");
+    Ok(Json(deleted))
+}
+
+/// Shared update logic for both contexts.
+async fn apply_update(
+    pool: &PgPool,
+    id: i64,
+    payload: UpdateToolRequest,
+) -> Result<ExternalToolRow, ApiError> {
+    let sql = format!(
+        "UPDATE external_tools SET \
+         name = COALESCE($2, name), \
+         description = COALESCE($3, description), \
+         url = COALESCE($4, url), \
+         domain = COALESCE($5, domain), \
+         consumer_id = COALESCE($6, consumer_id), \
+         consumer_key = COALESCE($7, consumer_key), \
+         shared_secret = COALESCE($8, shared_secret), \
+         privacy_level = COALESCE($9, privacy_level), \
+         workflow_state = COALESCE($10, workflow_state), \
+         icon_url = COALESCE($11, icon_url), \
+         text = COALESCE($12, text), \
+         enabled = COALESCE($13, enabled), \
+         visible = COALESCE($14, visible), \
+         open_in_new_tab = COALESCE($15, open_in_new_tab), \
+         root_url = COALESCE($16, root_url), \
+         ownership_type = COALESCE($17, ownership_type), \
+         tool_type = COALESCE($18, tool_type), \
+         lti_version = COALESCE($19, lti_version), \
+         developer_key_id = COALESCE($20, developer_key_id), \
+         lti_registration_id = COALESCE($21, lti_registration_id), \
+         deployment_id = COALESCE($22, deployment_id), \
+         tool_configuration = COALESCE($23, tool_configuration), \
+         custom_fields = COALESCE($24, custom_fields), \
+         selection_width = COALESCE($25, selection_width), \
+         selection_height = COALESCE($26, selection_height), \
+         not_selectable = COALESCE($27, not_selectable), \
+         updated_at = now() \
+         WHERE id = $1 AND workflow_state <> 'deleted' \
+         RETURNING {TOOL_COLUMNS}"
+    );
+    let tool: ExternalToolRow = sqlx::query_as(&sql)
+        .bind(id)
+        .bind(payload.name)
+        .bind(payload.description)
+        .bind(payload.url)
+        .bind(payload.domain)
+        .bind(payload.consumer_id)
+        .bind(payload.consumer_key)
+        .bind(payload.shared_secret)
+        .bind(payload.privacy_level)
+        .bind(payload.workflow_state)
+        .bind(payload.icon_url)
+        .bind(payload.text)
+        .bind(payload.enabled)
+        .bind(payload.visible)
+        .bind(payload.open_in_new_tab)
+        .bind(payload.root_url)
+        .bind(payload.ownership_type)
+        .bind(payload.tool_type)
+        .bind(payload.lti_version)
+        .bind(payload.developer_key_id)
+        .bind(payload.lti_registration_id)
+        .bind(payload.deployment_id)
+        .bind(payload.tool_configuration)
+        .bind(payload.custom_fields)
+        .bind(payload.selection_width)
+        .bind(payload.selection_height)
+        .bind(payload.not_selectable)
+        .fetch_one(pool)
+        .await?;
+    Ok(tool)
+}
+
+// --------------------------------------------------------------------------
+// New handlers: create_tool_with_verification (routes 5-6)
+// --------------------------------------------------------------------------
+
+/// `POST /courses/{course_id}/create_tool_with_verification` — create tool with OIDC verification.
+async fn create_course_tool_with_verification(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CreateToolWithVerificationRequest>,
+) -> Result<Response, ApiError> {
+    require_course(&state.db, course_id).await?;
+    if !can_manage_course_tools(&state.db, &auth, course_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let account_id = course_account_id(&state.db, course_id).await?;
+    let tool = match create_tool_verified(
+        &state.db,
+        &auth,
+        payload,
+        "Course",
+        course_id,
+        Some(course_id),
+        account_id,
+    )
+    .await?
+    {
+        Ok(t) => t,
+        Err(r) => return Ok(r),
+    };
+    Ok(Json(tool_json(&tool, false, None)).into_response())
+}
+
+/// `POST /accounts/{account_id}/create_tool_with_verification` — create account tool with OIDC verification.
+async fn create_account_tool_with_verification(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CreateToolWithVerificationRequest>,
+) -> Result<Response, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let tool = match create_tool_verified(
+        &state.db,
+        &auth,
+        payload,
+        "Account",
+        account_id,
+        None,
+        Some(account_id),
+    )
+    .await?
+    {
+        Ok(t) => t,
+        Err(r) => return Ok(r),
+    };
+    let favorites = rce_favorite_ids(&state.db, "Account", account_id).await?;
+    Ok(Json(tool_json(&tool, favorites.contains(&tool.id), None)).into_response())
+}
+
+/// Shared create-with-verification path. Only the 7 params Canvas permits
+/// (external_tools_controller.rb:1594-1602) are honored; the URL comes from
+/// the app center config URL derived from app_center_id + config_settings
+/// (controller.rb:1605: `config_url = app_api.get_app_config_url(...)`,
+/// `config_type = "by_url"`).
+async fn create_tool_verified(
+    pool: &PgPool,
+    auth: &AuthUser,
+    payload: CreateToolWithVerificationRequest,
+    context_type: &str,
+    context_id: i64,
+    course_id: Option<i64>,
+    account_id: Option<i64>,
+) -> Result<Result<ExternalToolRow, Response>, ApiError> {
+    // Canvas accepts context_id/context_type params (controller.rb:1599)
+    // but the tool is created in the route's context; when the caller
+    // supplies them they must agree with that context.
+    if let Some(provided) = payload.context_id {
+        if provided != context_id {
+            return Ok(Err(tool_errors(vec![format!(
+                "Context id {provided} does not match route context {context_id}"
+            )])));
+        }
+    }
+    if let Some(provided) = payload.context_type.as_deref() {
+        if !provided.eq_ignore_ascii_case(context_type) {
+            return Ok(Err(tool_errors(vec![format!(
+                "Context type {provided} does not match route context {context_type}"
+            )])));
+        }
+    }
+
+    // Use name from payload or app_center_id, fall back to blank error
+    let name = payload
+        .name
+        .clone()
+        .filter(|n| !n.trim().is_empty())
+        .or(payload.app_center_id.clone())
+        .filter(|n| !n.trim().is_empty());
+    let Some(name) = name else {
+        return Ok(Err(tool_errors(vec!["Name can't be blank".to_string()])));
+    };
+
+    // Canvas sets config_type "by_url" with a URL derived from the app
+    // center; star-lms has no AppCenter, so config_settings must carry the
+    // tool url itself.
+    let url = payload
+        .config_settings
+        .as_ref()
+        .and_then(|cs| serde_json::from_str::<Value>(cs).ok())
+        .and_then(|v| v.get("url").and_then(|u| u.as_str()).map(String::from));
+    let Some(url) = url else {
+        return Ok(Err(tool_errors(vec!["Url can't be blank".to_string()])));
+    };
+
+    let sql = format!(
+        "INSERT INTO external_tools \
+         (name, url, consumer_key, shared_secret, privacy_level, workflow_state, \
+          course_id, account_id, context_type, context_id, tool_type, lti_version, \
+          enabled, visible, open_in_new_tab, ownership_type, tool_configuration, \
+          custom_fields, created_by_id) \
+         VALUES ($1, $2, $3, $4, 'anonymous', 'active', \
+                 $5, $6, $7, $8, 'lti', '1.3', \
+                 true, true, false, $9, '{{}}', '{{}}', $10) \
+         RETURNING {TOOL_COLUMNS}"
+    );
+    let tool: ExternalToolRow = sqlx::query_as(&sql)
+        .bind(name)
+        .bind(url)
+        .bind(payload.consumer_key.as_ref())
+        .bind(payload.shared_secret.as_ref())
+        .bind(course_id)
+        .bind(account_id)
+        .bind(context_type)
+        .bind(context_id)
+        .bind("account")
+        .bind(auth.id)
+        .fetch_one(pool)
+        .await?;
+
+    Ok(Ok(tool))
+}
+
+// --------------------------------------------------------------------------
+// New handlers: sessionless_launch (routes 7-8, stub 503)
+// --------------------------------------------------------------------------
+
+/// `GET /courses/{course_id}/external_tools/sessionless_launch` — stub 503.
+async fn course_sessionless_launch() -> StatusCode {
+    StatusCode::SERVICE_UNAVAILABLE
+}
+
+/// `GET /accounts/{account_id}/external_tools/sessionless_launch` — stub 503.
+async fn account_sessionless_launch() -> StatusCode {
+    StatusCode::SERVICE_UNAVAILABLE
+}
+
+// --------------------------------------------------------------------------
+// New handlers: top_nav_favorites (routes 9-10) via context_settings table
+// --------------------------------------------------------------------------
+
+/// Fetch top_nav_favorite tool IDs from context_settings JSONB.
+async fn top_nav_favorite_ids(
+    pool: &PgPool,
+    context_type: &str,
+    context_id: i64,
+) -> Result<Vec<i64>, ApiError> {
+    let row: Option<(Value,)> = sqlx::query_as(
+        "SELECT settings FROM context_settings WHERE context_type = $1 AND context_id = $2",
+    )
+    .bind(context_type)
+    .bind(context_id)
+    .fetch_optional(pool)
+    .await?;
+    let settings = row.map(|(v,)| v).unwrap_or(json!({}));
+    let ids = settings
+        .get("top_nav_favorite_tool_ids")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
+        .unwrap_or_default();
+    Ok(ids)
+}
+
+/// Persist top_nav_favorite tool IDs back to context_settings.
+async fn set_top_nav_favorites(
+    pool: &PgPool,
+    context_type: &str,
+    context_id: i64,
+    ids: &[i64],
+) -> Result<(), ApiError> {
+    let settings = json!({ "top_nav_favorite_tool_ids": ids });
+    sqlx::query(
+        "INSERT INTO context_settings (context_type, context_id, settings) \
+         VALUES ($1, $2, $3) \
+         ON CONFLICT (context_type, context_id) DO UPDATE SET settings = $3",
+    )
+    .bind(context_type)
+    .bind(context_id)
+    .bind(&settings)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// `POST /accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}` —
+/// Canvas `add_top_nav_favorite` (external_tools_controller.rb:1760-1791):
+/// requires manage_lti_add, 404 when the tool is unknown, 400 when the tool
+/// lacks the top_navigation placement, 400 when more than 2 tools would be
+/// favorited; on success renders `{top_nav_favorite_tool_ids: [...]}`.
+async fn add_account_top_nav_favorite(
+    State(state): State<AppState>,
+    Path((account_id, tool_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let tool = find_account_tool(&state.db, account_id, tool_id).await?;
+
+    // Canvas: "Tool does not have top_navigation placement" → 400.
+    if !has_placement(&tool.tool_configuration, "top_navigation") {
+        return Ok(bad_request(
+            "Tool does not have top_navigation placement".to_string(),
+        ));
+    }
+
+    let mut ids = top_nav_favorite_ids(&state.db, "Account", account_id).await?;
+    if !ids.contains(&tool_id) {
+        ids.push(tool_id);
+    }
+    // Canvas: "Cannot have more than 2 favorited tools" → 400.
+    if ids.len() > 2 {
+        return Ok(bad_request(
+            "Cannot have more than 2 favorited tools".to_string(),
+        ));
+    }
+    set_top_nav_favorites(&state.db, "Account", account_id, &ids).await?;
+    Ok(Json(json!({ "top_nav_favorite_tool_ids": ids })).into_response())
+}
+
+/// `DELETE /accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}` —
+/// Canvas `remove_top_nav_favorite` (external_tools_controller.rb:1793-1802):
+/// requires manage_lti_delete, removes the id when present, always renders
+/// `{top_nav_favorite_tool_ids: [...]}`.
+async fn remove_account_top_nav_favorite(
+    State(state): State<AppState>,
+    Path((account_id, tool_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let mut ids = top_nav_favorite_ids(&state.db, "Account", account_id).await?;
+    ids.retain(|id| *id != tool_id);
+    set_top_nav_favorites(&state.db, "Account", account_id, &ids).await?;
+    Ok(Json(json!({ "top_nav_favorite_tool_ids": ids })))
+}
+
+// --------------------------------------------------------------------------
+// New handlers: migration_info (routes 12-13)
+// --------------------------------------------------------------------------
+
+/// `GET /courses/{course_id}/external_tools/{id}/migration_info` — Canvas
+/// `migration_info` (external_tools_controller.rb:994-1014): requires
+/// read_as_admin, finds the tool by id, and renders
+/// `{migration_running: false}` when no migration is running.
+async fn course_migration_info(
+    State(state): State<AppState>,
+    Path((course_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    require_course(&state.db, course_id).await?;
+    if !can_manage_course_tools(&state.db, &auth, course_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    find_course_tool(&state.db, course_id, id).await?;
+    Ok(Json(json!({ "migration_running": false })))
+}
+
+/// `GET /accounts/{account_id}/external_tools/{id}/migration_info` — the
+/// account twin of the course route above.
+async fn account_migration_info(
+    State(state): State<AppState>,
+    Path((account_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    find_account_tool(&state.db, account_id, id).await?;
+    Ok(Json(json!({ "migration_running": false })))
+}
+
+// --------------------------------------------------------------------------
+// New handlers: group tools (route 16)
+// --------------------------------------------------------------------------
+
+/// Canvas group read gate (app/models/group.rb:662): course-level groups
+/// grant :read when the containing course grants :read, so course
+/// teachers/admins and group members may both read group tools.
+async fn can_read_group_tools(
+    state: &AppState,
+    group_id: i64,
+    auth: &AuthUser,
+) -> Result<(), ApiError> {
+    let course: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT course_id FROM groups WHERE id = $1")
+            .bind(group_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let Some((course_id,)) = course else {
+        return Err(ApiError::NotFound);
+    };
+
+    let member: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM group_memberships \
+         WHERE group_id = $1 AND user_id = $2 AND workflow_state <> 'deleted' LIMIT 1",
+    )
+    .bind(group_id)
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await?;
+    if member.is_some() {
+        return Ok(());
+    }
+
+    if let Some(course_id) = course_id {
+        if can_read_course(&state.db, auth, course_id).await? {
+            return Ok(());
+        }
+    }
+    Err(ApiError::Forbidden)
+}
+
+/// `GET /groups/{group_id}/external_tools` — list tools for a group.
+async fn list_group_tools(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    can_read_group_tools(&state, group_id, &auth).await?;
+
+    // Canvas resolves a Group's tools through its course
+    // (Lti::ToolFinderUtils.contexts_to_search: Group -> [:self, :recursive];
+    // Group#context_external_tools is none, group.rb:196-198, so the course
+    // chain supplies the tools).
+    let sql = format!(
+        "SELECT {TOOL_COLUMNS} FROM external_tools \
+         WHERE context_type = 'Course' AND context_id = \
+               (SELECT course_id FROM groups WHERE id = $1) \
+           AND workflow_state <> 'deleted' \
+         ORDER BY id ASC"
+    );
+    let rows: Vec<ExternalToolRow> = sqlx::query_as(&sql)
+        .bind(group_id)
+        .fetch_all(&state.db)
+        .await?;
+
+    Ok(Json(
+        rows.iter().map(|t| tool_json(t, false, None)).collect(),
+    ))
+}
+
+/// `GET /groups/{group_id}/external_tools/{id}` — show one group tool.
+async fn show_group_tool(
+    State(state): State<AppState>,
+    Path((group_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    can_read_group_tools(&state, group_id, &auth).await?;
+
+    // Canvas resolves the tool through the group's course chain.
+    let sql = format!(
+        "SELECT {TOOL_COLUMNS} FROM external_tools \
+         WHERE id = $1 AND context_type = 'Course' \
+           AND context_id = (SELECT course_id FROM groups WHERE id = $2) \
+           AND workflow_state <> 'deleted'"
+    );
+    let tool: Option<ExternalToolRow> = sqlx::query_as(&sql)
+        .bind(id)
+        .bind(group_id)
+        .fetch_optional(&state.db)
+        .await?;
+    tool.map(|t| Json(tool_json(&t, false, None)))
+        .ok_or(ApiError::NotFound)
+}
+
+// --------------------------------------------------------------------------
+// New handlers: eula_launch (route 17, stub)
+// --------------------------------------------------------------------------
+
+/// `GET /courses/{course_id}/external_tools/{id}/eula_launch` — stub 503.
+/// Canvas launches an OIDC eula flow; star-lms has no launch endpoint yet.
+async fn eula_launch() -> StatusCode {
+    StatusCode::SERVICE_UNAVAILABLE
 }

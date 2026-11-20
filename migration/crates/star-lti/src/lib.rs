@@ -44,8 +44,10 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod data_services;
 mod dynamic_registration;
 mod external_tools;
+mod line_items;
 mod tool_proxy;
 
 // ---------------------------------------------------------------------------
@@ -561,7 +563,9 @@ pub fn router() -> Router<AppState> {
             get(list_deployments).post(create_deployment),
         )
         .merge(external_tools::router())
+        .merge(data_services::router())
         .merge(dynamic_registration::router())
+        .merge(line_items::router())
         .merge(tool_proxy::router())
 }
 

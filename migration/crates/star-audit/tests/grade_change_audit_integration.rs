@@ -419,15 +419,18 @@ async fn advanced_query_permission_and_condition_rules() {
     assert_eq!(body["events"].as_array().unwrap().len(), 1);
     assert_eq!(body["events"][0]["grade_after"], "10");
 
-    // `assignment_id=override` is rejected explicitly.
+    // `assignment_id=override` selects course final grade override events
+    // (Canvas `query` swaps in COURSE_OVERRIDE_ASSIGNMENT). The seeded course
+    // has no override event and disallows overrides, so the result is empty
+    // but the request itself succeeds.
     let resp = server
         .get(&format!(
             "/audit/grade_change?course_id={course}&assignment_id=override"
         ))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
-    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
-    assert!(resp.text().contains("override"));
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["events"].as_array().unwrap().len(), 0);
 
     cleanup(&pool, &prefix).await;
 }
