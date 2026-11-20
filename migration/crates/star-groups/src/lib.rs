@@ -1032,7 +1032,8 @@ async fn create_membership(
     let membership: MembershipWithUser = sqlx::query_as(
         r#"
         SELECT gm.id, gm.group_id, gm.user_id, u.name as user_name, u.email as user_email,
-               gm.workflow_state, gm.created_at, gm.updated_at
+               gm.workflow_state, gm.created_at, gm.updated_at,
+               COALESCE(gm.moderator, false) AS moderator
         FROM group_memberships gm
         JOIN users u ON u.id = gm.user_id
         WHERE gm.group_id = $1 AND gm.user_id = $2
@@ -1070,7 +1071,8 @@ async fn list_memberships(
     let memberships: Vec<MembershipWithUser> = sqlx::query_as(
         r#"
         SELECT gm.id, gm.group_id, gm.user_id, u.name as user_name, u.email as user_email,
-               gm.workflow_state, gm.created_at, gm.updated_at
+               gm.workflow_state, gm.created_at, gm.updated_at,
+               COALESCE(gm.moderator, false) AS moderator
         FROM group_memberships gm
         JOIN users u ON u.id = gm.user_id
         WHERE gm.group_id = $1 AND gm.workflow_state != 'deleted'
