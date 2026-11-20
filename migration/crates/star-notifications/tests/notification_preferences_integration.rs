@@ -915,9 +915,9 @@ async fn scoped_channel_categories_requires_auth_or_admin() {
 
     // Non-existent channel — 404.
     let resp = server
-        .get(&format!(
-            "/api/v1/users/self/communication_channels/99999999/notification_preference_categories"
-        ))
+        .get(
+            "/api/v1/users/self/communication_channels/99999999/notification_preference_categories",
+        )
         .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .await;
     assert_eq!(
