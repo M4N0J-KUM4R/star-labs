@@ -54,7 +54,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -1526,7 +1526,7 @@ async fn update_registration_scoped(
         .bind(payload.lock_deploying)
         .bind(registration_state)
         .bind(payload.configuration)
-        .bind(new_overlay)
+        .bind(&new_overlay)
         .bind(auth.id)
         .fetch_optional(&state.db)
         .await?;

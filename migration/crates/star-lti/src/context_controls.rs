@@ -21,10 +21,10 @@
 //! `course_count`, `child_control_count`).
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -38,7 +38,7 @@ use star_common::{ApiError, AppState};
 use crate::{
     can_manage_account, deployment_json, find_active_deployment, find_active_registration,
     record_history_entry, require_account, root_account_id, user_summary, DeploymentRow,
-    STATE_DELETED,
+    DEPLOYMENT_COLUMNS, STATE_DELETED,
 };
 
 /// Canvas MAX_BULK_CREATE (context_controls_controller.rb).
@@ -138,7 +138,7 @@ async fn root_account_deployment(
     account_id: i64,
 ) -> Result<Option<DeploymentRow>, ApiError> {
     let sql = format!(
-        "SELECT {crate::DEPLOYMENT_COLUMNS} FROM lti_deployments \
+        "SELECT {DEPLOYMENT_COLUMNS} FROM lti_deployments \
          WHERE registration_id = $1 AND context_type = 'Account' AND context_id = $2 \
            AND workflow_state <> '{STATE_DELETED}' \
          ORDER BY id ASC LIMIT 1"
@@ -440,7 +440,7 @@ async fn index_controls(
     let mut deployments = Vec::with_capacity(by_deployment.len());
     for (deployment_id, list) in &by_deployment {
         let sql = format!(
-            "SELECT {crate::DEPLOYMENT_COLUMNS} FROM lti_deployments \
+            "SELECT {DEPLOYMENT_COLUMNS} FROM lti_deployments \
              WHERE id = $1 AND workflow_state <> '{STATE_DELETED}'"
         );
         let deployment: Option<DeploymentRow> = sqlx::query_as(&sql)
@@ -720,7 +720,8 @@ async fn update_control(
     }
     let registration = find_active_registration(&state.db, registration_id).await?;
     let root_id = root_account_id(&state.db, account_id).await?;
-    let control = find_control(&state.db, registration.id, root_id, id).await?;
+    // The scoped lookup is the 404 guard.
+    find_control(&state.db, registration.id, root_id, id).await?;
 
     // Canvas `params.require(:available)` answers 400 when missing.
     let Some(available) = payload.available else {
@@ -779,8 +780,7 @@ async fn delete_control(
     let root_id = root_account_id(&state.db, account_id).await?;
     let control = find_control(&state.db, registration.id, root_id, id).await?;
 
-    let deployment_sql =
-        format!("SELECT {crate::DEPLOYMENT_COLUMNS} FROM lti_deployments WHERE id = $1");
+    let deployment_sql = format!("SELECT {DEPLOYMENT_COLUMNS} FROM lti_deployments WHERE id = $1");
     let deployment: Option<DeploymentRow> = sqlx::query_as(&deployment_sql)
         .bind(control.deployment_id)
         .fetch_optional(&state.db)

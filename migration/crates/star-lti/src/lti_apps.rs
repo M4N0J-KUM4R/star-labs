@@ -325,7 +325,7 @@ async fn account_tools(
     if exists.is_none() {
         return Err(ApiError::NotFound);
     }
-    if !can_manage_account(&state.db, auth, account_id).await? {
+    if !can_manage_account(&state.db, &auth, account_id).await? {
         return Err(ApiError::Forbidden);
     }
     context_tools(&state.db, None, account_id).await
@@ -415,7 +415,7 @@ async fn course_tools(
     .bind(auth.id)
     .fetch_optional(&state.db)
     .await?;
-    if !teacher.is_some() && !can_manage_account(&state.db, auth, account_id).await? {
+    if !teacher.is_some() && !can_manage_account(&state.db, &auth, account_id).await? {
         return Err(ApiError::Forbidden);
     }
     context_tools(&state.db, Some(course_id), account_id).await
@@ -445,7 +445,7 @@ async fn course_launch_definitions(
             .bind(auth.id)
             .fetch_optional(&state.db)
             .await?;
-    if !member.is_some() && !can_manage_account(&state.db, auth, account_id).await? {
+    if !member.is_some() && !can_manage_account(&state.db, &auth, account_id).await? {
         return Err(ApiError::Forbidden);
     }
 
