@@ -207,9 +207,15 @@ pub fn router() -> Router<AppState> {
                 .delete(destroy_authentication_provider),
         )
         .route(
+            "/accounts/{account_id}/authentication_providers/{id}/restore",
+            post(restore_authentication_provider),
+        )
+        .route(
             "/accounts/{account_id}/sso_settings",
             get(show_sso_settings).put(update_sso_settings),
         )
+        // Canvas pseudonym identification (user lookup by sis_id/unique_id).
+        .route("/users/lookup_user_ids", get(lookup_user_ids))
 }
 
 // ---------------------------------------------------------------------------
@@ -511,7 +517,12 @@ struct DeveloperKeyParams {
     vendor_code: Option<String>,
     auto_expire_tokens: Option<bool>,
     client_credentials_audience: Option<String>,
+    /// Optional workflow state machine event (e.g. "approve", "deny").
+    event: Option<String>,
 }
+
+/// Valid Canvas developer key workflow events.
+const DEVKEY_EVENTS: &[&str] = &["approve", "deny", "rotate_keys"];
 
 /// Admin-only management of developer keys, mirroring Canvas
 /// `require_manage_developer_keys`.
@@ -673,6 +684,17 @@ async fn update_developer_key(
     let params: DeveloperKeyParams = serde_json::from_value(raw)
         .map_err(|e| ApiError::BadRequest(format!("invalid developer_key: {e}")))?;
 
+    // Validate event if provided.
+    let event = params.event.as_deref().filter(|e| !e.is_empty());
+    if let Some(ev) = event {
+        if !DEVKEY_EVENTS.contains(&ev) {
+            return Err(ApiError::BadRequest(format!(
+                "unsupported event '{ev}', must be one of: {}",
+                DEVKEY_EVENTS.join(", ")
+            )));
+        }
+    }
+
     // Canvas' deprecated single redirect_uri is folded into redirect_uris on
     // create; on update the array form wins when both are sent.
     let mut redirect_uris = params
@@ -688,10 +710,40 @@ async fn update_developer_key(
     {
         redirect_uris.push(single.to_string());
     }
-    let scopes = params
-        .scopes
-        .map(StringList::into_vec)
-        .unwrap_or_else(|| existing.scopes.clone());
+
+    // Scope sanitisation: split on whitespace, fold in existing scopes if
+    // nothing new was sent, and deduplicate.
+    let new_scopes = params.scopes.map(StringList::into_vec);
+    let scopes = if let Some(mut incoming) = new_scopes {
+        let incoming: std::collections::HashSet<_> = incoming.into_iter().collect();
+        let existing: std::collections::HashSet<_> = existing.scopes.iter().cloned().collect();
+        // Union: keep existing + newly sent.
+        existing.union(&incoming).cloned().collect::<Vec<_>>()
+    } else {
+        existing.scopes.clone()
+    };
+
+    // Determine workflow state from event parameter.
+    let mut new_workflow_state: Option<String> = None;
+    let mut new_api_key: Option<String> = None;
+    if let Some(ev) = event {
+        match ev {
+            "approve" => {
+                if existing.workflow_state == "request" {
+                    new_workflow_state = Some("active".to_string());
+                }
+            }
+            "deny" => {
+                if existing.workflow_state == "request" {
+                    new_workflow_state = Some("denied".to_string());
+                }
+            }
+            "rotate_keys" => {
+                new_api_key = Some(generate_opaque_token(32));
+            }
+            _ => {}
+        }
+    }
 
     sqlx::query(
         r#"
@@ -700,6 +752,8 @@ async fn update_developer_key(
             redirect_uris = $6, scopes = $7, require_scopes = $8,
             allow_includes = $9, visible = $10, vendor_code = $11,
             auto_expire_tokens = $12, client_credentials_audience = $13,
+            workflow_state = COALESCE($14, workflow_state),
+            api_key = COALESCE($15, api_key),
             updated_at = now()
         WHERE id = $1 AND workflow_state <> 'deleted'
         "#,
@@ -725,6 +779,8 @@ async fn update_developer_key(
             .client_credentials_audience
             .or(existing.client_credentials_audience),
     )
+    .bind(new_workflow_state)
+    .bind(new_api_key)
     .execute(&app.db)
     .await?;
 
@@ -1638,7 +1694,91 @@ async fn destroy_authentication_provider(
     Ok(Json(authentication_provider_json(&deleted)))
 }
 
-// ---------------------------------------------------------------------------
+/// POST /accounts/{account_id}/authentication_providers/{id}/restore
+/// — reactivate a soft-deleted provider.
+async fn restore_authentication_provider(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Path((_account_id, id)): Path<(i64, i64)>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    require_admin(&auth)?;
+
+    let ap: AuthenticationProvider = sqlx::query_as(
+        format!(
+            "{} WHERE id = $1 AND workflow_state = 'deleted'",
+            AUTH_PROVIDER_SELECT
+        )
+        .as_str(),
+    )
+    .bind(id)
+    .fetch_optional(&app.db)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+
+    sqlx::query(
+        "UPDATE authentication_providers SET workflow_state = 'active', updated_at = now() WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&app.db)
+    .await?;
+
+    let mut restored = ap;
+    restored.workflow_state = "active".to_string();
+    restored.updated_at = Utc::now();
+    Ok(Json(authentication_provider_json(&restored)))
+}
+
+// --------------------------------------------------------------------------
+// User lookup by SIS ID / unique_id (Canvas GET /api/v1/users/lookup_user_ids)
+// --------------------------------------------------------------------------
+
+/// GET /users/lookup_user_ids?search[]=sis_id&search[]=unique_id
+///
+/// Returns {"user_id": <id>} for the first user that matches any of the
+/// provided search terms (sis_id or unique_id) against pseudonym records.
+/// Mirrors Canvas: the first matching pseudonym determines the result.
+async fn lookup_user_ids(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<serde_json::Map<String, serde_json::Value>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let search: Vec<String> = params
+        .get("search[]")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if search.is_empty() {
+        return Err(ApiError::BadRequest(
+            "lookup_user_ids requires at least one search[] parameter".into(),
+        ));
+    }
+
+    // Look up the first matching pseudonym; Canvas returns the first hit.
+    let found: Option<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT p.user_id::bigint
+        FROM pseudonyms p
+        WHERE p.unique_id = ANY($1)
+           OR p.sis_user_id = ANY($1)
+        LIMIT 1
+        "#,
+    )
+    .bind(&search)
+    .fetch_optional(&app.db)
+    .await?;
+
+    match found {
+        Some((user_id,)) => Ok(Json(serde_json::json!({ "user_id": user_id }))),
+        None => Ok(Json(serde_json::json!({ "user_id": null }))),
+    }
+}
+
+// --------------------------------------------------------------------------
 // SSO Settings (Canvas API v1 — /accounts/{id}/sso_settings)
 // ---------------------------------------------------------------------------
 
