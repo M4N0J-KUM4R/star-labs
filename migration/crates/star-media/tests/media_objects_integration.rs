@@ -463,7 +463,7 @@ async fn api_seed_group_member(pool: &PgPool, group_id: i64, user_id: i64) {
     .bind(user_id)
     .execute(pool)
     .await
-    .expect("seed group member")
+    .expect("seed group member");
 }
 
 /// A media object in a context, like Canvas' `MediaObject.create!`.

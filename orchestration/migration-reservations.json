@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0226",
- "next_available": "0227",
+ "max_merged": "0231",
+ "next_available": "0232",
  "reservations": {
   "0001": {
    "issue": null,
@@ -704,20 +704,45 @@
   },
   "0223": {
    "issue": null,
-   "note": "star-courses: the AI experiences and their conversations",
+   "note": "star-db: the Canvas schema tables (part a)",
    "status": "merged"
   },
   "0224": {
    "issue": null,
-   "note": "star-polling: the poll sessions",
+   "note": "star-db: the Canvas schema tables (part b)",
    "status": "merged"
   },
   "0225": {
    "issue": null,
-   "note": "star-media: the media object columns, the tracks and the media files",
+   "note": "star-db: the Canvas schema tables (part c)",
    "status": "merged"
   },
   "0226": {
+   "issue": null,
+   "note": "star-db: the Canvas schema indexes",
+   "status": "merged"
+  },
+  "0227": {
+   "issue": null,
+   "note": "star-db: the Canvas schema foreign keys",
+   "status": "merged"
+  },
+  "0228": {
+   "issue": null,
+   "note": "star-courses: the AI experiences and their conversations",
+   "status": "merged"
+  },
+  "0229": {
+   "issue": null,
+   "note": "star-polling: the poll sessions",
+   "status": "merged"
+  },
+  "0230": {
+   "issue": null,
+   "note": "star-media: the media object columns, the tracks and the media files",
+   "status": "merged"
+  },
+  "0231": {
    "issue": null,
    "note": "star-lti and star-search: the LTI registration history and the page views",
    "status": "merged"

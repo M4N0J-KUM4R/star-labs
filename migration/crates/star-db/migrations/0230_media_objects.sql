@@ -1,4 +1,4 @@
--- Migration 0224: the media object columns, its tracks and the group and user
+-- Migration 0230: the media object columns, its tracks and the group and user
 -- media files.
 --
 -- Canvas `MediaObject` is the entry of a media item in a course, a group or a
