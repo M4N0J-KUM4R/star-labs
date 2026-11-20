@@ -784,6 +784,153 @@ async fn notification_preference_categories_requires_auth_and_known_user() {
 }
 
 // ---------------------------------------------------------------------------
+// Tests — GET .../communication_channels/{id}/notification_preference_categories
+// (Canvas `category_index` scoped by channel id)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn scoped_channel_categories_returns_canvas_envelope() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let address = format!("{prefix}-scoped-cats@example.edu");
+    let user_id = seed_user(&pool, &prefix, "scoped-cats", "student").await;
+    let channel_id = seed_channel(&pool, user_id, &address, "email", "active").await;
+    // Seed preferences in two distinct categories.
+    seed_preference(
+        &pool,
+        user_id,
+        channel_id,
+        "new_announcement",
+        "announcement",
+        "daily",
+    )
+    .await;
+    seed_preference(
+        &pool,
+        user_id,
+        channel_id,
+        "grade_change",
+        "grading",
+        "never",
+    )
+    .await;
+
+    let token = auth_header(&pool, user_id, "student");
+    let resp = server
+        .get(&format!(
+            "/api/v1/users/self/communication_channels/{channel_id}/notification_preference_categories"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
+        .await;
+
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "categories list: {:#?}",
+        resp.text()
+    );
+    let body: Value = resp.json::<Value>();
+    let categories = body["categories"]
+        .as_array()
+        .expect("response must wrap slugs in categories");
+    let slugs: Vec<&str> = categories.iter().map(|s| s.as_str().unwrap()).collect();
+    assert!(
+        slugs.contains(&"announcement") && slugs.contains(&"grading"),
+        "stored categories must be present: {slugs:?}"
+    );
+
+    teardown(&pool, &[user_id]).await;
+}
+
+#[tokio::test]
+async fn scoped_channel_categories_fallback_when_no_stored_preferences() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let address = format!("{prefix}-scoped-fallback@example.edu");
+    let user_id = seed_user(&pool, &prefix, "scoped-fallback", "student").await;
+    let channel_id = seed_channel(&pool, user_id, &address, "email", "active").await;
+    // No preferences seeded — should fall back to the full static list.
+
+    let token = auth_header(&pool, user_id, "student");
+    let resp = server
+        .get(&format!(
+            "/api/v1/users/self/communication_channels/{channel_id}/notification_preference_categories"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
+        .await;
+
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "fallback response: {:#?}",
+        resp.text()
+    );
+    let body: Value = resp.json::<Value>();
+    let categories = body["categories"]
+        .as_array()
+        .expect("response must wrap slugs in categories");
+    assert_eq!(
+        categories.len(),
+        9,
+        "full static list when no prefs stored: {categories:#?}"
+    );
+
+    teardown(&pool, &[user_id]).await;
+}
+
+#[tokio::test]
+async fn scoped_channel_categories_requires_auth_or_admin() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let address = format!("{prefix}-scoped-auth@example.edu");
+    let user_id = seed_user(&pool, &prefix, "scoped-auth", "student").await;
+    let channel_id = seed_channel(&pool, user_id, &address, "email", "active").await;
+
+    // Unauthenticated request.
+    let resp = server
+        .get(&format!(
+            "/api/v1/users/self/communication_channels/{channel_id}/notification_preference_categories"
+        ))
+        .await;
+    assert_eq!(resp.status_code(), 401, "unauthenticated request");
+
+    // Authenticated as self — must succeed.
+    let token = auth_header(&pool, user_id, "student");
+    let resp = server
+        .get(&format!(
+            "/api/v1/users/self/communication_channels/{channel_id}/notification_preference_categories"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
+        .await;
+    assert_eq!(resp.status_code(), 200, "self request: {:#?}", resp.text());
+
+    // Non-existent channel — 404.
+    let resp = server
+        .get(
+            "/api/v1/users/self/communication_channels/99999999/notification_preference_categories",
+        )
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "unknown channel: {:#?}",
+        resp.text()
+    );
+
+    teardown(&pool, &[user_id]).await;
+}
+
+// ---------------------------------------------------------------------------
 // Tests — PUT .../communication_channels/{type}/{address}/notification_preferences
 // ---------------------------------------------------------------------------
 

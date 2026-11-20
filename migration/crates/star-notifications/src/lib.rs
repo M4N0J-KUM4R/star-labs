@@ -520,6 +520,11 @@ pub fn router() -> Router<AppState> {
             "/users/{user_id}/communication_channels/{communication_channel_id}/notification_preferences/{notification}",
             get(show_channel_preference_scoped),
         )
+        // Per-channel notification preference categories (Canvas `category_index`)
+        .route(
+            "/users/{user_id}/communication_channels/{communication_channel_id}/notification_preference_categories",
+            get(list_channel_preference_categories_scoped),
+        )
         // Per-channel notification preferences, scoped by (type, address)
         .route(
             "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences",
@@ -1502,6 +1507,53 @@ async fn show_channel_preference_scoped(
     let row = find_channel_preference(&state.db, target_user_id, channel_id, &notification).await?;
     Ok(Json(CommunicationChannelPreferencesResponse {
         notification_preferences: vec![row],
+    }))
+}
+
+/// Derive the distinct category slugs that have at least one stored preference
+/// for the given channel, falling back to the static list when none are stored.
+async fn derive_categories_for_channel(
+    pool: &sqlx::PgPool,
+    channel_id: i64,
+) -> Result<Vec<String>, ApiError> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT category
+        FROM notification_preferences
+        WHERE communication_channel_id = $1
+        ORDER BY category ASC
+        "#,
+    )
+    .bind(channel_id)
+    .fetch_all(pool)
+    .await?;
+
+    let stored: Vec<String> = rows.into_iter().map(|(c,)| c).collect();
+    if stored.is_empty() {
+        Ok(NOTIFICATION_CATEGORIES
+            .iter()
+            .map(|s| s.to_string())
+            .collect())
+    } else {
+        Ok(stored)
+    }
+}
+
+/// GET /users/{user_id}/communication_channels/{communication_channel_id}/notification_preference_categories
+/// Canvas' `category_index` scoped to one channel.
+async fn list_channel_preference_categories_scoped(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, channel_id)): Path<(String, i64)>,
+) -> Result<Json<NotificationPreferenceCategoriesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_read(&auth, target_user_id)?;
+    owned_channel_exists(&state.db, target_user_id, channel_id).await?;
+
+    let categories = derive_categories_for_channel(&state.db, channel_id).await?;
+    Ok(Json(NotificationPreferenceCategoriesResponse {
+        categories,
     }))
 }
 

@@ -1068,3 +1068,180 @@ async fn bounced_channels_excludes_retired_channels() {
         .await
         .expect("teardown");
 }
+
+// ---------------------------------------------------------------------------
+// Tests — GET /accounts/{accountId}/unconfirmed_communication_channels
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn unconfirmed_channels_requires_admin() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    // Canvas `generate_bulk_report` resolves the account first, so the 401 is
+    // only reachable for an account that exists.
+    let account_id: i64 =
+        sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+            .bind(format!("{prefix}-unconf-authz-acct"))
+            .fetch_one(&pool)
+            .await
+            .expect("seed account");
+
+    let student_id = seed_user(&pool, &prefix, "unconf-student", "student").await;
+    sqlx::query("INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, $3)")
+        .bind(account_id)
+        .bind(student_id)
+        .bind("student")
+        .execute(&pool)
+        .await
+        .expect("link student to account");
+    let token = auth_header(&pool, student_id, "student");
+
+    let resp = server
+        .get(&format!(
+            "/api/v1/accounts/{account_id}/unconfirmed_communication_channels"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
+        .await;
+
+    // `render_unauthorized_action` — 401, not 403.
+    assert_eq!(
+        resp.status_code(),
+        401,
+        "non-admin must be 401: {:#?}",
+        resp.text()
+    );
+
+    sqlx::query("DELETE FROM account_users WHERE account_id = $1")
+        .bind(account_id)
+        .execute(&pool)
+        .await
+        .expect("teardown");
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(student_id)
+        .execute(&pool)
+        .await
+        .expect("teardown");
+    sqlx::query("DELETE FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .execute(&pool)
+        .await
+        .expect("teardown");
+}
+
+// ---------------------------------------------------------------------------
+// Tests — DELETE /users/{userId}/communication_channels/{type}/{address}
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn destroy_channel_by_address_requires_auth() {
+    let Some((server, _, _)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let resp = server
+        .delete("/api/v1/users/1/communication_channels/email/test@example.edu")
+        .await;
+    assert_eq!(resp.status_code(), 401, "unauthenticated request");
+}
+
+#[tokio::test]
+async fn destroy_channel_by_address_owner_deletes() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let _ = prefix;
+
+    let user_id = seed_user(&pool, &prefix, "destroy-addr-owner", "student").await;
+    seed_channel(&pool, user_id, "destroy-me@example.edu", "email", "active").await;
+
+    let token = auth_header(&pool, user_id, "student");
+    let resp = server
+        .delete(&format!(
+            "/api/v1/users/{user_id}/communication_channels/email/destroy-me@example.edu"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
+        .await;
+
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "owner delete must succeed: {:#?}",
+        resp.text()
+    );
+    let body: Value = resp.json::<Value>();
+    assert_eq!(
+        body["workflow_state"].as_str(),
+        Some("retired"),
+        "channel must be retired"
+    );
+
+    sqlx::query("DELETE FROM communication_channels WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .expect("teardown");
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .expect("teardown");
+}
+
+#[tokio::test]
+async fn destroy_channel_by_address_not_found_returns_404() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let _ = prefix;
+
+    let user_id = seed_user(&pool, &prefix, "destroy-404-user", "student").await;
+    let token = auth_header(&pool, user_id, "student");
+
+    let resp = server
+        .delete(&format!(
+            "/api/v1/users/{user_id}/communication_channels/email/nonexistent@example.edu"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
+        .await;
+
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "missing channel must be 404: {:#?}",
+        resp.text()
+    );
+
+    sqlx::query("DELETE FROM communication_channels WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .expect("teardown");
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .expect("teardown");
+}
+
+// ---------------------------------------------------------------------------
+// Tests — DELETE /users/self/communication_channels/push
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn delete_push_token_requires_auth() {
+    let Some((server, _, _)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let resp = server
+        .delete("/api/v1/users/self/communication_channels/push?push_token=sometoken")
+        .await;
+    assert_eq!(resp.status_code(), 401, "unauthenticated request");
+}
