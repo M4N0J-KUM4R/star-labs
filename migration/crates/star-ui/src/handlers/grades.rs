@@ -252,6 +252,10 @@ pub async fn grades(
     let env = course_env(&ctx, &user, &origin, "grades", course_id);
     let (jar, csrf_token) = crate::session::ensure_csrf_cookie(jar);
 
+    // The breadcrumb borrows `ctx` while the page struct below moves its
+    // fields, so it is built first.
+    let breadcrumb = course_breadcrumb(&ctx, course_id);
+
     let page = GradesPage {
         title: format!("{} - Grades", ctx.course.name),
         body_class: format!(
@@ -262,7 +266,7 @@ pub async fn grades(
         notices: Vec::new(),
         user_name: ctx.user_name,
         active_path: "courses",
-        breadcrumb: course_breadcrumb(&ctx, course_id),
+        breadcrumb,
         csrf_token,
         tabs: ctx.tabs,
         active_context_tab: "grades".to_string(),
@@ -294,7 +298,11 @@ async fn letter_grade_for_percent(
     course_id: i64,
     percent: f64,
 ) -> Option<String> {
-    let std_row: Option<(i64,)> = sqlx::query_as(
+    // The row type is the plain tuple `(i64,)`: `.fetch_optional()` supplies
+    // the outer Option, so the `query_as` target must not wrap it in another
+    // (same shape as star-assignments' `find_submission`). No active
+    // standard -> no letter grade.
+    let (standard_id,): (i64,) = sqlx::query_as(
         r#"SELECT id FROM grading_standards
            WHERE course_id = $1 AND workflow_state = 'active'
            LIMIT 1"#,
@@ -310,7 +318,7 @@ async fn letter_grade_for_percent(
            WHERE grading_standard_id = $1
            ORDER BY position ASC"#,
     )
-    .bind(std_row.0)
+    .bind(standard_id)
     .fetch_all(db)
     .await
     .ok()?;
@@ -409,6 +417,10 @@ pub async fn gradebook(
     let env = course_env(&ctx, &user, &origin, "grades", course_id);
     let (jar, csrf_token) = crate::session::ensure_csrf_cookie(jar);
 
+    // The breadcrumb borrows `ctx` while the page struct below moves its
+    // fields, so it is built first.
+    let breadcrumb = course_breadcrumb(&ctx, course_id);
+
     let page = GradebookPage {
         title: format!("{} - Gradebook", ctx.course.name),
         body_class: format!(
@@ -419,7 +431,7 @@ pub async fn gradebook(
         notices: Vec::new(),
         user_name: ctx.user_name,
         active_path: "courses",
-        breadcrumb: course_breadcrumb(&ctx, course_id),
+        breadcrumb,
         csrf_token,
         tabs: ctx.tabs,
         active_context_tab: "grades".to_string(),

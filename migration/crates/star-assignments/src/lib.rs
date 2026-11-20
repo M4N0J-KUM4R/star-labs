@@ -9483,6 +9483,20 @@ pub async fn load_gradebook_rows(
     Ok(rows)
 }
 
+/// The shell's create-assignment form fields (issue #71) — the argument
+/// group of [`create_assignment_record`]. Borrowed views of the form: the
+/// loader only reads them, the caller keeps owning the parsed form.
+#[derive(Debug, Clone, Copy)]
+pub struct NewAssignmentRecord<'a> {
+    pub course_id: i64,
+    pub title: &'a str,
+    pub description: Option<&'a str>,
+    pub points_possible: Option<f64>,
+    pub due_at: Option<DateTime<Utc>>,
+    pub assignment_group_id: Option<i64>,
+    pub workflow_state: &'a str,
+}
+
 /// Create an assignment from the shell's form fields.
 ///
 /// Same INSERT shape as the REST `create_assignment` handler (title
@@ -9490,18 +9504,12 @@ pub async fn load_gradebook_rows(
 /// workflow_state selections. Returns the created row's id.
 pub async fn create_assignment_record(
     db: &PgPool,
-    course_id: i64,
-    title: &str,
-    description: Option<&str>,
-    points_possible: Option<f64>,
-    due_at: Option<DateTime<Utc>>,
-    assignment_group_id: Option<i64>,
-    workflow_state: &str,
+    record: &NewAssignmentRecord<'_>,
 ) -> Result<i64, ApiError> {
-    if title.trim().is_empty() {
+    if record.title.trim().is_empty() {
         return Err(ApiError::Validation("title is required".into()));
     }
-    if let Some(pp) = points_possible {
+    if let Some(pp) = record.points_possible {
         if pp < 0.0 {
             return Err(ApiError::Validation("points_possible must be >= 0".into()));
         }
@@ -9516,16 +9524,41 @@ pub async fn create_assignment_record(
         RETURNING id
         "#,
     )
-    .bind(course_id)
-    .bind(title.trim())
-    .bind(description)
-    .bind(points_possible)
-    .bind(due_at)
-    .bind(assignment_group_id)
-    .bind(workflow_state)
+    .bind(record.course_id)
+    .bind(record.title.trim())
+    .bind(record.description)
+    .bind(record.points_possible)
+    .bind(record.due_at)
+    .bind(record.assignment_group_id)
+    .bind(record.workflow_state)
     .fetch_one(db)
     .await?;
     Ok(id)
+}
+
+/// The shell's edit-assignment form fields (issue #71) — the argument group
+/// of [`update_assignment_record`]. `None` means "not in the form", and the
+/// loader keeps the stored value for it (partial-merge semantics).
+#[derive(Debug, Clone, Copy)]
+pub struct AssignmentRecordUpdate<'a> {
+    pub title: Option<&'a str>,
+    pub description: Option<&'a str>,
+    pub points_possible: Option<f64>,
+    pub due_at: Option<DateTime<Utc>>,
+    pub assignment_group_id: Option<i64>,
+    pub workflow_state: Option<&'a str>,
+}
+
+/// The stored column set of [`update_assignment_record`]'s SELECT (the
+/// tuple it used to destructure inline).
+#[derive(Debug, sqlx::FromRow)]
+struct ExistingAssignmentRecord {
+    title: String,
+    description: Option<String>,
+    points_possible: f64,
+    due_at: Option<DateTime<Utc>>,
+    assignment_group_id: Option<i64>,
+    workflow_state: String,
 }
 
 /// Update an assignment from the shell's edit form (same partial-merge
@@ -9533,28 +9566,9 @@ pub async fn create_assignment_record(
 pub async fn update_assignment_record(
     db: &PgPool,
     assignment_id: i64,
-    title: Option<&str>,
-    description: Option<&str>,
-    points_possible: Option<f64>,
-    due_at: Option<DateTime<Utc>>,
-    assignment_group_id: Option<i64>,
-    workflow_state: Option<&str>,
+    update: &AssignmentRecordUpdate<'_>,
 ) -> Result<(), ApiError> {
-    let (
-        existing_title,
-        existing_description,
-        existing_points,
-        existing_due,
-        existing_group,
-        existing_state,
-    ): (
-        String,
-        Option<String>,
-        f64,
-        Option<DateTime<Utc>>,
-        Option<i64>,
-        String,
-    ) = sqlx::query_as(
+    let existing: ExistingAssignmentRecord = sqlx::query_as(
         r#"
         SELECT title, description, points_possible::float8, due_at,
                assignment_group_id, workflow_state
@@ -9566,13 +9580,18 @@ pub async fn update_assignment_record(
     .await?
     .ok_or(ApiError::NotFound)?;
 
-    let title = title.map(str::trim).filter(|t| !t.is_empty());
-    let title = title.map(String::from).unwrap_or(existing_title);
-    let description = description.map(String::from).or(existing_description);
-    let points_possible = points_possible.unwrap_or(existing_points);
-    let due_at = due_at.or(existing_due);
-    let assignment_group_id = assignment_group_id.or(existing_group);
-    let workflow_state = workflow_state.map(String::from).unwrap_or(existing_state);
+    let title = update.title.map(str::trim).filter(|t| !t.is_empty());
+    let title = title.map(String::from).unwrap_or(existing.title);
+    let description = update.description.map(String::from).or(existing.description);
+    let points_possible = update.points_possible.unwrap_or(existing.points_possible);
+    let due_at = update.due_at.or(existing.due_at);
+    let assignment_group_id = update
+        .assignment_group_id
+        .or(existing.assignment_group_id);
+    let workflow_state = update
+        .workflow_state
+        .map(String::from)
+        .unwrap_or(existing.workflow_state);
 
     sqlx::query(
         r#"

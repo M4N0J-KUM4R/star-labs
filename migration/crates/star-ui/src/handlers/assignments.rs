@@ -18,7 +18,7 @@ use serde::Deserialize;
 
 use star_assignments::{
     create_assignment_record, load_assignment_submissions, update_assignment_record,
-    upsert_own_text_submission, UiAssignment,
+    upsert_own_text_submission, AssignmentRecordUpdate, NewAssignmentRecord, UiAssignment,
 };
 use star_common::{ApiError, AppState};
 
@@ -234,6 +234,10 @@ pub async fn assignments_index(
     let env = course_env(&ctx, &user, &origin, "assignments", course_id);
     let (jar, csrf_token) = ensure_csrf(jar);
 
+    // The breadcrumb borrows `ctx` while the page struct below moves its
+    // fields, so it is built first.
+    let breadcrumb = course_breadcrumb(&ctx, course_id);
+
     let page = AssignmentsIndexPage {
         title: format!("{} - Assignments", ctx.course.name),
         body_class: format!(
@@ -244,7 +248,7 @@ pub async fn assignments_index(
         notices: Vec::new(),
         user_name: ctx.user_name,
         active_path: "courses",
-        breadcrumb: course_breadcrumb(&ctx, course_id),
+        breadcrumb,
         csrf_token,
         tabs: ctx.tabs,
         active_context_tab: "assignments".to_string(),
@@ -845,16 +849,18 @@ pub async fn assignment_create(
 
     let created = create_assignment_record(
         &app.db,
-        course_id,
-        &form.name,
-        form.description.as_deref(),
-        parse_points(form.points_possible.as_deref()),
-        parse_due(form.due_date.as_deref(), form.due_time.as_deref()),
-        group_id,
-        if form.published.is_some() {
-            "published"
-        } else {
-            "unpublished"
+        &NewAssignmentRecord {
+            course_id,
+            title: &form.name,
+            description: form.description.as_deref(),
+            points_possible: parse_points(form.points_possible.as_deref()),
+            due_at: parse_due(form.due_date.as_deref(), form.due_time.as_deref()),
+            assignment_group_id: group_id,
+            workflow_state: if form.published.is_some() {
+                "published"
+            } else {
+                "unpublished"
+            },
         },
     )
     .await;
@@ -975,16 +981,18 @@ pub async fn assignment_update(
     let updated = update_assignment_record(
         &app.db,
         assignment_id,
-        Some(&form.name),
-        form.description.as_deref(),
-        parse_points(form.points_possible.as_deref()),
-        parse_due(form.due_date.as_deref(), form.due_time.as_deref()),
-        group_id,
-        Some(if form.published.is_some() {
-            "published"
-        } else {
-            "unpublished"
-        }),
+        &AssignmentRecordUpdate {
+            title: Some(&form.name),
+            description: form.description.as_deref(),
+            points_possible: parse_points(form.points_possible.as_deref()),
+            due_at: parse_due(form.due_date.as_deref(), form.due_time.as_deref()),
+            assignment_group_id: group_id,
+            workflow_state: Some(if form.published.is_some() {
+                "published"
+            } else {
+                "unpublished"
+            }),
+        },
     )
     .await;
 

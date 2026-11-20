@@ -1,11 +1,19 @@
-import { test, expect } from '@playwright/test';
-import {
-  login,
-  TEACHER_EMAIL,
-  STUDENT_EMAIL,
-  SMOKE_PASSWORD,
-  COURSE_FRONT_PAGE_ID,
-} from './helpers';
+import { test, expect, type Page } from '@playwright/test';
+
+// Journey 4 (issue #71): assignments + gradebook.
+//
+// This spec is deliberately self-contained: the sentinel ids and credentials
+// come from browser-smoke/fixtures/seed-assignments.sql (NOT helpers.ts /
+// seed.sql), because that fragment owns the assignments/gradebook fixture
+// (own users, course and enrollments — it must not depend on seed.sql's rows,
+// since the workflow applies seed*.sql in glob order and seed-assignments.sql
+// runs FIRST). The login flow is the same real form flow helpers.ts drives.
+
+const ASSIGNMENTS_TEACHER_EMAIL = 'assignments-teacher@test.local';
+const ASSIGNMENTS_STUDENT_EMAIL = 'assignments-student@test.local';
+const SMOKE_PASSWORD = 'SmokeTest-123!';
+
+const COURSE_ID = 992101; // "Smoke Assignments Course"
 
 // Sentinels from browser-smoke/fixtures/seed-assignments.sql (9920xx).
 const GROUP_ESSAYS = 'Smoke Essays';
@@ -13,18 +21,34 @@ const GROUP_QUIZZES = 'Smoke Quizzes';
 const ESSAY_ONE = 'Smoke Essay One';
 const ESSAY_TWO = 'Smoke Essay Two';
 const DRAFT_QUIZ = 'Smoke Draft Quiz';
-const STUDENT_NAME = 'Smoke Student';
+const STUDENT_NAME = 'Assignments Student';
 
+async function login(page: Page, email: string): Promise<void> {
+  await page.goto('/dashboard');
+  await expect(page).toHaveURL(/\/login\?next=/);
+  await expect(page.locator('#login_form')).toBeVisible();
+
+  await page.getByLabel('Email').fill(email);
+  await page.getByLabel('Password').fill(SMOKE_PASSWORD);
+  await page.getByRole('button', { name: 'Log In' }).click();
+
+  await expect(page).toHaveURL(/\/dashboard$/);
+}
+
+// The teacher journey creates the assignment the gradebook journey then
+// sees, and the student journey submits against the seeded rows, so the
+// tests must run in order (fullyParallel would race them).
+test.describe.configure({ mode: 'serial' });
 
 // Journey (issue #71): teacher assignments index -> assignment show ->
 // create via the new-assignment form -> gradebook grid + CSV; student
 // grades page -> text-entry submit flow.
 test.describe('journey 4: assignments + gradebook', () => {
   test('teacher: index groups, unpublished style, create assignment, gradebook grid', async ({ page }) => {
-    await login(page, TEACHER_EMAIL, SMOKE_PASSWORD);
+    await login(page, ASSIGNMENTS_TEACHER_EMAIL);
 
     // Assignments index: group buckets + rows + unpublished styling.
-    await page.goto(`/courses/${COURSE_FRONT_PAGE_ID}/assignments`);
+    await page.goto(`/courses/${COURSE_ID}/assignments`);
     const index = page.locator('#assignments_index');
     await expect(index).toBeVisible();
     await expect(page.locator('.ig-header-title', { hasText: GROUP_ESSAYS })).toBeVisible();
@@ -42,7 +66,7 @@ test.describe('journey 4: assignments + gradebook', () => {
     // Open the assignment show page.
     await page.locator('.ig-title', { hasText: ESSAY_ONE }).click();
     await expect(page).toHaveURL(
-      new RegExp(`/courses/${COURSE_FRONT_PAGE_ID}/assignments/\\d+$`),
+      new RegExp(`/courses/${COURSE_ID}/assignments/\\d+$`),
     );
     await expect(
       page.getByRole('heading', { name: ESSAY_ONE, exact: true }),
@@ -61,7 +85,7 @@ test.describe('journey 4: assignments + gradebook', () => {
     ).toHaveCount(1);
 
     // Create a new assignment through the form.
-    await page.goto(`/courses/${COURSE_FRONT_PAGE_ID}/assignments/new`);
+    await page.goto(`/courses/${COURSE_ID}/assignments/new`);
     await expect(page.locator('#assignment_edit_form')).toBeVisible();
     await page.locator('#assignment_name').fill('Smoke Created Essay');
     await page.locator('#assignment_description').fill('Created by the browser-smoke journey.');
@@ -70,7 +94,7 @@ test.describe('journey 4: assignments + gradebook', () => {
     await page.locator('#assignment_published').check();
     await page.locator('#assignment_form_submit').click();
     await expect(page).toHaveURL(
-      new RegExp(`/courses/${COURSE_FRONT_PAGE_ID}/assignments$`),
+      new RegExp(`/courses/${COURSE_ID}/assignments$`),
     );
 
     // The new row appears in the list.
@@ -79,7 +103,7 @@ test.describe('journey 4: assignments + gradebook', () => {
     await expect(created.locator('.publish-state-published')).toHaveText('Published');
 
     // Gradebook grid renders: teacher + student rows, assignment columns.
-    await page.goto(`/courses/${COURSE_FRONT_PAGE_ID}/gradebook`);
+    await page.goto(`/courses/${COURSE_ID}/gradebook`);
     await expect(page.locator('#gradebook_grid')).toBeVisible();
     await expect(
       page.locator('#gradebook_grid .assignment-header', { hasText: ESSAY_ONE }),
@@ -87,19 +111,19 @@ test.describe('journey 4: assignments + gradebook', () => {
     await expect(
       page.locator('#gradebook_grid .assignment-header', { hasText: 'Smoke Created Essay' }),
     ).toBeVisible();
-    // One row per enrollment (teacher 990001 + student 990002).
+    // One row per enrollment (teacher 992001 + student 992002).
     expect(await page.locator('#gradebook_grid .gradebook-row').count()).toBe(2);
     // The student's Essay One cell shows the graded 8.
     const studentRow = page.locator('.gradebook-row', { hasText: STUDENT_NAME });
     await expect(studentRow.locator('.gradebook-score', { hasText: '8' })).toBeVisible();
   });
 
-  test('teacher: CSV export serves text/csv with header and data row', async ({ page, request }) => {
-    await login(page, TEACHER_EMAIL, SMOKE_PASSWORD);
+  test('teacher: CSV export serves text/csv with header and data row', async ({ page }) => {
+    await login(page, ASSIGNMENTS_TEACHER_EMAIL);
 
     // page.request inherits the browser session cookies.
     const resp = await page.request.get(
-      `/courses/${COURSE_FRONT_PAGE_ID}/gradebook.csv`,
+      `/courses/${COURSE_ID}/gradebook.csv`,
     );
     expect(resp.status()).toBe(200);
     const contentType = resp.headers()['content-type'] ?? '';
@@ -114,10 +138,10 @@ test.describe('journey 4: assignments + gradebook', () => {
   });
 
   test('student: grades page shows score; text-entry submit flow', async ({ page }) => {
-    await login(page, STUDENT_EMAIL, SMOKE_PASSWORD);
+    await login(page, ASSIGNMENTS_STUDENT_EMAIL);
 
     // Grades page: own score + total for the seeded 8/10.
-    await page.goto(`/courses/${COURSE_FRONT_PAGE_ID}/grades`);
+    await page.goto(`/courses/${COURSE_ID}/grades`);
     await expect(page.locator('#grades_summary')).toBeVisible();
     const essayOneRow = page.locator('#grades_summary .student_assignment', {
       hasText: ESSAY_ONE,
@@ -129,7 +153,7 @@ test.describe('journey 4: assignments + gradebook', () => {
     await expect(page.locator('#view_gradebook_link')).toHaveCount(0);
 
     // Text-entry submit on the un-submitted Essay Two.
-    await page.goto(`/courses/${COURSE_FRONT_PAGE_ID}/assignments`);
+    await page.goto(`/courses/${COURSE_ID}/assignments`);
     await page.locator('.ig-title', { hasText: ESSAY_TWO }).click();
     await expect(page.locator('#assignment_show')).toBeVisible();
     await expect(page.locator('.submission-pill')).toContainText('Not Submitted');
@@ -149,12 +173,12 @@ test.describe('journey 4: assignments + gradebook', () => {
   });
 
   test('student: gradebook grid and CSV are teacher-only (403)', async ({ page }) => {
-    await login(page, STUDENT_EMAIL, SMOKE_PASSWORD);
+    await login(page, ASSIGNMENTS_STUDENT_EMAIL);
 
-    const grid = await page.goto(`/courses/${COURSE_FRONT_PAGE_ID}/gradebook`);
+    const grid = await page.goto(`/courses/${COURSE_ID}/gradebook`);
     expect(grid?.status()).toBe(403);
 
-    const csv = await page.goto(`/courses/${COURSE_FRONT_PAGE_ID}/gradebook.csv`);
+    const csv = await page.goto(`/courses/${COURSE_ID}/gradebook.csv`);
     expect(csv?.status()).toBe(403);
   });
 });
