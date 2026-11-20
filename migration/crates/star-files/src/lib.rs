@@ -461,6 +461,9 @@ pub struct FileResponse {
     pub folder_id: Option<i64>,
     pub filename: String,
     pub display_name: String,
+    /// Canvas attachment_json emits "content-type" with a dash
+    /// (lib/api/v1/attachment.rb); AttachmentResponse does the same.
+    #[serde(rename = "content-type")]
     pub content_type: String,
     pub size: i64,
     pub created_at: DateTime<Utc>,
