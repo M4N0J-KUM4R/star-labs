@@ -970,7 +970,6 @@ pub async fn quiz_create(
             ],
             csrf_token: csrf_token.clone(),
             unread_badge: ctx.unread_badge,
-        unread_badge: ctx.unread_badge,
             tabs: ctx.tabs,
             active_context_tab: "quizzes".to_string(),
             course_name: ctx.course.name,
