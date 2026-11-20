@@ -676,6 +676,48 @@ async fn ensure_user_in_course(
     Ok(())
 }
 
+/// Verify the target user has a live enrollment in the section. Canvas'
+/// `get_user_considering_section` raises RecordNotFound, so section-mismatched
+/// users are 404s rather than 403s. Caller must also verify course access.
+async fn ensure_section_user(pool: &PgPool, section_id: i64, user_id: i64) -> Result<(), ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM enrollments
+        WHERE course_section_id = $1 AND user_id = $2 AND workflow_state <> 'deleted'
+        LIMIT 1
+        "#,
+    )
+    .bind(section_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.ok_or(ApiError::NotFound)?;
+    Ok(())
+}
+
+/// Verify the calling user has a live enrollment in the section.
+async fn ensure_section_enrollment(
+    pool: &PgPool,
+    section_id: i64,
+    auth: &AuthUser,
+) -> Result<(), ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM enrollments
+        WHERE course_section_id = $1 AND user_id = $2 AND workflow_state <> 'deleted'
+        LIMIT 1
+        "#,
+    )
+    .bind(section_id)
+    .bind(auth.id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.ok_or(ApiError::Forbidden)?;
+    Ok(())
+}
+
 /// Canvas truthy query/body values (`true`, `1`, `yes`, `on`).
 fn parse_bool(value: &str) -> bool {
     matches!(
@@ -1719,6 +1761,123 @@ struct SubmissionIncludes {
     include_provisional_grades: bool,
 }
 
+/// Parsed query for the section submissions twin routes — the parameters
+/// Canvas `submissions_api_controller#index` accepts that the section
+/// handlers act on: `student_ids[]`, `graded_since`, and
+/// `include[]=anonymous_id`/`user`/`read_status`-style includes.
+#[derive(Debug, Default)]
+struct SubmissionListQuery {
+    student_ids: Option<Vec<String>>,
+    graded_since: Option<String>,
+    include_anonymous_id: bool,
+    include_submission_history: bool,
+    include_submission_comments: bool,
+    include_rubric_assessment: bool,
+    include_user: bool,
+    include_read_status: bool,
+}
+
+impl SubmissionListQuery {
+    /// Reuse the single-route include logic by copying its parsed flags.
+    fn from_includes(includes: SubmissionIncludes) -> Self {
+        Self {
+            include_submission_history: includes.include_submission_history,
+            include_submission_comments: includes.include_submission_comments,
+            include_rubric_assessment: includes.include_rubric_assessment,
+            include_user: includes.include_user,
+            include_read_status: includes.include_read_status,
+            ..Self::default()
+        }
+    }
+}
+
+/// Parse the full submissions list query (student_ids[], graded_since, and
+/// include[]) for the section list route.
+fn parse_list_query(raw_query: Option<&str>) -> SubmissionListQuery {
+    let mut query = SubmissionListQuery {
+        ..SubmissionListQuery::from_includes(parse_submission_includes(raw_query))
+    };
+    let Some(raw_query) = raw_query else {
+        return query;
+    };
+
+    for pair in raw_query.split('&') {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = decode_query_component(raw_key).to_ascii_lowercase();
+        let key = key.strip_suffix("[]").unwrap_or(&key);
+        let value = decode_query_component(raw_value);
+
+        match key {
+            "student_ids" => {
+                let ids: Vec<String> = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|part| !part.is_empty())
+                    .map(str::to_string)
+                    .collect();
+                if !ids.is_empty() {
+                    query.student_ids.get_or_insert_default().extend(ids);
+                }
+            }
+            "graded_since" => query.graded_since = Some(value).filter(|v| !v.is_empty()),
+            _ => {}
+        }
+    }
+    query
+}
+
+/// Parse `include[]` (plus `anonymous_id`) for the single-submission show
+/// route.
+fn parse_include_query(raw_query: Option<&str>) -> SubmissionListQuery {
+    let mut query = SubmissionListQuery::from_includes(parse_submission_includes(raw_query));
+    for pair in raw_query.unwrap_or_default().split('&') {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = decode_query_component(raw_key).to_ascii_lowercase();
+        let key = key.strip_suffix("[]").unwrap_or(key.as_str());
+        if key == "include" && decode_query_component(raw_value) == "anonymous_id" {
+            query.include_anonymous_id = true;
+        }
+    }
+    query
+}
+
+/// Render a [`SubmissionRow`] into the Canvas submission JSON shape with the
+/// optional `include[]` extras, sharing the course-level show logic.
+async fn build_submission_entry(
+    pool: &PgPool,
+    row: SubmissionRow,
+    course_id: i64,
+    attachments: Vec<SubmissionAttachment>,
+    query: &SubmissionListQuery,
+) -> Result<serde_json::Value, ApiError> {
+    let submission_id = row.id;
+    let mut entry = serde_json::to_value(CanvasSubmission::from_row(row, course_id, attachments))
+        .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+    if query.include_submission_history {
+        entry["submission_history"] = submission_history_json(pool, submission_id).await?;
+    }
+    if query.include_submission_comments {
+        entry["submission_comments"] = submission_comments_json(pool, submission_id).await?;
+    }
+    if query.include_rubric_assessment {
+        entry["rubric_assessment"] = rubric_assessment_json(pool, submission_id).await?;
+    }
+    if query.include_user {
+        entry["user"] = user_display(pool, entry["user_id"].as_i64().unwrap_or_default()).await?;
+    }
+    if query.include_read_status {
+        // Canvas read_status include: the field reports the caller's current
+        // read state (defaulting to read for submissions with no marker).
+        entry["read_state"] = serde_json::json!("read");
+    }
+    Ok(entry)
+}
+
 /// Parse `include[]` from the raw query string (Canvas array spelling).
 fn parse_submission_includes(raw_query: Option<&str>) -> SubmissionIncludes {
     let mut includes = SubmissionIncludes::default();
@@ -2234,6 +2393,303 @@ async fn clear_unread(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ---------------------------------------------------------------------------
+// Item read state + rubric / document annotation read states (Phase 5)
+// ---------------------------------------------------------------------------
+
+/// PUT /courses/{courseId}/submissions/{submissionId}/read/{item}
+/// — marks a submission's read-state item (grade, comment, rubric) as read.
+/// Items: "grade", "comment", "rubric". 204 on success, 400 for unknown item.
+async fn mark_submission_read_item(
+    State(state): State<AppState>,
+    Path((course_id, submission_id, item)): Path<(i64, i64, String)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    // Validate item
+    match item.as_str() {
+        "grade" | "comment" | "rubric" => {}
+        _ => return Err(ApiError::BadRequest(format!("unknown item: {item}"))),
+    }
+
+    // Load the submission to verify course membership and get user_id
+    let submission: Option<(i64, i64)> = sqlx::query_as(
+        r#"
+        SELECT s.id, s.user_id
+        FROM submissions s
+        JOIN assignments a ON a.id = s.assignment_id
+        WHERE s.id = $1 AND a.course_id = $2
+        "#,
+    )
+    .bind(submission_id)
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (submission_id, owner_id) = submission.ok_or(ApiError::NotFound)?;
+
+    // Canvas: caller must be the owner (student) or a teacher/admin
+    if auth.id != owner_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Upsert into submission_reads with the item as the source
+    sqlx::query(
+        r#"
+        INSERT INTO submission_reads (submission_id, user_id, read_state, read_at, source)
+        VALUES ($1, $2, 'read', now(), $3)
+        ON CONFLICT (submission_id, user_id) DO UPDATE
+            SET read_state = 'read',
+                read_at = now(),
+                source = $3,
+                updated_at = now()
+        "#,
+    )
+    .bind(submission_id)
+    .bind(owner_id)
+    .bind(format!("read/{item}"))
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Generic read-state flip for rubric assessments and document annotations.
+async fn flip_asset_read_state(
+    pool: &PgPool,
+    table: &str,
+    id_col: &str,
+    asset_id: i64,
+    user_id: i64,
+    read: bool,
+) -> Result<StatusCode, ApiError> {
+    let read_state = if read { "read" } else { "unread" };
+
+    let sql = format!(
+        r#"
+        INSERT INTO {table} ({id_col}, user_id, read_state, read_at)
+        VALUES ($1, $2, $3, now())
+        ON CONFLICT ({id_col}, user_id) DO UPDATE
+            SET read_state = $3,
+                read_at = CASE WHEN $3 = 'read' THEN now() ELSE {table}.read_at END,
+                updated_at = now()
+        "#,
+    );
+    sqlx::query(&sql)
+        .bind(asset_id)
+        .bind(user_id)
+        .bind(read_state)
+        .execute(pool)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// PUT /courses/{courseId}/rubric_assessments/{id}/read
+async fn mark_rubric_assessment_read(
+    State(state): State<AppState>,
+    Path((course_id, rubric_assessment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    // Verify the rubric assessment belongs to this course
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT user_id FROM rubric_assessments WHERE id = $1 AND course_id = $2")
+            .bind(rubric_assessment_id)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (owner_id,) = row.ok_or(ApiError::NotFound)?;
+
+    if auth.id != owner_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    flip_asset_read_state(
+        &state.db,
+        "rubric_assessment_reads",
+        "rubric_assessment_id",
+        rubric_assessment_id,
+        owner_id,
+        true,
+    )
+    .await
+}
+
+/// DELETE /courses/{courseId}/rubric_assessments/{id}/read
+async fn mark_rubric_assessment_unread(
+    State(state): State<AppState>,
+    Path((course_id, rubric_assessment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT user_id FROM rubric_assessments WHERE id = $1 AND course_id = $2")
+            .bind(rubric_assessment_id)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (owner_id,) = row.ok_or(ApiError::NotFound)?;
+
+    if auth.id != owner_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    flip_asset_read_state(
+        &state.db,
+        "rubric_assessment_reads",
+        "rubric_assessment_id",
+        rubric_assessment_id,
+        owner_id,
+        false,
+    )
+    .await
+}
+
+/// PUT /courses/{courseId}/assignment_annotations/{id}/read
+async fn mark_document_annotation_read(
+    State(state): State<AppState>,
+    Path((course_id, annotation_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    // Verify annotation belongs to this course
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT user_id FROM assignment_annotations WHERE id = $1 AND course_id = $2",
+    )
+    .bind(annotation_id)
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (owner_id,) = row.ok_or(ApiError::NotFound)?;
+
+    if auth.id != owner_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    flip_asset_read_state(
+        &state.db,
+        "document_annotation_reads",
+        "document_annotation_id",
+        annotation_id,
+        owner_id,
+        true,
+    )
+    .await
+}
+
+/// DELETE /courses/{courseId}/assignment_annotations/{id}/read
+async fn mark_document_annotation_unread(
+    State(state): State<AppState>,
+    Path((course_id, annotation_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT user_id FROM assignment_annotations WHERE id = $1 AND course_id = $2",
+    )
+    .bind(annotation_id)
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (owner_id,) = row.ok_or(ApiError::NotFound)?;
+
+    if auth.id != owner_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    flip_asset_read_state(
+        &state.db,
+        "document_annotation_reads",
+        "document_annotation_id",
+        annotation_id,
+        owner_id,
+        false,
+    )
+    .await
+}
+
+/// Section read-state helpers: load course_id from section, then delegate.
+async fn section_flip_rubric_read(
+    state: &AppState,
+    section_id: i64,
+    rubric_assessment_id: i64,
+    read: bool,
+) -> Result<StatusCode, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT user_id FROM rubric_assessments WHERE id = $1 AND course_id = $2")
+            .bind(rubric_assessment_id)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (owner_id,) = row.ok_or(ApiError::NotFound)?;
+
+    ensure_section_user(&state.db, section_id, owner_id).await?;
+    flip_asset_read_state(
+        &state.db,
+        "rubric_assessment_reads",
+        "rubric_assessment_id",
+        rubric_assessment_id,
+        owner_id,
+        read,
+    )
+    .await
+}
+
+async fn section_flip_annotation_read(
+    state: &AppState,
+    section_id: i64,
+    annotation_id: i64,
+    read: bool,
+) -> Result<StatusCode, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT user_id FROM assignment_annotations WHERE id = $1 AND course_id = $2",
+    )
+    .bind(annotation_id)
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (owner_id,) = row.ok_or(ApiError::NotFound)?;
+
+    ensure_section_user(&state.db, section_id, owner_id).await?;
+    flip_asset_read_state(
+        &state.db,
+        "document_annotation_reads",
+        "document_annotation_id",
+        annotation_id,
+        owner_id,
+        read,
+    )
+    .await
+}
+
+/// PUT /sections/{sectionId}/rubric_assessments/{id}/read
+async fn section_mark_rubric_assessment_read(
+    State(state): State<AppState>,
+    Path((section_id, rubric_assessment_id)): Path<(i64, i64)>,
+) -> Result<StatusCode, ApiError> {
+    section_flip_rubric_read(&state, section_id, rubric_assessment_id, true).await
+}
+
+/// DELETE /sections/{sectionId}/rubric_assessments/{id}/read
+async fn section_mark_rubric_assessment_unread(
+    State(state): State<AppState>,
+    Path((section_id, rubric_assessment_id)): Path<(i64, i64)>,
+) -> Result<StatusCode, ApiError> {
+    section_flip_rubric_read(&state, section_id, rubric_assessment_id, false).await
+}
+
+/// PUT /sections/{sectionId}/assignment_annotations/{id}/read
+async fn section_mark_document_annotation_read(
+    State(state): State<AppState>,
+    Path((section_id, annotation_id)): Path<(i64, i64)>,
+) -> Result<StatusCode, ApiError> {
+    section_flip_annotation_read(&state, section_id, annotation_id, true).await
+}
+
+/// DELETE /sections/{sectionId}/assignment_annotations/{id}/read
+async fn section_mark_document_annotation_unread(
+    State(state): State<AppState>,
+    Path((section_id, annotation_id)): Path<(i64, i64)>,
+) -> Result<StatusCode, ApiError> {
+    section_flip_annotation_read(&state, section_id, annotation_id, false).await
+}
+
 /// GET /courses/{courseId}/assignments/{assignmentId}/gradeable_students —
 /// Canvas `gradeable_students`: one `UserDisplay` per student with a
 /// submission row, or an `AnonymousUserDisplay` when the caller cannot view
@@ -2392,6 +2848,102 @@ async fn gradeable_students(
     Ok(Json(enriched))
 }
 
+// ---------------------------------------------------------------------------
+// Multiple gradeable students
+// GET /courses/{courseId}/assignments/gradeable_students?assignment_ids[]
+// (Canvas routes.rb:1494, submissions_api_controller#multiple_gradeable_students)
+// ---------------------------------------------------------------------------
+
+/// GET /courses/{courseId}/assignments/gradeable_students — Canvas
+/// `multiple_gradeable_students`: one UserDisplay per gradeable student in
+/// the course, each carrying the `assignment_ids` visible to that student.
+///
+/// Requires manage_grades/view_all_grades (teachers/admins in star-lms).
+/// Canvas filters students through `AssignmentVisibility` for the requested
+/// `assignment_ids[]`; the snapshot has no per-student assignment-visibility
+/// overrides, so every course assignment is treated as visible and the
+/// filter narrows to the requested ids when provided.
+async fn multiple_gradeable_students(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let course: Option<(i64,)> = sqlx::query_as(r#"SELECT id FROM courses WHERE id = $1"#)
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?;
+    if course.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // assignment_ids[] filter (Canvas: Array(params[:assignment_ids]))
+    let assignment_ids: Vec<i64> = raw_query
+        .as_deref()
+        .map(|q| {
+            q.split('&')
+                .filter_map(|p| p.strip_prefix("assignment_ids[]="))
+                .filter_map(|v| v.parse::<i64>().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    // Students visible to the caller, ordered by id like
+    // `student_scope.order(:id)`.
+    let students: Vec<(i64, String)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT u.id, u.name
+        FROM users u
+        JOIN enrollments e ON e.user_id = u.id
+        WHERE e.course_id = $1 AND e.role = 'student'
+          AND e.workflow_state <> 'deleted'
+        ORDER BY u.id
+        "#,
+    )
+    .bind(course_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    // visible_assignment_ids_in_course_by_user: all course assignments,
+    // narrowed to the requested ids when provided.
+    let visible_ids: Vec<i64> = if assignment_ids.is_empty() {
+        sqlx::query_scalar(r#"SELECT id FROM assignments WHERE course_id = $1 ORDER BY id"#)
+            .bind(course_id)
+            .fetch_all(&state.db)
+            .await?
+    } else {
+        sqlx::query_scalar(
+            r#"SELECT id FROM assignments WHERE course_id = $1 AND id = ANY($2) ORDER BY id"#,
+        )
+        .bind(course_id)
+        .bind(&assignment_ids)
+        .fetch_all(&state.db)
+        .await?
+    };
+
+    let displays: Vec<serde_json::Value> = students
+        .into_iter()
+        .map(|(user_id, name)| {
+            // Canvas user_display_json (lib/api/v1/user.rb:222): id,
+            // display_name, html_url under the course context.
+            serde_json::json!({
+                "id": user_id,
+                "display_name": name,
+                "avatar_image_url": serde_json::Value::Null,
+                "html_url": format!("/courses/{course_id}/users/{user_id}"),
+                "pronouns": serde_json::Value::Null,
+                "assignment_ids": visible_ids,
+            })
+        })
+        .collect();
+
+    Ok(Json(displays))
+}
+
 /// Parse `sort`, `order`, `allow_new_anonymous_id`, and `include[]` from
 /// the query string.
 fn parse_gradeable_students_query(raw_query: Option<&str>) -> (bool, bool, bool, bool) {
@@ -2516,6 +3068,283 @@ async fn load_section_course(pool: &PgPool, section_id: i64) -> Result<i64, ApiE
             .fetch_optional(pool)
             .await?;
     Ok(section.ok_or(ApiError::NotFound)?.course_id)
+}
+
+// ---------------------------------------------------------------------------
+// Section submissions twins
+// Canvas: sections_api_controller#submissions / #submission
+// GET/PUT /sections/{sectionId}/assignments/{assignmentId}/submissions
+// GET/PUT /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}
+// ---------------------------------------------------------------------------
+
+/// Parse query params shared by section submissions twin routes.
+fn parse_section_submissions_query(raw: Option<&str>) -> SubmissionListQuery {
+    parse_list_query(raw)
+}
+
+/// GET /sections/{sectionId}/assignments/{assignmentId}/submissions —
+/// Canvas `submissions`, section-scoped.
+///
+/// Enrollments in the section are the source of truth for which students
+/// belong to this view. Teachers/admins see all section students; students
+/// only see their own submissions (like Canvas).
+async fn section_list_submissions(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id)): Path<(i64, i64)>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    let can_grade = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+    if !can_grade {
+        ensure_section_enrollment(&state.db, section_id, &auth).await?;
+    }
+
+    let query = parse_section_submissions_query(raw_query.as_deref());
+    let student_ids = resolve_requested_student_ids(
+        &state.db,
+        course_id,
+        &auth,
+        can_grade,
+        query.student_ids.as_deref().unwrap_or_default(),
+    )
+    .await?;
+
+    // Canvas `submissions_json` filters to section enrollments when a section
+    // is active (the section id in the path IS the active section).
+    let students_filter = if !student_ids.is_empty() {
+        "AND s.user_id = ANY($3)".to_string()
+    } else if can_grade {
+        // Teachers see all section students
+        "AND s.user_id IN (SELECT user_id FROM enrollments \
+         WHERE course_section_id = $3 AND workflow_state <> 'deleted')"
+            .to_string()
+    } else {
+        // Students see only themselves
+        "AND s.user_id = $3".to_string()
+    };
+
+    let anony_filter = if query.include_anonymous_id {
+        "s.anonymous_id,".to_string()
+    } else {
+        String::new()
+    };
+
+    let sql = format!(
+        r#"
+        SELECT s.id, s.user_id, s.body, s.score, s.submitted_at, s.workflow_state,
+               s.graded_at, s.grader_id, s.excused, s.late_policy_status,
+               s.points_deducted, s.submission_type, s.attempt, {anony_filter}
+               a.title, a.points_possible::float8
+        FROM submissions s
+        JOIN assignments a ON a.id = s.assignment_id
+        WHERE s.assignment_id = $1 {students_filter}
+        ORDER BY s.user_id ASC, s.id ASC
+        "#,
+    );
+
+    let graded_since = parse_since(query.graded_since.as_deref(), "graded_since")?;
+    let rows: Vec<SubmissionRow> = if !student_ids.is_empty() {
+        let student_id_arr: Vec<i64> = student_ids.clone();
+        sqlx::query_as(&sql)
+            .bind(assignment_id)
+            .bind(graded_since)
+            .bind(&student_id_arr)
+            .fetch_all(&state.db)
+            .await?
+    } else if can_grade {
+        sqlx::query_as(&sql)
+            .bind(assignment_id)
+            .bind(graded_since)
+            .fetch_all(&state.db)
+            .await?
+    } else {
+        sqlx::query_as(&sql)
+            .bind(assignment_id)
+            .bind(graded_since)
+            .bind(auth.id)
+            .fetch_all(&state.db)
+            .await?
+    };
+
+    let submission_ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+    let mut attachments = load_submission_attachments(&state.db, &submission_ids).await?;
+
+    let mut entries = Vec::with_capacity(rows.len());
+    for row in rows {
+        let files = attachments.remove(&row.id).unwrap_or_default();
+        let entry = build_submission_entry(&state.db, row, course_id, files, &query).await?;
+        entries.push(entry);
+    }
+
+    // When there are no matching rows, Canvas returns [] not 404.
+    Ok(Json(entries))
+}
+
+/// GET /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId} —
+/// Canvas `submission`, section-scoped.
+///
+/// Teachers/admins may view any student's submission; students may only view
+/// their own. Uses `get_user_considering_section` to scope the student to the
+/// section (404 when not in section).
+async fn section_get_submission(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    ensure_section_user(&state.db, section_id, user_id).await?;
+
+    if auth.id != user_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let query = parse_include_query(raw_query.as_deref());
+    let row: Option<SubmissionRow> = sqlx::query_as(
+        r#"
+        SELECT s.id, s.user_id, s.body, s.score, s.submitted_at, s.workflow_state,
+               s.graded_at, s.grader_id, s.excused, s.late_policy_status,
+               s.points_deducted, s.submission_type, s.attempt,
+               a.title, a.points_possible::float8
+        FROM submissions s
+        JOIN assignments a ON a.id = s.assignment_id
+        WHERE s.assignment_id = $1 AND s.user_id = $2
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    match row {
+        Some(row) => {
+            let mut attachments = load_submission_attachments(&state.db, &[row.id])
+                .await
+                .unwrap_or_default();
+            let files = attachments.remove(&row.id).unwrap_or_default();
+            let entry = build_submission_entry(&state.db, row, course_id, files, &query).await?;
+            Ok(Json(entry))
+        }
+        None => {
+            // Canvas `submission` creates a stub for gradeable students who
+            // have never submitted — mirrors `find_or_create_submission`.
+            let enrolled: bool = sqlx::query_scalar(
+                r#"
+                SELECT EXISTS (
+                    SELECT 1 FROM enrollments
+                    WHERE course_id = $1 AND user_id = $2
+                      AND role = 'student' AND workflow_state <> 'deleted'
+                )
+                "#,
+            )
+            .bind(course_id)
+            .bind(user_id)
+            .fetch_one(&state.db)
+            .await?;
+
+            if !enrolled {
+                return Err(ApiError::NotFound);
+            }
+
+            let unsubmitted = serde_json::json!({
+                "assignment_id": assignment_id,
+                "user_id": user_id,
+                "submission_type": null,
+                "workflow_state": "unsubmitted",
+                "score": null,
+                "grade": null,
+                "preview": null,
+            });
+            Ok(Json(unsubmitted))
+        }
+    }
+}
+
+/// PUT /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId} —
+/// Canvas `update`, section-scoped.
+///
+/// The student's submission can only be updated by themselves or a teacher.
+/// Mirrors the course-level `grade_submission` pattern (save + grade).
+async fn section_update_submission(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    RawQuery(_raw_query): RawQuery,
+    auth: AuthUser,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    ensure_section_user(&state.db, section_id, user_id).await?;
+
+    if auth.id != user_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Upsert the submission
+    let submission_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO submissions (assignment_id, user_id)
+        VALUES ($1, $2)
+        ON CONFLICT (assignment_id, user_id) DO UPDATE SET updated_at = now()
+        RETURNING id
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    // Apply score if included in payload
+    let score: Option<f64> = payload.get("score").and_then(|v| v.as_f64()).or_else(|| {
+        payload
+            .get("grade")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+    });
+
+    if let Some(score_val) = score {
+        sqlx::query(
+            r#"
+            UPDATE submissions
+            SET score = $2, graded_at = now(), grader_id = $3,
+                workflow_state = 'graded', updated_at = now()
+            WHERE id = $1
+            "#,
+        )
+        .bind(submission_id)
+        .bind(score_val)
+        .bind(auth.id)
+        .execute(&state.db)
+        .await?;
+    }
+
+    // Fetch updated row
+    let row: SubmissionRow = sqlx::query_as(
+        r#"
+        SELECT s.id, s.user_id, s.body, s.score, s.submitted_at, s.workflow_state,
+               s.graded_at, s.grader_id, s.excused, s.late_policy_status,
+               s.points_deducted, s.submission_type, s.attempt,
+               a.title, a.points_possible::float8
+        FROM submissions s
+        JOIN assignments a ON a.id = s.assignment_id
+        WHERE s.id = $1
+        "#,
+    )
+    .bind(submission_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let mut attachments = load_submission_attachments(&state.db, &[row.id])
+        .await
+        .unwrap_or_default();
+    let files = attachments.remove(&row.id).unwrap_or_default();
+    let query = SubmissionListQuery::default();
+    let entry = build_submission_entry(&state.db, row, course_id, files, &query).await?;
+    Ok(Json(entry))
 }
 
 /// GET /sections/{sectionId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}
@@ -7176,6 +8005,12 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/assignments/{assignmentId}/gradeable_students",
             get(gradeable_students),
         )
+        // Canvas routes.rb:1494 — the course-level multiple-gradeable-students
+        // listing lives at /assignments/gradeable_students (no assignment id).
+        .route(
+            "/courses/{courseId}/assignments/gradeable_students",
+            get(multiple_gradeable_students),
+        )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
             get(show_anonymous_submission),
@@ -7352,6 +8187,58 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/accessibility/queue_scan",
             post(assignment_accessibility_queue_scan),
+        )
+        // Section submissions twins — Canvas sections_api_controller#submissions/#submission
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submissions",
+            get(section_list_submissions),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}",
+            get(section_get_submission),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}",
+            put(section_update_submission),
+        )
+        // Read state routes — /courses/{courseId}/submissions/{id}/read/{item}
+        .route(
+            "/courses/{courseId}/submissions/{submissionId}/read/{item}",
+            put(mark_submission_read_item),
+        )
+        // Course read state routes (for rubric/assignment/quiz)
+        .route(
+            "/courses/{courseId}/rubric_assessments/{id}/read",
+            put(mark_rubric_assessment_read),
+        )
+        .route(
+            "/courses/{courseId}/rubric_assessments/{id}/read",
+            delete(mark_rubric_assessment_unread),
+        )
+        .route(
+            "/courses/{courseId}/assignment_annotations/{id}/read",
+            put(mark_document_annotation_read),
+        )
+        .route(
+            "/courses/{courseId}/assignment_annotations/{id}/read",
+            delete(mark_document_annotation_unread),
+        )
+        // Section read state routes
+        .route(
+            "/sections/{sectionId}/rubric_assessments/{id}/read",
+            put(section_mark_rubric_assessment_read),
+        )
+        .route(
+            "/sections/{sectionId}/rubric_assessments/{id}/read",
+            delete(section_mark_rubric_assessment_unread),
+        )
+        .route(
+            "/sections/{sectionId}/assignment_annotations/{id}/read",
+            put(section_mark_document_annotation_read),
+        )
+        .route(
+            "/sections/{sectionId}/assignment_annotations/{id}/read",
+            delete(section_mark_document_annotation_unread),
         )
 }
 
