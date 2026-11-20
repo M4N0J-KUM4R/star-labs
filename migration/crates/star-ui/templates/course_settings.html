@@ -1,0 +1,53 @@
+{% extends "layouts/course.html" %}
+{# Course settings (issue #73) — Canvas courses#settings Details tab as a
+   plain HTML form. Only fields the REST PUT /courses/{id} update can
+   persist are rendered: name, course_code, description, workflow_state
+   (publish checkbox) and syllabus_body. There is no courses.default_view
+   or self_enrollment column in this schema, so those Canvas fields are
+   omitted (documented deviation). The syllabus renders as a read-only
+   summary + textarea (plain text; no RCE in the no-JS shell). #}
+{% block content %}
+  <div id="course_settings" class="course-settings">
+    <div class="header-bar">
+      <h1 class="settings-title">Course Settings</h1>
+      <span id="course-status" class="course-status">{% if published %}Course is Published{% else %}Course is Unpublished{% endif %}</span>
+    </div>
+    {% if !error.is_empty() %}
+    <div class="ic-flash error" role="alert">{{ error }}</div>
+    {% endif %}
+    <form id="course_settings_form" class="course-settings-form" method="post" action="/courses/{{ course_id }}/settings">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="course_name">Course Name</label>
+        <input class="ic-Input" type="text" id="course_name" name="name" value="{{ name_value }}" required>
+      </div>
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="course_code">Course Code</label>
+        <input class="ic-Input" type="text" id="course_code" name="course_code" value="{{ code_value }}">
+      </div>
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="course_description">Description</label>
+        <textarea class="ic-Input" id="course_description" name="description" rows="3">{{ description_value }}</textarea>
+      </div>
+
+      <div class="ic-Form-control ic-Form-control--checkbox">
+        <input type="checkbox" id="course_published" name="published" value="published"{% if published %} checked{% endif %}>
+        <label class="ic-Label" for="course_published">Published</label>
+      </div>
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="course_syllabus">Syllabus</label>
+        <p class="syllabus-summary" id="syllabus_summary">{% if syllabus_summary.is_empty() %}No syllabus content.{% else %}{{ syllabus_summary }}{% endif %}</p>
+        <textarea class="ic-Input" id="course_syllabus" name="syllabus_body" rows="6" placeholder="Add syllabus body">{{ syllabus_summary }}</textarea>
+      </div>
+
+      <div class="course-settings-actions">
+        <button type="submit" class="btn btn-primary" id="course_settings_submit">Update Course Details</button>
+        <a class="btn" href="/courses/{{ course_id }}">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock content %}

@@ -16,6 +16,9 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+/// Pub loaders for the server-rendered people/admin pages (star-ui, #73).
+pub mod ui;
+
 // --------------------------------------------------------------------------
 // Domain types
 // --------------------------------------------------------------------------

@@ -1,0 +1,34 @@
+{% extends "layouts/course.html" %}
+{# Add People form (issue #73) — the no-JS single-step equivalent of the
+   Canvas "Add People" wizard: login (email) + role select, posting to the
+   enrollments REST create validation. #}
+{% block content %}
+  <div id="add_people" class="add-people-form content_underline_links">
+    <h1 class="add-people-heading">Add People</h1>
+    {% if !error.is_empty() %}
+    <div class="ic-flash error" role="alert">{{ error }}</div>
+    {% endif %}
+    <form id="add_people_form" class="add-people" method="post" action="/courses/{{ course_id }}/users/add">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="add_people_login">Email / Login</label>
+        <input class="ic-Input" type="text" id="add_people_login" name="login" value="{{ login_value }}" placeholder="user@example.com" required>
+      </div>
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="add_people_role">Role</label>
+        <select class="ic-Input" id="add_people_role" name="role">
+          <option value="student"{% if selected_role == "student" %} selected{% endif %}>Student</option>
+          <option value="teacher"{% if selected_role == "teacher" %} selected{% endif %}>Teacher</option>
+          <option value="ta"{% if selected_role == "ta" %} selected{% endif %}>TA</option>
+        </select>
+      </div>
+
+      <div class="add-people-actions">
+        <button type="submit" class="btn btn-primary" id="add_people_submit">Add User</button>
+        <a class="btn" href="/courses/{{ course_id }}/users">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock content %}

@@ -16,6 +16,7 @@ star-assignment-groups = { path = "../star-assignment-groups" }
 star-grading-standards = { path = "../star-grading-standards" }
 star-discussions = { path = "../star-discussions" }
 star-conversations = { path = "../star-conversations" }
+star-enrollments = { path = "../star-enrollments" }
 axum = { workspace = true }
 axum-extra = { workspace = true }
 sqlx = { workspace = true }
