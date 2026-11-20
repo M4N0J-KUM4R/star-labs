@@ -942,7 +942,8 @@ pub fn router() -> axum::Router<AppState> {
         .route("/users/{userId}/folders/{id}", get(show_user_folder))
         .route("/groups/{groupId}/folders/{id}", get(show_group_folder))
         // list_all_folders — GET /context/folders (not to be confused with create)
-        .route("/courses/{courseId}/folders", get(list_all_course_folders))
+        // (GET /courses/{courseId}/folders is already registered above via
+        // list_course_folders — Canvas routes.rb:1258 declares it exactly once.)
         .route("/users/{userId}/folders", get(list_all_user_folders))
         // create folder in context — POST /context/folders
         // (POST /courses/{courseId}/folders is already registered above via
@@ -2202,7 +2203,7 @@ pub struct ResolvePathQuery {
     /// Canvas passes the path segments as `full_path[]` array params.
     /// When not present, path comes from the wildcard segment in by_path/*full_path.
     #[serde(rename = "full_path[]", default)]
-    pub full_pathSegments: Vec<String>,
+    pub full_path_segments: Vec<String>,
     /// Fallback: colon-separated path when wildcard isn't available.
     full_path: Option<String>,
 }
@@ -2211,8 +2212,8 @@ impl ResolvePathQuery {
     /// Returns path components: either explicit `full_path[]` array items
     /// or a slash-split `full_path` string.
     fn components(&self) -> Vec<&str> {
-        if !self.full_pathSegments.is_empty() {
-            self.full_pathSegments.iter().map(String::as_str).collect()
+        if !self.full_path_segments.is_empty() {
+            self.full_path_segments.iter().map(String::as_str).collect()
         } else if let Some(ref fp) = self.full_path {
             fp.split('/').filter(|s| !s.is_empty()).collect()
         } else {
@@ -2437,18 +2438,10 @@ async fn resolve_path_group_named(
 
 // ── context-scoped show ──────────────────────────────────────────────────────
 
-/// Query params for context-scoped folder show (context_id optional).
-#[derive(Debug, Deserialize)]
-pub struct FolderShowQuery {
-    context_type: Option<String>,
-    context_id: Option<i64>,
-}
-
 /// GET /courses/{courseId}/folders/{id}
 async fn show_course_folder(
     State(state): State<AppState>,
     Path((course_id, id)): Path<(i64, String)>,
-    Query(_params): Query<FolderShowQuery>,
     auth: AuthUser,
 ) -> Result<Json<FolderResponse>, ApiError> {
     let folder_id: i64 = id.parse().map_err(|_| ApiError::NotFound)?;
@@ -2471,7 +2464,6 @@ async fn show_course_folder(
 async fn show_user_folder(
     State(state): State<AppState>,
     Path((user_id, id)): Path<(i64, String)>,
-    Query(_params): Query<FolderShowQuery>,
     auth: AuthUser,
 ) -> Result<Json<FolderResponse>, ApiError> {
     if auth.id != user_id && !is_admin(&auth) {
@@ -2491,7 +2483,6 @@ async fn show_user_folder(
 async fn show_group_folder(
     State(state): State<AppState>,
     Path((group_id, id)): Path<(i64, String)>,
-    Query(_params): Query<FolderShowQuery>,
     auth: AuthUser,
 ) -> Result<Json<FolderResponse>, ApiError> {
     let can_view = is_admin(&auth) || user_in_group(&state.db, auth.id, group_id).await?;
@@ -2509,38 +2500,6 @@ async fn show_group_folder(
 }
 
 // ── list_all_folders ─────────────────────────────────────────────────────────
-
-/// GET /courses/{courseId}/folders — Canvas list_all_folders
-async fn list_all_course_folders(
-    State(state): State<AppState>,
-    Path(course_id): Path<i64>,
-    Query(params): Query<FolderListQuery>,
-    auth: AuthUser,
-) -> Result<Json<Vec<FolderResponse>>, ApiError> {
-    let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
-    let allowed =
-        can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
-    if !allowed {
-        return Err(ApiError::Forbidden);
-    }
-    ensure_root_folder(&state.db, course_id).await?;
-    let (per_page, offset) = pagination(params.page, params.per_page);
-    let by_position = params.sort_by.as_deref() == Some("position");
-    let rows = fetch_context_folders(
-        &state.db,
-        course_id,
-        can_manage,
-        by_position,
-        per_page,
-        offset,
-    )
-    .await?;
-    Ok(Json(
-        rows.into_iter()
-            .map(|row| FolderResponse::from_row(row, can_manage))
-            .collect(),
-    ))
-}
 
 /// GET /users/{userId}/folders — Canvas list_all_folders (User context)
 async fn list_all_user_folders(
