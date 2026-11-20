@@ -48,6 +48,7 @@ mod data_services;
 mod dynamic_registration;
 mod external_tools;
 mod line_items;
+mod support_helpers;
 mod tool_proxy;
 
 // ---------------------------------------------------------------------------
@@ -567,6 +568,7 @@ pub fn router() -> Router<AppState> {
         .merge(dynamic_registration::router())
         .merge(line_items::router())
         .merge(tool_proxy::router())
+        .merge(support_helpers::router())
 }
 
 // ---------------------------------------------------------------------------
