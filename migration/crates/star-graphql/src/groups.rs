@@ -1,6 +1,6 @@
 //! Group, group membership and group set (category) read types +
 //! `Course.groupsConnection` / `Course.groupSetsConnection`, `Group.members`
-/// and `GroupSet.groups` (Canvas issue #82 domain groups half).
+//! and `GroupSet.groups` (Canvas issue #82 domain groups half).
 //!
 //! Mirrors the conventions of the merged slices: camelCase field names,
 //! relay-style connections, opaque cursors, `LIMIT first+1` ordered by id.

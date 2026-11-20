@@ -81,8 +81,7 @@ struct ModuleItemRow {
 
 /// SQL fragment resolving a module item's display title: the explicit
 /// module_items.title override, else the linked page or assignment title.
-const MODULE_ITEM_TITLE_SQL: &str = "mi.title, \
-     COALESCE(mi.title, p.title, a.title) AS resolved_title";
+const MODULE_ITEM_TITLE_SQL: &str = "COALESCE(mi.title, p.title, a.title) AS title";
 
 /// SQL fragment LEFT JOINing the linked content for the title fallback.
 const MODULE_ITEM_JOIN_SQL: &str = "FROM module_items mi \
