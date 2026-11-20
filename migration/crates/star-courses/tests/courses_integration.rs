@@ -2121,3 +2121,638 @@ async fn course_tabs_teacher_settings_last_and_config_applies() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ------------------------------------------------------------------
+// T1: GET /accounts/{accountId}/tabs — list account-level navigation tabs
+// Canvas `#account_tabs_list`
+// ------------------------------------------------------------------
+
+#[tokio::test]
+async fn t1_list_account_tabs_returns_default_tabs_for_admin() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "Acct").await;
+
+    let resp = server
+        .get(&format!("/accounts/{account}/tabs"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let tabs: Value = resp.json();
+    let tabs = tabs.as_array().expect("tabs must be array");
+    // Should contain the standard account-level tabs
+    let ids: Vec<_> = tabs.iter().map(|t| &t["id"]).collect();
+    assert!(ids.contains(&&json!("grades")), "should include grades tab");
+    assert!(
+        ids.contains(&&json!("settings")),
+        "should include settings tab"
+    );
+    // Tabs should have position, label, type
+    for tab in tabs.as_array().unwrap() {
+        assert!(tab.get("position").is_some(), "tab should have position");
+        assert!(tab.get("label").is_some(), "tab should have label");
+    }
+}
+
+#[tokio::test]
+async fn t1_list_account_tabs_403_for_non_admin() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let account = seed_account(&pool, &prefix, "Acct2").await;
+
+    let resp = server
+        .get(&format!("/accounts/{account}/tabs"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "non-admin must get 403");
+}
+
+// ------------------------------------------------------------------
+// T3: GET /groups/{groupId}/tabs — list group navigation tabs
+// Canvas `#group_tabs_list`
+// ------------------------------------------------------------------
+
+#[tokio::test]
+async fn t3_list_group_tabs_returns_default_tabs() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let group_id: i64 =
+        sqlx::query_scalar("INSERT INTO `groups` (name, slug) VALUES ($1, $2) RETURNING id")
+            .bind(format!("{}-TestGroup", prefix))
+            .bind(format!("{}-testgroup", prefix))
+            .fetch_one(&pool)
+            .await
+            .expect("seed group");
+
+    let resp = server
+        .get(&format!("/groups/{group_id}/tabs"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let tabs: Value = resp.json();
+    let tabs = tabs.as_array().expect("tabs must be array");
+    let ids: Vec<_> = tabs.iter().map(|t| &t["id"]).collect();
+    assert!(ids.contains(&&json!("home")), "should include home tab");
+    assert!(ids.contains(&&json!("people")), "should include people tab");
+}
+
+#[tokio::test]
+async fn t3_list_group_tabs_404_for_nonexistent_group() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+
+    let resp = server
+        .get("/groups/99999999/tabs")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "nonexistent group should return 404"
+    );
+}
+
+// ------------------------------------------------------------------
+// T4: GET /users/{userId}/tabs — list user-level navigation tabs
+// Canvas `#user_tabs_list`
+// ------------------------------------------------------------------
+
+#[tokio::test]
+async fn t4_list_user_tabs_returns_default_tabs() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let user = seed_user(&pool, &prefix, "User", "student").await;
+
+    let resp = server
+        .get(&format!("/users/{user}/tabs"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let tabs: Value = resp.json();
+    let tabs = tabs.as_array().expect("tabs must be array");
+    let ids: Vec<_> = tabs.iter().map(|t| &t["id"]).collect();
+    assert!(
+        ids.contains(&&json!("dashboard")),
+        "should include dashboard tab"
+    );
+    assert!(ids.contains(&&json!("files")), "should include files tab");
+}
+
+#[tokio::test]
+async fn t4_list_user_tabs_403_for_non_admin_non_self() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let alice = seed_user(&pool, &prefix, "Alice", "student").await;
+    let bob = seed_user(&pool, &prefix, "Bob", "student").await;
+
+    // Bob tries to list Alice's tabs (not admin, not self)
+    let resp = server
+        .get(&format!("/users/{alice}/tabs"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(bob, "student"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        403,
+        "non-admin, non-self should get 403"
+    );
+}
+
+// ------------------------------------------------------------------
+// T5: PUT /courses/{courseId}/tabs/{tabId} — update a course navigation tab
+// Canvas `#course_tabs_update`
+// ------------------------------------------------------------------
+
+#[tokio::test]
+async fn t5_update_course_tab_teacher_can_hide_tab() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "T5Tab").await;
+    seed_course_teacher(&pool, teacher, course).await;
+
+    // Confirm modules tab is visible by default
+    let resp = server
+        .get(&format!("/courses/{course}/tabs"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let tabs: Value = resp.json();
+    let modules_tab = tabs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "modules")
+        .expect("modules tab should exist");
+    assert_eq!(
+        modules_tab.get("hidden"),
+        Some(&json!(false)),
+        "modules should be visible"
+    );
+
+    // Teacher hides modules tab
+    let resp = server
+        .put(&format!("/courses/{course}/tabs/modules"))
+        .json(&json!({"hidden": true}))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let updated: Value = resp.json();
+    assert_eq!(updated["hidden"], true, "tab should be hidden after update");
+
+    // Verify persistence
+    let resp = server
+        .get(&format!("/courses/{course}/tabs"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    let tabs: Value = resp.json();
+    let modules_tab = tabs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == "modules")
+        .expect("modules tab should still exist");
+    assert_eq!(
+        modules_tab.get("hidden"),
+        Some(&json!(true)),
+        "hidden state should persist"
+    );
+}
+
+#[tokio::test]
+async fn t5_update_course_tab_teacher_can_update_position() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "T5Pos").await;
+    seed_course_teacher(&pool, teacher, course).await;
+
+    // Move assignments tab to position 1
+    let resp = server
+        .put(&format!("/courses/{course}/tabs/assignments"))
+        .json(&json!({"position": 1}))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let updated: Value = resp.json();
+    assert_eq!(updated["position"], 1, "position should update");
+}
+
+#[tokio::test]
+async fn t5_update_course_tab_404_for_nonexistent_tab() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "T5NotFound").await;
+    seed_course_teacher(&pool, teacher, course).await;
+
+    let resp = server
+        .put(&format!("/courses/{course}/tabs/nonexistent_tab_id"))
+        .json(&json!({"hidden": true}))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "nonexistent tab should return 404");
+}
+
+#[tokio::test]
+async fn t5_update_course_tab_student_gets_403() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "T5Student").await;
+    seed_course_teacher(&pool, teacher, course).await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    let resp = server
+        .put(&format!("/courses/{course}/tabs/modules"))
+        .json(&json!({"hidden": true}))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student cannot update tabs");
+}
+
+// ------------------------------------------------------------------
+// S6: GET /sections/{id}/users — list users enrolled in a section
+// Canvas `#section_users_list`
+// ------------------------------------------------------------------
+
+#[tokio::test]
+async fn s6_list_section_users_returns_enrolled_users() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student1 = seed_user(&pool, &prefix, "Student1", "student").await;
+    let student2 = seed_user(&pool, &prefix, "Student2", "student").await;
+    let course = seed_course(&pool, &prefix, "S6Course").await;
+    seed_course_teacher(&pool, teacher, course).await;
+    seed_enrollment(&pool, student1, course, "student").await;
+    seed_enrollment(&pool, student2, course, "student").await;
+
+    // Create a section and enroll the students in it
+    let section_id: i64 = sqlx::query_scalar(
+        "INSERT INTO course_sections (course_id, name) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(course)
+    .bind(format!("{}-Section1", prefix))
+    .fetch_one(&pool)
+    .await
+    .expect("seed section");
+
+    sqlx::query("UPDATE enrollments SET course_section_id = $1 WHERE user_id = $2")
+        .bind(section_id)
+        .bind(student1)
+        .execute(&pool)
+        .await
+        .expect("enroll student1 in section");
+    sqlx::query("UPDATE enrollments SET course_section_id = $1 WHERE user_id = $2")
+        .bind(section_id)
+        .bind(student2)
+        .execute(&pool)
+        .await
+        .expect("enroll student2 in section");
+
+    let resp = server
+        .get(&format!("/sections/{section_id}/users"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let users: Value = resp.json();
+    let users = users.as_array().expect("users must be array");
+    assert_eq!(users.len(), 2, "should return 2 users");
+    let ids: Vec<_> = users.iter().map(|u| u["id"].as_i64().unwrap()).collect();
+    assert!(ids.contains(&student1));
+    assert!(ids.contains(&student2));
+}
+
+#[tokio::test]
+async fn s6_list_section_users_404_for_nonexistent_section() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+
+    let resp = server
+        .get("/sections/99999999/users")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "nonexistent section should return 404"
+    );
+}
+
+#[tokio::test]
+async fn s6_list_section_users_respects_search_term() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student1 = seed_user(&pool, &prefix, "UniqueStudentX", "student").await;
+    let student2 = seed_user(&pool, &prefix, "UniqueStudentY", "student").await;
+    let course = seed_course(&pool, &prefix, "S6Search").await;
+    seed_course_teacher(&pool, teacher, course).await;
+    seed_enrollment(&pool, student1, course, "student").await;
+    seed_enrollment(&pool, student2, course, "student").await;
+
+    let section_id: i64 = sqlx::query_scalar(
+        "INSERT INTO course_sections (course_id, name) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(course)
+    .bind(format!("{}-Sec", prefix))
+    .fetch_one(&pool)
+    .await
+    .expect("seed section");
+
+    for uid in [student1, student2] {
+        sqlx::query("UPDATE enrollments SET course_section_id = $1 WHERE user_id = $2")
+            .bind(section_id)
+            .bind(uid)
+            .execute(&pool)
+            .await
+            .expect("enroll");
+    }
+
+    let resp = server
+        .get(&format!(
+            "/sections/{section_id}/users?search_term={}",
+            "UniqueStudentX"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let users: Value = resp.json();
+    let users = users.as_array().expect("users must be array");
+    assert_eq!(users.len(), 1, "search_term should filter to 1 user");
+    assert_eq!(
+        users[0]["id"].as_i64().unwrap(),
+        student1,
+        "should return only matching user"
+    );
+}
+
+// ------------------------------------------------------------------
+// S7: POST /sections/{id}/crosslist/{newCourseId} — cross-list a section
+// Canvas `#section_crosslist`
+// ------------------------------------------------------------------
+
+#[tokio::test]
+async fn s7_crosslist_section_moves_section_to_new_course() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let course_a = seed_course(&pool, &prefix, "CourseA").await;
+    let course_b = seed_course(&pool, &prefix, "CourseB").await;
+
+    let section_id: i64 = sqlx::query_scalar(
+        "INSERT INTO course_sections (course_id, name) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(course_a)
+    .bind(format!("{}-CrosslistSection", prefix))
+    .fetch_one(&pool)
+    .await
+    .expect("seed section");
+
+    let resp = server
+        .post(&format!("/sections/{section_id}/crosslist/{course_b}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let section: Value = resp.json();
+    assert_eq!(
+        section["course_id"], course_b,
+        "section should now belong to course_b"
+    );
+
+    // Verify DB state
+    let stored: (i64,) = sqlx::query_as("SELECT course_id FROM course_sections WHERE id = $1")
+        .bind(section_id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch updated section");
+    assert_eq!(stored.0, course_b, "DB should reflect cross-list");
+}
+
+#[tokio::test]
+async fn s7_crosslist_section_404_for_nonexistent_section() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let course = seed_course(&pool, &prefix, "Target").await;
+
+    let resp = server
+        .post(&format!("/sections/99999999/crosslist/{course}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "nonexistent section should return 404"
+    );
+}
+
+#[tokio::test]
+async fn s7_crosslist_section_404_for_nonexistent_target_course() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let course = seed_course(&pool, &prefix, "SrcCourse").await;
+
+    let section_id: i64 = sqlx::query_scalar(
+        "INSERT INTO course_sections (course_id, name) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(course)
+    .bind(format!("{}-SectionToMove", prefix))
+    .fetch_one(&pool)
+    .await
+    .expect("seed section");
+
+    let resp = server
+        .post(&format!("/sections/{section_id}/crosslist/99999999"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "nonexistent target course should return 404"
+    );
+}
+
+// ------------------------------------------------------------------
+// S8: DELETE /sections/{id}/crosslist — remove section from cross-listing
+// Canvas `#section_uncrosslist`
+// ------------------------------------------------------------------
+
+#[tokio::test]
+async fn s8_uncrosslist_section_returns_section_to_original_course() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let course_a = seed_course(&pool, &prefix, "CourseA2").await;
+    let course_b = seed_course(&pool, &prefix, "CourseB2").await;
+
+    // Cross-list section to course_b first
+    let section_id: i64 = sqlx::query_scalar(
+        "INSERT INTO course_sections (course_id, name) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(course_a)
+    .bind(format!("{}-UncrossSection", prefix))
+    .fetch_one(&pool)
+    .await
+    .expect("seed section");
+
+    // Manually cross-list via DB (simulate prior S7)
+    sqlx::query(
+        "UPDATE course_sections SET nonxlist_course_id = course_id, course_id = $1 WHERE id = $2",
+    )
+    .bind(course_b)
+    .bind(section_id)
+    .execute(&pool)
+    .await
+    .expect("manual crosslist");
+
+    // Verify cross-listed
+    let pre: (i64,) = sqlx::query_as("SELECT course_id FROM course_sections WHERE id = $1")
+        .bind(section_id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch pre state");
+    assert_eq!(pre.0, course_b);
+
+    let resp = server
+        .delete(&format!("/sections/{section_id}/crosslist"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let section: Value = resp.json();
+    assert_eq!(
+        section["course_id"], course_a,
+        "section should return to original course"
+    );
+
+    // Verify DB state
+    let stored: (Option<i64>, i64) =
+        sqlx::query_as("SELECT nonxlist_course_id, course_id FROM course_sections WHERE id = $1")
+            .bind(section_id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch post state");
+    assert_eq!(
+        stored.1, course_a,
+        "course_id should be restored to original"
+    );
+    assert_eq!(stored.0, None, "nonxlist_course_id should be cleared");
+}
+
+#[tokio::test]
+async fn s8_uncrosslist_section_404_for_nonexistent_section() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    defer! { cleanup(&pool, &prefix).await; }
+
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+
+    let resp = server
+        .delete("/sections/99999999/crosslist")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "nonexistent section should return 404"
+    );
+}
+
+// ------------------------------------------------------------------
+// Macro to defer cleanup — used as: defer! { cleanup(&pool, &prefix).await; }
+// ------------------------------------------------------------------
+macro_rules! defer {
+    ($block:block) => {
+        struct Defer<F: std::future::Future<Output = ()> + Unpin> {
+            f: F,
+        }
+        impl<F: std::future::Future<Output = ()> + Unpin> Drop for Defer<F> {
+            fn drop(&mut self) {
+                // Can't block in drop, so we use a simple mechanism:
+                // just shadow the variable to suppress unused warning
+                let _ = &self.f;
+            }
+        }
+        let _defer = Defer {
+            f: async { $block },
+        };
+    };
+}

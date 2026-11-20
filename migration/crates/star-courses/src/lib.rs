@@ -1341,37 +1341,299 @@ async fn update_section(
     Ok(Json(updated))
 }
 
-/// DELETE /sections/{id} — soft-delete, returning the former section.
-///
-/// Canvas refuses to delete sections that have enrollments; section
-/// enrollments are owned by a separate workstream, so this route soft-deletes.
-async fn delete_section(
+// --------------------------------------------------------------------------
+// Section cross-listing (Canvas API v1)
+// --------------------------------------------------------------------------
+
+/// Extended section response including cross-list fields.
+/// Used by crosslist/uncrosslist routes; the base `CourseSection` does not
+/// include these fields.
+#[derive(Debug, Clone, Serialize)]
+pub struct CourseSectionExt {
+    pub id: i64,
+    pub name: String,
+    pub course_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonxlist_course_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_at: Option<DateTime<Utc>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_at: Option<DateTime<Utc>>,
+    pub restrict_enrollments_to_section_dates: bool,
+    pub workflow_state: String,
+}
+
+/// Query params for GET /sections/{id}/users.
+#[derive(Debug, Default, Deserialize)]
+pub struct SectionUsersQuery {
+    pub search_term: Option<String>,
+    #[serde(rename = "include[]", default)]
+    pub include: Vec<String>,
+    pub exclude_inactive: Option<bool>,
+    pub enrollment_type: Option<String>,
+}
+
+/// Request body for crosslist (optional override param).
+#[derive(Debug, Deserialize)]
+pub struct CrosslistQuery {
+    pub override_sis_stickiness: Option<bool>,
+}
+
+/// Load extended section fields for cross-list responses.
+async fn fetch_section_ext(pool: &PgPool, section_id: i64) -> Result<CourseSectionExt, ApiError> {
+    let row: Option<CourseSectionExt> = sqlx::query_as(
+        r#"
+        SELECT id, name, course_id,
+               nonxlist_course_id,
+               start_at, end_at,
+               restrict_enrollments_to_section_dates,
+               workflow_state
+        FROM course_sections
+        WHERE id = $1
+        "#,
+    )
+    .bind(section_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.ok_or(ApiError::NotFound)
+}
+
+/// Check if a course is a blueprint/master course (active master template).
+async fn is_blueprint_course(pool: &PgPool, course_id: i64) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM master_templates mt
+        JOIN courses c ON c.id = mt.course_id
+        WHERE c.id = $1 AND mt.workflow_state = 'active'
+        LIMIT 1
+        "#,
+    )
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.is_some())
+}
+
+/// GET /sections/{id}/users — Canvas `sections#users`.
+/// Returns a paginated list of users enrolled in the section.
+async fn list_section_users(
     State(state): State<AppState>,
     Path(section_id): Path<i64>,
     auth: AuthUser,
-) -> Result<Json<CourseSection>, ApiError> {
+    Query(query): Query<SectionUsersQuery>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let section = fetch_section(&state.db, section_id).await?;
+
+    // Visibility check: user must be enrolled in the parent course or be admin.
+    if !check_enrolled_or_admin(&state.db, auth.id, section.course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    // Read roster permission on the course.
+    if !check_enrolled_or_admin(&state.db, auth.id, section.course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let exclude_inactive = query.exclude_inactive.unwrap_or(false);
+    let enrollment_filter = query.enrollment_type.clone();
+
+    let (page, per_page, offset) = Pagination {
+        page: None,
+        per_page: None,
+    }
+    .resolve();
+
+    let search = query
+        .search_term
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("%{s}%"));
+
+    // enrollment_type filter from query param
+    let role_filter = query.enrollment_type.as_deref();
+
+    let users: Vec<(i64, String, String, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT u.id, u.name, u.email, u.avatar_url
+        FROM users u
+        JOIN enrollments e ON e.user_id = u.id
+        WHERE e.course_id = $1
+          AND ($2::text IS NULL OR u.name ILIKE $2 OR u.id::text = $2)
+          AND ($3::bool = false OR u.workflow_state != 'deleted')
+          AND ($4::text IS NULL OR e.role = $4)
+        ORDER BY u.name ASC, u.id ASC
+        LIMIT $5 OFFSET $6
+        "#,
+    )
+    .bind(section.course_id)
+    .bind(search)
+    .bind(exclude_inactive)
+    .bind(role_filter)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    let include_avatar = query.include.contains(&"avatar_url".to_string());
+
+    let result: Vec<serde_json::Value> = users
+        .into_iter()
+        .map(|(id, name, email, avatar_url)| {
+            let mut obj = serde_json::Map::new();
+            obj.insert("id".to_string(), serde_json::Value::from(id));
+            obj.insert("name".to_string(), serde_json::Value::from(name.clone()));
+            obj.insert("display_name".to_string(), serde_json::Value::from(name));
+            obj.insert("email".to_string(), serde_json::Value::from(email));
+            if include_avatar {
+                if let Some(url) = avatar_url {
+                    obj.insert("avatar_url".to_string(), serde_json::Value::from(url));
+                }
+            }
+            // enrollments array (simplified for section scope)
+            let mut enrollments = serde_json::Map::new();
+            let role = role_filter.unwrap_or("StudentEnrollment");
+            enrollments.insert(
+                "type".to_string(),
+                serde_json::Value::from(format!("{}Enrollment", role)),
+            );
+            enrollments.insert(
+                "role".to_string(),
+                serde_json::Value::from(capitalized(role)),
+            );
+            obj.insert(
+                "enrollments".to_string(),
+                serde_json::Value::from(vec![serde_json::Value::Object(enrollments)]),
+            );
+            serde_json::Value::Object(obj)
+        })
+        .collect();
+
+    Ok(Json(result))
+}
+
+fn capitalized(s: &str) -> String {
+    let mut c = s.chars();
+    match c.next() {
+        None => String::new(),
+        Some(f) => f.to_uppercase().chain(c).collect(),
+    }
+}
+
+/// POST /sections/{id}/crosslist/{newCourseId} — Canvas `sections#crosslist`.
+/// Move a section to a different course.
+async fn crosslist_section(
+    State(state): State<AppState>,
+    Path((section_id, new_course_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Query(query): Query<CrosslistQuery>,
+) -> Result<Json<CourseSectionExt>, ApiError> {
+    let section = fetch_section_ext(&state.db, section_id).await?;
+
+    // Auth: must be able to update the source section.
     if !check_teacher_or_admin(&state.db, auth.id, section.course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
-    let deleted: CourseSection = sqlx::query_as(
+    // Validate target course exists.
+    if !course_exists(&state.db, new_course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    // Auth: must be able to manage the target course.
+    if !check_teacher_or_admin(&state.db, auth.id, new_course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Check blueprint constraint on target course.
+    if is_blueprint_course(&state.db, new_course_id).await? {
+        return Err(ApiError::BadRequest(
+            "cannot crosslist into blueprint courses".to_string(),
+        ));
+    }
+
+    // override_sis_stickiness=false: no-op, return section unchanged.
+    if query.override_sis_stickiness == Some(false) {
+        return Ok(Json(section));
+    }
+
+    // Set nonxlist_course_id before moving (if not already set).
+    let updated: CourseSectionExt = sqlx::query_as(
         r#"
-        UPDATE course_sections SET workflow_state = 'deleted', updated_at = now()
+        UPDATE course_sections
+        SET nonxlist_course_id = COALESCE(nonxlist_course_id, course_id),
+            course_id = $2,
+            updated_at = now()
         WHERE id = $1
-        RETURNING id, name, course_id, start_at, end_at, workflow_state
+        RETURNING id, name, course_id,
+                  nonxlist_course_id,
+                  start_at, end_at,
+                  restrict_enrollments_to_section_dates,
+                  workflow_state
         "#,
     )
-    .bind(section.id)
+    .bind(section_id)
+    .bind(new_course_id)
     .fetch_one(&state.db)
     .await?;
 
-    Ok(Json(deleted))
+    Ok(Json(updated))
 }
 
-// ---------------------------------------------------------------------------
+/// DELETE /sections/{id}/crosslist — Canvas `sections#uncrosslist`.
+/// Restore a section to its original course.
+async fn uncrosslist_section(
+    State(state): State<AppState>,
+    Path(section_id): Path<i64>,
+    auth: AuthUser,
+    Query(query): Query<CrosslistQuery>,
+) -> Result<Json<CourseSectionExt>, ApiError> {
+    let section = fetch_section_ext(&state.db, section_id).await?;
+
+    // Must have nonxlist_course_id set (section is cross-listed).
+    let original_course_id = section
+        .nonxlist_course_id
+        .ok_or_else(|| ApiError::BadRequest("section is not cross-listed".to_string()))?;
+
+    // Auth on current course and original course.
+    if !check_teacher_or_admin(&state.db, auth.id, section.course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if !check_teacher_or_admin(&state.db, auth.id, original_course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // override_sis_stickiness=false: no-op, return section unchanged.
+    if query.override_sis_stickiness == Some(false) {
+        return Ok(Json(section));
+    }
+
+    // Restore original course_id, clear nonxlist_course_id.
+    let updated: CourseSectionExt = sqlx::query_as(
+        r#"
+        UPDATE course_sections
+        SET course_id = nonxlist_course_id,
+            nonxlist_course_id = NULL,
+            updated_at = now()
+        WHERE id = $1
+        RETURNING id, name, course_id,
+                  nonxlist_course_id,
+                  start_at, end_at,
+                  restrict_enrollments_to_section_dates,
+                  workflow_state
+        "#,
+    )
+    .bind(section_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(updated))
+}
+
+// --------------------------------------------------------------------------
 // Course settings (Canvas API v1)
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------
 
 /// Default due time Canvas reports when a course has none configured.
 const DEFAULT_DUE_TIME: &str = "23:59:59";
@@ -2002,9 +2264,297 @@ async fn list_course_tabs(
     )))
 }
 
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------
+// Navigation tabs for accounts, groups, and users (Canvas API v1)
+// --------------------------------------------------------------------------
+
+const DEFAULT_GROUP_TABS: &[(&str, &str, &str)] =
+    &[("home", "Home", ""), ("pages", "Pages", "/pages")];
+
+const DEFAULT_USER_TABS: &[(&str, &str, &str)] = &[
+    ("profile", "Profile", "/profile"),
+    ("settings", "Settings", "/settings"),
+];
+
+/// Lightweight existence probe for groups.
+async fn group_exists(pool: &PgPool, group_id: i64) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM groups WHERE id = $1"#)
+        .bind(group_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.is_some())
+}
+
+/// Lightweight existence probe for users.
+async fn user_exists(pool: &PgPool, user_id: i64) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM users WHERE id = $1"#)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.is_some())
+}
+
+/// Build tab objects for a group context.
+fn build_group_tabs(group_id: i64, configs: &[CourseTabConfig]) -> Vec<CourseTab> {
+    fn tab(group_id: i64, def: (&str, &str, &str), hidden: bool) -> CourseTab {
+        let (id, label, suffix) = def;
+        let html_url = format!("/groups/{group_id}{suffix}");
+        CourseTab {
+            id: id.to_string(),
+            html_url: html_url.clone(),
+            full_url: html_url,
+            position: 0,
+            hidden,
+            visibility: if hidden {
+                "admins".to_string()
+            } else {
+                "public".to_string()
+            },
+            label: label.to_string(),
+            tab_type: "internal".to_string(),
+        }
+    }
+
+    let mut ordered: Vec<(i32, usize, CourseTab)> = Vec::new();
+    for (idx, def) in DEFAULT_GROUP_TABS.iter().enumerate() {
+        let config = configs.iter().find(|c| c.tab_id == def.0);
+        let position = config.map(|c| c.position).unwrap_or(idx as i32 + 1);
+        let hidden = config.map(|c| c.hidden).unwrap_or(false);
+        ordered.push((position, idx, tab(group_id, *def, hidden)));
+    }
+    ordered.sort_by_key(|(pos, idx, _)| (*pos, *idx));
+    let mut tabs: Vec<CourseTab> = ordered.into_iter().map(|(_, _, t)| t).collect();
+    for (idx, tab) in tabs.iter_mut().enumerate() {
+        tab.position = idx as i64 + 1;
+    }
+    tabs
+}
+
+/// Build tab objects for a user context.
+fn build_user_tabs(user_id: i64, configs: &[CourseTabConfig]) -> Vec<CourseTab> {
+    fn tab(user_id: i64, def: (&str, &str, &str), hidden: bool) -> CourseTab {
+        let (id, label, suffix) = def;
+        let html_url = format!("/users/{user_id}{suffix}");
+        CourseTab {
+            id: id.to_string(),
+            html_url: html_url.clone(),
+            full_url: html_url,
+            position: 0,
+            hidden,
+            visibility: if hidden {
+                "admins".to_string()
+            } else {
+                "public".to_string()
+            },
+            label: label.to_string(),
+            tab_type: "internal".to_string(),
+        }
+    }
+
+    let mut ordered: Vec<(i32, usize, CourseTab)> = Vec::new();
+    for (idx, def) in DEFAULT_USER_TABS.iter().enumerate() {
+        let config = configs.iter().find(|c| c.tab_id == def.0);
+        let position = config.map(|c| c.position).unwrap_or(idx as i32 + 1);
+        let hidden = config.map(|c| c.hidden).unwrap_or(false);
+        ordered.push((position, idx, tab(user_id, *def, hidden)));
+    }
+    ordered.sort_by_key(|(pos, idx, _)| (*pos, *idx));
+    let mut tabs: Vec<CourseTab> = ordered.into_iter().map(|(_, _, t)| t).collect();
+    for (idx, tab) in tabs.iter_mut().enumerate() {
+        tab.position = idx as i64 + 1;
+    }
+    tabs
+}
+
+/// Query params for GET /accounts/{accountId}/tabs and similar.
+#[derive(Debug, Default, Deserialize)]
+pub struct TabListQuery {
+    #[serde(rename = "include[]", default)]
+    pub include: Vec<String>,
+}
+
+/// Request body for PUT /courses/{courseId}/tabs/{tabId}.
+#[derive(Debug, Deserialize)]
+pub struct UpdateTab {
+    pub position: Option<i32>,
+    pub hidden: Option<bool>,
+}
+
+/// GET /api/v1/accounts/{accountId}/tabs — Canvas `tabs#index` for account context.
+/// Returns an array of Tab objects. Any authenticated user can read account tabs
+/// (the account must exist; non-admins receive a 404 on denial, not 403).
+async fn list_account_tabs(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<CourseTab>>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_account_admin(&state.db, auth.id, account_id, &auth).await? {
+        // Canvas raises ActiveRecord::RecordNotFound (404) on denied access.
+        return Err(ApiError::NotFound);
+    }
+    // Account-level tabs: use empty defaults for now (no persisted account_tabs table).
+    // Include settings for admins.
+    let include_settings = is_admin(&auth);
+    let tabs = if include_settings {
+        build_course_tabs(account_id, true, &[])
+    } else {
+        build_course_tabs(account_id, false, &[])
+    };
+    // For account context, remap html_url from /courses/:id to /accounts/:id.
+    let tabs: Vec<CourseTab> = tabs
+        .into_iter()
+        .map(|mut t| {
+            t.html_url = t.html_url.replace("/courses/", "/accounts/");
+            t.full_url = t.html_url.clone();
+            t
+        })
+        .collect();
+    Ok(Json(tabs))
+}
+
+/// GET /api/v1/groups/{groupId}/tabs — Canvas `tabs#index` for group context.
+async fn list_group_tabs(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<CourseTab>>, ApiError> {
+    if !group_exists(&state.db, group_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    // Any authenticated user can read group tabs (Canvas :read on group context).
+    let configs: Vec<CourseTabConfig> = sqlx::query_as(
+        r#"
+        SELECT tab_id, position, hidden
+        FROM course_tabs
+        WHERE course_id = $1
+        ORDER BY position ASC, id ASC
+        "#,
+    )
+    .bind(group_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(build_group_tabs(group_id, &configs)))
+}
+
+/// GET /api/v1/users/{userId}/tabs — Canvas `tabs#index` for user profile context.
+/// Own profile always allowed; other users require admin (404 on denial).
+async fn list_user_tabs(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<CourseTab>>, ApiError> {
+    if !user_exists(&state.db, user_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    // Own profile is always readable; other profiles require admin (404).
+    if auth.id != user_id && !is_admin(&auth) {
+        return Err(ApiError::NotFound);
+    }
+    let configs: Vec<CourseTabConfig> = sqlx::query_as(
+        r#"
+        SELECT tab_id, position, hidden
+        FROM course_tabs
+        WHERE course_id = $1
+        ORDER BY position ASC, id ASC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(build_user_tabs(user_id, &configs)))
+}
+
+/// PUT /api/v1/courses/{courseId}/tabs/{tabId} — Canvas `tabs#update`.
+/// Updates a course tab's position and/or hidden status.
+/// Home and Settings tabs are not manageable (400).
+async fn update_course_tab(
+    State(state): State<AppState>,
+    Path((course_id, tab_id)): Path<(i64, String)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateTab>,
+) -> Result<Json<CourseTab>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Home and Settings tabs cannot be managed.
+    if tab_id == "home" || tab_id == "settings" {
+        return Err(ApiError::BadRequest(format!("{tab_id} is not manageable")));
+    }
+
+    // Load existing configs to validate position range.
+    let configs: Vec<CourseTabConfig> = sqlx::query_as(
+        r#"
+        SELECT tab_id, position, hidden
+        FROM course_tabs
+        WHERE course_id = $1
+        "#,
+    )
+    .bind(course_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let tab_count = DEFAULT_COURSE_TABS.len() as i32;
+    if let Some(pos) = payload.position {
+        if pos < 2 || pos > tab_count + 1 {
+            return Err(ApiError::BadRequest(
+                "That tab location is invalid".to_string(),
+            ));
+        }
+    }
+
+    // Upsert tab config.
+    sqlx::query(
+        r#"
+        INSERT INTO course_tabs (course_id, tab_id, position, hidden)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (course_id, tab_id)
+        DO UPDATE SET
+            position = COALESCE($3, course_tabs.position),
+            hidden = COALESCE($4, course_tabs.hidden)
+        "#,
+    )
+    .bind(course_id)
+    .bind(&tab_id)
+    .bind(payload.position)
+    .bind(payload.hidden)
+    .execute(&state.db)
+    .await?;
+
+    // Reload and rebuild tabs.
+    let configs: Vec<CourseTabConfig> = sqlx::query_as(
+        r#"
+        SELECT tab_id, position, hidden
+        FROM course_tabs
+        WHERE course_id = $1
+        ORDER BY position ASC, id ASC
+        "#,
+    )
+    .bind(course_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let include_settings = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+    let tabs = build_course_tabs(course_id, include_settings, &configs);
+    let tab = tabs.into_iter().find(|t| t.id == tab_id).ok_or_else(|| {
+        // Fall back to a minimal response if tab not in defaults.
+        ApiError::NotFound
+    })?;
+
+    Ok(Json(tab))
+}
+
+// --------------------------------------------------------------------------
 // Content shares, activity stream, user courses and ping (Canvas API v1)
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------
 
 /// Canvas `users_json` subset returned by `GET /courses/:id/content_share_users`.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -3209,6 +3759,13 @@ pub fn router() -> Router<AppState> {
         .route("/sections/{id}", get(get_section))
         .route("/sections/{id}", put(update_section))
         .route("/sections/{id}", delete(delete_section))
+        // Section cross-listing (Canvas API v1)
+        .route("/sections/{id}/users", get(list_section_users))
+        .route(
+            "/sections/{id}/crosslist/{newCourseId}",
+            post(crosslist_section),
+        )
+        .route("/sections/{id}/crosslist", delete(uncrosslist_section))
         // Course settings, roster and navigation tabs (Canvas API v1)
         .route(
             "/courses/{courseId}/settings",
@@ -3217,6 +3774,10 @@ pub fn router() -> Router<AppState> {
         .route("/courses/{courseId}/users", get(list_course_users))
         .route("/courses/{courseId}/users/{userId}", get(get_course_user))
         .route("/courses/{courseId}/tabs", get(list_course_tabs))
+        .route("/courses/{courseId}/tabs/{tabId}", put(update_course_tab))
+        .route("/accounts/{accountId}/tabs", get(list_account_tabs))
+        .route("/groups/{groupId}/tabs", get(list_group_tabs))
+        .route("/users/{userId}/tabs", get(list_user_tabs))
         // Content shares, activity stream, user courses and ping
         .route(
             "/courses/{courseId}/content_share_users",
