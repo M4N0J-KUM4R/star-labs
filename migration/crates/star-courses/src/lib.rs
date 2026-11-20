@@ -1756,6 +1756,8 @@ pub struct PaginatedBulkUserProgress {
     pub total: i64,
 }
 
+type StudentActivityRow = (i64, Option<i64>, Option<i64>, Option<i64>);
+
 /// GET /courses/{courseId}/bulk_user_progress — Canvas
 /// `CoursesController#bulk_user_progress`.
 ///
@@ -1792,7 +1794,7 @@ async fn bulk_user_progress(
     .fetch_one(&state.db)
     .await?;
 
-    let rows: Vec<(i64, Option<i64>, Option<i64>, Option<i64>)> = sqlx::query_as(
+    let rows: Vec<StudentActivityRow> = sqlx::query_as(
         r#"
         SELECT u.id,
                SUM(uda.page_views)        AS page_views,
