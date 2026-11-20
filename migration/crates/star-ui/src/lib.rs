@@ -5,7 +5,13 @@
 //! `/courses/{id}`, `/courses/{id}/{tab}` and `/static/{hash}/{file}`, plus
 //! the discussions + inbox journey routes (#72):
 //! `/courses/{id}/discussions[...]` (alias `/discussion_topics`) and
-//! `/conversations[...]`.
+//! `/conversations[...]`, plus the assignments + gradebook journey routes
+//! (issue #71): `/courses/{id}/assignments[...]`, `/courses/{id}/grades`,
+//! `/courses/{id}/gradebook[.csv]`.
+//!
+//! Specific journey routes are registered BEFORE the generic
+//! `/courses/{id}/{tab}` so the "assignments"/"grades"/"discussions" tab
+//! segments hit the journey pages, not the generic tab landing.
 //!
 //! Auth is the `star_session` cookie (HttpOnly, SameSite=Lax) verified by
 //! the exact same path as the API's Bearer `AuthUser`; shell POSTs are CSRF
@@ -37,6 +43,18 @@ pub fn router() -> Router<AppState> {
             get(handlers::login::login_form).post(handlers::login::login_submit),
         )
         .route("/logout", post(handlers::login::logout))
+        .route(
+            "/register",
+            get(handlers::auth::register_form).post(handlers::auth::register_submit),
+        )
+        .route(
+            "/forgot_password",
+            get(handlers::auth::forgot_password_form).post(handlers::auth::forgot_password_submit),
+        )
+        .route(
+            "/reset_password/{token}",
+            get(handlers::auth::reset_password_form).post(handlers::auth::reset_password_submit),
+        )
         .route("/dashboard", get(handlers::dashboard::dashboard))
         // Discussions journey (#72) — the specific tab routes come before
         // the generic `/courses/{id}/{tab}` catch-all below. Both
@@ -87,6 +105,36 @@ pub fn router() -> Router<AppState> {
             post(handlers::conversations::conversation_reply),
         )
         .route("/courses/{id}", get(handlers::course::course_home))
+        // Assignments journey (issue #71) — BEFORE the generic tab route.
+        .route(
+            "/courses/{id}/assignments",
+            get(handlers::assignments::assignments_index),
+        )
+        .route(
+            "/courses/{id}/assignments/new",
+            get(handlers::assignments::assignment_new)
+                .post(handlers::assignments::assignment_create),
+        )
+        .route(
+            "/courses/{id}/assignments/{aid}",
+            get(handlers::assignments::assignment_show),
+        )
+        .route(
+            "/courses/{id}/assignments/{aid}/edit",
+            get(handlers::assignments::assignment_edit)
+                .post(handlers::assignments::assignment_update),
+        )
+        .route(
+            "/courses/{id}/assignments/{aid}/submit",
+            post(handlers::assignments::assignment_submit),
+        )
+        // Grades + gradebook journey (issue #71) — BEFORE the generic tab route.
+        .route("/courses/{id}/grades", get(handlers::grades::grades))
+        .route("/courses/{id}/gradebook", get(handlers::grades::gradebook))
+        .route(
+            "/courses/{id}/gradebook.csv",
+            get(handlers::grades::gradebook_csv),
+        )
         .route("/courses/{id}/{tab}", get(handlers::course::course_tab))
         .route("/static/{hash}/{file}", get(assets::serve_static))
 }

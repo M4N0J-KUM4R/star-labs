@@ -10,6 +10,9 @@ star-dashboard = { path = "../star-dashboard" }
 star-courses = { path = "../star-courses" }
 star-pages = { path = "../star-pages" }
 star-modules = { path = "../star-modules" }
+star-assignments = { path = "../star-assignments" }
+star-assignment-groups = { path = "../star-assignment-groups" }
+star-grading-standards = { path = "../star-grading-standards" }
 star-discussions = { path = "../star-discussions" }
 star-conversations = { path = "../star-conversations" }
 axum = { workspace = true }

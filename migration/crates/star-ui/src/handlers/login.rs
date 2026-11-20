@@ -37,6 +37,9 @@ pub struct LoginPage {
     pub next: String,
     pub email: String,
     pub error: String,
+    /// Show the dismissible session-expiry notice (redirect carried
+    /// `expired=1` because the presented token's `exp` was in the past).
+    pub session_expired: bool,
 }
 
 impl IntoResponse for LoginPage {
@@ -59,6 +62,9 @@ impl IntoResponse for LoginPage {
 pub struct LoginQuery {
     pub next: Option<String>,
     pub login_hint: Option<String>,
+    /// Present when the shell redirected here because the session token was
+    /// EXPIRED (vs merely absent) — drives the dismissible expiry notice.
+    pub expired: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -70,6 +76,11 @@ pub struct LoginForm {
 }
 
 /// GET /login — public; issues `star_csrf` when absent and renders the form.
+///
+/// `?expired=1` (set by the session extractor when a well-formed token's
+/// `exp` is in the past) surfaces a dismissible "Your session has expired"
+/// notice (issue #70). A fresh login never carries the flag, so the notice
+/// disappears once the user re-authenticates.
 pub async fn login_form(
     State(_app): State<AppState>,
     Query(query): Query<LoginQuery>,
@@ -87,6 +98,7 @@ pub async fn login_form(
         next: sanitize_next(query.next.as_deref()),
         email: query.login_hint.unwrap_or_default(),
         error: String::new(),
+        session_expired: query.expired.as_deref().is_some_and(|v| v == "1"),
     };
     (jar, page).into_response()
 }
@@ -138,6 +150,7 @@ pub async fn login_submit(
             next: sanitize_next(form.next.as_deref()),
             email: form.email.clone(),
             error: "Invalid email or password.".to_string(),
+            session_expired: false,
         };
         return (StatusCode::UNAUTHORIZED, jar, page).into_response();
     }

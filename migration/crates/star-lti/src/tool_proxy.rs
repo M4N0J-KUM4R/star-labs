@@ -146,14 +146,25 @@ pub fn router() -> Router<AppState> {
             "/accounts/{account_id}/tool_proxies/{tool_proxy_id}/update",
             put(accept_tool_proxy_update_account).delete(dismiss_tool_proxy_update_account),
         )
-        // lti/ims/tool_proxy
-        .route("/tool_proxy/{tool_proxy_guid}", get(show_tool_proxy_guid))
+}
+
+/// Build the `lti/ims/tool_proxy` router.
+///
+/// Canvas serves the LTI Advantage family under `/api/lti`, outside `/api/v1`,
+/// so the paths carry the prefix and the router is mounted at the application
+/// root.
+pub fn advantage_router() -> Router<AppState> {
+    Router::new()
         .route(
-            "/courses/{course_id}/tool_proxy",
+            "/api/lti/tool_proxy/{tool_proxy_guid}",
+            get(show_tool_proxy_guid),
+        )
+        .route(
+            "/api/lti/courses/{course_id}/tool_proxy",
             post(create_tool_proxy_course),
         )
         .route(
-            "/accounts/{account_id}/tool_proxy",
+            "/api/lti/accounts/{account_id}/tool_proxy",
             post(create_tool_proxy_account),
         )
 }

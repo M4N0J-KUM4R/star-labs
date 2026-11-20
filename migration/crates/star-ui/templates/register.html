@@ -1,0 +1,52 @@
+{% extends "layouts/base.html" %}
+{# Registration page — Canvas users#new (layout "bare"), issue #70.
+   No-JS port of the JS signup dialogs: one server-rendered form. #}
+{% block shell %}
+  <div class="ic-Login">
+    <div class="ic-Login__container">
+      <div class="ic-Login__content">
+        <div class="ic-Login__innerContent">
+          <div class="ic-Login-header">
+            <h1 class="screenreader-only">Register</h1>
+            <p class="ic-Login__subtitle">star-lms</p>
+          </div>
+          <div class="ic-Login__body">
+            <div id="register_error" aria-live="assertive">
+            {% if !error.is_empty() %}
+            <div class="ic-flash error" role="alert">{{ error }}</div>
+            {% endif %}
+            </div>
+            <form id="register_form" method="post" action="/register">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <div class="ic-Form-control ic-Form-control--login">
+                <label class="ic-Label" for="user_name">Full Name</label>
+                <input class="ic-Input text" type="text" id="user_name" name="name" value="{{ name }}" autofocus autocomplete="name" required>
+                {% if !name_error.is_empty() %}<div class="ic-Form-error-text" role="alert">{{ name_error }}</div>{% endif %}
+              </div>
+              <div class="ic-Form-control ic-Form-control--login">
+                <label class="ic-Label" for="user_email">Email</label>
+                <input class="ic-Input text" type="email" id="user_email" name="email" value="{{ email }}" autocomplete="username" required>
+                {% if !email_error.is_empty() %}<div class="ic-Form-error-text" role="alert">{{ email_error }}</div>{% endif %}
+              </div>
+              <div class="ic-Form-control ic-Form-control--login">
+                <label class="ic-Label" for="user_password">Password</label>
+                <input class="ic-Input text" type="password" id="user_password" name="password" autocomplete="new-password" required>
+                {% if !password_error.is_empty() %}<div class="ic-Form-error-text" role="alert">{{ password_error }}</div>{% endif %}
+              </div>
+              <div class="ic-Form-control ic-Form-control--login">
+                <label class="ic-Label" for="user_password_confirmation">Confirm Password</label>
+                <input class="ic-Input text" type="password" id="user_password_confirmation" name="password_confirmation" autocomplete="new-password" required>
+              </div>
+              <div class="ic-Login__actions">
+                <button type="submit" class="Button Button--login">Register</button>
+              </div>
+            </form>
+            <div class="ic-Login__links">
+              <a href="/login">Already have an account? Log In</a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock shell %}
