@@ -220,6 +220,24 @@ struct ImsRow {
     registration_url: Option<String>,
 }
 
+/// A row of `lti_registration_history_entries`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct HistoryEntryRow {
+    id: i64,
+    root_account_id: Option<i64>,
+    lti_registration_id: Option<i64>,
+    created_by_id: Option<i64>,
+    diff: Value,
+    update_type: String,
+    comment: Option<String>,
+    old_configuration: Option<Value>,
+    new_configuration: Option<Value>,
+    old_context_controls: Option<Value>,
+    new_context_controls: Option<Value>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
 /// A row of `lti_overlay_versions`.
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct OverlayVersionRow {
@@ -1942,21 +1960,7 @@ pub async fn history(
         return Ok(Json(json!([])).into_response());
     }
 
-    let rows: Vec<(
-        i64,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Value,
-        String,
-        Option<String>,
-        Option<Value>,
-        Option<Value>,
-        Option<Value>,
-        Option<Value>,
-        DateTime<Utc>,
-        DateTime<Utc>,
-    )> = sqlx::query_as(
+    let rows: Vec<HistoryEntryRow> = sqlx::query_as(
         "SELECT id, root_account_id, lti_registration_id, created_by_id, diff, update_type, \
                 comment, old_configuration, new_configuration, old_context_controls, \
                 new_context_controls, created_at, updated_at \
@@ -1972,22 +1976,22 @@ pub async fn history(
     .await?;
 
     let mut entries = Vec::with_capacity(rows.len());
-    for (
-        entry_id,
-        root_account_id,
-        lti_registration_id,
-        created_by_id,
-        diff,
-        update_type,
-        comment,
-        old_configuration,
-        new_configuration,
-        old_context_controls,
-        new_context_controls,
-        created_at,
-        updated_at,
-    ) in rows
-    {
+    for row in rows {
+        let HistoryEntryRow {
+            id: entry_id,
+            root_account_id,
+            lti_registration_id,
+            created_by_id,
+            diff,
+            update_type,
+            comment,
+            old_configuration,
+            new_configuration,
+            old_context_controls,
+            new_context_controls,
+            created_at,
+            updated_at,
+        } = row;
         let mut json = json!({
             "id": entry_id,
             "root_account_id": root_account_id,
@@ -2002,11 +2006,11 @@ pub async fn history(
             "old_controls_by_deployment": old_context_controls
                 .as_ref()
                 .map(|_| Vec::<Value>::new())
-                .unwrap_or_else(|| Vec::new()),
+                .unwrap_or_default(),
             "new_controls_by_deployment": new_context_controls
                 .as_ref()
                 .map(|_| Vec::<Value>::new())
-                .unwrap_or_else(|| Vec::new()),
+                .unwrap_or_default(),
         });
         if let Some(created_by) = user_summary(&state.db, created_by_id).await? {
             json["created_by"] = created_by;
@@ -2948,7 +2952,7 @@ pub async fn bind(
             let updated_by = user_summary(&state.db, binding.updated_by_id).await?;
             Ok(Json(binding_json(&binding, created_by, updated_by)).into_response())
         }
-        Err(response) => Ok(response),
+        Err(response) => Ok(*response),
     }
 }
 
@@ -3065,7 +3069,7 @@ pub async fn install_from_template(
             json["account_binding"] = binding_json(&binding, created_by, updated_by);
             Ok(Json(json).into_response())
         }
-        Err(response) => Ok(response),
+        Err(response) => Ok(*response),
     }
 }
 
@@ -3079,28 +3083,28 @@ async fn install_template_registration(
     template: &RegistrationRow,
     binding_state: &str,
     user_id: i64,
-) -> Result<(RegistrationRow, BindingRow), Response> {
+) -> Result<(RegistrationRow, BindingRow), Box<Response>> {
     // The service's own validations.
     if template.workflow_state != "active" {
-        return Err(render_error(
+        return Err(Box::new(render_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_template",
             "template registration is off",
-        ));
+        )));
     }
     if !ctx.is_root_account {
-        return Err(render_error(
+        return Err(Box::new(render_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_template",
             "root account must be provided",
-        ));
+        )));
     }
     if template.dynamic_registration {
-        return Err(render_error(
+        return Err(Box::new(render_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_template",
             "Dynamic Registrations cannot be used as templates",
-        ));
+        )));
     }
 
     // The local copy of the template.
@@ -3139,29 +3143,29 @@ async fn install_template_registration(
                 Ok(row) => {
                     // The tool is deployed to the account.
                     if let Err(e) = deploy_registration(pool, &row, ctx, user_id).await {
-                        return Err(render_error(
+                        return Err(Box::new(render_error(
                             StatusCode::INTERNAL_SERVER_ERROR,
                             "deployment_failed",
                             &e.to_string(),
-                        ));
+                        )));
                     }
                     row
                 }
                 Err(e) => {
-                    return Err(render_error(
+                    return Err(Box::new(render_error(
                         StatusCode::INTERNAL_SERVER_ERROR,
                         "install_failed",
                         &e.to_string(),
-                    ))
+                    )))
                 }
             }
         }
         Err(e) => {
-            return Err(render_error(
+            return Err(Box::new(render_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "install_failed",
                 &e.to_string(),
-            ))
+            )))
         }
     };
 
@@ -3182,11 +3186,11 @@ async fn install_template_registration(
         .execute(pool)
         .await
         {
-            return Err(render_error(
+            return Err(Box::new(render_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "install_failed",
                 &e.to_string(),
-            ));
+            )));
         }
     }
 
@@ -3194,11 +3198,11 @@ async fn install_template_registration(
     let binding = match upsert_binding(pool, template, ctx, binding_state, user_id).await {
         Ok(binding) => binding,
         Err(e) => {
-            return Err(render_error(
+            return Err(Box::new(render_error(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "install_failed",
                 &e.to_string(),
-            ))
+            )))
         }
     };
 
