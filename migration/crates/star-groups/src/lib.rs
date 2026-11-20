@@ -99,8 +99,10 @@ pub struct MembershipWithUser {
 }
 
 /// Request to update a membership (accept request, set moderator).
+/// Canvas params are snake_case (`@argument workflow_state` /
+/// UPDATABLE_MEMBERSHIP_ATTRIBUTES = %w[workflow_state moderator],
+/// group_memberships_controller.rb:245,253-256) — no camelCase rename.
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 pub struct UpdateMembership {
     pub workflow_state: Option<String>,
     pub moderator: Option<bool>,
