@@ -817,9 +817,11 @@ async fn bind_unbind_and_install_from_template_manage_the_bindings() {
     assert_eq!(body["workflow_state"], "on");
 
     let bindings: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM lti_registration_account_bindings WHERE registration_id = $1",
+        "SELECT COUNT(*) FROM lti_registration_account_bindings \
+         WHERE registration_id = $1 AND account_id = $2",
     )
     .bind(template_id)
+    .bind(account)
     .fetch_one(&pool)
     .await
     .expect("count bindings");

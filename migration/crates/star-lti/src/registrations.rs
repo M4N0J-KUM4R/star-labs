@@ -826,7 +826,8 @@ async fn registration_json(
     if includes.overlay_versions {
         // Canvas nests the versions inside the overlay; the workspace keeps
         // them beside it because there is no `lti_overlays` table yet.
-        json["overlay_versions"] = json!(overlay_versions(pool).await?);
+        let versions = overlay_versions(pool).await?;
+        json["overlay_versions"] = Value::Array(versions);
     }
     if includes.account_binding {
         if let Some(binding) = account_binding_for(pool, registration, ctx).await? {
@@ -1396,13 +1397,16 @@ fn from_lti_configuration(config: &Value) -> Value {
 // ---------------------------------------------------------------------------
 
 /// Canvas `Lti::AccountBindingService::WORKFLOW_STATE_RESOLUTION`.
+///
+/// A missing workflow state resolves to nothing (the registration keeps its
+/// state), which is what `Lti::UpdateRegistrationService` expects.
 fn resolve_workflow_state(value: Option<&str>) -> Option<(&'static str, &'static str)> {
-    match value.unwrap_or("on") {
-        "on" => Some(("on", "active")),
-        "off" => Some(("off", "inactive")),
-        "allow" => Some(("allow", "active")),
-        "active" => Some(("on", "active")),
-        "inactive" => Some(("off", "inactive")),
+    match value {
+        Some("on") => Some(("on", "active")),
+        Some("off") => Some(("off", "inactive")),
+        Some("allow") => Some(("allow", "active")),
+        Some("active") => Some(("on", "active")),
+        Some("inactive") => Some(("off", "inactive")),
         _ => None,
     }
 }
@@ -2668,7 +2672,15 @@ pub async fn update_registration(
     // The workflow state resolution.
     let (binding_state, registration_state) =
         match resolve_workflow_state(payload.workflow_state.as_deref()) {
-            Some((binding, registration)) => (binding.to_string(), registration.to_string()),
+            Some((binding, registration)) => {
+                // A site-admin registration is bound with "allow".
+                let binding = if ctx.account_id == ctx.site_admin_id && binding == "on" {
+                    "allow"
+                } else {
+                    binding
+                };
+                (binding.to_string(), registration.to_string())
+            }
             None => (
                 registration.workflow_state.clone(),
                 registration.workflow_state.clone(),

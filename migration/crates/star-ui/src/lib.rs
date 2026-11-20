@@ -36,6 +36,18 @@ pub fn router() -> Router<AppState> {
             get(handlers::login::login_form).post(handlers::login::login_submit),
         )
         .route("/logout", post(handlers::login::logout))
+        .route(
+            "/register",
+            get(handlers::auth::register_form).post(handlers::auth::register_submit),
+        )
+        .route(
+            "/forgot_password",
+            get(handlers::auth::forgot_password_form).post(handlers::auth::forgot_password_submit),
+        )
+        .route(
+            "/reset_password/{token}",
+            get(handlers::auth::reset_password_form).post(handlers::auth::reset_password_submit),
+        )
         .route("/dashboard", get(handlers::dashboard::dashboard))
         .route("/courses/{id}", get(handlers::course::course_home))
         // Assignments journey (issue #71) — BEFORE the generic tab route.
