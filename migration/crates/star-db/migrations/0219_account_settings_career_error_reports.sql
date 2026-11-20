@@ -30,6 +30,10 @@ ALTER TABLE account_users
 ALTER TABLE courses
     ADD COLUMN IF NOT EXISTS enrollment_term_id BIGINT;
 
+-- Canvas marks a course as a career ("horizon") course.
+ALTER TABLE courses
+    ADD COLUMN IF NOT EXISTS horizon_course BOOLEAN NOT NULL DEFAULT false;
+
 -- Canvas tracks the deletion of a user in `workflow_state`; the port only
 -- knew the registration.
 ALTER TABLE users

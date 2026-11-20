@@ -585,11 +585,29 @@ async fn the_career_routes_follow_the_root_account_flag() {
     // With the flag the experience routes work.
     sqlx::query(
         "UPDATE accounts SET settings = settings || jsonb_build_object( \
-            'horizon_account_ids', '[1]'::jsonb) WHERE parent_account_id IS NULL",
+            'horizon_account_ids', '[1]'::jsonb, \
+            'canvas_career_config', jsonb_build_object('learner_launch_url', 'http://career.test')) \
+         WHERE parent_account_id IS NULL",
     )
     .execute(&pool)
     .await
     .expect("seed the career flag");
+
+    // A career course with a learner enrollment is what makes the user a
+    // career learner (Canvas `ExperienceResolver`).
+    let root_account: i64 = sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read the root account");
+    let course = seed_course(&pool, &prefix, "Career", root_account).await;
+    sqlx::query("UPDATE courses SET horizon_course = true WHERE id = $1")
+        .bind(course)
+        .execute(&pool)
+        .await
+        .expect("mark the course as a career course");
+    seed_enrollment(&pool, user, course, "student").await;
 
     let resp = server
         .get("/career/enabled")
@@ -605,7 +623,7 @@ async fn the_career_routes_follow_the_root_account_flag() {
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let summary: Value = resp.json();
     assert_eq!(summary["current_app"], "career_learner");
-    assert!(summary.get("available_apps").is_some(), "{summary}");
+    assert_eq!(summary["available_apps"], json!(["career_learner"]));
 
     // An invalid experience is the Canvas 400.
     let resp = server

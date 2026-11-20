@@ -1082,6 +1082,40 @@ async fn account_chain(pool: &PgPool, account_id: i64) -> Result<Vec<(i64, Strin
     Ok(rows)
 }
 
+/// Canvas `Account.multi_parent_sub_accounts_recursive`: an account and every
+/// account below it.
+async fn sub_account_ids(pool: &PgPool, account_ids: &[i64]) -> Result<Vec<i64>, ApiError> {
+    if account_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        r#"
+        WITH RECURSIVE sub AS (
+            SELECT id, parent_account_id FROM accounts WHERE id = ANY($1)
+            UNION
+            SELECT a.id, a.parent_account_id FROM accounts a JOIN sub s ON a.parent_account_id = s.id
+        )
+        SELECT DISTINCT id FROM sub
+        "#,
+    )
+    .bind(account_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// The site admin account. Canvas keeps it as a special account row; the port
+/// uses the root account.
+async fn site_admin_account(pool: &PgPool) -> Result<Option<i64>, ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM accounts WHERE parent_account_id IS NULL \
+           AND workflow_state <> 'deleted' ORDER BY id ASC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(id,)| id))
+}
+
 /// Canvas `account_json(read_only: true)` — the attribute fields plus the
 /// default time zone.
 async fn read_only_account_json(pool: &PgPool, account_id: i64) -> Result<Option<Value>, ApiError> {
@@ -1266,8 +1300,9 @@ async fn list_course_accounts(
 
 /// GET /horizon_accounts — Canvas `AccountsController#horizon_accounts`.
 ///
-/// The accounts the caller administers. The route is public, so an anonymous
-/// caller gets an empty list.
+/// The horizon accounts the caller administers (Canvas
+/// `User#adminable_horizon_accounts_scope`). The route is public, so an
+/// anonymous caller gets an empty list.
 async fn list_horizon_accounts(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1278,18 +1313,80 @@ async fn list_horizon_accounts(
     };
 
     let (per_page, offset) = page_params(&params);
-    let ids = adminable_account_ids(&state.db, &user).await?;
 
-    let mut list = Vec::new();
-    for account_id in ids
-        .into_iter()
-        .skip(offset as usize)
-        .take(per_page as usize)
-    {
-        if let Some(value) = account_json(&state.db, account_id).await? {
+    // The accounts the caller is an active account user of.
+    let adminable: Vec<i64> = sqlx::query_scalar(
+        "SELECT account_id FROM account_users \
+         WHERE user_id = $1 AND workflow_state = 'active'",
+    )
+    .bind(user.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut horizon_ids: Vec<i64> = Vec::new();
+
+    // The root accounts of those accounts carry the horizon account ids.
+    let mut roots: Vec<i64> = Vec::new();
+    for account_id in &adminable {
+        if let Some(root) = root_account_of(&state.db, *account_id).await? {
+            if !roots.contains(&root) {
+                roots.push(root);
+            }
+        }
+    }
+
+    for root in roots {
+        let settings = account_settings(&state.db, root).await?;
+        let horizon_parent_ids = match settings.get("horizon_account_ids") {
+            Some(Value::Array(items)) => items.iter().filter_map(|item| item.as_i64()).collect(),
+            _ => Vec::new(),
+        };
+        if horizon_parent_ids.is_empty() {
+            continue;
+        }
+        for id in sub_account_ids(&state.db, &horizon_parent_ids).await? {
+            if adminable.contains(&id) && !horizon_ids.contains(&id) {
+                horizon_ids.push(id);
+            }
+        }
+    }
+
+    // The site admin account joins when the horizon list is not empty and the
+    // caller is an account user of it.
+    if !horizon_ids.is_empty() {
+        if let Some(site_admin) = site_admin_account(&state.db).await? {
+            let is_admin: Option<(i32,)> = sqlx::query_as(
+                "SELECT 1 FROM account_users \
+                 WHERE user_id = $1 AND account_id = $2 AND workflow_state = 'active' LIMIT 1",
+            )
+            .bind(user.id)
+            .bind(site_admin)
+            .fetch_optional(&state.db)
+            .await?;
+            if is_admin.is_some() && !horizon_ids.contains(&site_admin) {
+                horizon_ids.push(site_admin);
+            }
+        }
+    }
+
+    // Canvas orders the accounts by name and id.
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT id FROM accounts WHERE id = ANY($1) AND workflow_state <> 'deleted' \
+         ORDER BY name, id LIMIT $2 OFFSET $3",
+    )
+    .bind(&horizon_ids)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut list = Vec::with_capacity(rows.len());
+    for (id,) in rows {
+        if let Some(value) = account_json(&state.db, id).await? {
             list.push(value);
         }
     }
+
     Ok(Json(Value::Array(list)))
 }
 
