@@ -1726,3 +1726,330 @@ async fn sso_settings_show_and_update() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// --------------------------------------------------------------------------
+// Developer key events (approve / deny / rotate_keys) + scope sanitisation
+// --------------------------------------------------------------------------
+
+#[tokio::test]
+async fn developer_key_update_event_approve_and_deny() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "DevKeyEventAdmin", "admin").await;
+
+    let name = format!("{prefix}-DevKeyEvent");
+    let resp = server
+        .post("/developer_keys")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "developer_key": {
+                "name": name,
+                "email": "dev@example.com",
+                "scopes": ["url:GET|/api/v1/courses"]
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "create: {}", resp.text());
+    let created: Value = resp.json();
+    let key_id = created["id"].as_i64().expect("key id");
+
+    let resp = server
+        .put(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "developer_key": { "event": "approve" } }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "approve: {}", resp.text());
+    let updated: Value = resp.json();
+    assert_eq!(updated["workflow_state"], "active");
+
+    let resp = server
+        .put(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "developer_key": { "event": "deny" } }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "deny: {}", resp.text());
+    let denied: Value = resp.json();
+    assert_eq!(denied["workflow_state"], "denied");
+
+    let resp = server
+        .put(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "developer_key": { "event": "INVALID" } }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "bad event: {}", resp.text());
+    let error: Value = resp.json();
+    assert!(
+        error[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("unsupported event"),
+        "error: {error}"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn developer_key_update_event_rotate_keys() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "DevKeyRotateAdmin", "admin").await;
+    let name = format!("{prefix}-DevKeyRotate");
+
+    let resp = server
+        .post("/developer_keys")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "developer_key": { "name": name } }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "create: {}", resp.text());
+    let created: Value = resp.json();
+    let key_id = created["id"].as_i64().expect("key id");
+    let original_api_key = created["api_key"].as_str().expect("api_key").to_string();
+
+    let resp = server
+        .put(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "developer_key": { "event": "rotate_keys" } }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "rotate: {}", resp.text());
+    let rotated: Value = resp.json();
+    let new_api_key = rotated["api_key"].as_str().expect("api_key");
+    assert_ne!(
+        new_api_key, original_api_key,
+        "rotate_keys must produce a new api_key"
+    );
+    assert_eq!(new_api_key.len(), 64, "opaque token is 64 hex chars");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn developer_key_update_scope_sanitisation() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "DevKeyScopeAdmin", "admin").await;
+    let name = format!("{prefix}-DevKeyScope");
+
+    let resp = server
+        .post("/developer_keys")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "developer_key": {
+                "name": name,
+                "scopes": ["url:GET|/api/v1/courses"]
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "create: {}", resp.text());
+    let created: Value = resp.json();
+    let key_id = created["id"].as_i64().expect("key id");
+
+    let resp = server
+        .put(&format!("/developer_keys/{key_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "developer_key": { "scopes": ["url:GET|/api/v1/users"] }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "update: {}", resp.text());
+    let updated: Value = resp.json();
+    let updated_scopes: Vec<&str> = updated["scopes"]
+        .as_str()
+        .unwrap()
+        .split('\n')
+        .map(str::trim)
+        .collect();
+    assert!(
+        updated_scopes.contains(&"url:GET|/api/v1/courses"),
+        "existing scope must be preserved: {updated_scopes}"
+    );
+    assert!(
+        updated_scopes.contains(&"url:GET|/api/v1/users"),
+        "new scope must be added: {updated_scopes}"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+// --------------------------------------------------------------------------
+// Authentication provider restore
+// --------------------------------------------------------------------------
+
+#[tokio::test]
+async fn auth_provider_restore() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    seed_account_if_needed(&pool).await;
+    let admin = seed_user(&pool, &prefix, "RestoreProviderAdmin", "admin").await;
+    let admin_auth = auth(admin, "admin");
+
+    let resp = server
+        .post("/accounts/1/authentication_providers")
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .json(&json!({
+            "authentication_provider": {
+                "auth_type": "saml",
+                "position": 1,
+                "idp_entity_id": "https://idp.example.org/entity"
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "create: {}", resp.text());
+    let created: Value = resp.json();
+    let provider_id = created["id"].as_i64().expect("provider id");
+    assert_eq!(created["workflow_state"], "active");
+
+    let resp = server
+        .delete(&format!(
+            "/accounts/1/authentication_providers/{provider_id}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .await;
+    assert_eq!(resp.status_code(), 200, "delete: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["workflow_state"], "deleted");
+
+    let resp = server
+        .get(&format!(
+            "/accounts/1/authentication_providers/{provider_id}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .await;
+    assert_eq!(resp.status_code(), 404, "deleted show: {}", resp.text());
+
+    let resp = server
+        .post(&format!(
+            "/accounts/1/authentication_providers/{provider_id}/restore"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .await;
+    assert_eq!(resp.status_code(), 200, "restore: {}", resp.text());
+    let restored: Value = resp.json();
+    assert_eq!(
+        restored["workflow_state"], "active",
+        "restore must set workflow_state to active"
+    );
+
+    let resp = server
+        .get(&format!(
+            "/accounts/1/authentication_providers/{provider_id}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "post-restore show: {}",
+        resp.text()
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn auth_provider_restore_nonexistent_or_active() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    seed_account_if_needed(&pool).await;
+    let admin = seed_user(&pool, &prefix, "RestoreProviderAdmin2", "admin").await;
+    let admin_auth = auth(admin, "admin");
+
+    let resp = server
+        .post("/accounts/1/authentication_providers/99999999/restore")
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "nonexistent restore: {}",
+        resp.text()
+    );
+
+    let resp = server
+        .post("/accounts/1/authentication_providers")
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .json(&json!({ "authentication_provider": { "auth_type": "saml", "idp_entity_id": "x" } }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "create: {}", resp.text());
+    let created: Value = resp.json();
+    let provider_id = created["id"].as_i64().expect("provider id");
+
+    let resp = server
+        .post(&format!(
+            "/accounts/1/authentication_providers/{provider_id}/restore"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "restore active provider must be 404: {}",
+        resp.text()
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+// --------------------------------------------------------------------------
+// User lookup by SIS ID / unique_id (GET /users/lookup_user_ids)
+// --------------------------------------------------------------------------
+
+#[tokio::test]
+async fn lookup_user_ids_requires_auth_and_search_param() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let user = seed_user(&pool, &prefix, "LookupUser", "student").await;
+    let user_auth = auth(user, "student");
+
+    let resp = server.get("/users/lookup_user_ids").await;
+    assert_eq!(resp.status_code(), 401, "anonymous: {}", resp.text());
+
+    let resp = server
+        .get("/users/lookup_user_ids")
+        .add_header(axum::http::header::AUTHORIZATION, &user_auth)
+        .await;
+    assert_eq!(resp.status_code(), 400, "no search param: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn lookup_user_ids_returns_null_when_not_found() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let user = seed_user(&pool, &prefix, "LookupUser2", "student").await;
+    let user_auth = auth(user, "student");
+
+    let resp = server
+        .get("/users/lookup_user_ids?search%5B%5D=nonexistent-sis-id")
+        .add_header(axum::http::header::AUTHORIZATION, &user_auth)
+        .await;
+    assert_eq!(resp.status_code(), 200, "not found: {}", resp.text());
+    let body: Value = resp.json();
+    assert!(
+        body["user_id"].is_null(),
+        "unmatched search must return null user_id: {body}"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
