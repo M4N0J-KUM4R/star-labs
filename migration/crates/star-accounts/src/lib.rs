@@ -1863,7 +1863,6 @@ pub fn router() -> Router<AppState> {
             get(get_account_settings).put(update_account_settings),
         )
         .route("/accounts/{id}/courses", get(list_account_courses))
-        .route("/accounts/{id}/users", get(list_account_users))
         .route(
             "/accounts/{id}/users/{userId}",
             post(grant_account_admin).delete(remove_account_user),
