@@ -1143,8 +1143,8 @@ async fn read_only_account_json(pool: &PgPool, account_id: i64) -> Result<Option
     })))
 }
 
-/// The columns of an account row.
-type AccountRow = (
+/// The columns of an account row of the account JSON.
+type AccountJsonRow = (
     i64,
     String,
     Option<i64>,
@@ -1158,7 +1158,7 @@ type AccountRow = (
 
 /// Canvas `account_json` — the full field set.
 async fn account_json(pool: &PgPool, account_id: i64) -> Result<Option<Value>, ApiError> {
-    let row: Option<AccountRow> = sqlx::query_as(
+    let row: Option<AccountJsonRow> = sqlx::query_as(
         "SELECT id, name, parent_account_id, workflow_state, uuid, default_time_zone, \
                 default_storage_quota_mb, default_user_storage_quota_mb, \
                 default_group_storage_quota_mb \
