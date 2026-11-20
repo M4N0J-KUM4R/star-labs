@@ -164,10 +164,12 @@ pub fn router() -> Router<AppState> {
         // teacher-only mutation forms.
         .route(
             "/courses/{id}/settings",
-            get(handlers::settings::course_settings)
-                .post(handlers::settings::course_settings_save),
+            get(handlers::settings::course_settings).post(handlers::settings::course_settings_save),
         )
-        .route("/courses/{id}/users", get(handlers::settings::course_people))
+        .route(
+            "/courses/{id}/users",
+            get(handlers::settings::course_people),
+        )
         .route(
             "/courses/{id}/users/add",
             get(handlers::settings::course_people_add)

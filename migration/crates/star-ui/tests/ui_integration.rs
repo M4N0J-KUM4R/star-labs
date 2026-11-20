@@ -2689,15 +2689,16 @@ async fn settings_save_round_trip_and_gates() {
         .post(&format!("/courses/{course}/settings"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .add_cookie(csrf_cookie.clone())
-        .form(&serde_json::json!({"name": "Renamed Course", "course_code": "RC-101", "_csrf": csrf}))
+        .form(
+            &serde_json::json!({"name": "Renamed Course", "course_code": "RC-101", "_csrf": csrf}),
+        )
         .await;
     assert_eq!(resp.status_code(), 303);
-    let state: String =
-        sqlx::query_scalar("SELECT workflow_state FROM courses WHERE id = $1")
-            .bind(course)
-            .fetch_one(&pool)
-            .await
-            .expect("state");
+    let state: String = sqlx::query_scalar("SELECT workflow_state FROM courses WHERE id = $1")
+        .bind(course)
+        .fetch_one(&pool)
+        .await
+        .expect("state");
     assert_eq!(state, "unpublished", "unpublish persisted");
 
     // Blank name -> 422 re-render with the error.
@@ -2750,7 +2751,10 @@ async fn people_page_lists_roster() {
         .add_cookie(session_cookie(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 200);
-    assert!(resp.text().contains("add_people_link"), "teacher sees Add People");
+    assert!(
+        resp.text().contains("add_people_link"),
+        "teacher sees Add People"
+    );
 
     cleanup(&pool, &prefix).await;
 }

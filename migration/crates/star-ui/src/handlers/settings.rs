@@ -80,10 +80,8 @@ impl IntoResponse for CourseSettingsPage {
                 html,
             )
                 .into_response(),
-            Err(err) => {
-                ApiError::Db(format!("course settings template render failed: {err}"))
-                    .into_response()
-            }
+            Err(err) => ApiError::Db(format!("course settings template render failed: {err}"))
+                .into_response(),
         }
     }
 }
@@ -232,7 +230,17 @@ pub async fn course_settings(
     };
 
     let course = ctx.course.clone();
-    render_settings(&app, &user, course_id, &course, None, String::new(), notices, jar).await
+    render_settings(
+        &app,
+        &user,
+        course_id,
+        &course,
+        None,
+        String::new(),
+        notices,
+        jar,
+    )
+    .await
 }
 
 /// POST /courses/{id}/settings — CSRF-checked form save.
@@ -266,9 +274,17 @@ pub async fn course_settings_save(
     if form.name.trim().is_empty() {
         let course = ctx.course.clone();
         let msg = "Name is required.".to_string();
-        let mut resp =
-            render_settings(&app, &user, course_id, &course, Some(&form), msg, Vec::new(), jar)
-                .await;
+        let mut resp = render_settings(
+            &app,
+            &user,
+            course_id,
+            &course,
+            Some(&form),
+            msg,
+            Vec::new(),
+            jar,
+        )
+        .await;
         *resp.status_mut() = StatusCode::UNPROCESSABLE_ENTITY;
         return resp;
     }
@@ -276,7 +292,13 @@ pub async fn course_settings_save(
     let payload = UpdateCourse {
         name: Some(form.name.clone()),
         course_code: Some(form.course_code.clone().unwrap_or_default()),
-        description: if form.description.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        description: if form
+            .description
+            .as_deref()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
+        {
             None
         } else {
             Some(form.description.clone().unwrap_or_default())
@@ -313,11 +335,7 @@ pub async fn course_settings_save(
     {
         Ok(_) => {
             let location = format!("/courses/{course_id}/settings?saved=1");
-            (
-                StatusCode::SEE_OTHER,
-                [("location", location.as_str())],
-            )
-                .into_response()
+            (StatusCode::SEE_OTHER, [("location", location.as_str())]).into_response()
         }
         Err(ApiError::Validation(msg)) => {
             let course = ctx.course.clone();
@@ -384,8 +402,9 @@ impl IntoResponse for CoursePeoplePage {
                 html,
             )
                 .into_response(),
-            Err(err) => ApiError::Db(format!("course people template render failed: {err}"))
-                .into_response(),
+            Err(err) => {
+                ApiError::Db(format!("course people template render failed: {err}")).into_response()
+            }
         }
     }
 }
@@ -526,8 +545,9 @@ impl IntoResponse for AddPeoplePage {
                 html,
             )
                 .into_response(),
-            Err(err) => ApiError::Db(format!("add people template render failed: {err}"))
-                .into_response(),
+            Err(err) => {
+                ApiError::Db(format!("add people template render failed: {err}")).into_response()
+            }
         }
     }
 }
@@ -658,24 +678,23 @@ pub async fn course_people_add_submit(
         return resp;
     }
 
-    let user_id =
-        match star_enrollments::ui::find_user_id_by_login(&app.db, &login).await {
-            Ok(Some(id)) => id,
-            Ok(None) => {
-                let mut resp = render_add_people(
-                    &app,
-                    &user,
-                    course_id,
-                    Some(&form),
-                    format!("No user with login {login} exists."),
-                    jar,
-                )
-                .await;
-                *resp.status_mut() = StatusCode::UNPROCESSABLE_ENTITY;
-                return resp;
-            }
-            Err(e) => return from_api_error(&e, &origin).into_response(),
-        };
+    let user_id = match star_enrollments::ui::find_user_id_by_login(&app.db, &login).await {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            let mut resp = render_add_people(
+                &app,
+                &user,
+                course_id,
+                Some(&form),
+                format!("No user with login {login} exists."),
+                jar,
+            )
+            .await;
+            *resp.status_mut() = StatusCode::UNPROCESSABLE_ENTITY;
+            return resp;
+        }
+        Err(e) => return from_api_error(&e, &origin).into_response(),
+    };
 
     match star_enrollments::ui::enroll_user_in_course(
         &app.db,
@@ -741,8 +760,7 @@ pub async fn course_people_conclude(
         return from_api_error(&ApiError::Forbidden, &origin).into_response();
     }
 
-    match star_enrollments::ui::conclude_course_enrollment(&app.db, course_id, target_user_id)
-        .await
+    match star_enrollments::ui::conclude_course_enrollment(&app.db, course_id, target_user_id).await
     {
         Ok(()) => {
             let location = format!("/courses/{course_id}/users?concluded=1");
