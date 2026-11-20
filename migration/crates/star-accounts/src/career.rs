@@ -83,8 +83,6 @@ const ROLE_KEY: &str = "career_role";
 /// Canvas `CanvasCareer::ExperienceResolver` in its contextless form, which is
 /// the one the API uses.
 struct ExperienceResolver {
-    /// `career_unaffiliated_institution?`
-    career_unaffiliated: bool,
     /// `career_at_root_account?`
     career_at_root: bool,
     /// `has_career_associations?`
@@ -192,7 +190,7 @@ async fn horizon_account(
     if !value {
         return Ok(false);
     }
-    Ok(feature_enabled(pool, account_id, "horizon_course_setting").await?)
+    feature_enabled(pool, account_id, "horizon_course_setting").await
 }
 
 /// Canvas `Account#feature_enabled?`.
@@ -355,7 +353,6 @@ async fn resolver(pool: &PgPool, user_id: i64) -> Result<ExperienceResolver, Api
 
     let Some((root_account_id, settings)) = root else {
         return Ok(ExperienceResolver {
-            career_unaffiliated: true,
             career_at_root: false,
             has_career_associations: false,
             has_academic_associations: true,
@@ -440,7 +437,6 @@ async fn resolver(pool: &PgPool, user_id: i64) -> Result<ExperienceResolver, Api
             || has_career_account_users);
 
     Ok(ExperienceResolver {
-        career_unaffiliated,
         career_at_root,
         has_career_associations,
         has_academic_associations,
@@ -662,7 +658,6 @@ mod tests {
 
     fn resolver() -> ExperienceResolver {
         ExperienceResolver {
-            career_unaffiliated: false,
             career_at_root: false,
             has_career_associations: false,
             has_academic_associations: true,
