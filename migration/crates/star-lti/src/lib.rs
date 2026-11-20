@@ -50,6 +50,7 @@ mod external_tools;
 mod line_items;
 mod support_helpers;
 mod tool_proxy;
+mod tool_setting;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -579,6 +580,7 @@ pub fn lti_advantage_router() -> Router<AppState> {
         .merge(dynamic_registration::advantage_router())
         .merge(line_items::router())
         .merge(tool_proxy::advantage_router())
+        .merge(tool_setting::router())
 }
 
 // ---------------------------------------------------------------------------
