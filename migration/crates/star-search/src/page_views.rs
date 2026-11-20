@@ -495,8 +495,8 @@ async fn fetch_page_views_for_range(
         "#,
     )
     .bind(user_id)
-    .bind(start_date.and_hms_opt(0, 0, 0).expect("midnight"))
-    .bind(end_date.and_hms_opt(0, 0, 0).expect("midnight"))
+    .bind(Utc.from_utc_datetime(&start_date.and_hms_opt(0, 0, 0).expect("midnight")))
+    .bind(Utc.from_utc_datetime(&end_date.and_hms_opt(0, 0, 0).expect("midnight")))
     .bind(account_ids.map(|ids| ids.to_vec()))
     .fetch_all(pool)
     .await?;
@@ -582,9 +582,10 @@ fn result_response(row: &QueryRow) -> Result<Response, PvError> {
         )
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
-    let filename = row.filename.clone().unwrap_or_else(|| {
-        format!("{}.{}", row.id, extension_for(&row.results_format))
-    });
+    let filename = row
+        .filename
+        .clone()
+        .unwrap_or_else(|| format!("{}.{}", row.id, extension_for(&row.results_format)));
     let disposition = format!("attachment; filename=\"{filename}\"");
     if let Ok(value) = HeaderValue::from_str(&disposition) {
         headers.insert(header::CONTENT_DISPOSITION, value);
@@ -623,22 +624,22 @@ async fn index(
     let start_time = params
         .get("start_time")
         .and_then(|value| parse_canvas_time(value));
-    let end_time = params.get("end_time").and_then(|value| parse_canvas_time(value));
+    let end_time = params
+        .get("end_time")
+        .and_then(|value| parse_canvas_time(value));
 
     if let Some(start) = start_time {
         if start > Utc::now() {
-            return Err(ApiError::BadRequest(
-                "start_time cannot be in the future".to_string(),
-            )
-            .into());
+            return Err(
+                ApiError::BadRequest("start_time cannot be in the future".to_string()).into(),
+            );
         }
     }
     if let (Some(start), Some(end)) = (start_time, end_time) {
         if end < start {
-            return Err(ApiError::BadRequest(
-                "end_time must be after start_time".to_string(),
-            )
-            .into());
+            return Err(
+                ApiError::BadRequest("end_time must be after start_time".to_string()).into(),
+            );
         }
     }
 
@@ -712,18 +713,24 @@ async fn query(
 
     // Canvas: the enqueue service validates the request and raises an
     // `ArgumentError`, which the controller answers with a generic 400.
-    let (start, end) = validate_query_request(&start_date, &end_date, &results_format).map_err(
-        |_| ApiError::BadRequest("Page Views received an invalid or malformed request.".to_string()),
-    )?;
+    let (start, end) =
+        validate_query_request(&start_date, &end_date, &results_format).map_err(|_| {
+            ApiError::BadRequest("Page Views received an invalid or malformed request.".to_string())
+        })?;
 
     let account_ids = if target_user_id == auth.id || is_site_admin(&auth) {
         None
     } else {
         Some(administered_account_ids(&state.db, auth.id).await?)
     };
-    let rows =
-        fetch_page_views_for_range(&state.db, target_user_id, start, end, account_ids.as_deref())
-            .await?;
+    let rows = fetch_page_views_for_range(
+        &state.db,
+        target_user_id,
+        start,
+        end,
+        account_ids.as_deref(),
+    )
+    .await?;
     let content = build_result_content(&rows, &results_format);
 
     let query_id = uuid::Uuid::new_v4().to_string();
@@ -743,11 +750,7 @@ async fn query(
     .await?;
 
     let poll_url = format!("/api/v1/users/{target_user_id}/page_views/query/{query_id}");
-    Ok((
-        StatusCode::CREATED,
-        Json(json!({ "poll_url": poll_url })),
-    )
-        .into_response())
+    Ok((StatusCode::CREATED, Json(json!({ "poll_url": poll_url }))).into_response())
 }
 
 // ---------------------------------------------------------------------------
@@ -860,9 +863,8 @@ async fn batch_query(
 
     // Canvas: the enqueue service raises an `ArgumentError`, which the batch
     // route answers with the message of the error.
-    let (start, end) =
-        validate_batch_request(&start_date, &end_date, &results_format, &user_ids)
-            .map_err(ApiError::BadRequest)?;
+    let (start, end) = validate_batch_request(&start_date, &end_date, &results_format, &user_ids)
+        .map_err(ApiError::BadRequest)?;
 
     let mut rows: Vec<PageViewRow> = Vec::new();
     for user_id in &user_ids {
@@ -984,7 +986,9 @@ fn parse_body(body: &Bytes) -> Result<Value, ApiError> {
 fn require_param(body: &Value, name: &str) -> Result<String, ApiError> {
     match body.get(name).and_then(|value| value.as_str()) {
         Some(value) => Ok(value.to_string()),
-        None => Err(ApiError::BadRequest(format!("Parameter {name} is missing."))),
+        None => Err(ApiError::BadRequest(format!(
+            "Parameter {name} is missing."
+        ))),
     }
 }
 

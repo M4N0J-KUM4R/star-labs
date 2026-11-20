@@ -32,10 +32,12 @@
 //!
 //! ## Schema
 //!
-//! This module needs the Canvas columns that migration `0098_media_objects.sql`
-//! did not carry (`context_type`, `context_id`, `viewer_restrictions`,
-//! `attachment_id`, `old_media_id`, `auto_caption_status`, `root_account_id`).
-//! The DDL is reported to the coordinator; it is not created here.
+//! Migration `0224_media_objects.sql` adds the Canvas columns this module
+//! reads and writes (`media_objects.context_type`, `.context_id`,
+//! `.old_media_id`, `.attachment_id`, `.viewer_restrictions`,
+//! `.auto_caption_status`) and the `group_files` / `user_files` attachment
+//! tables of the group and user scopes. `media_objects.root_account_id` has
+//! no column in star-lms and is answered as `null`.
 
 use std::collections::HashMap;
 
@@ -175,8 +177,8 @@ enum MediaScope {
 /// A context resolved from a Canvas asset string (`course_17`, `user_9`, …).
 #[derive(Debug, Clone, Copy)]
 enum MediaContext {
-    Course { id: i64, account_id: Option<i64> },
-    Group { id: i64, account_id: Option<i64> },
+    Course { id: i64 },
+    Group { id: i64 },
     User { id: i64 },
     Account { id: i64 },
 }
@@ -194,20 +196,10 @@ impl MediaContext {
 
     fn id(&self) -> i64 {
         match self {
-            MediaContext::Course { id, .. }
-            | MediaContext::Group { id, .. }
+            MediaContext::Course { id }
+            | MediaContext::Group { id }
             | MediaContext::User { id }
             | MediaContext::Account { id } => *id,
-        }
-    }
-
-    /// The `root_account_id` Canvas stores on `media_objects`.
-    fn root_account_id(&self) -> Option<i64> {
-        match self {
-            MediaContext::Course { account_id, .. } => *account_id,
-            MediaContext::Group { account_id, .. } => *account_id,
-            MediaContext::User { .. } => None,
-            MediaContext::Account { id } => Some(*id),
         }
     }
 }
@@ -545,14 +537,8 @@ async fn can_add_captions(
 /// The context a media object was created in.
 fn context_of(row: &MediaObjectRow) -> MediaContext {
     match (row.context_type.as_deref(), row.context_id) {
-        (Some("Course"), Some(id)) => MediaContext::Course {
-            id,
-            account_id: None,
-        },
-        (Some("Group"), Some(id)) => MediaContext::Group {
-            id,
-            account_id: None,
-        },
+        (Some("Course"), Some(id)) => MediaContext::Course { id },
+        (Some("Group"), Some(id)) => MediaContext::Group { id },
         (Some("User"), Some(id)) => MediaContext::User { id },
         (Some("Account"), Some(id)) => MediaContext::Account { id },
         _ => MediaContext::User { id: row.user_id },
@@ -575,34 +561,18 @@ async fn find_context(db: &PgPool, context_code: &str) -> Result<Option<MediaCon
 
     match kind {
         "course" => {
-            let row: Option<(Option<i64>,)> =
-                sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
-                    .bind(id)
-                    .fetch_optional(db)
-                    .await?;
-            Ok(row.map(|(account_id,)| MediaContext::Course { id, account_id }))
+            let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+                .bind(id)
+                .fetch_optional(db)
+                .await?;
+            Ok(row.map(|_| MediaContext::Course { id }))
         }
         "group" => {
-            let row: Option<(Option<i64>,)> =
-                sqlx::query_as("SELECT course_id FROM groups WHERE id = $1")
-                    .bind(id)
-                    .fetch_optional(db)
-                    .await?;
-            let Some((course_id,)) = row else {
-                return Ok(None);
-            };
-            let account_id = match course_id {
-                Some(course_id) => sqlx::query_scalar::<_, Option<i64>>(
-                    "SELECT account_id FROM courses WHERE id = $1",
-                )
-                .bind(course_id)
-                .fetch_one(db)
-                .await
-                .ok()
-                .flatten(),
-                None => None,
-            };
-            Ok(Some(MediaContext::Group { id, account_id }))
+            let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM groups WHERE id = $1")
+                .bind(id)
+                .fetch_optional(db)
+                .await?;
+            Ok(row.map(|_| MediaContext::Group { id }))
         }
         "user" => {
             let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM users WHERE id = $1")
@@ -1181,9 +1151,8 @@ async fn create_attachment(
             let row: (i64, Option<String>) = sqlx::query_as(
                 r#"
                 INSERT INTO files (course_id, uploader_id, filename, display_name,
-                                   content_type, size, folder, workflow_state, hidden,
-                                   media_entry_id)
-                VALUES ($1, $2, $3, $3, $4, 0, 'media', 'pending_upload', TRUE, $5)
+                                   content_type, size, folder, workflow_state, hidden)
+                VALUES ($1, $2, $3, $3, $4, 0, 'media', 'pending_upload', TRUE)
                 RETURNING id, uuid
                 "#,
             )
@@ -1191,7 +1160,6 @@ async fn create_attachment(
             .bind(auth.id)
             .bind(title)
             .bind(media_type)
-            .bind(media_id)
             .fetch_one(db)
             .await?;
             Ok(Some(row))
@@ -1358,10 +1326,9 @@ async fn create_media_object_route(
                      user_id = $4,
                      context_type = $5,
                      context_id = $6,
-                     root_account_id = $7,
-                     viewer_restrictions = $8,
+                     viewer_restrictions = $7,
                      updated_at = now()
-                 WHERE id = $9
+                 WHERE id = $8
                  RETURNING {MEDIA_OBJECT_COLUMNS}"
             ))
             .bind(&title)
@@ -1370,7 +1337,6 @@ async fn create_media_object_route(
             .bind(auth.id)
             .bind(context.context_type())
             .bind(context.id())
-            .bind(context.root_account_id())
             .bind(&viewer_restrictions)
             .bind(existing.id)
             .fetch_one(&state.db)
@@ -1392,9 +1358,9 @@ async fn create_media_object_route(
 
             sqlx::query_as(&format!(
                 "INSERT INTO media_objects (media_id, media_type, title, user_entered_title,
-                                           user_id, context_type, context_id, root_account_id,
+                                           user_id, context_type, context_id,
                                            viewer_restrictions)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                  RETURNING {MEDIA_OBJECT_COLUMNS}"
             ))
             .bind(&media_id)
@@ -1404,7 +1370,6 @@ async fn create_media_object_route(
             .bind(auth.id)
             .bind(context.context_type())
             .bind(context.id())
-            .bind(context.root_account_id())
             .bind(&viewer_restrictions)
             .fetch_one(&state.db)
             .await?

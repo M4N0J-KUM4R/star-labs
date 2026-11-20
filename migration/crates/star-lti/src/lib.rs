@@ -44,6 +44,8 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod registrations;
+
 mod data_services;
 mod dynamic_registration;
 mod external_tools;
@@ -542,6 +544,7 @@ fn resolve_workflow_state(value: Option<&str>) -> Result<(&'static str, &'static
 /// Build the LTI router (mounted under `/api/v1` by star-http).
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(registrations::router())
         .route(
             "/accounts/{account_id}/lti_registrations",
             get(list_registrations).post(create_registration),
