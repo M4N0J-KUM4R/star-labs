@@ -109,7 +109,11 @@ enum SettingContext {
 /// a `Response` instead of an `ApiError`.
 fn unauthorized() -> Box<Response> {
     Box::new(
-        (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response(),
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "unauthorized" })),
+        )
+            .into_response(),
     )
 }
 
