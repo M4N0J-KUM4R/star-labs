@@ -126,29 +126,33 @@ fn syllabus_summary(body: Option<&str>) -> String {
 /// Build the (re)renderable settings page. `form` (when present) overrides
 /// the stored values so a failed POST keeps the input. Shared by GET and the
 /// error branch of POST.
+struct SettingsRender<'a> {
+    course_id: i64,
+    course: &'a Course,
+    form: Option<&'a SettingsForm>,
+    error: String,
+    notices: Vec<String>,
+}
+
 async fn render_settings(
     app: &AppState,
     user: &SessionUser,
-    course_id: i64,
-    course: &Course,
-    form: Option<&SettingsForm>,
-    error: String,
-    notices: Vec<String>,
+    render: SettingsRender<'_>,
     jar: CookieJar,
 ) -> Response {
     let origin = crate::request_origin();
-    let ctx = match course_context(app, user, course_id, &origin).await {
+    let ctx = match course_context(app, user, render.course_id, &origin).await {
         Ok(ctx) => ctx,
         Err(resp) => return *resp,
     };
 
-    let mut name_value = course.name.clone();
-    let mut code_value = course.course_code.clone();
-    let mut description_value = course.description.clone().unwrap_or_default();
-    let mut published = course.workflow_state != "unpublished";
-    let mut summary = syllabus_summary(course.syllabus_body.as_deref());
+    let mut name_value = render.course.name.clone();
+    let mut code_value = render.course.course_code.clone();
+    let mut description_value = render.course.description.clone().unwrap_or_default();
+    let mut published = render.course.workflow_state != "unpublished";
+    let mut summary = syllabus_summary(render.course.syllabus_body.as_deref());
 
-    if let Some(form) = form {
+    if let Some(form) = render.form {
         name_value = form.name.clone();
         code_value = form.course_code.clone().unwrap_or_default();
         description_value = form.description.clone().unwrap_or_default();
@@ -156,21 +160,22 @@ async fn render_settings(
         summary = syllabus_summary(form.syllabus_body.as_deref());
     }
 
-    let env = course_env(&ctx, user, &origin, "settings", course_id);
+    let env = course_env(&ctx, user, &origin, "settings", render.course_id);
     let (jar, csrf_token) = ensure_csrf(jar);
 
     // The breadcrumb borrows `ctx` while the page struct below moves its
     // fields, so it is built first.
-    let breadcrumb = course_breadcrumb(&ctx, course_id);
+    let breadcrumb = course_breadcrumb(&ctx, render.course_id);
 
     let page = CourseSettingsPage {
         title: format!("{} - Settings", ctx.course.name),
         body_class: format!(
-            "with-left-side course-menu-expanded context-course_{course_id} settings"
+            "with-left-side course-menu-expanded context-course_{} settings",
+            render.course_id
         ),
         css_url: assets::app_css_url(),
         env_json: env.to_json_string(),
-        notices,
+        notices: render.notices,
         user_name: ctx.user_name,
         active_path: "courses",
         breadcrumb,
@@ -179,13 +184,13 @@ async fn render_settings(
         tabs: ctx.tabs,
         active_context_tab: "settings".to_string(),
         course_name: ctx.course.name.clone(),
-        course_id,
+        course_id: render.course_id,
         name_value,
         code_value,
         description_value,
         published,
         syllabus_summary: summary,
-        error,
+        error: render.error,
     };
     (jar, page).into_response()
 }
@@ -339,17 +344,14 @@ pub async fn course_settings_save(
         }
         Err(ApiError::Validation(msg)) => {
             let course = ctx.course.clone();
-            let mut resp = render_settings(
-                &app,
-                &user,
+            let render = SettingsRender {
                 course_id,
-                &course,
-                Some(&form),
-                msg,
-                Vec::new(),
-                jar,
-            )
-            .await;
+                course: &course,
+                form: Some(&form),
+                error: msg,
+                notices: Vec::new(),
+            };
+            let mut resp = render_settings(&app, &user, render, jar).await;
             *resp.status_mut() = StatusCode::UNPROCESSABLE_ENTITY;
             resp
         }
