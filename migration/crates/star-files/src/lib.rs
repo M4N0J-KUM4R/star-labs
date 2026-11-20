@@ -1432,7 +1432,7 @@ async fn create_success_get(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    let can_manage = user_teacher_of_course(&state.db, row.course_id, auth.id, &auth.role).await
+    let can_manage = user_teacher_of_course(&state.db, auth.id, row.course_id, &auth.role).await?
         || is_admin(&auth);
     let attachment = AttachmentResponse::from_row(row, can_manage);
 
@@ -1457,14 +1457,14 @@ async fn create_success_post(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    let can_manage = user_teacher_of_course(&state.db, row.course_id, auth.id, &auth.role).await
+    let can_manage = user_teacher_of_course(&state.db, auth.id, row.course_id, &auth.role).await?
         || is_admin(&auth);
     Ok(Json(AttachmentResponse::from_row(row, can_manage)))
 }
 
 /// OPTIONS /files/{id}/create_success — CORS preflight for the upload finalisation route.
 async fn create_success_options() -> impl IntoResponse {
-    let mut resp = Response::new(());
+    let mut resp = Response::new(axum::body::Body::empty());
     resp.headers_mut().insert(
         axum::http::header::ALLOW,
         axum::http::HeaderValue::from_static("GET,POST,OPTIONS"),
@@ -1479,7 +1479,7 @@ async fn reset_verifier(
     Path(file_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let row: Option<(i64, i64)> = sqlx::query_as(
+    let row: (i64, i64) = sqlx::query_as(
         "SELECT course_id, uploader_id FROM files WHERE id = $1 AND workflow_state <> 'deleted'",
     )
     .bind(file_id)
@@ -1489,7 +1489,7 @@ async fn reset_verifier(
 
     let (course_id, uploader_id) = row;
     let can_manage =
-        user_teacher_of_course(&state.db, course_id, auth.id, &auth.role).await || is_admin(&auth);
+        user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await? || is_admin(&auth);
     if !can_manage && uploader_id != auth.id {
         return Err(ApiError::Forbidden);
     }
@@ -1546,9 +1546,8 @@ async fn list_group_files(
     .await?;
     let (group_id_val, _course_id) = group.ok_or(ApiError::NotFound)?;
 
-    let can_manage = is_admin(&auth)
-        || user_teacher_of_course(&state.db, group_id_val, auth.id, &auth.role).await?;
-    let allowed = can_manage || user_in_group(&state.db, auth.id, group_id_val).await?;
+    // Groups are not courses; check group membership instead of course teaching rights.
+    let allowed = user_in_group(&state.db, auth.id, group_id_val).await? || is_admin(&auth);
     if !allowed {
         return Err(ApiError::Forbidden);
     }
@@ -1573,8 +1572,7 @@ async fn create_group_file(
     .ok_or(ApiError::NotFound)?;
     let (group_id_val, _course_id) = group;
 
-    let can_manage = is_admin(&auth)
-        || user_teacher_of_course(&state.db, group_id_val, auth.id, &auth.role).await?;
+    let can_manage = is_admin(&auth) || user_in_group(&state.db, auth.id, group_id_val).await?;
     if !can_manage {
         return Err(ApiError::Forbidden);
     }
@@ -1598,7 +1596,7 @@ async fn delete_group_file(
             .ok_or(ApiError::NotFound)?;
 
     let can_manage =
-        user_teacher_of_course(&state.db, group.0, auth.id, &auth.role).await || is_admin(&auth);
+        user_teacher_of_course(&state.db, auth.id, group.0, &auth.role).await? || is_admin(&auth);
     if !can_manage {
         return Err(ApiError::Forbidden);
     }
@@ -1626,7 +1624,7 @@ async fn get_group_files_quota(
     .ok_or(ApiError::NotFound)?;
     let (group_id_val, _course_id) = group;
 
-    let can_manage = user_teacher_of_course(&state.db, group_id_val, auth.id, &auth.role).await
+    let can_manage = user_teacher_of_course(&state.db, auth.id, group_id_val, &auth.role).await?
         || is_admin(&auth);
     let allowed = can_manage || user_in_group(&state.db, auth.id, group_id_val).await?;
     if !allowed {
