@@ -37,13 +37,11 @@ struct AppToolRow {
     domain: Option<String>,
     context_type: String,
     context_id: Option<i64>,
-    workflow_state: String,
     tool_configuration: Value,
 }
 
 const APP_TOOL_COLUMNS: &str =
-    "id, name, description, url, domain, context_type, context_id, workflow_state, \
-     tool_configuration";
+    "id, name, description, url, domain, context_type, context_id, tool_configuration";
 
 /// Query params for `launch_definitions` — Canvas `placements[]`,
 /// `only_visible` (default true) and `include_context_name`
@@ -53,7 +51,6 @@ pub struct LaunchDefinitionsQuery {
     pub placements: Option<String>,
     #[serde(rename = "placements[]")]
     pub placements_brackets: Option<String>,
-    pub only_visible: Option<bool>,
     pub include_context_name: Option<bool>,
 }
 
@@ -325,7 +322,7 @@ async fn account_tools(
     if exists.is_none() {
         return Err(ApiError::NotFound);
     }
-    if !can_manage_account(&state.db, &auth, account_id).await? {
+    if !can_manage_account(&state.db, auth, account_id).await? {
         return Err(ApiError::Forbidden);
     }
     context_tools(&state.db, None, account_id).await
@@ -415,7 +412,7 @@ async fn course_tools(
     .bind(auth.id)
     .fetch_optional(&state.db)
     .await?;
-    if !teacher.is_some() && !can_manage_account(&state.db, &auth, account_id).await? {
+    if !teacher.is_some() && !can_manage_account(&state.db, auth, account_id).await? {
         return Err(ApiError::Forbidden);
     }
     context_tools(&state.db, Some(course_id), account_id).await

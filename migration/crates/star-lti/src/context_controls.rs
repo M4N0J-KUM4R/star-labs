@@ -52,7 +52,6 @@ struct ContextControlRow {
     deployment_id: i64,
     account_id: Option<i64>,
     course_id: Option<i64>,
-    root_account_id: Option<i64>,
     available: bool,
     workflow_state: String,
     created_by_id: Option<i64>,
@@ -62,8 +61,7 @@ struct ContextControlRow {
 }
 
 const CONTROL_COLUMNS: &str = "id, registration_id, deployment_id, account_id, course_id, \
-     root_account_id, available, workflow_state, created_by_id, updated_by_id, created_at, \
-     updated_at";
+     available, workflow_state, created_by_id, updated_by_id, created_at, updated_at";
 
 /// Body for `POST .../controls` — one of `account_id` / `course_id`, an
 /// optional `deployment_id` (defaults to the registration's root-account
@@ -171,25 +169,6 @@ async fn find_control(
         .fetch_optional(pool)
         .await?;
     row.ok_or(ApiError::NotFound)
-}
-
-/// The name of the context a control targets.
-async fn context_name(pool: &PgPool, control: &ContextControlRow) -> Result<Value, ApiError> {
-    if let Some(account_id) = control.account_id {
-        let row: Option<(String,)> = sqlx::query_as("SELECT name FROM accounts WHERE id = $1")
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await?;
-        return Ok(row.map(|(name,)| json!(name)).unwrap_or(Value::Null));
-    }
-    if let Some(course_id) = control.course_id {
-        let row: Option<(String,)> = sqlx::query_as("SELECT name FROM courses WHERE id = $1")
-            .bind(course_id)
-            .fetch_optional(pool)
-            .await?;
-        return Ok(row.map(|(name,)| json!(name)).unwrap_or(Value::Null));
-    }
-    Ok(Value::Null)
 }
 
 /// Account chain names between the root and the context — the Canvas

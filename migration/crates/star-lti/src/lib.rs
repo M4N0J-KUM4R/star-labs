@@ -1681,6 +1681,20 @@ async fn unbind_registration(
     Ok(Json(binding).into_response())
 }
 
+/// A row of `lti_registration_history_entries`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct HistoryEntryRow {
+    id: i64,
+    root_account_id: Option<i64>,
+    update_type: String,
+    diff: Value,
+    comment: Option<String>,
+    old_configuration: Option<Value>,
+    new_configuration: Option<Value>,
+    created_by_id: Option<i64>,
+    created_at: DateTime<Utc>,
+}
+
 /// `GET /accounts/{account_id}/lti_registrations/{id}/history` — the
 /// registration changelog, newest first
 /// (registrations_controller.rb:2000-2026).
@@ -1701,17 +1715,7 @@ async fn registration_history(
     let offset = page.saturating_sub(1).saturating_mul(per_page);
     let root_id = root_account_id(&state.db, account_id).await?;
 
-    let rows: Vec<(
-        i64,
-        Option<i64>,
-        String,
-        Value,
-        Option<String>,
-        Option<Value>,
-        Option<Value>,
-        Option<i64>,
-        DateTime<Utc>,
-    )> = sqlx::query_as(
+    let rows: Vec<HistoryEntryRow> = sqlx::query_as(
         "SELECT id, root_account_id, update_type, diff, comment, old_configuration, \
                 new_configuration, created_by_id, created_at \
          FROM lti_registration_history_entries \
@@ -1726,33 +1730,22 @@ async fn registration_history(
     .await?;
 
     let mut entries = Vec::with_capacity(rows.len());
-    for (
-        id,
-        entry_root,
-        update_type,
-        diff,
-        comment,
-        old_configuration,
-        new_configuration,
-        created_by_id,
-        created_at,
-    ) in rows
-    {
+    for entry in rows {
         let mut json = json!({
-            "id": id,
-            "root_account_id": entry_root,
+            "id": entry.id,
+            "root_account_id": entry.root_account_id,
             "lti_registration_id": registration_id,
-            "created_at": created_at,
-            "updated_at": created_at,
-            "diff": diff,
-            "update_type": update_type,
-            "comment": comment,
-            "old_configuration": old_configuration,
-            "new_configuration": new_configuration,
+            "created_at": entry.created_at,
+            "updated_at": entry.created_at,
+            "diff": entry.diff,
+            "update_type": entry.update_type,
+            "comment": entry.comment,
+            "old_configuration": entry.old_configuration,
+            "new_configuration": entry.new_configuration,
             "old_controls_by_deployment": json!({}),
             "new_controls_by_deployment": json!({}),
         });
-        if let Some(user) = user_summary(&state.db, created_by_id).await? {
+        if let Some(user) = user_summary(&state.db, entry.created_by_id).await? {
             json["created_by"] = user;
         }
         entries.push(json);
