@@ -62,7 +62,7 @@ const NON_ADMIN_EXPORT_TYPES: [&str; 2] = ["zip", "user_data"];
 
 /// Columns returned for a content export row (kept in one place so the
 /// list/show/insert queries stay in sync).
-const EXPORT_COLUMNS: &str = "id, course_id, user_id, context_type, context_id, \
+const EXPORT_COLUMNS: &str = "id, course_id, user_id, context_type, \
      export_type, workflow_state, progress, new_quizzes_export_state, \
      new_quizzes_export_url, created_at, updated_at";
 
@@ -76,7 +76,6 @@ struct ContentExportRow {
     course_id: Option<i64>,
     user_id: Option<i64>,
     context_type: Option<String>,
-    context_id: Option<i64>,
     export_type: String,
     workflow_state: String,
     progress: i32,
@@ -1158,7 +1157,6 @@ mod tests {
             course_id: Some(7),
             user_id: Some(user_id),
             context_type: Some("Course".to_string()),
-            context_id: Some(7),
             export_type: export_type.to_string(),
             workflow_state: "created".to_string(),
             progress: 0,
@@ -1205,7 +1203,6 @@ mod tests {
     fn course_id_is_only_rendered_for_a_course_context() {
         let mut group = row("zip", 4);
         group.context_type = Some("Group".to_string());
-        group.context_id = Some(9);
         let value = group.to_json(&[]);
         assert!(value.get("course_id").is_none(), "{value}");
     }
