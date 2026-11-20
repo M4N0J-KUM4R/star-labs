@@ -182,10 +182,7 @@ pub async fn grades(
     let (scores, points) = grade_arrays_from_submissions(&pseudo_assignments, &pseudo_submissions);
     let percent = compute_grade_percent(&scores, &points);
 
-    let total_score: f64 = rows
-        .iter()
-        .filter_map(|r| r.submission_score)
-        .sum();
+    let total_score: f64 = rows.iter().filter_map(|r| r.submission_score).sum();
     let total_possible: f64 = rows
         .iter()
         .filter(|r| r.submission_score.is_some())
