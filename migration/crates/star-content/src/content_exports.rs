@@ -62,7 +62,7 @@ const NON_ADMIN_EXPORT_TYPES: [&str; 2] = ["zip", "user_data"];
 
 /// Columns returned for a content export row (kept in one place so the
 /// list/show/insert queries stay in sync).
-const EXPORT_COLUMNS: &str = "id, course_id, user_id, context_type, \
+pub(crate) const EXPORT_COLUMNS: &str = "id, course_id, user_id, context_type, \
      export_type, workflow_state, progress, new_quizzes_export_state, \
      new_quizzes_export_url, created_at, updated_at";
 
@@ -71,7 +71,7 @@ const EXPORT_COLUMNS: &str = "id, course_id, user_id, context_type, \
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, sqlx::FromRow)]
-struct ContentExportRow {
+pub(crate) struct ContentExportRow {
     id: i64,
     course_id: Option<i64>,
     user_id: Option<i64>,
@@ -90,7 +90,7 @@ impl ContentExportRow {
     ///
     /// `includes` carries the request's `include[]` values; Canvas only adds
     /// the new-quizzes export settings when they are asked for.
-    fn to_json(&self, includes: &[String]) -> Value {
+    pub(crate) fn to_json(&self, includes: &[String]) -> Value {
         fn ts(value: &DateTime<Utc>) -> String {
             value.to_rfc3339_opts(SecondsFormat::Secs, true)
         }

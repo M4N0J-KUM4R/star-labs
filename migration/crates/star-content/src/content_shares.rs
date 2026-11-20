@@ -82,10 +82,7 @@ struct ContentShareRow {
 }
 
 /// A user of a share, in the Canvas `user_display_json` shape.
-async fn user_display_json(
-    pool: &PgPool,
-    user_id: i64,
-) -> Result<Option<Value>, ApiError> {
+async fn user_display_json(pool: &PgPool, user_id: i64) -> Result<Option<Value>, ApiError> {
     let row: Option<(i64, String)> = sqlx::query_as("SELECT id, name FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_optional(pool)
@@ -101,7 +98,10 @@ async fn user_display_json(
 }
 
 /// The receivers of a share: the rows the sender made for them.
-async fn receivers_of(pool: &PgPool, sender_share: &ContentShareRow) -> Result<Vec<Value>, ApiError> {
+async fn receivers_of(
+    pool: &PgPool,
+    sender_share: &ContentShareRow,
+) -> Result<Vec<Value>, ApiError> {
     let rows: Vec<(i64,)> = sqlx::query_as(
         "SELECT user_id FROM content_shares \
          WHERE sender_id = $1 AND content_export_id = $2 AND type = 'received' \
@@ -146,34 +146,36 @@ async fn content_share_json(
         None => None,
     };
     map.insert("sender".to_string(), sender.unwrap_or(Value::Null));
-    map.insert(
-        "receivers".to_string(),
-        Value::Array(receivers_of(pool, share).await?),
-    );
+    // Only a sent share has receivers.
+    let receivers = if share.share_type == "sent" {
+        receivers_of(pool, share).await?
+    } else {
+        Vec::new()
+    };
+    map.insert("receivers".to_string(), Value::Array(receivers));
 
     // The export of the share, with the content type it points at.
-    let export: Option<crate::content_exports::ContentExportRow> =
-        sqlx::query_as(&format!(
-            "SELECT {} FROM content_exports WHERE id = $1",
-            crate::content_exports::EXPORT_COLUMNS
-        ))
-        .bind(share.content_export_id)
-        .fetch_optional(pool)
-        .await?;
+    let export: Option<crate::content_exports::ContentExportRow> = sqlx::query_as(&format!(
+        "SELECT {} FROM content_exports WHERE id = $1",
+        crate::content_exports::EXPORT_COLUMNS
+    ))
+    .bind(share.content_export_id)
+    .fetch_optional(pool)
+    .await?;
 
     if let Some(export) = export {
-        let settings: Option<Value> = sqlx::query_scalar("SELECT settings FROM content_exports WHERE id = $1")
-            .bind(share.content_export_id)
-            .fetch_optional(pool)
-            .await?;
-        let content_type = content_type_from_export_settings(
-            settings.as_ref().unwrap_or(&Value::Null),
-        );
-        map.insert("content_type".to_string(), content_type.unwrap_or(Value::Null));
+        let settings: Option<Value> =
+            sqlx::query_scalar("SELECT settings FROM content_exports WHERE id = $1")
+                .bind(share.content_export_id)
+                .fetch_optional(pool)
+                .await?;
+        let content_type =
+            content_type_from_export_settings(settings.as_ref().unwrap_or(&Value::Null));
         map.insert(
-            "content_export".to_string(),
-            export.to_json(&[]),
+            "content_type".to_string(),
+            content_type.unwrap_or(Value::Null),
         );
+        map.insert("content_export".to_string(), export.to_json(&[]));
 
         // A course export carries its source course.
         if export.context_type.as_deref() == Some("Course") {
@@ -335,31 +337,35 @@ fn content_table(content_type: &str) -> Option<(&'static str, &'static str)> {
     }
 }
 
-/// The course a shared content belongs to.
-async fn content_course(
+/// The shared content: its course and its name (`Context.asset_name`).
+///
+/// Canvas only shares the content that is not deleted, and the discussion
+/// topics only when they are active.
+async fn content_info(
     pool: &PgPool,
     content_type: &str,
     content_id: i64,
 ) -> Result<Option<(i64, String)>, ApiError> {
-    let Some((table, _)) = content_table(content_type) else {
+    let Some((table, title_column)) = content_table(content_type) else {
         return Ok(None);
     };
-    let sql = format!("SELECT course_id FROM {table} WHERE id = $1");
-    let row: Option<(Option<i64>,)> = sqlx::query_as(&sql)
+    let filter = if content_type == "discussion_topic" {
+        " AND workflow_state = 'active'"
+    } else {
+        ""
+    };
+    let sql = format!("SELECT course_id, {title_column} FROM {table} WHERE id = $1{filter}");
+    let row: Option<(Option<i64>, String)> = sqlx::query_as(&sql)
         .bind(content_id)
         .fetch_optional(pool)
         .await?;
-    let Some((course_id,)) = row else {
+    let Some((course_id, title)) = row else {
         return Ok(None);
     };
     let Some(course_id) = course_id else {
         return Ok(None);
     };
-    let course: Option<(i64, String)> = sqlx::query_as("SELECT id, name FROM courses WHERE id = $1")
-        .bind(course_id)
-        .fetch_optional(pool)
-        .await?;
-    Ok(course)
+    Ok(Some((course_id, title)))
 }
 
 // ---------------------------------------------------------------------------
@@ -387,13 +393,11 @@ async fn create_content_share(
         .unwrap_or("")
         .trim()
         .to_string();
-    let content_id = payload
-        .get("content_id")
-        .and_then(|value| match value {
-            Value::Number(number) => number.as_i64(),
-            Value::String(text) => text.trim().parse::<i64>().ok(),
-            _ => None,
-        });
+    let content_id = payload.get("content_id").and_then(|value| match value {
+        Value::Number(number) => number.as_i64(),
+        Value::String(text) => text.trim().parse::<i64>().ok(),
+        _ => None,
+    });
 
     let (Some(content_id), false) = (content_id, content_type.is_empty()) else {
         return Ok((
@@ -414,7 +418,8 @@ async fn create_content_share(
     }
 
     // The shared content has to exist.
-    let Some((course_id, course_name)) = content_course(&state.db, &content_type, content_id).await?
+    let Some((course_id, content_name)) =
+        content_info(&state.db, &content_type, content_id).await?
     else {
         return Ok((
             StatusCode::BAD_REQUEST,
@@ -422,16 +427,18 @@ async fn create_content_share(
         ));
     };
 
-    // Canvas exports the content as a common cartridge.
-    let select_key = format!("{}s", content_type);
+    // Canvas exports the content as a common cartridge; the selection is
+    // keyed by the pluralized content type.
     let select_key = match content_type.as_str() {
-        "discussion_topic" => "discussion_topics".to_string(),
-        "page" => "wiki_pages".to_string(),
-        "module" => "context_modules".to_string(),
-        "module_item" => "content_tags".to_string(),
-        other => other.to_string(),
+        "assignment" => "assignments",
+        "attachment" => "attachments",
+        "discussion_topic" => "discussion_topics",
+        "page" => "pages",
+        "quiz" => "quizzes",
+        "module" => "modules",
+        "module_item" => "module_items",
+        _ => "",
     };
-    let _ = select_key;
 
     let settings = json!({
         "selected_content": { select_key: [content_id.to_string()] },
@@ -465,7 +472,7 @@ async fn create_content_share(
          (name, user_id, content_export_id, sender_id, read_state, type, root_account_id) \
          VALUES ($1, $2, $3, $2, 'read', 'sent', $4) RETURNING id",
     )
-    .bind(&course_name)
+    .bind(&content_name)
     .bind(auth.id)
     .bind(export_id)
     .bind(root_account_id)
@@ -479,7 +486,7 @@ async fn create_content_share(
              VALUES ($1, $2, $3, $4, 'unread', 'received', $5) \
              ON CONFLICT (user_id, content_export_id, sender_id) DO NOTHING",
         )
-        .bind(&course_name)
+        .bind(&content_name)
         .bind(receiver)
         .bind(export_id)
         .bind(auth.id)
@@ -632,14 +639,13 @@ async fn destroy_content_share(
     require_current_user(&auth, user_id)?;
 
     // Canvas: `@current_user.content_shares.find(params[:id])`
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT id FROM content_shares WHERE id = $1 AND user_id = $2",
-    )
-    .bind(id)
-    .bind(auth.id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(ApiError::NotFound)?;
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM content_shares WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(auth.id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(ApiError::NotFound)?;
 
     sqlx::query("DELETE FROM content_shares WHERE id = $1")
         .bind(row.0)
@@ -778,10 +784,7 @@ async fn find_share(pool: &PgPool, id: i64) -> Result<ContentShareRow, ApiError>
 /// Build the content shares router.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/users/{userId}/content_shares",
-            post(create_content_share),
-        )
+        .route("/users/{userId}/content_shares", post(create_content_share))
         .route(
             "/users/{userId}/content_shares/sent",
             get(list_sent_content_shares),
@@ -839,7 +842,8 @@ mod tests {
         );
 
         // A module wins over the other selected types.
-        let settings = json!({ "selected_content": { "assignments": ["1"], "context_modules": ["2"] } });
+        let settings =
+            json!({ "selected_content": { "assignments": ["1"], "context_modules": ["2"] } });
         assert_eq!(
             content_type_from_export_settings(&settings),
             Some("module".to_string())
