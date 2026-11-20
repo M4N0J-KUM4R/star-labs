@@ -190,21 +190,19 @@ pub async fn load_topic_for_viewer(
     .fetch_optional(db)
     .await?;
 
-    let Some(
-        (
-            id,
-            topic_course_id,
-            title,
-            message,
-            workflow_state,
-            discussion_type,
-            pinned,
-            locked,
-            created_at,
-            updated_at,
-            author_name,
-        ),
-    ) = topic
+    let Some((
+        id,
+        topic_course_id,
+        title,
+        message,
+        workflow_state,
+        discussion_type,
+        pinned,
+        locked,
+        created_at,
+        updated_at,
+        author_name,
+    )) = topic
     else {
         return Err(ApiError::NotFound);
     };

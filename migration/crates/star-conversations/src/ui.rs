@@ -154,10 +154,7 @@ pub async fn load_inbox(
         "#
     );
 
-    let rows: Vec<InboxRow> = sqlx::query_as(&sql)
-        .bind(viewer_id)
-        .fetch_all(db)
-        .await?;
+    let rows: Vec<InboxRow> = sqlx::query_as(&sql).bind(viewer_id).fetch_all(db).await?;
 
     Ok(rows)
 }

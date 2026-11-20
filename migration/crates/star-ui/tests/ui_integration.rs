@@ -788,13 +788,12 @@ async fn seed_conversation(
     body: &str,
 ) -> i64 {
     let mut tx = pool.begin().await.expect("begin");
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO conversations (subject) VALUES ($1) RETURNING id",
-    )
-    .bind(subject)
-    .fetch_one(&mut *tx)
-    .await
-    .expect("seed conversation");
+    let id: i64 =
+        sqlx::query_scalar("INSERT INTO conversations (subject) VALUES ($1) RETURNING id")
+            .bind(subject)
+            .fetch_one(&mut *tx)
+            .await
+            .expect("seed conversation");
     for (uid, read) in [(author_id, true), (recipient_id, false)] {
         sqlx::query(
             "INSERT INTO conversation_participants \
@@ -824,7 +823,11 @@ async fn seed_conversation(
 
 /// Fetch a shell page with the session cookie (CSRF cookie attached too, so
 /// follow-up POSTs can double-submit).
-async fn get_with_session(server: &TestServer, path: &str, session: &str) -> axum_test::TestResponse {
+async fn get_with_session(
+    server: &TestServer,
+    path: &str,
+    session: &str,
+) -> axum_test::TestResponse {
     server
         .get(path)
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
@@ -849,14 +852,7 @@ async fn discussions_index_teacher_button_and_unread_marker() {
     let course = seed_course(&pool, &prefix, "Disc Course", "available").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
-    let topic = seed_topic(
-        &pool,
-        course,
-        teacher,
-        "Unread Topic",
-        "<p>Read me</p>",
-    )
-    .await;
+    let topic = seed_topic(&pool, course, teacher, "Unread Topic", "<p>Read me</p>").await;
     let _ = seed_entry(&pool, topic, teacher, "first entry", None).await;
 
     let teacher_token = star_auth::create_token(teacher, "teacher", JWT_SECRET).expect("mint");
@@ -1314,7 +1310,10 @@ async fn inbox_unread_open_reply_mark_all_and_compose() {
     assert_eq!(compose.status_code(), 200, "body: {}", compose.text());
     let body = compose.text();
     assert!(body.contains("compose_form"));
-    assert!(body.contains(&format!("value=\"{teacher}\"")), "recipient option");
+    assert!(
+        body.contains(&format!("value=\"{teacher}\"")),
+        "recipient option"
+    );
     let csrf = compose
         .cookies()
         .get("star_csrf")

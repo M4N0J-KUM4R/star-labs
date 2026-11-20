@@ -94,10 +94,8 @@ impl IntoResponse for DiscussionsIndexPage {
                 html,
             )
                 .into_response(),
-            Err(err) => {
-                ApiError::Db(format!("discussions index template render failed: {err}"))
-                    .into_response()
-            }
+            Err(err) => ApiError::Db(format!("discussions index template render failed: {err}"))
+                .into_response(),
         }
     }
 }
@@ -132,10 +130,8 @@ impl IntoResponse for DiscussionNewPage {
                 html,
             )
                 .into_response(),
-            Err(err) => {
-                ApiError::Db(format!("discussion new template render failed: {err}"))
-                    .into_response()
-            }
+            Err(err) => ApiError::Db(format!("discussion new template render failed: {err}"))
+                .into_response(),
         }
     }
 }
@@ -187,10 +183,8 @@ impl IntoResponse for DiscussionShowPage {
                 html,
             )
                 .into_response(),
-            Err(err) => {
-                ApiError::Db(format!("discussion show template render failed: {err}"))
-                    .into_response()
-            }
+            Err(err) => ApiError::Db(format!("discussion show template render failed: {err}"))
+                .into_response(),
         }
     }
 }
@@ -219,10 +213,9 @@ async fn load_course_context(
     let tabs = star_courses::load_course_tabs(&app.db, course_id, &auth_of(user))
         .await
         .map_err(|e| from_api_error(&e, origin).into_response())?;
-    let (preferences, use_high_contrast) =
-        queries::load_preferences(&app.db, user.id)
-            .await
-            .map_err(|e| from_api_error(&e, origin).into_response())?;
+    let (preferences, use_high_contrast) = queries::load_preferences(&app.db, user.id)
+        .await
+        .map_err(|e| from_api_error(&e, origin).into_response())?;
     let user_name = queries::load_user_name(&app.db, user.id)
         .await
         .map_err(|e| from_api_error(&e, origin).into_response())?
@@ -262,17 +255,13 @@ pub async fn discussions_index(
             Err(e) => return from_api_error(&e, &origin).into_response(),
         };
 
-    let can_create = match star_courses::check_teacher_or_admin(
-        &app.db,
-        user.id,
-        course_id,
-        &auth_of(&user),
-    )
-    .await
-    {
-        Ok(flag) => flag,
-        Err(_) => false,
-    };
+    let can_create =
+        match star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
+            .await
+        {
+            Ok(flag) => flag,
+            Err(_) => false,
+        };
 
     let topics: Vec<TopicRow> = rows
         .into_iter()
@@ -350,17 +339,13 @@ pub async fn discussion_new(
         Err(resp) => return resp,
     };
 
-    let teacher = match star_courses::check_teacher_or_admin(
-        &app.db,
-        user.id,
-        course_id,
-        &auth_of(&user),
-    )
-    .await
-    {
-        Ok(flag) => flag,
-        Err(_) => false,
-    };
+    let teacher =
+        match star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
+            .await
+        {
+            Ok(flag) => flag,
+            Err(_) => false,
+        };
     if !teacher {
         return from_api_error(&ApiError::Forbidden, &origin).into_response();
     }
@@ -451,8 +436,9 @@ pub async fn discussion_create(
         .await
     {
         // PRG: land on the freshly created topic page.
-        Ok(topic_id) => Redirect::to(&format!("/courses/{course_id}/discussions/{topic_id}"))
-            .into_response(),
+        Ok(topic_id) => {
+            Redirect::to(&format!("/courses/{course_id}/discussions/{topic_id}")).into_response()
+        }
         Err(e) => from_api_error(&e, &origin).into_response(),
     }
 }

@@ -78,10 +78,8 @@ impl IntoResponse for ConversationsIndexPage {
                 html,
             )
                 .into_response(),
-            Err(err) => {
-                ApiError::Db(format!("conversations index template render failed: {err}"))
-                    .into_response()
-            }
+            Err(err) => ApiError::Db(format!("conversations index template render failed: {err}"))
+                .into_response(),
         }
     }
 }
@@ -126,10 +124,8 @@ impl IntoResponse for ConversationShowPage {
                 html,
             )
                 .into_response(),
-            Err(err) => {
-                ApiError::Db(format!("conversation show template render failed: {err}"))
-                    .into_response()
-            }
+            Err(err) => ApiError::Db(format!("conversation show template render failed: {err}"))
+                .into_response(),
         }
     }
 }
@@ -167,10 +163,10 @@ impl IntoResponse for ConversationComposePage {
                 html,
             )
                 .into_response(),
-            Err(err) => {
-                ApiError::Db(format!("conversation compose template render failed: {err}"))
-                    .into_response()
-            }
+            Err(err) => ApiError::Db(format!(
+                "conversation compose template render failed: {err}"
+            ))
+            .into_response(),
         }
     }
 }
@@ -188,10 +184,9 @@ async fn load_inbox_context(
     user: &SessionUser,
     origin: &str,
 ) -> Result<InboxContext, Response> {
-    let (preferences, use_high_contrast) =
-        queries::load_preferences(&app.db, user.id)
-            .await
-            .map_err(|e| from_api_error(&e, origin).into_response())?;
+    let (preferences, use_high_contrast) = queries::load_preferences(&app.db, user.id)
+        .await
+        .map_err(|e| from_api_error(&e, origin).into_response())?;
     let user_name = queries::load_user_name(&app.db, user.id)
         .await
         .map_err(|e| from_api_error(&e, origin).into_response())?
@@ -415,16 +410,11 @@ pub async fn conversation_show(
         Err(resp) => return resp,
     };
 
-    let thread = match conversations_ui::load_conversation_thread(
-        &app.db,
-        conversation_id,
-        user.id,
-    )
-    .await
-    {
-        Ok(thread) => thread,
-        Err(e) => return from_api_error(&e, &origin).into_response(),
-    };
+    let thread =
+        match conversations_ui::load_conversation_thread(&app.db, conversation_id, user.id).await {
+            Ok(thread) => thread,
+            Err(e) => return from_api_error(&e, &origin).into_response(),
+        };
 
     // Mark read on open; a failure is non-fatal (the badge lags one view).
     let _ = conversations_ui::mark_conversation_read_for_viewer(
