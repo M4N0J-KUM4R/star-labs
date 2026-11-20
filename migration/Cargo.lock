@@ -3460,14 +3460,18 @@ dependencies = [
  "star-assignments",
  "star-auth",
  "star-common",
+ "star-conversations",
  "star-courses",
  "star-dashboard",
  "star-db",
+ "star-discussions",
  "star-grading-standards",
  "star-modules",
  "star-pages",
+ "star-quizzes",
  "time",
  "tokio",
+ "url",
 ]
 
 [[package]]

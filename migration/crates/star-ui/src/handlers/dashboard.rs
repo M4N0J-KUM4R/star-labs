@@ -25,6 +25,8 @@ pub struct DashboardPage {
     pub active_path: &'static str,
     pub breadcrumb: Vec<(String, String)>,
     pub csrf_token: String,
+    /// Unread conversation count for the global-nav Inbox badge (#72).
+    pub unread_badge: i64,
     pub cards: Vec<DashboardCard>,
 }
 
@@ -69,6 +71,10 @@ pub async fn dashboard(
         Ok(name) => name.unwrap_or_default(),
         Err(e) => return from_api_error(&e, &origin).into_response(),
     };
+    let unread_badge = match star_conversations::ui::load_unread_count(&app.db, user.id).await {
+        Ok(count) => count,
+        Err(e) => return from_api_error(&e, &origin).into_response(),
+    };
 
     let mut env = JsEnv::for_user(
         user.id,
@@ -94,6 +100,7 @@ pub async fn dashboard(
         active_path: "dashboard",
         breadcrumb: vec![("Dashboard".to_string(), "/dashboard".to_string())],
         csrf_token,
+        unread_badge,
         cards,
     };
     (jar, page).into_response()

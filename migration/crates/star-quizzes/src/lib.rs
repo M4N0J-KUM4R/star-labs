@@ -727,6 +727,73 @@ async fn start_quiz(
     Ok((StatusCode::CREATED, Json(submission)))
 }
 
+/// Start (or resume) the caller's single submission for a quiz.
+///
+/// The star-ui take-flow analogue of `start_quiz` with Canvas' one-attempt
+/// semantics: `quiz_submissions` is UNIQUE (quiz_id, user_id), so a student
+/// who re-enters the take page gets their existing in-progress submission
+/// back instead of a 409. The student-enrollment gate matches the API
+/// handler exactly (an enrollments row with role='student'; admins get no
+/// bypass). Rows created here mirror `start_quiz`'s INSERT, including a
+/// fresh validation_token when the row predates migration 0113.
+pub async fn start_or_resume_submission(
+    pool: &PgPool,
+    quiz_id: i64,
+    user_id: i64,
+) -> Result<QuizSubmission, ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM quizzes WHERE id = $1"#)
+        .bind(quiz_id)
+        .fetch_optional(pool)
+        .await?;
+
+    let (course_id,) = row.ok_or(ApiError::NotFound)?;
+
+    // Canvas only lets students take quizzes (same gate as start_quiz).
+    let enrolled: Option<(i32,)> = sqlx::query_as(
+        r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'student' LIMIT 1"#,
+    )
+    .bind(user_id)
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await?;
+
+    if enrolled.is_none() {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Resume: an existing row is returned as-is (409 would force the UI to
+    // re-render a dead form; Canvas' take page resumes the attempt).
+    let existing: Option<QuizSubmission> = sqlx::query_as(
+        r#"
+        SELECT id, quiz_id, user_id, score, completed_at, started_at, created_at, updated_at
+        FROM quiz_submissions
+        WHERE quiz_id = $1 AND user_id = $2
+        "#,
+    )
+    .bind(quiz_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    if let Some(submission) = existing {
+        return Ok(submission);
+    }
+
+    let submission: QuizSubmission = sqlx::query_as(
+        r#"
+        INSERT INTO quiz_submissions (quiz_id, user_id, started_at, validation_token)
+        VALUES ($1, $2, now(), $3)
+        RETURNING id, quiz_id, user_id, score, completed_at, started_at, created_at, updated_at
+        "#,
+    )
+    .bind(quiz_id)
+    .bind(user_id)
+    .bind(generate_validation_token())
+    .fetch_one(pool)
+    .await?;
+
+    Ok(submission)
+}
+
 /// GET /quizzes/{id}/submissions/me
 async fn get_my_submission(
     State(state): State<AppState>,

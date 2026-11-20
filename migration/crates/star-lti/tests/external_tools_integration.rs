@@ -1380,3 +1380,262 @@ async fn external_tools_require_authentication() {
     let res = server.get("/courses/1/external_tools/1").await;
     assert_eq!(res.status_code(), 401);
 }
+
+// ---------------------------------------------------------------------------
+// jwt_token (Canvas /api/lti, external_tools_controller.rb:1678-1690)
+// ---------------------------------------------------------------------------
+
+/// Decode an HS256 token signed with the tool's shared secret, the way a
+/// tool would verify Canvas' jwt_token response.
+fn decode_launch_jwt(token: &str, shared_secret: &str) -> Value {
+    let mut validation = jsonwebtoken::Validation::default();
+    // Canvas create_jwt signs without an exp claim when expires is nil
+    // (canvas_security.rb:238-247), so validation must not require one.
+    validation.validate_exp = false;
+    validation.required_spec_claims.clear();
+    let data = jsonwebtoken::decode::<Value>(
+        token,
+        &jsonwebtoken::DecodingKey::from_secret(shared_secret.as_bytes()),
+        &validation,
+    )
+    .expect("decode launch jwt");
+    data.claims
+}
+
+#[tokio::test]
+async fn jwt_token_course_tool_signed_launch_token() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let course_id = seed_course(&pool, &prefix, "course", account_id).await;
+    let teacher_id = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    seed_enrollment(&pool, teacher_id, course_id, "teacher").await;
+
+    let resp = create_course_tool(
+        &server,
+        course_id,
+        &auth(teacher_id, "teacher"),
+        json!({
+            "name": "JWT Tool",
+            "url": "https://tool.example.com/launch",
+            "consumer_key": "key123",
+            "shared_secret": "sec123"
+        }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // Happy path: 200 { jwt_token } signed with the tool's shared secret and
+    // carrying consumer_key + iat (controller.rb:1685-1690).
+    let resp = server
+        .get(&format!(
+            "/api/lti/courses/{course_id}/jwt_token?tool_launch_url=https://tool.example.com/launch"
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(teacher_id, "teacher"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let token = body["jwt_token"].as_str().expect("jwt_token string");
+    let claims = decode_launch_jwt(token, "sec123");
+    assert_eq!(claims["consumer_key"], "key123");
+    assert_eq!(claims["lti_message_type"], "basic-lti-launch-request");
+    assert_eq!(claims["context_id"], json!(format!("course_{course_id}")));
+    assert!(claims["iat"].is_i64());
+
+    // A launch URL that matches no tool 404s — Canvas raises
+    // ActiveRecord::RecordNotFound (controller.rb:1680-1681). This is the
+    // launch URL validation acceptance of the issue.
+    let resp = server
+        .get(&format!(
+            "/api/lti/courses/{course_id}/jwt_token?tool_launch_url=https://other.example.com/launch"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher_id, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404);
+
+    // Unknown course → 404 (require_context).
+    let resp = server
+        .get("/api/lti/courses/987654/jwt_token?tool_launch_url=https://tool.example.com/launch")
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(teacher_id, "teacher"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 404);
+
+    teardown(&pool, &[teacher_id], account_id, course_id).await;
+}
+
+#[tokio::test]
+async fn jwt_token_course_requires_read_access() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let course_id = seed_course(&pool, &prefix, "course", account_id).await;
+    let outsider_id = seed_user(&pool, &prefix, "outsider", "student").await;
+
+    // No token → 401 (AuthUser); an outsider → 403 — Canvas
+    // require_access_to_context demands course grants_right?(:read)
+    // (controller.rb:2116-2121).
+    let resp = server
+        .get(&format!(
+            "/api/lti/courses/{course_id}/jwt_token?tool_launch_url=https://x.example.com"
+        ))
+        .await;
+    assert_eq!(resp.status_code(), 401);
+    let resp = server
+        .get(&format!(
+            "/api/lti/courses/{course_id}/jwt_token?tool_launch_url=https://x.example.com"
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(outsider_id, "student"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 403);
+
+    teardown(&pool, &[outsider_id], account_id, course_id).await;
+}
+
+#[tokio::test]
+async fn jwt_token_tool_id_and_domain_matching() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let course_id = seed_course(&pool, &prefix, "course", account_id).await;
+    let teacher_id = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    seed_enrollment(&pool, teacher_id, course_id, "teacher").await;
+
+    // Tool A matches by URL; tool B only by domain.
+    let resp = create_course_tool(
+        &server,
+        course_id,
+        &auth(teacher_id, "teacher"),
+        json!({
+            "name": "A",
+            "url": "https://a.example.com/launch",
+            "consumer_key": "keyA",
+            "shared_secret": "secA"
+        }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let tool_a: Value = resp.json();
+
+    // Tool B only matches by domain.
+    let resp = create_course_tool(
+        &server,
+        course_id,
+        &auth(teacher_id, "teacher"),
+        json!({
+            "name": "B",
+            "url": "https://placeholder.example.com",
+            "domain": "b.example.com",
+            "consumer_key": "keyB",
+            "shared_secret": "secB"
+        }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // Domain match: any host under b.example.com finds tool B
+    // (matches_tool_domain?, context_external_tool.rb:1039-1048).
+    let resp = server
+        .get(&format!(
+            "/api/lti/courses/{course_id}/jwt_token?tool_launch_url=https://www.b.example.com/x"
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(teacher_id, "teacher"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let claims = decode_launch_jwt(body["jwt_token"].as_str().unwrap(), "secB");
+    assert_eq!(claims["consumer_key"], "keyB");
+
+    // tool_id pins the tool when it matches the launch host
+    // (Lti::ToolFinder.from_url, tool_finder.rb:216-228).
+    let resp = server
+        .get(&format!(
+            "/api/lti/courses/{course_id}/jwt_token?tool_launch_url=https://a.example.com/launch&tool_id={}",
+            tool_a["id"]
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher_id, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let claims = decode_launch_jwt(body["jwt_token"].as_str().unwrap(), "secA");
+    assert_eq!(claims["consumer_key"], "keyA");
+
+    // A preferred id that does not match the launch host falls through to
+    // the domain match.
+    let resp = server
+        .get(&format!(
+            "/api/lti/courses/{course_id}/jwt_token?tool_launch_url=https://www.b.example.com/x&tool_id={}",
+            tool_a["id"]
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher_id, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let claims = decode_launch_jwt(body["jwt_token"].as_str().unwrap(), "secB");
+    assert_eq!(claims["consumer_key"], "keyB");
+
+    teardown(&pool, &[teacher_id], account_id, course_id).await;
+}
+
+#[tokio::test]
+async fn jwt_token_account_tool_any_logged_in_user() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let admin_id = seed_user(&pool, &prefix, "admin", "student").await;
+    let outsider_id = seed_user(&pool, &prefix, "outsider", "student").await;
+    seed_account_user(&pool, account_id, admin_id).await;
+
+    let resp = server
+        .post(&format!("/accounts/{account_id}/external_tools"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .json(&json!({
+            "name": "Acct JWT Tool",
+            "url": "https://acct-tool.example.com/launch",
+            "consumer_key": "acctKey",
+            "shared_secret": "acctSecret"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // No token → 401. require_user is the only gate for account contexts
+    // (controller.rb:2116-2118) — any logged-in user passes.
+    let resp = server
+        .get(&format!(
+            "/api/lti/accounts/{account_id}/jwt_token?tool_launch_url=https://acct-tool.example.com/launch"
+        ))
+        .await;
+    assert_eq!(resp.status_code(), 401);
+
+    let resp = server
+        .get(&format!(
+            "/api/lti/accounts/{account_id}/jwt_token?tool_launch_url=https://acct-tool.example.com/launch"
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(outsider_id, "student"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let claims = decode_launch_jwt(body["jwt_token"].as_str().unwrap(), "acctSecret");
+    assert_eq!(claims["consumer_key"], "acctKey");
+    assert_eq!(claims["context_id"], json!(format!("account_{account_id}")));
+
+    teardown(&pool, &[admin_id, outsider_id], account_id, 0).await;
+}

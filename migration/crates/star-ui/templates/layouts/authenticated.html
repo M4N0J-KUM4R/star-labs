@@ -12,14 +12,14 @@
         <li class="ic-app-header__menu-list-item {% if active_path == "dashboard" %}ic-app-header__menu-list-item--active{% endif %}">
           <a id="global_nav_dashboard_link" class="ic-app-header__menu-list-link" href="/dashboard">Dashboard</a>
         </li>
-        <li class="ic-app-header__menu-list-item">
+        <li class="ic-app-header__menu-list-item{% if active_path == "courses" %} ic-app-header__menu-list-item--active{% endif %}">
           <a id="global_nav_courses_link" class="ic-app-header__menu-list-link" href="/dashboard">Courses</a>
         </li>
         <li class="ic-app-header__menu-list-item">
           <a id="global_nav_calendar_link" class="ic-app-header__menu-list-link" href="/dashboard">Calendar</a>
         </li>
-        <li class="ic-app-header__menu-list-item">
-          <a id="global_nav_conversations_link" class="ic-app-header__menu-list-link" href="/dashboard">Inbox</a>
+        <li class="ic-app-header__menu-list-item{% if active_path == "conversations" %} ic-app-header__menu-list-item--active{% endif %}">
+          <a id="global_nav_conversations_link" class="ic-app-header__menu-list-link" href="/conversations">Inbox{% if unread_badge > 0 %} <span class="menu-item__badge" id="global_nav_conversations_unread_badge" aria-label="{{ unread_badge }} unread conversations">{{ unread_badge }}</span>{% endif %}</a>
         </li>
         <li class="ic-app-header__menu-list-item">
           <a id="global_nav_help_link" class="ic-app-header__menu-list-link" href="/dashboard">Help</a>

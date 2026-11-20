@@ -1,0 +1,73 @@
+{% extends "layouts/course.html" %}
+{# Quiz show — Canvas quizzes#show analogue. Students: details + Take Quiz
+   (or their submission status). Teachers: details + submissions summary. #}
+{% block content %}
+  <div id="quiz_show" class="quizzes" data-quiz-id="{{ quiz_id }}">
+    <h1 class="quiz-title">{{ quiz_title }}</h1>
+    {% if !published %}<div class="unpublished-note">This quiz is unpublished.</div>{% endif %}
+    <ul id="quiz_details" class="quiz-details">
+      <li><span class="detail-label">Quiz Type:</span> {{ quiz_type }}</li>
+      <li><span class="detail-label">Points:</span> {{ points }}</li>
+      <li><span class="detail-label">Questions:</span> {{ question_count }}</li>
+      <li><span class="detail-label">{{ availability }}</span></li>
+      <li><span class="detail-label">Allowed Attempts:</span> {% if allowed_attempts < 0 %}Unlimited{% else %}{{ allowed_attempts }}{% endif %}</li>
+    </ul>
+    <div id="quiz_instructions" class="user_content quiz-instructions">
+      {{ instructions_html|safe }}
+    </div>
+    {% if is_teacher %}
+    <div class="quiz-submissions-summary">
+      <h2>Submissions</h2>
+      {% if submissions.is_empty() %}
+      <p class="no-submissions">No students have taken this quiz yet.</p>
+      {% endif %}
+      {% if !submissions.is_empty() %}
+      <table class="submissions-table" id="quiz_submissions_table">
+        <thead>
+          <tr>
+            <th>Student</th>
+            <th>Attempt</th>
+            <th>Score</th>
+            <th>Status</th>
+            <th>Started</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for sub in submissions %}
+          <tr class="submission-row">
+            <td><a class="submission-link" href="/courses/{{ course_id }}/quizzes/{{ quiz_id }}/submissions/{{ sub.id }}">{{ sub.student_name }}</a></td>
+            <td>{{ sub.attempt }}</td>
+            <td>{% match sub.score %}{% when Some with (score) %}{{ score }}{% when None %}—{% endmatch %}</td>
+            <td>{{ sub.workflow_state }}</td>
+            <td>{{ sub.started_at }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% endif %}
+    </div>
+    {% else %}
+    <div class="take_quiz_button quiz-actions">
+      {% if can_take %}
+      <form method="post" action="{{ take_url }}" class="take-quiz-form">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button type="submit" class="btn btn-primary" id="take_quiz_link">Take Quiz</button>
+      </form>
+      {% endif %}
+      {% if has_submission %}
+      <div class="submission-status" data-submission-state="{{ submission_state }}">
+        <p>Status: {{ submission_state }}</p>
+        {% match submission_score %}
+        {% when Some with (score) %}
+        <p>Score: {{ score }} / {{ points }}</p>
+        {% when None %}{% endmatch %}
+        {% match results_url %}
+        {% when Some with (url) %}
+        <a class="btn" id="quiz_results_link" href="{{ url }}">View Results</a>
+        {% when None %}{% endmatch %}
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+{% endblock content %}

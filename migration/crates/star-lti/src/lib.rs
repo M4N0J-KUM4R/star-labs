@@ -584,6 +584,7 @@ pub fn lti_advantage_router() -> Router<AppState> {
         .merge(line_items::router())
         .merge(tool_proxy::advantage_router())
         .merge(tool_setting::router())
+        .merge(external_tools::advantage_router())
 }
 
 // ---------------------------------------------------------------------------

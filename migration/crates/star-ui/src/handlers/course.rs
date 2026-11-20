@@ -33,6 +33,8 @@ pub struct CourseHomePage {
     pub active_path: &'static str,
     pub breadcrumb: Vec<(String, String)>,
     pub csrf_token: String,
+    /// Unread conversation count for the global-nav Inbox badge (#72).
+    pub unread_badge: i64,
     pub tabs: Vec<CourseTab>,
     pub active_context_tab: String,
     pub course_name: String,
@@ -69,6 +71,8 @@ pub struct CourseTabPage {
     pub active_path: &'static str,
     pub breadcrumb: Vec<(String, String)>,
     pub csrf_token: String,
+    /// Unread conversation count for the global-nav Inbox badge (#72).
+    pub unread_badge: i64,
     pub tabs: Vec<CourseTab>,
     pub active_context_tab: String,
     pub course_name: String,
@@ -145,6 +149,10 @@ pub async fn course_home(
         Ok(name) => name.unwrap_or_default(),
         Err(e) => return from_api_error(&e, &origin).into_response(),
     };
+    let unread_badge = match star_conversations::ui::load_unread_count(&app.db, user.id).await {
+        Ok(count) => count,
+        Err(e) => return from_api_error(&e, &origin).into_response(),
+    };
 
     let context_asset_string = format!("course_{course_id}");
     let env = JsEnv::for_user(
@@ -175,6 +183,7 @@ pub async fn course_home(
             (course.name.clone(), format!("/courses/{course_id}")),
         ],
         csrf_token,
+        unread_badge,
         tabs,
         active_context_tab: "home".to_string(),
         course_name: course.name,
@@ -226,6 +235,10 @@ pub async fn course_tab(
         Ok(name) => name.unwrap_or_default(),
         Err(e) => return from_api_error(&e, &origin).into_response(),
     };
+    let unread_badge = match star_conversations::ui::load_unread_count(&app.db, user.id).await {
+        Ok(count) => count,
+        Err(e) => return from_api_error(&e, &origin).into_response(),
+    };
 
     let context_asset_string = format!("course_{course_id}");
     let env = JsEnv::for_user(
@@ -256,6 +269,7 @@ pub async fn course_tab(
             (course.name.clone(), format!("/courses/{course_id}")),
         ],
         csrf_token,
+        unread_badge,
         tabs,
         active_context_tab: tab,
         course_name: course.name,

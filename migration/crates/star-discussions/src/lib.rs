@@ -70,6 +70,11 @@ use star_common::{ApiError, AppState};
 
 use std::collections::HashMap;
 
+// Server-rendered UI loaders (star-ui, issue #72): pub loaders extracted the
+// same way star-courses extracted load_course_for_viewer / load_course_tabs.
+pub mod ui;
+pub use ui::TopicIndexRow;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -246,7 +251,9 @@ fn is_admin(auth: &AuthUser) -> bool {
     auth.role == "admin"
 }
 
-async fn check_enrolled_or_admin(
+// `pub(crate)`: shared with the UI loader module (ui.rs) so the shell runs
+// the exact same gate SQL as the REST handlers.
+pub(crate) async fn check_enrolled_or_admin(
     pool: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -265,7 +272,7 @@ async fn check_enrolled_or_admin(
     Ok(row.is_some())
 }
 
-async fn check_teacher_or_admin(
+pub(crate) async fn check_teacher_or_admin(
     pool: &PgPool,
     user_id: i64,
     course_id: i64,
