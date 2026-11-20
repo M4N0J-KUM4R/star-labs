@@ -1713,11 +1713,13 @@ pub struct BouncedChannelsResponse {
 }
 
 /// GET /accounts/{account_id}/bounced_communication_channels — list all bounced
-/// channels for users in the account. Requires account-level :view_bounced_emails.
+/// channels for users in the account. Supports query params from BouncedReportQuery.
+/// Requires account-level :view_bounced_emails.
 async fn bounced_communication_channels(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(account_id): Path<i64>,
+    Query(params): Query<BouncedReportQuery>,
 ) -> Result<Json<BouncedChannelsResponse>, ApiError> {
     // Admins with site-wide or account-level read_bounced_emails can view this.
     // star-lms uses account role 'admin' for site admins and account admins.
@@ -1736,7 +1738,74 @@ async fn bounced_communication_channels(
         return Err(ApiError::NotFound);
     }
 
-    let rows: Vec<BouncedChannelRow> = sqlx::query_as(
+    let order = params.order.as_deref().unwrap_or("desc");
+    let order_col = match order {
+        "asc" => "cc.last_bounce_at ASC",
+        _ => "cc.last_bounce_at DESC NULLS LAST",
+    };
+
+    let path_type_filter = params
+        .path_type
+        .as_ref()
+        .map(|pt| format!("AND lower(cc.path_type) = lower($2)"));
+
+    let after_filter = params
+        .after
+        .as_ref()
+        .map(|a| format!("AND cc.last_bounce_at >= '{}'", a.replace("'", "''")));
+
+    let before_filter = params
+        .before
+        .as_ref()
+        .map(|b| format!("AND cc.last_bounce_at <= '{}'", b.replace("'", "''")));
+
+    let pattern_filter = params
+        .pattern
+        .as_ref()
+        .map(|p| format!("AND (lower(cc.path) LIKE '%{}%' OR lower(cc.last_bounce_summary) LIKE '%{}%')",
+            p.replace("'", "''"), p.replace("'", "''")));
+
+    let with_invalid = params.with_invalid_paths.unwrap_or(false);
+    let invalid_filter = if with_invalid {
+        "AND cc.bounce_count > 0"
+    } else {
+        ""
+    };
+
+    // Build the WHERE clause segments
+    let mut where_clauses = vec![
+        "au.account_id = $1".to_string(),
+        "cc.bounce_count > 0".to_string(),
+        "cc.workflow_state != 'retired'".to_string(),
+    ];
+
+    if path_type_filter.is_some() {
+        where_clauses.push(format!("lower(cc.path_type) = lower($2)"));
+    }
+    if after_filter.is_some() {
+        where_clauses.push(format!("cc.last_bounce_at >= '{}'", params.after.as_ref().unwrap().replace("'", "''")));
+    }
+    if before_filter.is_some() {
+        where_clauses.push(format!("cc.last_bounce_at <= '{}'", params.before.as_ref().unwrap().replace("'", "''")));
+    }
+    if pattern_filter.is_some() {
+        where_clauses.push(format!(
+            "(lower(cc.path) LIKE '%{}%' OR lower(cc.last_bounce_summary) LIKE '%{}%')",
+            params.pattern.as_ref().unwrap().replace("'", "''"),
+            params.pattern.as_ref().unwrap().replace("'", "''")
+        ));
+    }
+    if with_invalid {
+        where_clauses.push("cc.bounce_count > 0".to_string());
+    }
+
+    let where_sql: String = where_clauses
+        .iter()
+        .map(|c| format!("AND {}", c))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let sql = format!(
         r#"
         SELECT
             cc.id,
@@ -1748,15 +1817,22 @@ async fn bounced_communication_channels(
             cc.last_bounce_summary
         FROM communication_channels cc
         JOIN account_users au ON au.user_id = cc.user_id
-        WHERE au.account_id = $1
-          AND cc.bounce_count > 0
-          AND cc.workflow_state != 'retired'
-        ORDER BY cc.last_bounce_at DESC NULLS LAST, cc.id DESC
+        WHERE {}
+        {}
+        ORDER BY {}
         "#,
-    )
-    .bind(account_id)
-    .fetch_all(&state.db)
-    .await?;
+        "au.account_id = $1",
+        where_sql,
+        order_col
+    );
+
+    let mut query = sqlx::query_as::<_, BouncedChannelRow>(&sql).bind(account_id);
+
+    if params.path_type.is_some() {
+        query = query.bind(params.path_type.as_ref().unwrap());
+    }
+
+    let rows: Vec<BouncedChannelRow> = query.fetch_all(&state.db).await?;
 
     Ok(Json(BouncedChannelsResponse { channels: rows }))
 }
@@ -1766,9 +1842,11 @@ async fn bounced_communication_channels_csv(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(account_id): Path<i64>,
+    Query(params): Query<BouncedReportQuery>,
 ) -> Result<String, ApiError> {
     let Json(BouncedChannelsResponse { channels }) =
-        bounced_communication_channels(State(state), auth, Path(account_id)).await?;
+        bounced_communication_channels(State(state), auth, Path(account_id), Query(params))
+            .await?;
     Ok(channels_to_csv(&channels))
 }
 
