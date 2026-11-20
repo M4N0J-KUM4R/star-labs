@@ -421,6 +421,11 @@ async fn registration_token(
         "unified_tool_id": params.unified_tool_id,
         "registration_url": params.registration_url,
         "registration_id": params.registration_id,
+        // Canvas signs the token with a 1 hour expiration
+        // (REGISTRATION_TOKEN_EXPIRATION, dynamic_registration_controller.rb:27
+        // and :84-86); jsonwebtoken's default validation requires the exp
+        // claim, so dr_iframe's decode fails without it.
+        "exp": (Utc::now() + chrono::Duration::hours(1)).timestamp(),
     });
 
     let secret = &state.jwt_secret;
@@ -654,12 +659,12 @@ async fn create_registration(
     auth: AuthUser,
     Json(payload): Json<OidcRegistrationRequest>,
 ) -> Result<Response, ApiError> {
-    // This route is public in Canvas (uses a registration JWT, not user auth).
-    // We validate the access token passed as Bearer.
-    // For workspace parity, we accept either a valid user token or a
-    // registration JWT. We decode but don't enforce user presence here
-    // because the registration token flow handles it upstream.
-    let _ = auth; // Mark as used.
+    // Canvas gates `create` on the dynamic registration JWT contents
+    // (dynamic_registration_controller.rb:29 skips require_user; :252-259
+    // decode the token and require its claims) rather than on a user
+    // session. The workspace models that gate on the bearer token's admin
+    // status, mirroring the flat update route below.
+    require_site_admin_or_account_admin(&state.db, &auth, 1).await?;
 
     // Validate required fields.
     if payload.client_name.is_none() {
