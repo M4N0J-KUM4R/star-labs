@@ -372,3 +372,335 @@ async fn media_tracks_listing_and_include_content() {
 
     cleanup(&pool, &prefix).await;
 }
+
+#[tokio::test]
+async fn show_and_update_media_object() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let owner = seed_user(&pool, &prefix, "Owner", "student").await;
+    let other = seed_user(&pool, &prefix, "Other", "student").await;
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let bearer_owner = auth(owner, "student");
+
+    let created = create_ok(
+        &server,
+        &bearer_owner,
+        &format!("{prefix}-m-show"),
+        "Original Title",
+    )
+    .await;
+    let id = created["id"].as_i64().unwrap();
+
+    // GET /media_objects/{id} returns the full MediaObjectJson.
+    let resp = server
+        .get(&format!("/media_objects/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer_owner.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let shown: Value = resp.json();
+    assert_eq!(shown["id"], id);
+    assert_eq!(shown["title"], "Original Title");
+    assert_eq!(shown["can_add_captions"], true);
+    assert!(shown["media_tracks"].as_array().unwrap().is_empty());
+
+    // PUT /media_objects/{id} updates user_entered_title.
+    let resp = server
+        .put(&format!("/media_objects/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer_owner.clone())
+        .json(&json!({ "user_entered_title": "Updated Title" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let updated: Value = resp.json();
+    assert_eq!(updated["title"], "Updated Title");
+
+    // PUT without title is 400 (Canvas behavior).
+    let resp = server
+        .put(&format!("/media_objects/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer_owner.clone())
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(
+        resp.json::<Value>()["message"],
+        "The user_entered_title parameter must have a value"
+    );
+
+    // Non-owner gets 403.
+    let resp = server
+        .put(&format!("/media_objects/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+        .json(&json!({ "user_entered_title": "Hijack" }))
+        .await;
+    assert_eq!(resp.status_code(), 403);
+
+    // Admin can update.
+    let resp = server
+        .put(&format!("/media_objects/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "user_entered_title": "Admin Title" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["title"], "Admin Title");
+
+    // Unknown id is 404.
+    let resp = server
+        .get("/media_objects/999999999")
+        .add_header(axum::http::header::AUTHORIZATION, bearer_owner.clone())
+        .await;
+    assert_eq!(resp.status_code(), 404);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn create_and_delete_media_track() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let owner = seed_user(&pool, &prefix, "Owner", "student").await;
+    let other = seed_user(&pool, &prefix, "Other", "student").await;
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let bearer_owner = auth(owner, "student");
+
+    let created = create_ok(
+        &server,
+        &bearer_owner,
+        &format!("{prefix}-m-track-crud"),
+        "Track CRUD",
+    )
+    .await;
+    let id = created["id"].as_i64().unwrap();
+
+    // POST /media_objects/{id}/media_tracks — create a subtitle track.
+    let resp = server
+        .post(&format!("/media_objects/{id}/media_tracks"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer_owner.clone())
+        .json(
+            &json!({ "locale": "fr", "kind": "subtitles", "content": "1\n00:00 --> 01\nBonjour" }),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let track_obj: Value = resp.json();
+    let track_id = track_obj["media_tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["locale"] == "fr")
+        .expect("fr track in response")["id"]
+        .as_i64()
+        .unwrap();
+
+    // Invalid locale returns 422.
+    let resp = server
+        .post(&format!("/media_objects/{id}/media_tracks"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer_owner.clone())
+        .json(&json!({ "locale": "invalid!locale", "kind": "subtitles" }))
+        .await;
+    assert_eq!(resp.status_code(), 422);
+
+    // Invalid kind returns 422.
+    let resp = server
+        .post(&format!("/media_objects/{id}/media_tracks"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer_owner.clone())
+        .json(&json!({ "locale": "de", "kind": "bogus" }))
+        .await;
+    assert_eq!(resp.status_code(), 422);
+
+    // Non-owner gets 403.
+    let resp = server
+        .post(&format!("/media_objects/{id}/media_tracks"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+        .json(&json!({ "locale": "pt", "kind": "subtitles" }))
+        .await;
+    assert_eq!(resp.status_code(), 403);
+
+    // Admin can create track.
+    let resp = server
+        .post(&format!("/media_objects/{id}/media_tracks"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "locale": "pt", "kind": "captions" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // DELETE /media_objects/{id}/media_tracks/{track_id}.
+    let resp = server
+        .delete(&format!("/media_objects/{id}/media_tracks/{track_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer_owner.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let after_delete: Value = resp.json();
+    let fr_track = after_delete["media_tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["locale"] == "fr");
+    assert!(fr_track.is_none(), "fr track should be gone");
+
+    // Non-owner gets 403 on delete.
+    let resp = server
+        .post(&format!("/media_objects/{id}/media_tracks"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "locale": "it", "kind": "subtitles" }))
+        .await;
+    let it_track_id = resp.json()["media_tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["locale"] == "it")
+        .expect("it track")["id"]
+        .as_i64()
+        .unwrap();
+
+    let resp = server
+        .delete(&format!("/media_objects/{id}/media_tracks/{it_track_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403);
+
+    // Unknown track returns 404.
+    let resp = server
+        .delete(&format!("/media_objects/{id}/media_tracks/999999999"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer_owner.clone())
+        .await;
+    assert_eq!(resp.status_code(), 404);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn bulk_replace_tracks() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let owner = seed_user(&pool, &prefix, "Owner", "student").await;
+    let other = seed_user(&pool, &prefix, "Other", "student").await;
+    let bearer_owner = auth(owner, "student");
+
+    let created = create_ok(
+        &server,
+        &bearer_owner,
+        &format!("{prefix}-m-bulk"),
+        "Bulk Replace",
+    )
+    .await;
+    let id = created["id"].as_i64().unwrap();
+
+    // Seed two tracks.
+    seed_track(&pool, id, owner, "en", "existing EN").await;
+    seed_track(&pool, id, owner, "ja", "existing JA").await;
+
+    // Bulk replace with two new locales — removes EN and JA, adds FR and DE.
+    let resp = server
+        .put(&format!("/media_objects/{id}/media_tracks"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer_owner.clone())
+        .json(&json!([
+            { "locale": "fr", "content": "nouveau", "kind": "subtitles" },
+            { "locale": "de", "content": "neu", "kind": "subtitles" }
+        ]))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let tracks: Value = resp.json();
+    let locales: Vec<&str> = tracks
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["locale"].as_str().unwrap())
+        .collect();
+    assert!(locales.contains(&"fr"), "should have fr: {locales:?}");
+    assert!(locales.contains(&"de"), "should have de: {locales:?}");
+    assert!(
+        !locales.contains(&"en"),
+        "en should be removed: {locales:?}"
+    );
+    assert!(
+        !locales.contains(&"ja"),
+        "ja should be removed: {locales:?}"
+    );
+
+    // Non-owner gets 403.
+    let resp = server
+        .put(&format!("/media_objects/{id}/media_tracks"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+        .json(&json!([{ "locale": "zz", "content": "test" }]))
+        .await;
+    assert_eq!(resp.status_code(), 403);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn asr_creates_processing_track() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let owner = seed_user(&pool, &prefix, "Owner", "student").await;
+    let other = seed_user(&pool, &prefix, "Other", "student").await;
+    let bearer_owner = auth(owner, "student");
+
+    let created = create_ok(
+        &server,
+        &bearer_owner,
+        &format!("{prefix}-m-asr"),
+        "ASR Test",
+    )
+    .await;
+    let id = created["id"].as_i64().unwrap();
+
+    // POST /media_objects/{id}/asr — creates processing track.
+    let resp = server
+        .post(&format!("/media_objects/{id}/asr"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer_owner.clone())
+        .json(&json!({ "locale": "en" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let after_asr: Value = resp.json();
+    let asr_track = after_asr["media_tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["locale"] == "en" && t["asr"] == true);
+    assert!(asr_track.is_some(), "should have ASR track: {}", after_asr);
+
+    // Duplicate ASR request is idempotent (no new track).
+    let resp = server
+        .post(&format!("/media_objects/{id}/asr"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer_owner.clone())
+        .json(&json!({ "locale": "en" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let after_dup: Value = resp.json();
+    let en_tracks: Vec<_> = after_dup["media_tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["locale"] == "en")
+        .collect();
+    assert_eq!(en_tracks.len(), 1, "should still be one en track");
+
+    // Invalid locale returns 422.
+    let resp = server
+        .post(&format!("/media_objects/{id}/asr"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer_owner.clone())
+        .json(&json!({ "locale": "" }))
+        .await;
+    assert_eq!(resp.status_code(), 422);
+
+    // Non-owner gets 403.
+    let resp = server
+        .post(&format!("/media_objects/{id}/asr"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+        .json(&json!({ "locale": "es" }))
+        .await;
+    assert_eq!(resp.status_code(), 403);
+
+    cleanup(&pool, &prefix).await;
+}
