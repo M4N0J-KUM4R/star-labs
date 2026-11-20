@@ -54,45 +54,12 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
     Some((server, pool, run_prefix()))
 }
 
-async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
-    sqlx::query_scalar(
-        "INSERT INTO users (name, email, password_hash, role) VALUES ($1, $2, $3, $4) RETURNING id",
-    )
-    .bind(name)
-    .bind(format!("{prefix}-{name}@test.local"))
-    .bind(star_auth::hash_password("pw-test-1234").expect("hash"))
-    .bind(role)
-    .fetch_one(pool)
-    .await
-    .expect("seed user")
-}
-
 async fn seed_account(pool: &PgPool, prefix: &str, name: &str) -> i64 {
     sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
         .bind(format!("{prefix}-{name}"))
         .fetch_one(pool)
         .await
         .expect("seed account")
-}
-
-async fn seed_account_admin(pool: &PgPool, account_id: i64, user_id: i64) {
-    sqlx::query(
-        "INSERT INTO account_users (account_id, user_id, role, workflow_state) \
-         VALUES ($1, $2, 'admin', 'active') \
-         ON CONFLICT (account_id, user_id) DO NOTHING",
-    )
-    .bind(account_id)
-    .bind(user_id)
-    .execute(pool)
-    .await
-    .expect("seed account admin");
-}
-
-fn auth(user_id: i64, role: &str) -> String {
-    format!(
-        "Bearer {}",
-        star_auth::create_token(user_id, role, "test-jwt-secret").expect("mint token")
-    )
 }
 
 async fn cleanup(pool: &PgPool, prefix: &str) {
