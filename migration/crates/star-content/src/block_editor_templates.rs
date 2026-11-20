@@ -24,7 +24,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -231,7 +231,7 @@ async fn global_template_editor(
 fn param_value<'a>(params: &'a HashMap<String, String>, key: &str) -> Option<&'a str> {
     params
         .iter()
-        .find(|(name, _)| name == key)
+        .find(|(name, _)| name.as_str() == key)
         .map(|(_, value)| value.as_str())
 }
 
@@ -249,7 +249,7 @@ fn includes(params: &HashMap<String, String>) -> Vec<String> {
 fn template_types(params: &HashMap<String, String>) -> Vec<String> {
     params
         .iter()
-        .filter(|(key, _)| key == "type[]" || key == "type")
+        .filter(|(key, _)| key.as_str() == "type[]" || key.as_str() == "type")
         .map(|(_, value)| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .collect()

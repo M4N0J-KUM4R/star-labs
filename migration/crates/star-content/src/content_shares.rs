@@ -258,12 +258,6 @@ fn parse_receiver_ids(
 ) -> Result<Vec<i64>, ApiError> {
     let mut ids: Vec<i64> = Vec::new();
 
-    let mut push = |value: &str| {
-        if let Ok(id) = value.trim().parse::<i64>() {
-            ids.push(id);
-        }
-    };
-
     if let Some(body) = body {
         match body.get("receiver_ids") {
             Some(Value::Array(items)) => {
@@ -271,13 +265,17 @@ fn parse_receiver_ids(
                     if let Some(id) = item.as_i64() {
                         ids.push(id);
                     } else if let Some(text) = item.as_str() {
-                        push(text);
+                        if let Ok(id) = text.trim().parse::<i64>() {
+                            ids.push(id);
+                        }
                     }
                 }
             }
             Some(Value::String(value)) => {
                 for item in value.split(',') {
-                    push(item);
+                    if let Ok(id) = item.trim().parse::<i64>() {
+                        ids.push(id);
+                    }
                 }
             }
             _ => {}
@@ -286,7 +284,9 @@ fn parse_receiver_ids(
 
     for (key, value) in params {
         if key == "receiver_ids[]" || key == "receiver_ids" {
-            push(value);
+            if let Ok(id) = value.trim().parse::<i64>() {
+                ids.push(id);
+            }
         }
     }
 
@@ -637,8 +637,8 @@ async fn destroy_content_share(
     require_current_user(&auth, user_id)?;
 
     // Canvas: `@current_user.content_shares.find(params[:id])`
-    let row: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM content_shares WHERE id = $1 AND user_id = $2")
+    let row =
+        sqlx::query_as::<_, (i64,)>("SELECT id FROM content_shares WHERE id = $1 AND user_id = $2")
             .bind(id)
             .bind(auth.id)
             .fetch_optional(&state.db)
@@ -723,7 +723,7 @@ async fn update_content_share(
     auth: AuthUser,
     Query(params): Query<HashMap<String, String>>,
     body: Option<Json<Value>>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<(StatusCode, Json<Value>), ApiError> {
     ensure_user(&state.db, user_id).await?;
     require_current_user(&auth, user_id)?;
 
@@ -759,7 +759,10 @@ async fn update_content_share(
     }
 
     let share = find_share(&state.db, id).await?;
-    Ok(Json(content_share_json(&state.db, &share, &auth).await?))
+    Ok((
+        StatusCode::OK,
+        Json(content_share_json(&state.db, &share, &auth).await?),
+    ))
 }
 
 /// Load one share.

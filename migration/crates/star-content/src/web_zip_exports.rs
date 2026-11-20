@@ -120,6 +120,7 @@ async fn feature_enabled(db: &PgPool, course_id: i64) -> Result<bool, ApiError> 
             .unwrap_or(false)
     };
 
+    let course_settings = course_settings.unwrap_or(Value::Null);
     Ok(enabled(&account_settings) && enabled(&course_settings))
 }
 
