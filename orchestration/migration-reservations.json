@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0223",
- "next_available": "0224",
+ "max_merged": "0228",
+ "next_available": "0229",
  "reservations": {
   "0001": {
    "issue": null,
@@ -703,6 +703,31 @@
    "status": "merged"
   },
   "0223": {
+   "issue": null,
+   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "status": "merged"
+  },
+  "0224": {
+   "issue": null,
+   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "status": "merged"
+  },
+  "0225": {
+   "issue": null,
+   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "status": "merged"
+  },
+  "0226": {
+   "issue": null,
+   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "status": "merged"
+  },
+  "0227": {
+   "issue": null,
+   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "status": "merged"
+  },
+  "0228": {
    "issue": 69,
    "note": "LTI registrations deep: context controls, overlay versions, registration history",
    "status": "merged"
