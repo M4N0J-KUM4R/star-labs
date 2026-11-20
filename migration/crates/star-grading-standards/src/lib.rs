@@ -388,34 +388,34 @@ async fn get_grading_standard(
     Path(standard_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<GradingStandardResponse>, ApiError> {
-    let std = GradingStandardResponse::from_id(&state.db, standard_id)
+    // Fetch course_id for authz check before expanding entries.
+    let raw: Option<GradingStandard> = sqlx::query_as(
+        r#"SELECT id, course_id, title, workflow_state, created_at, updated_at
+           FROM grading_standards WHERE id = $1"#,
+    )
+    .bind(standard_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let std = raw.ok_or(ApiError::NotFound)?;
+    if std.workflow_state == "deleted" {
+        return Err(ApiError::NotFound);
+    }
+
+    if let Some(course_id) = std.course_id {
+        if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+            return Err(ApiError::Forbidden);
+        }
+    } else if !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    let std_resp = GradingStandardResponse::from_id(&state.db, standard_id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?
         .ok_or(ApiError::NotFound)?;
 
-    // Course-level check: verify user has access to the associated course
-    let course_id = std.id;
-    if course_id > 0 {
-        // We need to check the course_id from the standard...
-        // Actually re-fetch to get course_id
-        let raw: Option<GradingStandard> = sqlx::query_as(
-            r#"SELECT id, course_id, title, workflow_state, created_at, updated_at
-               FROM grading_standards WHERE id = $1"#,
-        )
-        .bind(standard_id)
-        .fetch_optional(&state.db)
-        .await?;
-
-        if let Some(s) = raw {
-            if let Some(cid) = s.course_id {
-                if !check_enrolled_or_admin(&state.db, auth.id, cid, &auth).await? {
-                    return Err(ApiError::Forbidden);
-                }
-            }
-        }
-    }
-
-    Ok(Json(std))
+    Ok(Json(std_resp))
 }
 
 /// DELETE /grading_standards/{id} — soft-delete a grading standard
