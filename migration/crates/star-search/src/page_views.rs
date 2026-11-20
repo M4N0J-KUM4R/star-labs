@@ -509,23 +509,25 @@ async fn fetch_page_views_for_range(
     Ok(rows)
 }
 
-/// Store an enqueued query together with its result.
-///
-/// The query id is a uuid, the file name of the result is the query id plus
-/// the extension, exactly like the Canvas service names its result files.
-async fn insert_query(
-    pool: &PgPool,
-    query_id: &str,
+/// The values of a stored `page_view_queries` row.
+struct NewQuery {
+    query_id: String,
     requestor_id: i64,
     user_id: Option<i64>,
     user_ids: Vec<i64>,
     start_date: NaiveDate,
     end_date: NaiveDate,
-    format: &str,
+    results_format: String,
     content: Vec<u8>,
     filename: String,
-    content_type: &str,
-) -> Result<(), ApiError> {
+    content_type: String,
+}
+
+/// Store an enqueued query together with its result.
+///
+/// The query id is a uuid, the file name of the result is the query id plus
+/// the extension, exactly like the Canvas service names its result files.
+async fn insert_query(pool: &PgPool, query: &NewQuery) -> Result<(), ApiError> {
     sqlx::query(
         r#"
         INSERT INTO page_view_queries (
@@ -535,16 +537,16 @@ async fn insert_query(
         VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, 'finished', $8, $9, $10, now())
         "#,
     )
-    .bind(query_id)
-    .bind(requestor_id)
-    .bind(user_id)
-    .bind(user_ids)
-    .bind(start_date)
-    .bind(end_date)
-    .bind(format)
-    .bind(content)
-    .bind(filename)
-    .bind(content_type)
+    .bind(&query.query_id)
+    .bind(query.requestor_id)
+    .bind(query.user_id)
+    .bind(&query.user_ids)
+    .bind(query.start_date)
+    .bind(query.end_date)
+    .bind(&query.results_format)
+    .bind(&query.content)
+    .bind(&query.filename)
+    .bind(&query.content_type)
     .execute(pool)
     .await?;
     Ok(())
@@ -745,16 +747,18 @@ async fn query(
     let query_id = uuid::Uuid::new_v4().to_string();
     insert_query(
         &state.db,
-        &query_id,
-        auth.id,
-        Some(target_user_id),
-        Vec::new(),
-        start,
-        end,
-        &results_format,
-        content,
-        format!("{}.{}", query_id, extension_for(&results_format)),
-        content_type_for(&results_format),
+        &NewQuery {
+            query_id: query_id.clone(),
+            requestor_id: auth.id,
+            user_id: Some(target_user_id),
+            user_ids: Vec::new(),
+            start_date: start,
+            end_date: end,
+            results_format: results_format.clone(),
+            content,
+            filename: format!("{}.{}", query_id, extension_for(&results_format)),
+            content_type: content_type_for(&results_format).to_string(),
+        },
     )
     .await?;
 
@@ -825,7 +829,7 @@ async fn query_results(
             ))
         }
     };
-    Ok(result_response(&row)?)
+    result_response(&row)
 }
 
 // ---------------------------------------------------------------------------
@@ -892,16 +896,18 @@ async fn batch_query(
     let query_id = uuid::Uuid::new_v4().to_string();
     insert_query(
         &state.db,
-        &query_id,
-        auth.id,
-        None,
-        user_ids,
-        start,
-        end,
-        &results_format,
-        content,
-        format!("{}.{}", query_id, extension_for(&results_format)),
-        content_type_for(&results_format),
+        &NewQuery {
+            query_id: query_id.clone(),
+            requestor_id: auth.id,
+            user_id: None,
+            user_ids,
+            start_date: start,
+            end_date: end,
+            results_format: results_format.clone(),
+            content,
+            filename: format!("{}.{}", query_id, extension_for(&results_format)),
+            content_type: content_type_for(&results_format).to_string(),
+        },
     )
     .await?;
 
@@ -973,7 +979,7 @@ async fn batch_query_results(
     if row.requestor_id != auth.id && !is_site_admin(&auth) {
         return Err(ApiError::Forbidden.into());
     }
-    Ok(result_response(&row)?)
+    result_response(&row)
 }
 
 // ---------------------------------------------------------------------------

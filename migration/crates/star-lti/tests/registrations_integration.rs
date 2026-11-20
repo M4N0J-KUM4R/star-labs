@@ -615,16 +615,14 @@ async fn update_requests_are_shown_latest_and_applied() {
     let body: Value = response.json();
     assert_eq!(body["id"].as_i64(), Some(id));
 
-    let rejected_at: Option<(Option<chrono::DateTime<chrono::Utc>>,)> =
-        sqlx::query_as("SELECT rejected_at FROM lti_registration_update_requests WHERE id = $1")
-            .bind(update_request_id)
-            .fetch_one(&pool)
-            .await
-            .expect("read update request");
-    assert!(
-        rejected_at.0.expect("rejected_at").is_some(),
-        "the request is rejected"
-    );
+    let rejected_at: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+        "SELECT rejected_at FROM lti_registration_update_requests WHERE id = $1",
+    )
+    .bind(update_request_id)
+    .fetch_one(&pool)
+    .await
+    .expect("read update request");
+    assert!(rejected_at.is_some(), "the request is rejected");
 
     cleanup(&pool, &prefix).await;
 }

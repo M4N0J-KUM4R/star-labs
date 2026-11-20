@@ -72,7 +72,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
     };
     let server = TestServer::new(
         axum::Router::new()
-            .merge(star_courses::ai_experiences::router())
+            .merge(star_courses::router())
             .with_state(state),
     )
     .expect("build TestServer");

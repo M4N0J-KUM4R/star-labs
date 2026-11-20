@@ -65,15 +65,14 @@ CREATE TABLE IF NOT EXISTS lti_deployments (
 CREATE INDEX IF NOT EXISTS idx_lti_deployments_registration ON lti_deployments (registration_id);
 
 CREATE TABLE IF NOT EXISTS page_views (
-    id                   BIGSERIAL PRIMARY KEY,
-    request_id           TEXT NOT NULL,
+    request_id           TEXT PRIMARY KEY,
     session_id           TEXT,
-    user_id              BIGINT REFERENCES users(id) ON DELETE SET NULL,
+    user_id              BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     real_user_id         BIGINT REFERENCES users(id) ON DELETE SET NULL,
-    url                  TEXT NOT NULL,
+    url                  TEXT,
     context_id           BIGINT,
     context_type         TEXT,
-    asset_id             TEXT,
+    asset_id             BIGINT,
     asset_type           TEXT,
     controller           TEXT,
     action               TEXT,
@@ -81,7 +80,7 @@ CREATE TABLE IF NOT EXISTS page_views (
     participated         BOOLEAN NOT NULL DEFAULT false,
     summarized           BOOLEAN NOT NULL DEFAULT false,
     developer_key_id     BIGINT REFERENCES developer_keys(id) ON DELETE SET NULL,
-    user_request         TEXT,
+    user_request         BOOLEAN,
     render_time          DOUBLE PRECISION,
     user_agent           TEXT,
     asset_user_access_id BIGINT,
@@ -95,16 +94,19 @@ CREATE TABLE IF NOT EXISTS page_views (
 CREATE INDEX IF NOT EXISTS idx_page_views_user ON page_views (user_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS page_view_queries (
-    id               UUID PRIMARY KEY,
-    requestor_id     BIGINT REFERENCES users(id) ON DELETE SET NULL,
-    user_id          BIGINT REFERENCES users(id) ON DELETE CASCADE,
-    user_ids         BIGINT[] NOT NULL DEFAULT '{}',
-    start_date       TIMESTAMPTZ,
-    end_date         TIMESTAMPTZ,
-    results_format   TEXT NOT NULL DEFAULT 'json',
-    status           TEXT NOT NULL DEFAULT 'new',
-    content          TEXT,
-    filename         TEXT,
-    content_type     TEXT,
-    completed_at     TIMESTAMPTZ
+    id             UUID PRIMARY KEY,
+    requestor_id   BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    user_id        BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    user_ids       BIGINT[] NOT NULL DEFAULT '{}',
+    start_date     DATE NOT NULL,
+    end_date       DATE NOT NULL,
+    results_format TEXT NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'finished',
+    error_code     TEXT,
+    warnings       JSONB,
+    content        BYTEA,
+    filename       TEXT,
+    content_type   TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at   TIMESTAMPTZ
 );
