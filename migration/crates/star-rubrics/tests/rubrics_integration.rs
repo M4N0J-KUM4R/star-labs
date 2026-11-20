@@ -164,7 +164,10 @@ async fn list_peer_reviews_requires_enrollment() {
         .get(&format!(
             "/courses/{course}/assignments/{assignment}/peer_reviews"
         ))
-        .add_header(axum::http::header::AUTHORIZATION, auth(not_enrolled, "student"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(not_enrolled, "student"),
+        )
         .await;
     assert_eq!(resp.status_code(), 403);
 
@@ -257,7 +260,12 @@ async fn create_and_list_peer_review() {
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student2 }))
         .await;
-    assert_eq!(create_resp.status_code(), 201, "body: {}", create_resp.text());
+    assert_eq!(
+        create_resp.status_code(),
+        201,
+        "body: {}",
+        create_resp.text()
+    );
     let created: Value = create_resp.json();
     assert_eq!(created["assessor_id"].as_i64(), Some(student2));
     assert_eq!(created["user_id"].as_i64(), Some(student1)); // assessee = submission owner
@@ -384,7 +392,12 @@ async fn delete_peer_review_requires_teacher() {
         ))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
-    assert_eq!(del_teacher.status_code(), 200, "body: {}", del_teacher.text());
+    assert_eq!(
+        del_teacher.status_code(),
+        200,
+        "body: {}",
+        del_teacher.text()
+    );
     let deleted: Value = del_teacher.json();
     assert_eq!(deleted["assessor_id"].as_i64(), Some(reviewer));
 

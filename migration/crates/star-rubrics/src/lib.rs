@@ -1888,12 +1888,26 @@ async fn verify_rubric_course(
 
 // -----------------------------------------------------------------------------
 // Rubric imports (Canvas RubricsApiController#upload / #upload_status /
-// #rubrics_by_import_id)
+// -----------------------------------------------------------------------------
 //
 // star-lms stores rubrics as normalized rows, so import processing creates
 // rubric_criteria and rubric_ratings rows. The import record tracks workflow
 // state and progress for polling.
 // -----------------------------------------------------------------------------
+
+/// DB row type for rubric_imports query results (9 columns, no assembled JSON).
+#[derive(Debug, sqlx::FromRow)]
+struct RubricImportRow {
+    id: i64,
+    user_id: Option<i64>,
+    attachment_id: Option<i64>,
+    workflow_state: String,
+    progress: i32,
+    error_count: i32,
+    error_data: serde_json::Value,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
 
 /// Canvas-shaped rubric import response.
 /// Maps to Canvas `RubricImport` JSON (app/models/rubric_import.rb).
@@ -1914,6 +1928,24 @@ pub struct RubricImportResponse {
     pub attachment: Option<serde_json::Value>,
 }
 
+impl RubricImportResponse {
+    fn from_row(row: RubricImportRow) -> Self {
+        Self {
+            id: row.id,
+            user_id: row.user_id,
+            attachment_id: row.attachment_id,
+            workflow_state: row.workflow_state,
+            progress: row.progress,
+            error_count: row.error_count,
+            error_data: row.error_data,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            user: None,
+            attachment: None,
+        }
+    }
+}
+
 /// Request body for POST .../rubrics/upload.
 #[derive(Debug, Deserialize)]
 pub struct UploadRubricRequest {
@@ -1930,7 +1962,7 @@ async fn create_rubric_import(
     user_id: Option<i64>,
     attachment_id: i64,
 ) -> Result<RubricImportResponse, ApiError> {
-    let row: RubricImportResponse = sqlx::query_as(
+    let row: RubricImportRow = sqlx::query_as(
         r#"
         INSERT INTO rubric_imports (context_id, context_type, attachment_id, user_id, workflow_state)
         VALUES ($1, $2, $3, $4, 'created')
@@ -1946,7 +1978,7 @@ async fn create_rubric_import(
     .fetch_one(pool)
     .await?;
 
-    Ok(row)
+    Ok(RubricImportResponse::from_row(row))
 }
 
 /// Query params for upload_status.
@@ -1986,9 +2018,14 @@ async fn upload_rubric(
     let mut import =
         create_rubric_import(&state.db, course_id, "Course", Some(auth.id), attachment_id).await?;
 
+    let user_row: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await?;
+    let display_name = user_row.map(|(name,)| name);
     import.user = Some(serde_json::json!({
         "id": auth.id,
-        "display_name": auth.name,
+        "display_name": display_name,
     }));
     import.attachment = Some(serde_json::json!({
         "id": attachment_id,
@@ -2038,7 +2075,7 @@ async fn get_upload_status(
 
     let import_id = import_id.ok_or(ApiError::NotFound)?;
 
-    let mut import: RubricImportResponse = sqlx::query_as(
+    let row: RubricImportRow = sqlx::query_as(
         r#"
         SELECT id, user_id, attachment_id, workflow_state,
                progress, error_count, error_data, created_at, updated_at
@@ -2049,6 +2086,8 @@ async fn get_upload_status(
     .fetch_optional(&state.db)
     .await?
     .ok_or(ApiError::NotFound)?;
+
+    let mut import = RubricImportResponse::from_row(row);
 
     if import.user_id.is_some() {
         let user_row: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")
