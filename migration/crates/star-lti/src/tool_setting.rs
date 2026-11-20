@@ -431,6 +431,7 @@ async fn show_setting(
     tool_proxy_guid: Option<&str>,
     context: SettingContext,
 ) -> Response {
+    let accepts_graph = accepts_graph(&headers);
     let bubble = match checked_bubble(&query, accepts_graph) {
         Ok(bubble) => bubble,
         Err(response) => return response,
