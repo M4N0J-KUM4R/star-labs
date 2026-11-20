@@ -2310,9 +2310,9 @@ async fn deployment_context_search(
     // The deployment's account subtree.
     let subtree: Vec<(i64, String)> = sqlx::query_as(
         "WITH RECURSIVE down AS ( \
-             SELECT id, name, parent_account_id FROM accounts WHERE id = $1 \
+             SELECT id, name, parent_account_id, workflow_state FROM accounts WHERE id = $1 \
              UNION ALL \
-             SELECT a.id, a.name, a.parent_account_id FROM accounts a \
+             SELECT a.id, a.name, a.parent_account_id, a.workflow_state FROM accounts a \
              JOIN down ON a.parent_account_id = down.id \
          ) SELECT id, name FROM down WHERE workflow_state <> 'deleted'",
     )

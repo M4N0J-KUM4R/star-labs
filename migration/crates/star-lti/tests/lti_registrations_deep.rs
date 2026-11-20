@@ -679,7 +679,12 @@ async fn client_id_utid_domain_and_install_status() {
     seed_account_admin(&pool, account_id, admin_id).await;
 
     // Canvas carries unified_tool_id on the registration itself, not inside
-    // the configuration.
+    // the configuration. The client id is prefix-unique because the shard
+    // runs the sibling suites in parallel against the shared database and
+    // the lookup matches on the configuration alone.
+    let client_id = format!("client-{prefix}");
+    let mut configuration = sample_configuration();
+    configuration["client_id"] = json!(client_id);
     let response = server
         .post(&format!("/accounts/{account_id}/lti_registrations"))
         .add_header(AUTHORIZATION, auth(admin_id, "admin"))
@@ -687,7 +692,7 @@ async fn client_id_utid_domain_and_install_status() {
             "name": format!("{prefix}-tool"),
             "vendor": "Example Vendor",
             "unified_tool_id": "utid-123",
-            "configuration": sample_configuration(),
+            "configuration": configuration,
         }))
         .await;
     assert_eq!(response.status_code(), 201, "body: {}", response.text());
@@ -697,7 +702,7 @@ async fn client_id_utid_domain_and_install_status() {
     // show by client id (:1462-1480).
     let response = server
         .get(&format!(
-            "/accounts/{account_id}/lti_registration_by_client_id/client-abc"
+            "/accounts/{account_id}/lti_registration_by_client_id/{client_id}"
         ))
         .add_header(AUTHORIZATION, auth(admin_id, "admin"))
         .await;
@@ -709,7 +714,7 @@ async fn client_id_utid_domain_and_install_status() {
     // Not visible from another account -> 404.
     let response = server
         .get(&format!(
-            "/accounts/{other_account}/lti_registration_by_client_id/client-abc"
+            "/accounts/{other_account}/lti_registration_by_client_id/{client_id}"
         ))
         .add_header(AUTHORIZATION, auth(admin_id, "admin"))
         .await;
@@ -742,7 +747,7 @@ async fn client_id_utid_domain_and_install_status() {
     // install_status: installed directly in this account (:1543-1635).
     let response = server
         .get(&format!(
-            "/accounts/{account_id}/lti_registrations/install_status/client-abc"
+            "/accounts/{account_id}/lti_registrations/install_status/{client_id}"
         ))
         .add_header(AUTHORIZATION, auth(admin_id, "admin"))
         .await;
@@ -765,7 +770,7 @@ async fn client_id_utid_domain_and_install_status() {
 
     let response = server
         .get(&format!(
-            "/accounts/{other_account}/lti_registrations/install_status/client-abc"
+            "/accounts/{other_account}/lti_registrations/install_status/{client_id}"
         ))
         .add_header(AUTHORIZATION, auth(admin_id, "admin"))
         .await;
