@@ -56,6 +56,7 @@ struct ImsRegistrationRow {
     logo_uri: Option<String>,
     scopes: Option<String>,
     lti_tool_configuration: Value,
+    lti_registration_id: Option<i64>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -100,7 +101,7 @@ struct RegistrationRow {
 const IMS_REG_COLUMNS: &str =
     "id, guid, developer_key_id, root_account_id, unified_tool_id, registration_url, \
      initiate_login_uri, jwks_uri, client_name, redirect_uris, logo_uri, scopes, \
-     lti_tool_configuration, created_at, updated_at";
+     lti_tool_configuration, created_at, updated_at, lti_registration_id";
 
 // ---------------------------------------------------------------------------
 // Request / query types
@@ -210,6 +211,31 @@ async fn find_ims_registration_by_id(
     row.ok_or(ApiError::NotFound)
 }
 
+/// Fetch the IMS registration linked to a parent LTI registration, if any.
+/// Canvas associates the pair via `Lti::IMS::Registration#lti_registration`
+/// (app/models/lti/ims/registration.rb:73).
+async fn find_ims_registration_by_lti_registration(
+    pool: &PgPool,
+    lti_registration_id: i64,
+) -> Result<Option<ImsRegistrationRow>, ApiError> {
+    let row: Option<ImsRegistrationRow> = sqlx::query_as(&format!(
+        "SELECT {IMS_REG_COLUMNS} FROM lti_ims_registrations WHERE lti_registration_id = $1"
+    ))
+    .bind(lti_registration_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Resolve the parent LTI registration for an IMS registration row.
+async fn find_parent_for_ims(
+    pool: &PgPool,
+    ims: &ImsRegistrationRow,
+) -> Result<RegistrationRow, ApiError> {
+    let parent_id = ims.lti_registration_id.ok_or(ApiError::NotFound)?;
+    find_active_registration(pool, parent_id).await
+}
+
 /// Fetch an update request by its UUID.
 async fn find_update_request_by_uuid(
     pool: &PgPool,
@@ -232,29 +258,32 @@ async fn find_update_request_by_uuid(
 // ---------------------------------------------------------------------------
 
 /// Render an IMS registration as Canvas `lti_registration_json` with full
-/// configuration and overlay included.
+/// configuration and overlay included. `ims` is `None` for a plain LTI
+/// registration with no linked IMS row; its fields then render as null while
+/// the parent registration data still resolves.
 async fn ims_registration_json(
     _pool: &PgPool,
-    ims: &ImsRegistrationRow,
+    ims: Option<&ImsRegistrationRow>,
     registration: &RegistrationRow,
     include_overlay: bool,
 ) -> Result<Value, ApiError> {
     let mut json = json!({
-        "id": ims.id,
-        "guid": ims.guid,
-        "developer_key_id": ims.developer_key_id,
-        "root_account_id": ims.root_account_id,
-        "unified_tool_id": ims.unified_tool_id,
-        "registration_url": ims.registration_url,
-        "initiate_login_uri": ims.initiate_login_uri,
-        "jwks_uri": ims.jwks_uri,
-        "client_name": ims.client_name,
-        "redirect_uris": ims.redirect_uris,
-        "logo_uri": ims.logo_uri,
-        "scopes": ims.scopes,
-        "lti_tool_configuration": ims.lti_tool_configuration,
-        "created_at": ims.created_at,
-        "updated_at": ims.updated_at,
+        "id": ims.map(|i| i.id).unwrap_or(registration.id),
+        "lti_registration_id": registration.id,
+        "guid": ims.map(|i| i.guid.clone()),
+        "developer_key_id": ims.and_then(|i| i.developer_key_id),
+        "root_account_id": ims.and_then(|i| i.root_account_id).or(registration.root_account_id),
+        "unified_tool_id": ims.and_then(|i| i.unified_tool_id.clone()),
+        "registration_url": ims.and_then(|i| i.registration_url.clone()),
+        "initiate_login_uri": ims.and_then(|i| i.initiate_login_uri.clone()),
+        "jwks_uri": ims.and_then(|i| i.jwks_uri.clone()),
+        "client_name": ims.and_then(|i| i.client_name.clone()),
+        "redirect_uris": ims.and_then(|i| i.redirect_uris.clone()),
+        "logo_uri": ims.and_then(|i| i.logo_uri.clone()),
+        "scopes": ims.and_then(|i| i.scopes.clone()),
+        "lti_tool_configuration": ims.map(|i| i.lti_tool_configuration.clone()).unwrap_or(Value::Null),
+        "created_at": ims.map(|i| i.created_at).unwrap_or(registration.created_at),
+        "updated_at": ims.map(|i| i.updated_at).unwrap_or(registration.updated_at),
         // Canvas always embeds the parent registration data:
         "name": registration.name,
         "admin_nickname": registration.admin_nickname,
@@ -372,11 +401,14 @@ async fn registration_token(
     let user_id = auth.id;
     let root_account_global_id = account_id;
 
-    // Look up the account domain.
-    let domain: Option<(String,)> = sqlx::query_as("SELECT domain FROM accounts WHERE id = $1")
-        .bind(account_id)
-        .fetch_optional(&state.db)
-        .await?;
+    // Look up the account domain. Canvas derives Account#domain from the
+    // request host (app/models/account.rb:842-844) rather than storing it, so
+    // the column is nullable in the workspace and reads coalesce NULL to ''.
+    let domain: Option<(String,)> =
+        sqlx::query_as("SELECT COALESCE(domain, '') FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await?;
 
     let domain = domain.map(|(d,)| d).unwrap_or_default();
 
@@ -421,9 +453,9 @@ async fn show_ims_registration_by_uuid(
     let ims = find_ims_registration_by_guid(&state.db, &registration_uuid).await?;
 
     // Load the parent registration.
-    let registration = find_active_registration(&state.db, ims.id).await?;
+    let registration = find_parent_for_ims(&state.db, &ims).await?;
 
-    let json = ims_registration_json(&state.db, &ims, &registration, true).await?;
+    let json = ims_registration_json(&state.db, Some(&ims), &registration, true).await?;
     Ok(Json(json))
 }
 
@@ -438,7 +470,7 @@ async fn show_registration_by_uuid(
     require_site_admin_or_account_admin(&state.db, &auth, account_id).await?;
 
     let ims = find_ims_registration_by_guid(&state.db, &registration_uuid).await?;
-    let registration = find_active_registration(&state.db, ims.id).await?;
+    let registration = find_parent_for_ims(&state.db, &ims).await?;
 
     // Render as Canvas `lti_registration_json` (parent shape).
     let mut json = json!({
@@ -481,7 +513,9 @@ async fn show_update_request_by_uuid(
 }
 
 /// `GET /accounts/:account_id/registrations/:registration_id` — show one
-/// IMS registration by its numeric id.
+/// registration by its numeric id. The `{registration_id}` addresses the
+/// `lti_registrations` row; IMS-only fields (client_name, guid, ...) render
+/// when an IMS registration is linked to it.
 async fn show_ims_registration(
     State(state): State<AppState>,
     Path((account_id, registration_id)): Path<(i64, i64)>,
@@ -490,10 +524,10 @@ async fn show_ims_registration(
     require_account(&state.db, account_id).await?;
     require_site_admin_or_account_admin(&state.db, &auth, account_id).await?;
 
-    let ims = find_ims_registration_by_id(&state.db, registration_id).await?;
-    let registration = find_active_registration(&state.db, ims.id).await?;
+    let registration = find_active_registration(&state.db, registration_id).await?;
+    let ims = find_ims_registration_by_lti_registration(&state.db, registration.id).await?;
 
-    let json = ims_registration_json(&state.db, &ims, &registration, true).await?;
+    let json = ims_registration_json(&state.db, ims.as_ref(), &registration, true).await?;
     Ok(Json(json))
 }
 
@@ -586,8 +620,8 @@ pub struct DrIframeQuery {
     pub url: Option<String>,
 }
 
-/// `GET /accounts/:account_id/registrations/:registration_id/view` — redirects
-/// to the registration management page in the Canvas UI.
+/// `GET /accounts/:account_id/registrations/:registration_id/view` — returns
+/// the URL of the registration management page in the Canvas UI.
 async fn registration_view(
     State(state): State<AppState>,
     Path((account_id, registration_id)): Path<(i64, i64)>,
@@ -602,21 +636,15 @@ async fn registration_view(
         .fetch_optional(&state.db)
         .await?;
 
-    // Redirect to the Canvas UI path for managing this registration.
+    // Canvas redirects to
+    // "/accounts/{root_account_id}/apps/manage/{lti_registration.id}/configuration"
+    // (app/controllers/lti/ims/dynamic_registration_controller.rb:421-424).
+    // The workspace returns the target as JSON so API clients can follow it.
     let location = format!(
         "/accounts/{}/apps/manage/{}/configuration",
         account_id, registration_id
     );
-    let mut response = (
-        StatusCode::FOUND,
-        axum::response::Redirect::permanent(&location),
-    )
-        .into_response();
-    response.headers_mut().insert(
-        axum::http::header::LOCATION,
-        axum::http::HeaderValue::from_str(&location).unwrap(),
-    );
-    Ok(response)
+    Ok(Json(json!({ "url": location })).into_response())
 }
 
 /// `POST /registrations` — create a new LTI IMS registration from OIDC
@@ -671,26 +699,9 @@ async fn create_registration(
 
     let guid = uuid::Uuid::new_v4().to_string();
 
-    // Insert the IMS registration.
-    let ims: ImsRegistrationRow = sqlx::query_as(&format!(
-        "INSERT INTO lti_ims_registrations \
-             (guid, client_name, redirect_uris, initiate_login_uri, jwks_uri, \
-              logo_uri, scopes, lti_tool_configuration) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
-             RETURNING {IMS_REG_COLUMNS}"
-    ))
-    .bind(&guid)
-    .bind(&client_name)
-    .bind(&redirect_uris)
-    .bind(&payload.initiate_login_uri)
-    .bind(&payload.jwks_uri)
-    .bind(&payload.logo_uri)
-    .bind(&scopes)
-    .bind(&lti_tool_configuration)
-    .fetch_one(&state.db)
-    .await?;
-
-    // Also create a parent lti_registration entry.
+    // Create the parent LTI registration first so the IMS row can reference
+    // it; Canvas associates the pair via Lti::IMS::Registration#lti_registration
+    // (app/models/lti/ims/registration.rb:73).
     let registration: RegistrationRow = sqlx::query_as(
         "INSERT INTO lti_registrations \
          (name, account_id, root_account_id, lti_version, workflow_state, \
@@ -707,8 +718,28 @@ async fn create_registration(
     .fetch_one(&state.db)
     .await?;
 
+    // Insert the IMS registration linked to the parent.
+    let ims: ImsRegistrationRow = sqlx::query_as(&format!(
+        "INSERT INTO lti_ims_registrations \
+             (guid, lti_registration_id, client_name, redirect_uris, initiate_login_uri, \
+              jwks_uri, logo_uri, scopes, lti_tool_configuration) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             RETURNING {IMS_REG_COLUMNS}"
+    ))
+    .bind(&guid)
+    .bind(registration.id)
+    .bind(&client_name)
+    .bind(&redirect_uris)
+    .bind(&payload.initiate_login_uri)
+    .bind(&payload.jwks_uri)
+    .bind(&payload.logo_uri)
+    .bind(&scopes)
+    .bind(&lti_tool_configuration)
+    .fetch_one(&state.db)
+    .await?;
+
     // Render the response as Canvas would.
-    let json = ims_registration_json(&state.db, &ims, &registration, false).await?;
+    let json = ims_registration_json(&state.db, Some(&ims), &registration, false).await?;
     Ok((StatusCode::CREATED, Json(json)).into_response())
 }
 
@@ -763,8 +794,8 @@ async fn update_registration(
     .fetch_one(&state.db)
     .await?;
 
-    let registration = find_active_registration(&state.db, updated.id).await?;
-    let json = ims_registration_json(&state.db, &updated, &registration, true).await?;
+    let registration = find_parent_for_ims(&state.db, &updated).await?;
+    let json = ims_registration_json(&state.db, Some(&updated), &registration, true).await?;
     Ok((StatusCode::OK, Json(json)).into_response())
 }
 
@@ -780,9 +811,12 @@ async fn show_registration_configuration(
     let ims = find_ims_registration_by_id(&state.db, registration_id).await?;
 
     // Load the parent registration to get configuration.
-    let registration = find_active_registration(&state.db, ims.id).await?;
+    let registration = find_parent_for_ims(&state.db, &ims).await?;
 
     let json = json!({
+        // The create response carries the numeric id; echo it so clients can
+        // round-trip the identifier through show.
+        "id": registration_id,
         "client_id": ims.developer_key_id.map(|id| id.to_string()).unwrap_or_default(),
         "application_type": "web",
         "grant_types": ["client_credentials", "implicit"],

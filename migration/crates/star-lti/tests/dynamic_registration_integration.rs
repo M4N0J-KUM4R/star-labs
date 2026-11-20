@@ -133,34 +133,6 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Create an IMS registration via POST /registrations and return its id.
-async fn create_ims_registration(server: &TestServer, admin_id: i64, prefix: &str) -> i64 {
-    let response = server
-        .post("/registrations")
-        .add_header(AUTHORIZATION, auth(admin_id, "admin"))
-        .json(&json!({
-            "client_name": format!("{prefix}-tool"),
-            "redirect_uris": "https://example.com/callback",
-            "initiate_login_uri": "https://example.com/oidc/login",
-            "jwks_uri": "https://example.com/.well-known/jwks.json",
-            "logo_uri": "https://example.com/logo.png",
-            "scopes": "openid",
-            "https://purl.imsglobal.org/spec/lti-tool-configuration": {
-                "title": "Test Tool",
-                "target_link_uri": "https://example.com/launch"
-            }
-        }))
-        .await;
-    assert_eq!(
-        response.status_code(),
-        201,
-        "create ims registration: {}",
-        response.text()
-    );
-    let body: Value = response.json();
-    body["id"].as_i64().expect("registration id")
-}
-
 /// Create an LTI registration in lti_registrations and return its id.
 async fn create_lti_registration(
     pool: &PgPool,

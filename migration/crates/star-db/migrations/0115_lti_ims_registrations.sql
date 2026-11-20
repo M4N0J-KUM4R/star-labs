@@ -96,3 +96,21 @@ CREATE INDEX IF NOT EXISTS idx_rur_registration
     ON lti_registration_update_requests(lti_registration_id);
 CREATE INDEX IF NOT EXISTS idx_rur_uuid
     ON lti_registration_update_requests(uuid);
+
+-- accounts.domain: Canvas derives Account#domain from the request host
+-- (app/models/account.rb:842-844, `HostUrl.context_host`) instead of storing
+-- it, and the dynamic registration token embeds root_account_domain
+-- (app/controllers/lti/ims/dynamic_registration_controller.rb:69). The
+-- workspace materializes it as a nullable column; readers coalesce NULL to ''.
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS domain TEXT;
+
+-- lti_ims_registrations.lti_registration_id: Canvas links an IMS registration
+-- to its parent Lti::Registration (app/models/lti/ims/registration.rb:73,
+-- `belongs_to :lti_registration`). Mirror the association so handlers can
+-- resolve the parent registration deterministically.
+ALTER TABLE lti_ims_registrations
+    ADD COLUMN IF NOT EXISTS lti_registration_id BIGINT
+    REFERENCES lti_registrations(id) ON DELETE SET NULL;
+
+CREATE INDEX IF NOT EXISTS idx_lti_ims_registrations_lti_registration
+    ON lti_ims_registrations(lti_registration_id);

@@ -35,12 +35,13 @@ use crate::{can_manage_account, is_admin};
 /// Row type for `lti_tool_proxies`.
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct ToolProxyRow {
+    id: i64,
     guid: String,
     developer_key_id: Option<i64>,
     raw_data: Value,
 }
 
-const TOOL_PROXY_COLUMNS: &str = "guid, developer_key_id, raw_data";
+const TOOL_PROXY_COLUMNS: &str = "id, guid, developer_key_id, raw_data";
 
 /// Check whether the user can manage LTI tools in the given context.
 async fn can_manage_tool_proxy(
@@ -430,10 +431,16 @@ async fn create_tool_proxy_course(
     .fetch_one(&state.db)
     .await?;
 
+    // Canvas routes the context-scoped tool proxy endpoints by the numeric
+    // primary key (app/controllers/lti/tool_proxy_controller.rb:102,
+    // `Lti::ToolProxy.find(params[:tool_proxy_id])`) and serializes ids as
+    // strings in LTI JSON (app/models/lti/ims/registration.rb:283,
+    // `id: global_id.to_s`).
     let body = json!({
         "@context": "http://purl.imsglobal.org/ctx/lti/v2/ToolProxyId",
         "@type": "ToolProxy",
         "@id": null,
+        "id": row.id.to_string(),
         "tool_proxy_guid": row.guid,
     });
 
@@ -472,10 +479,16 @@ async fn create_tool_proxy_account(
     .fetch_one(&state.db)
     .await?;
 
+    // Canvas routes the context-scoped tool proxy endpoints by the numeric
+    // primary key (app/controllers/lti/tool_proxy_controller.rb:102,
+    // `Lti::ToolProxy.find(params[:tool_proxy_id])`) and serializes ids as
+    // strings in LTI JSON (app/models/lti/ims/registration.rb:283,
+    // `id: global_id.to_s`).
     let body = json!({
         "@context": "http://purl.imsglobal.org/ctx/lti/v2/ToolProxyId",
         "@type": "ToolProxy",
         "@id": null,
+        "id": row.id.to_string(),
         "tool_proxy_guid": row.guid,
     });
 
