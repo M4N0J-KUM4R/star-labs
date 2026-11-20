@@ -850,9 +850,13 @@ pub fn router() -> axum::Router<AppState> {
         // (groups#create_file, routes.rb:2127) lives here.
         .route("/groups/{groupId}/files", post(create_group_file))
         .route("/groups/{groupId}/files/quota", get(get_group_files_quota))
-        .route("/groups/{groupId}/files/{id}", delete(delete_group_file))
+        .route(
+            "/groups/{groupId}/files/{id}",
+            get(get_group_file).delete(delete_group_file),
+        )
         .route("/users/{userId}/files", get(list_user_files))
         .route("/users/{userId}/files/quota", get(get_user_files_quota))
+        .route("/users/{userId}/files/{id}", get(get_user_file))
         .route(
             "/courses/{courseId}/files/file_ref/{migrationId}",
             get(get_file_ref),
@@ -1410,7 +1414,7 @@ async fn post_file(
     Path(file_id): Path<i64>,
     _auth: AuthUser,
 ) -> Result<impl IntoResponse, ApiError> {
-    let row: (i64,) = sqlx::query_as("SELECT id FROM files WHERE id = $1")
+    let _: (i64,) = sqlx::query_as("SELECT id FROM files WHERE id = $1")
         .bind(file_id)
         .fetch_optional(&state.db)
         .await?
@@ -1510,7 +1514,7 @@ async fn reset_verifier(
 async fn get_icon_metadata(
     State(state): State<AppState>,
     Path(file_id): Path<i64>,
-    auth: AuthUser,
+    _auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let row: (String,) = sqlx::query_as(
         "SELECT content_type FROM files WHERE id = $1 AND workflow_state <> 'deleted'",
