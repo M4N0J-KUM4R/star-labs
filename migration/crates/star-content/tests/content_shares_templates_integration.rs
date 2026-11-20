@@ -321,7 +321,7 @@ async fn a_content_share_validates_its_content_type() {
     let user = seed_user(&pool, &prefix, "User", "student").await;
     let receiver = seed_user(&pool, &prefix, "Receiver", "student").await;
     let account = seed_account(&pool, &prefix, "Account").await;
-    let course = seed_course(&pool, &prefix, "Course", account).await;
+    seed_course(&pool, &prefix, "Course", account).await;
 
     // An unknown content type is the Canvas 400.
     let resp = server
