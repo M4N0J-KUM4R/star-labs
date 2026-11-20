@@ -31,12 +31,12 @@ use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 use star_common::{ApiError, AppState};
 
-use crate::handlers::error::from_api_error;
+use crate::assets;
 use crate::handlers::course_context::{
     course_breadcrumb, course_context, course_env, ensure_csrf,
 };
+use crate::handlers::error::from_api_error;
 use crate::session::{check_csrf, SessionUser};
-use crate::assets;
 
 // ---------------------------------------------------------------------------
 // View models
@@ -816,6 +816,7 @@ pub async fn quiz_list(
         })
         .collect();
 
+    let breadcrumb = course_breadcrumb(&ctx, course_id);
     let page = QuizzesPage {
         title: format!("{} - Quizzes", ctx.course.name),
         body_class: format!(
@@ -826,7 +827,7 @@ pub async fn quiz_list(
         notices: Vec::new(),
         user_name: ctx.user_name,
         active_path: "courses",
-        breadcrumb: course_breadcrumb(&ctx, course_id),
+        breadcrumb,
         csrf_token: csrf_token.clone(),
         tabs: ctx.tabs,
         active_context_tab: "quizzes".to_string(),
@@ -931,7 +932,7 @@ pub async fn quiz_create(
         Err(resp) => return *resp,
     };
     let env = course_env(&ctx, &user, &origin, "quizzes", course_id);
-    let (jar, csrf_token) = ensure_csrf(jar);
+    let (_jar, csrf_token) = ensure_csrf(jar);
 
     if !ctx.is_teacher {
         return from_api_error(&ApiError::Forbidden, &origin).into_response();

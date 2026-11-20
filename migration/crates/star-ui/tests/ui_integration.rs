@@ -1320,7 +1320,7 @@ async fn quiz_submit_grades_and_results() {
         .add_cookie(session_cookie(student, "student"))
         .add_cookie(csrf_cookie)
         .add_header("content-type", "application/x-www-form-urlencoded")
-        .raw_body(body)
+        .bytes(body.into())
         .await;
     assert_eq!(resp.status_code(), 303, "submit: {}", resp.text());
     assert_eq!(
