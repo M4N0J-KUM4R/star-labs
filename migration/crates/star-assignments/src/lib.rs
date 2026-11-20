@@ -679,11 +679,7 @@ async fn ensure_user_in_course(
 /// Verify the target user has a live enrollment in the section. Canvas'
 /// `get_user_considering_section` raises RecordNotFound, so section-mismatched
 /// users are 404s rather than 403s. Caller must also verify course access.
-async fn ensure_section_user(
-    pool: &PgPool,
-    section_id: i64,
-    user_id: i64,
-) -> Result<(), ApiError> {
+async fn ensure_section_user(pool: &PgPool, section_id: i64, user_id: i64) -> Result<(), ApiError> {
     let row: Option<(i32,)> = sqlx::query_as(
         r#"
         SELECT 1 FROM enrollments
@@ -2386,13 +2382,12 @@ async fn mark_rubric_assessment_read(
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
     // Verify the rubric assessment belongs to this course
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT user_id FROM rubric_assessments WHERE id = $1 AND course_id = $2",
-    )
-    .bind(rubric_assessment_id)
-    .bind(course_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT user_id FROM rubric_assessments WHERE id = $1 AND course_id = $2")
+            .bind(rubric_assessment_id)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
     let (owner_id,) = row.ok_or(ApiError::NotFound)?;
 
     if auth.id != owner_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
@@ -2416,13 +2411,12 @@ async fn mark_rubric_assessment_unread(
     Path((course_id, rubric_assessment_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT user_id FROM rubric_assessments WHERE id = $1 AND course_id = $2",
-    )
-    .bind(rubric_assessment_id)
-    .bind(course_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT user_id FROM rubric_assessments WHERE id = $1 AND course_id = $2")
+            .bind(rubric_assessment_id)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
     let (owner_id,) = row.ok_or(ApiError::NotFound)?;
 
     if auth.id != owner_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
@@ -2510,13 +2504,12 @@ async fn section_flip_rubric_read(
     read: bool,
 ) -> Result<(), ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT user_id FROM rubric_assessments WHERE id = $1 AND course_id = $2",
-    )
-    .bind(rubric_assessment_id)
-    .bind(course_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT user_id FROM rubric_assessments WHERE id = $1 AND course_id = $2")
+            .bind(rubric_assessment_id)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
     let (owner_id,) = row.ok_or(ApiError::NotFound)?;
 
     ensure_section_user(&state.db, section_id, owner_id).await?;
@@ -2782,18 +2775,16 @@ async fn multiple_gradeable_students(
         parse_gradeable_students_query(raw_query.as_deref());
 
     // Parse student_ids[] from query if present
-    let student_ids: Option<Vec<i64>> = raw_query
-        .as_ref()
-        .and_then(|q| {
-            q.split('&')
-                .filter(|p| p.starts_with("student_ids[]="))
-                .map(|p| {
-                    p.strip_prefix("student_ids[]=")
-                        .and_then(|v| urlencoding::decode(v).ok())
-                        .and_then(|v| v.parse::<i64>().ok())
-                })
-                .collect::<Option<Vec<i64>>>()
-        });
+    let student_ids: Option<Vec<i64>> = raw_query.as_ref().and_then(|q| {
+        q.split('&')
+            .filter(|p| p.starts_with("student_ids[]="))
+            .map(|p| {
+                p.strip_prefix("student_ids[]=")
+                    .and_then(|v| urlencoding::decode(v).ok())
+                    .and_then(|v| v.parse::<i64>().ok())
+            })
+            .collect::<Option<Vec<i64>>>()
+    });
 
     let anonymize =
         allow_new_anonymous_id && assignment_anonymize_students(&state.db, assignment_id).await?;
@@ -3038,10 +3029,7 @@ async fn section_list_submissions(
     // Canvas `submissions_json` filters to section enrollments when a section
     // is active (the section id in the path IS the active section).
     let (students_filter, students_bind) = if let Some(ref ids) = student_ids {
-        (
-            "AND s.user_id = ANY($4)".to_string(),
-            ids.clone(),
-        )
+        ("AND s.user_id = ANY($4)".to_string(), ids.clone())
     } else if can_grade {
         // Teachers see all section students
         (
@@ -3052,10 +3040,7 @@ async fn section_list_submissions(
         )
     } else {
         // Students see only themselves
-        (
-            "AND s.user_id = $4".to_string(),
-            vec![auth.id],
-        )
+        ("AND s.user_id = $4".to_string(), vec![auth.id])
     };
 
     let anony_filter = if query.include_anonymous_id {
@@ -3145,9 +3130,7 @@ async fn section_get_submission(
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
     ensure_section_user(&state.db, section_id, user_id).await?;
 
-    if auth.id != user_id
-        && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?
-    {
+    if auth.id != user_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -3172,8 +3155,9 @@ async fn section_get_submission(
 
     match row {
         Some(row) => {
-            let attachments =
-                load_submission_attachments(&state.db, &[row.id]).await.unwrap_or_default();
+            let attachments = load_submission_attachments(&state.db, &[row.id])
+                .await
+                .unwrap_or_default();
             let entry = build_submission_entry(row, course_id, attachments, &query, can_grade)?;
             Ok(Json(entry))
         }
@@ -3228,9 +3212,7 @@ async fn section_update_submission(
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
     ensure_section_user(&state.db, section_id, user_id).await?;
 
-    if auth.id != user_id
-        && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?
-    {
+    if auth.id != user_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -3249,15 +3231,12 @@ async fn section_update_submission(
     .await?;
 
     // Apply score if included in payload
-    let score: Option<f64> = payload
-        .get("score")
-        .and_then(|v| v.as_f64())
-        .or_else(|| {
-            payload
-                .get("grade")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse::<f64>().ok())
-        });
+    let score: Option<f64> = payload.get("score").and_then(|v| v.as_f64()).or_else(|| {
+        payload
+            .get("grade")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+    });
 
     if let Some(score_val) = score {
         sqlx::query(
@@ -3291,8 +3270,9 @@ async fn section_update_submission(
     .fetch_one(&state.db)
     .await?;
 
-    let attachments =
-        load_submission_attachments(&state.db, &[row.id]).await.unwrap_or_default();
+    let attachments = load_submission_attachments(&state.db, &[row.id])
+        .await
+        .unwrap_or_default();
     let query = SubmissionListQuery::default();
     let entry = build_submission_entry(row, course_id, attachments, &query, true)?;
     Ok(Json(entry))
