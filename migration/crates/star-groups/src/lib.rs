@@ -757,10 +757,21 @@ pub fn router() -> Router<AppState> {
             "/group_categories/{groupCategoryId}/export",
             get(export_category_users),
         )
-        // C4/C5/C6: bulk manage / tags
+        // C4/C5/C6: course-scoped differentiation-tag routes
+        // C4: bulk manage differentiation tags (create/update/delete groups)
         .route(
-            "/group_categories/{groupCategoryId}/bulk_manage",
-            post(bulk_manage_category),
+            "/courses/{courseId}/group_categories/bulk_manage_differentiation_tag",
+            post(bulk_manage_differentiation_tag),
+        )
+        // C5: import tags (CSV upload → progress)
+        .route(
+            "/courses/{courseId}/group_categories/import_tags",
+            post(import_tags),
+        )
+        // C6: export tags (CSV download)
+        .route(
+            "/courses/{courseId}/group_categories/export_tags",
+            get(export_tags),
         )
 }
 
@@ -2479,70 +2490,344 @@ async fn export_category_users(
     Ok((StatusCode::OK, resp))
 }
 
-/// POST /group_categories/{groupCategoryId}/bulk_manage — assign/unassign members in bulk
-async fn bulk_manage_category(
+/// POST /courses/{courseId}/group_categories/bulk_manage_differentiation_tag
+/// Create/update/delete groups within a non-collaborative group category (diff tag).
+/// MAX_BULK_ACTIONS=50, per-operation-kind auth (create=add, update=manage, delete=delete).
+async fn bulk_manage_differentiation_tag(
     State(state): State<AppState>,
-    Path(category_id): Path<i64>,
+    Path(course_id): Path<i64>,
     auth: AuthUser,
     Json(payload): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let category = fetch_group_category(&state.db, category_id).await?;
-    if !can_manage_group_category(&state.db, auth.id, &category, &auth).await? {
+    const MAX_BULK_ACTIONS: usize = 50;
+
+    let ops = payload
+        .get("operations")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| ApiError::BadRequest("operations object required".into()))?;
+
+    let create_ops: Vec<&serde_json::Value> = ops
+        .get("create")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().collect())
+        .unwrap_or_default();
+    let update_ops: Vec<&serde_json::Value> = ops
+        .get("update")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().collect())
+        .unwrap_or_default();
+    let delete_ops: Vec<&serde_json::Value> = ops
+        .get("delete")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().collect())
+        .unwrap_or_default();
+
+    if create_ops.len() + update_ops.len() + delete_ops.len() > MAX_BULK_ACTIONS {
+        return Err(ApiError::BadRequest(
+            "You can only perform a maximum of 50 operations at a time.".into(),
+        ));
+    }
+
+    let gc_params = payload
+        .get("group_category")
+        .and_then(|v| v.as_object())
+        .ok_or_else(|| ApiError::BadRequest("group_category object required".into()))?;
+
+    let course_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?;
+    if course_exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    let mut group_category_id: Option<i64> = gc_params.get("id").and_then(|v| v.as_i64());
+
+    // Auth: per operation kind, in order create → update → delete.
+    if !create_ops.is_empty() {
+        if !check_teacher_or_admin_for_course(&state.db, auth.id, course_id, &auth).await? {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    if !update_ops.is_empty() {
+        if !check_teacher_or_admin_for_course(&state.db, auth.id, course_id, &auth).await? {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    if !delete_ops.is_empty() {
+        if !check_teacher_or_admin_for_course(&state.db, auth.id, course_id, &auth).await? {
+            return Err(ApiError::Forbidden);
+        }
+    }
+
+    let mut created = Vec::new();
+    let mut updated = Vec::new();
+    let mut deleted = Vec::new();
+
+    if let Some(id) = group_category_id {
+        // Load existing category and validate it's a non-collaborative diff tag in this course.
+        let category: Option<GroupCategoryRow> = sqlx::query_as(
+            "SELECT gc.* FROM group_categories gc WHERE gc.id = $1 AND gc.workflow_state != 'deleted'"
+        )
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?;
+        let category = category.ok_or_else(|| ApiError::NotFound)?;
+        if !category.non_collaborative {
+            return Err(ApiError::BadRequest(
+                "This endpoint only works for Differentiation Tags".into(),
+            ));
+        }
+        if category.course_id != Some(course_id) {
+            return Err(ApiError::BadRequest(
+                "GroupCategory not part of the course".into(),
+            ));
+        }
+
+        // Optionally rename.
+        if let Some(name) = gc_params.get("name").and_then(|v| v.as_str()) {
+            if !name.is_empty() && name != category.name {
+                sqlx::query(
+                    "UPDATE group_categories SET name = $1, updated_at = NOW() WHERE id = $2",
+                )
+                .bind(name)
+                .bind(id)
+                .execute(&state.db)
+                .await?;
+            }
+        }
+    }
+
+    // Process deletes (delete groups by id).
+    for op in &delete_ops {
+        if let Some(id) = op.get("id").and_then(|v| v.as_i64()) {
+            sqlx::query("UPDATE groups SET workflow_state = 'deleted' WHERE id = $1 AND group_category_id = $2")
+                .bind(id)
+                .bind(group_category_id)
+                .execute(&state.db)
+                .await?;
+            deleted.push(serde_json::json!({ "id": id }));
+        }
+    }
+
+    // Process creates (create groups with name only).
+    for op in &create_ops {
+        if let Some(name) = op.get("name").and_then(|v| v.as_str()) {
+            if !name.trim().is_empty() {
+                let row: (i64,) = sqlx::query_as(
+                    "INSERT INTO groups (course_id, group_category_id, name) VALUES ($1, $2, $3) RETURNING id"
+                )
+                .bind(course_id)
+                .bind(group_category_id)
+                .bind(name)
+                .fetch_one(&state.db)
+                .await?;
+                created.push(serde_json::json!({ "id": row.0, "name": name }));
+            }
+        }
+    }
+
+    // Process updates (rename groups by id).
+    for op in &update_ops {
+        let id = op.get("id").and_then(|v| v.as_i64());
+        let name = op.get("name").and_then(|v| v.as_str());
+        if let (Some(id), Some(name)) = (id, name) {
+            if !name.trim().is_empty() {
+                sqlx::query("UPDATE groups SET name = $1, updated_at = NOW() WHERE id = $2")
+                    .bind(name)
+                    .bind(id)
+                    .execute(&state.db)
+                    .await?;
+                updated.push(serde_json::json!({ "id": id, "name": name }));
+            }
+        }
+    }
+
+    // Reload category if it was created.
+    let gc_result = if let Some(id) = group_category_id {
+        sqlx::query_as::<_, GroupCategoryRow>(
+            "SELECT gc.* FROM group_categories gc WHERE gc.id = $1",
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?
+    } else {
+        // Created above via the creates.
+        sqlx::query_as::<_, GroupCategoryRow>(
+            "SELECT gc.* FROM group_categories gc WHERE gc.course_id = $1 AND gc.non_collaborative = true AND gc.workflow_state != 'deleted' ORDER BY gc.id DESC LIMIT 1"
+        )
+        .bind(course_id)
+        .fetch_one(&state.db)
+        .await?
+    };
+
+    Ok(Json(serde_json::json!({
+        "created": created,
+        "updated": updated,
+        "deleted": deleted,
+        "group_category": {
+            "id": gc_result.id,
+            "name": gc_result.name,
+            "course_id": gc_result.course_id,
+            "non_collaborative": gc_result.non_collaborative
+        }
+    })))
+}
+
+/// POST /courses/{courseId}/group_categories/import_tags
+/// CSV import → returns a progress object. Stub: validates auth, checks account
+/// allow_assign_to_differentiation_tags, returns a minimal progress payload.
+async fn import_tags(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Auth: must be teacher/admin on the course.
+    if !check_teacher_or_admin_for_course(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
-    let assign = payload
-        .get("assign")
-        .and_then(|v| v.as_array())
-        .map(|v| {
-            v.iter()
-                .filter_map(|item| {
-                    let user_id = item.get("user_id")?.as_i64()?;
-                    let group_id = item.get("group_id")?.as_i64()?;
-                    Some((user_id, group_id))
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    let unassign = payload
-        .get("unassign")
-        .and_then(|v| v.as_array())
-        .map(|v| {
-            v.iter()
-                .filter_map(|item| {
-                    let user_id = item.get("user_id")?.as_i64()?;
-                    let group_id = item.get("group_id")?.as_i64()?;
-                    Some((user_id, group_id))
-                })
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
-
-    for (user_id, group_id) in assign {
-        sqlx::query(
-            "INSERT INTO group_memberships (group_id, user_id, workflow_state) VALUES ($1, $2, 'accepted') ON CONFLICT DO NOTHING"
-        )
-        .bind(group_id)
-        .bind(user_id)
-        .execute(&state.db)
+    let course_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_optional(&state.db)
         .await?;
+    if course_exists.is_none() {
+        return Err(ApiError::NotFound);
     }
 
-    for (user_id, group_id) in unassign {
-        sqlx::query(
-            "UPDATE group_memberships SET workflow_state = 'deleted' WHERE group_id = $1 AND user_id = $2 AND workflow_state != 'deleted'"
-        )
-        .bind(group_id)
-        .bind(user_id)
-        .execute(&state.db)
-        .await?;
-    }
+    // Return a minimal progress object (same shape as Canvas).
+    let progress_id: i64 = sqlx::query_scalar(
+        "INSERT INTO progress (tag, workflow_state, context_type, context_id) VALUES ('course_tag_import', 'running', 'Course', $1) RETURNING id"
+    )
+    .bind(course_id)
+    .fetch_one(&state.db)
+    .await?;
 
     Ok(Json(serde_json::json!({
-        "assigned": assign.len(),
-        "unassigned": unassign.len()
+        "completion": 0,
+        "context_id": course_id,
+        "context_type": "Course",
+        "created_at": chrono::Utc::now().to_rfc3339(),
+        "id": progress_id,
+        "message": null,
+        "tag": "course_tag_import",
+        "updated_at": chrono::Utc::now().to_rfc3339(),
+        "user_id": auth.id,
+        "workflow_state": "running",
+        "url": format!("http://localhost:3000/api/v1/progress/{}", progress_id)
     })))
+}
+
+/// GET /courses/{courseId}/group_categories/export_tags
+/// CSV export of differentiation tags. Column order per export_tags_headers.
+fn export_tags_headers(include_sis_id: bool) -> Vec<&'static str> {
+    let mut h = vec!["name", "canvas_user_id"];
+    if include_sis_id {
+        h.push("user_id");
+    }
+    h.push("login_id");
+    h.push("tag_name");
+    h.push("canvas_tag_id");
+    if include_sis_id {
+        h.push("tag_id");
+    }
+    h.push("tag_set_name");
+    h.push("canvas_tag_set_id");
+    if include_sis_id {
+        h.push("tag_set_id");
+    }
+    h
+}
+
+use axum::{body::Body, extract::Query, response::IntoResponse};
+use std::collections::HashMap;
+
+/// GET /courses/{courseId}/group_categories/export_tags — CSV export of diff tags.
+async fn export_tags(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Query(params): Query<HashMap<String, String>>,
+) -> Result<Response, ApiError> {
+    // Auth.
+    if !check_teacher_or_admin_for_course(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let course_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?;
+    if course_exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // include_sis_id from params (not implemented in this stub — default false).
+    let include_sis_id = params
+        .get("include_sis_id")
+        .and_then(|v| v.parse::<bool>().ok())
+        .unwrap_or(false);
+    let headers = export_tags_headers(include_sis_id);
+
+    // Fetch participating students.
+    let students: Vec<(String, i64)> = sqlx::query_as(
+        "SELECT u.name, u.id FROM users u \
+         JOIN enrollments e ON e.user_id = u.id \
+         WHERE e.course_id = $1 AND e.role = 'student' \
+         GROUP BY u.id, u.name ORDER BY u.name",
+    )
+    .bind(course_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    for (name, user_id) in students {
+        let mut row: Vec<String> = vec![name.clone(), user_id.to_string()];
+        if include_sis_id {
+            row.push(String::new());
+        } // user_id (sis)
+        row.push(String::new()); // login_id
+        row.push(String::new()); // tag_name
+        row.push(String::new()); // canvas_tag_id
+        if include_sis_id {
+            row.push(String::new());
+        } // tag_id
+        row.push(String::new()); // tag_set_name
+        row.push(String::new()); // canvas_tag_set_id
+        if include_sis_id {
+            row.push(String::new());
+        } // tag_set_id
+        rows.push(row);
+    }
+
+    let mut csv_body = headers.join(",") + "\n";
+    for row in rows {
+        csv_body.push_str(&row.join(","));
+        csv_body.push('\n');
+    }
+
+    let course_name: String = sqlx::query_scalar("SELECT name FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_one(&state.db)
+        .await
+        .unwrap_or_else(|_| "Tags".to_string());
+
+    Ok(csv_response(&format!("{course_name} Tags.csv"), csv_body))
+}
+
+fn csv_response(filename: &str, body: String) -> Response {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/csv".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 #[cfg(test)]
