@@ -1565,13 +1565,12 @@ async fn verify_submission_assignment(
     assignment_id: i64,
     submission_id: i64,
 ) -> Result<i64, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT id FROM submissions WHERE id = $1 AND assignment_id = $2",
-    )
-    .bind(submission_id)
-    .bind(assignment_id)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM submissions WHERE id = $1 AND assignment_id = $2")
+            .bind(submission_id)
+            .bind(assignment_id)
+            .fetch_optional(pool)
+            .await?;
 
     row.map(|(id,)| id).ok_or(ApiError::NotFound)
 }
@@ -1695,8 +1694,7 @@ async fn list_submission_peer_reviews(
         return Err(ApiError::Forbidden);
     }
 
-    let assignment_id =
-        verify_assignment_course(&state.db, course_id, assignment_id).await?;
+    let assignment_id = verify_assignment_course(&state.db, course_id, assignment_id).await?;
     let _submission_id =
         verify_submission_assignment(&state.db, assignment_id, submission_id).await?;
 
@@ -1754,22 +1752,22 @@ async fn create_peer_review(
         return Err(ApiError::Forbidden);
     }
 
-    let assignment_id =
-        verify_assignment_course(&state.db, course_id, assignment_id).await?;
+    let assignment_id = verify_assignment_course(&state.db, course_id, assignment_id).await?;
     let submission_id =
         verify_submission_assignment(&state.db, assignment_id, submission_id).await?;
 
     // The reviewer must not be the same as the submission owner.
-    let submission_owner: Option<(i64,)> = sqlx::query_as(
-        "SELECT user_id FROM submissions WHERE id = $1",
-    )
-    .bind(submission_id)
-    .fetch_optional(&state.db)
-    .await?;
+    let submission_owner: Option<(i64,)> =
+        sqlx::query_as("SELECT user_id FROM submissions WHERE id = $1")
+            .bind(submission_id)
+            .fetch_optional(&state.db)
+            .await?;
 
     if let Some((owner_id,)) = submission_owner {
         if payload.user_id == owner_id {
-            return Err(ApiError::Validation("reviewer and student cannot be the same".into()));
+            return Err(ApiError::Validation(
+                "reviewer and student cannot be the same".into(),
+            ));
         }
     }
 
@@ -1784,7 +1782,9 @@ async fn create_peer_review(
 
     let _reviewer_role = reviewer_enrollment
         .map(|(r,)| r)
-        .ok_or(ApiError::Validation("reviewer must be a course student".into()))?;
+        .ok_or(ApiError::Validation(
+            "reviewer must be a course student".into(),
+        ))?;
 
     // Upsert: UNIQUE(asset_id, assessor_id) prevents duplicates.
     // user_id = submission owner (the assessee), assessor_id = reviewer (payload.user_id).
@@ -1803,14 +1803,17 @@ async fn create_peer_review(
     .fetch_one(&state.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(serde_json::json!({
-        "id": review.id,
-        "user_id": review.user_id,
-        "assessor_id": review.assessor_id,
-        "asset_id": review.asset_id,
-        "asset_type": review.asset_type,
-        "workflow_state": review.workflow_state,
-    }))))
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "id": review.id,
+            "user_id": review.user_id,
+            "assessor_id": review.assessor_id,
+            "asset_id": review.asset_id,
+            "asset_type": review.asset_type,
+            "workflow_state": review.workflow_state,
+        })),
+    ))
 }
 
 /// DELETE /courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
@@ -1826,8 +1829,7 @@ async fn delete_peer_review(
         return Err(ApiError::Forbidden);
     }
 
-    let assignment_id =
-        verify_assignment_course(&state.db, course_id, assignment_id).await?;
+    let assignment_id = verify_assignment_course(&state.db, course_id, assignment_id).await?;
     let submission_id =
         verify_submission_assignment(&state.db, assignment_id, submission_id).await?;
 
@@ -1981,14 +1983,8 @@ async fn upload_rubric(
         .attachment_id
         .ok_or_else(|| ApiError::Validation("attachment_id is required".into()))?;
 
-    let mut import = create_rubric_import(
-        &state.db,
-        course_id,
-        "Course",
-        Some(auth.id),
-        attachment_id,
-    )
-    .await?;
+    let mut import =
+        create_rubric_import(&state.db, course_id, "Course", Some(auth.id), attachment_id).await?;
 
     import.user = Some(serde_json::json!({
         "id": auth.id,
@@ -2055,12 +2051,10 @@ async fn get_upload_status(
     .ok_or(ApiError::NotFound)?;
 
     if import.user_id.is_some() {
-        let user_row: Option<(String,)> = sqlx::query_as(
-            "SELECT name FROM users WHERE id = $1",
-        )
-        .bind(import.user_id)
-        .fetch_optional(&state.db)
-        .await?;
+        let user_row: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")
+            .bind(import.user_id)
+            .fetch_optional(&state.db)
+            .await?;
         if let Some((name,)) = user_row {
             import.user = Some(serde_json::json!({
                 "id": import.user_id,
