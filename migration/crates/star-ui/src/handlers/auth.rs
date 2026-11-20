@@ -12,7 +12,7 @@
 //!   star-lms, so the link is written to the server log — documented in the
 //!   PR as the first password-reset path in the repo.
 //! * `GET/POST /reset_password/:token` — single-use, 2h-expiry token from
-//!   `password_reset_tokens` (migration 0217); sets the new argon2 hash,
+//!   `password_reset_tokens` (migration 0219); sets the new argon2 hash,
 //!   stamps `used_at`, and logs the user straight in (Canvas parity:
 //!   change_password "logs user in").
 
