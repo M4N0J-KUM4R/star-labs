@@ -107,59 +107,65 @@ enum SettingContext {
 
 /// Canvas renders the LTI errors with their own body, so the handlers answer
 /// a `Response` instead of an `ApiError`.
-fn unauthorized() -> Response {
-    (
-        StatusCode::UNAUTHORIZED,
-        Json(json!({ "error": "unauthorized" })),
+fn unauthorized() -> Box<Response> {
+    Box::new(
+        (StatusCode::UNAUTHORIZED, Json(json!({ "error": "unauthorized" }))).into_response(),
     )
-        .into_response()
 }
 
-fn forbidden() -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        Json(json!({
-            "errors": [{ "code": "forbidden", "message": "forbidden" }]
-        })),
+fn forbidden() -> Box<Response> {
+    Box::new(
+        (
+            StatusCode::FORBIDDEN,
+            Json(json!({
+                "errors": [{ "code": "forbidden", "message": "forbidden" }]
+            })),
+        )
+            .into_response(),
     )
-        .into_response()
 }
 
-fn bad_request() -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({
-            "status": "bad_request",
-            "errors": [{ "message": "bad_request" }]
-        })),
+fn bad_request() -> Box<Response> {
+    Box::new(
+        (
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "status": "bad_request",
+                "errors": [{ "message": "bad_request" }]
+            })),
+        )
+            .into_response(),
     )
-        .into_response()
 }
 
-fn not_found() -> Response {
-    (
-        StatusCode::NOT_FOUND,
-        Json(json!({
-            "status": "not_found",
-            "errors": [{ "message": "not_found" }]
-        })),
+fn not_found() -> Box<Response> {
+    Box::new(
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({
+                "status": "not_found",
+                "errors": [{ "message": "not_found" }]
+            })),
+        )
+            .into_response(),
     )
-        .into_response()
 }
 
-fn server_error(error: sqlx::Error) -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "error": error.to_string() })),
+fn server_error(error: sqlx::Error) -> Box<Response> {
+    Box::new(
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "error": error.to_string() })),
+        )
+            .into_response(),
     )
-        .into_response()
 }
 
 /// The tool proxy of an LTI Advantage access token.
 ///
 /// The token is a JWT signed with the platform secret; its `sub` claim is the
 /// guid of the tool proxy and its `scopes` claim carries the permissions.
-async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<i64, Response> {
+async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<i64, Box<Response>> {
     let Some(value) = headers.get(header::AUTHORIZATION) else {
         return Err(unauthorized());
     };
@@ -216,7 +222,7 @@ async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<i64, Resp
 // ---------------------------------------------------------------------------
 
 /// The tool proxy of a guid.
-async fn tool_proxy_by_guid(pool: &PgPool, guid: &str) -> Result<Option<i64>, Response> {
+async fn tool_proxy_by_guid(pool: &PgPool, guid: &str) -> Result<Option<i64>, Box<Response>> {
     sqlx::query_scalar::<_, i64>(
         "SELECT id FROM lti_tool_proxies WHERE guid = $1 AND workflow_state = 'active'",
     )
@@ -231,7 +237,7 @@ async fn find_setting(
     pool: &PgPool,
     tool_proxy_id: i64,
     context: SettingContext,
-) -> Result<Option<ToolSettingRow>, Response> {
+) -> Result<Option<ToolSettingRow>, Box<Response>> {
     let row = match context {
         SettingContext::Course {
             course_id,
@@ -297,7 +303,7 @@ async fn find_setting(
 async fn next_level(
     pool: &PgPool,
     row: &ToolSettingRow,
-) -> Result<Option<ToolSettingRow>, Response> {
+) -> Result<Option<ToolSettingRow>, Box<Response>> {
     let next = match row.setting_type() {
         "LtiLink" => {
             sqlx::query_as::<_, ToolSettingRow>(
@@ -342,7 +348,7 @@ async fn resolve_setting(
     headers: &HeaderMap,
     tool_proxy_guid: Option<&str>,
     context: SettingContext,
-) -> Result<(ToolSettingRow, i64), Response> {
+) -> Result<(ToolSettingRow, i64), Box<Response>> {
     let proxy = match tool_proxy_guid {
         Some(guid) => {
             let proxy = tool_proxy_by_guid(&state.db, guid).await?;
@@ -397,7 +403,7 @@ fn accepts_simple(headers: &HeaderMap) -> bool {
 }
 
 /// The `bubble` parameter, checked the way Canvas does.
-fn checked_bubble(query: &BubbleQuery, accepts_graph: bool) -> Result<&str, Response> {
+fn checked_bubble(query: &BubbleQuery, accepts_graph: bool) -> Result<&str, Box<Response>> {
     let bubble = query.bubble.as_deref().unwrap_or("").trim();
     match bubble {
         "" | "distinct" => Ok(bubble),
@@ -434,7 +440,7 @@ async fn settings_response(
             graph.push(entry);
             current = match next_level(pool, &row).await {
                 Ok(next) => next,
-                Err(response) => return response,
+                Err(response) => return *response,
             };
         }
 
@@ -508,13 +514,13 @@ async fn show_setting(
     let accepts_simple = accepts_simple(&headers);
     let bubble = match checked_bubble(&query, accepts_graph) {
         Ok(bubble) => bubble.to_string(),
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     match resolve_setting(state, &headers, tool_proxy_guid, context).await {
         Ok((setting, _proxy)) => {
             settings_response(&state.db, &setting, accepts_graph, accepts_simple, &bubble).await
         }
-        Err(response) => response,
+        Err(response) => *response,
     }
 }
 
@@ -676,7 +682,7 @@ async fn update_setting(
 
     let (setting, _proxy) = match resolve_setting(state, &headers, tool_proxy_guid, context).await {
         Ok(resolved) => resolved,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
 
     if let Err(error) =
