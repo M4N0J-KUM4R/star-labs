@@ -206,10 +206,7 @@ async fn check_global_group_manage_access(
     _group: &LearningOutcomeGroup,
     auth: &AuthUser,
 ) -> Result<bool, ApiError> {
-    if is_global_admin(auth) {
-        return Ok(true);
-    }
-    Ok(false)
+    Ok(is_global_admin(auth))
 }
 
 /// Check global outcome group read access: global admin only.
