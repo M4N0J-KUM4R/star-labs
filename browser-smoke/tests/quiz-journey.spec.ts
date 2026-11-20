@@ -25,6 +25,11 @@ async function login(page: import('@playwright/test').Page, email: string): Prom
 }
 
 test.describe('quiz-taking journey (#109)', () => {
+  // The teacher table assertion needs the student's submitted attempt, and
+  // the page is static HTML — the locator cannot wait for data that lands
+  // after render. Run the journey in order.
+  test.describe.configure({ mode: 'serial' });
+
   test('student takes the quiz, submits, and sees the score + pending essay', async ({ page }) => {
     await login(page, STUDENT_EMAIL);
 

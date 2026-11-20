@@ -32,9 +32,7 @@ use sqlx::PgPool;
 use star_common::{ApiError, AppState};
 
 use crate::assets;
-use crate::handlers::course_context::{
-    course_breadcrumb, course_context, course_env, ensure_csrf,
-};
+use crate::handlers::course_context::{course_breadcrumb, course_context, course_env, ensure_csrf};
 use crate::handlers::error::from_api_error;
 use crate::session::{check_csrf, SessionUser};
 
@@ -1600,17 +1598,20 @@ pub async fn quiz_results(
 }
 
 /// Rehydrate a `StudentAnswer` from the stored `submission_data` snapshot.
+/// The entry shape is `{"answer": {...}, "score": ...}` (see
+/// `student_answer_json`), so unwrap the `answer` object first.
 fn decode_stored_answer(entry: &Value) -> StudentAnswer {
-    if let Some(id) = entry.get("answer_id").and_then(Value::as_i64) {
+    let answer = entry.get("answer").unwrap_or(entry);
+    if let Some(id) = answer.get("answer_id").and_then(Value::as_i64) {
         return StudentAnswer::Choice(id);
     }
-    if let Some(ids) = entry.get("answer_ids").and_then(Value::as_array) {
+    if let Some(ids) = answer.get("answer_ids").and_then(Value::as_array) {
         return StudentAnswer::Choices(ids.iter().filter_map(Value::as_i64).collect::<Vec<_>>());
     }
-    if let Some(text) = entry.get("text").and_then(Value::as_str) {
+    if let Some(text) = answer.get("text").and_then(Value::as_str) {
         return StudentAnswer::Text(text.to_string());
     }
-    if let Some(blanks) = entry.get("blanks").and_then(Value::as_array) {
+    if let Some(blanks) = answer.get("blanks").and_then(Value::as_array) {
         let pairs = blanks
             .iter()
             .filter_map(|blank| {
