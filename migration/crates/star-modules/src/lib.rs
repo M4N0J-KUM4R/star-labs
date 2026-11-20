@@ -97,6 +97,85 @@ pub struct ListModulesQuery {
     pub offset: Option<i64>,
 }
 
+/// Course pace — mirrors Canvas CoursePace (app/models/course_pace.rb).
+/// Workflow states: unpublished | active | deleted.
+/// Context can be Course (primary pace, no section/user), CourseSection, or User.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct CoursePace {
+    pub id: i64,
+    pub course_id: i64,
+    pub course_section_id: Option<i64>,
+    pub user_id: Option<i64>,
+    pub root_account_id: i64,
+    pub workflow_state: String,
+    pub exclude_weekends: bool,
+    pub selected_days_to_skip: Option<serde_json::Value>, // JSONB array e.g. ["sun","sat"]
+    pub hard_end_dates: bool,
+    pub end_date: Option<DateTime<Utc>>,
+    pub published_at: Option<DateTime<Utc>>,
+    pub assignments_weighting: Option<serde_json::Value>, // JSONB hash
+    pub time_to_complete_calendar_days: Option<i32>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// course_pace_module_item — links a CoursePace to a content_tag (module_item_id).
+/// Mirrors Canvas CoursePaceModuleItem (app/models/course_pace_module_item.rb).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct CoursePaceModuleItem {
+    pub id: i64,
+    pub course_pace_id: i64,
+    pub module_item_id: i64,
+    pub root_account_id: i64,
+    pub duration: i32,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Input for creating a course pace.
+#[derive(Debug, Deserialize)]
+pub struct CreateCoursePace {
+    pub course_section_id: Option<i64>,
+    pub user_id: Option<i64>,
+    pub end_date: Option<DateTime<Utc>>,
+    pub exclude_weekends: Option<bool>,
+    pub selected_days_to_skip: Option<Vec<String>>,
+    pub hard_end_dates: Option<bool>,
+    pub workflow_state: Option<String>,
+    pub time_to_complete_calendar_days: Option<i32>,
+    pub assignments_weighting: Option<serde_json::Value>,
+}
+
+/// Input for updating a course pace (partial).
+#[derive(Debug, Deserialize)]
+pub struct UpdateCoursePace {
+    pub end_date: Option<DateTime<Utc>>,
+    pub exclude_weekends: Option<bool>,
+    pub selected_days_to_skip: Option<Vec<String>>,
+    pub hard_end_dates: Option<bool>,
+    pub workflow_state: Option<String>,
+    pub time_to_complete_calendar_days: Option<i32>,
+    pub assignments_weighting: Option<serde_json::Value>,
+}
+
+/// Nested module item attributes inside course pace create/update bodies.
+/// Mirrors Canvas `course_pace_module_items_attributes: %i[id duration module_item_id root_account_id]`.
+#[derive(Debug, Deserialize)]
+pub struct CoursePaceModuleItemAttrs {
+    pub id: Option<i64>,
+    pub duration: i32,
+    pub module_item_id: i64,
+    pub root_account_id: i64,
+}
+
+/// Wrapper body accepted by both create and update.
+#[derive(Debug, Deserialize)]
+pub struct CoursePaceBody {
+    #[serde(flatten)]
+    pub base: CreateCoursePace,
+    pub course_pace_module_items_attributes: Option<Vec<CoursePaceModuleItemAttrs>>,
+}
+
 /// Mutable module item attributes accepted by the Canvas
 /// `context_module_items_api#update` endpoints (Phase 3, migration 0065).
 #[derive(Debug, Default, Deserialize)]
@@ -1239,11 +1318,686 @@ async fn delete_course_module_item(
 }
 
 // --------------------------------------------------------------------------
+// Course Pace handlers  (migration 0213)
+// --------------------------------------------------------------------------
+
+/// Guard: require teacher or admin on the course.
+async fn require_pace_teacher_or_admin(
+    db: &PgPool,
+    user_id: i64,
+    course_id: i64,
+    auth: &AuthUser,
+) -> Result<(), ApiError> {
+    if auth.role == "admin" {
+        return Ok(());
+    }
+    let row: Option<(String,)> =
+        sqlx::query_as(r#"SELECT role FROM enrollments WHERE user_id = $1 AND course_id = $2"#)
+            .bind(user_id)
+            .bind(course_id)
+            .fetch_optional(db)
+            .await?;
+    match row {
+        Some((role,)) if role == "teacher" || role == "admin" => Ok(()),
+        _ => Err(ApiError::Forbidden),
+    }
+}
+
+/// Load a course_pace by id, verifying it belongs to the given course.
+async fn load_pace(db: &PgPool, course_id: i64, pace_id: i64) -> Result<CoursePace, ApiError> {
+    let pace: Option<CoursePace> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, course_section_id, user_id, root_account_id,
+               workflow_state, exclude_weekends, selected_days_to_skip, hard_end_dates,
+               end_date, published_at, assignments_weighting, time_to_complete_calendar_days,
+               created_at, updated_at
+        FROM course_paces
+        WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(pace_id)
+    .bind(course_id)
+    .fetch_optional(db)
+    .await?;
+    pace.ok_or(ApiError::NotFound)
+}
+
+/// GET /courses/{courseId}/course_pacing
+/// Returns the primary course pace (no section/user) for the course.
+async fn get_course_pace(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<CoursePace>, ApiError> {
+    require_course_read_access(&state.db, auth.id, course_id, &auth).await?;
+
+    let pace: Option<CoursePace> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, course_section_id, user_id, root_account_id,
+               workflow_state, exclude_weekends, selected_days_to_skip, hard_end_dates,
+               end_date, published_at, assignments_weighting, time_to_complete_calendar_days,
+               created_at, updated_at
+        FROM course_paces
+        WHERE course_id = $1 AND course_section_id IS NULL AND user_id IS NULL
+          AND workflow_state <> 'deleted'
+        ORDER BY id ASC LIMIT 1
+        "#,
+    )
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    match pace {
+        Some(p) => Ok(Json(p)),
+        None => Err(ApiError::NotFound),
+    }
+}
+
+/// POST /courses/{courseId}/course_pacing
+async fn create_course_pace(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Json(body): Json<CoursePaceBody>,
+) -> Result<(StatusCode, Json<CoursePace>), ApiError> {
+    require_pace_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+
+    // Verify course exists
+    let course_exists: Option<(i64,)> = sqlx::query_as(r#"SELECT id FROM courses WHERE id = $1"#)
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?;
+    if course_exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // Exactly one of section_id or user_id may be set
+    let section_id = body.base.course_section_id;
+    let user_id = body.base.user_id;
+    if section_id.is_some() && user_id.is_some() {
+        return Err(ApiError::Validation(
+            "Only one of course_section_id and user_id may be set".into(),
+        ));
+    }
+
+    // Look up root_account_id from the course
+    let root_account_id: i64 =
+        sqlx::query_scalar(r#"SELECT root_account_id FROM courses WHERE id = $1"#)
+            .bind(course_id)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|_| ApiError::NotFound)?;
+
+    let selected_days_json: Option<serde_json::Value> = body
+        .base
+        .selected_days_to_skip
+        .as_ref()
+        .map(|days| serde_json::to_value(days).unwrap_or(serde_json::Value::Null));
+
+    let workflow_state = body.base.workflow_state.as_deref().unwrap_or("unpublished");
+
+    let pace: CoursePace = sqlx::query_as(
+        r#"
+        INSERT INTO course_paces
+          (course_id, course_section_id, user_id, root_account_id, workflow_state,
+           exclude_weekends, selected_days_to_skip, hard_end_dates, end_date,
+           assignments_weighting, time_to_complete_calendar_days)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING id, course_id, course_section_id, user_id, root_account_id,
+                  workflow_state, exclude_weekends, selected_days_to_skip, hard_end_dates,
+                  end_date, published_at, assignments_weighting, time_to_complete_calendar_days,
+                  created_at, updated_at
+        "#,
+    )
+    .bind(course_id)
+    .bind(section_id)
+    .bind(user_id)
+    .bind(root_account_id)
+    .bind(workflow_state)
+    .bind(body.base.exclude_weekends.unwrap_or(false))
+    .bind(selected_days_json)
+    .bind(body.base.hard_end_dates.unwrap_or(false))
+    .bind(body.base.end_date)
+    .bind(body.base.assignments_weighting.clone())
+    .bind(body.base.time_to_complete_calendar_days)
+    .fetch_one(&state.db)
+    .await?;
+
+    // Handle nested module items if provided
+    if let Some(items) = &body.course_pace_module_items_attributes {
+        for item in items {
+            sqlx::query(
+                r#"
+                INSERT INTO course_pace_module_items
+                  (course_pace_id, module_item_id, root_account_id, duration)
+                VALUES ($1, $2, $3, $4)
+                ON CONFLICT (course_pace_id, module_item_id) DO NOTHING
+                "#,
+            )
+            .bind(pace.id)
+            .bind(item.module_item_id)
+            .bind(item.root_account_id)
+            .bind(item.duration)
+            .execute(&state.db)
+            .await?;
+        }
+    }
+
+    Ok((StatusCode::CREATED, Json(pace)))
+}
+
+/// GET /courses/{courseId}/course_pacing/{id}
+async fn get_single_pace(
+    State(state): State<AppState>,
+    Path((course_id, pace_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<CoursePace>, ApiError> {
+    require_course_read_access(&state.db, auth.id, course_id, &auth).await?;
+    let pace = load_pace(&state.db, course_id, pace_id).await?;
+    Ok(Json(pace))
+}
+
+/// PUT /courses/{courseId}/course_pacing/{id}
+async fn update_pace(
+    State(state): State<AppState>,
+    Path((course_id, pace_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<CoursePaceBody>,
+) -> Result<Json<CoursePace>, ApiError> {
+    require_pace_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+
+    let _ = load_pace(&state.db, course_id, pace_id).await?;
+
+    let selected_days_json: Option<serde_json::Value> = body
+        .base
+        .selected_days_to_skip
+        .as_ref()
+        .map(|days| serde_json::to_value(days).unwrap_or(serde_json::Value::Null));
+
+    let pace: CoursePace = sqlx::query_as(
+        r#"
+        UPDATE course_paces
+        SET end_date               = COALESCE($1, end_date),
+            exclude_weekends       = COALESCE($2, exclude_weekends),
+            selected_days_to_skip  = COALESCE($3, selected_days_to_skip),
+            hard_end_dates        = COALESCE($4, hard_end_dates),
+            workflow_state        = COALESCE($5, workflow_state),
+            time_to_complete_calendar_days = COALESCE($6, time_to_complete_calendar_days),
+            assignments_weighting  = COALESCE($7, assignments_weighting),
+            updated_at            = now()
+        WHERE id = $8 AND course_id = $9 AND workflow_state <> 'deleted'
+        RETURNING id, course_id, course_section_id, user_id, root_account_id,
+                  workflow_state, exclude_weekends, selected_days_to_skip, hard_end_dates,
+                  end_date, published_at, assignments_weighting, time_to_complete_calendar_days,
+                  created_at, updated_at
+        "#,
+    )
+    .bind(body.base.end_date)
+    .bind(body.base.exclude_weekends)
+    .bind(selected_days_json)
+    .bind(body.base.hard_end_dates)
+    .bind(body.base.workflow_state.as_deref())
+    .bind(body.base.time_to_complete_calendar_days)
+    .bind(body.base.assignments_weighting.as_ref())
+    .bind(pace_id)
+    .bind(course_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    // Sync module items if provided
+    if let Some(items) = &body.course_pace_module_items_attributes {
+        // Delete existing and replace
+        sqlx::query(r#"DELETE FROM course_pace_module_items WHERE course_pace_id = $1"#)
+            .bind(pace_id)
+            .execute(&state.db)
+            .await?;
+        for item in items {
+            sqlx::query(
+                r#"
+                INSERT INTO course_pace_module_items
+                  (course_pace_id, module_item_id, root_account_id, duration)
+                VALUES ($1, $2, $3, $4)
+                "#,
+            )
+            .bind(pace_id)
+            .bind(item.module_item_id)
+            .bind(item.root_account_id)
+            .bind(item.duration)
+            .execute(&state.db)
+            .await?;
+        }
+    }
+
+    Ok(Json(pace))
+}
+
+/// DELETE /courses/{courseId}/course_pacing/{id}
+async fn delete_pace(
+    State(state): State<AppState>,
+    Path((course_id, pace_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    require_pace_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+
+    let pace = load_pace(&state.db, course_id, pace_id).await?;
+
+    // Cannot delete the primary published pace
+    if pace.course_section_id.is_none() && pace.user_id.is_none() && pace.workflow_state == "active"
+    {
+        return Err(ApiError::Validation(
+            "Cannot delete the default course pace".into(),
+        ));
+    }
+
+    // Soft delete
+    sqlx::query(
+        r#"UPDATE course_paces SET workflow_state = 'deleted', updated_at = now() WHERE id = $1"#,
+    )
+    .bind(pace_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// POST /courses/{courseId}/course_pacing/{id}/publish
+/// Marks the pace as active (published).
+async fn publish_pace(
+    State(state): State<AppState>,
+    Path((course_id, pace_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<CoursePace>, ApiError> {
+    require_pace_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+    let _ = load_pace(&state.db, course_id, pace_id).await?;
+
+    let pace: CoursePace = sqlx::query_as(
+        r#"
+        UPDATE course_paces
+        SET workflow_state = 'active', published_at = now(), updated_at = now()
+        WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+        RETURNING id, course_id, course_section_id, user_id, root_account_id,
+                  workflow_state, exclude_weekends, selected_days_to_skip, hard_end_dates,
+                  end_date, published_at, assignments_weighting, time_to_complete_calendar_days,
+                  created_at, updated_at
+        "#,
+    )
+    .bind(pace_id)
+    .bind(course_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(pace))
+}
+
+// --------------------------------------------------------------------------
+// M1: Module item sequence  (item_sequence)
+// GET /courses/{courseId}/module_item_sequence?asset_type=...&asset_id=...
+// Returns previous/next module items around the given asset.
+// --------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct ItemSequenceQuery {
+    pub asset_type: String,
+    pub asset_id: String,
+}
+
+/// Map Canvas API asset types to internal content type names.
+fn canvas_asset_type(asset_type: &str) -> Option<&'static str> {
+    match asset_type {
+        "ModuleItem" => Some("ContentTag"),
+        "File" => Some("Attachment"),
+        "Page" => Some("WikiPage"),
+        "Discussion" => Some("DiscussionTopic"),
+        "Assignment" => Some("Assignment"),
+        "Quiz" => Some("Quizzes::Quiz"),
+        "ExternalTool" => Some("ExternalTool"),
+        _ => None,
+    }
+}
+
+/// Build the module-item-sequence response for an asset.
+/// Returns { items: [{current, prev, next, mastery_path}] }.
+async fn build_item_sequence(
+    db: &PgPool,
+    course_id: i64,
+    asset_type: &str,
+    asset_id: &str,
+    user_id: i64,
+) -> Result<Value, ApiError> {
+    let canvas_type = canvas_asset_type(asset_type)
+        .ok_or_else(|| ApiError::Validation("invalid asset_type".into()))?;
+
+    // Fetch all module item ids for the course in module order.
+    // Only visible (not deleted) items from published modules.
+    let tag_rows: Vec<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT mi.id
+        FROM module_items mi
+        JOIN modules m ON m.id = mi.module_id
+        WHERE m.course_id = $1 AND m.workflow_state <> 'deleted' AND mi.workflow_state <> 'deleted'
+        ORDER BY m.position ASC, mi.position ASC, mi.id ASC
+        "#,
+    )
+    .bind(course_id)
+    .fetch_all(db)
+    .await?;
+
+    let tag_ids: Vec<i64> = tag_rows.into_iter().map(|(id,)| id).collect();
+    if tag_ids.is_empty() {
+        return Ok(json!({ "items": [] }));
+    }
+
+    // Find matching tag indices
+    let mut tag_indices: Vec<usize> = Vec::new();
+
+    if canvas_type == "ContentTag" {
+        let parsed_id = asset_id
+            .parse::<i64>()
+            .map_err(|_| ApiError::Validation("invalid asset_id".into()))?;
+        for (ix, tid) in tag_ids.iter().enumerate() {
+            if *tid == parsed_id {
+                tag_indices.push(ix);
+            }
+        }
+    } else {
+        // Look up content_id match
+        let matching_tags: Vec<(i64,)> = if canvas_type == "WikiPage" {
+            // asset_id is a page URL slug; resolve to page id via wiki_pages
+            let page_row: Option<(i64,)> = sqlx::query_as(
+                r#"SELECT id FROM wiki_pages WHERE course_id = $1 AND url_suf = $2 LIMIT 1"#,
+            )
+            .bind(course_id)
+            .bind(asset_id)
+            .fetch_optional(db)
+            .await?;
+            if let Some((page_id,)) = page_row {
+                sqlx::query_as(
+                    r#"SELECT id FROM module_items WHERE module_id IN
+                       (SELECT id FROM modules WHERE course_id = $1 AND workflow_state <> 'deleted')
+                       AND item_type = 'page' AND item_id = $2"#,
+                )
+                .bind(course_id)
+                .bind(page_id)
+                .fetch_all(db)
+                .await?
+            } else {
+                vec![]
+            }
+        } else {
+            let content_id = asset_id
+                .parse::<i64>()
+                .map_err(|_| ApiError::Validation("invalid asset_id".into()))?;
+            sqlx::query_as(
+                r#"
+                SELECT mi.id FROM module_items mi
+                JOIN modules m ON m.id = mi.module_id
+                WHERE m.course_id = $1 AND m.workflow_state <> 'deleted'
+                  AND mi.workflow_state <> 'deleted'
+                  AND mi.item_type = $2 AND mi.item_id = $3
+                "#,
+            )
+            .bind(course_id)
+            .bind(canvas_type)
+            .bind(content_id)
+            .fetch_all(db)
+            .await?
+        };
+
+        for (ix, tid) in tag_ids.iter().enumerate() {
+            if matching_tags.iter().any(|(mid,)| *mid == *tid) {
+                tag_indices.push(ix);
+            }
+        }
+    }
+
+    if tag_indices.is_empty() {
+        return Ok(json!({ "items": [] }));
+    }
+
+    // Cap at 3 (MAX_SEQUENCES in Canvas)
+    tag_indices.truncate(3);
+
+    // Load needed tags (current + prev + next for each)
+    let mut needed_ids: Vec<i64> = Vec::new();
+    for &ix in &tag_indices {
+        needed_ids.push(tag_ids[ix]);
+        if ix > 0 {
+            needed_ids.push(tag_ids[ix - 1]);
+        }
+        if ix < tag_ids.len() - 1 {
+            needed_ids.push(tag_ids[ix + 1]);
+        }
+    }
+    needed_ids.sort();
+    needed_ids.dedup();
+
+    // Fetch module item details
+    let items_map: std::collections::HashMap<i64, ModuleItemDetail> = {
+        let rows: Vec<ModuleItemDetail> = sqlx::query_as(
+            r#"
+            SELECT mi.id, mi.module_id, m.course_id, mi.item_type, mi.item_id,
+                   mi.position, mi.title, mi.indent, mi.workflow_state,
+                   mi.created_at, mi.updated_at,
+                   COALESCE(a.title, p.title) AS content_title,
+                   p.url AS page_url,
+                   a.points_possible::float8 AS points_possible,
+                   a.due_at AS due_at
+            FROM module_items mi
+            JOIN modules m ON m.id = mi.module_id
+            LEFT JOIN assignments a ON a.id = mi.item_id AND mi.item_type = 'assignment'
+            LEFT JOIN wiki_pages p ON p.id = mi.item_id AND mi.item_type = 'page'
+            WHERE mi.id = ANY($1)
+            "#,
+        )
+        .bind(&needed_ids)
+        .fetch_all(db)
+        .await?;
+        rows.into_iter().map(|item| (item.id, item)).collect()
+    };
+
+    let mut result_items: Vec<Value> = Vec::new();
+    for &ix in &tag_indices {
+        let cur_id = tag_ids[ix];
+        let prev_id = if ix > 0 { Some(tag_ids[ix - 1]) } else { None };
+        let next_id = if ix < tag_ids.len() - 1 {
+            Some(tag_ids[ix + 1])
+        } else {
+            None
+        };
+
+        let make_item_json = |id: i64| -> Value {
+            items_map
+                .get(&id)
+                .map(|item| module_item_json(item, false))
+                .unwrap_or(Value::Null)
+        };
+
+        let mut item = serde_json::Map::new();
+        item.insert("current".into(), make_item_json(cur_id));
+        if let Some(pid) = prev_id {
+            item.insert("prev".into(), make_item_json(pid));
+        }
+        if let Some(nid) = next_id {
+            item.insert("next".into(), make_item_json(nid));
+        }
+        // mastery_path omitted (Conditional Release / cyoe not implemented)
+        result_items.push(Value::Object(item));
+    }
+
+    Ok(json!({ "items": result_items }))
+}
+
+async fn get_item_sequence(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    Query(query): Query<ItemSequenceQuery>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    require_course_read_access(&state.db, auth.id, course_id, &auth).await?;
+    let result = build_item_sequence(
+        &state.db,
+        course_id,
+        &query.asset_type,
+        &query.asset_id,
+        auth.id,
+    )
+    .await?;
+    Ok(Json(result))
+}
+
+// --------------------------------------------------------------------------
+// M2: Show module item (module-scoped)
+// GET /courses/{courseId}/modules/{moduleId}/items/{id}
+// (Already registered — listed here for reference.)
+// --------------------------------------------------------------------------
+
+// --------------------------------------------------------------------------
+// M3: Mark item read
+// POST /courses/{courseId}/modules/{moduleId}/items/{id}/mark_read
+// --------------------------------------------------------------------------
+
+async fn mark_item_read(
+    State(state): State<AppState>,
+    Path((course_id, module_id, item_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    require_course_read_access(&state.db, auth.id, course_id, &auth).await?;
+    require_module_in_course(&state.db, course_id, module_id).await?;
+    require_item_in_module(&state.db, module_id, item_id).await?;
+
+    // Load the item to check if it's published/locked
+    let item: Option<(String,)> = sqlx::query_as(
+        r#"SELECT workflow_state FROM module_items WHERE id = $1 AND module_id = $2"#,
+    )
+    .bind(item_id)
+    .bind(module_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    match item {
+        Some((ws,)) if ws == "active" => {
+            // Record a "read" completion event in module_completions
+            sqlx::query(
+                r#"
+                INSERT INTO module_completions (user_id, module_id, module_item_id, workflow_state, created_at, updated_at)
+                VALUES ($1, $2, $3, 'completed', now(), now())
+                ON CONFLICT (user_id, module_item_id)
+                DO UPDATE SET workflow_state = 'completed', updated_at = now()
+                "#,
+            )
+            .bind(auth.id)
+            .bind(module_id)
+            .bind(item_id)
+            .execute(&state.db)
+            .await?;
+            Ok(Json(json!({ "message": "OK" })))
+        }
+        _ => Err(ApiError::Forbidden),
+    }
+}
+
+// --------------------------------------------------------------------------
+// M4: Select mastery path
+// POST /courses/{courseId}/modules/{moduleId}/items/{id}/select_mastery_path
+// assignment_set_id required.  Returns adjusted module items per the
+// Conditional Release rules.  (Lightweight stub — full CYOE deferred.)
+// --------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct SelectMasteryPathBody {
+    pub assignment_set_id: i64,
+}
+
+async fn select_mastery_path(
+    State(state): State<AppState>,
+    Path((course_id, module_id, item_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(body): Json<SelectMasteryPathBody>,
+) -> Result<Json<Value>, ApiError> {
+    require_course_read_access(&state.db, auth.id, course_id, &auth).await?;
+    require_module_in_course(&state.db, course_id, module_id).await?;
+    require_item_in_module(&state.db, module_id, item_id).await?;
+
+    // Load the item — must be an assignment
+    let item_detail: Option<ModuleItemDetail> = sqlx::query_as(
+        r#"
+        SELECT mi.id, mi.module_id, m.course_id, mi.item_type, mi.item_id,
+               mi.position, mi.title, mi.indent, mi.workflow_state,
+               mi.created_at, mi.updated_at,
+               COALESCE(a.title, p.title) AS content_title,
+               p.url AS page_url,
+               a.points_possible::float8 AS points_possible,
+               a.due_at AS due_at
+        FROM module_items mi
+        JOIN modules m ON m.id = mi.module_id
+        LEFT JOIN assignments a ON a.id = mi.item_id AND mi.item_type = 'assignment'
+        LEFT JOIN wiki_pages p ON p.id = mi.item_id AND mi.item_type = 'page'
+        WHERE mi.id = $1 AND mi.module_id = $2 AND mi.item_type = 'assignment'
+        "#,
+    )
+    .bind(item_id)
+    .bind(module_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    match item_detail {
+        Some(item) if item.item_type == "assignment" => {
+            // For now, return the item itself as the "mastery path" result.
+            // Full Conditional Release OverrideHandler logic deferred.
+            Ok(Json(json!({
+                "meta": { "primaryCollection": "assignments" },
+                "items": vec![module_item_json(&item, false)],
+                "assignments": json!([{ "id": item.item_id, "title": item.content_title }])
+            })))
+        }
+        _ => Err(ApiError::Validation("item is not an assignment".into())),
+    }
+}
+
+// --------------------------------------------------------------------------
 // Router
 // --------------------------------------------------------------------------
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // ---- Course Paces (migration 0213) ----
+        .route("/courses/{courseId}/course_pacing", get(get_course_pace))
+        .route(
+            "/courses/{courseId}/course_pacing",
+            post(create_course_pace),
+        )
+        .route(
+            "/courses/{courseId}/course_pacing/{paceId}",
+            get(get_single_pace),
+        )
+        .route(
+            "/courses/{courseId}/course_pacing/{paceId}",
+            put(update_pace),
+        )
+        .route(
+            "/courses/{courseId}/course_pacing/{paceId}",
+            delete(delete_pace),
+        )
+        .route(
+            "/courses/{courseId}/course_pacing/{paceId}/publish",
+            post(publish_pace),
+        )
+        // ---- M1: Item sequence ----
+        .route(
+            "/courses/{courseId}/module_item_sequence",
+            get(get_item_sequence),
+        )
+        // ---- M3: Mark item read ----
+        .route(
+            "/courses/{courseId}/modules/{moduleId}/items/{itemId}/mark_read",
+            post(mark_item_read),
+        )
+        // ---- M4: Select mastery path ----
+        .route(
+            "/courses/{courseId}/modules/{moduleId}/items/{itemId}/select_mastery_path",
+            post(select_mastery_path),
+        )
+        // ---- Modules ----
         .route("/courses/{courseId}/modules", get(list_modules))
         .route("/courses/{courseId}/modules", post(create_module))
         .route(
