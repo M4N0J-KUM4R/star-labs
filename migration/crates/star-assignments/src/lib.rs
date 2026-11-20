@@ -8100,6 +8100,822 @@ async fn assignment_accessibility_queue_scan(
     assignment_accessibility_scan(State(state), Path((course_id, assignment_id)), auth).await
 }
 
+// ---------------------------------------------------------------------------
+// Canvas `submissions_api` — the section twins and the course level bulk
+// grade update.
+//
+// Canvas mounts `SubmissionsApiController` twice: under a course and under a
+// section (`sections_api` reuses it with the section as the context). The
+// section twins and the course level bulk grade update were missing.
+//
+// Canvas `Submission.process_bulk_update` reads `grade_data` as
+// `{ assignment_id => { user_id => { posted_grade, ... } } }`; when the
+// assignment id is part of the path the map is `{ user_id => { ... } }` for
+// that one assignment.
+// ---------------------------------------------------------------------------
+
+/// The preference key of the rubric read state
+/// (Canvas `User#unread_rubric_assessments?`).
+const UNREAD_RUBRIC_KEY: &str = "unread_rubric_comments";
+
+/// The preference key of the document annotation read state
+/// (Canvas `User#unread_submission_annotations?`).
+const UNREAD_ANNOTATIONS_KEY: &str = "unread_submission_annotations";
+
+/// The read state families of the submission routes.
+#[derive(Debug, Clone, Copy)]
+enum ReadStateKind {
+    /// `rubric_comments/read` and `rubric_assessments/read`.
+    Rubric,
+    /// `document_annotations/read`.
+    Annotations,
+}
+
+impl ReadStateKind {
+    /// The user preference Canvas keeps the flag in.
+    fn preference_key(self) -> &'static str {
+        match self {
+            ReadStateKind::Rubric => UNREAD_RUBRIC_KEY,
+            ReadStateKind::Annotations => UNREAD_ANNOTATIONS_KEY,
+        }
+    }
+}
+
+/// The Canvas global id of a submission (`submission-42`).
+fn submission_global_id(submission_id: i64) -> String {
+    format!("submission-{submission_id}")
+}
+
+/// The submission of an assignment and a student (404 when there is none).
+async fn find_submission(pool: &PgPool, assignment_id: i64, user_id: i64) -> Result<i64, ApiError> {
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM submissions WHERE assignment_id = $1 AND user_id = $2")
+            .bind(assignment_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
+    row.map(|(id,)| id).ok_or(ApiError::NotFound)
+}
+
+/// Canvas `User#unread_submission_annotations?` / `unread_rubric_assessments?`.
+async fn submission_unread_preference(
+    pool: &PgPool,
+    user_id: i64,
+    key: &str,
+    submission_id: i64,
+) -> Result<bool, ApiError> {
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT COALESCE(preferences -> $2::text, 'null'::jsonb) \
+         FROM user_preferences WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .bind(key)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some((value,)) = row else {
+        return Ok(false);
+    };
+    Ok(value
+        .get(submission_global_id(submission_id))
+        .and_then(|flag| flag.as_bool())
+        .unwrap_or(false))
+}
+
+/// Canvas `User#mark_submission_annotations_read!` / `mark_rubric_assessments_read!`:
+/// the flag is removed from the preference hash.
+async fn clear_submission_unread_preference(
+    pool: &PgPool,
+    user_id: i64,
+    key: &str,
+    submission_id: i64,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        r#"
+        INSERT INTO user_preferences (user_id, preferences)
+        VALUES ($1, '{}'::jsonb)
+        ON CONFLICT (user_id) DO UPDATE
+        SET preferences = jsonb_set(
+                user_preferences.preferences,
+                ARRAY[$2::text],
+                (COALESCE(user_preferences.preferences -> $2::text, '{}'::jsonb) - $3::text),
+                true),
+            updated_at = now()
+        "#,
+    )
+    .bind(user_id)
+    .bind(key)
+    .bind(submission_global_id(submission_id))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The Progress shaped body of a bulk update. The port applies the grades
+/// before it answers, so the progress is already completed.
+fn bulk_update_progress(
+    context_id: i64,
+    context_type: &str,
+    user_id: i64,
+    tag: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "id": 0,
+        "context_id": context_id,
+        "context_type": context_type,
+        "user_id": user_id,
+        "tag": tag,
+        "completion": 100,
+        "workflow_state": "completed",
+        "created_at": Utc::now(),
+        "updated_at": Utc::now(),
+        "url": String::from("/api/v1/progress/0"),
+    })
+}
+
+/// The `grade_data` of a bulk update.
+fn parse_grade_data(body: &Bytes) -> Result<serde_json::Map<String, serde_json::Value>, ApiError> {
+    let payload: serde_json::Value = serde_json::from_slice(body)
+        .map_err(|_| ApiError::BadRequest("'grade_data' parameter required".into()))?;
+    let grade_data = payload
+        .get("grade_data")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| ApiError::BadRequest("'grade_data' parameter required".into()))?;
+    if grade_data.is_empty() {
+        return Err(ApiError::BadRequest(
+            "'grade_data' parameter required".into(),
+        ));
+    }
+    Ok(grade_data.clone())
+}
+
+/// Canvas `Submission.process_bulk_update` — apply the grades.
+///
+/// `assignment_id` is the assignment of the path when there is one; then the
+/// map is `{ user_id => { ... } }` for that assignment. Otherwise the map is
+/// `{ assignment_id => { user_id => { ... } } }`.
+async fn apply_bulk_grade_data(
+    state: &AppState,
+    auth: &AuthUser,
+    course_id: i64,
+    section_id: Option<i64>,
+    assignment_id: Option<i64>,
+    grade_data: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), ApiError> {
+    // Normalise the payload into (assignment, users) pairs.
+    let mut pairs: Vec<(i64, &serde_json::Map<String, serde_json::Value>)> = Vec::new();
+    match assignment_id {
+        Some(id) => pairs.push((id, grade_data)),
+        None => {
+            for (raw_assignment_id, user_grades) in grade_data {
+                let Ok(id) = raw_assignment_id.parse::<i64>() else {
+                    continue;
+                };
+                if let Some(users) = user_grades.as_object() {
+                    pairs.push((id, users));
+                }
+            }
+        }
+    }
+
+    let mut unknown_assignments: Vec<i64> = Vec::new();
+    let mut unpublished = false;
+
+    for (target_assignment, user_grades) in pairs {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT workflow_state FROM assignments WHERE id = $1 AND course_id = $2",
+        )
+        .bind(target_assignment)
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?;
+
+        let Some((workflow_state,)) = row else {
+            if !unknown_assignments.contains(&target_assignment) {
+                unknown_assignments.push(target_assignment);
+            }
+            continue;
+        };
+        // Canvas only grades published assignments.
+        if workflow_state != "published" {
+            unpublished = true;
+            continue;
+        }
+
+        for (raw_user_id, grade) in user_grades {
+            let Ok(user_id) = raw_user_id.parse::<i64>() else {
+                continue;
+            };
+            // The student has to be in the course, and in the section when the
+            // request is section scoped.
+            let in_course: Option<(i32,)> = sqlx::query_as(
+                "SELECT 1 FROM enrollments \
+                 WHERE course_id = $1 AND user_id = $2 AND workflow_state <> 'deleted' LIMIT 1",
+            )
+            .bind(course_id)
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?;
+            if in_course.is_none() {
+                continue;
+            }
+            if let Some(section_id) = section_id {
+                let in_section: Option<(i32,)> = sqlx::query_as(
+                    "SELECT 1 FROM enrollments \
+                     WHERE course_section_id = $1 AND user_id = $2 \
+                       AND workflow_state <> 'deleted' LIMIT 1",
+                )
+                .bind(section_id)
+                .bind(user_id)
+                .fetch_optional(&state.db)
+                .await?;
+                if in_section.is_none() {
+                    continue;
+                }
+            }
+
+            let score = match grade.get("posted_grade") {
+                Some(value) => parse_grade_value(value)?,
+                None => match grade.get("excuse").and_then(|value| value.as_bool()) {
+                    Some(true) => None,
+                    _ => continue,
+                },
+            };
+
+            let graded_at = if score.is_some() {
+                Some(Utc::now())
+            } else {
+                None
+            };
+            let workflow_state = if score.is_some() {
+                "graded"
+            } else {
+                "submitted"
+            };
+            sqlx::query(
+                r#"
+                INSERT INTO submissions
+                    (assignment_id, user_id, score, graded_at, grader_id, workflow_state)
+                VALUES ($1, $2, $3, $4, $5, $6)
+                ON CONFLICT (assignment_id, user_id) DO UPDATE
+                SET score = EXCLUDED.score,
+                    graded_at = EXCLUDED.graded_at,
+                    grader_id = EXCLUDED.grader_id,
+                    workflow_state = EXCLUDED.workflow_state,
+                    updated_at = now()
+                "#,
+            )
+            .bind(target_assignment)
+            .bind(user_id)
+            .bind(score)
+            .bind(graded_at)
+            .bind(auth.id)
+            .bind(workflow_state)
+            .execute(&state.db)
+            .await?;
+        }
+    }
+
+    // Canvas checks the rights before it reports the unknown assignments, so
+    // that the error does not leak which assignments exist.
+    if unpublished {
+        return Err(ApiError::Forbidden);
+    }
+    if !unknown_assignments.is_empty() {
+        let ids = unknown_assignments
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(ApiError::BadRequest(format!(
+            "Some assignments could not be found: ( {ids} )"
+        )));
+    }
+    Ok(())
+}
+
+/// POST /courses/{courseId}/submissions/update_grades — Canvas `bulk_update`
+/// for a whole course: `grade_data` is `{ assignment_id => { user_id => ... } }`.
+async fn course_bulk_update_grades(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let grade_data = parse_grade_data(&body)?;
+    apply_bulk_grade_data(&state, &auth, course_id, None, None, &grade_data).await?;
+    Ok(Json(bulk_update_progress(
+        course_id,
+        "Course",
+        auth.id,
+        "submissions_update",
+    )))
+}
+
+/// POST /sections/{sectionId}/submissions/update_grades — Canvas `bulk_update`
+/// for a section.
+async fn section_bulk_update_grades(
+    State(state): State<AppState>,
+    Path(section_id): Path<i64>,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let grade_data = parse_grade_data(&body)?;
+    apply_bulk_grade_data(
+        &state,
+        &auth,
+        course_id,
+        Some(section_id),
+        None,
+        &grade_data,
+    )
+    .await?;
+    Ok(Json(bulk_update_progress(
+        section_id,
+        "CourseSection",
+        auth.id,
+        "section_submissions_update",
+    )))
+}
+
+/// POST /sections/{sectionId}/assignments/{assignmentId}/submissions/update_grades
+/// — Canvas `bulk_update` for one assignment of a section.
+async fn section_bulk_update_assignment_grades(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    let grade_data = parse_grade_data(&body)?;
+    apply_bulk_grade_data(
+        &state,
+        &auth,
+        course_id,
+        Some(section_id),
+        Some(assignment_id),
+        &grade_data,
+    )
+    .await?;
+    Ok(Json(bulk_update_progress(
+        section_id,
+        "CourseSection",
+        auth.id,
+        "section_submissions_update",
+    )))
+}
+
+/// PUT /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/read
+/// — Canvas `mark_submission_read` for a section.
+async fn section_mark_submission_read(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_section_user(&state.db, section_id, user_id).await?;
+    mark_submission_read_state(
+        State(state),
+        Path((course_id, assignment_id, user_id)),
+        auth,
+        true,
+    )
+    .await
+}
+
+/// DELETE /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/read
+/// — Canvas `mark_submission_unread` for a section.
+async fn section_mark_submission_unread(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_section_user(&state.db, section_id, user_id).await?;
+    mark_submission_read_state(
+        State(state),
+        Path((course_id, assignment_id, user_id)),
+        auth,
+        false,
+    )
+    .await
+}
+
+/// Canvas `mark_submission_item_read` — mark one item of a submission read.
+///
+/// Items are `grade`, `comment` and `rubric`.
+async fn mark_submission_item_read_for(
+    state: &AppState,
+    auth: &AuthUser,
+    course_id: i64,
+    assignment_id: i64,
+    user_id: i64,
+    item: &str,
+) -> Result<StatusCode, ApiError> {
+    if !matches!(item, "grade" | "comment" | "rubric") {
+        return Err(ApiError::BadRequest(format!("unknown item: {item}")));
+    }
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    let submission_id = find_submission(&state.db, assignment_id, user_id).await?;
+
+    // Canvas: authorized_action(@submission, @current_user, :mark_item_read)
+    if auth.id != user_id && !check_teacher_or_admin(&state.db, auth.id, course_id, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO submission_reads (submission_id, user_id, read_state, read_at, source)
+        VALUES ($1, $2, 'read', now(), $3)
+        ON CONFLICT (submission_id, user_id) DO UPDATE
+            SET read_state = 'read',
+                read_at = now(),
+                source = $3,
+                updated_at = now()
+        "#,
+    )
+    .bind(submission_id)
+    .bind(user_id)
+    .bind(format!("read/{item}"))
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// PUT /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/read/{item}
+/// — Canvas `mark_submission_item_read`.
+async fn course_mark_submission_item_read(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id, item)): Path<(i64, i64, i64, String)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    mark_submission_item_read_for(&state, &auth, course_id, assignment_id, user_id, &item).await
+}
+
+/// PUT /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/read/{item}
+/// — Canvas `mark_submission_item_read` for a section.
+async fn section_mark_submission_item_read(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, user_id, item)): Path<(i64, i64, i64, String)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_section_user(&state.db, section_id, user_id).await?;
+    mark_submission_item_read_for(&state, &auth, course_id, assignment_id, user_id, &item).await
+}
+
+/// PUT /sections/{sectionId}/submissions/bulk_mark_read — Canvas
+/// `mark_bulk_submissions_as_read` for a section. Only the caller's own
+/// submissions are marked.
+async fn section_bulk_mark_read(
+    State(state): State<AppState>,
+    Path(section_id): Path<i64>,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<StatusCode, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    let submission_ids = parse_submission_id_list(&body)?;
+
+    if !submission_ids.is_empty() {
+        sqlx::query(
+            r#"
+            INSERT INTO submission_reads (submission_id, user_id, read_state)
+            SELECT s.id, $2, 'read'
+            FROM submissions s
+            JOIN assignments a ON a.id = s.assignment_id
+            WHERE s.id = ANY($1) AND s.user_id = $2 AND a.course_id = $3
+              AND EXISTS (SELECT 1 FROM enrollments e
+                          WHERE e.course_section_id = $4 AND e.user_id = s.user_id
+                            AND e.workflow_state <> 'deleted')
+            ON CONFLICT (submission_id, user_id) DO UPDATE
+            SET read_state = 'read', updated_at = now()
+            "#,
+        )
+        .bind(&submission_ids)
+        .bind(auth.id)
+        .bind(course_id)
+        .bind(section_id)
+        .execute(&state.db)
+        .await?;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// PUT /sections/{sectionId}/submissions/{userId}/clear_unread — Canvas
+/// `submissions_clear_unread` for a section. Site-admin only.
+async fn section_submissions_clear_unread(
+    State(state): State<AppState>,
+    Path((section_id, user_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    // Canvas: authorized_action(Account.site_admin, @current_user, :manage_students)
+    if !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+    let course_id = load_section_course(&state.db, section_id).await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO submission_reads (submission_id, user_id, read_state, read_at, source)
+        SELECT s.id, $2, 'read', now(), 'clear_unread'
+        FROM submissions s
+        JOIN assignments a ON a.id = s.assignment_id
+        WHERE s.user_id = $2 AND a.course_id = $1
+        ON CONFLICT (submission_id, user_id) DO UPDATE
+        SET read_state = 'read', read_at = now(), source = 'clear_unread', updated_at = now()
+        "#,
+    )
+    .bind(course_id)
+    .bind(user_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Canvas `rubric_assessments_read_state` / `document_annotations_read_state` —
+/// the read state of the submission for the student it belongs to.
+async fn submission_read_state(
+    state: &AppState,
+    auth: &AuthUser,
+    course_id: i64,
+    assignment_id: i64,
+    user_id: i64,
+    kind: ReadStateKind,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    let submission_id = find_submission(&state.db, assignment_id, user_id).await?;
+
+    // Canvas: authorized_action(@submission, @current_user, :read)
+    if auth.id != user_id && !check_teacher_or_admin(&state.db, auth.id, course_id, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let unread =
+        submission_unread_preference(&state.db, user_id, kind.preference_key(), submission_id)
+            .await?;
+    Ok(Json(serde_json::json!({ "read": !unread })))
+}
+
+/// Canvas `mark_rubric_assessments_read` / `mark_document_annotations_read` —
+/// only the student who owns the submission may mark it read.
+async fn mark_submission_read_family(
+    state: &AppState,
+    auth: &AuthUser,
+    course_id: i64,
+    assignment_id: i64,
+    user_id: i64,
+    kind: ReadStateKind,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+    let submission_id = find_submission(&state.db, assignment_id, user_id).await?;
+
+    // Canvas: `return render_unauthorized_action unless @user == @current_user`
+    if auth.id != user_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    clear_submission_unread_preference(&state.db, user_id, kind.preference_key(), submission_id)
+        .await?;
+    Ok(Json(serde_json::json!({ "read": true })))
+}
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/rubric_assessments/read
+/// — Canvas `rubric_assessments_read_state`.
+async fn course_rubric_assessments_read_state(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    submission_read_state(
+        &state,
+        &auth,
+        course_id,
+        assignment_id,
+        user_id,
+        ReadStateKind::Rubric,
+    )
+    .await
+}
+
+/// PUT /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/rubric_assessments/read
+/// — Canvas `mark_rubric_assessments_read`.
+async fn course_mark_rubric_assessments_read(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    mark_submission_read_family(
+        &state,
+        &auth,
+        course_id,
+        assignment_id,
+        user_id,
+        ReadStateKind::Rubric,
+    )
+    .await
+}
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/document_annotations/read
+/// — Canvas `document_annotations_read_state`.
+async fn course_document_annotations_read_state(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    submission_read_state(
+        &state,
+        &auth,
+        course_id,
+        assignment_id,
+        user_id,
+        ReadStateKind::Annotations,
+    )
+    .await
+}
+
+/// PUT /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/document_annotations/read
+/// — Canvas `mark_document_annotations_read`.
+async fn course_mark_document_annotations_read(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    mark_submission_read_family(
+        &state,
+        &auth,
+        course_id,
+        assignment_id,
+        user_id,
+        ReadStateKind::Annotations,
+    )
+    .await
+}
+
+/// GET /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/rubric_assessments/read
+/// — Canvas `rubric_assessments_read_state` for a section.
+async fn section_rubric_assessments_read_state(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_section_user(&state.db, section_id, user_id).await?;
+    submission_read_state(
+        &state,
+        &auth,
+        course_id,
+        assignment_id,
+        user_id,
+        ReadStateKind::Rubric,
+    )
+    .await
+}
+
+/// PUT /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/rubric_assessments/read
+/// — Canvas `mark_rubric_assessments_read` for a section.
+async fn section_mark_rubric_assessments_read(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_section_user(&state.db, section_id, user_id).await?;
+    mark_submission_read_family(
+        &state,
+        &auth,
+        course_id,
+        assignment_id,
+        user_id,
+        ReadStateKind::Rubric,
+    )
+    .await
+}
+
+/// GET /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/document_annotations/read
+/// — Canvas `document_annotations_read_state` for a section.
+async fn section_document_annotations_read_state(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_section_user(&state.db, section_id, user_id).await?;
+    submission_read_state(
+        &state,
+        &auth,
+        course_id,
+        assignment_id,
+        user_id,
+        ReadStateKind::Annotations,
+    )
+    .await
+}
+
+/// PUT /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/document_annotations/read
+/// — Canvas `mark_document_annotations_read` for a section.
+async fn section_mark_document_annotations_read(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_section_user(&state.db, section_id, user_id).await?;
+    mark_submission_read_family(
+        &state,
+        &auth,
+        course_id,
+        assignment_id,
+        user_id,
+        ReadStateKind::Annotations,
+    )
+    .await
+}
+
+/// GET /sections/{sectionId}/students/submissions — Canvas `for_students` for
+/// a section: the submissions of the students of the section.
+async fn section_for_students(
+    State(state): State<AppState>,
+    Path(section_id): Path<i64>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+
+    // Only the students of the section are visible in this context.
+    let students: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT user_id FROM enrollments \
+         WHERE course_section_id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(section_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let Json(list) =
+        list_student_submissions(State(state), Path(course_id), RawQuery(raw_query), auth).await?;
+
+    let filtered: Vec<serde_json::Value> = list
+        .as_array()
+        .map(|items| {
+            items
+                .iter()
+                .filter(|item| {
+                    item.get("user_id")
+                        .and_then(|value| value.as_i64())
+                        .map(|user_id| students.contains(&user_id))
+                        .unwrap_or(false)
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Ok(Json(serde_json::Value::Array(filtered)))
+}
+
+/// POST /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/files
+/// — Canvas `create_file` for a section.
+async fn section_create_submission_file(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<SubmissionFileRequest>,
+) -> Result<(StatusCode, Json<SubmissionAttachment>), ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_section_user(&state.db, section_id, user_id).await?;
+    create_submission_file(
+        State(state),
+        Path((course_id, assignment_id, user_id)),
+        auth,
+        Json(payload),
+    )
+    .await
+}
+
+/// GET /sections/{sectionId}/assignments/{assignmentId}/submission_summary —
+/// Canvas `submission_summary` for a section.
+async fn section_submission_summary(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    submission_summary(State(state), Path((course_id, assignment_id)), auth).await
+}
+
 /// Build the assignments router.
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -8349,6 +9165,80 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/extensions",
             post(create_assignment_extension),
+        )
+        // Canvas submissions_api — the section twins and the course level bulk
+        // grade update (the parity report counted them as missing).
+        .route(
+            "/courses/{courseId}/submissions/update_grades",
+            post(course_bulk_update_grades),
+        )
+        .route(
+            "/sections/{sectionId}/submissions/update_grades",
+            post(section_bulk_update_grades),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submissions/update_grades",
+            post(section_bulk_update_assignment_grades),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/read",
+            put(section_mark_submission_read).delete(section_mark_submission_unread),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/read/{item}",
+            put(course_mark_submission_item_read),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/read/{item}",
+            put(section_mark_submission_item_read),
+        )
+        .route(
+            "/sections/{sectionId}/submissions/bulk_mark_read",
+            put(section_bulk_mark_read),
+        )
+        .route(
+            "/sections/{sectionId}/submissions/{userId}/clear_unread",
+            put(section_submissions_clear_unread),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/rubric_assessments/read",
+            get(course_rubric_assessments_read_state).put(course_mark_rubric_assessments_read),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/rubric_comments/read",
+            get(course_rubric_assessments_read_state).put(course_mark_rubric_assessments_read),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/document_annotations/read",
+            get(course_document_annotations_read_state)
+                .put(course_mark_document_annotations_read),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/rubric_assessments/read",
+            get(section_rubric_assessments_read_state)
+                .put(section_mark_rubric_assessments_read),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/rubric_comments/read",
+            get(section_rubric_assessments_read_state)
+                .put(section_mark_rubric_assessments_read),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/document_annotations/read",
+            get(section_document_annotations_read_state)
+                .put(section_mark_document_annotations_read),
+        )
+        .route(
+            "/sections/{sectionId}/students/submissions",
+            get(section_for_students),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/files",
+            post(section_create_submission_file),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submission_summary",
+            get(section_submission_summary),
         )
         // Section submissions twins — Canvas sections_api_controller#submissions/#submission
         .route(
