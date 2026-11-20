@@ -2263,9 +2263,14 @@ async fn delete_deployment_scoped(
     .execute(&state.db)
     .await?;
 
-    let root = deployment.context_type == "Account"
-        && is_root_account(&state.db, deployment.context_id).await?;
-    Ok(Json(deployment_json(&deployment, root)))
+    // Canvas renders the destroyed deployment's JSON (deployments_
+    // controller.rb:164-170), with workflow_state 'deleted' on the returned
+    // record — the same shape delete_registration uses.
+    let mut deleted = deployment;
+    deleted.workflow_state = STATE_DELETED.to_string();
+    let root =
+        deleted.context_type == "Account" && is_root_account(&state.db, deleted.context_id).await?;
+    Ok(Json(deployment_json(&deleted, root)))
 }
 
 /// An active deployment of a registration (Canvas
