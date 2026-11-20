@@ -977,17 +977,17 @@ async fn overlay_versions(pool: &PgPool) -> Result<Vec<Value>, ApiError> {
     .await?;
 
     let mut versions = Vec::with_capacity(rows.len());
-    for (
-        id,
-        account_id,
-        root_account_id,
-        lti_overlay_id,
-        diff,
-        caused_by_reset,
-        created_at,
-        updated_at,
-    ) in rows
-    {
+    for row in rows {
+        let OverlayVersionRow {
+            id,
+            account_id,
+            root_account_id,
+            lti_overlay_id,
+            diff,
+            caused_by_reset,
+            created_at,
+            updated_at,
+        } = row;
         versions.push(json!({
             "id": id,
             "account_id": account_id,

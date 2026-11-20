@@ -812,8 +812,10 @@ async fn validate_workflow_state_change(
                 json!(["Cannot publish while source files are still processing"]),
             );
         }
-    } else if new_workflow_state == "unpublished" {
-        if !can_unpublish(pool, row).await.unwrap_or(false) {
+    } else if new_workflow_state == "unpublished"
+        && !can_unpublish(pool, row).await.unwrap_or(false)
+    {
+        {
             if !indexing_allows_publish_changes(pool, row)
                 .await
                 .unwrap_or(true)
