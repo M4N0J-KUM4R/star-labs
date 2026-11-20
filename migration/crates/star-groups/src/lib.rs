@@ -689,7 +689,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/groups/{groupId}/memberships/{membershipId}",
-            put(update_membership),
+            put(update_membership).patch(update_membership),
         )
         .route(
             "/groups/{groupId}/memberships/{membershipId}",
@@ -706,6 +706,11 @@ pub fn router() -> Router<AppState> {
         .route(
             "/groups/{groupId}/users/{userId}",
             delete(remove_group_user),
+        )
+        // Canvas group_memberships#update addressed by user id.
+        .route(
+            "/groups/{groupId}/users/{userId}",
+            put(update_membership_by_user).patch(update_membership_by_user),
         )
         // Canvas groups#invite and group file metadata
         .route("/groups/{groupId}/invite", post(invite_group_users))
@@ -1267,6 +1272,43 @@ async fn update_membership(
     auth: AuthUser,
     Json(payload): Json<UpdateMembership>,
 ) -> Result<Json<MembershipWithUser>, ApiError> {
+    apply_membership_update(&state, group_id, membership_id, payload, &auth).await
+}
+
+/// PATCH/PUT /groups/{groupId}/users/{userId} — the same membership update,
+/// addressed by the member's user id.
+///
+/// Canvas routes `resources :users, path: "groups/:group_id/users"` to
+/// `group_memberships#update`, and `find_membership` resolves the membership
+/// through `params[:user_id]`, so the path segment is a user id.
+async fn update_membership_by_user(
+    State(state): State<AppState>,
+    Path((group_id, user_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateMembership>,
+) -> Result<Json<MembershipWithUser>, ApiError> {
+    let membership: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM group_memberships \
+         WHERE group_id = $1 AND user_id = $2 AND workflow_state != 'deleted'",
+    )
+    .bind(group_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((membership_id,)) = membership else {
+        return Err(ApiError::NotFound);
+    };
+    apply_membership_update(&state, group_id, membership_id, payload, &auth).await
+}
+
+/// The shared body of Canvas `group_memberships#update`.
+async fn apply_membership_update(
+    state: &AppState,
+    group_id: i64,
+    membership_id: i64,
+    payload: UpdateMembership,
+    auth: &AuthUser,
+) -> Result<Json<MembershipWithUser>, ApiError> {
     if fetch_active_group_join_level(&state.db, group_id)
         .await?
         .is_none()
@@ -1287,7 +1329,7 @@ async fn update_membership(
     let (user_id, _old_state) = existing.ok_or(ApiError::NotFound)?;
 
     // Auth: :update on membership — teacher/admin or the member themselves
-    if user_id != auth.id && !is_teacher_in_group(&state.db, auth.id, group_id, &auth).await? {
+    if user_id != auth.id && !is_teacher_in_group(&state.db, auth.id, group_id, auth).await? {
         return Err(ApiError::Forbidden);
     }
 
