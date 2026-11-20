@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0222",
- "next_available": "0223",
+ "max_merged": "0223",
+ "next_available": "0224",
  "reservations": {
   "0001": {
    "issue": null,
@@ -700,6 +700,11 @@
   "0222": {
    "issue": 70,
    "note": "star-ui: password reset tokens (issue #70)",
+   "status": "merged"
+  },
+  "0223": {
+   "issue": 69,
+   "note": "LTI registrations deep: context controls, overlay versions, registration history",
    "status": "merged"
   }
  }
