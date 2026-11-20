@@ -1041,8 +1041,8 @@ async fn show_experience(
 
     // Canvas `authorized_action(@ai_experience, @current_user, :read)`: a
     // manager reads any experience, a student only a published one.
-    let can_manage = can_manage(&state.db, &auth, path.course_id).await?;
-    if !can_manage && row.workflow_state != "published" {
+    let manager = can_manage(&state.db, &auth, path.course_id).await?;
+    if !manager && row.workflow_state != "published" {
         return Ok(unauthorized());
     }
 
@@ -1050,7 +1050,7 @@ async fn show_experience(
         &state.db,
         &row,
         ExperienceJsonOptions {
-            can_manage: Some(can_manage),
+            can_manage: Some(manager),
             submission_status: None,
             failed_context_file_names: None,
         },
