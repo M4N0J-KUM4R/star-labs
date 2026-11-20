@@ -8177,7 +8177,7 @@ async fn submission_unread_preference(
         return Ok(false);
     };
     Ok(value
-        .get(&submission_global_id(submission_id))
+        .get(submission_global_id(submission_id))
         .and_then(|flag| flag.as_bool())
         .unwrap_or(false))
 }

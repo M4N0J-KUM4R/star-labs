@@ -327,7 +327,7 @@ async fn the_section_bulk_grade_update_is_scoped_to_the_section() {
     )
     .bind(assignment)
     .bind(outsider)
-    .fetch_one(&pool)
+    .fetch_optional(&pool)
     .await
     .expect("read score");
     assert_eq!(outsider_score, None);
