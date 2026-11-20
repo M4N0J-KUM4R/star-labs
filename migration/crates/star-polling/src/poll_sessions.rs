@@ -380,9 +380,8 @@ async fn update(
     if let Some(requested) = params.course_id {
         // `belongs_to :course` — a course that does not exist fails the
         // validation and the controller answers 400.
-        let requested = requested.ok_or_else(|| {
-            ApiError::BadRequest("That course section does not belong to the existing course.".into())
-        })?;
+        let requested =
+            requested.ok_or_else(|| ApiError::BadRequest("Course must exist".into()))?;
         if !course_exists(&app.db, requested).await? {
             return Err(ApiError::BadRequest("Course must exist".into()));
         }
@@ -694,7 +693,10 @@ fn session_json(
         }
         object.insert("results".to_string(), Value::Object(results));
     }
-    object.insert("course_id".to_string(), json!(session.course_id.to_string()));
+    object.insert(
+        "course_id".to_string(),
+        json!(session.course_id.to_string()),
+    );
     object.insert(
         "course_section_id".to_string(),
         match session.course_section_id {
@@ -765,7 +767,7 @@ fn jsonapi_meta(
         0
     };
 
-    let current = page_url(headers, uri, page, per_page);
+    let current = page_url(headers, uri, &page.to_string(), per_page);
     let mut pagination_meta = Map::new();
     pagination_meta.insert("per_page".to_string(), json!(per_page));
     pagination_meta.insert("page".to_string(), json!(page));
@@ -774,31 +776,28 @@ fn jsonapi_meta(
     pagination_meta.insert("current".to_string(), json!(current));
     pagination_meta.insert(
         "template".to_string(),
-        json!(page_url(headers, uri, page, per_page).replace(
-            &format!("page={page}"),
-            "page={page}"
-        )),
+        json!(page_url(headers, uri, "{page}", per_page)),
     );
     if page < page_count {
         pagination_meta.insert(
             "next".to_string(),
-            json!(page_url(headers, uri, page + 1, per_page)),
+            json!(page_url(headers, uri, &(page + 1).to_string(), per_page)),
         );
     }
     if page > 1 {
         pagination_meta.insert(
             "prev".to_string(),
-            json!(page_url(headers, uri, page - 1, per_page)),
+            json!(page_url(headers, uri, &(page - 1).to_string(), per_page)),
         );
     }
     pagination_meta.insert(
         "first".to_string(),
-        json!(page_url(headers, uri, 1, per_page)),
+        json!(page_url(headers, uri, "1", per_page)),
     );
     if page_count > 0 {
         pagination_meta.insert(
             "last".to_string(),
-            json!(page_url(headers, uri, page_count, per_page)),
+            json!(page_url(headers, uri, &page_count.to_string(), per_page)),
         );
     }
 
@@ -809,14 +808,17 @@ fn jsonapi_meta(
 }
 
 /// Build the pagination link of a collection.
-fn page_url(headers: &HeaderMap, uri: &OriginalUri, page: i64, per_page: i64) -> String {
+fn page_url(headers: &HeaderMap, uri: &OriginalUri, page: &str, per_page: i64) -> String {
     let host = headers
         .get(axum::http::header::HOST)
         .and_then(|value| value.to_str().ok())
         .unwrap_or("localhost");
     format!(
-        "http://{host}{}?page={page}&per_page={per_page}",
-        uri.path()
+        "http://{host}{path}?page={page}&per_page={per_page}",
+        host = host,
+        path = uri.path(),
+        page = page,
+        per_page = per_page,
     )
 }
 
@@ -835,11 +837,7 @@ async fn load_poll(db: &PgPool, poll_id: i64) -> Result<Poll, ApiError> {
 
 /// `@poll.poll_sessions.find(id)` — 404 when the session does not belong to
 /// the poll.
-async fn load_session(
-    db: &PgPool,
-    poll_id: i64,
-    session_id: i64,
-) -> Result<PollSession, ApiError> {
+async fn load_session(db: &PgPool, poll_id: i64, session_id: i64) -> Result<PollSession, ApiError> {
     sqlx::query_as(
         "SELECT id, poll_id, course_id, course_section_id, has_public_results, is_published, created_at \
          FROM poll_sessions WHERE id = $1 AND poll_id = $2",
@@ -859,11 +857,7 @@ async fn course_exists(db: &PgPool, course_id: i64) -> Result<bool, ApiError> {
     Ok(exists)
 }
 
-async fn section_in_course(
-    db: &PgPool,
-    section_id: i64,
-    course_id: i64,
-) -> Result<bool, ApiError> {
+async fn section_in_course(db: &PgPool, section_id: i64, course_id: i64) -> Result<bool, ApiError> {
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM course_sections WHERE id = $1 AND course_id = $2)",
     )
@@ -882,11 +876,7 @@ async fn section_in_course(
 ///
 /// The creator of the poll may update it; so may a teacher of a course the
 /// poll has a session in (`manage_course_content_edit`).
-async fn poll_grants_update(
-    db: &PgPool,
-    auth: &AuthUser,
-    poll: &Poll,
-) -> Result<bool, ApiError> {
+async fn poll_grants_update(db: &PgPool, auth: &AuthUser, poll: &Poll) -> Result<bool, ApiError> {
     if auth.role == "admin" {
         return Ok(true);
     }

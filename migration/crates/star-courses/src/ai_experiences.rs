@@ -225,6 +225,14 @@ struct ConversationPath {
     id: i64,
 }
 
+/// Path parameters of the conversation collection routes — they carry the
+/// experience but no conversation.
+#[derive(Debug, Deserialize)]
+struct ConversationsPath {
+    course_id: i64,
+    ai_experience_id: i64,
+}
+
 /// Path parameters of the teacher conversation routes of the AI Experiences
 /// controller.
 #[derive(Debug, Deserialize)]
@@ -235,13 +243,28 @@ struct ExperienceConversationPath {
 }
 
 /// Path parameters of the message feedback routes.
+///
+/// The message and the feedback id are the request of the external
+/// `llm-conversation` service; they are not read locally.
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct FeedbackPath {
     course_id: i64,
     ai_experience_id: i64,
     id: i64,
     message_id: String,
     feedback_id: String,
+}
+
+/// Path parameters of the feedback creation route — it carries the message
+/// but no feedback id.
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+struct FeedbackCreatePath {
+    course_id: i64,
+    ai_experience_id: i64,
+    id: i64,
+    message_id: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -1221,7 +1244,7 @@ async fn destroy_experience(
 /// without a conversation are listed with `has_conversation: false`.
 async fn ai_conversations_index(
     State(state): State<AppState>,
-    Path(path): Path<ExperienceConversationPath>,
+    Path(path): Path<ExperiencePath>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
     if !feature_enabled(&state.db, path.course_id, FEATURE_AI_EXPERIENCES).await? {
@@ -1365,7 +1388,7 @@ async fn load_conversation(
 /// Answers an empty object when the user has no active conversation.
 async fn active_conversation(
     State(state): State<AppState>,
-    Path(path): Path<ConversationPath>,
+    Path(path): Path<ConversationsPath>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
     if !feature_enabled(&state.db, path.course_id, FEATURE_AI_EXPERIENCES).await? {
@@ -1437,7 +1460,7 @@ async fn show_conversation(
 /// — Canvas `create`.
 async fn create_conversation(
     State(state): State<AppState>,
-    Path(path): Path<ConversationPath>,
+    Path(path): Path<ConversationsPath>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
     if !feature_enabled(&state.db, path.course_id, FEATURE_AI_EXPERIENCES).await? {
@@ -1505,7 +1528,7 @@ async fn post_message(
 /// `create_feedback`.
 async fn create_feedback(
     State(state): State<AppState>,
-    Path(path): Path<FeedbackPath>,
+    Path(path): Path<FeedbackCreatePath>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
     if !feature_enabled(&state.db, path.course_id, FEATURE_AI_EXPERIENCES).await? {
@@ -1689,7 +1712,6 @@ pub fn router() -> Router<AppState> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     #[test]
     fn routes_build() {
