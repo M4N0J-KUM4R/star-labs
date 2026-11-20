@@ -293,7 +293,7 @@ async fn course_account_chain(pool: &PgPool, course_id: i64) -> Result<Vec<i64>,
                 .await?;
         chain.push(current);
         match parent {
-            Some((Some(parent_id))) => current = parent_id,
+            Some((Some(parent_id),)) => current = parent_id,
             _ => break,
         }
     }

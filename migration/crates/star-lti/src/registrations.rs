@@ -29,8 +29,8 @@
 //!    — `404` when the account is missing, or when it is a sub-account and
 //!    the root account does not have `canvas_apps_sub_account_access`.
 //! 2. `require_lti_registrations_next_feature_flag` (`reset`, `context_search`,
-//!    `overlay_history`) / `require_lti_registrations_history_feature_flag`
-//!    (`history`) / `require_lti_deactivate_registrations_flag` (`unbind`)
+//!    `overlay_history`), `require_lti_registrations_history_feature_flag`
+//!    (`history`) and `require_lti_deactivate_registrations_flag` (`unbind`)
 //!    — `404` when the root account lacks the flag.
 //! 3. `require_manage_lti_registrations` — `403` without the account admin
 //!    right.
@@ -77,9 +77,9 @@ const DEFAULT_PER_PAGE: i64 = 10;
 /// Canvas `Api::MAX_PER_PAGE`.
 const MAX_PER_PAGE: i64 = 100;
 
-/// Canvas `Lti::ResourcePlacement::PLACEMENTS` (the subset that matters for
+/// Canvas `Lti::ResourcePlacement::PLACEMENTS` — the subset that matters for
 /// the launch-settings filter in `Schemas::InternalLtiConfiguration
-/// .from_lti_configuration`).
+/// .from_lti_configuration`.
 const PLACEMENTS: &[&str] = &[
     "account_navigation",
     "analytics_hub",
@@ -282,7 +282,8 @@ pub struct HistoryQuery {
     pub per_page: Option<i64>,
 }
 
-/// Query of `GET /lti_registrations/{registration_id}/deployments/{deployment_id}/context_search`.
+/// Query of
+/// `GET /lti_registrations/{registration_id}/deployments/{deployment_id}/context_search`.
 #[derive(Debug, Deserialize, Default)]
 pub struct ContextSearchQuery {
     pub only_children_of: Option<String>,
@@ -470,7 +471,11 @@ async fn site_admin_account_id(pool: &PgPool) -> Result<i64, ApiError> {
 }
 
 /// Canvas `Account#feature_enabled?`.
-async fn feature_enabled(pool: &PgPool, account_id: i64, feature: &str) -> Result<bool, ApiError> {
+async fn feature_enabled(
+    pool: &PgPool,
+    account_id: i64,
+    feature: &str,
+) -> Result<bool, ApiError> {
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT state FROM feature_flags \
          WHERE context_type = 'Account' AND context_id = $1 AND feature = $2 LIMIT 1",
@@ -482,23 +487,15 @@ async fn feature_enabled(pool: &PgPool, account_id: i64, feature: &str) -> Resul
     Ok(row.map(|(state,)| state == "enabled").unwrap_or(false))
 }
 
-/// Canvas' controller-level `before_action` chain, steps 1 and 3:
-/// the account context, the sub-account feature flag and the account admin
-/// right.
-async fn guard(pool: &PgPool, auth: &AuthUser, account_id: i64) -> Result<Ctx, ApiError> {
+/// Canvas `require_root_account_instrumented_or_sub_account_and_feature_flag`.
+async fn account_context(pool: &PgPool, account_id: i64) -> Result<Ctx, ApiError> {
     require_account(pool, account_id).await?;
 
     let root_id = root_account_id(pool, account_id).await?;
     let is_root = root_id == account_id;
 
-    // require_root_account_instrumented_or_sub_account_and_feature_flag
     if !is_root && !feature_enabled(pool, root_id, "canvas_apps_sub_account_access").await? {
         return Err(ApiError::NotFound);
-    }
-
-    // require_manage_lti_registrations
-    if !can_manage_account(pool, auth, account_id).await? {
-        return Err(ApiError::Forbidden);
     }
 
     Ok(Ctx {
@@ -507,6 +504,20 @@ async fn guard(pool: &PgPool, auth: &AuthUser, account_id: i64) -> Result<Ctx, A
         is_root_account: is_root,
         site_admin_id: site_admin_account_id(pool).await?,
     })
+}
+
+/// Canvas `require_manage_lti_registrations` — `403` without the account
+/// admin right.
+async fn require_manage(
+    pool: &PgPool,
+    auth: &AuthUser,
+    account_id: i64,
+) -> Result<(), ApiError> {
+    if can_manage_account(pool, auth, account_id).await? {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden)
+    }
 }
 
 /// Canvas `restrict_sub_account_to_read_only` — `403` for sub-accounts.
@@ -681,11 +692,7 @@ async fn user_summary(pool: &PgPool, user_id: Option<i64>) -> Result<Option<Valu
 }
 
 /// Canvas `lti_registration_account_binding_json` shape.
-fn binding_json(
-    binding: &BindingRow,
-    created_by: Option<Value>,
-    updated_by: Option<Value>,
-) -> Value {
+fn binding_json(binding: &BindingRow, created_by: Option<Value>, updated_by: Option<Value>) -> Value {
     let mut json = json!({
         "id": binding.id,
         "account_id": binding.account_id,
@@ -723,8 +730,16 @@ fn update_request_json(
         "root_account_id": request.root_account_id,
         "lti_registration_id": request.lti_registration_id,
         "uuid": request.uuid,
-        "reinstall": request.extra.get("reinstall").and_then(Value::as_bool).unwrap_or(false),
-        "tool_initiated": request.extra.get("tool_initiated").and_then(Value::as_bool).unwrap_or(false),
+        "reinstall": request
+            .extra
+            .get("reinstall")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        "tool_initiated": request
+            .extra
+            .get("tool_initiated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         "comment": request.extra.get("comment").cloned().unwrap_or(Value::Null),
         "created_at": request.created_at,
         "updated_at": request.updated_at,
@@ -874,10 +889,7 @@ fn apply_overlay(config: &Value, overlay: &Value) -> Value {
         }
     }
     if !launch_settings.is_empty() {
-        result_map.insert(
-            "launch_settings".to_string(),
-            Value::Object(launch_settings),
-        );
+        result_map.insert("launch_settings".to_string(), Value::Object(launch_settings));
     }
 
     // disabled_scopes takes precedence over scopes.
@@ -889,10 +901,7 @@ fn apply_overlay(config: &Value, overlay: &Value) -> Value {
 
     // The per-placement overlay wins over the base placement.
     if let Some(placements_overlay) = overlay_map.get("placements").and_then(Value::as_object) {
-        if let Some(placements) = result_map
-            .get_mut("placements")
-            .and_then(Value::as_array_mut)
-        {
+        if let Some(placements) = result_map.get_mut("placements").and_then(Value::as_array_mut) {
             for placement in placements.iter_mut() {
                 let Some(placement_map) = placement.as_object_mut() else {
                     continue;
@@ -912,14 +921,8 @@ fn apply_overlay(config: &Value, overlay: &Value) -> Value {
     }
 
     // disabled_placements takes precedence over placements.
-    if let Some(disabled) = overlay_map
-        .get("disabled_placements")
-        .and_then(Value::as_array)
-    {
-        if let Some(placements) = result_map
-            .get_mut("placements")
-            .and_then(Value::as_array_mut)
-        {
+    if let Some(disabled) = overlay_map.get("disabled_placements").and_then(Value::as_array) {
+        if let Some(placements) = result_map.get_mut("placements").and_then(Value::as_array_mut) {
             for placement in placements.iter_mut() {
                 let Some(placement_map) = placement.as_object_mut() else {
                     continue;
@@ -957,8 +960,8 @@ async fn overlay_versions(pool: &PgPool) -> Result<Vec<Value>, ApiError> {
         DateTime<Utc>,
     )> = sqlx::query_as(
         "SELECT id, account_id, root_account_id, lti_overlay_id, diff, caused_by_reset, \
-                    created_at, updated_at \
-             FROM lti_overlay_versions ORDER BY created_at DESC LIMIT $1",
+                created_at, updated_at \
+         FROM lti_overlay_versions ORDER BY created_at DESC LIMIT $1",
     )
     .bind(DEFAULT_PER_PAGE)
     .fetch_all(pool)
@@ -1001,9 +1004,7 @@ fn required_error(pointer: &str, missing: &str) -> String {
 
 /// JSONSchemer's message for a type mismatch.
 fn type_error(pointer: &str, actual: &str, expected: &str) -> String {
-    format!(
-        "The property '{pointer}' of type {actual} did not match the following type: {expected}."
-    )
+    format!("The property '{pointer}' of type {actual} did not match the following type: {expected}.")
 }
 
 /// The JSON type name of a value, as JSONSchemer reports it.
@@ -1041,26 +1042,20 @@ fn lti_configuration_errors(config: &Value) -> Vec<String> {
         return errors;
     };
 
-    for required in [
-        "title",
-        "description",
-        "target_link_uri",
-        "oidc_initiation_url",
-    ] {
+    for required in ["title", "description", "target_link_uri", "oidc_initiation_url"] {
         if !map.contains_key(required) {
             errors.push(required_error("#/", required));
         }
     }
 
-    let string_properties = [
+    for property in [
         "title",
         "description",
         "target_link_uri",
         "oidc_initiation_url",
         "oidc_initiation_urls",
         "public_jwk_url",
-    ];
-    for property in string_properties {
+    ] {
         if let Some(value) = map.get(property) {
             check_type(&mut errors, &format!("#/{property}"), value, &["string"]);
         }
@@ -1074,10 +1069,8 @@ fn lti_configuration_errors(config: &Value) -> Vec<String> {
     }
     if let Some(value) = map.get("scopes") {
         if check_type(&mut errors, "#/scopes", value, &["array"]) {
-            if let Some(items) = value.as_array() {
-                for (index, item) in items.iter().enumerate() {
-                    check_type(&mut errors, &format!("#/scopes/{index}"), item, &["string"]);
-                }
+            for (index, item) in value.as_array().unwrap_or_default().iter().enumerate() {
+                check_type(&mut errors, &format!("#/scopes/{index}"), item, &["string"]);
             }
         }
     }
@@ -1175,21 +1168,14 @@ fn internal_configuration_errors(config: &Value) -> Vec<String> {
     }
     if let Some(value) = map.get("redirect_uris") {
         if check_type(&mut errors, "#/redirect_uris", value, &["array"]) {
-            if let Some(items) = value.as_array() {
-                if items.is_empty() {
-                    errors.push(
-                        "The property '#/redirect_uris' did not have a minimum of 1 items."
-                            .to_string(),
-                    );
-                }
-                for (index, item) in items.iter().enumerate() {
-                    check_type(
-                        &mut errors,
-                        &format!("#/redirect_uris/{index}"),
-                        item,
-                        &["string"],
-                    );
-                }
+            let items = value.as_array().unwrap_or_default();
+            if items.is_empty() {
+                errors.push(
+                    "The property '#/redirect_uris' did not have a minimum of 1 items.".to_string(),
+                );
+            }
+            for (index, item) in items.iter().enumerate() {
+                check_type(&mut errors, &format!("#/redirect_uris/{index}"), item, &["string"]);
             }
         }
     }
@@ -1220,12 +1206,7 @@ fn internal_configuration_errors(config: &Value) -> Vec<String> {
         }
         let settings = value.as_object().unwrap();
         if let Some(icon_url) = settings.get("icon_url") {
-            check_type(
-                &mut errors,
-                "#/launch_settings/icon_url",
-                icon_url,
-                &["string"],
-            );
+            check_type(&mut errors, "#/launch_settings/icon_url", icon_url, &["string"]);
         }
     }
 
@@ -1261,12 +1242,7 @@ fn overlay_errors(overlay: &Value) -> Vec<String> {
         if let Some(value) = map.get(property) {
             if check_type(&mut errors, &format!("#/{property}"), value, &["array"]) {
                 for (index, item) in value.as_array().unwrap_or_default().iter().enumerate() {
-                    check_type(
-                        &mut errors,
-                        &format!("#/{property}/{index}"),
-                        item,
-                        &["string"],
-                    );
+                    check_type(&mut errors, &format!("#/{property}/{index}"), item, &["string"]);
                 }
             }
         }
@@ -1280,12 +1256,7 @@ fn overlay_errors(overlay: &Value) -> Vec<String> {
                 }
                 for property in ["text", "target_link_uri", "icon_url"] {
                     if let Some(value) = placement.as_object().unwrap().get(property) {
-                        check_type(
-                            &mut errors,
-                            &format!("{pointer}/{property}"),
-                            value,
-                            &["string"],
-                        );
+                        check_type(&mut errors, &format!("{pointer}/{property}"), value, &["string"]);
                     }
                 }
             }
@@ -1307,15 +1278,15 @@ fn from_lti_configuration(config: &Value) -> Value {
         .and_then(|value| value.as_array().cloned())
         .unwrap_or_default();
 
-    let mut canvas_extension = Value::Object(Default::default());
+    let mut canvas_extension: Option<Value> = None;
     let mut vendor_extensions = Vec::new();
     for extension in extensions {
         let platform = extension.get("platform").and_then(Value::as_str);
-        if platform == Some("canvas.instructure.com") && !canvas_extension.is_object() {
-            canvas_extension = extension;
-        } else if platform == Some("canvas.instructure.com") {
+        if platform == Some("canvas.instructure.com") {
             // Canvas keeps the first Canvas extension only.
-            continue;
+            if canvas_extension.is_none() {
+                canvas_extension = Some(extension);
+            }
         } else {
             vendor_extensions.push(extension);
         }
@@ -1332,7 +1303,9 @@ fn from_lti_configuration(config: &Value) -> Value {
         map.insert("scopes".to_string(), json!([]));
     }
 
-    let mut canvas_map = canvas_extension.as_object().cloned().unwrap_or_default();
+    let mut canvas_map = canvas_extension
+        .and_then(|extension| extension.as_object().cloned())
+        .unwrap_or_default();
     canvas_map.remove("platform");
 
     let mut launch_settings = canvas_map
@@ -1347,10 +1320,7 @@ fn from_lti_configuration(config: &Value) -> Value {
     for (key, value) in canvas_map {
         map.insert(key, value);
     }
-    map.insert(
-        "launch_settings".to_string(),
-        Value::Object(launch_settings),
-    );
+    map.insert("launch_settings".to_string(), Value::Object(launch_settings));
     map.insert("placements".to_string(), placements);
 
     result
@@ -1380,7 +1350,7 @@ fn validate_workflow_state(ctx: &Ctx, value: Option<&str>) -> Option<Response> {
     if resolve_workflow_state(Some(value)).is_some() && value != "allow" {
         return None;
     }
-    if value == "allow" && ctx.site_admin_id == ctx.account_id {
+    if value == "allow" && ctx.account_id == ctx.site_admin_id {
         return None;
     }
     if value == "allow" {
@@ -1411,7 +1381,8 @@ pub async fn validate_configuration(
     auth: AuthUser,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
+    require_manage(&state.db, &auth, account_id).await?;
 
     // `validate_lti_configuration` is not in the controller's `except:` list,
     // so sub-accounts may not use it.
@@ -1447,7 +1418,7 @@ pub async fn validate_configuration(
         // has no HTTP client dependency, so the URL branch cannot be served.
         None => {
             return Ok(configuration_errors(vec![
-                "invalid configuration url".to_string()
+                "invalid configuration url".to_string(),
             ]))
         }
     };
@@ -1462,18 +1433,15 @@ pub async fn validate_configuration(
     // Canvas adds the redirect URIs so the UI can display them.
     {
         let map = configuration.as_object_mut().unwrap();
-        if !map.contains_key("redirect_uris") {
-            let target_link_uri = map.get("target_link_uri").cloned().unwrap_or(Value::Null);
-            map.insert("redirect_uris".to_string(), json!([target_link_uri]));
-        } else if let Some(value) = map.get("redirect_uris") {
-            if value.is_array() {
-                // already an array
-            } else if value.is_null() {
-                let target_link_uri = map.get("target_link_uri").cloned().unwrap_or(Value::Null);
-                map.insert("redirect_uris".to_string(), json!([target_link_uri]));
-            } else {
+        let target_link_uri = map.get("target_link_uri").cloned().unwrap_or(Value::Null);
+        match map.get("redirect_uris") {
+            Some(Value::Array(_)) => {}
+            Some(Value::String(value)) => {
                 let single = value.clone();
                 map.insert("redirect_uris".to_string(), json!([single]));
+            }
+            _ => {
+                map.insert("redirect_uris".to_string(), json!([target_link_uri]));
             }
         }
     }
@@ -1491,7 +1459,8 @@ pub async fn check_domain_duplicates(
     auth: AuthUser,
     Query(params): Query<DomainDuplicatesQuery>,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
+    require_manage(&state.db, &auth, account_id).await?;
 
     let domain = params.domain.unwrap_or_default();
     if domain.trim().is_empty() {
@@ -1499,24 +1468,20 @@ pub async fn check_domain_duplicates(
     }
     let normalized = domain.trim().to_lowercase();
 
-    let templates_enabled = feature_enabled(
-        &state.db,
-        ctx.root_account_id,
-        "lti_registrations_templates",
-    )
-    .await?;
+    let templates_enabled =
+        feature_enabled(&state.db, ctx.root_account_id, "lti_registrations_templates").await?;
 
     let mut duplicates: Vec<Value> = Vec::new();
 
     if templates_enabled {
-        // With templates enabled only the account's own registrations count.
+        // With templates enabled only the account's own registrations count
+        // (the local copies carry the domain of their template).
         duplicates.extend(
             registrations_with_domain(
                 &state.db,
                 &ctx,
                 &normalized,
                 "r.account_id = $1 AND r.workflow_state <> 'deleted'",
-                &[],
             )
             .await?,
         );
@@ -1529,7 +1494,6 @@ pub async fn check_domain_duplicates(
                 &normalized,
                 "r.account_id = $1 AND r.workflow_state <> 'deleted' \
                  AND r.template_registration_id IS NULL",
-                &[],
             )
             .await?,
         );
@@ -1543,7 +1507,6 @@ pub async fn check_domain_duplicates(
              AND EXISTS (SELECT 1 FROM lti_registration_account_bindings b \
                          WHERE b.registration_id = r.id AND b.account_id = $2 \
                            AND b.workflow_state = 'on')",
-            &[ctx.site_admin_id],
         )
         .await?;
         let forced_on_ids: Vec<i64> = forced_on
@@ -1561,14 +1524,15 @@ pub async fn check_domain_duplicates(
              AND EXISTS (SELECT 1 FROM lti_registration_account_bindings b \
                          WHERE b.registration_id = r.id AND b.account_id = $1 \
                            AND b.workflow_state = 'on')",
-            &[],
         )
         .await?;
         duplicates.extend(
             inherited
                 .into_iter()
                 .filter(|entry| {
-                    !forced_on_ids.contains(&entry.get("id").and_then(Value::as_i64).unwrap_or(-1))
+                    !forced_on_ids.contains(
+                        &entry.get("id").and_then(Value::as_i64).unwrap_or(-1),
+                    )
                 })
                 .collect::<Vec<Value>>(),
         );
@@ -1583,31 +1547,23 @@ async fn registrations_with_domain(
     ctx: &Ctx,
     normalized_domain: &str,
     scope: &str,
-    extra_params: &[i64],
 ) -> Result<Vec<Value>, ApiError> {
     let sql = format!(
         "SELECT r.id, r.name, r.admin_nickname FROM lti_registrations r \
          WHERE {scope} \
-         AND (LOWER(COALESCE(r.configuration->>'domain', \
-                            (SELECT i.lti_tool_configuration->>'domain' \
-                             FROM lti_ims_registrations i \
-                             WHERE i.lti_registration_id = r.id LIMIT 1))) = $3 \
+         AND (LOWER(r.configuration->>'domain') = $3 \
               OR LOWER((SELECT i.lti_tool_configuration->>'domain' \
                         FROM lti_ims_registrations i \
                         WHERE i.lti_registration_id = r.id LIMIT 1)) = $3) \
          LIMIT 3"
     );
 
-    let mut query = sqlx::query_as::<_, (i64, String, Option<String>)>(&sql)
+    let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(&sql)
         .bind(ctx.account_id)
         .bind(ctx.site_admin_id)
-        .bind(normalized_domain);
-
-    for extra in extra_params {
-        query = query.bind(*extra);
-    }
-
-    let rows = query.fetch_all(pool).await?;
+        .bind(normalized_domain)
+        .fetch_all(pool)
+        .await?;
 
     Ok(rows
         .into_iter()
@@ -1626,12 +1582,14 @@ pub async fn context_search(
     auth: AuthUser,
     Query(params): Query<ContextSearchQuery>,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
 
     // require_lti_registrations_next_feature_flag
     if !feature_enabled(&state.db, ctx.root_account_id, "lti_registrations_next").await? {
         return Ok(not_found_render_error());
     }
+
+    require_manage(&state.db, &auth, account_id).await?;
 
     let registration = find_active_registration(&state.db, registration_id).await?;
 
@@ -1683,12 +1641,7 @@ pub async fn context_search(
         }
     }
 
-    let search_term = params
-        .search_term
-        .as_deref()
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let search_term = params.search_term.as_deref().unwrap_or("").trim().to_string();
     let search_term_int = search_term.parse::<i64>().ok().filter(|id| *id > 0);
 
     // The accounts.
@@ -1699,34 +1652,45 @@ pub async fn context_search(
               OR ($3::bigint IS NOT NULL AND id = $3)) \
          ORDER BY name LIMIT 20",
     )
-    .bind(&descendant_ids)
+    .bind(descendant_ids.clone())
     .bind(search_term.as_str())
     .bind(search_term_int)
     .fetch_all(&state.db)
     .await?;
 
     // The courses.
-    let course_rows: Vec<(i64, String, String, i64)> = sqlx::query_as(
-        "SELECT id, name, course_code, account_id FROM courses \
-         WHERE workflow_state = 'available' \
-         AND ($4::bigint IS NOT NULL AND account_id = $4 \
-              OR account_id = ANY($1) OR account_id = $2) \
-         AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%' \
-              OR course_code ILIKE '%' || $3 || '%' \
-              OR ($5::bigint IS NOT NULL AND id = $5)) \
-         ORDER BY name LIMIT 20",
-    )
-    .bind(&descendant_ids)
-    .bind(deployment.context_id)
-    .bind(search_term.as_str())
-    .bind(
-        only_children_of
-            .as_ref()
-            .and_then(|v| v.parse::<i64>().ok()),
-    )
-    .bind(search_term_int)
-    .fetch_all(&state.db)
-    .await?;
+    let course_rows: Vec<(i64, String, String, i64)> = if let Some(children_of) = &only_children_of {
+        let children_of_id = children_of.parse::<i64>().unwrap_or(0);
+        sqlx::query_as(
+            "SELECT id, name, course_code, account_id FROM courses \
+             WHERE workflow_state = 'available' AND account_id = $1 \
+             AND ($2::text IS NULL OR name ILIKE '%' || $2 || '%' \
+                  OR course_code ILIKE '%' || $2 || '%' \
+                  OR ($3::bigint IS NOT NULL AND id = $3)) \
+             ORDER BY name LIMIT 20",
+        )
+        .bind(children_of_id)
+        .bind(search_term.as_str())
+        .bind(search_term_int)
+        .fetch_all(&state.db)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT id, name, course_code, account_id FROM courses \
+             WHERE workflow_state = 'available' \
+             AND (account_id = ANY($1) OR account_id = $2) \
+             AND ($3::text IS NULL OR name ILIKE '%' || $3 || '%' \
+                  OR course_code ILIKE '%' || $3 || '%' \
+                  OR ($4::bigint IS NOT NULL AND id = $4)) \
+             ORDER BY name LIMIT 20",
+        )
+        .bind(descendant_ids.clone())
+        .bind(deployment.context_id)
+        .bind(search_term.as_str())
+        .bind(search_term_int)
+        .fetch_all(&state.db)
+        .await?
+    };
 
     if account_rows.is_empty() && course_rows.is_empty() {
         return Ok(Json(json!({ "accounts": [], "courses": [] })).into_response());
@@ -1747,16 +1711,15 @@ pub async fn context_search(
                FROM accounts a JOIN account_chain c ON a.id = c.parent_account_id \
          ) SELECT id, original_id, level FROM account_chain ORDER BY original_id, level",
     )
-    .bind(&chain_ids)
+    .bind(chain_ids.clone())
     .fetch_all(&state.db)
     .await?;
 
-    let mut names: Vec<(i64, String)> =
+    let names: Vec<(i64, String)> =
         sqlx::query_as("SELECT id, name FROM accounts WHERE id = ANY($1)")
-            .bind(&chain_ids)
+            .bind(chain_ids)
             .fetch_all(&state.db)
             .await?;
-    names.sort_unstable_by_key(|(id, _)| *id);
     let mut name_map: std::collections::HashMap<i64, String> = Default::default();
     for (id, name) in names {
         name_map.insert(id, name);
@@ -1767,10 +1730,7 @@ pub async fn context_search(
         let mut ids: Vec<i64> = chain
             .iter()
             .filter(|(_, original, _)| *original == account_id)
-            .map(|(id, _, level)| (*id, *level))
-            .collect::<Vec<(i64, i64)>>()
-            .into_iter()
-            .map(|(id, _)| id)
+            .map(|(id, _, _)| *id)
             .collect();
         ids.reverse();
         ids
@@ -1822,12 +1782,14 @@ pub async fn overlay_history(
     auth: AuthUser,
     Query(params): Query<LimitQuery>,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
 
     // require_lti_registrations_next_feature_flag
     if !feature_enabled(&state.db, ctx.root_account_id, "lti_registrations_next").await? {
         return Ok(not_found_render_error());
     }
+
+    require_manage(&state.db, &auth, account_id).await?;
 
     let registration = find_active_registration(&state.db, id).await?;
 
@@ -1863,11 +1825,8 @@ pub async fn overlay_history(
     };
 
     let versions = overlay_versions(&state.db).await?;
-    Ok(Json(json!(versions
-        .into_iter()
-        .take(limit as usize)
-        .collect::<Vec<Value>>()))
-    .into_response())
+    let versions: Vec<Value> = versions.into_iter().take(limit as usize).collect();
+    Ok(Json(json!(versions)).into_response())
 }
 
 /// `GET /accounts/{account_id}/lti_registrations/{id}/history`.
@@ -1879,12 +1838,14 @@ pub async fn history(
     auth: AuthUser,
     Query(params): Query<HistoryQuery>,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
 
     // require_lti_registrations_history_feature_flag
     if !feature_enabled(&state.db, ctx.root_account_id, "lti_registrations_history").await? {
         return Ok(not_found_render_error());
     }
+
+    require_manage(&state.db, &auth, account_id).await?;
 
     let registration = find_active_registration(&state.db, id).await?;
 
@@ -1893,10 +1854,7 @@ pub async fn history(
     }
 
     let page = params.page.unwrap_or(1).max(1);
-    let per_page = params
-        .per_page
-        .unwrap_or(DEFAULT_PER_PAGE)
-        .clamp(1, MAX_PER_PAGE);
+    let per_page = params.per_page.unwrap_or(DEFAULT_PER_PAGE).clamp(1, MAX_PER_PAGE);
     let offset = (page - 1) * per_page;
 
     if !table_exists(&state.db, "lti_registration_history_entries").await? {
@@ -1919,11 +1877,11 @@ pub async fn history(
         DateTime<Utc>,
     )> = sqlx::query_as(
         "SELECT id, root_account_id, lti_registration_id, created_by_id, diff, update_type, \
-                    comment, old_configuration, new_configuration, old_context_controls, \
-                    new_context_controls, created_at, updated_at \
-             FROM lti_registration_history_entries \
-             WHERE lti_registration_id = $1 AND root_account_id = $2 \
-             ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4",
+                comment, old_configuration, new_configuration, old_context_controls, \
+                new_context_controls, created_at, updated_at \
+         FROM lti_registration_history_entries \
+         WHERE lti_registration_id = $1 AND root_account_id = $2 \
+         ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4",
     )
     .bind(registration.id)
     .bind(ctx.account_id)
@@ -1986,7 +1944,8 @@ pub async fn show_by_client_id(
     Path((account_id, client_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
+    require_manage(&state.db, &auth, account_id).await?;
 
     let registration = registration_for_client_id(&state.db, client_id).await?;
     let Some(registration) = registration else {
@@ -1998,8 +1957,7 @@ pub async fn show_by_client_id(
 
     // The registration must be active and owned by the context or the site
     // admin.
-    if !(registration.account_id == ctx.account_id || registration.account_id == ctx.site_admin_id)
-    {
+    if !(registration.account_id == ctx.account_id || registration.account_id == ctx.site_admin_id) {
         return Ok(errors_string(
             StatusCode::NOT_FOUND,
             "LTI registration not found",
@@ -2030,7 +1988,8 @@ pub async fn show_by_utid(
     Path((account_id, utid)): Path<(i64, String)>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
+    require_manage(&state.db, &auth, account_id).await?;
 
     if let Some(response) = restrict_sub_account_to_read_only(&ctx) {
         return Ok(response);
@@ -2100,7 +2059,8 @@ pub async fn install_status(
     Path((account_id, client_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
+    require_manage(&state.db, &auth, account_id).await?;
 
     if let Some(response) = restrict_sub_account_to_read_only(&ctx) {
         return Ok(response);
@@ -2125,7 +2085,7 @@ pub async fn install_status(
                 return Ok(errors_string(
                     StatusCode::NOT_FOUND,
                     "LTI registration not found",
-                ));
+                ))
             }
         }
     } else if template.account_id == ctx.account_id {
@@ -2157,7 +2117,8 @@ pub async fn show_update_request(
     Path((account_id, id, update_request_id)): Path<(i64, i64, i64)>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
+    require_manage(&state.db, &auth, account_id).await?;
 
     if let Some(response) = restrict_sub_account_to_read_only(&ctx) {
         return Ok(response);
@@ -2165,7 +2126,8 @@ pub async fn show_update_request(
 
     let registration = find_active_registration(&state.db, id).await?;
 
-    let request = find_update_request(&state.db, update_request_id, registration.id, false).await?;
+    let request =
+        find_update_request(&state.db, update_request_id, Some(registration.id), false).await?;
     let Some(request) = request else {
         return Err(ApiError::NotFound);
     };
@@ -2195,7 +2157,8 @@ pub async fn latest_update_request(
     Path((account_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
+    require_manage(&state.db, &auth, account_id).await?;
 
     if let Some(response) = restrict_sub_account_to_read_only(&ctx) {
         return Ok(response);
@@ -2234,7 +2197,8 @@ pub async fn apply_update_request(
     auth: AuthUser,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
+    require_manage(&state.db, &auth, account_id).await?;
 
     if let Some(response) = restrict_sub_account_to_read_only(&ctx) {
         return Ok(response);
@@ -2243,7 +2207,7 @@ pub async fn apply_update_request(
     let registration = find_active_registration(&state.db, id).await?;
 
     // Only the pending requests can be applied.
-    let request = find_update_request(&state.db, update_request_id, registration.id, true).await?;
+    let request = find_update_request(&state.db, update_request_id, None, true).await?;
     let Some(request) = request else {
         return Err(ApiError::NotFound);
     };
@@ -2264,7 +2228,7 @@ pub async fn apply_update_request(
     };
 
     // Only the most recent request may be applied.
-    if !is_most_recent_update_request(&state.db, registration.id, request.id).await? {
+    if !is_most_recent_update_request(&state.db, request.lti_registration_id, request.id).await? {
         return Ok(errors_string(
             StatusCode::BAD_REQUEST,
             "Cannot apply an outdated registration update request. A newer update request exists.",
@@ -2272,15 +2236,13 @@ pub async fn apply_update_request(
     }
 
     if accepted {
-        apply_registration_update_request(&state.db, &registration, &request, payload.overlay)
-            .await?;
+        let target = find_active_registration(&state.db, request.lti_registration_id).await?;
+        apply_registration_update_request(&state.db, &target, &request, payload.overlay).await?;
     } else {
-        sqlx::query(
-            "UPDATE lti_registration_update_requests SET rejected_at = now() WHERE id = $1",
-        )
-        .bind(request.id)
-        .execute(&state.db)
-        .await?;
+        sqlx::query("UPDATE lti_registration_update_requests SET rejected_at = now() WHERE id = $1")
+            .bind(request.id)
+            .execute(&state.db)
+            .await?;
     }
 
     let registration = find_active_registration(&state.db, registration.id).await?;
@@ -2301,11 +2263,11 @@ pub async fn apply_update_request(
     Ok(Json(json).into_response())
 }
 
-/// Canvas `Lti::RegistrationUpdateRequest.active.find_by(id:)`.
+/// Canvas `Lti::RegistrationUpdateRequest.find_by(...)`.
 async fn find_update_request(
     pool: &PgPool,
     update_request_id: i64,
-    lti_registration_id: i64,
+    lti_registration_id: Option<i64>,
     only_pending: bool,
 ) -> Result<Option<UpdateRequestRow>, ApiError> {
     let sql = "SELECT id, uuid, lti_registration_id, root_account_id, lti_ims_registration, \
@@ -2314,7 +2276,7 @@ async fn find_update_request(
                        - 'lti_ims_registration' - 'created_by_id' - 'accepted_at' - 'rejected_at' \
                        - 'created_at' - 'updated_at') AS extra \
                FROM lti_registration_update_requests t \
-               WHERE t.id = $1 AND t.lti_registration_id = $2 \
+               WHERE t.id = $1 AND ($2::bigint IS NULL OR t.lti_registration_id = $2) \
                AND ($3::boolean IS FALSE \
                     OR (t.accepted_at IS NULL AND t.rejected_at IS NULL))";
 
@@ -2445,14 +2407,14 @@ async fn apply_registration_update_request(
             "UPDATE developer_keys SET \
                  name = COALESCE($2, name), \
                  icon_url = COALESCE($3, icon_url), \
-                 scopes = COALESCE($4, scopes), \
+                 scopes = COALESCE($4::text[], scopes), \
                  updated_at = now() \
              WHERE id = $1",
         )
         .bind(developer_key_id)
         .bind(client_name.as_ref().and_then(Value::as_str))
         .bind(logo_uri.as_ref().and_then(Value::as_str))
-        .bind(scopes_value)
+        .bind(scopes_value.split(',').map(str::to_string).collect::<Vec<String>>())
         .execute(pool)
         .await?;
     }
@@ -2484,7 +2446,8 @@ pub async fn update_registration(
     auth: AuthUser,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
+    require_manage(&state.db, &auth, account_id).await?;
 
     let registration = find_active_registration(&state.db, id).await?;
 
@@ -2516,9 +2479,7 @@ pub async fn update_registration(
     }
     if let Some(overlay) = payload.overlay.as_ref() {
         if !overlay.is_object() {
-            return Ok(configuration_errors(vec![
-                "overlay must be an object".to_string()
-            ]));
+            return Ok(configuration_errors(vec!["overlay must be an object".to_string()]));
         }
     }
 
@@ -2561,7 +2522,7 @@ pub async fn update_registration(
         return Ok(response);
     }
 
-    // The permitted registration attributes.
+    // `lock_deploying` is only permitted with the feature flag.
     let lock_deploying_permitted =
         feature_enabled(&state.db, ctx.root_account_id, "lock_lti_registrations").await?;
 
@@ -2606,29 +2567,27 @@ pub async fn update_registration(
             ),
         };
 
-    let mut name = registration.name.clone();
-    if let Some(value) = payload.name.as_ref() {
-        name = value.clone();
-    }
+    let name = payload.name.clone().unwrap_or_else(|| registration.name.clone());
     let admin_nickname = payload
         .admin_nickname
         .clone()
-        .or(registration.admin_nickname.clone());
-    let vendor = payload.vendor.clone().or(registration.vendor.clone());
+        .or_else(|| registration.admin_nickname.clone());
+    let vendor = payload.vendor.clone().or_else(|| registration.vendor.clone());
     let description = payload
         .description
         .clone()
-        .or(registration.description.clone());
-    let lock_deploying = payload
-        .lock_deploying
-        .unwrap_or(registration.lock_deploying);
-    let _ = lock_deploying_permitted;
+        .or_else(|| registration.description.clone());
+    let lock_deploying = if lock_deploying_permitted {
+        payload.lock_deploying.unwrap_or(registration.lock_deploying)
+    } else {
+        registration.lock_deploying
+    };
 
     sqlx::query(
         "UPDATE lti_registrations SET \
              name = $2, admin_nickname = $3, vendor = $4, description = $5, \
-             workflow_state = $6, configuration = $7, overlay = $8, \
-             updated_by_id = $9, updated_at = now() \
+             workflow_state = $6, configuration = $7, overlay = $8, lock_deploying = $9, \
+             updated_by_id = $10, updated_at = now() \
          WHERE id = $1",
     )
     .bind(registration.id)
@@ -2639,6 +2598,7 @@ pub async fn update_registration(
     .bind(registration_state)
     .bind(&new_configuration)
     .bind(&new_overlay)
+    .bind(lock_deploying)
     .bind(auth.id)
     .execute(&state.db)
     .await?;
@@ -2704,12 +2664,14 @@ pub async fn reset_registration(
     Path((account_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
 
     // require_lti_registrations_next_feature_flag
     if !feature_enabled(&state.db, ctx.root_account_id, "lti_registrations_next").await? {
         return Ok(not_found_render_error());
     }
+
+    require_manage(&state.db, &auth, account_id).await?;
 
     let registration = find_active_registration(&state.db, id).await?;
 
@@ -2768,9 +2730,8 @@ pub async fn bind(
     auth: AuthUser,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
-
-    let registration = find_active_registration(&state.db, id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
+    require_manage(&state.db, &auth, account_id).await?;
 
     if let Some(response) = restrict_sub_account_to_read_only(&ctx) {
         return Ok(response);
@@ -2781,6 +2742,8 @@ pub async fn bind(
     if let Some(response) = validate_workflow_state(&ctx, payload.workflow_state.as_deref()) {
         return Ok(response);
     }
+
+    let registration = find_active_registration(&state.db, id).await?;
 
     if let Some(response) = require_in_account_or_site_admin(&ctx, &registration) {
         return Ok(response);
@@ -2810,16 +2773,15 @@ pub async fn bind(
         ));
     }
 
-    let (local_copy, binding) =
-        install_template_registration(&state.db, &ctx, &registration, workflow_state, auth.id)
-            .await?;
-
-    let created_by = user_summary(&state.db, binding.created_by_id).await?;
-    let updated_by = user_summary(&state.db, binding.updated_by_id).await?;
-
-    let _ = local_copy;
-
-    Ok(Json(binding_json(&binding, created_by, updated_by)).into_response())
+    match install_template_registration(&state.db, &ctx, &registration, workflow_state, auth.id).await
+    {
+        Ok((_local_copy, binding)) => {
+            let created_by = user_summary(&state.db, binding.created_by_id).await?;
+            let updated_by = user_summary(&state.db, binding.updated_by_id).await?;
+            Ok(Json(binding_json(&binding, created_by, updated_by)).into_response())
+        }
+        Err(response) => Ok(response),
+    }
 }
 
 /// `DELETE /accounts/{account_id}/lti_registrations/{id}/bind`.
@@ -2830,24 +2792,20 @@ pub async fn unbind(
     Path((account_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
 
     // require_lti_deactivate_registrations_flag
-    if !feature_enabled(
-        &state.db,
-        ctx.root_account_id,
-        "lti_deactivate_registrations",
-    )
-    .await?
-    {
+    if !feature_enabled(&state.db, ctx.root_account_id, "lti_deactivate_registrations").await? {
         return Ok(not_found_render_error());
     }
 
-    let registration = find_active_registration(&state.db, id).await?;
+    require_manage(&state.db, &auth, account_id).await?;
 
     if let Some(response) = restrict_sub_account_to_read_only(&ctx) {
         return Ok(response);
     }
+
+    let registration = find_active_registration(&state.db, id).await?;
 
     if let Some(response) = require_in_account_or_site_admin(&ctx, &registration) {
         return Ok(response);
@@ -2905,7 +2863,8 @@ pub async fn install_from_template(
     Path((account_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
-    let ctx = guard(&state.db, &auth, account_id).await?;
+    let ctx = account_context(&state.db, account_id).await?;
+    require_manage(&state.db, &auth, account_id).await?;
 
     if let Some(response) = restrict_sub_account_to_read_only(&ctx) {
         return Ok(response);
@@ -2913,58 +2872,71 @@ pub async fn install_from_template(
 
     let registration = find_active_registration(&state.db, id).await?;
 
-    let (local_copy, binding) =
-        install_template_registration(&state.db, &ctx, &registration, "on", auth.id).await?;
-
-    let json = registration_json(
-        &state.db,
-        &local_copy,
-        &ctx,
-        RegIncludes {
-            configuration: true,
-            overlay: true,
-            account_binding: true,
-            ..Default::default()
-        },
-    )
-    .await?;
-
-    let _ = binding;
-
-    Ok(Json(json).into_response())
+    match install_template_registration(&state.db, &ctx, &registration, "on", auth.id).await {
+        Ok((local_copy, binding)) => {
+            let mut json = registration_json(
+                &state.db,
+                &local_copy,
+                &ctx,
+                RegIncludes {
+                    configuration: true,
+                    overlay: true,
+                    ..Default::default()
+                },
+            )
+            .await?;
+            // Canvas renders the template's account binding.
+            let created_by = user_summary(&state.db, binding.created_by_id).await?;
+            let updated_by = user_summary(&state.db, binding.updated_by_id).await?;
+            json["account_binding"] = binding_json(&binding, created_by, updated_by);
+            Ok(Json(json).into_response())
+        }
+        Err(response) => Ok(response),
+    }
 }
 
 /// Canvas `Lti::InstallTemplateRegistrationService.call`.
 ///
-/// Returns the local copy of the template and the account binding.
+/// Returns the local copy of the template and the account binding. The
+/// `ArgumentError`s Canvas rescues become a `422 invalid_template` response.
 async fn install_template_registration(
     pool: &PgPool,
     ctx: &Ctx,
     template: &RegistrationRow,
     binding_state: &str,
     user_id: i64,
-) -> Result<(RegistrationRow, BindingRow), ApiError> {
+) -> Result<(RegistrationRow, BindingRow), Response> {
     // The service's own validations.
     if template.workflow_state != "active" {
-        return Err(ApiError::Validation(
-            "template registration is off".to_string(),
+        return Err(render_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_template",
+            "template registration is off",
         ));
     }
     if !ctx.is_root_account {
-        return Err(ApiError::Validation(
-            "root account must be provided".to_string(),
+        return Err(render_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_template",
+            "root account must be provided",
         ));
     }
     if template.dynamic_registration {
-        return Err(ApiError::Validation(
-            "Dynamic Registrations cannot be used as templates".to_string(),
+        return Err(render_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "invalid_template",
+            "Dynamic Registrations cannot be used as templates",
         ));
     }
 
     // The local copy of the template.
-    let local_copy = match find_local_copy(pool, template.id, ctx.account_id).await? {
-        Some(local_copy) => local_copy,
-        None => {
+    let local_copy = match find_local_copy(pool, template.id, ctx.account_id).await {
+        Ok(Some(local_copy)) => local_copy,
+        Ok(None) => {
+            // The local copy starts from the overlaid template configuration.
+            let configuration =
+                apply_overlay(&template.configuration, &overlay_data(template));
+
             let sql = format!(
                 "INSERT INTO lti_registrations \
                      (account_id, root_account_id, name, admin_nickname, vendor, description, \
@@ -2975,7 +2947,7 @@ async fn install_template_registration(
                          '{{}}'::jsonb, $12, $12) \
                  RETURNING {REGISTRATION_COLUMNS}"
             );
-            sqlx::query_as::<_, RegistrationRow>(&sql)
+            match sqlx::query_as::<_, RegistrationRow>(&sql)
                 .bind(ctx.account_id)
                 .bind(ctx.root_account_id)
                 .bind(&template.name)
@@ -2986,10 +2958,37 @@ async fn install_template_registration(
                 .bind(template.lock_deploying)
                 .bind(template.id)
                 .bind(template.unified_tool_id.as_deref())
-                .bind(&template.configuration)
+                .bind(&configuration)
                 .bind(user_id)
                 .fetch_one(pool)
-                .await?
+                .await
+            {
+                Ok(row) => {
+                    // The tool is deployed to the account.
+                    if let Err(e) = deploy_registration(pool, &row, ctx, user_id).await {
+                        return Err(render_error(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "deployment_failed",
+                            &e.to_string(),
+                        ));
+                    }
+                    row
+                }
+                Err(e) => {
+                    return Err(render_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "install_failed",
+                        &e.to_string(),
+                    ))
+                }
+            }
+        }
+        Err(e) => {
+            return Err(render_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "install_failed",
+                &e.to_string(),
+            ))
         }
     };
 
@@ -3000,7 +2999,7 @@ async fn install_template_registration(
         "inactive"
     };
     if local_copy.workflow_state != registration_state {
-        sqlx::query(
+        if let Err(e) = sqlx::query(
             "UPDATE lti_registrations SET workflow_state = $2, updated_by_id = $3, \
                     updated_at = now() WHERE id = $1",
         )
@@ -3008,14 +3007,27 @@ async fn install_template_registration(
         .bind(registration_state)
         .bind(user_id)
         .execute(pool)
-        .await?;
+        .await
+        {
+            return Err(render_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "install_failed",
+                &e.to_string(),
+            ));
+        }
     }
 
     // The account binding of the template.
-    let binding = upsert_binding(pool, template, ctx, binding_state, user_id).await?;
-
-    // The tool is deployed to the account.
-    deploy_registration(pool, &local_copy, ctx, user_id).await?;
+    let binding = match upsert_binding(pool, template, ctx, binding_state, user_id).await {
+        Ok(binding) => binding,
+        Err(e) => {
+            return Err(render_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "install_failed",
+                &e.to_string(),
+            ))
+        }
+    };
 
     Ok((local_copy, binding))
 }
@@ -3029,17 +3041,25 @@ async fn deploy_registration(
     ctx: &Ctx,
     user_id: i64,
 ) -> Result<(), ApiError> {
-    let existing: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM lti_deployments WHERE registration_id = $1 AND context_type = 'Account' AND context_id = $2")
-            .bind(registration.id)
-            .bind(ctx.account_id)
-            .fetch_optional(pool)
-            .await?;
+    let existing: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM lti_deployments \
+         WHERE registration_id = $1 AND context_type = 'Account' AND context_id = $2",
+    )
+    .bind(registration.id)
+    .bind(ctx.account_id)
+    .fetch_optional(pool)
+    .await?;
     if existing.is_some() {
         return Ok(());
     }
 
+    let context_name: Option<(String,)> =
+        sqlx::query_as("SELECT name FROM accounts WHERE id = $1")
+            .bind(ctx.account_id)
+            .fetch_optional(pool)
+            .await?;
     let deployment_id = format!("{}:{}", ctx.account_id, uuid::Uuid::new_v4());
+
     sqlx::query(
         "INSERT INTO lti_deployments \
              (registration_id, deployment_id, context_type, context_id, context_name, available, \
@@ -3049,7 +3069,7 @@ async fn deploy_registration(
     .bind(registration.id)
     .bind(&deployment_id)
     .bind(ctx.account_id)
-    .bind(ctx.account_id.to_string())
+    .bind(context_name.map(|(name,)| name))
     .bind(user_id)
     .execute(pool)
     .await?;

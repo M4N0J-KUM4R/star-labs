@@ -1317,8 +1317,13 @@ async fn create_media_object_route(
     .fetch_optional(&state.db)
     .await?;
 
+    let mut attachment_id: Option<i64> = None;
+    let mut uuid: Option<String> = None;
+
     let row = match existing {
         Some(existing) => {
+            // Canvas updates the existing object; `create_attachment` is a
+            // `before_create` callback, so no second attachment is made.
             sqlx::query_as(&format!(
                 "UPDATE media_objects
                  SET title = COALESCE($1, title),
@@ -1357,7 +1362,7 @@ async fn create_media_object_route(
                 )));
             }
 
-            sqlx::query_as(&format!(
+            let inserted: MediaObjectRow = sqlx::query_as(&format!(
                 "INSERT INTO media_objects (media_id, media_type, title, user_entered_title,
                                            user_id, context_type, context_id,
                                            viewer_restrictions)
@@ -1373,34 +1378,35 @@ async fn create_media_object_route(
             .bind(context.id())
             .bind(&viewer_restrictions)
             .fetch_one(&state.db)
-            .await?
-        }
-    };
-
-    // Canvas creates the attachment in the context's media folder.
-    let attachment = create_attachment(
-        &state.db,
-        &context,
-        &auth,
-        &title.clone().unwrap_or_else(|| "Untitled".to_string()),
-        &media_type,
-        &media_id,
-    )
-    .await?;
-
-    let (attachment_id, uuid, row) = match attachment {
-        Some((attachment_id, uuid)) => {
-            let updated: MediaObjectRow = sqlx::query_as(&format!(
-                "UPDATE media_objects SET attachment_id = $1, updated_at = now()
-                 WHERE id = $2 RETURNING {MEDIA_OBJECT_COLUMNS}"
-            ))
-            .bind(attachment_id)
-            .bind(row.id)
-            .fetch_one(&state.db)
             .await?;
-            (Some(attachment_id), uuid, updated)
+
+            // Canvas creates the attachment in the context's media folder.
+            let attachment = create_attachment(
+                &state.db,
+                &context,
+                &auth,
+                &title.clone().unwrap_or_else(|| "Untitled".to_string()),
+                &media_type,
+                &media_id,
+            )
+            .await?;
+
+            match attachment {
+                Some((id, attachment_uuid)) => {
+                    attachment_id = Some(id);
+                    uuid = attachment_uuid;
+                    sqlx::query_as(&format!(
+                        "UPDATE media_objects SET attachment_id = $1, updated_at = now()
+                         WHERE id = $2 RETURNING {MEDIA_OBJECT_COLUMNS}"
+                    ))
+                    .bind(id)
+                    .bind(inserted.id)
+                    .fetch_one(&state.db)
+                    .await?
+                }
+                None => inserted,
+            }
         }
-        None => (None, None, row),
     };
 
     let mut payload = serde_json::Map::new();
