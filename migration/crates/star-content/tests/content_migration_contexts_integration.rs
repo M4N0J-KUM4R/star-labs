@@ -46,12 +46,8 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
         db: pool.clone(),
         jwt_secret: "test-jwt-secret".to_string(),
     };
-    let server = TestServer::new(
-        axum::Router::new()
-            .merge(star_content::router())
-            .with_state(state),
-    )
-    .expect("build TestServer");
+    let server =
+        TestServer::new(star_content::router().with_state(state)).expect("build TestServer");
     Some((server, pool, run_prefix()))
 }
 
@@ -250,7 +246,7 @@ async fn user_content_migrations_are_scoped_to_the_user() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
-    assert_eq!(body.as_array().map(Vec::len), Some(1));
+    assert_eq!(body.as_array().map(|items| items.len()), Some(1));
 
     // Another user does not see it.
     let resp = server

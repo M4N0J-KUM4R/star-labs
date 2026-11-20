@@ -302,6 +302,10 @@ fn bad_request(message: &str) -> (StatusCode, Json<Value>) {
     (StatusCode::BAD_REQUEST, Json(json!({ "message": message })))
 }
 
+/// The outcome of a create: either the id of the new migration, or the
+/// Canvas-rendered error body that must be returned verbatim.
+type CreatedMigration = Result<i64, (StatusCode, Json<Value>)>;
+
 fn includes_audit_info(params: &HashMap<String, String>) -> bool {
     ["include", "include[]"].iter().any(|key| {
         params
@@ -566,9 +570,17 @@ async fn create_migration(
     }
 
     let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
-    let id =
-        create_migration_for_context(&state, &auth, MigrationContext::Course(course_id), &payload)
-            .await?;
+    let id = match create_migration_for_context(
+        &state,
+        &auth,
+        MigrationContext::Course(course_id),
+        &payload,
+    )
+    .await?
+    {
+        Ok(id) => id,
+        Err(response) => return Ok(response),
+    };
     let row = find_course_migration(&state.db, course_id, id).await?;
     // Canvas renders the created migration as JSON with HTTP 200.
     Ok((StatusCode::OK, Json(migration_json(&row, is_admin(&auth)))))
@@ -584,7 +596,7 @@ async fn create_migration_for_context(
     auth: &AuthUser,
     context: MigrationContext,
     payload: &Value,
-) -> Result<i64, ApiError> {
+) -> Result<CreatedMigration, ApiError> {
     let course_id = context_course(&state.db, context).await?;
     let migration_type = payload
         .get("migration_type")
@@ -593,7 +605,7 @@ async fn create_migration_for_context(
         .unwrap_or("");
 
     let Some(plugin) = migrator(migration_type) else {
-        return Ok(bad_request("Invalid migration_type"));
+        return Ok(Err(bad_request("Invalid migration_type")));
     };
 
     let settings = payload.get("settings").and_then(Value::as_object);
@@ -613,28 +625,28 @@ async fn create_migration_for_context(
         && !object_present(settings, "file_url")
         && !object_present(settings, "content_export_id")
     {
-        return Ok(bad_request(
+        return Ok(Err(bad_request(
             "File upload, file_url, or content_export_id is required",
-        ));
+        )));
     }
 
     // Canvas::Migration::Validators::CourseCopyValidator.
     let mut source_course_id = None;
     if migration_type == "course_copy_importer" {
         let Some(source_id) = object_i64(settings, "source_course_id") else {
-            return Ok(bad_request("A course copy requires a source course."));
+            return Ok(Err(bad_request("A course copy requires a source course.")));
         };
         let source: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
             .bind(source_id)
             .fetch_optional(&state.db)
             .await?;
         if source.is_none() {
-            return Ok(bad_request("The source course was not found."));
+            return Ok(Err(bad_request("The source course was not found.")));
         }
         if !manages_course(&state.db, auth, source_id).await? {
-            return Ok(bad_request(
+            return Ok(Err(bad_request(
                 "You are not allowed to copy the source course.",
-            ));
+            )));
         }
         source_course_id = Some(source_id);
     }
@@ -642,7 +654,9 @@ async fn create_migration_for_context(
     // Canvas::Migration::Validators::ZipImporterValidator.
     if migration_type == "zip_file_importer" {
         let Some(folder_id) = object_i64(settings, "folder_id") else {
-            return Ok(bad_request("A .zip upload requires a folder to upload to."));
+            return Ok(Err(bad_request(
+                "A .zip upload requires a folder to upload to.",
+            )));
         };
         let folder: Option<(i32,)> = sqlx::query_as(
             "SELECT 1 FROM folders \
@@ -654,9 +668,9 @@ async fn create_migration_for_context(
         .fetch_optional(&state.db)
         .await?;
         if folder.is_none() {
-            return Ok(bad_request(
+            return Ok(Err(bad_request(
                 "The specified folder couldn't be found in this course.",
-            ));
+            )));
         }
     }
 
@@ -676,13 +690,13 @@ async fn create_migration_for_context(
             None => None,
         };
         let Some((export_course_id, export_state)) = export else {
-            return Ok(bad_request("invalid content export"));
+            return Ok(Err(bad_request("invalid content export")));
         };
         if export_course_id != course_id {
-            return Ok(bad_request("invalid content export"));
+            return Ok(Err(bad_request("invalid content export")));
         }
         if export_state != "exported" {
-            return Ok(bad_request("content export is incomplete"));
+            return Ok(Err(bad_request("content export is incomplete")));
         }
     }
 
@@ -697,7 +711,7 @@ async fn create_migration_for_context(
 
     // Canvas `set_date_shift_options` (only persisted when enabled).
     if let Some((status, json)) = merge_date_shift(&payload, &mut merged) {
-        return Ok((status, json));
+        return Ok(Err((status, json)));
     }
 
     let selective_import = truthy(payload.get("selective_import"));
@@ -755,7 +769,7 @@ async fn create_migration_for_context(
     .bind(started_at)
     .fetch_one(&state.db)
     .await?;
-    Ok(id)
+    Ok(Ok(id))
 }
 
 /// GET /courses/{courseId}/content_migrations/{id} — Canvas `show`.
@@ -930,19 +944,19 @@ async fn selective_data(
 
     let row = find_course_migration(&state.db, course_id, id).await?;
     let base_url = format!("/api/v1/courses/{course_id}/content_migrations/{id}/selective_data");
-    selective_data_for(&state, course_id, base_url, row, params).await
+    selective_data_for(&state, Some(course_id), base_url, row, &params).await
 }
 
 /// The shared body of the selective import listing.
 async fn selective_data_for(
     state: &AppState,
-    course_id: i64,
+    course_id: Option<i64>,
     base_url: String,
     row: ContentMigrationRow,
     params: &HashMap<String, String>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     // Course copies enumerate the source course; everything else the target.
-    let source_course_id = row.source_course_id.unwrap_or(course_id);
+    let source_course_id = row.source_course_id.or(course_id);
     let requested = params
         .get("type")
         .map(|value| value.trim())
@@ -1118,7 +1132,7 @@ async fn manages_context(
                     .fetch_optional(db)
                     .await?;
             match group {
-                Some((Some(course_id))) => manages_course(db, auth, course_id).await,
+                Some((Some(course_id),)) => manages_course(db, auth, course_id).await,
                 _ => Ok(false),
             }
         }
@@ -1256,7 +1270,7 @@ async fn update_context_migration(
     auth: &AuthUser,
     context: MigrationContext,
     id: i64,
-    body: Option<Json<Value>>,
+    payload: &Value,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     if !context_exists(&state.db, context).await? {
         return Err(ApiError::NotFound);
@@ -1266,8 +1280,7 @@ async fn update_context_migration(
     }
     let mut row = find_context_migration(&state.db, context, id).await?;
     check_pre_processing_timeout(&state.db, &mut row).await?;
-    let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
-    apply_migration_update(state, auth, row, payload).await
+    apply_migration_update(state, auth, row, payload.clone()).await
 }
 
 /// GET /{contexts}/{id}/content_migrations/{id}/selective_data — Canvas
@@ -1403,7 +1416,10 @@ async fn create_account_migration(
         return Err(ApiError::Forbidden);
     }
     let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
-    let id = create_migration_for_context(&state, &auth, context, &payload).await?;
+    let id = match create_migration_for_context(&state, &auth, context, &payload).await? {
+        Ok(id) => id,
+        Err(response) => return Ok(response),
+    };
     let row = find_context_migration(&state.db, context, id).await?;
     Ok((StatusCode::OK, Json(migration_json(&row, is_admin(&auth)))))
 }
@@ -1494,7 +1510,10 @@ async fn create_group_migration(
         return Err(ApiError::Forbidden);
     }
     let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
-    let id = create_migration_for_context(&state, &auth, context, &payload).await?;
+    let id = match create_migration_for_context(&state, &auth, context, &payload).await? {
+        Ok(id) => id,
+        Err(response) => return Ok(response),
+    };
     let row = find_context_migration(&state.db, context, id).await?;
     Ok((StatusCode::OK, Json(migration_json(&row, is_admin(&auth)))))
 }
@@ -1585,7 +1604,10 @@ async fn create_user_migration(
         return Err(ApiError::Forbidden);
     }
     let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
-    let id = create_migration_for_context(&state, &auth, context, &payload).await?;
+    let id = match create_migration_for_context(&state, &auth, context, &payload).await? {
+        Ok(id) => id,
+        Err(response) => return Ok(response),
+    };
     let row = find_context_migration(&state.db, context, id).await?;
     Ok((StatusCode::OK, Json(migration_json(&row, is_admin(&auth)))))
 }
