@@ -3454,8 +3454,10 @@ dependencies = [
  "star-db",
  "star-modules",
  "star-pages",
+ "star-quizzes",
  "time",
  "tokio",
+ "url",
 ]
 
 [[package]]

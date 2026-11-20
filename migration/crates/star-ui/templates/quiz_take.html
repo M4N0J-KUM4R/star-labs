@@ -1,0 +1,78 @@
+{% extends "layouts/course.html" %}
+{# Take page — Canvas quizzes/take_quiz analogue: ALL questions in ONE form.
+   DOM contract (canvas-reference.md §8): #question_<id>, .question_text,
+   radio name="question_<id>" value="<answer_id>",
+   checkbox hidden-0 + name="question_<id>_answer_<answer_id>",
+   text/essay/numerical name="question_<id>",
+   matching/missing-word/multiple-dropdowns select
+   name="question_<id>_answer_<answer_id>". #}
+{% block content %}
+  <div id="take_quiz" class="quizzes assessing">
+    <header class="quiz-header">
+      <h1 class="quiz-title">{{ quiz_title }}</h1>
+    </header>
+    <div id="quiz-instructions" class="user_content quiz-instructions">
+      {{ instructions_html|safe }}
+    </div>
+    <form id="submit_quiz_form" method="post" action="{{ submit_url }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <input type="hidden" name="attempt" value="0">
+      <div id="questions" class="assessing">
+        {% for question in questions %}
+        <div class="display_question question {{ question.question_type }}" id="question_{{ question.id }}">
+          <div class="header">
+            <span class="question_name">{{ question.name }}</span>
+            <span class="points_question">{{ question.points }} pts</span>
+          </div>
+          <div class="text question_text">{{ question.text|safe }}</div>
+          <div class="answers">
+            {% if !question.renderable %}
+            <p class="not-renderable-note">This question type ({{ question.question_type }}) is not renderable in phase 1 — it will be reviewed manually.</p>
+            {% else %}
+            {% if question.question_type == "multiple_choice_question" || question.question_type == "true_false_question" %}
+            {% for answer in question.answers %}
+            <div class="answer answer_radio">
+              <input type="radio" class="question_input" id="answer_#{% if question.question_type == "multiple_choice_question" %}{{ question.id }}_{% endif %}{{ answer.id }}" name="question_{{ question.id }}" value="{{ answer.id }}">
+              <label class="answer_label" for="answer_#{% if question.question_type == "multiple_choice_question" %}{{ question.id }}_{% endif %}{{ answer.id }}">{{ answer.text }}</label>
+            </div>
+            {% endfor %}
+            {% endif %}
+            {% if question.question_type == "multiple_answers_question" %}
+            {% for answer in question.answers %}
+            <div class="answer answer_checkbox">
+              <input type="hidden" name="question_{{ question.id }}_answer_{{ answer.id }}" value="0">
+              <input type="checkbox" class="question_input" id="answer_{{ question.id }}_{{ answer.id }}" name="question_{{ question.id }}_answer_{{ answer.id }}" value="1">
+              <label class="answer_label" for="answer_{{ question.id }}_{{ answer.id }}">{{ answer.text }}</label>
+            </div>
+            {% endfor %}
+            {% endif %}
+            {% if question.question_type == "short_answer_question" || question.question_type == "numerical_question" %}
+            <input type="text" class="question_input text" name="question_{{ question.id }}" autocomplete="off">
+            {% endif %}
+            {% if question.question_type == "essay_question" %}
+            <textarea class="question_input essay" name="question_{{ question.id }}" rows="6"></textarea>
+            {% endif %}
+            {% if question.question_type == "matching_question" || question.question_type == "missing_word_question" || question.question_type == "multiple_dropdowns_question" %}
+            {% for answer in question.answers %}
+            <div class="answer answer_select">
+              <label class="answer_label match-left" for="select_{{ question.id }}_{{ answer.id }}">{{ answer.text }}</label>
+              <select class="question_input" id="select_{{ question.id }}_{{ answer.id }}" name="question_{{ question.id }}_answer_{{ answer.id }}">
+                <option value="">-- Select --</option>
+                {% for option in question.select_options %}
+                <option value="{{ option.id }}">{{ option.text }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            {% endfor %}
+            {% endif %}
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary submit_button quiz_submit" id="submit_quiz_button">Submit Quiz</button>
+      </div>
+    </form>
+  </div>
+{% endblock content %}

@@ -10,6 +10,7 @@ star-dashboard = { path = "../star-dashboard" }
 star-courses = { path = "../star-courses" }
 star-pages = { path = "../star-pages" }
 star-modules = { path = "../star-modules" }
+star-quizzes = { path = "../star-quizzes" }
 axum = { workspace = true }
 axum-extra = { workspace = true }
 sqlx = { workspace = true }
@@ -21,6 +22,10 @@ jsonwebtoken = { workspace = true }
 sha2 = { workspace = true }
 rand = { workspace = true }
 time = { workspace = true }
+# Form parsing for the quiz take form: the question field names are dynamic
+# (`question_<id>`, `question_<id>_answer_<answer_id>`), so serde_urlencoded
+# cannot type them — the submit handler decodes raw pairs from the body.
+url = { workspace = true }
 
 [dev-dependencies]
 star-db = { path = "../star-db" }
