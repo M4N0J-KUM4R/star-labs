@@ -80,17 +80,9 @@ impl Default for EnvPreferences {
 }
 
 /// Account/user settings slice feeding `ENV.SETTINGS` (phase 1).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct EnvSettings {
     pub collapse_global_nav: bool,
-}
-
-impl Default for EnvSettings {
-    fn default() -> Self {
-        Self {
-            collapse_global_nav: false,
-        }
-    }
 }
 
 /// The typed `window.ENV` payload. Field order matches the §3 tables; the

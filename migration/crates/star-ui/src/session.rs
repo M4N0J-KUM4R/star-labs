@@ -143,19 +143,12 @@ pub fn constant_time_eq(a: &str, b: &str) -> bool {
 
 /// Extract and validate the CSRF double-submit pair from a request.
 ///
-/// Returns `Ok(())` when the non-HttpOnly `star_csrf` cookie and the hidden
-/// `_csrf` form field match (constant-time); `Err(())` means the handler
-/// must answer 403.
-pub fn check_csrf(jar: &CookieJar, form_token: &str) -> Result<(), ()> {
+/// Returns `true` when the non-HttpOnly `star_csrf` cookie and the hidden
+/// `_csrf` form field match (constant-time); `false` means the handler must
+/// answer 403.
+pub fn check_csrf(jar: &CookieJar, form_token: &str) -> bool {
     let cookie_token = jar.get(CSRF_COOKIE).map(|c| c.value()).unwrap_or("");
-    if cookie_token.is_empty() || form_token.is_empty() {
-        return Err(());
-    }
-    if constant_time_eq(cookie_token, form_token) {
-        Ok(())
-    } else {
-        Err(())
-    }
+    !cookie_token.is_empty() && !form_token.is_empty() && constant_time_eq(cookie_token, form_token)
 }
 
 /// Issue the CSRF cookie when absent, returning the (possibly updated) jar
@@ -233,10 +226,10 @@ mod tests {
     #[test]
     fn check_csrf_requires_both_sides() {
         let jar = CookieJar::new().add(Cookie::new(CSRF_COOKIE, "token"));
-        assert!(check_csrf(&jar, "token").is_ok());
-        assert!(check_csrf(&jar, "wrong").is_err());
-        assert!(check_csrf(&CookieJar::new(), "token").is_err());
-        assert!(check_csrf(&jar, "").is_err());
+        assert!(check_csrf(&jar, "token"));
+        assert!(!check_csrf(&jar, "wrong"));
+        assert!(!check_csrf(&CookieJar::new(), "token"));
+        assert!(!check_csrf(&jar, ""));
     }
 
     #[test]

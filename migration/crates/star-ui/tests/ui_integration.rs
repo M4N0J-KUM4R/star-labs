@@ -2,8 +2,9 @@
 //! spec §4. Real Postgres (SKIP when DATABASE_URL unset), real router via
 //! axum-test, real argon2 hashes for login.
 
+#![allow(dead_code)] // seed helpers are used by subsets of the tests
+
 use axum_test::TestServer;
-use serde_json::Value;
 use sqlx::PgPool;
 use star_common::AppState;
 
@@ -103,6 +104,10 @@ async fn seed_module(pool: &PgPool, course_id: i64, name: &str, position: i32) -
 }
 
 /// Login through the real form flow and return the session cookie value.
+///
+/// The TestServer does not persist cookies between requests (save_cookies
+/// defaults to false), so the CSRF cookie must be attached to the POST
+/// explicitly — the double-submit pair is cookie + form field.
 async fn login(server: &TestServer, email: &str, password: &str) -> (String, String) {
     let page = server.get("/login").await;
     assert_eq!(page.status_code(), 200);
@@ -114,6 +119,10 @@ async fn login(server: &TestServer, email: &str, password: &str) -> (String, Str
         .to_string();
     let resp = server
         .post("/login")
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
         .form(&serde_json::json!({
             "email": email,
             "password": password,
@@ -216,6 +225,10 @@ async fn login_sets_session_cookie_and_rejects_bad_credentials() {
         .to_string();
     let resp = server
         .post("/login")
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
         .form(&serde_json::json!({"email": email, "password": "Password123!", "_csrf": csrf, "next": "/dashboard"}))
         .await;
     assert_eq!(resp.status_code(), 303, "body: {}", resp.text());
@@ -246,6 +259,10 @@ async fn login_sets_session_cookie_and_rejects_bad_credentials() {
         .to_string();
     let wrong = server
         .post("/login")
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf2.clone(),
+        ))
         .form(&serde_json::json!({"email": email, "password": "WrongPassword!", "_csrf": csrf2}))
         .await;
     assert_eq!(
@@ -270,6 +287,10 @@ async fn login_sets_session_cookie_and_rejects_bad_credentials() {
         .to_string();
     let unknown = server
         .post("/login")
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf3.clone(),
+        ))
         .form(&serde_json::json!({"email": format!("{prefix}-nobody@test.local"), "password": "Whatever123!", "_csrf": csrf3}))
         .await;
     assert_eq!(unknown.status_code(), 401);
@@ -389,11 +410,12 @@ async fn dashboard_renders_cards_and_env_contract() {
     // Static asset serves with immutable caching; wrong hash 404s.
     let asset = server.get(&format!("/static/{hash}/app.css")).await;
     assert_eq!(asset.status_code(), 200);
-    assert!(asset
+    let cache_control = asset
         .headers()
         .get("cache-control")
-        .unwrap()
-        .contains("immutable"));
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    assert!(cache_control.contains("immutable"));
     let bad = server.get("/static/wrong-hash/app.css").await;
     assert_eq!(bad.status_code(), 404);
 
@@ -566,6 +588,10 @@ async fn logout_invalidates_session_server_side() {
         .to_string();
     let login = server
         .post("/login")
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
         .form(&serde_json::json!({"email": email, "password": "Password123!", "_csrf": csrf}))
         .await;
     assert_eq!(login.status_code(), 303);
@@ -575,12 +601,9 @@ async fn logout_invalidates_session_server_side() {
         .expect("session")
         .value()
         .to_string();
-    let login_csrf = login
-        .cookies()
-        .get("star_csrf")
-        .expect("csrf persists")
-        .value()
-        .to_string();
+    // The CSRF cookie the browser holds after login is the one issued by
+    // GET /login (the POST's Set-Cookie delta only carries star_session).
+    let login_csrf = csrf;
 
     // Dashboard works with the session.
     let dash = server
@@ -681,6 +704,10 @@ async fn next_param_round_trips_through_login() {
         .to_string();
     let resp = server
         .post("/login")
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
         .form(&serde_json::json!({
             "email": email,
             "password": "Password123!",
@@ -691,7 +718,7 @@ async fn next_param_round_trips_through_login() {
     assert_eq!(resp.status_code(), 303);
     assert_eq!(
         resp.headers().get("location").unwrap(),
-        format!("/courses/{course}"),
+        format!("/courses/{course}").as_str(),
         "next must round-trip"
     );
 

@@ -98,7 +98,7 @@ pub async fn login_submit(
     Form(form): Form<LoginForm>,
 ) -> Response {
     // Double-submit CSRF: 403 on mismatch or absence.
-    if check_csrf(&jar, &form._csrf).is_err() {
+    if !check_csrf(&jar, &form._csrf) {
         return (
             StatusCode::FORBIDDEN,
             [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
@@ -175,7 +175,7 @@ pub async fn logout(
     user: crate::session::SessionUser,
     Form(form): Form<LogoutForm>,
 ) -> Response {
-    if check_csrf(&jar, &form._csrf).is_err() {
+    if !check_csrf(&jar, &form._csrf) {
         return (
             StatusCode::FORBIDDEN,
             [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
