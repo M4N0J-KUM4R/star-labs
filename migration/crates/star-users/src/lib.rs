@@ -2810,8 +2810,7 @@ async fn create_observee(
 
     let row = rows.first().ok_or(ApiError::NotFound)?;
 
-    let (uid, name, display_name, cid, course_name, workflow_state) =
-        *row;
+    let (uid, name, display_name, cid, course_name, workflow_state) = row.clone();
 
     Ok(Json(ObserveeResponse {
         id: uid,
@@ -2957,8 +2956,7 @@ async fn update_observee(
 
     let row = rows.first().ok_or(ApiError::NotFound)?;
 
-    let (uid, name, display_name, cid, course_name, workflow_state) =
-        row;
+    let (uid, name, display_name, cid, course_name, workflow_state) = row.clone();
 
     Ok(Json(ObserveeResponse {
         id: uid,
