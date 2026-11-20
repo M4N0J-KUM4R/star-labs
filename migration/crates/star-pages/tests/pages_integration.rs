@@ -541,7 +541,8 @@ async fn title_availability_conflict_when_page_exists() {
 
     let resp = server
         .get(&format!(
-            "/courses/{course}/page_title_availability?title=Existing Title"
+            // %20, not a raw space: http::Uri rejects spaces in the query.
+            "/courses/{course}/page_title_availability?title=Existing%20Title"
         ))
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
@@ -552,7 +553,8 @@ async fn title_availability_conflict_when_page_exists() {
     // current_page_id excludes itself from conflict check.
     let resp = server
         .get(&format!(
-            "/courses/{course}/page_title_availability?title=Existing Title&current_page_id={existing}"
+            // %20, not a raw space: http::Uri rejects spaces in the query.
+            "/courses/{course}/page_title_availability?title=Existing%20Title&current_page_id={existing}"
         ))
         .add_header(axum::http::header::AUTHORIZATION, bearer)
         .await;
