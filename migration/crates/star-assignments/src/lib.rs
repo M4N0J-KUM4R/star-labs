@@ -7233,6 +7233,163 @@ async fn section_assignment_override_alias(
 }
 
 // ---------------------------------------------------------------------------
+// Assignment extensions + section-scoped submission create (Canvas
+// AssignmentExtensionsController#create and the section twin of
+// submissions#create from the routes.rb context loop; the moderated /
+// provisional grading routes live above via main's implementations).
+// ---------------------------------------------------------------------------
+
+/// POST .../courses/:course_id/assignments/:assignment_id/extensions — Canvas
+/// AssignmentExtensionsController#create. The body carries an array of
+/// `{user_id, extra_attempts}`; Canvas stores extra attempts on the
+/// student's submission row (there is no assignment_extensions table) and
+/// answers 200 with `{assignment_extensions: [...]}`. Entries whose user has
+/// no submission yet are skipped from the response (Canvas only updates
+/// `@context.submissions.where(...)`); invalid payloads are 400s.
+async fn create_assignment_extension(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    ensure_course_not_deleted(&state.db, course_id).await?;
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    // Canvas: authorized_action?(@assignment, @current_user, :create) — the
+    // course-scoped manage right; crate mapping is check_teacher_or_admin.
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas: reject! "missing required key :assignment_extensions", 400.
+    let Some(extensions) = payload
+        .get("assignment_extensions")
+        .and_then(|v| v.as_array())
+    else {
+        return Err(ApiError::BadRequest(
+            "missing required key :assignment_extensions".into(),
+        ));
+    };
+
+    // Canvas: every entry needs both user_id and extra_attempts, else 400.
+    for ext in extensions {
+        if ext.get("user_id").and_then(|v| v.as_i64()).is_none()
+            || ext.get("extra_attempts").and_then(|v| v.as_i64()).is_none()
+        {
+            return Err(ApiError::BadRequest(
+                ":assignment_extensions must be in this format: { user_id: 1, extra_attempts: 2 }"
+                    .into(),
+            ));
+        }
+    }
+
+    // Apply each extension to the student's submission for this assignment.
+    // Canvas requires extra_attempts >= 0 (Submission numericality) — invalid
+    // values are a 400 with the per-user error list.
+    let mut applied: Vec<serde_json::Value> = Vec::new();
+    let mut errors: Vec<serde_json::Value> = Vec::new();
+    for ext in extensions {
+        let user_id = ext.get("user_id").and_then(|v| v.as_i64()).unwrap();
+        let extra_attempts = ext.get("extra_attempts").and_then(|v| v.as_i64()).unwrap();
+        if extra_attempts < 0 {
+            errors.push(serde_json::json!({
+                "user_id": user_id,
+                "errors": ["Extra attempts must be greater than or equal to 0"],
+            }));
+            continue;
+        }
+        let updated: Option<()> = sqlx::query_scalar(
+            r#"
+            UPDATE submissions
+            SET extra_attempts = $3, updated_at = now()
+            WHERE assignment_id = $1 AND user_id = $2
+            RETURNING 1
+            "#,
+        )
+        .bind(assignment_id)
+        .bind(user_id)
+        .bind(extra_attempts)
+        .fetch_optional(&state.db)
+        .await?;
+        if updated.is_some() {
+            applied.push(serde_json::json!({
+                "user_id": user_id,
+                "extra_attempts": extra_attempts,
+            }));
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(ApiError::BadRequest(
+            serde_json::to_string(&serde_json::json!({ "errors": errors }))
+                .unwrap_or_else(|_| "invalid assignment extensions".into()),
+        ));
+    }
+
+    // Canvas: render json: { assignment_extensions: } — 200, not 201.
+    Ok(Json(serde_json::json!({
+        "assignment_extensions": applied,
+    })))
+}
+
+/// POST .../sections/:section_id/assignments/:assignment_id/submissions — the
+/// section twin of submissions#create (Canvas routes.rb generates the same
+/// route for sections and courses). Resolves the section to its course,
+/// requires the caller to be enrolled in the section, then runs the same
+/// upsert as the course-level create_submission.
+async fn section_create_submission(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<CreateSubmission>,
+) -> Result<(StatusCode, Json<Submission>), ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    // The submission belongs to the course; the caller must be enrolled in
+    // this specific section (Canvas scopes @context to the section).
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let enrolled: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM enrollments
+        WHERE user_id = $1 AND course_id = $2 AND course_section_id = $3
+          AND role = 'student' AND workflow_state <> 'deleted'
+        LIMIT 1
+        "#,
+    )
+    .bind(auth.id)
+    .bind(course_id)
+    .bind(section_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    if enrolled.is_none() {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Same upsert as the course-level create_submission.
+    let submission: Submission = sqlx::query_as(
+        r#"
+        INSERT INTO submissions (assignment_id, user_id, body, submission_type, anonymous_id)
+        VALUES ($1, $2, $3, 'online_text_entry', gen_random_uuid()::text)
+        ON CONFLICT (assignment_id, user_id) DO UPDATE
+        SET body = $3, submission_type = 'online_text_entry', submitted_at = now(),
+            anonymous_id = COALESCE(submissions.anonymous_id, gen_random_uuid()::text)
+        RETURNING id, assignment_id, user_id, body, score::float8, submitted_at, created_at, updated_at
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(auth.id)
+    .bind(&payload.body)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(submission)))
+}
+
+// ---------------------------------------------------------------------------
 // Assignments API tail (Canvas AssignmentsApiController#user_index /
 // student_group_members / duplicate / bulk_update / retry_alignment_clone /
 // accessibility_scan / accessibility_queue_scan; issue #55)
@@ -8188,10 +8345,15 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/assignments/{assignmentId}/accessibility/queue_scan",
             post(assignment_accessibility_queue_scan),
         )
+        // Assignment extensions (Canvas AssignmentExtensionsController).
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/extensions",
+            post(create_assignment_extension),
+        )
         // Section submissions twins — Canvas sections_api_controller#submissions/#submission
         .route(
             "/sections/{sectionId}/assignments/{assignmentId}/submissions",
-            get(section_list_submissions),
+            get(section_list_submissions).post(section_create_submission),
         )
         .route(
             "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}",

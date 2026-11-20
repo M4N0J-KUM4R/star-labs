@@ -2720,6 +2720,7 @@ dependencies = [
  "axum",
  "axum-test",
  "chrono",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",
