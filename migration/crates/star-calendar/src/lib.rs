@@ -54,9 +54,9 @@ use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use star_common::{ApiError, AppState};
-
 use star_auth::AuthUser;
+use star_common::{ApiError, AppState};
+use star_groups::Group;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -1176,6 +1176,17 @@ pub struct AppointmentGroupShowQuery {
 pub struct AppointmentGroupUsersQuery {
     pub registration_status: Option<String>,
     pub context_code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AppointmentGroupGroupsQuery {
+    pub registration_status: Option<String>,
+    pub context_code: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NextAppointmentQuery {
+    pub appointment_group_ids: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2760,6 +2771,275 @@ async fn list_appointment_group_users(
     Ok(Json(filtered))
 }
 
+/// GET /appointment_groups/{id}/groups — student groups for group-signup appointments.
+/// Returns [] when participant_type is "User".
+async fn list_appointment_group_groups(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    Query(params): Query<AppointmentGroupGroupsQuery>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let group = fetch_appointment_group(&state.db, id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if group.workflow_state == "deleted" {
+        return Err(ApiError::Forbidden);
+    }
+    if !can_read_appointment_group(&state.db, &auth, id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    // Only meaningful when participant_type is "Group"
+    if group.participant_type != "Group" {
+        return Ok(Json(Vec::new()));
+    }
+
+    let context_code = params
+        .context_code
+        .as_deref()
+        .and_then(parse_course_context_code);
+
+    let groups: Vec<Group> = if let Some(course_id) = context_code {
+        sqlx::query_as(
+            r#"
+            SELECT id, course_id, name, description, workflow_state, join_level,
+                   group_category_id, created_at, updated_at
+            FROM groups
+            WHERE course_id = $1 AND workflow_state != 'deleted'
+            ORDER BY name ASC, id ASC
+            "#,
+        )
+        .bind(course_id)
+        .fetch_all(&state.db)
+        .await?
+    } else {
+        let snapshot = load_appointment_snapshot(&state.db, id).await?;
+        if snapshot.course_ids.is_empty() {
+            return Ok(Json(Vec::new()));
+        }
+        sqlx::query_as(
+            r#"
+            SELECT g.id, g.course_id, g.name, g.description, g.workflow_state, g.join_level,
+                   g.group_category_id, g.created_at, g.updated_at
+            FROM groups g
+            WHERE g.course_id = ANY($1) AND g.workflow_state != 'deleted'
+            ORDER BY g.name ASC, g.id ASC
+            "#,
+        )
+        .bind(&snapshot.course_ids)
+        .fetch_all(&state.db)
+        .await?
+    };
+
+    let registered_group_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT DISTINCT user_id FROM calendar_events \
+         WHERE appointment_group_id = $1 AND parent_event_id IS NOT NULL \
+           AND workflow_state <> 'deleted' AND user_id IS NOT NULL",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let filtered: Vec<serde_json::Value> = match params.registration_status.as_deref() {
+        Some("registered") => groups
+            .into_iter()
+            .filter(|g| registered_group_ids.contains(&g.id))
+            .map(|g| group_json(&g, false))
+            .collect(),
+        Some("unregistered") => groups
+            .into_iter()
+            .filter(|g| !registered_group_ids.contains(&g.id))
+            .map(|g| group_json(&g, false))
+            .collect(),
+        _ => groups
+            .into_iter()
+            .map(|g| group_json(&g, false))
+            .collect(),
+    };
+    Ok(Json(filtered))
+}
+
+/// Build a Canvas-compatible group_json for appointment group listings.
+fn group_json(group: &Group, _can_edit: bool) -> serde_json::Value {
+    json!({
+        "id": group.id,
+        "name": group.name,
+        "description": group.description,
+        "members_count": None::<i64>,
+        "avatar_url": None::<String>,
+        "context_code": group.course_id.map(|cid| format!("course_{}", cid)),
+        "course_id": group.course_id,
+        "workflow_state": group.workflow_state,
+        "join_level": group.join_level,
+        "default_view": "members",
+        "group_category_id": group.group_category_id,
+        "storage_quota_mb": None::<i64>,
+        "storage_quota_used_mb": None::<f64>,
+        "created_at": group.created_at,
+        "updated_at": group.updated_at,
+        "has_submission": false,
+    })
+}
+
+/// GET /appointment_groups/next_appointment — nearest reservable slot for caller.
+async fn get_next_appointment(
+    State(state): State<AppState>,
+    Query(params): Query<NextAppointmentQuery>,
+    auth: AuthUser,
+) -> Result<Json<Vec<CalendarEvent>>, ApiError> {
+    // Find appointment groups the current user can reserve
+    let now = Utc::now();
+    let appointment_group_ids: Vec<i64> = params
+        .appointment_group_ids
+        .as_ref()
+        .map(|ids| {
+            ids.iter()
+                .filter_map(|s| s.parse::<i64>().ok())
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let groups: Vec<AppointmentGroupRow> = if appointment_group_ids.is_empty() {
+        // Find all active groups the user can reserve
+        sqlx::query_as::<_, AppointmentGroupRow>(
+            "SELECT * FROM appointment_groups \
+             WHERE workflow_state = 'active' AND participant_type = 'User' \
+             ORDER BY id ASC",
+        )
+        .fetch_all(&state.db)
+        .await?
+    } else {
+        sqlx::query_as::<_, AppointmentGroupRow>(
+            "SELECT * FROM appointment_groups \
+             WHERE id = ANY($1) AND workflow_state = 'active' AND participant_type = 'User' \
+             ORDER BY id ASC",
+        )
+        .bind(&appointment_group_ids)
+        .fetch_all(&state.db)
+        .await?
+    };
+
+    let mut candidates: Vec<CalendarEvent> = Vec::new();
+
+    for group in groups {
+        let snapshot = load_appointment_snapshot(&state.db, group.id).await?;
+        if snapshot.course_ids.is_empty() {
+            continue;
+        }
+        // Must be a student in at least one course context
+        if !has_course_membership(&state.db, auth.id, &snapshot.course_ids, Some("student")).await? {
+            continue;
+        }
+
+        // Find future slots with open spots the user hasn't already reserved
+        let slots: Vec<AppointmentSlotRow> = sqlx::query_as(
+            r#"
+            SELECT id, appointment_group_id, parent_event_id, user_id, title, description,
+                   start_at, end_at, workflow_state, location_name, location_address, comments,
+                   created_at, updated_at
+            FROM calendar_events
+            WHERE appointment_group_id = $1
+              AND parent_event_id IS NULL
+              AND workflow_state = 'active'
+              AND start_at > $2
+            ORDER BY start_at ASC
+            LIMIT 10
+            "#,
+        )
+        .bind(group.id)
+        .bind(now)
+        .fetch_all(&state.db)
+        .await?;
+
+        let reserved_slot_ids: Vec<i64> = sqlx::query_scalar(
+            "SELECT parent_event_id FROM calendar_events \
+             WHERE appointment_group_id = $1 AND parent_event_id IS NOT NULL \
+               AND user_id = $2 AND workflow_state <> 'deleted'",
+        )
+        .bind(group.id)
+        .bind(auth.id)
+        .fetch_all(&state.db)
+        .await?;
+
+        for slot in slots {
+            // Skip if user already reserved this slot
+            if reserved_slot_ids.contains(&slot.id) {
+                continue;
+            }
+            // Skip if full
+            if let Some(limit) = group.participants_per_appointment {
+                let count: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM calendar_events \
+                     WHERE parent_event_id = $1 AND workflow_state <> 'deleted'",
+                )
+                .bind(slot.id)
+                .fetch_one(&state.db)
+                .await?;
+                if count >= limit as i64 {
+                    continue;
+                }
+            }
+            candidates.push(CalendarEvent {
+                id: slot.id,
+                course_id: snapshot.course_ids.first().copied(),
+                user_id: None,
+                title: slot.title,
+                description: slot.description,
+                start_at: slot.start_at,
+                end_at: slot.end_at,
+                workflow_state: slot.workflow_state,
+                location_name: slot.location_name,
+                created_at: slot.created_at,
+                updated_at: slot.updated_at,
+            });
+            break; // Only one slot per group
+        }
+    }
+
+    // Sort by start_at and return at most one
+    candidates.sort_by_key(|e| e.start_at);
+    candidates.truncate(1);
+
+    Ok(Json(candidates))
+}
+
+/// GET /calendar_events/{id}/participants — users/groups registered for a slot.
+async fn get_calendar_event_participants(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<UserDisplay>>, ApiError> {
+    // Load the slot to verify it's an appointment child event (or slot)
+    let slot = fetch_appointment_slot(&state.db, id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    // Must belong to an appointment group
+    let Some(group_id) = slot.appointment_group_id else {
+        return Ok(Json(Vec::new()));
+    };
+
+    // Read access check
+    if !can_read_appointment_group(&state.db, &auth, group_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let participants: Vec<UserDisplay> = sqlx::query_as(
+        r#"
+        SELECT u.id, u.name AS anonymous_id, u.name AS display_name,
+               NULL AS avatar_image_url, '' AS html_url, NULL AS pronouns
+        FROM calendar_events c
+        JOIN users u ON u.id = c.user_id
+        WHERE c.parent_event_id = $1 AND c.workflow_state <> 'deleted' AND c.user_id IS NOT NULL
+        ORDER BY u.id ASC
+        "#,
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(participants))
+}
+
 /// POST /calendar_events/{id}/reservations — reserve a time slot.
 async fn reserve_appointment(
     State(state): State<AppState>,
@@ -3371,6 +3651,19 @@ pub fn router() -> Router<AppState> {
         .route(
             "/calendar_events/{id}/reservations",
             post(reserve_appointment),
+        )
+        // Calendar preferences (Canvas CalendarEventsApiController)
+        .route(
+            "/calendar_events/visible_contexts",
+            get(list_visible_contexts),
+        )
+        .route(
+            "/calendar_events/save_selected_contexts",
+            post(save_selected_contexts),
+        )
+        .route(
+            "/calendar_events/save_enabled_account_calendars",
+            post(save_enabled_account_calendars),
         )
 }
 
