@@ -80,11 +80,11 @@ pub struct MediaObjectRow {
     pub title: Option<String>,
     pub user_entered_title: Option<String>,
     pub user_id: i64,
-    pub workflow_state: String,
     pub context_type: Option<String>,
     pub context_id: Option<i64>,
     pub old_media_id: Option<String>,
     pub attachment_id: Option<i64>,
+    pub root_account_id: Option<i64>,
     pub viewer_restrictions: serde_json::Value,
     pub auto_caption_status: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -95,7 +95,6 @@ pub struct MediaObjectRow {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct MediaTrackRow {
     pub id: i64,
-    pub media_object_id: i64,
     pub kind: String,
     pub locale: String,
     pub external_id: Option<String>,
@@ -177,21 +176,10 @@ enum MediaScope {
 /// A context resolved from a Canvas asset string (`course_17`, `user_9`, …).
 #[derive(Debug, Clone, Copy)]
 enum MediaContext {
-    Course {
-        id: i64,
-        account_id: Option<i64>,
-    },
-    Group {
-        id: i64,
-        course_id: Option<i64>,
-        account_id: Option<i64>,
-    },
-    User {
-        id: i64,
-    },
-    Account {
-        id: i64,
-    },
+    Course { id: i64, account_id: Option<i64> },
+    Group { id: i64, account_id: Option<i64> },
+    User { id: i64 },
+    Account { id: i64 },
 }
 
 impl MediaContext {
@@ -564,7 +552,6 @@ fn context_of(row: &MediaObjectRow) -> MediaContext {
         },
         (Some("Group"), Some(id)) => MediaContext::Group {
             id,
-            course_id: None,
             account_id: None,
         },
         (Some("User"), Some(id)) => MediaContext::User { id },
@@ -612,14 +599,11 @@ async fn find_context(db: &PgPool, context_code: &str) -> Result<Option<MediaCon
                 .bind(course_id)
                 .fetch_one(db)
                 .await
-                .unwrap_or(None),
+                .ok()
+                .flatten(),
                 None => None,
             };
-            Ok(Some(MediaContext::Group {
-                id,
-                course_id,
-                account_id,
-            }))
+            Ok(Some(MediaContext::Group { id, account_id }))
         }
         "user" => {
             let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM users WHERE id = $1")
@@ -644,9 +628,9 @@ async fn find_context(db: &PgPool, context_code: &str) -> Result<Option<MediaCon
 // ---------------------------------------------------------------------------
 
 const MEDIA_OBJECT_COLUMNS: &str = r#"
-    id, media_id, media_type, title, user_entered_title, user_id, workflow_state,
-    context_type, context_id, old_media_id, attachment_id, viewer_restrictions,
-    auto_caption_status, created_at, updated_at
+    id, media_id, media_type, title, user_entered_title, user_id,
+    context_type, context_id, old_media_id, attachment_id, root_account_id,
+    viewer_restrictions, auto_caption_status, created_at, updated_at
 "#;
 
 /// `MediaObject.by_media_id` — the Kaltura entry id, or the id the object was
@@ -673,7 +657,7 @@ async fn fetch_media_object_by_media_id(
 async fn load_tracks(db: &PgPool, media_object_id: i64) -> Result<Vec<MediaTrackRow>, ApiError> {
     let rows: Vec<MediaTrackRow> = sqlx::query_as(
         r#"
-        SELECT id, media_object_id, kind, locale, external_id, workflow_state,
+        SELECT id, kind, locale, external_id, workflow_state,
                created_at, updated_at
         FROM media_tracks
         WHERE media_object_id = $1 AND workflow_state <> 'deleted'
@@ -761,7 +745,7 @@ fn media_object_as_json(row: &MediaObjectRow, uuid: Option<&str>) -> serde_json:
         "duration": serde_json::Value::Null,
         "max_size": serde_json::Value::Null,
         "total_size": serde_json::Value::Null,
-        "root_account_id": serde_json::Value::Null,
+        "root_account_id": row.root_account_id,
         "attachment_id": row.attachment_id,
         "old_media_id": row.old_media_id,
         "auto_caption_status": row.auto_caption_status,
@@ -779,21 +763,18 @@ fn media_object_as_json(row: &MediaObjectRow, uuid: Option<&str>) -> serde_json:
 // ---------------------------------------------------------------------------
 
 /// The `scope` predicate and the pagination base URL of a listing.
-fn scope_parts(scope: MediaScope, base: &str) -> (String, i64, String) {
+fn scope_parts(scope: MediaScope, base: &str) -> (String, String) {
     match scope {
         MediaScope::User => (
             "user_id = $1".to_string(),
-            0,
             format!("{base}/api/v1/media_attachments"),
         ),
         MediaScope::Course(id) => (
             "context_type = 'Course' AND context_id = $1".to_string(),
-            id,
             format!("{base}/api/v1/courses/{id}/media_attachments"),
         ),
         MediaScope::Group(id) => (
             "context_type = 'Group' AND context_id = $1".to_string(),
-            id,
             format!("{base}/api/v1/groups/{id}/media_attachments"),
         ),
     }
@@ -900,20 +881,16 @@ async fn list_media_objects(
         }
     }
 
-    let (predicate, scope_id, pagination_base) = scope_parts(scope, base);
+    let (predicate, pagination_base) = scope_parts(scope, base);
     let pattern = search_pattern(params.search_term.as_deref())?;
 
-    let mut where_sql = format!(
+    // `$2` is bound to NULL when there is no search term, which makes the
+    // filter a no-op — the same result as Canvas returning the scope
+    // unchanged when `search_term` is blank.
+    let where_sql = format!(
         "WHERE workflow_state <> 'deleted' AND {predicate} \
          AND ($2::text IS NULL OR LOWER(title) LIKE $2 ESCAPE '\\')"
     );
-    if pattern.is_none() {
-        // keep the placeholder count stable: `$2` is bound to NULL.
-        where_sql = where_sql.replace(
-            "AND ($2::text IS NULL OR LOWER(title) LIKE $2 ESCAPE '\\')",
-            "AND ($2::text IS NULL OR TRUE)",
-        );
-    }
 
     let (column, direction) = order_clause(&params);
     let per_page = params
@@ -956,13 +933,7 @@ async fn list_media_objects(
     for row in &rows {
         let tracks = load_tracks(&state.db, row.id).await?;
         let allowed = can_add_captions(&state.db, auth, row).await?;
-        payload.push(media_object_api_json(
-            row,
-            allowed,
-            base,
-            &exclude,
-            &tracks,
-        ));
+        payload.push(media_object_api_json(row, allowed, base, &exclude, &tracks));
     }
 
     let mut response = Json(payload).into_response();
@@ -1123,9 +1094,9 @@ async fn update_media_object_route(
     State(state): State<AppState>,
     Path(media_object_id): Path<String>,
     Query(query): Query<UpdateQuery>,
-    body: Option<Json<UpdateBody>>,
     headers: HeaderMap,
     auth: AuthUser,
+    body: Option<Json<UpdateBody>>,
 ) -> Result<Response, ApiError> {
     let base = base_url(&headers);
 
@@ -1151,7 +1122,7 @@ async fn update_media_object_route(
     // when `params[:user_entered_title]` is blank.
     let Some(user_entered_title) = user_entered_title.filter(|value| !value.trim().is_empty())
     else {
-        return Err((
+        return Ok((
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({
                 "message": "The user_entered_title parameter must have a value"
@@ -1162,7 +1133,8 @@ async fn update_media_object_route(
 
     let viewer_restrictions = merge_viewer_restrictions(
         &existing.viewer_restrictions,
-        body.as_ref().and_then(|body| body.viewer_restrictions.as_ref()),
+        body.as_ref()
+            .and_then(|body| body.viewer_restrictions.as_ref()),
     )?;
 
     let title = truncate_title(&user_entered_title);
@@ -1181,7 +1153,13 @@ async fn update_media_object_route(
     // Canvas renders `media_object_api_json(..., %w[sources tracks])`.
     let tracks = load_tracks(&state.db, row.id).await?;
     let allowed = can_add_captions(&state.db, &auth, &row).await?;
-    let json = media_object_api_json(&row, allowed, &base, &["sources".into(), "tracks".into()], &tracks);
+    let json = media_object_api_json(
+        &row,
+        allowed,
+        &base,
+        &["sources".into(), "tracks".into()],
+        &tracks,
+    );
     Ok(Json(json).into_response())
 }
 
@@ -1204,8 +1182,9 @@ async fn create_attachment(
             let row: (i64, Option<String>) = sqlx::query_as(
                 r#"
                 INSERT INTO files (course_id, uploader_id, filename, display_name,
-                                   content_type, size, folder, workflow_state, hidden)
-                VALUES ($1, $2, $3, $3, $4, 0, 'media', 'pending_upload', TRUE)
+                                   content_type, size, folder, workflow_state, hidden,
+                                   media_entry_id)
+                VALUES ($1, $2, $3, $3, $4, 0, 'media', 'pending_upload', TRUE, $5)
                 RETURNING id, uuid
                 "#,
             )
@@ -1213,17 +1192,18 @@ async fn create_attachment(
             .bind(auth.id)
             .bind(title)
             .bind(media_type)
+            .bind(media_id)
             .fetch_one(db)
             .await?;
-            let _ = media_id;
             Ok(Some(row))
         }
         MediaContext::Group { id, .. } => {
             let row: (i64, Option<String>) = sqlx::query_as(
                 r#"
                 INSERT INTO group_files (group_id, uploader_id, filename, display_name,
-                                         content_type, size, folder, uuid)
-                VALUES ($1, $2, $3, $3, $4, 0, 'group files', md5(random()::text || clock_timestamp()::text))
+                                         content_type, size, folder, uuid, media_entry_id)
+                VALUES ($1, $2, $3, $3, $4, 0, 'group files',
+                        md5(random()::text || clock_timestamp()::text), $5)
                 RETURNING id, uuid
                 "#,
             )
@@ -1231,6 +1211,7 @@ async fn create_attachment(
             .bind(auth.id)
             .bind(title)
             .bind(media_type)
+            .bind(media_id)
             .fetch_one(db)
             .await?;
             Ok(Some(row))
@@ -1239,14 +1220,16 @@ async fn create_attachment(
             let row: (i64, Option<String>) = sqlx::query_as(
                 r#"
                 INSERT INTO user_files (user_id, filename, display_name, content_type,
-                                        size, folder, uuid)
-                VALUES ($1, $2, $2, $3, 0, 'media', md5(random()::text || clock_timestamp()::text))
+                                        size, folder, uuid, media_entry_id)
+                VALUES ($1, $2, $2, $3, 0, 'media',
+                        md5(random()::text || clock_timestamp()::text), $4)
                 RETURNING id, uuid
                 "#,
             )
             .bind(*id)
             .bind(title)
             .bind(media_type)
+            .bind(media_id)
             .fetch_one(db)
             .await?;
             Ok(Some(row))
@@ -1260,9 +1243,9 @@ async fn create_attachment(
 async fn create_media_object_route(
     State(state): State<AppState>,
     Query(query): Query<CreateQuery>,
-    body: Option<Json<CreateBody>>,
     headers: HeaderMap,
     auth: AuthUser,
+    body: Option<Json<CreateBody>>,
 ) -> Result<Response, ApiError> {
     let base = base_url(&headers);
     let body = body.map(|Json(body)| body);
@@ -1334,7 +1317,10 @@ async fn create_media_object_route(
         "show_rolling_transcript".to_string(),
         serde_json::Value::Bool(false),
     );
-    if let Some(permitted) = body.as_ref().and_then(|body| body.viewer_restrictions.as_ref()) {
+    if let Some(permitted) = body
+        .as_ref()
+        .and_then(|body| body.viewer_restrictions.as_ref())
+    {
         for (key, value) in permitted {
             if !VIEWER_RESTRICTION_KEYS.contains(&key.as_str()) {
                 continue;
@@ -1394,12 +1380,11 @@ async fn create_media_object_route(
         None => {
             // The port's `media_objects.media_id` is unique, so a media id can
             // only ever live in one context.
-            let clash: Option<(i32,)> = sqlx::query_as(
-                "SELECT 1 FROM media_objects WHERE media_id = $1 LIMIT 1",
-            )
-            .bind(&media_id)
-            .fetch_optional(&state.db)
-            .await?;
+            let clash: Option<(i32,)> =
+                sqlx::query_as("SELECT 1 FROM media_objects WHERE media_id = $1 LIMIT 1")
+                    .bind(&media_id)
+                    .fetch_optional(&state.db)
+                    .await?;
             if clash.is_some() {
                 return Err(ApiError::Conflict(format!(
                     "media_id {media_id} already exists in another context"
@@ -1438,7 +1423,7 @@ async fn create_media_object_route(
     )
     .await?;
 
-    let (attachment_id, uuid) = match attachment {
+    let (attachment_id, uuid, row) = match attachment {
         Some((attachment_id, uuid)) => {
             let updated: MediaObjectRow = sqlx::query_as(&format!(
                 "UPDATE media_objects SET attachment_id = $1, updated_at = now()
@@ -1452,7 +1437,6 @@ async fn create_media_object_route(
         }
         None => (None, None, row),
     };
-    let row = updated_row;
 
     let mut payload = serde_json::Map::new();
     payload.insert(

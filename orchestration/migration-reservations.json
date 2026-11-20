@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0223",
- "next_available": "0224",
+ "max_merged": "0224",
+ "next_available": "0225",
  "reservations": {
   "0001": {
    "issue": null,
@@ -705,6 +705,11 @@
   "0223": {
    "issue": null,
    "note": "star-polling: the poll sessions",
+   "status": "merged"
+  },
+  "0224": {
+   "issue": null,
+   "note": "star-media: the media object columns, the tracks and the media files",
    "status": "merged"
   }
  }

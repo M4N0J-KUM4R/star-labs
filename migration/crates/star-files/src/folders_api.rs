@@ -50,7 +50,7 @@ use crate::{
     ensure_unfiled_folder, fetch_child_by_name, fetch_folder, fetch_sibling_names,
     find_or_create_unique_folder, insert_folder, is_admin, join_full_name, next_position,
     normalize_folder_name, pagination, user_in_group, user_teacher_of_course, CreateFolderRequest,
-    DuplicatesResponse, FolderListQuery, FolderResponse, FolderRow, FOLDER_SELECT, NewFolder,
+    DuplicatesResponse, FolderListQuery, FolderResponse, FolderRow, NewFolder, FOLDER_SELECT,
     MEDIA_TYPE,
 };
 
@@ -92,19 +92,6 @@ async fn group_can_manage(
         Some(course_id) => user_teacher_of_course(db, auth.id, course_id, &auth.role).await,
         None => Ok(false),
     }
-}
-
-/// Canvas `:read_files` on a group: the managers of the group plus its
-/// accepted members.
-async fn group_can_read(
-    db: &PgPool,
-    auth: &AuthUser,
-    group: &GroupScope,
-) -> Result<bool, ApiError> {
-    if group_can_manage(db, auth, group).await? {
-        return Ok(true);
-    }
-    user_in_group(db, auth.id, group.id).await
 }
 
 // ─── list_all_folders ────────────────────────────────────────────────────────

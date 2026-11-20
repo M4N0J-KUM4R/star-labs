@@ -68,7 +68,7 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
     )
     .bind(name)
     .bind(format!("{prefix}-{name}@test.local"))
-    .bind("not-a-real-hash")
+    .bind(star_auth::hash_password("pw-test-1234").expect("hash"))
     .bind(role)
     .fetch_one(pool)
     .await
@@ -97,7 +97,8 @@ async fn seed_course(pool: &PgPool, prefix: &str, name: &str, account_id: i64) -
 
 async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str) {
     sqlx::query(
-        "INSERT INTO enrollments (user_id, course_id, role) VALUES ($1, $2, $3)",
+        "INSERT INTO enrollments (user_id, course_id, role, workflow_state) \
+         VALUES ($1, $2, $3, 'active')",
     )
     .bind(user_id)
     .bind(course_id)
@@ -258,7 +259,15 @@ async fn the_group_folders_are_listed_for_the_members_and_the_teachers() {
 
     let root = seed_folder(&pool, "Group", group, "files", "files", None).await;
     let alpha = seed_folder(&pool, "Group", group, "alpha", "files/alpha", Some(root)).await;
-    seed_folder(&pool, "Group", group, "beta", "files/alpha/beta", Some(alpha)).await;
+    seed_folder(
+        &pool,
+        "Group",
+        group,
+        "beta",
+        "files/alpha/beta",
+        Some(alpha),
+    )
+    .await;
 
     // The teacher of the course of the group reads the folder list.
     let resp = server
@@ -276,7 +285,10 @@ async fn the_group_folders_are_listed_for_the_members_and_the_teachers() {
     assert_eq!(list[0]["context_type"], "Group");
     assert_eq!(list[0]["context_id"], group);
     assert_eq!(list[0]["full_name"], "files/alpha");
-    assert_eq!(list[0]["folders_url"], format!("/api/v1/folders/{alpha}/folders"));
+    assert_eq!(
+        list[0]["folders_url"],
+        format!("/api/v1/folders/{alpha}/folders")
+    );
 
     // A member of the group reads it as well.
     let resp = server
@@ -299,14 +311,7 @@ async fn the_group_folders_are_listed_for_the_members_and_the_teachers() {
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
-    cleanup(
-        &pool,
-        &prefix,
-        group,
-        course,
-        &[teacher, member, outsider],
-    )
-    .await;
+    cleanup(&pool, &prefix, group, course, &[teacher, member, outsider]).await;
 }
 
 #[tokio::test]
@@ -440,14 +445,7 @@ async fn the_group_media_folder_belongs_to_the_caller_without_the_file_rights() 
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
-    cleanup(
-        &pool,
-        &prefix,
-        group,
-        course,
-        &[teacher, member, outsider],
-    )
-    .await;
+    cleanup(&pool, &prefix, group, course, &[teacher, member, outsider]).await;
 }
 
 #[tokio::test]
@@ -532,9 +530,24 @@ async fn the_by_path_resolvers_answer_the_folder_hierarchy() {
     let group = seed_group(&pool, &prefix, "Group", course).await;
     seed_group_membership(&pool, group, member).await;
 
-    let course_root = seed_folder(&pool, "Course", course, "course files", "course files", None).await;
-    let course_alpha =
-        seed_folder(&pool, "Course", course, "alpha", "course files/alpha", Some(course_root)).await;
+    let course_root = seed_folder(
+        &pool,
+        "Course",
+        course,
+        "course files",
+        "course files",
+        None,
+    )
+    .await;
+    let course_alpha = seed_folder(
+        &pool,
+        "Course",
+        course,
+        "alpha",
+        "course files/alpha",
+        Some(course_root),
+    )
+    .await;
     let course_beta = seed_folder(
         &pool,
         "Course",
@@ -546,10 +559,26 @@ async fn the_by_path_resolvers_answer_the_folder_hierarchy() {
     .await;
 
     let user_root = seed_folder(&pool, "User", member, "my files", "my files", None).await;
-    let user_alpha = seed_folder(&pool, "User", member, "alpha", "my files/alpha", Some(user_root)).await;
+    let user_alpha = seed_folder(
+        &pool,
+        "User",
+        member,
+        "alpha",
+        "my files/alpha",
+        Some(user_root),
+    )
+    .await;
 
     let group_root = seed_folder(&pool, "Group", group, "files", "files", None).await;
-    let group_alpha = seed_folder(&pool, "Group", group, "alpha", "files/alpha", Some(group_root)).await;
+    let group_alpha = seed_folder(
+        &pool,
+        "Group",
+        group,
+        "alpha",
+        "files/alpha",
+        Some(group_root),
+    )
+    .await;
 
     // The course path answers the hierarchy from the root folder down.
     let resp = server
@@ -595,12 +624,5 @@ async fn the_by_path_resolvers_answer_the_folder_hierarchy() {
     assert_eq!(hierarchy[0]["id"], group_root);
     assert_eq!(hierarchy[1]["id"], group_alpha);
 
-    cleanup(
-        &pool,
-        &prefix,
-        group,
-        course,
-        &[teacher, member],
-    )
-    .await;
+    cleanup(&pool, &prefix, group, course, &[teacher, member]).await;
 }

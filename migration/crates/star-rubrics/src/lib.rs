@@ -15,6 +15,8 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod rubrics_api;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -2116,6 +2118,7 @@ async fn download_account_rubrics(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(rubrics_api::router())
         .route("/courses/{courseId}/rubrics", post(create_rubric))
         .route("/courses/{courseId}/rubrics", get(list_course_rubrics))
         .route("/courses/{courseId}/rubrics/{id}", get(get_course_rubric))

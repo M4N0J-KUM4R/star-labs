@@ -47,9 +47,9 @@ use star_common::{ApiError, AppState};
 
 use crate::{
     check_teacher_or_admin, create_rubric_import, fetch_rubric_with_nested, is_admin, Rubric,
-    RubricAssociation, RubricAssessment, RubricImportResponse, RubricImportRow,
-    UploadRubricRequest, UsedLocationAssignment, UsedLocationCourse, ASSOCIATION_COLUMNS,
-    ASSESSMENT_COLUMNS,
+    RubricAssessment, RubricAssociation, RubricImportResponse, RubricImportRow,
+    UploadRubricRequest, UsedLocationAssignment, UsedLocationCourse, ASSESSMENT_COLUMNS,
+    ASSOCIATION_COLUMNS,
 };
 
 // ---------------------------------------------------------------------------
@@ -57,7 +57,8 @@ use crate::{
 // ---------------------------------------------------------------------------
 
 /// Canvas `VALID_ASSESSMENT_SCOPES`.
-const VALID_ASSESSMENT_SCOPES: [&str; 3] = ["assessments", "graded_assessments", "peer_assessments"];
+const VALID_ASSESSMENT_SCOPES: [&str; 3] =
+    ["assessments", "graded_assessments", "peer_assessments"];
 
 /// Canvas `VALID_ASSOCIATION_SCOPES`.
 const VALID_ASSOCIATION_SCOPES: [&str; 4] = [
@@ -91,7 +92,10 @@ fn context_not_found() -> Response {
 /// Canvas `RubricsApiController#show` / `#used_locations` render
 /// `{"message": "Rubric not found"}` when the rubric is unknown.
 fn rubric_not_found() -> Response {
-    json_response(StatusCode::NOT_FOUND, json!({"message": "Rubric not found"}))
+    json_response(
+        StatusCode::NOT_FOUND,
+        json!({"message": "Rubric not found"}),
+    )
 }
 
 /// Canvas `render_json_unauthorized` (authenticated but not authorized).
@@ -176,11 +180,7 @@ async fn course_gate(
 }
 
 /// Is the user an administrator of the account?
-async fn is_account_admin(
-    pool: &PgPool,
-    user_id: i64,
-    account_id: i64,
-) -> Result<bool, ApiError> {
+async fn is_account_admin(pool: &PgPool, user_id: i64, account_id: i64) -> Result<bool, ApiError> {
     let row: Option<(i32,)> = sqlx::query_as(
         r#"
         SELECT 1 FROM account_users
@@ -334,16 +334,18 @@ fn valid_include_params() -> Vec<&'static str> {
 fn validate_args(args: &ShowArgs) -> Option<Value> {
     let mut errs: Map<String, String> = Map::new();
 
-    if let Some(style) = &args.style {
-        if !VALID_STYLE_ARGS.contains(&style.as_str()) {
-            errs.insert(
-                "style".to_string(),
-                format!(
-                    "invalid style requested. Must be one of the following: {}",
-                    VALID_STYLE_ARGS.join(", ")
-                ),
-            );
-        }
+    let invalid_style = args
+        .style
+        .as_deref()
+        .is_some_and(|style| !VALID_STYLE_ARGS.contains(&style));
+    if invalid_style {
+        errs.insert(
+            "style".to_string(),
+            format!(
+                "invalid style requested. Must be one of the following: {}",
+                VALID_STYLE_ARGS.join(", ")
+            ),
+        );
     }
 
     let invalid: Vec<&str> = args
@@ -351,7 +353,8 @@ fn validate_args(args: &ShowArgs) -> Option<Value> {
         .iter()
         .map(String::as_str)
         .filter(|include| {
-            !VALID_ASSESSMENT_SCOPES.contains(include) && !VALID_ASSOCIATION_SCOPES.contains(include)
+            !VALID_ASSESSMENT_SCOPES.contains(include)
+                && !VALID_ASSOCIATION_SCOPES.contains(include)
         })
         .collect();
 

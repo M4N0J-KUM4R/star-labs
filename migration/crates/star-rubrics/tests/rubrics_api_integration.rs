@@ -18,6 +18,10 @@
 //! Fleet rule: dedicated users, accounts, courses, assignments and imports per
 //! test, every seeded row is cleaned up. Skipped cleanly when DATABASE_URL is
 //! unset.
+//!
+//! The routes under test are the `RubricsApiController` account scope routes;
+//! they are served by the crate router once the coordinator has wired the
+//! `rubrics_api` module into it.
 
 use axum::http::header::AUTHORIZATION;
 use axum_test::TestServer;
@@ -55,7 +59,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
     };
     let server = TestServer::new(
         axum::Router::new()
-            .merge(star_rubrics::rubrics_api::router())
+            .merge(star_rubrics::router())
             .with_state(state),
     )
     .expect("build TestServer");
@@ -381,9 +385,10 @@ async fn account_rubric_is_shown_with_its_used_locations() {
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
     let body: Value = resp.json();
     let style_errors = body["style"].as_array().expect("style errors");
-    assert!(style_errors
-        .iter()
-        .any(|message| message.as_str().unwrap_or_default().contains("invalid style requested")));
+    assert!(style_errors.iter().any(|message| message
+        .as_str()
+        .unwrap_or_default()
+        .contains("invalid style requested")));
 
     // A style without an assessment include is a 400 as well.
     let resp = server
@@ -394,7 +399,9 @@ async fn account_rubric_is_shown_with_its_used_locations() {
 
     // The used locations list the course and the assignment.
     let resp = server
-        .get(&format!("/accounts/{account}/rubrics/{rubric}/used_locations"))
+        .get(&format!(
+            "/accounts/{account}/rubrics/{rubric}/used_locations"
+        ))
         .add_header(AUTHORIZATION, auth(admin, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -410,7 +417,9 @@ async fn account_rubric_is_shown_with_its_used_locations() {
 
     // An unknown rubric has no used locations either.
     let resp = server
-        .get(&format!("/accounts/{account}/rubrics/987654321/used_locations"))
+        .get(&format!(
+            "/accounts/{account}/rubrics/987654321/used_locations"
+        ))
         .add_header(AUTHORIZATION, auth(admin, "student"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());

@@ -44,8 +44,8 @@ use std::collections::{HashMap, HashSet};
 
 /// Domain router for the poll session routes.
 ///
-/// The coordinator wires it with `pub mod poll_sessions;` in `src/lib.rs` and
-/// `.merge(poll_sessions::router())` in the crate router.
+/// The crate router (`src/lib.rs`) wires it with
+/// `.merge(poll_sessions::router())`.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/polls/{poll_id}/poll_sessions", get(index).post(create))
