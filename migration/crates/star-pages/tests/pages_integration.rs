@@ -497,3 +497,343 @@ async fn latest_revision_falls_back_to_page_state() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// Title availability, group alt text, accessibility scan tests
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn title_availability_no_conflict_for_unique_title() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "TitleAvail").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let bearer = auth(teacher, "teacher");
+
+    let resp = server
+        .get(&format!(
+            "/courses/{course}/page_title_availability?title=UniquePage{}",
+            chrono::Utc::now().timestamp()
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, bearer)
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["conflict"], false, "unique title has no conflict");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn title_availability_conflict_when_page_exists() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "TitleConflict").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let existing = seed_page(&pool, course, "Existing Title", "existing-title", "body").await;
+    let bearer = auth(teacher, "teacher");
+
+    let resp = server
+        .get(&format!(
+            "/courses/{course}/page_title_availability?title=Existing%20Title"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["conflict"], true, "existing title should conflict");
+
+    // current_page_id excludes itself from conflict check.
+    let resp = server
+        .get(&format!(
+            "/courses/{course}/page_title_availability?title=Existing%20Title&current_page_id={existing}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, bearer)
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(
+        body["conflict"], false,
+        "excluding self should show no conflict"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn title_availability_requires_auth() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "TitleNoAuth").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+
+    let resp = server
+        .get(&format!(
+            "/courses/{course}/page_title_availability?title=Foo"
+        ))
+        .await;
+    assert!(
+        resp.status_code() == 401 || resp.status_code() == 403,
+        "expected 401/403, got {}: {}",
+        resp.status_code(),
+        resp.text()
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn group_title_availability_always_no_conflict() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "GroupTitleCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let group: i64 =
+        sqlx::query_scalar("INSERT INTO groups (name, course_id) VALUES ($1, $2) RETURNING id")
+            .bind(format!("{prefix}-Group"))
+            .bind(course)
+            .fetch_one(&pool)
+            .await
+            .expect("seed group");
+    let bearer = auth(teacher, "teacher");
+
+    let resp = server
+        .get(&format!(
+            "/groups/{group}/page_title_availability?title=AnyTitle{}",
+            chrono::Utc::now().timestamp()
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, bearer)
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(
+        body["conflict"], false,
+        "group titles never conflict in this schema"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn group_alt_text_happy_path() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "GroupAltTextCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let group: i64 =
+        sqlx::query_scalar("INSERT INTO groups (name, course_id) VALUES ($1, $2) RETURNING id")
+            .bind(format!("{prefix}-Group"))
+            .bind(course)
+            .fetch_one(&pool)
+            .await
+            .expect("seed group");
+    let bearer = auth(teacher, "teacher");
+
+    let resp = server
+        .post(&format!("/groups/{group}/pages_ai/alt_text"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer)
+        .json(&json!({ "attachment_id": 999 }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["image"]["altText"], "Image of attachment 999");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn group_alt_text_requires_auth() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "GroupAltTextNoAuth").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let group: i64 =
+        sqlx::query_scalar("INSERT INTO groups (name, course_id) VALUES ($1, $2) RETURNING id")
+            .bind(format!("{prefix}-Group"))
+            .bind(course)
+            .fetch_one(&pool)
+            .await
+            .expect("seed group");
+
+    let resp = server
+        .post(&format!("/groups/{group}/pages_ai/alt_text"))
+        .json(&json!({ "attachment_id": 999 }))
+        .await;
+    assert!(
+        resp.status_code() == 401 || resp.status_code() == 403,
+        "expected 401/403, got {}: {}",
+        resp.status_code(),
+        resp.text()
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn accessibility_scan_happy_path() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "A11yCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let page = seed_page(&pool, course, "A11y Page", "a11y-page", "body").await;
+    let bearer = auth(teacher, "teacher");
+
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/pages/{page}/accessibility/scan"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, bearer)
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["resource_type"], "WikiPage");
+    assert_eq!(body["workflow_state"], "completed");
+    assert_eq!(body["issue_count"], 0);
+    assert!(body["issues"].as_array().unwrap().is_empty());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn accessibility_scan_by_url_slug() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "A11ySlugCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_page(&pool, course, "Slug Page", "slug-page", "body").await;
+    let bearer = auth(teacher, "teacher");
+
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/pages/slug-page/accessibility/scan"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, bearer)
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["resource_type"], "WikiPage");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn accessibility_scan_requires_teacher() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "A11yStudentCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let page = seed_page(&pool, course, "Student Page", "student-page", "body").await;
+    let student_bearer = auth(student, "student");
+
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/pages/{page}/accessibility/scan"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer)
+        .await;
+    assert_eq!(resp.status_code(), 403, "student should get 403");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn accessibility_scan_page_not_found() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "A11y404Course").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let bearer = auth(teacher, "teacher");
+
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/pages/nonexistent-page/accessibility/scan"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, bearer)
+        .await;
+    assert_eq!(resp.status_code(), 404, "nonexistent page should 404");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn accessibility_queue_scan_happy_path() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "QueueA11yCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let page = seed_page(&pool, course, "Queue Page", "queue-page", "body").await;
+    let bearer = auth(teacher, "teacher");
+
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/pages/{page}/accessibility/queue_scan"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, bearer)
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["workflow_state"], "completed");
+    assert_eq!(body["issue_count"], 0);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn accessibility_queue_scan_requires_teacher() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "QueueStudentCourse").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let page = seed_page(&pool, course, "Q Page", "q-page", "body").await;
+    let student_bearer = auth(student, "student");
+
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/pages/{page}/accessibility/queue_scan"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer)
+        .await;
+    assert_eq!(resp.status_code(), 403, "student should get 403");
+
+    cleanup(&pool, &prefix).await;
+}

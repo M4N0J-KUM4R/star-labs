@@ -444,6 +444,74 @@ impl PageRevisionRow {
 }
 
 // ---------------------------------------------------------------------------
+// Title availability check types
+// ---------------------------------------------------------------------------
+
+/// Query params for GET /courses/{courseId}/page_title_availability
+#[derive(Debug, Deserialize)]
+pub struct CheckTitleQuery {
+    pub title: String,
+    #[serde(rename = "current_page_id")]
+    pub current_page_id: Option<String>,
+}
+
+/// Response for title availability check.
+#[derive(Debug, Serialize)]
+pub struct CheckTitleResponse {
+    pub conflict: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Accessibility scan types
+// ---------------------------------------------------------------------------
+
+/// A single accessibility issue returned by the scan endpoints.
+#[derive(Debug, Serialize)]
+pub struct AccessibilityIssue {
+    pub id: i64,
+    #[serde(rename = "rule_id")]
+    pub rule_id: String,
+    pub element: Option<String>,
+    #[serde(rename = "display_name")]
+    pub display_name: Option<String>,
+    pub message: Option<String>,
+    pub why: Option<String>,
+    pub path: Option<String>,
+    #[serde(rename = "issue_url")]
+    pub issue_url: Option<String>,
+    pub form: Option<String>,
+}
+
+/// Full scan response from POST .../accessibility/scan (sync) and
+/// POST .../accessibility/queue_scan (async/queued). Both return the same
+/// JSON shape: the serializer `accessibility_resource_scan_json`.
+#[derive(Debug, Serialize)]
+pub struct AccessibilityScanResponse {
+    pub id: i64,
+    #[serde(rename = "resource_id")]
+    pub resource_id: i64,
+    #[serde(rename = "resource_type")]
+    pub resource_type: String,
+    #[serde(rename = "resource_name")]
+    pub resource_name: String,
+    #[serde(rename = "resource_workflow_state")]
+    pub resource_workflow_state: String,
+    #[serde(rename = "resource_updated_at")]
+    pub resource_updated_at: String,
+    #[serde(rename = "resource_url")]
+    pub resource_url: String,
+    #[serde(rename = "resource_scan_path")]
+    pub resource_scan_path: String,
+    #[serde(rename = "workflow_state")]
+    pub workflow_state: String,
+    #[serde(rename = "error_message")]
+    pub error_message: String,
+    #[serde(rename = "issue_count")]
+    pub issue_count: i32,
+    pub issues: Vec<AccessibilityIssue>,
+}
+
+// ---------------------------------------------------------------------------
 // Permission helpers
 // ---------------------------------------------------------------------------
 
@@ -1641,6 +1709,175 @@ async fn update_group_front_page(
 }
 
 // ---------------------------------------------------------------------------
+// Title availability check (Canvas wiki_pages_api#check_title_availability)
+// ---------------------------------------------------------------------------
+
+/// GET /courses/{courseId}/page_title_availability — check whether a page
+/// title is already in use within the course wiki.
+///
+/// Permission sequence: site_admin feature flag `permanent_page_links` ->
+/// read access on course wiki -> enrolled in course.
+/// Returns `{"conflict": true}` when a non-deleted page with that title
+/// exists (optionally excluding `current_page_id`).
+async fn check_course_title_availability(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    Query(q): Query<CheckTitleQuery>,
+    auth: AuthUser,
+) -> Result<Json<CheckTitleResponse>, ApiError> {
+    if !user_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let title = q.title.trim();
+    if title.is_empty() {
+        return Err(ApiError::Validation("title is required".into()));
+    }
+
+    // Exclude the current page when editing (so renaming to the same title
+    // is not flagged as a conflict).
+    let exclude_id: Option<i64> = q.current_page_id.and_then(|s| s.parse().ok());
+
+    let conflict: bool = if let Some(excl) = exclude_id {
+        let row: Option<(i32,)> = sqlx::query_as(
+            r#"
+            SELECT 1 FROM pages
+            WHERE course_id = $1 AND title = $2 AND id <> $3 AND workflow_state <> 'deleted'
+            LIMIT 1
+            "#,
+        )
+        .bind(course_id)
+        .bind(title)
+        .bind(excl)
+        .fetch_optional(&state.db)
+        .await?;
+        row.is_some()
+    } else {
+        let row: Option<(i32,)> = sqlx::query_as(
+            r#"
+            SELECT 1 FROM pages
+            WHERE course_id = $1 AND title = $2 AND workflow_state <> 'deleted'
+            LIMIT 1
+            "#,
+        )
+        .bind(course_id)
+        .bind(title)
+        .fetch_optional(&state.db)
+        .await?;
+        row.is_some()
+    };
+
+    Ok(Json(CheckTitleResponse { conflict }))
+}
+
+/// GET /groups/{groupId}/page_title_availability — group-scoped variant.
+///
+/// This schema has no group-scoped wiki pages, so all titles are always
+/// available (conflict=false).
+async fn check_group_title_availability(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    Query(_q): Query<CheckTitleQuery>,
+    auth: AuthUser,
+) -> Result<Json<CheckTitleResponse>, ApiError> {
+    ensure_group(&state.db, group_id).await?;
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    // No group-scoped pages exist in this schema — never a conflict.
+    Ok(Json(CheckTitleResponse { conflict: false }))
+}
+
+// ---------------------------------------------------------------------------
+// Group AI alt text (Canvas wiki_pages_api#ai_generate_alt_text, group ctx)
+// ---------------------------------------------------------------------------
+
+/// POST /groups/{groupId}/pages_ai/alt_text — identical to the course variant
+/// but in a group context. Reuses the same AltTextRequest / AltTextResponse
+/// types; the handler mirrors `generate_alt_text` with a group check.
+async fn generate_group_alt_text(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+    payload: Option<Json<AltTextRequest>>,
+) -> Result<Json<AltTextResponse>, ApiError> {
+    ensure_group(&state.db, group_id).await?;
+    ensure_group_manage_access(&state.db, group_id, &auth).await?;
+
+    let attachment_id = payload
+        .and_then(|Json(body)| body.attachment_id)
+        .ok_or_else(|| ApiError::BadRequest("attachment_id is required".into()))?;
+
+    Ok(Json(AltTextResponse {
+        image: AltTextImage {
+            alt_text: format!("Image of attachment {attachment_id}"),
+        },
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Accessibility scan (Canvas wiki_pages_api#accessibility_scan / queue_scan)
+// ---------------------------------------------------------------------------
+
+/// Build a stub `AccessibilityScanResponse` for a page.
+///
+/// The real Canvas service calls `Accessibility::ResourceScannerService`
+/// synchronously (scan) or asynchronously (queue_scan). This stub returns a
+/// completed scan with zero issues since no scanner is available.
+fn stub_accessibility_response(page: &PageDetail, scan_path: &str) -> AccessibilityScanResponse {
+    let url = format!(
+        "https://example.com/courses/{}/pages/{}",
+        page.course_id,
+        page.url.as_deref().unwrap_or(&page.id.to_string())
+    );
+    AccessibilityScanResponse {
+        id: page.id,
+        resource_id: page.id,
+        resource_type: "WikiPage".to_string(),
+        resource_name: page.title.clone(),
+        resource_workflow_state: page.workflow_state.clone(),
+        resource_updated_at: page.updated_at.to_rfc3339(),
+        resource_url: url,
+        resource_scan_path: scan_path.to_string(),
+        workflow_state: "completed".to_string(),
+        error_message: String::new(),
+        issue_count: 0,
+        issues: vec![],
+    }
+}
+
+/// POST /courses/{courseId}/pages/{urlOrId}/accessibility/scan —
+/// synchronous accessibility scan. Teacher/admin required.
+async fn accessibility_scan(
+    State(state): State<AppState>,
+    Path((course_id, page_ref)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<AccessibilityScanResponse>, ApiError> {
+    if !user_teacher_of_course(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let page = load_page_in_course(&state.db, course_id, &page_ref).await?;
+    let scan_path = format!("/courses/{course_id}/pages/{}", page_ref);
+    Ok(Json(stub_accessibility_response(&page, &scan_path)))
+}
+
+/// POST /courses/{courseId}/pages/{urlOrId}/accessibility/queue_scan —
+/// queued (async) accessibility scan. Teacher/admin required.
+/// Identical response shape to the sync variant.
+async fn accessibility_queue_scan(
+    State(state): State<AppState>,
+    Path((course_id, page_ref)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<AccessibilityScanResponse>, ApiError> {
+    if !user_teacher_of_course(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let page = load_page_in_course(&state.db, course_id, &page_ref).await?;
+    let scan_path = format!("/courses/{course_id}/pages/{}", page_ref);
+    Ok(Json(stub_accessibility_response(&page, &scan_path)))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -1699,6 +1936,26 @@ pub fn router() -> Router<AppState> {
         .route(
             "/groups/{groupId}/front_page",
             get(show_group_front_page).put(update_group_front_page),
+        )
+        .route(
+            "/courses/{courseId}/page_title_availability",
+            get(check_course_title_availability),
+        )
+        .route(
+            "/groups/{groupId}/page_title_availability",
+            get(check_group_title_availability),
+        )
+        .route(
+            "/groups/{groupId}/pages_ai/alt_text",
+            post(generate_group_alt_text),
+        )
+        .route(
+            "/courses/{courseId}/pages/{urlOrId}/accessibility/scan",
+            post(accessibility_scan),
+        )
+        .route(
+            "/courses/{courseId}/pages/{urlOrId}/accessibility/queue_scan",
+            post(accessibility_queue_scan),
         )
 }
 
