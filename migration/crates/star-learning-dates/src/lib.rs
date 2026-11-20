@@ -9,6 +9,13 @@
 //! - PUT /courses/{courseId}/discussion_topics/{topicId}/date_details
 //! - GET /courses/{courseId}/pages/{urlOrId}/date_details
 //! - PUT /courses/{courseId}/pages/{urlOrId}/date_details
+//! - GET /courses/{courseId}/files/{attachmentId}/date_details          (requires differentiated_files)
+//! - PUT /courses/{courseId}/files/{attachmentId}/date_details          (requires differentiated_files)
+//! - GET /courses/{courseId}/modules/{contextModuleId}/date_details
+//! - PUT /courses/{courseId}/assignments/{assignmentId}/date_details/convert_tag_overrides
+//! - PUT /courses/{courseId}/quizzes/{quizId}/date_details/convert_tag_overrides
+//! - PUT /courses/{courseId}/discussion_topics/{topicId}/date_details/convert_tag_overrides
+//! - PUT /courses/{courseId}/pages/{urlOrId}/date_details/convert_tag_overrides
 //!
 //! Mirrors Canvas `LearningObjectDatesController`: the response is
 //! `LearningObjectDates` (id, due_at, lock_at, unlock_at,
@@ -38,6 +45,8 @@ enum Asset {
     Quiz,
     DiscussionTopic,
     WikiPage,
+    File,
+    Module,
 }
 
 impl Asset {
@@ -47,6 +56,8 @@ impl Asset {
             Asset::Quiz => "Quiz",
             Asset::DiscussionTopic => "DiscussionTopic",
             Asset::WikiPage => "WikiPage",
+            Asset::File => "File",
+            Asset::Module => "Module",
         }
     }
 
@@ -61,6 +72,8 @@ impl Asset {
             Asset::Quiz => "quizzes",
             Asset::DiscussionTopic => "discussion_topics",
             Asset::WikiPage => "pages",
+            Asset::File => "files",
+            Asset::Module => "modules",
         }
     }
 }
@@ -593,9 +606,350 @@ async fn put_page_dates(
     update(state, auth, course_id, Asset::WikiPage, url_or_id, payload).await
 }
 
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------
+// Files  (requires differentiated_files feature flag)
+// --------------------------------------------------------------------------
+
+async fn get_file_dates(
+    State(state): State<AppState>,
+    Path((course_id, attachment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<DateDetails>, ApiError> {
+    // Feature flag guard — 400 when not enabled (per §5.19 spec)
+    let flag: Option<(String,)> = sqlx::query_as(
+        "SELECT state FROM feature_flags WHERE context_type = 'Course' AND context_id = $1 AND feature = 'differentiated_files' LIMIT 1",
+    )
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if flag.as_ref().map(|(s,)| s.as_str()) != Some("enabled") {
+        return Err(ApiError::BadRequest("This API does not support files.".into()));
+    }
+    show(
+        state,
+        auth,
+        course_id,
+        Asset::File,
+        attachment_id.to_string(),
+    )
+    .await
+}
+
+async fn put_file_dates(
+    State(state): State<AppState>,
+    Path((course_id, attachment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateDates>,
+) -> Result<StatusCode, ApiError> {
+    let flag: Option<(String,)> = sqlx::query_as(
+        "SELECT state FROM feature_flags WHERE context_type = 'Course' AND context_id = $1 AND feature = 'differentiated_files' LIMIT 1",
+    )
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if flag.as_ref().map(|(s,)| s.as_str()) != Some("enabled") {
+        return Err(ApiError::BadRequest("This API does not support files.".into()));
+    }
+    update(
+        state,
+        auth,
+        course_id,
+        Asset::File,
+        attachment_id.to_string(),
+        payload,
+    )
+    .await
+}
+
+// --------------------------------------------------------------------------
+// Modules  (GET only — modules cannot be PUT)
+// --------------------------------------------------------------------------
+
+async fn get_module_dates(
+    State(state): State<AppState>,
+    Path((course_id, context_module_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<DateDetails>, ApiError> {
+    show(
+        state,
+        auth,
+        course_id,
+        Asset::Module,
+        context_module_id.to_string(),
+    )
+    .await
+}
+
+// --------------------------------------------------------------------------
+// convert_tag_overrides  (mirrors ContentTag#create_for_leviathan)
+// --------------------------------------------------------------------------
+
+async fn convert_tag_overrides_assignment(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let assignment_id = resolve_asset(&state.db, course_id, Asset::Assignment, &assignment_id.to_string()).await?;
+
+    // Migrate ContentTag overrides for this assignment into learning_object_date_overrides
+    let object_date: Option<(i64,)> = sqlx::query_scalar(
+        "SELECT id FROM learning_object_dates WHERE learning_object_type = 'Assignment' AND learning_object_id = $1",
+    )
+    .bind(assignment_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let date_id = match object_date {
+        Some((id,)) => id,
+        None => {
+            let row: (i64,) = sqlx::query_as(
+                "INSERT INTO learning_object_dates (course_id, learning_object_type, learning_object_id, only_visible_to_overrides) VALUES ($1, 'Assignment', $2, false) RETURNING id",
+            )
+            .bind(course_id)
+            .bind(assignment_id)
+            .fetch_one(&state.db)
+            .await?;
+            row.0
+        }
+    };
+
+    // Find all ContentTag rows for this assignment that have dates set
+    let tags: Vec<(i64, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+        r#"
+        SELECT ct.id, ct.due_at, ct.unlock_at, ct.lock_at
+        FROM content_tags ct
+        JOIN assignments a ON a.id = ct.content_id AND ct.content_type = 'Assignment'
+        WHERE a.id = $1 AND ct.id > 0
+          AND (ct.due_at IS NOT NULL OR ct.unlock_at IS NOT NULL OR ct.lock_at IS NOT NULL)
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    for (tag_id, due_at, unlock_at, lock_at) in tags {
+        // Upsert override per tag (title = tag id as string, set_type = 'ADHOC')
+        sqlx::query(
+            r#"
+            INSERT INTO learning_object_date_overrides
+                (learning_object_date_id, title, set_type, set_id, student_ids, due_at, unlock_at, lock_at)
+            VALUES ($1, $2, 'ADHOC', NULL, '{}', $3, $4, $5)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(date_id)
+        .bind(format!("tag-{}", tag_id))
+        .bind(due_at)
+        .bind(unlock_at)
+        .bind(lock_at)
+        .execute(&state.db)
+        .await?;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn convert_tag_overrides_quiz(
+    State(state): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let quiz_id = resolve_asset(&state.db, course_id, Asset::Quiz, &quiz_id.to_string()).await?;
+
+    let object_date: Option<(i64,)> = sqlx::query_scalar(
+        "SELECT id FROM learning_object_dates WHERE learning_object_type = 'Quiz' AND learning_object_id = $1",
+    )
+    .bind(quiz_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let date_id = match object_date {
+        Some((id,)) => id,
+        None => {
+            let row: (i64,) = sqlx::query_as(
+                "INSERT INTO learning_object_dates (course_id, learning_object_type, learning_object_id, only_visible_to_overrides) VALUES ($1, 'Quiz', $2, false) RETURNING id",
+            )
+            .bind(course_id)
+            .bind(quiz_id)
+            .fetch_one(&state.db)
+            .await?;
+            row.0
+        }
+    };
+
+    let tags: Vec<(i64, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+        r#"
+        SELECT ct.id, ct.due_at, ct.unlock_at, ct.lock_at
+        FROM content_tags ct
+        JOIN quizzes q ON q.id = ct.content_id AND ct.content_type = 'Quiz'
+        WHERE q.id = $1 AND ct.id > 0
+          AND (ct.due_at IS NOT NULL OR ct.unlock_at IS NOT NULL OR ct.lock_at IS NOT NULL)
+        "#,
+    )
+    .bind(quiz_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    for (tag_id, due_at, unlock_at, lock_at) in tags {
+        sqlx::query(
+            r#"
+            INSERT INTO learning_object_date_overrides
+                (learning_object_date_id, title, set_type, set_id, student_ids, due_at, unlock_at, lock_at)
+            VALUES ($1, $2, 'ADHOC', NULL, '{}', $3, $4, $5)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(date_id)
+        .bind(format!("tag-{}", tag_id))
+        .bind(due_at)
+        .bind(unlock_at)
+        .bind(lock_at)
+        .execute(&state.db)
+        .await?;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn convert_tag_overrides_topic(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let topic_id = resolve_asset(&state.db, course_id, Asset::DiscussionTopic, &topic_id.to_string()).await?;
+
+    let object_date: Option<(i64,)> = sqlx::query_scalar(
+        "SELECT id FROM learning_object_dates WHERE learning_object_type = 'DiscussionTopic' AND learning_object_id = $1",
+    )
+    .bind(topic_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let date_id = match object_date {
+        Some((id,)) => id,
+        None => {
+            let row: (i64,) = sqlx::query_as(
+                "INSERT INTO learning_object_dates (course_id, learning_object_type, learning_object_id, only_visible_to_overrides) VALUES ($1, 'DiscussionTopic', $2, false) RETURNING id",
+            )
+            .bind(course_id)
+            .bind(topic_id)
+            .fetch_one(&state.db)
+            .await?;
+            row.0
+        }
+    };
+
+    let tags: Vec<(i64, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+        r#"
+        SELECT ct.id, ct.due_at, ct.unlock_at, ct.lock_at
+        FROM content_tags ct
+        JOIN discussion_topics dt ON dt.id = ct.content_id AND ct.content_type = 'DiscussionTopic'
+        WHERE dt.id = $1 AND ct.id > 0
+          AND (ct.due_at IS NOT NULL OR ct.unlock_at IS NOT NULL OR ct.lock_at IS NOT NULL)
+        "#,
+    )
+    .bind(topic_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    for (tag_id, due_at, unlock_at, lock_at) in tags {
+        sqlx::query(
+            r#"
+            INSERT INTO learning_object_date_overrides
+                (learning_object_date_id, title, set_type, set_id, student_ids, due_at, unlock_at, lock_at)
+            VALUES ($1, $2, 'ADHOC', NULL, '{}', $3, $4, $5)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(date_id)
+        .bind(format!("tag-{}", tag_id))
+        .bind(due_at)
+        .bind(unlock_at)
+        .bind(lock_at)
+        .execute(&state.db)
+        .await?;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn convert_tag_overrides_page(
+    State(state): State<AppState>,
+    Path((course_id, url_or_id)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let page_id = resolve_asset(&state.db, course_id, Asset::WikiPage, &url_or_id).await?;
+
+    let object_date: Option<(i64,)> = sqlx::query_scalar(
+        "SELECT id FROM learning_object_dates WHERE learning_object_type = 'WikiPage' AND learning_object_id = $1",
+    )
+    .bind(page_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let date_id = match object_date {
+        Some((id,)) => id,
+        None => {
+            let row: (i64,) = sqlx::query_as(
+                "INSERT INTO learning_object_dates (course_id, learning_object_type, learning_object_id, only_visible_to_overrides) VALUES ($1, 'WikiPage', $2, false) RETURNING id",
+            )
+            .bind(course_id)
+            .bind(page_id)
+            .fetch_one(&state.db)
+            .await?;
+            row.0
+        }
+    };
+
+    let tags: Vec<(i64, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>, Option<chrono::DateTime<Utc>>)> = sqlx::query_as(
+        r#"
+        SELECT ct.id, ct.due_at, ct.unlock_at, ct.lock_at
+        FROM content_tags ct
+        JOIN pages p ON p.id = ct.content_id AND ct.content_type = 'WikiPage'
+        WHERE p.id = $1 AND ct.id > 0
+          AND (ct.due_at IS NOT NULL OR ct.unlock_at IS NOT NULL OR ct.lock_at IS NOT NULL)
+        "#,
+    )
+    .bind(page_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    for (tag_id, due_at, unlock_at, lock_at) in tags {
+        sqlx::query(
+            r#"
+            INSERT INTO learning_object_date_overrides
+                (learning_object_date_id, title, set_type, set_id, student_ids, due_at, unlock_at, lock_at)
+            VALUES ($1, $2, 'ADHOC', NULL, '{}', $3, $4, $5)
+            ON CONFLICT DO NOTHING
+            "#,
+        )
+        .bind(date_id)
+        .bind(format!("tag-{}", tag_id))
+        .bind(due_at)
+        .bind(unlock_at)
+        .bind(lock_at)
+        .execute(&state.db)
+        .await?;
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --------------------------------------------------------------------------
 // Router
-// ---------------------------------------------------------------------------
+// --------------------------------------------------------------------------
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -608,12 +962,20 @@ pub fn router() -> Router<AppState> {
             put(put_assignment_dates),
         )
         .route(
+            "/courses/{courseId}/assignments/{assignmentId}/date_details/convert_tag_overrides",
+            put(convert_tag_overrides_assignment),
+        )
+        .route(
             "/courses/{courseId}/quizzes/{quizId}/date_details",
             get(get_quiz_dates),
         )
         .route(
             "/courses/{courseId}/quizzes/{quizId}/date_details",
             put(put_quiz_dates),
+        )
+        .route(
+            "/courses/{courseId}/quizzes/{quizId}/date_details/convert_tag_overrides",
+            put(convert_tag_overrides_quiz),
         )
         .route(
             "/courses/{courseId}/discussion_topics/{topicId}/date_details",
@@ -624,11 +986,31 @@ pub fn router() -> Router<AppState> {
             put(put_topic_dates),
         )
         .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/date_details/convert_tag_overrides",
+            put(convert_tag_overrides_topic),
+        )
+        .route(
             "/courses/{courseId}/pages/{urlOrId}/date_details",
             get(get_page_dates),
         )
         .route(
             "/courses/{courseId}/pages/{urlOrId}/date_details",
             put(put_page_dates),
+        )
+        .route(
+            "/courses/{courseId}/pages/{urlOrId}/date_details/convert_tag_overrides",
+            put(convert_tag_overrides_page),
+        )
+        .route(
+            "/courses/{courseId}/files/{attachmentId}/date_details",
+            get(get_file_dates),
+        )
+        .route(
+            "/courses/{courseId}/files/{attachmentId}/date_details",
+            put(put_file_dates),
+        )
+        .route(
+            "/courses/{courseId}/modules/{contextModuleId}/date_details",
+            get(get_module_dates),
         )
 }
