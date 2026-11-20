@@ -38,9 +38,11 @@
 //! The sub-crates own all handlers and domain logic; this crate only
 //! provides a single merged `Router<AppState>` for inclusion in `star-http`.
 
+pub mod block_editor_templates;
 pub mod content_exports;
 pub mod content_imports;
 pub mod content_migrations;
+pub mod content_shares;
 pub mod epub_exports;
 pub mod migration_issues;
 pub mod web_zip_exports;
@@ -56,6 +58,8 @@ pub fn router() -> Router<AppState> {
         .merge(star_modules::router())
         .merge(content_exports::router())
         .merge(content_migrations::router())
+        .merge(content_shares::router())
+        .merge(block_editor_templates::router())
         .merge(epub_exports::router())
         .merge(web_zip_exports::router())
         .merge(content_imports::router())

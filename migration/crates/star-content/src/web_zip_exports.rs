@@ -93,18 +93,35 @@ fn is_admin(auth: &AuthUser) -> bool {
 
 /// Canvas `check_feature_enabled`: 404 when the root account explicitly
 /// disabled the offline web export.
-async fn feature_enabled(db: &PgPool) -> Result<bool, ApiError> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT state FROM feature_flags \
-         WHERE context_type = 'Account' AND context_id = 1 \
-           AND feature IN ('offline_web_export', 'enable_offline_web_export') LIMIT 1",
-    )
-    .fetch_optional(db)
-    .await?;
-    Ok(match row {
-        Some((state,)) => state == "enabled",
-        None => true,
-    })
+/// Canvas `WebZipExportHelper#course_allow_web_export_download?`: the account
+/// of the course and the course itself have to enable the offline web
+/// export.
+async fn feature_enabled(db: &PgPool, course_id: i64) -> Result<bool, ApiError> {
+    let course: Option<(Option<i64>, Option<Value>)> =
+        sqlx::query_as("SELECT account_id, settings FROM courses WHERE id = $1")
+            .bind(course_id)
+            .fetch_optional(db)
+            .await?;
+    let Some((account_id, course_settings)) = course else {
+        return Ok(false);
+    };
+
+    let account: Option<(Value,)> = sqlx::query_as("SELECT settings FROM accounts WHERE id = $1")
+        .bind(account_id.unwrap_or(1))
+        .fetch_optional(db)
+        .await?;
+    let account_settings = account.map(|(settings,)| settings).unwrap_or(Value::Null);
+
+    let enabled = |settings: &Value| {
+        settings
+            .get("enable_offline_web_export")
+            .and_then(|value| value.get("value"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    };
+
+    let course_settings = course_settings.unwrap_or(Value::Null);
+    Ok(enabled(&account_settings) && enabled(&course_settings))
 }
 
 /// Canvas `require_context`: 404 when the course does not exist.
@@ -143,7 +160,7 @@ async fn list_web_zip_exports(
     auth: AuthUser,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     ensure_course(&state.db, course_id).await?;
-    if !feature_enabled(&state.db).await? {
+    if !feature_enabled(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
     }
     if !can_download(&state.db, &auth, course_id).await? {
@@ -190,7 +207,7 @@ async fn show_web_zip_export(
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
     ensure_course(&state.db, course_id).await?;
-    if !feature_enabled(&state.db).await? {
+    if !feature_enabled(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
     }
 

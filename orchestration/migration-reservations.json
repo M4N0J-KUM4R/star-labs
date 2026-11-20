@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0218",
- "next_available": "0219",
+ "max_merged": "0220",
+ "next_available": "0221",
  "reservations": {
   "0001": {
    "issue": null,
@@ -680,6 +680,16 @@
   "0218": {
    "issue": null,
    "note": "star-content: content export contexts, new quizzes settings and epub exports",
+   "status": "merged"
+  },
+  "0219": {
+   "issue": null,
+   "note": "star-accounts: the account extras, the career experience and the error reports",
+   "status": "merged"
+  },
+  "0220": {
+   "issue": null,
+   "note": "star-content: content export settings, block editor templates and course settings",
    "status": "merged"
   }
  }

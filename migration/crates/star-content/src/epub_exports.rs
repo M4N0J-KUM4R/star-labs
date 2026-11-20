@@ -92,18 +92,41 @@ fn is_admin(auth: &AuthUser) -> bool {
 
 /// Canvas `check_feature_enabled`: 404 when the root account explicitly
 /// disabled the `epub_export` feature.
+/// Canvas `EpubExportsController#check_feature_enabled`: the root account has
+/// to allow the `epub_export` feature and the offline web export has to be
+/// off.
 async fn feature_enabled(db: &PgPool) -> Result<bool, ApiError> {
-    let row: Option<(String,)> = sqlx::query_as(
-        "SELECT state FROM feature_flags \
-         WHERE context_type = 'Account' AND context_id = 1 AND feature = 'epub_export' \
-         LIMIT 1",
+    let root: Option<(i64, Value)> = sqlx::query_as(
+        "SELECT id, settings FROM accounts \
+         WHERE parent_account_id IS NULL AND workflow_state <> 'deleted' \
+         ORDER BY id ASC LIMIT 1",
     )
     .fetch_optional(db)
     .await?;
-    Ok(match row {
-        Some((state,)) => state == "enabled",
-        None => true,
-    })
+    let Some((root_id, settings)) = root else {
+        return Ok(false);
+    };
+
+    // Canvas: `@domain_root_account.feature_allowed?(:epub_export)`
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT state FROM feature_flags \
+         WHERE context_type = 'Account' AND context_id = $1 AND feature = 'epub_export' \
+         LIMIT 1",
+    )
+    .bind(root_id)
+    .fetch_optional(db)
+    .await?;
+    if !matches!(row, Some((state,)) if state == "enabled") {
+        return Ok(false);
+    }
+
+    // Canvas: `@domain_root_account.enable_offline_web_export?`
+    let offline_web_export = settings
+        .get("enable_offline_web_export")
+        .and_then(|value| value.get("value"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    Ok(!offline_web_export)
 }
 
 /// Canvas `require_context`: 404 when the course does not exist.
