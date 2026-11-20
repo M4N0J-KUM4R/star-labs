@@ -1,4 +1,4 @@
--- Migration 0219: password reset tokens.
+-- Migration 0222: password reset tokens.
 --
 -- Backing store for the star-ui forgot/reset password journey (issue #70;
 -- specs/ui-research/canvas-reference.md §2 "Password reset").

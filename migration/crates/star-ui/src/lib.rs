@@ -2,7 +2,14 @@
 //!
 //! Merged at the TOP LEVEL of star-http's router (sibling of `/health`, NOT
 //! under `/api/v1`): `/`, `/login`, `/logout`, `/dashboard`,
-//! `/courses/{id}`, `/courses/{id}/{tab}` and `/static/{hash}/{file}`.
+//! `/courses/{id}`, `/courses/{id}/{tab}` and `/static/{hash}/{file}`, plus
+//! the assignments + gradebook journey routes (issue #71):
+//! `/courses/{id}/assignments[...]`, `/courses/{id}/grades`,
+//! `/courses/{id}/gradebook[.csv]`.
+//!
+//! Specific journey routes are registered BEFORE the generic
+//! `/courses/{id}/{tab}` so the "assignments"/"grades" tab segments hit the
+//! journey pages, not the generic tab landing.
 //!
 //! Auth is the `star_session` cookie (HttpOnly, SameSite=Lax) verified by
 //! the exact same path as the API's Bearer `AuthUser`; shell POSTs are CSRF
@@ -43,6 +50,36 @@ pub fn router() -> Router<AppState> {
         )
         .route("/dashboard", get(handlers::dashboard::dashboard))
         .route("/courses/{id}", get(handlers::course::course_home))
+        // Assignments journey (issue #71) — BEFORE the generic tab route.
+        .route(
+            "/courses/{id}/assignments",
+            get(handlers::assignments::assignments_index),
+        )
+        .route(
+            "/courses/{id}/assignments/new",
+            get(handlers::assignments::assignment_new)
+                .post(handlers::assignments::assignment_create),
+        )
+        .route(
+            "/courses/{id}/assignments/{aid}",
+            get(handlers::assignments::assignment_show),
+        )
+        .route(
+            "/courses/{id}/assignments/{aid}/edit",
+            get(handlers::assignments::assignment_edit)
+                .post(handlers::assignments::assignment_update),
+        )
+        .route(
+            "/courses/{id}/assignments/{aid}/submit",
+            post(handlers::assignments::assignment_submit),
+        )
+        // Grades + gradebook journey (issue #71) — BEFORE the generic tab route.
+        .route("/courses/{id}/grades", get(handlers::grades::grades))
+        .route("/courses/{id}/gradebook", get(handlers::grades::gradebook))
+        .route(
+            "/courses/{id}/gradebook.csv",
+            get(handlers::grades::gradebook_csv),
+        )
         .route("/courses/{id}/{tab}", get(handlers::course::course_tab))
         .route("/static/{hash}/{file}", get(assets::serve_static))
 }

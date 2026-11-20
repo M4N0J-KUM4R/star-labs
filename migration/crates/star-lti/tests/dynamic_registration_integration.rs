@@ -44,7 +44,12 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
         jwt_secret: JWT_SECRET.to_string(),
     };
 
-    let server = TestServer::new(star_lti::router().with_state(state)).expect("build TestServer");
+    let server = TestServer::new(
+        star_lti::router()
+            .merge(star_lti::lti_advantage_router())
+            .with_state(state),
+    )
+    .expect("build TestServer");
     Some((server, pool, run_prefix()))
 }
 
@@ -165,7 +170,7 @@ async fn create_tool_proxy(
     prefix: &str,
 ) -> Value {
     let response = server
-        .post(&format!("/courses/{course_id}/tool_proxy"))
+        .post(&format!("/api/lti/courses/{course_id}/tool_proxy"))
         .add_header(AUTHORIZATION, auth(admin_id, "admin"))
         .json(&json!({
             "@context": "http://purl.imsglobal.org/ctx/lti/v2/ToolProxy",
@@ -199,21 +204,21 @@ async fn registration_token_requires_auth() {
 
     // Anonymous gets 401.
     let resp = server
-        .get(&format!("/accounts/{account}/registration_token"))
+        .get(&format!("/api/lti/accounts/{account}/registration_token"))
         .await;
     assert_eq!(resp.status_code(), 401);
 
     // Student gets 403.
     let student = seed_user(&pool, &prefix, "student", "student").await;
     let resp = server
-        .get(&format!("/accounts/{account}/registration_token"))
+        .get(&format!("/api/lti/accounts/{account}/registration_token"))
         .add_header(AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 403);
 
     // Admin gets 200 with token.
     let resp = server
-        .get(&format!("/accounts/{account}/registration_token"))
+        .get(&format!("/api/lti/accounts/{account}/registration_token"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -239,7 +244,7 @@ async fn create_show_update_ims_registration() {
 
     // Create via POST /registrations.
     let response = server
-        .post("/registrations")
+        .post("/api/lti/registrations")
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "client_name": format!("{prefix}-tool"),
@@ -260,7 +265,7 @@ async fn create_show_update_ims_registration() {
 
     // Show via GET /registrations/:registration_id.
     let response = server
-        .get(&format!("/registrations/{id}"))
+        .get(&format!("/api/lti/registrations/{id}"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(response.status_code(), 200, "body: {}", response.text());
@@ -270,7 +275,7 @@ async fn create_show_update_ims_registration() {
 
     // Update via PUT /registrations/:registration_id.
     let response = server
-        .put(&format!("/registrations/{id}"))
+        .put(&format!("/api/lti/registrations/{id}"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "client_name": format!("{prefix}-updated-tool"),
@@ -285,7 +290,7 @@ async fn create_show_update_ims_registration() {
 
     // Non-admin cannot create.
     let response = server
-        .post("/registrations")
+        .post("/api/lti/registrations")
         .add_header(AUTHORIZATION, auth(student, "student"))
         .json(&json!({
             "client_name": "Should Fail",
@@ -323,7 +328,7 @@ async fn create_registration_validates_required_fields() {
         payload.as_object_mut().unwrap().remove(missing_field);
 
         let response = server
-            .post("/registrations")
+            .post("/api/lti/registrations")
             .add_header(AUTHORIZATION, auth(admin, "admin"))
             .json(&payload)
             .await;
@@ -356,7 +361,7 @@ async fn dr_iframe_requires_valid_token() {
 
     // First get a valid token.
     let resp = server
-        .get(&format!("/accounts/{account}/registration_token"))
+        .get(&format!("/api/lti/accounts/{account}/registration_token"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .await;
     let token_body: Value = resp.json();
@@ -368,7 +373,7 @@ async fn dr_iframe_requires_valid_token() {
         token
     );
     let resp = server
-        .get(&format!("/accounts/{account}/dr_iframe"))
+        .get(&format!("/api/lti/accounts/{account}/dr_iframe"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .add_query_params([("url", &url)])
         .await;
@@ -376,7 +381,7 @@ async fn dr_iframe_requires_valid_token() {
 
     // Missing token is 400.
     let resp = server
-        .get(&format!("/accounts/{account}/dr_iframe"))
+        .get(&format!("/api/lti/accounts/{account}/dr_iframe"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .add_query_params([("url", "https://example.com/no-token")])
         .await;
@@ -397,7 +402,9 @@ async fn registration_view_returns_redirect() {
     let reg_id = create_lti_registration(&pool, account, admin, &prefix).await;
 
     let resp = server
-        .get(&format!("/accounts/{account}/registrations/{reg_id}/view"))
+        .get(&format!(
+            "/api/lti/accounts/{account}/registrations/{reg_id}/view"
+        ))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -419,7 +426,7 @@ async fn overlay_update_and_account_scoped_shows() {
     // Update overlay.
     let resp = server
         .put(&format!(
-            "/accounts/{account}/registrations/{reg_id}/overlay"
+            "/api/lti/accounts/{account}/registrations/{reg_id}/overlay"
         ))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
@@ -436,7 +443,9 @@ async fn overlay_update_and_account_scoped_shows() {
 
     // Show via account-scoped path.
     let resp = server
-        .get(&format!("/accounts/{account}/registrations/{reg_id}"))
+        .get(&format!(
+            "/api/lti/accounts/{account}/registrations/{reg_id}"
+        ))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -461,7 +470,7 @@ async fn create_tool_proxy_course_and_account() {
 
     // Course tool proxy.
     let resp = server
-        .post(&format!("/courses/{course}/tool_proxy"))
+        .post(&format!("/api/lti/courses/{course}/tool_proxy"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "tool_proxy_guid": format!("{prefix}-course-guid") }))
         .await;
@@ -472,7 +481,7 @@ async fn create_tool_proxy_course_and_account() {
 
     // Account tool proxy.
     let resp = server
-        .post(&format!("/accounts/{account}/tool_proxy"))
+        .post(&format!("/api/lti/accounts/{account}/tool_proxy"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "tool_proxy_guid": format!("{prefix}-account-guid") }))
         .await;
@@ -592,7 +601,7 @@ async fn tool_proxy_account_routes() {
 
     // Create.
     let resp = server
-        .post(&format!("/accounts/{account}/tool_proxy"))
+        .post(&format!("/api/lti/accounts/{account}/tool_proxy"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "tool_proxy_guid": format!("{prefix}-acct-guid") }))
         .await;
@@ -606,7 +615,7 @@ async fn tool_proxy_account_routes() {
             .expect("lookup guid");
     if let Some((guid,)) = row {
         let resp = server
-            .get(&format!("/tool_proxy/{guid}"))
+            .get(&format!("/api/lti/tool_proxy/{guid}"))
             .add_header(AUTHORIZATION, auth(admin, "admin"))
             .await;
         assert_eq!(resp.status_code(), 200, "guid show: {}", resp.text());
@@ -630,7 +639,7 @@ async fn tool_proxy_student_forbidden() {
 
     // Create as admin succeeds.
     let resp = server
-        .post(&format!("/courses/{course}/tool_proxy"))
+        .post(&format!("/api/lti/courses/{course}/tool_proxy"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "tool_proxy_guid": format!("{prefix}-s-guid") }))
         .await;
@@ -638,7 +647,7 @@ async fn tool_proxy_student_forbidden() {
 
     // Student gets 403.
     let resp = server
-        .post(&format!("/courses/{course}/tool_proxy"))
+        .post(&format!("/api/lti/courses/{course}/tool_proxy"))
         .add_header(AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "tool_proxy_guid": "should-fail" }))
         .await;

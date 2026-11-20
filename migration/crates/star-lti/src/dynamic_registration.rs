@@ -336,43 +336,47 @@ async fn update_request_json(pool: &PgPool, rur: &UpdateRequestRow) -> Result<Va
 // ---------------------------------------------------------------------------
 
 /// Build the dynamic registration router.
-pub fn router() -> Router<AppState> {
+///
+/// Canvas serves the dynamic registration family under `/api/lti`, outside
+/// `/api/v1`, so the paths carry the prefix and the router is mounted at
+/// the application root.
+pub fn advantage_router() -> Router<AppState> {
     Router::new()
         // Account-scoped read routes
         .route(
-            "/accounts/{account_id}/registration_token",
+            "/api/lti/accounts/{account_id}/registration_token",
             get(registration_token),
         )
         .route(
-            "/accounts/{account_id}/registrations/uuid/{registration_uuid}",
+            "/api/lti/accounts/{account_id}/registrations/uuid/{registration_uuid}",
             get(show_ims_registration_by_uuid),
         )
         .route(
-            "/accounts/{account_id}/lti_registrations/uuid/{registration_uuid}",
+            "/api/lti/accounts/{account_id}/lti_registrations/uuid/{registration_uuid}",
             get(show_registration_by_uuid),
         )
         .route(
-            "/accounts/{account_id}/lti_registration_update_request/uuid/{registration_uuid}",
+            "/api/lti/accounts/{account_id}/lti_registration_update_request/uuid/{registration_uuid}",
             get(show_update_request_by_uuid),
         )
         .route(
-            "/accounts/{account_id}/registrations/{registration_id}",
+            "/api/lti/accounts/{account_id}/registrations/{registration_id}",
             get(show_ims_registration),
         )
         .route(
-            "/accounts/{account_id}/registrations/{registration_id}/overlay",
+            "/api/lti/accounts/{account_id}/registrations/{registration_id}/overlay",
             put(update_registration_overlay),
         )
-        .route("/accounts/{account_id}/dr_iframe", get(dr_iframe))
+        .route("/api/lti/accounts/{account_id}/dr_iframe", get(dr_iframe))
         .route(
-            "/accounts/{account_id}/registrations/{registration_id}/view",
+            "/api/lti/accounts/{account_id}/registrations/{registration_id}/view",
             get(registration_view),
         )
         // Flat paths (no account scope)
-        .route("/registrations", post(create_registration))
-        .route("/registrations/{registration_id}", put(update_registration))
+        .route("/api/lti/registrations", post(create_registration))
+        .route("/api/lti/registrations/{registration_id}", put(update_registration))
         .route(
-            "/registrations/{registration_id}",
+            "/api/lti/registrations/{registration_id}",
             get(show_registration_configuration),
         )
 }
