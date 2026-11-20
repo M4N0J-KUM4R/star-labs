@@ -5112,18 +5112,6 @@ mod tests {
     }
 
     #[test]
-    fn create_group_file_requires_member_or_admin() {
-        // Canvas groups#create_file guards with authorized_action(attachment,
-        // :create); star-lms checks group membership (user_in_group) or admin.
-        fn can_manage(is_admin: bool, is_member: bool) -> bool {
-            is_admin || is_member
-        }
-        assert!(can_manage(true, false));
-        assert!(can_manage(false, true));
-        assert!(!can_manage(false, false));
-    }
-
-    #[test]
     fn delete_group_file_removes_metadata_row() {
         // group_files is a metadata-only table with no workflow_state column,
         // so the handler hard-deletes the row (Canvas attachments#destroy
