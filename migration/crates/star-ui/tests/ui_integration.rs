@@ -1632,7 +1632,21 @@ async fn discussion_topics_alias_serves_the_index() {
     assert_eq!(b.status_code(), 200);
     let a_body = a.text();
     let b_body = b.text();
-    assert_eq!(a_body, b_body, "alias serves the identical page");
+    // The CSRF token differs per request; mask each page's own token before
+    // comparing, the same normalization the auth tests apply.
+    let mask_csrf = |body: &str| {
+        let token = body
+            .split("name=\"_csrf\" value=\"")
+            .nth(1)
+            .and_then(|rest| rest.split('"').next())
+            .unwrap_or_default();
+        body.replace(&format!("value=\"{token}\""), "value=\"CSRF\"")
+    };
+    assert_eq!(
+        mask_csrf(&a_body),
+        mask_csrf(&b_body),
+        "alias serves the identical page"
+    );
     assert!(a_body.contains("Alias Topic"));
     let _ = topic;
 
@@ -1824,12 +1838,13 @@ async fn inbox_unread_open_reply_mark_all_and_compose() {
             "star_csrf",
             csrf.clone(),
         ))
-        .form(&serde_json::json!({
-            "_csrf": csrf,
-            "recipients": [teacher],
-            "subject": "New compose subject",
-            "body": "Composed through the form."
-        }))
+        // Vec<String> forms decode repeated keys, so send recipients as
+        // urlencoded pairs rather than a JSON array (serde_urlencoded cannot
+        // serialize arrays).
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .raw_body(format!(
+            "_csrf={csrf}&recipients={teacher}&subject=New+compose+subject&body=Composed+through+the+form."
+        ))
         .await;
     assert_eq!(resp.status_code(), 303, "compose PRG: {}", resp.text());
     let location = resp

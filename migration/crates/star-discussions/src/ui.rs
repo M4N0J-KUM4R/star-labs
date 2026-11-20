@@ -183,7 +183,7 @@ pub async fn load_topic_for_viewer(
         r#"
         SELECT t.id, t.course_id, t.title, t.message, t.workflow_state,
                t.discussion_type, t.pinned, t.locked, t.created_at, t.updated_at,
-               u.name
+               u.name AS author_name
         FROM discussion_topics t
         LEFT JOIN users u ON u.id = t.user_id
         WHERE t.id = $1 AND t.course_id = $2 AND t.group_id IS NULL

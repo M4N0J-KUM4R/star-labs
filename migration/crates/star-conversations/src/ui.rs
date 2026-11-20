@@ -159,6 +159,17 @@ pub async fn load_inbox(
     Ok(rows)
 }
 
+/// The conversation row `load_conversation_thread` reads (a named FromRow
+/// struct instead of a 5-tuple — clippy::type_complexity).
+#[derive(Debug, sqlx::FromRow)]
+struct ConversationCoreRow {
+    id: i64,
+    subject: String,
+    created_at: DateTime<Utc>,
+    starred: bool,
+    read_at: Option<DateTime<Utc>>,
+}
+
 /// Load one conversation thread for the viewer: participants WITH names,
 /// messages with author names, and the viewer's own starred/read flags.
 /// Non-participants get 404 (same non-leaking convention as the API).
@@ -171,7 +182,7 @@ pub async fn load_conversation_thread(
         return Err(ApiError::NotFound);
     }
 
-    let conv: Option<(i64, String, DateTime<Utc>, bool, Option<DateTime<Utc>>)> = sqlx::query_as(
+    let conv: Option<ConversationCoreRow> = sqlx::query_as(
         r#"
         SELECT c.id, c.subject, c.created_at, cp.starred, cp.read_at
         FROM conversations c
@@ -184,7 +195,14 @@ pub async fn load_conversation_thread(
     .fetch_optional(db)
     .await?;
 
-    let Some((id, subject, created_at, starred, read_at)) = conv else {
+    let Some(ConversationCoreRow {
+        id,
+        subject,
+        created_at,
+        starred,
+        read_at,
+    }) = conv
+    else {
         return Err(ApiError::NotFound);
     };
 
