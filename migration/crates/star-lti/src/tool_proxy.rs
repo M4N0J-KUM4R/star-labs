@@ -35,22 +35,12 @@ use crate::{can_manage_account, is_admin};
 /// Row type for `lti_tool_proxies`.
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct ToolProxyRow {
-    id: i64,
     guid: String,
-    context_type: String,
-    context_id: i64,
-    registration_id: Option<i64>,
     developer_key_id: Option<i64>,
     raw_data: Value,
-    workflow_state: String,
-    update_payload: Option<Value>,
-    created_at: chrono::DateTime<chrono::Utc>,
-    updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-const TOOL_PROXY_COLUMNS: &str =
-    "id, guid, context_type, context_id, registration_id, developer_key_id, \
-     raw_data, workflow_state, update_payload, created_at, updated_at";
+const TOOL_PROXY_COLUMNS: &str = "guid, developer_key_id, raw_data";
 
 /// Check whether the user can manage LTI tools in the given context.
 async fn can_manage_tool_proxy(

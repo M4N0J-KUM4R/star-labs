@@ -87,15 +87,11 @@ struct RegistrationRow {
     description: Option<String>,
     icon_url: Option<String>,
     lti_version: String,
-    dynamic_registration: bool,
-    internal_service: bool,
     lock_deploying: bool,
     template_registration_id: Option<i64>,
     workflow_state: String,
     configuration: Value,
     overlay: Option<Value>,
-    created_by_id: Option<i64>,
-    updated_by_id: Option<i64>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -129,11 +125,6 @@ pub struct OidcRegistrationRequest {
     pub scopes: Option<String>,
     #[serde(rename = "https://purl.imsglobal.org/spec/lti-tool-configuration")]
     pub lti_tool_configuration: Option<Value>,
-    pub application_type: Option<String>,
-    pub grant_types: Option<Value>,
-    pub response_types: Option<String>,
-    // Canvas accepts and forwards these without validating them:
-    pub token_endpoint_auth_method: Option<String>,
 }
 
 /// Body for `PUT /accounts/:account_id/registrations/:registration_id/overlay`.
@@ -195,9 +186,8 @@ async fn find_ims_registration_by_guid(
 async fn find_active_registration(pool: &PgPool, id: i64) -> Result<RegistrationRow, ApiError> {
     let row: Option<RegistrationRow> = sqlx::query_as(
         "SELECT id, account_id, root_account_id, name, admin_nickname, vendor, description, \
-         icon_url, lti_version, dynamic_registration, internal_service, lock_deploying, \
-         template_registration_id, workflow_state, configuration, overlay, \
-         created_by_id, updated_by_id, created_at, updated_at \
+         icon_url, lti_version, lock_deploying, template_registration_id, workflow_state, \
+         configuration, overlay, created_at, updated_at \
          FROM lti_registrations WHERE id = $1 AND workflow_state <> 'deleted'",
     )
     .bind(id)
