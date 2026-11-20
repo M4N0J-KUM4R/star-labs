@@ -12,8 +12,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 tokio = { workspace = true }
+jsonwebtoken = { workspace = true }
 uuid = { workspace = true }
+url = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 axum-test = { workspace = true }
 star-db = { path = "../star-db" }
+rand = { workspace = true }

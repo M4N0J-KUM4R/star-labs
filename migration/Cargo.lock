@@ -3138,6 +3138,8 @@ dependencies = [
  "axum",
  "axum-test",
  "chrono",
+ "jsonwebtoken",
+ "rand 0.8.8",
  "serde",
  "serde_json",
  "sqlx",
@@ -3145,6 +3147,7 @@ dependencies = [
  "star-common",
  "star-db",
  "tokio",
+ "url",
  "uuid",
 ]
 
