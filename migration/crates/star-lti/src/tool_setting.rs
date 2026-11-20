@@ -29,10 +29,10 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, put},
+    routing::get,
     Json, Router,
 };
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use star_common::AppState;
@@ -87,7 +87,7 @@ impl ToolSettingRow {
 }
 
 /// The context a tool setting belongs to.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum SettingContext {
     /// A course with an optional resource link.
     Course {
@@ -572,8 +572,6 @@ async fn update_setting(
     tool_proxy_guid: Option<&str>,
     context: SettingContext,
 ) -> Response {
-    let accepts_graph = accepts_graph(&headers);
-
     // Canvas `valid_update_request?`: the body has to be JSON and the media
     // type has to be one of the two tool settings types.
     let content_type = headers
