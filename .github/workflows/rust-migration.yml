@@ -25,6 +25,7 @@ on:
       - 'migration/**'
       - 'orchestration/**'
       - 'tools/ci/**'
+      - 'browser-smoke/**'
       - '.github/workflows/rust-migration.yml'
   merge_group:
   workflow_dispatch:
