@@ -1330,17 +1330,21 @@ pub(crate) async fn record_history_entry(
 /// overlay_version.rb) — `lti_overlay_id` is null because the workspace
 /// keeps the overlay on the registration row instead of a separate
 /// `Lti::Overlay`.
+/// A row of `lti_overlay_versions`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct OverlayVersionRow {
+    id: i64,
+    account_id: i64,
+    root_account_id: Option<i64>,
+    overlay: Value,
+    diff: Option<Value>,
+    caused_by_reset: bool,
+    created_by_id: Option<i64>,
+    created_at: DateTime<Utc>,
+}
+
 async fn overlay_version_json(pool: &PgPool, version_id: i64) -> Result<Option<Value>, ApiError> {
-    let row: Option<(
-        i64,
-        i64,
-        Option<i64>,
-        Value,
-        Option<Value>,
-        bool,
-        Option<i64>,
-        DateTime<Utc>,
-    )> = sqlx::query_as(
+    let row: Option<OverlayVersionRow> = sqlx::query_as(
         "SELECT id, account_id, root_account_id, overlay, diff, caused_by_reset, \
                 created_by_id, created_at \
          FROM lti_overlay_versions WHERE id = $1",
@@ -1348,31 +1352,21 @@ async fn overlay_version_json(pool: &PgPool, version_id: i64) -> Result<Option<V
     .bind(version_id)
     .fetch_optional(pool)
     .await?;
-    let Some((
-        id,
-        account_id,
-        root_account_id,
-        overlay,
-        diff,
-        caused_by_reset,
-        created_by_id,
-        created_at,
-    )) = row
-    else {
+    let Some(version) = row else {
         return Ok(None);
     };
     let mut json = json!({
-        "id": id,
-        "account_id": account_id,
-        "root_account_id": root_account_id,
+        "id": version.id,
+        "account_id": version.account_id,
+        "root_account_id": version.root_account_id,
         "lti_overlay_id": Value::Null,
-        "overlay": overlay,
-        "diff": diff,
-        "caused_by_reset": caused_by_reset,
-        "created_at": created_at,
-        "updated_at": created_at,
+        "overlay": version.overlay,
+        "diff": version.diff,
+        "caused_by_reset": version.caused_by_reset,
+        "created_at": version.created_at,
+        "updated_at": version.created_at,
     });
-    if let Some(user) = user_summary(pool, created_by_id).await? {
+    if let Some(user) = user_summary(pool, version.created_by_id).await? {
         json["created_by"] = user;
     }
     Ok(Some(json))
@@ -1925,19 +1919,23 @@ async fn install_from_template(
 
 /// Canvas `lti_registration_update_request_json` shape (lib/api/v1/lti/
 /// registration_update_request.rb).
+/// A row of `lti_registration_update_requests`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct UpdateRequestRow {
+    id: i64,
+    root_account_id: Option<i64>,
+    lti_registration_id: i64,
+    uuid: String,
+    created_by_id: Option<i64>,
+    accepted_at: Option<DateTime<Utc>>,
+    rejected_at: Option<DateTime<Utc>>,
+    updated_by_id: Option<i64>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
 async fn update_request_json(pool: &PgPool, rur_id: i64) -> Result<Option<Value>, ApiError> {
-    let row: Option<(
-        i64,
-        Option<i64>,
-        i64,
-        String,
-        Option<i64>,
-        Option<DateTime<Utc>>,
-        Option<DateTime<Utc>>,
-        Option<i64>,
-        DateTime<Utc>,
-        DateTime<Utc>,
-    )> = sqlx::query_as(
+    let row: Option<UpdateRequestRow> = sqlx::query_as(
         "SELECT id, root_account_id, lti_registration_id, uuid, created_by_id, \
                 accepted_at, rejected_at, updated_by_id, created_at, updated_at \
          FROM lti_registration_update_requests WHERE id = $1",
@@ -1945,46 +1943,34 @@ async fn update_request_json(pool: &PgPool, rur_id: i64) -> Result<Option<Value>
     .bind(rur_id)
     .fetch_optional(pool)
     .await?;
-    let Some((
-        id,
-        root_account_id,
-        lti_registration_id,
-        uuid,
-        created_by_id,
-        accepted_at,
-        rejected_at,
-        updated_by_id,
-        created_at,
-        updated_at,
-    )) = row
-    else {
+    let Some(rur) = row else {
         return Ok(None);
     };
-    let status = if accepted_at.is_some() {
+    let status = if rur.accepted_at.is_some() {
         "applied"
-    } else if rejected_at.is_some() {
+    } else if rur.rejected_at.is_some() {
         "rejected"
     } else {
         "pending"
     };
     let mut json = json!({
-        "id": id,
-        "root_account_id": root_account_id,
-        "lti_registration_id": lti_registration_id,
-        "uuid": uuid,
+        "id": rur.id,
+        "root_account_id": rur.root_account_id,
+        "lti_registration_id": rur.lti_registration_id,
+        "uuid": rur.uuid,
         "reinstall": Value::Null,
         "tool_initiated": Value::Null,
         "comment": Value::Null,
-        "created_at": created_at,
-        "updated_at": updated_at,
-        "accepted_at": accepted_at,
-        "rejected_at": rejected_at,
+        "created_at": rur.created_at,
+        "updated_at": rur.updated_at,
+        "accepted_at": rur.accepted_at,
+        "rejected_at": rur.rejected_at,
         "status": status,
     });
-    if let Some(user) = user_summary(pool, created_by_id).await? {
+    if let Some(user) = user_summary(pool, rur.created_by_id).await? {
         json["created_by"] = user;
     }
-    if let Some(user) = user_summary(pool, updated_by_id).await? {
+    if let Some(user) = user_summary(pool, rur.updated_by_id).await? {
         json["updated_by"] = user;
     }
     Ok(Some(json))
@@ -2406,15 +2392,15 @@ async fn deployment_context_search(
     account_rows.truncate(20);
     course_rows.truncate(20);
 
-    let can_read_sis = is_admin(&auth);
-
+    // The workspace schema carries no SIS columns, so sis_id is always
+    // null (Canvas nulls it for callers without read_sis).
     let mut accounts_json = Vec::with_capacity(account_rows.len());
     for (id, name) in &account_rows {
         let display_path = display_path_names(&state.db, *id, false).await?;
         accounts_json.push(json!({
             "id": id.to_string(),
             "name": name,
-            "sis_id": if can_read_sis { Value::Null } else { Value::Null },
+            "sis_id": Value::Null,
             "display_path": display_path,
         }));
     }
