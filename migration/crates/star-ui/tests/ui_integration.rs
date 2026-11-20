@@ -653,6 +653,14 @@ async fn logout_invalidates_session_server_side() {
     );
 
     // The old session cookie is rejected: /dashboard redirects to /login.
+    // The 5-second nudge mirrors star-users' account-mgmt test: issued-at is
+    // derived from exp with second granularity, so a login and logout inside
+    // the same wall-clock second would otherwise race the comparison.
+    sqlx::query("UPDATE users SET last_logged_out = now() + interval '5 seconds' WHERE id = $1")
+        .bind(user)
+        .execute(&pool)
+        .await
+        .expect("nudge last_logged_out");
     let dash = server
         .get("/dashboard")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(

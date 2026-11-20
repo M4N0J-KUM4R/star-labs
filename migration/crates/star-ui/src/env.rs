@@ -300,12 +300,25 @@ mod tests {
     /// must exactly equal the checked-in [`ENV_KEYS`] list. Pure unit test —
     /// no DB, no HTTP — so it runs in every shard that compiles the crate.
     ///
+    /// Built from `for_user`: the anonymous env skips the `Option::is_none`
+    /// user keys (`current_user_id`, `current_user_global_id`), so it can
+    /// never cover the full contract.
+    ///
     /// To add a key: add the field to `JsEnv`, the name to `ENV_KEYS`, and a
     /// row to `js-env-coverage.md` (key -> phase -> source). That is the
     /// whole procedure; this test is what makes it impossible to skip.
     #[test]
     fn env_keys_match_checked_in_contract() {
-        let env = JsEnv::anonymous("http://localhost", Vec::new());
+        let env = JsEnv::for_user(
+            42,
+            "student",
+            EnvPreferences::default(),
+            false,
+            "http://localhost",
+            Some("home"),
+            "course_42",
+            Vec::new(),
+        );
         let rendered = serde_json::to_value(&env).expect("serialize JsEnv");
         let object = rendered.as_object().expect("JsEnv serializes to an object");
 
