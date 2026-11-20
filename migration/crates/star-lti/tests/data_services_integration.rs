@@ -195,10 +195,40 @@ async fn data_services_crud() {
     let shown: Value = resp.json();
     assert_eq!(shown["id"].as_i64(), Some(id));
 
-    // Update the subscription (Canvas reads PascalCase subscription[State],
-    // data_services_controller.rb L154/L166).
+    // Delete the subscription (soft-delete) BEFORE the update-to-Deleted
+    // step: our destroy refuses already-deleted rows (404), and Canvas gives
+    // no ground truth for destroy-after-delete — it merely proxies the
+    // upstream live-events service response
+    // (data_services_controller.rb:219-221 forward_service_response).
+    let resp = server
+        .delete(&show_path)
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "destroy: {}", resp.text());
+
+    // Update a fresh subscription to the Deleted state (Canvas reads
+    // PascalCase subscription[State], data_services_controller.rb
+    // L154/L166).
+    let created2 = server
+        .post(&base)
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "subscription": {
+                "ContextId": "assignment-2",
+                "ContextType": "assignment",
+                "EventTypes": ["asset_accessed"],
+                "Format": "live-event",
+                "TransportMetadata": { "Url": "https://example.com/sqs" },
+                "TransportType": "https"
+            }
+        }))
+        .await;
+    assert_eq!(created2.status_code(), 201, "create 2: {}", created2.text());
+    let sub2: Value = created2.json();
+    let id2 = sub2["id"].as_i64().expect("subscription id 2");
+
     let updated = server
-        .put(&show_path)
+        .put(&format!("{base}/{id2}"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "subscription": {
@@ -209,13 +239,6 @@ async fn data_services_crud() {
     assert_eq!(updated.status_code(), 200, "update: {}", updated.text());
     let updated_sub: Value = updated.json();
     assert_eq!(updated_sub["workflow_state"], "deleted");
-
-    // Delete the subscription (soft-delete).
-    let resp = server
-        .delete(&show_path)
-        .add_header(AUTHORIZATION, auth(admin, "admin"))
-        .await;
-    assert_eq!(resp.status_code(), 200, "destroy: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }
