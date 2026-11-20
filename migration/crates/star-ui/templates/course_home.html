@@ -1,0 +1,28 @@
+{% extends "layouts/course.html" %}
+{# Course home — Canvas courses#show. Phase-1 branch: front page when the
+   course has one (default_view "wiki" analogue), else the module list
+   ("modules"); see the PR's Deviations section — the courses.default_view
+   column does not exist in this schema. #}
+{% block content %}
+  <div id="course_home_content">
+    {% match front_page %}
+    {% when Some with (page) %}
+    <div id="wiki_page_show" class="user_content">
+      <h1>{{ page.title }}</h1>
+      <div class="user_content">{{ page.body|safe }}</div>
+    </div>
+    {% when None %}
+    <div id="context_modules" class="context_modules">
+      <h1 class="screenreader-only">Modules</h1>
+      {% if modules.is_empty() %}
+      <p class="no-modules">No modules have been added to this course yet.</p>
+      {% endif %}
+      {% for module in modules %}
+      <div class="context_module" id="context_module_{{ module.id }}" data-module-id="{{ module.id }}">
+        <h2 class="context_module_name">{{ module.name }}</h2>
+      </div>
+      {% endfor %}
+    </div>
+    {% endmatch %}
+  </div>
+{% endblock content %}

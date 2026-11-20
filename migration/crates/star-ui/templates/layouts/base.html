@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+{# Base layout — Canvas analogue: layouts/_head.html.erb + outer shell of
+   application.html.erb. The ENV script block is the ONLY inline script and
+   is emitted in <head> before any other script. #}
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>{{ title }}</title>
+  <link rel="stylesheet" href="{{ css_url }}">
+  <script>
+window.ENV = {{ env_json|safe }};
+  </script>
+  {% block head_extra %}{% endblock head_extra %}
+</head>
+<body class="{{ body_class }}">
+  <div id="flash_message_holder" aria-live="polite">
+    {% if !notices.is_empty() %}
+    <div class="flash-message-list">
+      {% for notice in notices %}
+      <div class="ic-flash success">{{ notice }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  <div id="flash_screenreader_holder" class="screenreader-only" aria-live="assertive"></div>
+  <div id="application" class="ic-app">
+    {% block shell %}{% endblock shell %}
+  </div>
+</body>
+</html>

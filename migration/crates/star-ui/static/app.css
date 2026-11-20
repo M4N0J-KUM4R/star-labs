@@ -1,0 +1,189 @@
+/* star-lms UI shell stylesheet (phase 1).
+   Hand-authored, Canvas-like: left global nav, card grid, section tabs.
+   Served content-hashed at /static/{sha256}/app.css with immutable caching. */
+
+* { box-sizing: border-box; }
+
+html, body { margin: 0; padding: 0; }
+
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  color: #2d3b45;
+  background: #f5f5f5;
+}
+
+a { color: #0374b5; text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+.screenreader-only {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.no-print { }
+
+/* Flash notices (server-rendered into #flash_message_holder) */
+#flash_message_holder { margin: 0 auto; max-width: 1180px; padding: 0 16px; }
+.ic-flash {
+  margin: 12px 0; padding: 12px 16px; border-radius: 3px;
+  border: 1px solid #cfd6dd; background: #fff;
+}
+.ic-flash.error { border-color: #ee0612; background: #ffecec; color: #8a0308; }
+.ic-flash.success { border-color: #127a1e; background: #eaf6e9; color: #127a1e; }
+
+/* ---- Global header / left nav (Canvas ic-app-header) ---- */
+.ic-app { min-height: 100vh; display: flex; }
+.ic-app-header {
+  position: fixed; top: 0; left: 0; bottom: 0; width: 88px;
+  display: flex; flex-direction: column;
+  background: #2d3b45; color: #fff; z-index: 100;
+}
+#skip_navigation_link {
+  position: absolute; left: -9999px; color: #fff;
+}
+#skip_navigation_link:focus { left: 8px; top: 8px; z-index: 200; }
+.ic-app-header__main-navigation { flex: 1; overflow-y: auto; }
+.ic-app-header__logomark-container { padding: 10px 0; text-align: center; }
+.ic-app-header__logomark {
+  display: inline-block; width: 40px; height: 40px; border-radius: 4px;
+  background: #0b5f8a; color: #fff; font-size: 20px; line-height: 40px;
+}
+ul.ic-app-header__menu-list { list-style: none; margin: 0; padding: 0; }
+.ic-app-header__menu-list-item { text-align: center; }
+.ic-app-header__menu-list-item--active { background: #1b3641; }
+.ic-app-header__menu-list-link {
+  display: block; padding: 14px 4px; color: #b8c3c9; font-size: 13px;
+}
+.ic-app-header__menu-list-link:hover { color: #fff; text-decoration: none; }
+.ic-app-header__secondary-navigation { padding: 10px 0; }
+.menu-item__user-name {
+  display: block; color: #b8c3c9; font-size: 12px; padding: 6px 4px;
+}
+.menu-item__logout-form { margin: 0; }
+#global_nav_logout_link {
+  background: none; border: none; color: #b8c3c9; font-size: 13px;
+  cursor: pointer; padding: 4px;
+}
+#global_nav_logout_link:hover { color: #fff; }
+
+/* ---- Wrapper / crumbs / main ---- */
+.ic-Layout-wrapper { flex: 1; margin-left: 88px; display: flex; flex-direction: column; }
+.ic-app-nav-toggle-and-crumbs {
+  background: #fff; border-bottom: 1px solid #c7cdd1; padding: 8px 24px;
+}
+.ic-app-crumbs { font-size: 14px; color: #73858c; }
+.ic-app-crumbs .crumb::after { content: " / "; color: #a5adb2; }
+.ic-app-crumbs .crumb:last-child::after { content: ""; }
+.ic-Layout-columns { display: flex; flex: 1; min-height: 0; }
+.ic-app-main-content { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.ic-Layout-contentWrapper { flex: 1; }
+.ic-Layout-contentMain { max-width: 1180px; margin: 0 auto; padding: 24px; width: 100%; }
+
+/* ---- Course left-side section tabs ---- */
+body.with-left-side .ic-Layout-columns { }
+#left-side.ic-app-course-menu {
+  width: 220px; flex: 0 0 220px; background: #fff;
+  border-right: 1px solid #c7cdd1; padding: 16px 0;
+}
+#sticky-container { padding: 0 12px; }
+ul.section-tabs { list-style: none; margin: 0; padding: 0; }
+ul.section-tabs .section { margin: 2px 0; }
+ul.section-tabs a {
+  display: block; padding: 8px 12px; border-radius: 3px;
+  color: #2d3b45; font-size: 14px;
+}
+ul.section-tabs a:hover { background: #eef1f3; text-decoration: none; }
+ul.section-tabs a.active { background: #e8f3fb; color: #0374b5; font-weight: 600; }
+.section-hidden a { color: #9babb3; }
+
+/* ---- Login page (Canvas ic-Login) ---- */
+body.no-headers .ic-app { display: block; }
+.ic-Login {
+  display: flex; align-items: center; justify-content: center;
+  min-height: 100vh; background: #2d3b45;
+}
+.ic-Login__container { width: 100%; max-width: 440px; padding: 16px; }
+.ic-Login__content {
+  background: #fff; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,.25);
+  padding: 32px;
+}
+.ic-Login__subtitle { text-align: center; font-size: 24px; margin: 0 0 20px; color: #2d3b45; }
+.ic-Form-control { margin-bottom: 18px; }
+.ic-Label { display: block; font-size: 14px; margin-bottom: 6px; color: #2d3b45; }
+.ic-Input {
+  width: 100%; padding: 8px 10px; font-size: 16px;
+  border: 1px solid #c7cdd1; border-radius: 3px;
+}
+.ic-Input:focus { outline: 2px solid #0374b5; border-color: #0374b5; }
+.Button--login {
+  width: 100%; padding: 12px; font-size: 16px; border: none; border-radius: 3px;
+  background: #0374b5; color: #fff; cursor: pointer;
+}
+.Button--login:hover { background: #025e8c; }
+.ic-Login__actions { margin-top: 24px; }
+
+/* ---- Dashboard cards (Canvas ic-DashboardCard) ---- */
+.ic-DashboardCard_Container { margin-top: 8px; }
+.ic-DashboardCard__box {
+  display: grid; gap: 16px;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+}
+.ic-DashboardCard {
+  background: #fff; border-radius: 4px; border: 1px solid #c7cdd1;
+  overflow: hidden; display: flex; flex-direction: column;
+}
+.ic-DashboardCard__link { color: inherit; display: block; }
+.ic-DashboardCard__link:hover { text-decoration: none; }
+.ic-DashboardCard__header {
+  background: #0374b5; color: #fff; padding: 24px 16px 12px;
+}
+.ic-DashboardCard__header-title { font-size: 18px; font-weight: 600; display: block; }
+.ic-DashboardCard__subheader { padding: 8px 16px; background: #f2f5f7; }
+.ic-DashboardCard__course-code { font-weight: 600; display: block; }
+.ic-DashboardCard__term { font-size: 13px; color: #73858c; display: block; }
+.ic-DashboardCard__footer {
+  padding: 10px 16px; font-size: 13px; color: #73858c;
+  display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap;
+}
+/* Unpublished courses: muted card style, matching the API's published flag */
+.ic-DashboardCard__unpublished .ic-DashboardCard__header { background: #9babb1; }
+.ic-DashboardCard__unpublished-badge {
+  display: inline-block; margin-top: 6px; font-size: 12px;
+  background: rgba(0,0,0,.25); padding: 2px 8px; border-radius: 10px;
+}
+
+/* ---- Course home: wiki front page + modules ---- */
+#wiki_page_show h1 { margin-top: 0; }
+.user_content img { max-width: 100%; height: auto; }
+.context_module {
+  background: #fff; border: 1px solid #c7cdd1; border-radius: 4px;
+  padding: 16px; margin-bottom: 12px;
+}
+.context_module_name { margin: 0; font-size: 17px; }
+.no-modules { color: #73858c; font-style: italic; }
+
+/* ---- Generic tab landing ---- */
+.tab-placeholder { color: #73858c; }
+
+/* ---- Error page ---- */
+.ic-Error { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.ic-Error__content { text-align: center; }
+.ic-Error__code { font-size: 64px; margin: 0; color: #0374b5; }
+.ic-Error__message { font-size: 18px; color: #73858c; }
+
+/* ---- Responsive ---- */
+@media (max-width: 768px) {
+  .ic-app-header { position: static; width: 100%; height: auto; flex-direction: row; }
+  .ic-app-header__main-navigation { overflow-x: auto; }
+  ul.ic-app-header__menu-list { display: flex; }
+  .ic-Layout-wrapper { margin-left: 0; }
+  .ic-Layout-columns { flex-direction: column; }
+  #left-side.ic-app-course-menu {
+    width: 100%; flex: none; border-right: none; border-bottom: 1px solid #c7cdd1;
+  }
+}

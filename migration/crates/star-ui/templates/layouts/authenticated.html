@@ -1,0 +1,62 @@
+{% extends "layouts/base.html" %}
+{# Authenticated layout — Canvas analogue: application.html.erb with the
+   shared/new_nav_header global navigation, breadcrumb bar, and #wrapper. #}
+{% block shell %}
+  <header id="header" class="ic-app-header no-print" aria-label="Global Header">
+    <a href="#content" id="skip_navigation_link">Skip To Content</a>
+    <div role="region" class="ic-app-header__main-navigation" aria-label="Global Navigation">
+      <div class="ic-app-header__logomark-container">
+        <a href="/dashboard" class="ic-app-header__logomark" aria-label="Dashboard"></a>
+      </div>
+      <ul id="menu" class="ic-app-header__menu-list">
+        <li class="ic-app-header__menu-list-item {% if active_path == "dashboard" %}ic-app-header__menu-list-item--active{% endif %}">
+          <a id="global_nav_dashboard_link" class="ic-app-header__menu-list-link" href="/dashboard">Dashboard</a>
+        </li>
+        <li class="ic-app-header__menu-list-item">
+          <a id="global_nav_courses_link" class="ic-app-header__menu-list-link" href="/dashboard">Courses</a>
+        </li>
+        <li class="ic-app-header__menu-list-item">
+          <a id="global_nav_calendar_link" class="ic-app-header__menu-list-link" href="/dashboard">Calendar</a>
+        </li>
+        <li class="ic-app-header__menu-list-item">
+          <a id="global_nav_conversations_link" class="ic-app-header__menu-list-link" href="/dashboard">Inbox</a>
+        </li>
+        <li class="ic-app-header__menu-list-item">
+          <a id="global_nav_help_link" class="ic-app-header__menu-list-link" href="/dashboard">Help</a>
+        </li>
+      </ul>
+    </div>
+    <div class="ic-app-header__secondary-navigation">
+      <ul id="menu" class="ic-app-header__menu-list">
+        <li class="ic-app-header__menu-list-item menu-item__user">
+          <span class="menu-item__user-name">{{ user_name }}</span>
+          <form method="post" action="/logout" class="menu-item__logout-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <button type="submit" id="global_nav_logout_link" class="Button--link">Logout</button>
+          </form>
+        </li>
+      </ul>
+    </div>
+  </header>
+  <div id="wrapper" class="ic-Layout-wrapper">
+    {% if !breadcrumb.is_empty() %}
+    <div class="ic-app-nav-toggle-and-crumbs no-print">
+      <div class="ic-app-crumbs">
+        {% for crumb in breadcrumb %}
+        <a class="crumb" href="{{ crumb.1 }}">{{ crumb.0 }}</a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+    <div id="main" class="ic-Layout-columns">
+      {% block left_side %}{% endblock left_side %}
+      <div id="not_right_side" class="ic-app-main-content">
+        <div id="content-wrapper" class="ic-Layout-contentWrapper">
+          <div id="content" class="ic-Layout-contentMain" role="main">
+            {% block content %}{% endblock content %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock shell %}

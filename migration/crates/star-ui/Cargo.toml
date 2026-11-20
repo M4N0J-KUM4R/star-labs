@@ -1,0 +1,30 @@
+[package]
+name = "star-ui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+star-common = { path = "../star-common" }
+star-auth = { path = "../star-auth" }
+star-dashboard = { path = "../star-dashboard" }
+star-courses = { path = "../star-courses" }
+star-pages = { path = "../star-pages" }
+star-modules = { path = "../star-modules" }
+axum = { workspace = true }
+axum-extra = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+askama = { workspace = true }
+sha2 = { workspace = true }
+rand = { workspace = true }
+time = { workspace = true }
+
+[dev-dependencies]
+star-db = { path = "../star-db" }
+star-auth = { path = "../star-auth" }
+axum-test = { workspace = true }
+tokio = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }

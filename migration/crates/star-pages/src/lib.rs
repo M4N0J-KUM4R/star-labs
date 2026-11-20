@@ -595,7 +595,13 @@ impl FrontPageRow {
 /// Canvas resolves the wiki's `front_page_url`; this schema keeps the marker
 /// on the page row (`pages.front_page`, migration 0075). Soft-deleted pages
 /// are ignored, so deleting the front page leaves the course without one.
-async fn load_front_page(db: &PgPool, course_id: i64) -> Result<Option<FrontPageRow>, ApiError> {
+///
+/// Extracted as a pub loader so the server-rendered UI shell (star-ui) can
+/// render the course home front page from the same row the API serves.
+pub async fn load_front_page(
+    db: &PgPool,
+    course_id: i64,
+) -> Result<Option<FrontPageRow>, ApiError> {
     let row: Option<FrontPageRow> = sqlx::query_as(
         r#"
         SELECT id, course_id, title, body, url, workflow_state, editing_roles,

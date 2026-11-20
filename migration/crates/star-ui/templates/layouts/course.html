@@ -1,0 +1,21 @@
+{% extends "layouts/authenticated.html" %}
+{# Course layout — Canvas analogue: application.html.erb course context
+   branch. Left-side section tabs from the tabs API order; body carries
+   with-left-side + context-{asset_string} + the active tab class. #}
+{% block left_side %}
+        <div id="left-side" class="ic-app-course-menu ic-sticky-on list-view">
+          <div id="sticky-container" class="ic-sticky-frame">
+            <nav role="navigation" aria-label="Courses Navigation Menu">
+              <ul id="section-tabs" class="section-tabs">
+                {% for tab in tabs %}
+                {% if tab.id == "settings" %}
+                <li class="section section-hidden"><a id="{{ tab.id }}-link" class="{{ tab.id }}" href="{{ tab.html_url }}">{{ tab.label }}</a></li>
+                {% else %}
+                <li class="section"><a id="{{ tab.id }}-link" class="{{ tab.id }}{% if active_context_tab == tab.id %} active{% endif %}" href="{{ tab.html_url }}">{{ tab.label }}</a></li>
+                {% endif %}
+                {% endfor %}
+              </ul>
+            </nav>
+          </div>
+        </div>
+{% endblock left_side %}
