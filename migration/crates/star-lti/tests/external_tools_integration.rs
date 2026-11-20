@@ -718,7 +718,7 @@ async fn sessionless_launch_returns_503() {
     let bearer = auth(teacher_id, "teacher");
 
     let resp = server
-        .post(&format!(
+        .get(&format!(
             "/courses/{course_id}/external_tools/sessionless_launch?url=https://tool.example.com"
         ))
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
@@ -729,7 +729,7 @@ async fn sessionless_launch_returns_503() {
     let admin_id = seed_user(&pool, &prefix, "admin", "student").await;
     seed_account_user(&pool, account_id, admin_id).await;
     let resp = server
-        .post(&format!(
+        .get(&format!(
             "/accounts/{account_id}/external_tools/sessionless_launch?url=https://tool.example.com"
         ))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
@@ -909,7 +909,7 @@ async fn course_and_account_migration_info() {
     // Course migration info
     let resp = server
         .get(&format!(
-            "/courses/{course_id}/external_tools/{course_tool_id}/migration"
+            "/courses/{course_id}/external_tools/{course_tool_id}/migration_info"
         ))
         .add_header(
             axum::http::header::AUTHORIZATION,
@@ -917,14 +917,15 @@ async fn course_and_account_migration_info() {
         )
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    // Canvas controller.rb:1004 renders {migration_running: false} when no
+    // migration is running.
     let info: Value = resp.json();
-    assert!(info["id"].is_number());
-    assert!(info["created_at"].is_string());
+    assert_eq!(info["migration_running"], json!(false));
 
     // Account migration info
     let resp = server
         .get(&format!(
-            "/accounts/{account_id}/external_tools/{account_tool_id}/migration"
+            "/accounts/{account_id}/external_tools/{account_tool_id}/migration_info"
         ))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
         .await;
@@ -1032,7 +1033,9 @@ async fn eula_launch_returns_503() {
     let tool_id = tool["id"].as_i64().unwrap();
 
     let resp = server
-        .get(&format!("/external_tools/{tool_id}/eula_accepted"))
+        .get(&format!(
+            "/courses/{course_id}/external_tools/{tool_id}/eula_launch"
+        ))
         .add_header(
             axum::http::header::AUTHORIZATION,
             auth(teacher_id, "teacher"),

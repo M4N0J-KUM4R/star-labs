@@ -139,7 +139,7 @@ pub struct CreateToolRequest {
     pub lti_version: Option<String>,
     pub developer_key_id: Option<i64>,
     pub lti_registration_id: Option<i64>,
-    pub deployment_id: Option<i64>,
+    pub deployment_id: Option<String>,
     pub tool_configuration: Option<Value>,
     pub custom_fields: Option<Value>,
     pub selection_width: Option<i32>,
@@ -180,7 +180,7 @@ pub struct UpdateToolRequest {
     pub lti_version: Option<String>,
     pub developer_key_id: Option<i64>,
     pub lti_registration_id: Option<i64>,
-    pub deployment_id: Option<i64>,
+    pub deployment_id: Option<String>,
     pub tool_configuration: Option<Value>,
     pub custom_fields: Option<Value>,
     pub selection_width: Option<i32>,
@@ -310,11 +310,27 @@ fn tool_json(
     is_rce_favorite: bool,
     is_top_nav_favorite: Option<bool>,
 ) -> Value {
-    let placements = tool
-        .tool_configuration
-        .get("placements")
-        .cloned()
-        .unwrap_or(json!([]));
+    // Canvas serializes placements as an array of
+    // {placement: "<name>", ...} objects (Lti::IMS::Registration#placements,
+    // lti/ims/registration.rb:231). The stored tool_configuration uses the
+    // map form {name: settings}, so convert; a configuration that already
+    // carries the array form passes through unchanged.
+    let placements = match tool.tool_configuration.get("placements") {
+        Some(Value::Object(map)) => json!(map
+            .iter()
+            .map(|(name, settings)| {
+                let mut entry = json!({ "placement": name });
+                if let Value::Object(fields) = settings {
+                    for (key, value) in fields {
+                        entry[key] = value.clone();
+                    }
+                }
+                entry
+            })
+            .collect::<Vec<_>>()),
+        Some(Value::Array(items)) => json!(items),
+        _ => json!([]),
+    };
     let mut json = json!({
         "id": tool.id,
         "name": tool.name,
@@ -503,13 +519,14 @@ pub fn router() -> Router<AppState> {
             "/accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}",
             post(add_account_top_nav_favorite).delete(remove_account_top_nav_favorite),
         )
-        // New: migration_info (routes 12-13)
+        // New: migration_info (routes 12-13) — Canvas routes.rb:1707 nests
+        // it under the tool: .../external_tools/:external_tool_id/migration_info
         .route(
-            "/courses/{course_id}/external_tools/migration_info",
+            "/courses/{course_id}/external_tools/{id}/migration_info",
             get(course_migration_info),
         )
         .route(
-            "/accounts/{account_id}/external_tools/migration_info",
+            "/accounts/{account_id}/external_tools/{id}/migration_info",
             get(account_migration_info),
         )
         // New: group tools (route 16)
@@ -518,10 +535,11 @@ pub fn router() -> Router<AppState> {
             "/groups/{group_id}/external_tools/{id}",
             get(show_group_tool),
         )
-        // New: eula_launch (route 17, stub)
+        // New: eula_launch (route 17, stub) — Canvas routes.rb:1216 is
+        // GET .../external_tools/:context_external_tool_id/eula_launch
         .route(
-            "/courses/{course_id}/external_tools/eula_launch",
-            post(eula_launch),
+            "/courses/{course_id}/external_tools/{id}/eula_launch",
+            get(eula_launch),
         )
 }
 
@@ -1380,38 +1398,36 @@ async fn remove_account_top_nav_favorite(
 // New handlers: migration_info (routes 12-13)
 // --------------------------------------------------------------------------
 
-/// `GET /courses/{course_id}/external_tools/migration_info` — course tool migration info.
+/// `GET /courses/{course_id}/external_tools/{id}/migration_info` — Canvas
+/// `migration_info` (external_tools_controller.rb:994-1014): requires
+/// read_as_admin, finds the tool by id, and renders
+/// `{migration_running: false}` when no migration is running.
 async fn course_migration_info(
     State(state): State<AppState>,
-    Path(course_id): Path<i64>,
+    Path((course_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
     require_course(&state.db, course_id).await?;
-    if !can_read_course(&state.db, &auth, course_id).await? {
+    if !can_manage_course_tools(&state.db, &auth, course_id).await? {
         return Err(ApiError::Forbidden);
     }
-    Ok(Json(json!({
-        "context_type": "Course",
-        "context_id": course_id,
-        "migration_candidates": [],
-    })))
+    find_course_tool(&state.db, course_id, id).await?;
+    Ok(Json(json!({ "migration_running": false })))
 }
 
-/// `GET /accounts/{account_id}/external_tools/migration_info` — account tool migration info.
+/// `GET /accounts/{account_id}/external_tools/{id}/migration_info` — the
+/// account twin of the course route above.
 async fn account_migration_info(
     State(state): State<AppState>,
-    Path(account_id): Path<i64>,
+    Path((account_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
     require_account(&state.db, account_id).await?;
     if !can_manage_account(&state.db, &auth, account_id).await? {
         return Err(ApiError::Forbidden);
     }
-    Ok(Json(json!({
-        "context_type": "Account",
-        "context_id": account_id,
-        "migration_candidates": [],
-    })))
+    find_account_tool(&state.db, account_id, id).await?;
+    Ok(Json(json!({ "migration_running": false })))
 }
 
 // --------------------------------------------------------------------------
@@ -1424,8 +1440,8 @@ async fn list_group_tools(
     Path(group_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    // Group membership check: user must be a member of the group.
-    let row: Option<(i64,)> = sqlx::query_as("SELECT group_id FROM groups WHERE id = $1")
+    // Group existence check: groups has no group_id column — select the id.
+    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM groups WHERE id = $1")
         .bind(group_id)
         .fetch_optional(&state.db)
         .await?;
@@ -1498,7 +1514,8 @@ async fn show_group_tool(
 // New handlers: eula_launch (route 17, stub)
 // --------------------------------------------------------------------------
 
-/// `POST /courses/{course_id}/external_tools/eula_launch` — stub.
+/// `GET /courses/{course_id}/external_tools/{id}/eula_launch` — stub 503.
+/// Canvas launches an OIDC eula flow; star-lms has no launch endpoint yet.
 async fn eula_launch() -> StatusCode {
-    StatusCode::NOT_IMPLEMENTED
+    StatusCode::SERVICE_UNAVAILABLE
 }
