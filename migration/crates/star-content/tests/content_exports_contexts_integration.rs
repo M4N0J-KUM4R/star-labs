@@ -532,7 +532,26 @@ async fn an_epub_export_is_created_with_a_progress() {
         .iter()
         .any(|item| item["id"] == course && item["epub_export"]["id"] == export_id));
 
-    // The web zip export list of the course is empty but served.
+    // Canvas `course_allow_web_export_download?`: the account of the course
+    // and the course itself have to enable the offline web export.
+    sqlx::query(
+        "UPDATE accounts SET settings = settings || \
+            jsonb_build_object('enable_offline_web_export', jsonb_build_object('value', true)) \
+         WHERE id = (SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("enable the offline web export of the account");
+    sqlx::query(
+        "UPDATE courses SET settings = settings || \
+            jsonb_build_object('enable_offline_web_export', jsonb_build_object('value', true)) \
+         WHERE id = $1",
+    )
+    .bind(course)
+    .execute(&pool)
+    .await
+    .expect("enable the offline web export of the course");
+
     let resp = server
         .get(&format!("/courses/{course}/web_zip_exports"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
