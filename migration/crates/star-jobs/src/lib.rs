@@ -40,6 +40,11 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+// New route modules (V1 JSON and V2 grouped/management).
+pub mod routes_v1;
+pub mod routes_v2_grouped;
+pub mod routes_v2_manage;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -344,15 +349,22 @@ fn require_admin(auth: &AuthUser) -> Result<(), ApiError> {
 
 /// Build the jobs router (mounted under `/api/v1` by star-http).
 pub fn router() -> Router<AppState> {
-    Router::new()
+    let v1 = Router::new()
         .route("/jobs", get(list_jobs))
         .route("/jobs/{id}", get(show_job))
-        .route("/jobs/{id}/cancel", post(cancel_job))
-        // Canvas Jobs V2 (`/api/v1/jobs2/...`).
+        .route("/jobs/{id}/cancel", post(cancel_job));
+
+    // Canvas Jobs V2 (`/api/v1/jobs2/...`).
+    let v2 = Router::new()
         .route("/jobs2", get(list_jobs_v2))
         .route("/jobs2/clusters", get(list_job_clusters))
         .route("/jobs2/{id}", get(lookup_job_v2))
-        .route("/jobs2/{id}/requeue", post(requeue_job_v2))
+        .route("/jobs2/{id}/requeue", post(requeue_job_v2));
+
+    v1.merge(v2)
+        .merge(routes_v1::router())
+        .merge(routes_v2_grouped::router())
+        .merge(routes_v2_manage::router())
 }
 
 // ---------------------------------------------------------------------------
