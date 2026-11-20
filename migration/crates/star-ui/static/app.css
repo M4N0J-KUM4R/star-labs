@@ -170,6 +170,124 @@ body.no-headers .ic-app { display: block; }
 /* ---- Generic tab landing ---- */
 .tab-placeholder { color: #73858c; }
 
+/* ---- Assignments index (issue #71) ---- */
+.assignment-index-header {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 12px; margin-bottom: 4px;
+}
+.assignment-index-title { margin: 0; }
+.assignment-index-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.assignment-index-total { color: #73858c; margin-top: 0; }
+.btn {
+  display: inline-block; padding: 8px 14px; font-size: 14px;
+  border: 1px solid #c7cdd1; border-radius: 3px; background: #fff;
+  color: #0374b5; cursor: pointer;
+}
+.btn:hover { background: #eef1f3; text-decoration: none; }
+.btn-primary { background: #0374b5; border-color: #0374b5; color: #fff; }
+.btn-primary:hover { background: #025e8c; }
+.item-group-condensed {
+  background: #fff; border: 1px solid #c7cdd1; border-radius: 4px;
+  margin-bottom: 16px;
+}
+.ig-header {
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 10px 16px; background: #f2f5f7; border-bottom: 1px solid #c7cdd1;
+}
+.ig-header-title { margin: 0; font-size: 16px; }
+.ig-header-summary { font-size: 13px; color: #73858c; }
+ul.ig-list { list-style: none; margin: 0; padding: 0; }
+.ig-row {
+  display: flex; justify-content: space-between; gap: 12px;
+  padding: 10px 16px; border-bottom: 1px solid #e8ecee; flex-wrap: wrap;
+}
+.ig-row:last-child { border-bottom: none; }
+.ig-row-main { min-width: 200px; }
+.ig-title { font-weight: 600; }
+.ig-details { display: block; font-size: 13px; color: #73858c; margin-top: 2px; }
+.ig-details .ig-points { margin-left: 12px; }
+.ig-row-right {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 13px;
+}
+.ig-row-unpublished .ig-title,
+.ig-row-unpublished .ig-details { color: #9babb3; }
+.publish-state {
+  font-size: 12px; padding: 2px 8px; border-radius: 10px;
+  background: #eaf6e9; color: #127a1e;
+}
+.publish-state-unpublished { background: #eee; color: #73858c; }
+.submission-pill {
+  display: inline-block; font-size: 12px; padding: 2px 8px;
+  border-radius: 10px; background: #eee; color: #73858c;
+}
+.pill-submitted { background: #e8f3fb; color: #0374b5; }
+.pill-graded { background: #eaf6e9; color: #127a1e; }
+.pill-unsubmitted { background: #fdf3e3; color: #8a6d3b; }
+.pill- { background: #eee; color: #73858c; }
+
+/* ---- Assignment show (issue #71) ---- */
+.assignment-title {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.assignment-title .title { margin: 0; flex: 1; }
+.ic-Table { border-collapse: collapse; width: 100%; margin: 16px 0; }
+.ic-Table th, .ic-Table td {
+  border: 1px solid #d7dce0; padding: 8px 12px; text-align: left;
+  vertical-align: top;
+}
+.ic-Table thead th { background: #f2f5f7; }
+.assignment_dates { max-width: 480px; }
+.assignment_dates th { width: 96px; background: #fafbfc; font-weight: 600; }
+.description.user_content {
+  background: #fff; border: 1px solid #c7cdd1; border-radius: 4px;
+  padding: 16px; margin: 16px 0;
+}
+.submit-assignment-form, .assignment-edit-form {
+  background: #fff; border: 1px solid #c7cdd1; border-radius: 4px;
+  padding: 16px; margin: 16px 0; max-width: 640px;
+}
+textarea.ic-Input { width: 100%; font-family: inherit; }
+.assignment-form-actions, .ic-Login__actions { margin-top: 16px; }
+.ic-Form-control--checkbox { display: flex; align-items: center; gap: 8px; }
+.ic-Form-control--checkbox .ic-Label { margin: 0; }
+.submissions-table .submission-body { max-width: 320px; }
+.table-wrapper { overflow-x: auto; }
+
+/* ---- Grades page (issue #71) ---- */
+.ic-Action-header {
+  display: flex; justify-content: space-between; align-items: center;
+  flex-wrap: wrap; gap: 12px;
+}
+.grades-heading { margin: 0; }
+.student-grades-right-content .final_grade {
+  background: #fff; border: 1px solid #c7cdd1; border-radius: 4px;
+  padding: 12px 16px; display: inline-block; margin-bottom: 16px;
+}
+.total-grade-label { font-weight: 600; margin-right: 6px; }
+.final-letter-grade {
+  margin-left: 10px; font-weight: 600; color: #127a1e;
+}
+#grades_summary .context { display: block; font-size: 12px; color: #73858c; }
+
+/* ---- Gradebook grid (issue #71) ---- */
+.gradebook-toolbar {
+  display: flex; justify-content: space-between; align-items: center;
+  flex-wrap: wrap; gap: 12px; margin-bottom: 16px;
+}
+.gradebook-heading { margin: 0; }
+.gradebook-toolbar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.gradebook-grid .student-header, .gradebook-grid .student-name {
+  position: sticky; left: 0; background: #fff; min-width: 140px;
+}
+.gradebook-grid thead .student-header { background: #f2f5f7; }
+.assignment-header { min-width: 96px; }
+.assignment-header-link { font-weight: 600; }
+.assignment-header-points {
+  display: block; font-size: 12px; font-weight: 400; color: #73858c;
+}
+.gradebook-cell, .gradebook-total { text-align: center; white-space: nowrap; }
+
 /* ---- Error page ---- */
 .ic-Error { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
 .ic-Error__content { text-align: center; }

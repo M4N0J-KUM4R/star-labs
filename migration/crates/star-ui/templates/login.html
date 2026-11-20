@@ -1,6 +1,8 @@
 {% extends "layouts/base.html" %}
 {# Login page — Canvas login/canvas/new_login with the "bare" layout:
-   body class no-headers (Canvas: full-width ic-Login-Body), no global nav. #}
+   body class no-headers (Canvas: full-width ic-Login-Body), no global nav.
+   Issue #70 polish: forgot-password link, register link, dismissible
+   session-expiry notice, aria-live error region. #}
 {% block shell %}
   <div class="ic-Login">
     <div class="ic-Login__container">
@@ -11,9 +13,17 @@
             <p class="ic-Login__subtitle">star-lms</p>
           </div>
           <div class="ic-Login__body">
+            {% if session_expired %}
+            <div id="session_expired_notice" class="ic-flash warning" role="status">
+              Your session has expired. Please log in again.
+              <button type="button" class="Button--link" aria-label="Dismiss">Dismiss</button>
+            </div>
+            {% endif %}
+            <div id="login_error" aria-live="assertive">
             {% if !error.is_empty() %}
             <div class="ic-flash error" role="alert">{{ error }}</div>
             {% endif %}
+            </div>
             <form id="login_form" method="post" action="/login">
               <input type="hidden" name="_csrf" value="{{ csrf_token }}">
               <input type="hidden" name="next" value="{{ next }}">
@@ -29,6 +39,12 @@
                 <button type="submit" class="Button Button--login">Log In</button>
               </div>
             </form>
+            {# Canvas renders both forms and toggles with JS; no-JS port renders
+               them as separate pages (canvas-reference.md §2 notes). #}
+            <div class="ic-Login__links">
+              <a id="forgot_password_link" href="/forgot_password">Forgot password?</a>
+              <a id="register_link" href="/register">Sign up now, it's free!</a>
+            </div>
           </div>
         </div>
       </div>

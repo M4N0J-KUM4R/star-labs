@@ -467,6 +467,22 @@ async fn an_epub_export_is_created_with_a_progress() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
 
+    // Canvas `EpubExportsController#check_feature_enabled`: the root account
+    // has to allow the epub export feature.
+    let root_account: i64 = sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read the root account");
+    sqlx::query(
+        "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state)          VALUES ('Account', $1, 'epub_export', 'epub_export', 'enabled')          ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
+    )
+    .bind(root_account)
+    .execute(&pool)
+    .await
+    .expect("enable the epub export feature");
+
     // A student may not create an export.
     let resp = server
         .post(&format!("/courses/{course}/epub_exports"))
@@ -516,7 +532,26 @@ async fn an_epub_export_is_created_with_a_progress() {
         .iter()
         .any(|item| item["id"] == course && item["epub_export"]["id"] == export_id));
 
-    // The web zip export list of the course is empty but served.
+    // Canvas `course_allow_web_export_download?`: the account of the course
+    // and the course itself have to enable the offline web export.
+    sqlx::query(
+        "UPDATE accounts SET settings = settings || \
+            jsonb_build_object('enable_offline_web_export', jsonb_build_object('value', true)) \
+         WHERE id = (SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1)",
+    )
+    .execute(&pool)
+    .await
+    .expect("enable the offline web export of the account");
+    sqlx::query(
+        "UPDATE courses SET settings = settings || \
+            jsonb_build_object('enable_offline_web_export', jsonb_build_object('value', true)) \
+         WHERE id = $1",
+    )
+    .bind(course)
+    .execute(&pool)
+    .await
+    .expect("enable the offline web export of the course");
+
     let resp = server
         .get(&format!("/courses/{course}/web_zip_exports"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
