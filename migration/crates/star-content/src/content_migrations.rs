@@ -540,7 +540,8 @@ async fn list_migrations(
         check_pre_processing_timeout(&state.db, row).await?;
     }
 
-    let include_audit = is_admin(&auth);
+    // Canvas includes audit_info for site admins or `?include=audit_info`.
+    let include_audit = is_admin(&auth) || includes_audit_info(&params);
     Ok(Json(Value::Array(
         rows.iter()
             .map(|row| migration_json(row, include_audit))
