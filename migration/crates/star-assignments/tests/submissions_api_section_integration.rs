@@ -77,25 +77,21 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
 }
 
 async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
-    sqlx::query_scalar(
-        "INSERT INTO courses (name, course_code) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(format!("{prefix}-{name}"))
-    .bind(format!("{prefix}-{name}"))
-    .fetch_one(pool)
-    .await
-    .expect("seed course")
+    sqlx::query_scalar("INSERT INTO courses (name, course_code) VALUES ($1, $2) RETURNING id")
+        .bind(format!("{prefix}-{name}"))
+        .bind(format!("{prefix}-{name}"))
+        .fetch_one(pool)
+        .await
+        .expect("seed course")
 }
 
 async fn seed_section(pool: &PgPool, course_id: i64, name: &str) -> i64 {
-    sqlx::query_scalar(
-        "INSERT INTO course_sections (course_id, name) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(course_id)
-    .bind(name)
-    .fetch_one(pool)
-    .await
-    .expect("seed course section")
+    sqlx::query_scalar("INSERT INTO course_sections (course_id, name) VALUES ($1, $2) RETURNING id")
+        .bind(course_id)
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .expect("seed course section")
 }
 
 async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str) {
@@ -545,9 +541,10 @@ async fn the_section_student_views_are_scoped_to_the_section() {
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let list: Value = resp.json();
     let list = list.as_array().expect("array");
-    assert!(list
-        .iter()
-        .all(|item| item["user_id"] == student), "{list:?}");
+    assert!(
+        list.iter().all(|item| item["user_id"] == student),
+        "{list:?}"
+    );
 
     // The summary of the assignment.
     let resp = server
