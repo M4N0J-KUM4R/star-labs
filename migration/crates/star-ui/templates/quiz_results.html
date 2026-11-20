@@ -1,0 +1,46 @@
+{% extends "layouts/course.html" %}
+{# Results — Canvas _quiz_submission_results analogue: score-for-this-attempt
+   plus the per-question breakdown (your answer, correct/incorrect class,
+   correct answer for auto-graded types). #}
+{% block content %}
+  <div id="quiz_results" class="quizzes" data-submission-state="{{ workflow_state }}">
+    <h1 class="quiz-title">{{ quiz_title }} — Results</h1>
+    <p class="results-student">Student: {{ student_name }} (attempt {{ attempt }})</p>
+    <div class="score-summary" id="score_summary">
+      {% match score %}
+      {% when Some with (s) %}
+      <p>Score for this attempt: {{ s }} / {{ points_possible }}</p>
+      {% when None %}
+      <p>Score for this attempt: — / {{ points_possible }}</p>
+      {% endmatch %}
+      {% if workflow_state == "pending_review" %}
+      <p class="pending-review-note" id="pending_review_note">Some questions have not yet been graded.</p>
+      {% endif %}
+    </div>
+    <div id="questions" class="results-questions">
+      {% for question in questions %}
+      <div class="display_question question {{ question.question_type }} {{ question.outcome }}" id="question_{{ question.id }}">
+        <div class="header">
+          <span class="question_name">{{ question.name }}</span>
+          <span class="points_question">{{ question.points }} pts</span>
+          <span class="outcome outcome_{{ question.outcome }}">{% if question.outcome == "correct" %}Correct{% else %}{% if question.outcome == "incorrect" %}Incorrect{% else %}Needs review{% endif %}{% endif %}</span>
+        </div>
+        <div class="text question_text">{{ question.text|safe }}</div>
+        <div class="answers results-answers">
+          <p class="your-answer">Your answer: {{ question.your_answer }}</p>
+          {% match question.correct_answer %}
+          {% when Some with (correct) %}
+          <p class="correct-answer">Correct answer: {{ correct }}</p>
+          {% when None %}{% endmatch %}
+          {% match question.score %}
+          {% when Some with (s) %}
+          <p class="question-score">Score: {{ s }} / {{ question.points }}</p>
+          {% when None %}
+          <p class="question-score">Score: pending review</p>
+          {% endmatch %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+{% endblock content %}
