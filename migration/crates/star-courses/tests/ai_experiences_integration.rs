@@ -265,7 +265,7 @@ async fn a_manager_creates_shows_updates_and_deletes_an_experience() {
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({
             "ai_experience": {
-                "title": "Customer Service Simulation",
+                "title": format!("{prefix}-Customer Service Simulation"),
                 "description": "Practice customer service skills",
                 "facts": "You are a customer service representative",
                 "learning_objective": "Students practise active listening",
@@ -275,7 +275,10 @@ async fn a_manager_creates_shows_updates_and_deletes_an_experience() {
         .await;
     assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
     let created: Value = resp.json();
-    assert_eq!(created["title"], "Customer Service Simulation");
+    assert_eq!(
+        created["title"],
+        format!("{prefix}-Customer Service Simulation")
+    );
     assert_eq!(created["workflow_state"], "unpublished");
     assert_eq!(created["course_id"], course);
     assert_eq!(created["context_index_status"], "not_started");
@@ -533,10 +536,7 @@ async fn the_teacher_conversation_list_reports_the_students_without_a_conversati
     assert_eq!(with_conversation["workflow_state"], "active");
     assert!(with_conversation["llm_conversation_id"].is_string());
     assert_eq!(with_conversation["student"]["id"], student);
-    assert_eq!(
-        with_conversation["student"]["name"],
-        format!("{prefix}-Student")
-    );
+    assert_eq!(with_conversation["student"]["name"], "Student");
 
     let without_conversation = conversations
         .iter()
