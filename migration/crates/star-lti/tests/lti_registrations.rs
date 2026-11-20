@@ -48,7 +48,12 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
         jwt_secret: JWT_SECRET.to_string(),
     };
 
-    let server = TestServer::new(star_lti::router().with_state(state)).expect("build TestServer");
+    let server = TestServer::new(
+        star_lti::router()
+            .merge(star_lti::lti_advantage_router())
+            .with_state(state),
+    )
+    .expect("build TestServer");
     let prefix = run_prefix();
     Some((server, pool, prefix))
 }
