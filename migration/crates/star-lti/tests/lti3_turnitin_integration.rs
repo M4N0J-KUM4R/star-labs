@@ -83,10 +83,22 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
 // Shared assertions
 // ---------------------------------------------------------------------------
 
-/// Every support-helper route, in one list, so the auth matrix and the 503
-/// contract are exercised uniformly across all 7 endpoints.
+/// Every support-helper route, in one list, so the auth matrix is exercised
+/// uniformly across all 7 endpoints.
 const ROUTES: [&str; 7] = [
     "/support_helpers/turnitin/md5",
+    "/support_helpers/turnitin/error2305",
+    "/support_helpers/turnitin/shard",
+    "/support_helpers/turnitin/assignment",
+    "/support_helpers/turnitin/pending",
+    "/support_helpers/turnitin/expired",
+    "/support_helpers/turnitin/refresh_lti_attachment",
+];
+
+/// The six data-dependent stub routes. `md5` is excluded: it is implemented
+/// for real (see `md5_computes_rfc1321_digest_of_object_id`) and answers 200
+/// with the digest rather than the 503 stub contract.
+const STUB_ROUTES: [&str; 6] = [
     "/support_helpers/turnitin/error2305",
     "/support_helpers/turnitin/shard",
     "/support_helpers/turnitin/assignment",
@@ -166,7 +178,7 @@ async fn data_dependent_turnitin_routes_stub_503_for_admin() {
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
 
-    for route in ROUTES {
+    for route in STUB_ROUTES {
         let resp = server
             .get(route)
             .add_header(AUTHORIZATION, auth(admin, "admin"))

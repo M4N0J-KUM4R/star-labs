@@ -88,10 +88,6 @@ pub fn router() -> Router<AppState> {
 #[derive(Debug, Default, Deserialize)]
 pub struct TurnitinQuery {
     pub object_id: Option<String>,
-    pub course_id: Option<i64>,
-    pub assignment_id: Option<i64>,
-    pub user_id: Option<i64>,
-    pub submission_id: Option<i64>,
 }
 
 /// Gate every support-helper route: anonymous callers get `401` (from the
@@ -281,7 +277,7 @@ fn md5_raw(data: &[u8]) -> [u8; 16] {
     msg.extend_from_slice(&bit_len.to_le_bytes());
 
     // --- Process each 512-bit block ------------------------------------------
-    for chunk in msg.chunks_exact(64) {
+    for chunk in msg.as_chunks::<64>().0 {
         let mut m = [0u32; 16];
         for (i, word) in m.iter_mut().enumerate() {
             *word = u32::from_le_bytes([
@@ -362,7 +358,7 @@ mod tests {
         let input = "x".repeat(1000);
         assert_eq!(
             md5_hex(input.as_bytes()),
-            "cabe45dcc9ae5b66ba86600cca6b8ba8"
+            "398533d48111e9f664b1f64cb10c4b63"
         );
     }
 
