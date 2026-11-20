@@ -30,7 +30,7 @@ use crate::session::SessionUser;
 /// Presentation-ready row of the grades summary table (student-facing).
 /// All display strings are precomputed so the template only does field
 /// access.
-pub(crate) struct GradeRowView {
+pub struct GradeRowView {
     pub assignment_id: i64,
     pub title: String,
     pub group_name: Option<String>,
@@ -112,7 +112,7 @@ pub async fn grades(
 
     let ctx = match course_context(&app, &user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     // Whose grades: the viewer, or (teacher-only) ?student_id.
@@ -184,8 +184,7 @@ pub async fn grades(
 
     let total_score: f64 = rows
         .iter()
-        .filter(|r| r.submission_score.is_some())
-        .map(|r| r.submission_score.unwrap_or(0.0))
+        .filter_map(|r| r.submission_score)
         .sum();
     let total_possible: f64 = rows
         .iter()
@@ -403,7 +402,7 @@ pub async fn gradebook(
 
     let ctx = match course_context(&app, &user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !ctx.is_teacher {
         return from_api_error(&ApiError::Forbidden, &origin).into_response();
@@ -458,7 +457,7 @@ pub async fn gradebook_csv(
 
     let ctx = match course_context(&app, &user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !ctx.is_teacher {
         return from_api_error(&ApiError::Forbidden, &origin).into_response();

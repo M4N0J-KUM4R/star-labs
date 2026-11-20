@@ -863,9 +863,15 @@ async fn assignments_index_roles_and_grouping() {
     assert!(body.contains("id=\"add_assignment\""), "teacher add button");
     assert!(body.contains("15"), "total points 10+5 rendered");
 
-    // Group order: Essays bucket before Quizzes bucket.
-    let pos_a = body.find("Essays").expect("essays heading");
-    let pos_b = body.find("Quizzes").expect("quizzes heading");
+    // Group order: Essays bucket before Quizzes bucket. The plain text
+    // "Quizzes" also appears in the left-side course tabs, so compare the
+    // group buckets by their data-group-id attributes instead.
+    let pos_a = body
+        .find(&format!("data-group-id=\"{group_a}\""))
+        .expect("essays bucket");
+    let pos_b = body
+        .find(&format!("data-group-id=\"{group_b}\""))
+        .expect("quizzes bucket");
     assert!(pos_a < pos_b, "groups ordered by position");
 
     // Student: published rows + own submission pill, no unpublished, no add.
@@ -1066,7 +1072,7 @@ async fn new_assignment_create_and_gates() {
         .form(&serde_json::json!({
             "name": "Hacked",
             "points_possible": "1",
-            "_csrf": csrf,
+            "_csrf": csrf.clone(),
             "published": "published"
         }))
         .await;
@@ -1087,7 +1093,7 @@ async fn new_assignment_create_and_gates() {
             "due_date": "2026-12-01",
             "due_time": "17:00",
             "assignment_group_id": group.to_string(),
-            "_csrf": csrf,
+            "_csrf": csrf.clone(),
             "published": "published"
         }))
         .await;
@@ -1122,13 +1128,18 @@ async fn new_assignment_create_and_gates() {
     assert!(resp.text().contains("Project One"), "row appears in list");
 
     // Validation: empty name re-renders the form with 422, no row created.
+    // The CSRF cookie and the form token must match (the handler checks the
+    // token pair before validating the fields).
     let resp = server
         .post(&format!("/courses/{course}/assignments/new"))
         .add_cookie(session_cookie(teacher, "teacher"))
-        .add_cookie(axum_extra::extract::cookie::Cookie::new("star_csrf", csrf))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
         .form(&serde_json::json!({
             "name": "  ",
-            "_csrf": "",
+            "_csrf": csrf,
             "published": "published"
         }))
         .await;

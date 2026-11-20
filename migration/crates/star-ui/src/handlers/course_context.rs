@@ -48,28 +48,30 @@ pub(crate) async fn course_context(
     user: &SessionUser,
     course_id: i64,
     origin: &str,
-) -> Result<CourseContext, Response> {
+) -> Result<CourseContext, Box<Response>> {
+    // Boxed: `Response` is large enough to trip clippy::result_large_err, and
+    // every caller only ever returns the error as-is.
     let course = star_courses::load_course_for_viewer(&app.db, course_id, &auth_of(user))
         .await
-        .map_err(|e| from_api_error(&e, origin).into_response())?;
+        .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?;
 
     let tabs = star_courses::load_course_tabs(&app.db, course_id, &auth_of(user))
         .await
-        .map_err(|e| from_api_error(&e, origin).into_response())?;
+        .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?;
 
     let (preferences, use_high_contrast) = queries::load_preferences(&app.db, user.id)
         .await
-        .map_err(|e| from_api_error(&e, origin).into_response())?;
+        .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?;
 
     let user_name = queries::load_user_name(&app.db, user.id)
         .await
-        .map_err(|e| from_api_error(&e, origin).into_response())?
+        .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?
         .unwrap_or_default();
 
     let is_teacher =
         star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(user))
             .await
-            .map_err(|e| from_api_error(&e, origin).into_response())?;
+            .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?;
 
     let is_student = !star_courses::is_admin(&auth_of(user))
         && sqlx::query_scalar::<_, i32>(
@@ -82,7 +84,7 @@ pub(crate) async fn course_context(
         .bind(user.id)
         .fetch_optional(&app.db)
         .await
-        .map_err(|e| from_api_error(&ApiError::from(e), origin).into_response())?
+        .map_err(|e| Box::new(from_api_error(&ApiError::from(e), origin).into_response()))?
         .is_some();
 
     Ok(CourseContext {

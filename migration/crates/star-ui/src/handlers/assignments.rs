@@ -29,7 +29,7 @@ use crate::session::{check_csrf, SessionUser};
 
 /// Presentation-ready row of the assignments index. All display strings are
 /// precomputed here so the template only does field access (issue #71).
-pub(crate) struct AssignmentRowView {
+pub struct AssignmentRowView {
     pub id: i64,
     pub title: String,
     /// "Due Jan 5, 2026" / "No due date".
@@ -67,7 +67,7 @@ impl AssignmentRowView {
 /// assignments land in the trailing "Ungrouped" bucket (Canvas'
 /// `require_assignment_group` keeps a default group, but rows predating that
 /// or created without one still render).
-pub(crate) struct AssignmentGroupView {
+pub struct AssignmentGroupView {
     pub group_id: Option<i64>,
     pub name: String,
     pub assignments: Vec<AssignmentRowView>,
@@ -197,7 +197,7 @@ pub async fn assignments_index(
 
     let ctx = match course_context(&app, &user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let mut rows =
@@ -262,7 +262,7 @@ pub async fn assignments_index(
 }
 
 /// Presentation-ready row of the teacher's read-only submissions table.
-pub(crate) struct SubmissionRowView {
+pub struct SubmissionRowView {
     pub user_id: i64,
     pub user_name: String,
     /// submissions.workflow_state (submitted/graded).
@@ -338,7 +338,7 @@ pub async fn assignment_show(
 
     let ctx = match course_context(&app, &user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let rows =
@@ -644,7 +644,7 @@ async fn render_form(
     let origin = crate::request_origin();
     let ctx = match course_context(app, user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let group_options = match load_group_options(app, course_id).await {
@@ -771,7 +771,7 @@ pub async fn assignment_new(
 
     let ctx = match course_context(&app, &user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !ctx.is_teacher {
         return from_api_error(&ApiError::Forbidden, &origin).into_response();
@@ -796,7 +796,7 @@ pub async fn assignment_create(
 
     let ctx = match course_context(&app, &user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !ctx.is_teacher {
         return from_api_error(&ApiError::Forbidden, &origin).into_response();
@@ -890,7 +890,7 @@ pub async fn assignment_edit(
 
     let ctx = match course_context(&app, &user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !ctx.is_teacher {
         return from_api_error(&ApiError::Forbidden, &origin).into_response();
@@ -934,7 +934,7 @@ pub async fn assignment_update(
 
     let ctx = match course_context(&app, &user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !ctx.is_teacher {
         return from_api_error(&ApiError::Forbidden, &origin).into_response();
@@ -1043,7 +1043,7 @@ pub async fn assignment_submit(
 
     let ctx = match course_context(&app, &user, course_id, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
     if !check_csrf(&jar, &form._csrf) {
         return from_api_error(&ApiError::Forbidden, &origin).into_response();
