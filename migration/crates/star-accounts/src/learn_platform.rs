@@ -19,12 +19,7 @@
 //! the empty body of the unconfigured service — exactly what Canvas answers
 //! when the plugin is not enabled.
 
-use axum::{
-    extract::Path,
-    http::StatusCode,
-    routing::get,
-    Json, Router,
-};
+use axum::{extract::Path, http::StatusCode, routing::get, Json, Router};
 use serde_json::{json, Value};
 
 use star_common::ApiError;
