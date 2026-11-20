@@ -131,7 +131,6 @@ const COURSE_MIGRATORS: [Migrator; 6] = [
 /// Columns returned for a content migration row. The issue count is computed
 /// in SQL so index/show stay a single round trip per page.
 const MIGRATION_SELECT: &str = "SELECT m.id, m.course_id, m.user_id, \
-        m.context_type, m.context_id, \
         m.migration_type, m.workflow_state, m.migration_settings, \
         m.source_course_id, sc.name AS source_course_name, \
         m.started_at, m.finished_at, m.created_at, m.updated_at, \
@@ -149,8 +148,6 @@ struct ContentMigrationRow {
     id: i64,
     course_id: Option<i64>,
     user_id: Option<i64>,
-    context_type: Option<String>,
-    context_id: Option<i64>,
     migration_type: String,
     workflow_state: String,
     migration_settings: String,
@@ -710,7 +707,7 @@ async fn create_migration_for_context(
     }
 
     // Canvas `set_date_shift_options` (only persisted when enabled).
-    if let Some((status, json)) = merge_date_shift(&payload, &mut merged) {
+    if let Some((status, json)) = merge_date_shift(payload, &mut merged) {
         return Ok(Err((status, json)));
     }
 
