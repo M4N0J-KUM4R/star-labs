@@ -11,21 +11,21 @@
 //! - `DELETE /accounts/{accountId}/data_services/{id}`      — destroy subscription
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::get,
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
-use crate::{can_manage_account, is_admin};
+use crate::can_manage_account;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -98,11 +98,10 @@ pub struct UpdateSubscriptionRequest {
 // ---------------------------------------------------------------------------
 
 async fn require_account(pool: &PgPool, account_id: i64) -> Result<(), ApiError> {
-    let row: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await?;
+    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await?;
     row.map(|_| ()).ok_or(ApiError::NotFound)
 }
 
@@ -188,8 +187,10 @@ async fn list_subscriptions(
          WHERE account_id = $1 AND workflow_state <> '{STATE_DELETED}' \
          ORDER BY created_at DESC"
     );
-    let rows: Vec<SubscriptionRow> =
-        sqlx::query_as(&sql).bind(account_id).fetch_all(&state.db).await?;
+    let rows: Vec<SubscriptionRow> = sqlx::query_as(&sql)
+        .bind(account_id)
+        .fetch_all(&state.db)
+        .await?;
 
     let data: Vec<Value> = rows.iter().map(subscription_json).collect();
     Ok(Json(data))
@@ -206,23 +207,23 @@ async fn create_subscription(
         return Err(ApiError::Forbidden);
     }
 
-    let subscription = payload.subscription.ok_or_else(|| {
-        ApiError::BadRequest("subscription object is required".to_string())
-    })?;
+    let subscription = payload
+        .subscription
+        .ok_or_else(|| ApiError::BadRequest("subscription object is required".to_string()))?;
 
-    let context_id = subscription.context_id.ok_or_else(|| {
-        ApiError::BadRequest("subscription.ContextId is required".to_string())
-    })?;
-    let context_type = subscription.context_type.ok_or_else(|| {
-        ApiError::BadRequest("subscription.ContextType is required".to_string())
-    })?;
+    let context_id = subscription
+        .context_id
+        .ok_or_else(|| ApiError::BadRequest("subscription.ContextId is required".to_string()))?;
+    let context_type = subscription
+        .context_type
+        .ok_or_else(|| ApiError::BadRequest("subscription.ContextType is required".to_string()))?;
 
-    let event_types = subscription.event_types.ok_or_else(|| {
-        ApiError::BadRequest("subscription.EventTypes is required".to_string())
-    })?;
-    let format = subscription.format.ok_or_else(|| {
-        ApiError::BadRequest("subscription.Format is required".to_string())
-    })?;
+    let event_types = subscription
+        .event_types
+        .ok_or_else(|| ApiError::BadRequest("subscription.EventTypes is required".to_string()))?;
+    let format = subscription
+        .format
+        .ok_or_else(|| ApiError::BadRequest("subscription.Format is required".to_string()))?;
     let transport_type = subscription.transport_type.ok_or_else(|| {
         ApiError::BadRequest("subscription.TransportType is required".to_string())
     })?;
@@ -300,7 +301,9 @@ async fn update_subscription(
         .unwrap_or(existing.context_id);
     let event_types = subscription
         .and_then(|s| s.event_types.clone())
-        .unwrap_or_else(|| existing.event_types.clone());
+        .unwrap_or_else(|| {
+            serde_json::from_value::<Vec<String>>(existing.event_types.clone()).unwrap_or_default()
+        });
     let format = subscription
         .and_then(|s| s.format.clone())
         .unwrap_or(existing.format);
@@ -313,8 +316,8 @@ async fn update_subscription(
     let workflow_state = subscription
         .and_then(|s| s.state.clone())
         .map(|s| match s.as_str() {
-            "Deleted" => STATE_DELETED,
-            _ => STATE_ACTIVE,
+            "Deleted" => STATE_DELETED.to_string(),
+            _ => STATE_ACTIVE.to_string(),
         })
         .unwrap_or(existing.workflow_state);
 

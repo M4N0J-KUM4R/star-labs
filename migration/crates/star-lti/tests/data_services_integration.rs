@@ -356,7 +356,9 @@ async fn tool_proxy_routes() {
         created_account.text()
     );
     let tp_account: Value = created_account.json();
-    let guid = tp_account["tool_proxy_guid"].as_str().expect("tool_proxy_guid");
+    let guid = tp_account["tool_proxy_guid"]
+        .as_str()
+        .expect("tool_proxy_guid");
 
     // Show tool proxy by guid.
     let resp = server.get(&format!("/api/lti/tool_proxy/{guid}")).await;

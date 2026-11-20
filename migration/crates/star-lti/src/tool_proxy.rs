@@ -14,12 +14,12 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
@@ -83,20 +83,18 @@ async fn find_tool_proxy_by_guid(pool: &PgPool, guid: &str) -> Result<ToolProxyR
 }
 
 async fn require_account(pool: &PgPool, account_id: i64) -> Result<(), ApiError> {
-    let row: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
-            .bind(account_id)
-            .fetch_optional(pool)
-            .await?;
+    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await?;
     row.map(|_| ()).ok_or(ApiError::NotFound)
 }
 
 async fn require_course(pool: &PgPool, course_id: i64) -> Result<(), ApiError> {
-    let row: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM courses WHERE id = $1")
-            .bind(course_id)
-            .fetch_optional(pool)
-            .await?;
+    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_optional(pool)
+        .await?;
     row.map(|_| ()).ok_or(ApiError::NotFound)
 }
 
@@ -107,15 +105,17 @@ async fn require_course(pool: &PgPool, course_id: i64) -> Result<(), ApiError> {
 fn tool_proxy_json(tp: &ToolProxyRow) -> Value {
     let mut out = tp.raw_data.clone();
     // Merge in DB-computed fields that may differ from stored raw_data.
-    out.as_object_mut()
-        .map(|obj| {
-            obj.insert("tool_proxy_guid".to_string(), json!(tp.guid));
-            obj.insert("id".to_string(), json!(tp.id));
-            obj.insert("@context".to_string(), json!("http://purl.imsglobal.org/ctx/lti/v2/ToolProxy"));
-            obj.insert("@type".to_string(), json!("ToolProxy"));
-            obj.insert("created_at".to_string(), json!(tp.created_at));
-            obj.insert("updated_at".to_string(), json!(tp.updated_at));
-        });
+    out.as_object_mut().map(|obj| {
+        obj.insert("tool_proxy_guid".to_string(), json!(tp.guid));
+        obj.insert("id".to_string(), json!(tp.id));
+        obj.insert(
+            "@context".to_string(),
+            json!("http://purl.imsglobal.org/ctx/lti/v2/ToolProxy"),
+        );
+        obj.insert("@type".to_string(), json!("ToolProxy"));
+        obj.insert("created_at".to_string(), json!(tp.created_at));
+        obj.insert("updated_at".to_string(), json!(tp.updated_at));
+    });
     out
 }
 
@@ -125,7 +125,10 @@ fn tool_proxy_json(tp: &ToolProxyRow) -> Value {
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/lti/tool_proxy/{tool_proxy_guid}", get(show_tool_proxy))
+        .route(
+            "/api/lti/tool_proxy/{tool_proxy_guid}",
+            get(show_tool_proxy),
+        )
         .route(
             "/api/lti/courses/{course_id}/tool_proxy",
             post(create_tool_proxy_course),
@@ -154,7 +157,7 @@ async fn show_tool_proxy(
     // In the migration this is handled by the star-auth middleware via the
     // LTI token layer. For the fallback raw JSON endpoint we return the data.
     let response = Json(tool_proxy_json(&tp)).into_response();
-    Ok((StatusCode::OK, response.0, tp.raw_data.clone()).into_response())
+    Ok((StatusCode::OK, response).into_response())
 }
 
 /// `POST /api/lti/courses/{course_id}/tool_proxy` — create tool proxy in course.

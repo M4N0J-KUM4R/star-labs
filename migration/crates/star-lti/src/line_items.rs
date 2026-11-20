@@ -13,14 +13,14 @@
 //! with LTI-specific extensions (scoreMaximum, label, resourceId, tag).
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
-    routing::{delete, get, post, put},
+    response::{IntoResponse, Response},
+    routing::get,
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
@@ -103,11 +103,10 @@ pub struct UpdateLineItemRequest {
 // ---------------------------------------------------------------------------
 
 async fn require_course(pool: &PgPool, course_id: i64) -> Result<(), ApiError> {
-    let row: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM courses WHERE id = $1")
-            .bind(course_id)
-            .fetch_optional(pool)
-            .await?;
+    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_optional(pool)
+        .await?;
     row.map(|_| ()).ok_or(ApiError::NotFound)
 }
 
@@ -189,8 +188,10 @@ async fn list_line_items(
          WHERE course_id = $1 AND workflow_state <> 'deleted' \
          ORDER BY created_at DESC"
     );
-    let rows: Vec<LineItemRow> =
-        sqlx::query_as(&sql).bind(course_id).fetch_all(&state.db).await?;
+    let rows: Vec<LineItemRow> = sqlx::query_as(&sql)
+        .bind(course_id)
+        .fetch_all(&state.db)
+        .await?;
 
     let data: Vec<Value> = rows.iter().map(line_item_json).collect();
     Ok(Json(data))
@@ -209,7 +210,10 @@ async fn create_line_item(
 
     let label = payload.label;
     if label.is_empty() {
-        return Ok((StatusCode::BAD_REQUEST, Json(json!({ "error": "label is required" })))
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "label is required" })),
+        )
             .into_response());
     }
 
@@ -219,7 +223,7 @@ async fn create_line_item(
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "scoreMaximum must be non-negative" })),
         ))
-            .into_response();
+        .into_response();
     }
 
     let resource_id = payload.resource_id;
@@ -247,7 +251,7 @@ async fn create_line_item(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "Failed to create Canvas assignment" })),
             ))
-                .into_response();
+            .into_response();
         }
     };
 
