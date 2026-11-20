@@ -738,7 +738,13 @@ async fn next_param_round_trips_through_login() {
 // ---------------------------------------------------------------------------
 
 /// Seed helpers for the quiz journey (mirror star-quizzes' test seeding).
-async fn seed_quiz(pool: &PgPool, course_id: i64, title: &str, published: bool, points: f64) -> i64 {
+async fn seed_quiz(
+    pool: &PgPool,
+    course_id: i64,
+    title: &str,
+    published: bool,
+    points: f64,
+) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO quizzes (course_id, title, published, points_possible)          VALUES ($1, $2, $3, $4) RETURNING id",
     )
@@ -788,10 +794,7 @@ fn csrf_pair() -> (axum_extra::extract::cookie::Cookie<'static>, String) {
 
 /// One MC (answer ids 7 correct / 8 wrong), one true_false, one essay —
 /// the grading fixture. Returns (quiz, mc_question, essay_question).
-async fn seed_graded_quiz(
-    pool: &PgPool,
-    course_id: i64,
-) -> (i64, i64, i64) {
+async fn seed_graded_quiz(pool: &PgPool, course_id: i64) -> (i64, i64, i64) {
     let quiz = seed_quiz(pool, course_id, "Graded Quiz", true, 30.0).await;
     let mc = seed_question(
         pool,
@@ -853,7 +856,10 @@ async fn quiz_list_roles_and_filter() {
     let body = resp.text();
     assert!(!body.contains("new_quiz_link"), "no + Quiz for student");
     assert!(body.contains("Published Quiz"));
-    assert!(!body.contains("Draft Quiz"), "unpublished hidden from student");
+    assert!(
+        !body.contains("Draft Quiz"),
+        "unpublished hidden from student"
+    );
     assert!(body.contains(&format!("quiz_row_{published}")));
 
     // Unenrolled non-admin: course gate (403/404, no leak).
@@ -909,7 +915,13 @@ async fn quiz_new_teacher_creates_student_forbidden() {
         }))
         .await;
     assert_eq!(resp.status_code(), 303, "body: {}", resp.text());
-    let location = resp.headers().get("location").unwrap().to_str().unwrap().to_string();
+    let location = resp
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
     let new_id: i64 = location
         .rsplit('/')
         .next()
@@ -918,12 +930,13 @@ async fn quiz_new_teacher_creates_student_forbidden() {
         .expect("quiz id in location");
     assert!(location.starts_with(&format!("/courses/{course}/quizzes/")));
 
-    let stored: Option<(String, bool, f64)> =
-        sqlx::query_as("SELECT title, published, points_possible::float8 FROM quizzes WHERE id = $1")
-            .bind(new_id)
-            .fetch_optional(&pool)
-            .await
-            .expect("query");
+    let stored: Option<(String, bool, f64)> = sqlx::query_as(
+        "SELECT title, published, points_possible::float8 FROM quizzes WHERE id = $1",
+    )
+    .bind(new_id)
+    .fetch_optional(&pool)
+    .await
+    .expect("query");
     let (title, published, points) = stored.expect("quiz created");
     assert_eq!(title, "Created By Form");
     assert!(published);
@@ -1031,14 +1044,20 @@ async fn quiz_take_starts_and_resumes() {
         .add_cookie(csrf_cookie)
         .form(&serde_json::json!({"_csrf": csrf}))
         .await;
-    assert_eq!(resp.status_code(), 303, "resume must not 409: {}", resp.text());
-    let count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM quiz_submissions WHERE quiz_id = $1 AND user_id = $2")
-            .bind(quiz)
-            .bind(student)
-            .fetch_one(&pool)
-            .await
-            .expect("count");
+    assert_eq!(
+        resp.status_code(),
+        303,
+        "resume must not 409: {}",
+        resp.text()
+    );
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM quiz_submissions WHERE quiz_id = $1 AND user_id = $2",
+    )
+    .bind(quiz)
+    .bind(student)
+    .fetch_one(&pool)
+    .await
+    .expect("count");
     assert_eq!(count, 1, "resume must reuse the one submission");
 
     // Teacher gets 403 on take (students-only, Canvas parity).
@@ -1092,12 +1111,13 @@ async fn quiz_submit_grades_and_results() {
     // Submit: MC correct (answer 7), true_false wrong (22 instead of 21),
     // essay text. The field names are dynamic (`question_<id>`), so the body
     // is built by hand and POSTed raw.
-    let questions: Vec<(i64, String)> =
-        sqlx::query_as("SELECT id, question_type FROM quiz_questions WHERE quiz_id = $1 ORDER BY position")
-            .bind(quiz)
-            .fetch_all(&pool)
-            .await
-            .expect("questions");
+    let questions: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, question_type FROM quiz_questions WHERE quiz_id = $1 ORDER BY position",
+    )
+    .bind(quiz)
+    .fetch_all(&pool)
+    .await
+    .expect("questions");
     let tf_id = questions
         .iter()
         .find(|(_, qtype)| qtype == "true_false_question")
@@ -1183,7 +1203,9 @@ async fn quiz_submit_grades_and_results() {
         .add_cookie(session_cookie(teacher, "teacher"))
         .await;
     assert_eq!(teacher_view.status_code(), 200);
-    assert!(teacher_view.text().contains("Score for this attempt: 10 / 30"));
+    assert!(teacher_view
+        .text()
+        .contains("Score for this attempt: 10 / 30"));
 
     // Second submit on a finished attempt redirects to results (no regrade).
     let (csrf_cookie, csrf) = csrf_pair();

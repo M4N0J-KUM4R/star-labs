@@ -121,6 +121,7 @@ const QUIZ_LIST_SQL: &str = r#"
 "#;
 
 /// Row behind [`QUIZ_LIST_SQL`].
+#[derive(sqlx::FromRow)]
 struct QuizListRow {
     id: i64,
     title: String,
@@ -164,7 +165,9 @@ fn availability_label(
             locked = true;
             format!("Closed {}", format_ts(until))
         }
-        (Some(from), Some(until)) => format!("Available {} – {}", format_ts(from), format_ts(until)),
+        (Some(from), Some(until)) => {
+            format!("Available {} – {}", format_ts(from), format_ts(until))
+        }
         (Some(from), None) => format!("Available {}", format_ts(from)),
         (None, Some(until)) => format!("Available until {}", format_ts(until)),
         (None, None) => "Always available".to_string(),
@@ -178,6 +181,7 @@ fn format_ts(ts: &chrono::DateTime<chrono::Utc>) -> String {
 }
 
 /// Load one quiz (id, course check, fields the pages need).
+#[derive(sqlx::FromRow)]
 struct QuizRow {
     id: i64,
     course_id: i64,
@@ -223,23 +227,25 @@ async fn load_question_views(db: &PgPool, quiz_id: i64) -> Result<Vec<QuestionVi
 
     Ok(rows
         .into_iter()
-        .map(|(id, position, name, question_type, text, points, answers)| {
-            let parsed = parse_answers(&answers);
-            let renderable = renderable_type(&question_type);
-            QuestionView {
-                id,
-                position,
-                name,
-                question_type: question_type.clone(),
-                text,
-                points,
-                renderable,
-                // Phase 1: matching/missing-word selects draw their options
-                // from the same answers array (see module docs).
-                select_options: parsed.clone(),
-                answers: parsed,
-            }
-        })
+        .map(
+            |(id, position, name, question_type, text, points, answers)| {
+                let parsed = parse_answers(&answers);
+                let renderable = renderable_type(&question_type);
+                QuestionView {
+                    id,
+                    position,
+                    name,
+                    question_type: question_type.clone(),
+                    text,
+                    points,
+                    renderable,
+                    // Phase 1: matching/missing-word selects draw their options
+                    // from the same answers array (see module docs).
+                    select_options: parsed.clone(),
+                    answers: parsed,
+                }
+            },
+        )
         .collect())
 }
 
@@ -286,6 +292,7 @@ fn renderable_type(question_type: &str) -> bool {
 
 /// The submission fields the journey needs (star-quizzes' QuizSubmissionRow
 /// is handler-private, so the shell keeps its own minimal row).
+#[derive(sqlx::FromRow)]
 struct SubmissionRow {
     id: i64,
     quiz_id: i64,
@@ -427,10 +434,17 @@ fn grade_question(question: &QuestionView, answer: &StudentAnswer) -> GradedQues
                 your_answer: if selected.is_empty() {
                     "No answer".to_string()
                 } else {
-                    selected.iter().map(|id| answer_text(*id)).collect::<Vec<_>>().join(", ")
+                    selected
+                        .iter()
+                        .map(|id| answer_text(*id))
+                        .collect::<Vec<_>>()
+                        .join(", ")
                 },
                 correct_answer: Some(
-                    keys.iter().map(|id| answer_text(*id)).collect::<Vec<_>>().join(", "),
+                    keys.iter()
+                        .map(|id| answer_text(*id))
+                        .collect::<Vec<_>>()
+                        .join(", "),
                 ),
             }
         }
@@ -458,9 +472,16 @@ fn grade_question(question: &QuestionView, answer: &StudentAnswer) -> GradedQues
         ("numerical_question", StudentAnswer::Text(text)) => {
             let value = text.trim().parse::<f64>().ok();
             let correct = value.is_some_and(|v| {
-                question.answers.iter().filter(|a| a.weight == 100.0).any(|a| {
-                    a.text.trim().parse::<f64>().is_ok_and(|key| (key - v).abs() < f64::EPSILON)
-                })
+                question
+                    .answers
+                    .iter()
+                    .filter(|a| a.weight == 100.0)
+                    .any(|a| {
+                        a.text
+                            .trim()
+                            .parse::<f64>()
+                            .is_ok_and(|key| (key - v).abs() < f64::EPSILON)
+                    })
             });
             GradedQuestion {
                 outcome: if correct { "correct" } else { "incorrect" },
@@ -478,7 +499,9 @@ fn grade_question(question: &QuestionView, answer: &StudentAnswer) -> GradedQues
         | ("missing_word_question", StudentAnswer::Blanks(blanks))
         | ("multiple_dropdowns_question", StudentAnswer::Blanks(blanks)) => {
             let correct = !blanks.is_empty()
-                && blanks.iter().all(|(_, chosen)| correct_ids.contains(chosen));
+                && blanks
+                    .iter()
+                    .all(|(_, chosen)| correct_ids.contains(chosen));
             GradedQuestion {
                 outcome: if correct { "correct" } else { "incorrect" },
                 score: Some(if correct { question.points } else { 0.0 }),
@@ -552,8 +575,7 @@ fn decode_answers(
                         .answers
                         .iter()
                         .filter(|a| {
-                            get(&format!("{base}_answer_{}", a.id))
-                                .is_some_and(|v| v != "0")
+                            get(&format!("{base}_answer_{}", a.id)).is_some_and(|v| v != "0")
                         })
                         .map(|a| a.id)
                         .collect();
@@ -668,19 +690,13 @@ fn html_response(template_result: Result<String, askama::Error>, page: &str) -> 
             html,
         )
             .into_response(),
-        Err(err) => {
-            ApiError::Db(format!("{page} template render failed: {err}")).into_response()
-        }
+        Err(err) => ApiError::Db(format!("{page} template render failed: {err}")).into_response(),
     }
 }
 
 /// Load the quiz and verify it belongs to the path course (404 otherwise,
 /// mirroring the REST nested find).
-async fn quiz_in_course(
-    db: &PgPool,
-    course_id: i64,
-    quiz_id: i64,
-) -> Result<QuizRow, Response> {
+async fn quiz_in_course(db: &PgPool, course_id: i64, quiz_id: i64) -> Result<QuizRow, Response> {
     match load_quiz(db, quiz_id).await {
         Ok(Some(quiz)) if quiz.course_id == course_id => Ok(quiz),
         Ok(_) => Err(from_api_error(&ApiError::NotFound, &crate::request_origin()).into_response()),
@@ -883,10 +899,7 @@ pub async fn quiz_list(
         active_path: "courses",
         breadcrumb: vec![
             ("Dashboard".to_string(), "/dashboard".to_string()),
-            (
-                ctx.course_name.clone(),
-                format!("/courses/{course_id}"),
-            ),
+            (ctx.course_name.clone(), format!("/courses/{course_id}")),
         ],
         csrf_token: ctx.csrf_token,
         tabs: ctx.tabs,
@@ -914,17 +927,13 @@ pub async fn quiz_new(
         Err(response) => return response,
     };
 
-    let is_teacher = match star_courses::check_teacher_or_admin(
-        &app.db,
-        user.id,
-        course_id,
-        &auth_of(&user),
-    )
-    .await
-    {
-        Ok(teacher) => teacher,
-        Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
-    };
+    let is_teacher =
+        match star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
+            .await
+        {
+            Ok(teacher) => teacher,
+            Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
+        };
     if !is_teacher {
         return from_api_error(&ApiError::Forbidden, &crate::request_origin()).into_response();
     }
@@ -942,7 +951,10 @@ pub async fn quiz_new(
         breadcrumb: vec![
             ("Dashboard".to_string(), "/dashboard".to_string()),
             (ctx.course_name.clone(), format!("/courses/{course_id}")),
-            ("Quizzes".to_string(), format!("/courses/{course_id}/quizzes")),
+            (
+                "Quizzes".to_string(),
+                format!("/courses/{course_id}/quizzes"),
+            ),
         ],
         csrf_token: ctx.csrf_token,
         tabs: ctx.tabs,
@@ -989,17 +1001,13 @@ pub async fn quiz_create(
             .into_response();
     }
 
-    let is_teacher = match star_courses::check_teacher_or_admin(
-        &app.db,
-        user.id,
-        course_id,
-        &auth_of(&user),
-    )
-    .await
-    {
-        Ok(teacher) => teacher,
-        Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
-    };
+    let is_teacher =
+        match star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
+            .await
+        {
+            Ok(teacher) => teacher,
+            Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
+        };
     if !is_teacher {
         return from_api_error(&ApiError::Forbidden, &crate::request_origin()).into_response();
     }
@@ -1009,7 +1017,8 @@ pub async fn quiz_create(
         let ctx = match course_context(&app, course_id, &user, jar, "quizzes").await {
             Ok(ctx) => ctx,
             Err(response) => return response,
-        };        let page = QuizNewPage {
+        };
+        let page = QuizNewPage {
             title: format!("{} - New Quiz", ctx.course_name),
             body_class: format!(
                 "with-left-side course-menu-expanded context-course_{course_id} quizzes"
@@ -1022,7 +1031,10 @@ pub async fn quiz_create(
             breadcrumb: vec![
                 ("Dashboard".to_string(), "/dashboard".to_string()),
                 (ctx.course_name.clone(), format!("/courses/{course_id}")),
-                ("Quizzes".to_string(), format!("/courses/{course_id}/quizzes")),
+                (
+                "Quizzes".to_string(),
+                format!("/courses/{course_id}/quizzes"),
+            ),
             ],
             csrf_token: ctx.csrf_token,
             tabs: ctx.tabs,
@@ -1073,12 +1085,17 @@ pub async fn quiz_create(
     .await
     {
         Ok(id) => id,
-        Err(e) => return from_api_error(&ApiError::from(e), &crate::request_origin()).into_response(),
+        Err(e) => {
+            return from_api_error(&ApiError::from(e), &crate::request_origin()).into_response()
+        }
     };
 
     (
         StatusCode::SEE_OTHER,
-        [("location", format!("/courses/{course_id}/quizzes/{new_id}").as_str())],
+        [(
+            "location",
+            format!("/courses/{course_id}/quizzes/{new_id}").as_str(),
+        )],
     )
         .into_response()
 }
@@ -1103,17 +1120,13 @@ pub async fn quiz_show(
         Err(response) => return response,
     };
 
-    let is_teacher = match star_courses::check_teacher_or_admin(
-        &app.db,
-        user.id,
-        course_id,
-        &auth_of(&user),
-    )
-    .await
-    {
-        Ok(teacher) => teacher,
-        Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
-    };
+    let is_teacher =
+        match star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
+            .await
+        {
+            Ok(teacher) => teacher,
+            Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
+        };
 
     // Students cannot open unpublished quizzes (404, not 403 — matches the
     // course gate's 404-before-403 posture).
@@ -1134,9 +1147,7 @@ pub async fn quiz_show(
         if is_teacher {
             let rows = match load_submission_rows(&app.db, quiz_id).await {
                 Ok(rows) => rows,
-                Err(e) => {
-                    return from_api_error(&e, &crate::request_origin()).into_response()
-                }
+                Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
             };
             let submissions: Vec<SubmissionRowView> = rows
                 .into_iter()
@@ -1184,7 +1195,10 @@ pub async fn quiz_show(
         breadcrumb: vec![
             ("Dashboard".to_string(), "/dashboard".to_string()),
             (ctx.course_name.clone(), format!("/courses/{course_id}")),
-            ("Quizzes".to_string(), format!("/courses/{course_id}/quizzes")),
+            (
+                "Quizzes".to_string(),
+                format!("/courses/{course_id}/quizzes"),
+            ),
         ],
         csrf_token: ctx.csrf_token,
         tabs: ctx.tabs,
@@ -1214,6 +1228,7 @@ pub async fn quiz_show(
 }
 
 /// Teacher's submissions summary row.
+#[derive(sqlx::FromRow)]
 struct SubmissionWithUserRow {
     id: i64,
     student_name: String,
@@ -1273,11 +1288,10 @@ pub async fn quiz_take_start(
         return response;
     }
 
-    let submission = match star_quizzes::start_or_resume_submission(&app.db, quiz_id, user.id).await
-    {
-        Ok(submission) => submission,
+    match star_quizzes::start_or_resume_submission(&app.db, quiz_id, user.id).await {
+        Ok(_) => {}
         Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
-    };
+    }
 
     (
         StatusCode::SEE_OTHER,
@@ -1315,19 +1329,22 @@ pub async fn quiz_take(
         Ok(None) => {
             // No attempt yet: send the student back to the show page, whose
             // "Take Quiz" button POSTs start (no GET-start loop).
-            (
+            return (
                 StatusCode::SEE_OTHER,
                 [(
                     "location",
                     format!("/courses/{course_id}/quizzes/{quiz_id}").as_str(),
                 )],
             )
-                .into_response()
+                .into_response();
         }
         Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
     };
 
-    if matches!(submission.workflow_state.as_str(), "complete" | "pending_review") {
+    if matches!(
+        submission.workflow_state.as_str(),
+        "complete" | "pending_review"
+    ) {
         return (
             StatusCode::SEE_OTHER,
             [(
@@ -1360,8 +1377,14 @@ pub async fn quiz_take(
         breadcrumb: vec![
             ("Dashboard".to_string(), "/dashboard".to_string()),
             (ctx.course_name.clone(), format!("/courses/{course_id}")),
-            ("Quizzes".to_string(), format!("/courses/{course_id}/quizzes")),
-            (quiz.title.clone(), format!("/courses/{course_id}/quizzes/{quiz_id}")),
+            (
+                "Quizzes".to_string(),
+                format!("/courses/{course_id}/quizzes"),
+            ),
+            (
+                quiz.title.clone(),
+                format!("/courses/{course_id}/quizzes/{quiz_id}"),
+            ),
         ],
         csrf_token: ctx.csrf_token,
         tabs: ctx.tabs,
@@ -1432,15 +1455,16 @@ pub async fn quiz_submit(
     }
 
     // One shot per attempt: submitting a finished attempt goes to results.
-    if matches!(submission.workflow_state.as_str(), "complete" | "pending_review") {
+    if matches!(
+        submission.workflow_state.as_str(),
+        "complete" | "pending_review"
+    ) {
         return (
             StatusCode::SEE_OTHER,
             [(
                 "location",
-                format!(
-                    "/courses/{course_id}/quizzes/{quiz_id}/submissions/{submission_id}"
-                )
-                .as_str(),
+                format!("/courses/{course_id}/quizzes/{quiz_id}/submissions/{submission_id}")
+                    .as_str(),
             )],
         )
             .into_response();
@@ -1478,7 +1502,11 @@ pub async fn quiz_submit(
     submission_data.insert("questions".to_string(), Value::Object(questions_data));
     let submission_data_json = Value::Object(submission_data).to_string();
 
-    let workflow_state = if needs_review { "pending_review" } else { "complete" };
+    let workflow_state = if needs_review {
+        "pending_review"
+    } else {
+        "complete"
+    };
     // Partial score: the auto-graded portion is stored even while essay /
     // unrenderable questions await manual review (Canvas shows the running
     // total; `pending_review` marks the attempt as not final).
@@ -1559,17 +1587,13 @@ pub async fn quiz_results(
         Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
     };
 
-    let is_teacher = match star_courses::check_teacher_or_admin(
-        &app.db,
-        user.id,
-        course_id,
-        &auth_of(&user),
-    )
-    .await
-    {
-        Ok(teacher) => teacher,
-        Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
-    };
+    let is_teacher =
+        match star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
+            .await
+        {
+            Ok(teacher) => teacher,
+            Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
+        };
     if !is_teacher && submission.user_id != user.id {
         return from_api_error(&ApiError::Forbidden, &crate::request_origin()).into_response();
     }
@@ -1589,12 +1613,17 @@ pub async fn quiz_results(
     // Rebuild the per-question breakdown from the recorded answers.
     let stored: Value = serde_json::from_str(&submission.submission_data).unwrap_or(json!({}));
     let empty = Map::new();
-    let stored_questions = stored.get("questions").and_then(Value::as_object).unwrap_or(&empty);
+    let stored_questions = stored
+        .get("questions")
+        .and_then(Value::as_object)
+        .unwrap_or(&empty);
 
     let mut breakdown = Vec::with_capacity(questions.len());
     for question in &questions {
         let stored_answer = stored_questions.get(&question.id.to_string());
-        let answer = stored_answer.map(decode_stored_answer).unwrap_or(StudentAnswer::Unanswered);
+        let answer = stored_answer
+            .map(decode_stored_answer)
+            .unwrap_or(StudentAnswer::Unanswered);
         let graded = grade_question(question, &answer);
         let stored_score = stored_answer
             .and_then(|entry| entry.get("score"))
@@ -1625,8 +1654,14 @@ pub async fn quiz_results(
         breadcrumb: vec![
             ("Dashboard".to_string(), "/dashboard".to_string()),
             (ctx.course_name.clone(), format!("/courses/{course_id}")),
-            ("Quizzes".to_string(), format!("/courses/{course_id}/quizzes")),
-            (quiz.title.clone(), format!("/courses/{course_id}/quizzes/{quiz_id}")),
+            (
+                "Quizzes".to_string(),
+                format!("/courses/{course_id}/quizzes"),
+            ),
+            (
+                quiz.title.clone(),
+                format!("/courses/{course_id}/quizzes/{quiz_id}"),
+            ),
         ],
         csrf_token: ctx.csrf_token,
         tabs: ctx.tabs,
@@ -1651,9 +1686,7 @@ fn decode_stored_answer(entry: &Value) -> StudentAnswer {
         return StudentAnswer::Choice(id);
     }
     if let Some(ids) = entry.get("answer_ids").and_then(Value::as_array) {
-        return StudentAnswer::Choices(
-            ids.iter().filter_map(Value::as_i64).collect::<Vec<_>>(),
-        );
+        return StudentAnswer::Choices(ids.iter().filter_map(Value::as_i64).collect::<Vec<_>>());
     }
     if let Some(text) = entry.get("text").and_then(Value::as_str) {
         return StudentAnswer::Text(text.to_string());
@@ -1671,4 +1704,3 @@ fn decode_stored_answer(entry: &Value) -> StudentAnswer {
     }
     StudentAnswer::Unanswered
 }
-

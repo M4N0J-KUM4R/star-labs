@@ -37,10 +37,7 @@ pub fn router() -> Router<AppState> {
         .route("/dashboard", get(handlers::dashboard::dashboard))
         .route("/courses/{id}", get(handlers::course::course_home))
         // Quiz-taking journey (issue #109) — specific before generic.
-        .route(
-            "/courses/{id}/quizzes",
-            get(handlers::quiz::quiz_list),
-        )
+        .route("/courses/{id}/quizzes", get(handlers::quiz::quiz_list))
         .route(
             "/courses/{id}/quizzes/new",
             get(handlers::quiz::quiz_new).post(handlers::quiz::quiz_create),
