@@ -2393,7 +2393,7 @@ async fn import_category_users(
     }
 
     let csv_str = String::from_utf8_lossy(&body);
-    let mut lines = csv_str.lines().skip(1); // skip header
+    let lines = csv_str.lines().skip(1); // skip header
     let mut added = 0;
 
     for line in lines {
@@ -2552,23 +2552,23 @@ async fn bulk_manage_differentiation_tag(
         return Err(ApiError::NotFound);
     }
 
-    let mut group_category_id: Option<i64> = gc_params.get("id").and_then(|v| v.as_i64());
+    let group_category_id: Option<i64> = gc_params.get("id").and_then(|v| v.as_i64());
 
     // Auth: per operation kind, in order create → update → delete.
-    if !create_ops.is_empty() {
-        if !check_teacher_or_admin_for_course(&state.db, auth.id, course_id, &auth).await? {
-            return Err(ApiError::Forbidden);
-        }
+    if !create_ops.is_empty()
+        && !check_teacher_or_admin_for_course(&state.db, auth.id, course_id, &auth).await?
+    {
+        return Err(ApiError::Forbidden);
     }
-    if !update_ops.is_empty() {
-        if !check_teacher_or_admin_for_course(&state.db, auth.id, course_id, &auth).await? {
-            return Err(ApiError::Forbidden);
-        }
+    if !update_ops.is_empty()
+        && !check_teacher_or_admin_for_course(&state.db, auth.id, course_id, &auth).await?
+    {
+        return Err(ApiError::Forbidden);
     }
-    if !delete_ops.is_empty() {
-        if !check_teacher_or_admin_for_course(&state.db, auth.id, course_id, &auth).await? {
-            return Err(ApiError::Forbidden);
-        }
+    if !delete_ops.is_empty()
+        && !check_teacher_or_admin_for_course(&state.db, auth.id, course_id, &auth).await?
+    {
+        return Err(ApiError::Forbidden);
     }
 
     let mut created = Vec::new();
@@ -2583,7 +2583,7 @@ async fn bulk_manage_differentiation_tag(
         .bind(id)
         .fetch_optional(&state.db)
         .await?;
-        let category = category.ok_or_else(|| ApiError::NotFound)?;
+        let category = category.ok_or(ApiError::NotFound)?;
         if !category.non_collaborative {
             return Err(ApiError::BadRequest(
                 "This endpoint only works for Differentiation Tags".into(),
