@@ -11,7 +11,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
@@ -4249,6 +4249,374 @@ async fn blueprint_import_details(
 // ---------------------------------------------------------------------------
 
 /// Build the courses router.
+// ---------------------------------------------------------------------------
+// Navigation tabs for accounts, groups and users (Canvas `tabs_controller.rb`)
+// ---------------------------------------------------------------------------
+
+/// Canvas renders tab errors as a JSON body with an `error` key.
+fn tab_error(status: StatusCode, message: &str) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    (status, Json(json!({ "error": message }))).into_response()
+}
+
+/// Build one navigation tab in Canvas' `Api::V1::Tab#tab_json` shape.
+fn nav_tab(id: &str, label: &str, html_url: String, position: i64) -> CourseTab {
+    CourseTab {
+        id: id.to_string(),
+        html_url: html_url.clone(),
+        full_url: html_url,
+        position,
+        hidden: false,
+        visibility: "public".to_string(),
+        label: label.to_string(),
+        tab_type: "internal".to_string(),
+    }
+}
+
+/// GET /accounts/{accountId}/tabs — Canvas `tabs_controller#index` for an
+/// account context.
+///
+/// Canvas gates every account tab on its own permission
+/// (`Account#tabs_available`).  The port knows only "account admin", so an
+/// account admin sees the whole set and everybody else is refused.  The
+/// site-admin-only tabs (Plugins, Release Notes, Jobs) have no counterpart
+/// here because the port has no site admin.
+async fn list_account_tabs(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<CourseTab>>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_account_admin(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let base = format!("/accounts/{account_id}");
+    let defs: Vec<(&str, &str, String)> = vec![
+        ("courses", "Courses", base.clone()),
+        ("users", "People", format!("{base}/users")),
+        ("statistics", "Statistics", format!("{base}/statistics")),
+        ("account_reports", "Reports", format!("{base}/reports")),
+        ("permissions", "Permissions", format!("{base}/permissions")),
+        ("outcomes", "Outcomes", format!("{base}/outcomes")),
+        ("rubrics", "Rubrics", format!("{base}/rubrics")),
+        (
+            "grading_standards",
+            "Grading",
+            format!("{base}/grading_settings"),
+        ),
+        (
+            "question_banks",
+            "Question Banks",
+            format!("{base}/question_banks"),
+        ),
+        (
+            "accessibility",
+            "Accessibility",
+            format!("{base}/accessibility"),
+        ),
+        (
+            "sub_accounts",
+            "Sub-Accounts",
+            format!("{base}/sub_accounts"),
+        ),
+        (
+            "account_calendars",
+            "Account Calendars",
+            format!("{base}/account_calendars"),
+        ),
+        ("terms", "Terms", format!("{base}/terms")),
+        (
+            "authentication",
+            "Authentication",
+            format!("{base}/authentication_providers"),
+        ),
+        (
+            "rate_limiting",
+            "Rate Limiting",
+            format!("{base}/rate_limiting"),
+        ),
+        ("sis_import", "SIS Import", format!("{base}/sis_import")),
+        ("brand_configs", "Themes", format!("{base}/brand_configs")),
+        (
+            "developer_keys",
+            "Developer Keys",
+            format!("{base}/developer_keys"),
+        ),
+    ];
+    let tabs = defs
+        .into_iter()
+        .enumerate()
+        .map(|(index, (id, label, url))| nav_tab(id, label, url, index as i64 + 1))
+        .collect();
+    Ok(Json(tabs))
+}
+
+/// GET /groups/{groupId}/tabs — Canvas `tabs_controller#index` for a group
+/// context (`Group#tabs_available`).
+async fn list_group_tabs(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<CourseTab>>, ApiError> {
+    let group: Option<(Option<i64>, Option<i64>)> = sqlx::query_as(
+        "SELECT course_id, account_id FROM groups WHERE id = $1 AND workflow_state != 'deleted'",
+    )
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((course_id, account_id)) = group else {
+        return Err(ApiError::NotFound);
+    };
+
+    // Canvas raises RecordNotFound when the caller cannot read the group.
+    let member: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM group_memberships WHERE group_id = $1 AND user_id = $2 AND workflow_state = 'accepted' LIMIT 1",
+    )
+    .bind(group_id)
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await?;
+    let mut can_read = member.is_some();
+    if let Some(course_id) = course_id {
+        can_read |= check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+    }
+    if let Some(account_id) = account_id {
+        can_read |= check_account_admin(&state.db, auth.id, account_id, &auth).await?;
+    }
+    if !can_read {
+        return Err(ApiError::NotFound);
+    }
+
+    let base = format!("/groups/{group_id}");
+    let defs: Vec<(&str, &str, String)> = vec![
+        ("home", "Home", base.clone()),
+        (
+            "announcements",
+            "Announcements",
+            format!("{base}/announcements"),
+        ),
+        ("pages", "Pages", format!("{base}/wiki_page")),
+        ("people", "People", format!("{base}/users")),
+        (
+            "discussions",
+            "Discussions",
+            format!("{base}/discussion_topics"),
+        ),
+        ("files", "Files", format!("{base}/files")),
+        ("conferences", "Conferences", format!("{base}/conferences")),
+        (
+            "collaborations",
+            "Collaborations",
+            format!("{base}/collaborations"),
+        ),
+        (
+            "collaborations_new",
+            "Collaborations",
+            format!("{base}/lti_collaborations"),
+        ),
+    ];
+    let tabs = defs
+        .into_iter()
+        .enumerate()
+        .map(|(index, (id, label, url))| nav_tab(id, label, url, index as i64 + 1))
+        .collect();
+    Ok(Json(tabs))
+}
+
+/// GET /users/{userId}/tabs — Canvas `tabs_controller#index` for a user
+/// context (`UserProfile#tabs_available`).
+///
+/// Canvas serves the profile tabs of the addressed user; the caller has to
+/// be that user or an admin.
+async fn list_user_tabs(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<CourseTab>>, ApiError> {
+    let exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await?;
+    if exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+    if auth.id != user_id && !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas `UserProfile::BASE_TABS` (Notifications, Files, Settings) with
+    // the profile tab inserted at index 1.
+    let defs: Vec<(&str, &str, String)> = vec![
+        (
+            "notifications",
+            "Notifications",
+            "/profile/communication".to_string(),
+        ),
+        ("profile", "Profile", "/profile".to_string()),
+        ("files", "Files", "/profile/files".to_string()),
+        (
+            "profile_settings",
+            "Settings",
+            "/profile/settings".to_string(),
+        ),
+    ];
+    let tabs = defs
+        .into_iter()
+        .enumerate()
+        .map(|(index, (id, label, url))| nav_tab(id, label, url, index as i64 + 1))
+        .collect();
+    Ok(Json(tabs))
+}
+
+/// Request to update a course tab.
+#[derive(Debug, Deserialize)]
+pub struct UpdateCourseTab {
+    /// Canvas `params["hidden"]`: "true" hides the tab, "false" shows it and
+    /// an absent key leaves it alone.
+    pub hidden: Option<String>,
+    /// Canvas `params["position"]`: the one-based slot the tab moves to.
+    pub position: Option<i64>,
+}
+
+/// PUT /courses/{courseId}/tabs/{tabId} — Canvas `tabs_controller#update`.
+///
+/// Canvas stores the whole tab configuration on the course; the port keeps
+/// one row per tab in `course_tabs`, so an update rewrites the rows of the
+/// course's manageable tabs.
+async fn update_course_tab(
+    State(state): State<AppState>,
+    Path((course_id, tab_id)): Path<(i64, String)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateCourseTab>,
+) -> Result<Json<CourseTab>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    // Canvas `authorized_action(@context, @current_user, :manage_course_content_edit)`.
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let configs: Vec<CourseTabConfig> = sqlx::query_as(
+        r#"
+        SELECT tab_id, position, hidden
+        FROM course_tabs
+        WHERE course_id = $1
+        ORDER BY position ASC, id ASC
+        "#,
+    )
+    .bind(course_id)
+    .fetch_all(&state.db)
+    .await?;
+    let include_settings = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+    let tabs = build_course_tabs(course_id, include_settings, &configs);
+
+    let Some(tab) = tabs.iter().find(|tab| tab.id == tab_id).cloned() else {
+        return Err(ApiError::NotFound);
+    };
+
+    // Home and Settings are pinned by Canvas and cannot be managed.
+    if tab_id == "home" || tab_id == "settings" {
+        return Ok(tab_error(
+            StatusCode::BAD_REQUEST,
+            &format!("{tab_id} is not manageable"),
+        ));
+    }
+
+    let count = tabs.len() as i64;
+    if let Some(new_position) = payload.position {
+        if new_position <= 1 || new_position >= count + 1 {
+            return Ok(tab_error(
+                StatusCode::BAD_REQUEST,
+                "That tab location is invalid",
+            ));
+        }
+    }
+
+    // The manageable tabs, in their current order.
+    let mut order: Vec<String> = tabs
+        .iter()
+        .map(|tab| tab.id.clone())
+        .filter(|id| id != "home" && id != "settings")
+        .collect();
+    let hidden_before: Vec<bool> = order
+        .iter()
+        .map(|id| {
+            configs
+                .iter()
+                .find(|config| &config.tab_id == id)
+                .map(|config| config.hidden)
+                .unwrap_or(false)
+        })
+        .collect();
+
+    // Apply the hidden flag: Canvas hides on a truthy value and unhides when
+    // the key is present with a false value.
+    let mut hidden = hidden_before.clone();
+    if let Some(value) = payload.hidden.as_deref() {
+        let truthy = matches!(
+            value.to_ascii_lowercase().as_str(),
+            "yes" | "y" | "true" | "t" | "on" | "1"
+        );
+        if let Some(index) = order.iter().position(|id| id == &tab_id) {
+            hidden[index] = truthy;
+        }
+    }
+
+    // Move the tab to its new slot.
+    if let Some(new_position) = payload.position {
+        if let Some(index) = order.iter().position(|id| id == &tab_id) {
+            order.remove(index);
+            hidden.remove(index);
+            let target = (new_position - 1).max(0) as usize;
+            let target = target.min(order.len());
+            order.insert(target, tab_id.clone());
+            hidden.insert(target, hidden.get(index).copied().unwrap_or(false));
+        }
+    }
+
+    for (index, id) in order.iter().enumerate() {
+        sqlx::query(
+            r#"
+            INSERT INTO course_tabs (course_id, tab_id, position, hidden)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (course_id, tab_id)
+            DO UPDATE SET position = EXCLUDED.position,
+                          hidden = EXCLUDED.hidden,
+                          updated_at = now()
+            "#,
+        )
+        .bind(course_id)
+        .bind(id)
+        .bind(index as i32 + 1)
+        .bind(hidden.get(index).copied().unwrap_or(false))
+        .execute(&state.db)
+        .await?;
+    }
+
+    // Answer with the tab as it looks now.
+    let configs: Vec<CourseTabConfig> = sqlx::query_as(
+        r#"
+        SELECT tab_id, position, hidden
+        FROM course_tabs
+        WHERE course_id = $1
+        ORDER BY position ASC, id ASC
+        "#,
+    )
+    .bind(course_id)
+    .fetch_all(&state.db)
+    .await?;
+    let tabs = build_course_tabs(course_id, include_settings, &configs);
+    let updated = tabs.into_iter().find(|tab| tab.id == tab_id).unwrap_or(tab);
+    Ok(Json(updated))
+}
+
+// ---------------------------------------------------------------------------
+// Router
+// ---------------------------------------------------------------------------
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/courses", get(list_courses))
@@ -4290,6 +4658,10 @@ pub fn router() -> Router<AppState> {
         .route("/courses/{courseId}/users", get(list_course_users))
         .route("/courses/{courseId}/users/{userId}", get(get_course_user))
         .route("/courses/{courseId}/tabs", get(list_course_tabs))
+        .route("/courses/{courseId}/tabs/{tabId}", put(update_course_tab))
+        .route("/accounts/{accountId}/tabs", get(list_account_tabs))
+        .route("/groups/{groupId}/tabs", get(list_group_tabs))
+        .route("/users/{userId}/tabs", get(list_user_tabs))
         .route(
             "/courses/{courseId}/permissions",
             get(get_course_permissions),
