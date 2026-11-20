@@ -39,6 +39,19 @@ pub const CSRF_FIELD: &str = "_csrf";
 /// from `exp` for the `last_logged_out` invalidation check.
 const TOKEN_EXPIRY_SECS: i64 = 7 * 24 * 60 * 60;
 
+/// Why a session extractor rejected the request. The distinction drives the
+/// login redirect: an EXPIRED token gets `?expired=1` so /login can show the
+/// "Your session has expired" notice (issue #70), while a merely absent or
+/// invalid token does not — Canvas flashes "You must be logged in" only when
+/// there was no session at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionRejection {
+    /// No `star_session` cookie at all (or an unparseable one).
+    Absent,
+    /// A well-formed token whose `exp` is in the past.
+    Expired,
+}
+
 /// A user authenticated through the `star_session` cookie.
 #[derive(Debug, Clone)]
 pub struct SessionUser {
@@ -53,7 +66,8 @@ where
 {
     /// Rejection is a 303 redirect to `/login?next=<original path>` — the
     /// shell's equivalent of Canvas' `store_location` + `redirect_to_login`
-    /// for HTML requests.
+    /// for HTML requests. Tokens that decode but are past their expiry carry
+    /// `&expired=1` (issue #70).
     type Rejection = Redirect;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
@@ -61,18 +75,26 @@ where
 
         let jar = CookieJar::from_headers(&parts.headers);
         let Some(token) = jar.get(SESSION_COOKIE).map(|c| c.value().to_string()) else {
-            return Err(login_redirect(parts));
+            return Err(login_redirect(parts, SessionRejection::Absent));
         };
 
         // Same verification path as star-auth's AuthUser: decode against the
         // shared secret, then reload the role from the DB (never trust the
-        // claim), then reject pre-logout tokens.
+        // claim), then reject pre-logout tokens. A decode error means the
+        // token is absent-ish garbage; only a token that decodes and whose
+        // exp is in the past counts as EXPIRED (so the user gets told why).
         let claims = decode::<Claims>(
             &token,
             &DecodingKey::from_secret(app.jwt_secret.as_bytes()),
             &Validation::default(),
         )
-        .map_err(|_| Redirect::to("/login"))?
+        .map_err(|e| {
+            if matches!(e.kind(), jsonwebtoken::errors::ErrorKind::ExpiredSignature) {
+                login_redirect(parts, SessionRejection::Expired)
+            } else {
+                login_redirect(parts, SessionRejection::Absent)
+            }
+        })?
         .claims;
 
         let row: Option<(String, Option<DateTime<Utc>>)> =
@@ -83,7 +105,7 @@ where
                 .map_err(|_| Redirect::to("/login"))?;
 
         let Some((role, last_logged_out)) = row else {
-            return Err(Redirect::to("/login"));
+            return Err(login_redirect(parts, SessionRejection::Absent));
         };
 
         // Tokens minted before the last logout are invalid. issued-at is
@@ -91,7 +113,7 @@ where
         // AuthUser does.
         let issued_at = claims.exp as i64 - TOKEN_EXPIRY_SECS;
         if last_logged_out.is_some_and(|last| issued_at < last.timestamp()) {
-            return Err(Redirect::to("/login"));
+            return Err(login_redirect(parts, SessionRejection::Absent));
         }
 
         Ok(SessionUser {
@@ -103,14 +125,18 @@ where
 
 /// Build the login redirect preserving the requested path (`next` round-trip,
 /// acceptance criterion 9). Only same-origin paths are preserved — the value
-/// is echoed back into a Location header.
-fn login_redirect(parts: &Parts) -> Redirect {
+/// is echoed back into a Location header. An expired token adds `expired=1`
+/// so the login page can surface the session-expiry notice (issue #70).
+fn login_redirect(parts: &Parts, reason: SessionRejection) -> Redirect {
     let next = parts
         .uri
         .path_and_query()
         .map(|pq| pq.as_str().to_string())
         .unwrap_or_else(|| "/".to_string());
-    Redirect::to(&format!("/login?next={next}"))
+    match reason {
+        SessionRejection::Absent => Redirect::to(&format!("/login?next={next}")),
+        SessionRejection::Expired => Redirect::to(&format!("/login?next={next}&expired=1")),
+    }
 }
 
 /// Sanitize a user-supplied `next` target: keep only same-origin absolute
@@ -125,6 +151,19 @@ pub fn sanitize_next(next: Option<&str>) -> String {
 
 /// Generate a fresh 128-bit CSRF token (random hex, rand 0.8 OsRng).
 pub fn generate_csrf_token() -> String {
+    let mut bytes = [0u8; 16];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Generate a fresh 128-bit password-reset token (random hex from OsRng).
+///
+/// Same generator discipline as the CSRF token but double the entropy
+/// budget (32 hex chars is already 128-bit; this stays 128-bit to match the
+/// CSRF primitive and the spec's "random 128-bit hex" wording for reset
+/// tokens). Critically, the value is pure randomness — never derived from
+/// the user id, email or any hash, so it cannot be guessed from public data.
+pub fn generate_password_reset_token() -> String {
     let mut bytes = [0u8; 16];
     rand::thread_rng().fill_bytes(&mut bytes);
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -211,6 +250,15 @@ mod tests {
         assert_eq!(t1.len(), 32);
         assert!(t1.chars().all(|c| c.is_ascii_hexdigit()));
         assert_ne!(t1, t2, "CSRF tokens must not repeat");
+    }
+
+    #[test]
+    fn password_reset_tokens_are_128_bit_hex() {
+        let t1 = generate_password_reset_token();
+        let t2 = generate_password_reset_token();
+        assert_eq!(t1.len(), 32);
+        assert!(t1.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(t1, t2, "reset tokens must not repeat");
     }
 
     #[test]
