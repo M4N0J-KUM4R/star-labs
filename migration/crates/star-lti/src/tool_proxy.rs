@@ -21,7 +21,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use serde_json::{json, Value};
@@ -237,7 +237,7 @@ async fn accept_tool_proxy_update_course(
     .await?;
 
     match row {
-        Some((Some(payload),)) => {
+        Some((payload,)) => {
             // Clear update_payload after acceptance.
             sqlx::query(
                 "UPDATE lti_tool_proxies SET update_payload = NULL, updated_at = now() \
@@ -337,7 +337,7 @@ async fn accept_tool_proxy_update_account(
     .await?;
 
     match row {
-        Some((Some(payload),)) => {
+        Some((payload,)) => {
             sqlx::query(
                 "UPDATE lti_tool_proxies SET update_payload = NULL, updated_at = now() \
                  WHERE id = $1",
@@ -397,11 +397,11 @@ async fn show_tool_proxy_guid(
 
     Ok((
         StatusCode::OK,
-        Json(row.raw_data),
         [(
             axum::http::header::CONTENT_TYPE,
             "application/vnd.ims.lti.v2.toolproxy+json",
         )],
+        Json(row.raw_data),
     )
         .into_response())
 }
@@ -431,7 +431,7 @@ async fn create_tool_proxy_course(
         )
         .as_str(),
     )
-    .bind(&guid)
+    .bind(&uuid)
     .bind(course_id)
     .bind(&raw_data)
     .bind(auth.id)
@@ -473,7 +473,7 @@ async fn create_tool_proxy_account(
         )
         .as_str(),
     )
-    .bind(&guid)
+    .bind(&uuid)
     .bind(account_id)
     .bind(&raw_data)
     .bind(auth.id)

@@ -23,7 +23,7 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
@@ -246,7 +246,7 @@ async fn find_update_request_by_uuid(
 /// Render an IMS registration as Canvas `lti_registration_json` with full
 /// configuration and overlay included.
 async fn ims_registration_json(
-    pool: &PgPool,
+    _pool: &PgPool,
     ims: &ImsRegistrationRow,
     registration: &RegistrationRow,
     include_overlay: bool,
@@ -390,12 +390,14 @@ async fn registration_token(
         .fetch_optional(&state.db)
         .await?;
 
+    let domain = domain.map(|(d,)| d).unwrap_or_default();
+
     let payload = json!({
         "uuid": uuid,
         "initiated_at": initiated_at,
         "user_id": user_id,
         "root_account_global_id": root_account_global_id,
-        "root_account_domain": domain.map(|(d,)| d).unwrap_or_default(),
+        "root_account_domain": domain,
         "unified_tool_id": params.unified_tool_id,
         "registration_url": params.registration_url,
         "registration_id": params.registration_id,
@@ -407,11 +409,11 @@ async fn registration_token(
         &payload,
         &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
     )
-    .map_err(|e| ApiError::Internal(e.to_string()))?;
+    .map_err(|e| ApiError::Db(e.to_string()))?;
 
     let oidc_configuration_url = format!(
-        "https://{}//api/lti/ims/authorize",
-        domain.map(|(d,)| d).unwrap_or_default()
+        "https://{}/api/lti/ims/authorize",
+        domain
     );
 
     Ok(Json(json!({
@@ -522,7 +524,7 @@ async fn update_registration_overlay(
     require_site_admin_or_account_admin(&state.db, &auth, account_id).await?;
 
     // Fetch registration - use the plain lti_registrations table.
-    let registration = find_active_registration(&state.db, registration_id).await?;
+    let _registration = find_active_registration(&state.db, registration_id).await?;
 
     // Validate the overlay data is an object.
     let overlay_json = if let Some(disabled) = payload.disabled_scopes {
@@ -582,7 +584,7 @@ async fn dr_iframe(
 
     // Decode and validate the JWT.
     let secret = &state.jwt_secret;
-    let _decoded = jsonwebtoken::decode(
+    let _decoded: jsonwebtoken::TokenData<serde_json::Value> = jsonwebtoken::decode(
         &token,
         &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
         &jsonwebtoken::Validation::default(),

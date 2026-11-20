@@ -15,6 +15,7 @@ tokio = { workspace = true }
 jsonwebtoken = { workspace = true }
 uuid = { workspace = true }
 url = { workspace = true }
+rand = { workspace = true }
 
 [dev-dependencies]
 axum-test = { workspace = true }
