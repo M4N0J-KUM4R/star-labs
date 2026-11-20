@@ -2855,7 +2855,7 @@ async fn get_observee(
     .map_err(ApiError::from)?;
 
     let first = rows.first().ok_or(ApiError::NotFound)?;
-    let (uid, name, display_name, _, _, _) = *first;
+    let (uid, name, display_name, _, _, _) = first.clone();
 
     let enrollments: Vec<ObserverEnrollmentJson> = rows
         .into_iter()
