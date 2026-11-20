@@ -10,15 +10,18 @@
 //!
 //! Canvas behavior mirrored here (`app/controllers/lti/ims/tool_setting_controller.rb`):
 //! - the request is authenticated with an LTI Advantage access token: the
-//!   token's `sub` names the tool proxy and its `scopes` claim carries the
-//!   permission. A request without a token is a 401, a token without the
-//!   required scope is a 403.
-//! - the setting is looked up by its id, or by the tool proxy of the token
+//!   token names the tool proxy in its `sub` claim and carries the permission
+//!   in its `scopes` claim. A request without a token is a 401, a token
+//!   without the required scope is a 403.
+//! - the setting is looked up by its id, or by the tool proxy of the path
 //!   together with the context of the path and the optional resource link id.
 //!   A setting that does not exist is a 404.
 //! - the `bubble` query parameter is blank, `distinct` or `all`; `all` is only
 //!   allowed with the `application/vnd.ims.lti.v2.toolsettings+json` media
 //!   type. Anything else is a 400.
+//! - with a bubble the graph walks the levels of the setting — the resource
+//!   link, then its binding, then the tool proxy — and `distinct` keeps only
+//!   the keys the higher level does not already carry.
 //! - with the tool settings media type the answer is the `@graph` form, with
 //!   the simple media type it is the flat `custom` object.
 //! - an update replaces the `custom` settings of the setting and answers
@@ -32,7 +35,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 
 use star_common::AppState;
@@ -50,7 +53,7 @@ const TOOL_SETTINGS_SCOPE: &str = "ToolSettings";
 // Domain types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 struct ToolSettingRow {
     id: i64,
     tool_proxy_id: i64,
@@ -61,7 +64,7 @@ struct ToolSettingRow {
 }
 
 impl ToolSettingRow {
-    /// The `@type` of the setting: `LtiLink` for a resource link,
+    /// Canvas `tool_setting_type`: `LtiLink` for a resource link,
     /// `ToolProxyBinding` for a context and `ToolProxy` without one.
     fn setting_type(&self) -> &'static str {
         if self.resource_link_id.is_some() {
@@ -73,16 +76,9 @@ impl ToolSettingRow {
         }
     }
 
-    /// The url of the setting, the id Canvas uses in the graph.
+    /// Canvas `show_lti_tool_settings_url` — the url of the setting.
     fn url(&self) -> String {
-        match (&self.context_type, self.context_id) {
-            (Some(context_type), Some(context_id)) => match context_type.as_str() {
-                "Course" => format!("/api/lti/courses/{context_id}/tool_setting"),
-                "Account" => format!("/api/lti/accounts/{context_id}/tool_setting"),
-                other => format!("/api/lti/{other}s/{context_id}/tool_setting"),
-            },
-            _ => "/api/lti/tool_proxy/tool_setting".to_string(),
-        }
+        format!("/api/lti/tool_settings/{}", self.id)
     }
 }
 
@@ -151,14 +147,19 @@ fn not_found() -> Response {
         .into_response()
 }
 
+fn server_error(error: sqlx::Error) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": error.to_string() })),
+    )
+        .into_response()
+}
+
 /// The tool proxy of an LTI Advantage access token.
 ///
 /// The token is a JWT signed with the platform secret; its `sub` claim is the
 /// guid of the tool proxy and its `scopes` claim carries the permissions.
-async fn authenticate(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<(Option<i64>, Vec<String>), Response> {
+async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<i64, Response> {
     let Some(value) = headers.get(header::AUTHORIZATION) else {
         return Err(unauthorized());
     };
@@ -173,44 +174,21 @@ async fn authenticate(
         token,
         &jsonwebtoken::DecodingKey::from_secret(state.jwt_secret.as_bytes()),
         &jsonwebtoken::Validation::default(),
-    );
-    let Ok(decoded) = decoded else {
-        return Err(unauthorized());
-    };
+    )
+    .map_err(|_| unauthorized())?;
     let claims = decoded.claims;
 
     // An LTI Advantage access token carries the scopes of the call.
-    let scopes = claims.get("scopes").and_then(Value::as_str).map(|scopes| {
-        scopes
-            .split_whitespace()
-            .map(|scope| scope.to_string())
-            .collect::<Vec<String>>()
-    });
-
-    let Some(scopes) = scopes else {
-        // A Canvas session token: only a site admin may read the tool
-        // settings.
-        return match claims.get("sub").and_then(Value::as_i64) {
-            Some(user_id) => {
-                let row: Option<(String,)> = sqlx::query_as("SELECT role FROM users WHERE id = $1")
-                    .bind(user_id)
-                    .fetch_optional(&state.db)
-                    .await
-                    .map_err(|error| {
-                        (
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            Json(json!({ "error": error.to_string() })),
-                        )
-                            .into_response()
-                    })?;
-                match row {
-                    Some((role,)) if role == "admin" => Ok((None, Vec::new())),
-                    _ => Err(forbidden()),
-                }
-            }
-            None => Err(forbidden()),
-        };
-    };
+    let scopes = claims
+        .get("scopes")
+        .and_then(Value::as_str)
+        .map(|scopes| {
+            scopes
+                .split_whitespace()
+                .map(|scope| scope.to_string())
+                .collect::<Vec<String>>()
+        })
+        .ok_or_else(unauthorized)?;
 
     if !scopes.iter().any(|scope| scope == TOOL_SETTINGS_SCOPE) {
         return Err(forbidden());
@@ -227,15 +205,10 @@ async fn authenticate(
     .bind(sub)
     .fetch_optional(&state.db)
     .await
-    .map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": error.to_string() })),
-        )
-            .into_response()
-    })?;
+    .map_err(server_error)?;
 
-    Ok((proxy, scopes))
+    // Canvas: the token has to name an active tool proxy.
+    proxy.ok_or_else(unauthorized)
 }
 
 // ---------------------------------------------------------------------------
@@ -250,13 +223,7 @@ async fn tool_proxy_by_guid(pool: &PgPool, guid: &str) -> Result<Option<i64>, Re
     .bind(guid)
     .fetch_optional(pool)
     .await
-    .map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": error.to_string() })),
-        )
-            .into_response()
-    })
+    .map_err(server_error)
 }
 
 /// The tool setting of a tool proxy in a context.
@@ -322,13 +289,45 @@ async fn find_setting(
         }
     };
 
-    row.map_err(|error| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": error.to_string() })),
-        )
-            .into_response()
-    })
+    row.map_err(server_error)
+}
+
+/// The setting of the next level of the graph: the binding of a resource
+/// link, or the tool proxy of a binding.
+async fn next_level(
+    pool: &PgPool,
+    row: &ToolSettingRow,
+) -> Result<Option<ToolSettingRow>, Response> {
+    let next = match row.setting_type() {
+        "LtiLink" => {
+            sqlx::query_as::<_, ToolSettingRow>(
+                "SELECT id, tool_proxy_id, context_type, context_id, resource_link_id, custom \
+                 FROM tool_settings \
+                 WHERE tool_proxy_id = $1 AND context_type = $2 AND context_id = $3 \
+                   AND resource_link_id IS NULL \
+                 ORDER BY id ASC LIMIT 1",
+            )
+            .bind(row.tool_proxy_id)
+            .bind(&row.context_type)
+            .bind(row.context_id)
+            .fetch_optional(pool)
+            .await
+        }
+        "ToolProxyBinding" => {
+            sqlx::query_as::<_, ToolSettingRow>(
+                "SELECT id, tool_proxy_id, context_type, context_id, resource_link_id, custom \
+                 FROM tool_settings \
+                 WHERE tool_proxy_id = $1 AND context_type IS NULL AND context_id IS NULL \
+                   AND resource_link_id IS NULL \
+                 ORDER BY id ASC LIMIT 1",
+            )
+            .bind(row.tool_proxy_id)
+            .fetch_optional(pool)
+            .await
+        }
+        _ => Ok(None),
+    };
+    next.map_err(server_error)
 }
 
 /// The `bubble` parameter of a request.
@@ -344,18 +343,15 @@ async fn resolve_setting(
     tool_proxy_guid: Option<&str>,
     context: SettingContext,
 ) -> Result<(ToolSettingRow, i64), Response> {
-    let (token_proxy, _scopes) = authenticate(state, headers).await?;
-
-    let proxy = match (tool_proxy_guid, token_proxy) {
-        (Some(guid), _) => {
+    let proxy = match tool_proxy_guid {
+        Some(guid) => {
             let proxy = tool_proxy_by_guid(&state.db, guid).await?;
             match proxy {
                 Some(proxy) => proxy,
                 None => return Err(not_found()),
             }
         }
-        (None, Some(proxy)) => proxy,
-        (None, None) => return Err(forbidden()),
+        None => authenticate(state, headers).await?,
     };
 
     let setting = find_setting(&state.db, proxy, context).await?;
@@ -366,42 +362,20 @@ async fn resolve_setting(
 }
 
 // ---------------------------------------------------------------------------
-// Handlers
+// The answer — Canvas `tool_setting_json`
 // ---------------------------------------------------------------------------
 
-/// The tool settings of a request, in the shape the media type asks for.
-fn settings_response(setting: &ToolSettingRow, accepts_graph: bool, bubble: &str) -> Response {
-    let custom = setting.custom.clone();
-    let graph = if bubble == "all" {
-        vec![json!({
-            "@type": "LtiLink",
-            "custom": custom,
-            "id": setting.url(),
-        })]
-    } else {
-        vec![json!({
-            "@type": setting.setting_type(),
-            "custom": custom,
-            "id": setting.url(),
-        })]
-    };
-
-    if accepts_graph {
-        return (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, TOOL_SETTINGS_JSON)],
-            Json(json!({ "@graph": graph })),
-        )
-            .into_response();
+/// Canvas `collect_tool_settings`: the entry of the graph.
+fn collect_tool_settings(setting: &ToolSettingRow, distinct: Option<&[String]>) -> Value {
+    let mut custom = setting.custom.as_object().cloned().unwrap_or_default();
+    if let Some(distinct) = distinct {
+        custom.retain(|key, _| !distinct.contains(key));
     }
-
-    let custom = custom.as_object().cloned().unwrap_or_default();
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, TOOL_SETTINGS_SIMPLE_JSON)],
-        Json(Value::Object(custom)),
-    )
-        .into_response()
+    json!({
+        "@type": setting.setting_type(),
+        "custom": Value::Object(custom),
+        "id": setting.url(),
+    })
 }
 
 /// Whether the request wants the tool settings graph.
@@ -410,6 +384,15 @@ fn accepts_graph(headers: &HeaderMap) -> bool {
         .get(header::ACCEPT)
         .and_then(|value| value.to_str().ok())
         .map(|value| value.contains(TOOL_SETTINGS_JSON))
+        .unwrap_or(false)
+}
+
+/// Whether the request wants the flat tool settings.
+fn accepts_simple(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.contains(TOOL_SETTINGS_SIMPLE_JSON))
         .unwrap_or(false)
 }
 
@@ -423,6 +406,96 @@ fn checked_bubble(query: &BubbleQuery, accepts_graph: bool) -> Result<&str, Resp
     }
 }
 
+/// Canvas `tool_setting_json`.
+async fn settings_response(
+    pool: &PgPool,
+    setting: &ToolSettingRow,
+    accepts_graph: bool,
+    accepts_simple: bool,
+    bubble: &str,
+) -> Response {
+    if bubble == "all" || bubble == "distinct" {
+        // The graph walks the levels of the setting: the resource link, then
+        // its binding, then the tool proxy.
+        let mut graph: Vec<Value> = Vec::new();
+        let mut distinct: Option<Vec<String>> = if bubble == "distinct" {
+            Some(Vec::new())
+        } else {
+            None
+        };
+        let mut current = Some(setting.clone());
+        while let Some(row) = current {
+            let entry = collect_tool_settings(&row, distinct.as_deref());
+            if let Some(seen) = distinct.as_mut() {
+                if let Some(custom) = entry.get("custom").and_then(Value::as_object) {
+                    seen.extend(custom.keys().cloned());
+                }
+            }
+            graph.push(entry);
+            current = match next_level(pool, &row).await {
+                Ok(next) => next,
+                Err(response) => return response,
+            };
+        }
+
+        if accepts_graph {
+            return (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, TOOL_SETTINGS_JSON)],
+                Json(json!({ "@graph": graph })),
+            )
+                .into_response();
+        }
+        if bubble == "distinct" && accepts_simple {
+            // The higher level wins, so the graph is merged from the bottom.
+            let mut custom = Map::new();
+            for entry in graph.iter().rev() {
+                if let Some(map) = entry.get("custom").and_then(Value::as_object) {
+                    for (key, value) in map {
+                        custom.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+            return (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, TOOL_SETTINGS_SIMPLE_JSON)],
+                Json(Value::Object(custom)),
+            )
+                .into_response();
+        }
+        // The simple form without the media type.
+        let custom = setting.custom.as_object().cloned().unwrap_or_default();
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, TOOL_SETTINGS_SIMPLE_JSON)],
+            Json(Value::Object(custom)),
+        )
+            .into_response();
+    }
+
+    if accepts_graph {
+        let graph = vec![collect_tool_settings(setting, None)];
+        return (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, TOOL_SETTINGS_JSON)],
+            Json(json!({ "@graph": graph })),
+        )
+            .into_response();
+    }
+
+    let custom = setting.custom.as_object().cloned().unwrap_or_default();
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, TOOL_SETTINGS_SIMPLE_JSON)],
+        Json(Value::Object(custom)),
+    )
+        .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
+
 /// The shared body of the show routes.
 async fn show_setting(
     state: &AppState,
@@ -432,12 +505,15 @@ async fn show_setting(
     context: SettingContext,
 ) -> Response {
     let accepts_graph = accepts_graph(&headers);
+    let accepts_simple = accepts_simple(&headers);
     let bubble = match checked_bubble(&query, accepts_graph) {
-        Ok(bubble) => bubble,
+        Ok(bubble) => bubble.to_string(),
         Err(response) => return response,
     };
     match resolve_setting(state, &headers, tool_proxy_guid, context).await {
-        Ok((setting, _proxy)) => settings_response(&setting, accepts_graph, bubble),
+        Ok((setting, _proxy)) => {
+            settings_response(&state.db, &setting, accepts_graph, accepts_simple, &bubble).await
+        }
         Err(response) => response,
     }
 }
@@ -546,22 +622,14 @@ async fn show_tool_setting(
     headers: HeaderMap,
     Query(query): Query<BubbleQuery>,
 ) -> Response {
-    let accepts_graph = accepts_graph(&headers);
-    let bubble = match checked_bubble(&query, accepts_graph) {
-        Ok(bubble) => bubble,
-        Err(response) => return response,
-    };
-    match resolve_setting(
+    show_setting(
         &state,
-        &headers,
+        headers,
+        query,
         None,
         SettingContext::Setting { tool_setting_id },
     )
     .await
-    {
-        Ok((setting, _proxy)) => settings_response(&setting, accepts_graph, bubble),
-        Err(response) => response,
-    }
 }
 
 /// The shared body of the update routes.
@@ -618,11 +686,7 @@ async fn update_setting(
             .execute(&state.db)
             .await
     {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": error.to_string() })),
-        )
-            .into_response();
+        return server_error(error);
     }
 
     // Canvas answers `head :ok` — 200 with an empty body.
@@ -789,37 +853,36 @@ pub fn router() -> Router<AppState> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_setting_type_follows_the_context() {
-        let mut setting = ToolSettingRow {
+    fn setting(resource_link_id: Option<&str>, context_id: Option<i64>) -> ToolSettingRow {
+        ToolSettingRow {
             id: 1,
             tool_proxy_id: 2,
             context_type: Some("Course".to_string()),
-            context_id: Some(3),
-            resource_link_id: None,
-            custom: json!({}),
-        };
-        assert_eq!(setting.setting_type(), "ToolProxyBinding");
-
-        setting.resource_link_id = Some("link".to_string());
-        assert_eq!(setting.setting_type(), "LtiLink");
-
-        setting.context_id = None;
-        setting.resource_link_id = None;
-        assert_eq!(setting.setting_type(), "ToolProxy");
+            context_id,
+            resource_link_id: resource_link_id.map(|value| value.to_string()),
+            custom: json!({ "a": 1 }),
+        }
     }
 
     #[test]
-    fn the_graph_carries_the_type_the_custom_settings_and_the_url() {
-        let setting = ToolSettingRow {
-            id: 1,
-            tool_proxy_id: 2,
-            context_type: Some("Course".to_string()),
-            context_id: Some(3),
-            resource_link_id: None,
-            custom: json!({ "a": 1 }),
-        };
-        let response = settings_response(&setting, true, "");
-        assert_eq!(response.status(), StatusCode::OK);
+    fn the_setting_type_follows_the_context() {
+        assert_eq!(setting(Some("link"), Some(3)).setting_type(), "LtiLink");
+        assert_eq!(setting(None, Some(3)).setting_type(), "ToolProxyBinding");
+        assert_eq!(setting(None, None).setting_type(), "ToolProxy");
+    }
+
+    #[test]
+    fn the_url_is_the_setting_route() {
+        assert_eq!(setting(None, Some(3)).url(), "/api/lti/tool_settings/1");
+    }
+
+    #[test]
+    fn distinct_drops_the_keys_of_the_higher_level() {
+        let mut row = setting(None, Some(3));
+        row.custom = json!({ "a": 1, "b": 2 });
+        let entry = collect_tool_settings(&row, Some(&["a".to_string()]));
+        assert_eq!(entry["custom"]["a"], Value::Null);
+        assert_eq!(entry["custom"]["b"], 2);
+        assert_eq!(entry["@type"], "ToolProxyBinding");
     }
 }

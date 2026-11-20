@@ -12,6 +12,7 @@
 //! Fleet rule: dedicated tool proxies, courses and settings per test, every
 //! seeded row is cleaned up. Skipped cleanly when DATABASE_URL is unset.
 
+use axum::body::Bytes;
 use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use axum_test::TestServer;
 use serde_json::{json, Value};
@@ -67,6 +68,22 @@ fn access_token(guid: &str, scopes: &str) -> String {
     let claims = json!({
         "sub": guid,
         "scopes": scopes,
+        "exp": (chrono::Utc::now().timestamp() + 3600),
+        "iss": "canvas",
+    });
+    jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &claims,
+        &jsonwebtoken::EncodingKey::from_secret(JWT_SECRET.as_bytes()),
+    )
+    .expect("mint token")
+}
+
+/// A Canvas session token — it carries no scopes, so it is not an LTI
+/// Advantage access token.
+fn session_token(user_id: i64) -> String {
+    let claims = json!({
+        "sub": user_id,
         "exp": (chrono::Utc::now().timestamp() + 3600),
         "iss": "canvas",
     });
@@ -156,6 +173,15 @@ async fn the_tool_settings_need_an_lti_advantage_token() {
         .await;
     assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
 
+    // A token that is not an LTI Advantage token is a 401.
+    let resp = server
+        .get(&format!(
+            "/api/lti/tool_proxy/{guid}/courses/{course}/tool_setting"
+        ))
+        .add_header(AUTHORIZATION, format!("Bearer {}", session_token(42)))
+        .await;
+    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
+
     // A token without the scope is a 403.
     let resp = server
         .get(&format!(
@@ -235,7 +261,7 @@ async fn the_tool_settings_answer_the_graph_and_the_flat_form() {
             format!("Bearer {}", access_token(&guid, "ToolSettings")),
         )
         .add_header(CONTENT_TYPE, TOOL_SETTINGS_SIMPLE_JSON)
-        .bytes(&json!({ "deep_link": false }).to_string().into_bytes())
+        .bytes(Bytes::from(json!({ "deep_link": false }).to_string()))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     assert_eq!(resp.text(), "");
