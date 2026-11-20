@@ -84,7 +84,6 @@ pub struct MediaObjectRow {
     pub context_id: Option<i64>,
     pub old_media_id: Option<String>,
     pub attachment_id: Option<i64>,
-    pub root_account_id: Option<i64>,
     pub viewer_restrictions: serde_json::Value,
     pub auto_caption_status: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -629,7 +628,7 @@ async fn find_context(db: &PgPool, context_code: &str) -> Result<Option<MediaCon
 
 const MEDIA_OBJECT_COLUMNS: &str = r#"
     id, media_id, media_type, title, user_entered_title, user_id,
-    context_type, context_id, old_media_id, attachment_id, root_account_id,
+    context_type, context_id, old_media_id, attachment_id,
     viewer_restrictions, auto_caption_status, created_at, updated_at
 "#;
 
@@ -745,7 +744,7 @@ fn media_object_as_json(row: &MediaObjectRow, uuid: Option<&str>) -> serde_json:
         "duration": serde_json::Value::Null,
         "max_size": serde_json::Value::Null,
         "total_size": serde_json::Value::Null,
-        "root_account_id": row.root_account_id,
+        "root_account_id": serde_json::Value::Null,
         "attachment_id": row.attachment_id,
         "old_media_id": row.old_media_id,
         "auto_caption_status": row.auto_caption_status,

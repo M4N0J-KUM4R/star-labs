@@ -3,25 +3,25 @@
 //!
 //! Routes served here (the coordinator mounts this router under `/api/v1`):
 //!
-//! | Method | Path                                                  | Canvas action   |
-//! |--------|-------------------------------------------------------|-----------------|
-//! | GET    | `/users/{user_id}/page_views`                        | `index`         |
-//! | POST   | `/users/{user_id}/page_views/query`                  | `query`         |
-//! | GET    | `/users/{user_id}/page_views/query/{query_id}`       | `poll_query`    |
-//! | GET    | `/users/{user_id}/page_views/query/{query_id}/results`| `query_results` |
-//! | POST   | `/users/page_views/query`                            | `batch_query`   |
-//! | GET    | `/users/page_views/query/{query_id}`                 | `poll_batch_query` |
-//! | GET    | `/users/page_views/query/{query_id}/results`         | `batch_query_results` |
+//! | Method | Path                                                   | Canvas action      |
+//! |--------|--------------------------------------------------------|--------------------|
+//! | GET    | `/users/{user_id}/page_views`                         | `index`            |
+//! | POST   | `/users/{user_id}/page_views/query`                   | `query`            |
+//! | GET    | `/users/{user_id}/page_views/query/{query_id}`        | `poll_query`       |
+//! | GET    | `/users/{user_id}/page_views/query/{query_id}/results`| `query_results`    |
+//! | POST   | `/users/page_views/query`                             | `batch_query`      |
+//! | GET    | `/users/page_views/query/{query_id}`                  | `poll_batch_query` |
+//! | GET    | `/users/page_views/query/{query_id}/results`          | `batch_query_results` |
 //!
-//! Faithfulness notes (see the migration report for the full list):
+//! Faithfulness notes:
 //!
-//! * `index` returns a bare JSON array of page view hashes, newest first, the
-//!   same shape `Api::V1::PageView#page_view_json` builds (`id` is the
+//! * `index` returns a bare JSON array of page view hashes, newest first, in
+//!   the shape `Api::V1::PageView#page_view_json` builds: `id` is the
 //!   `request_id`, the id columns move into `links`, `contributed` is always
-//!   `false` and `app_name` is the developer key name).
+//!   `false` and `app_name` is the developer key name.
 //! * The authorization is Canvas' `authorized_action(@user, @current_user,
-//!   :view_statistics)`: the user themself, a site admin, or an account admin
-//!   of an account the user belongs to. A failure is a 403.
+//!   :view_statistics)`: the user themself, a site admin, or an admin of an
+//!   account the user belongs to. A failure is a 403.
 //! * `start_time` in the future and `end_time` before `start_time` are the
 //!   two 400s of `index`.
 //! * The query routes store the query (`page_view_queries`) and the results
@@ -55,7 +55,7 @@ const BATCH_QUERY_MAX_USER_IDS: usize = 10;
 /// Canvas `PageViews::Common::FORMATS`.
 const FORMATS: [&str; 2] = ["csv", "jsonl"];
 
-/// Canvas `PageView::EXPORTED_COLUMNS` — the CSV export columns.
+/// Canvas `PageView::EXPORTED_COLUMNS` — the columns of the CSV export.
 const EXPORTED_COLUMNS: [&str; 19] = [
     "request_id",
     "user_id",
@@ -262,12 +262,12 @@ fn is_uuid(value: &str) -> bool {
         return false;
     }
     let widths = [8usize, 4, 4, 4, 12];
-    parts
-        .iter()
-        .zip(widths.iter())
-        .all(|(part, width)| {
-            part.len() == *width && part.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-        })
+    parts.iter().zip(widths.iter()).all(|(part, width)| {
+        part.len() == *width
+            && part
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+    })
 }
 
 /// Ruby's `String#to_i`: the leading integer of the string, 0 when there is
@@ -290,7 +290,7 @@ fn parse_canvas_time(value: &str) -> Option<DateTime<Utc>> {
     if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
         return Some(parsed.with_timezone(&Utc));
     }
-    for format in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"] {
+    for format in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"] {
         if let Ok(naive) = NaiveDateTime::parse_from_str(value, format) {
             return Some(Utc.from_utc_datetime(&naive));
         }
@@ -304,6 +304,35 @@ fn parse_canvas_time(value: &str) -> Option<DateTime<Utc>> {
 /// A Canvas style error body: `{"error": "..."}`.
 fn canvas_error(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
+}
+
+/// The error type of the handlers.
+///
+/// Canvas answers the specific failures with a JSON body
+/// (`{"error": "..."}`), the house `ApiError` answers everything else with
+/// its plain text body.
+enum PvError {
+    Api(ApiError),
+}
+
+impl From<ApiError> for PvError {
+    fn from(error: ApiError) -> Self {
+        PvError::Api(error)
+    }
+}
+
+impl IntoResponse for PvError {
+    fn into_response(self) -> Response {
+        match self {
+            PvError::Api(ApiError::BadRequest(message)) => {
+                canvas_error(StatusCode::BAD_REQUEST, &message)
+            }
+            PvError::Api(ApiError::Validation(message)) => {
+                canvas_error(StatusCode::UNPROCESSABLE_ENTITY, &message)
+            }
+            PvError::Api(other) => other.into_response(),
+        }
+    }
 }
 
 /// The JSON body of one page view — Canvas
@@ -365,18 +394,12 @@ fn page_view_csv_row(row: &PageViewRow) -> Vec<String> {
             .map(|v| v.to_string())
             .unwrap_or_default(),
         row.created_at.format("%Y-%m-%d %H:%M:%S UTC").to_string(),
-        row.user_request
-            .map(|v| v.to_string())
-            .unwrap_or_default(),
+        row.user_request.map(|v| v.to_string()).unwrap_or_default(),
         row.render_time.map(|v| v.to_string()).unwrap_or_default(),
         row.user_agent.clone().unwrap_or_default(),
-        row.participated
-            .map(|v| v.to_string())
-            .unwrap_or_default(),
+        row.participated.map(|v| v.to_string()).unwrap_or_default(),
         row.account_id.map(|v| v.to_string()).unwrap_or_default(),
-        row.real_user_id
-            .map(|v| v.to_string())
-            .unwrap_or_default(),
+        row.real_user_id.map(|v| v.to_string()).unwrap_or_default(),
         row.http_method.clone().unwrap_or_default(),
         row.remote_ip.clone().unwrap_or_default(),
     ]
@@ -445,13 +468,14 @@ fn extension_for(format: &str) -> &'static str {
 }
 
 /// The page views of a user inside a month range (the end month is included,
-/// so the range covers whole months).
+/// so the range covers whole months). `account_ids` limits the rows to the
+/// accounts the viewer may see; `None` means no restriction.
 async fn fetch_page_views_for_range(
     pool: &PgPool,
     user_id: i64,
     start_date: NaiveDate,
     end_date: NaiveDate,
-    account_ids: &[i64],
+    account_ids: Option<&[i64]>,
 ) -> Result<Vec<PageViewRow>, ApiError> {
     let rows: Vec<PageViewRow> = sqlx::query_as(
         r#"
@@ -466,14 +490,14 @@ async fn fetch_page_views_for_range(
         WHERE pv.user_id = $1
           AND pv.created_at >= $2::timestamptz
           AND pv.created_at < ($3::timestamptz + INTERVAL '1 month')
-          AND (pv.account_id IS NULL OR pv.account_id = ANY($4::bigint[]))
+          AND ($4::bigint[] IS NULL OR pv.account_id IS NULL OR pv.account_id = ANY($4))
         ORDER BY pv.created_at DESC
         "#,
     )
     .bind(user_id)
     .bind(start_date.and_hms_opt(0, 0, 0).expect("midnight"))
     .bind(end_date.and_hms_opt(0, 0, 0).expect("midnight"))
-    .bind(account_ids.to_vec())
+    .bind(account_ids.map(|ids| ids.to_vec()))
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -482,6 +506,7 @@ async fn fetch_page_views_for_range(
 /// Store an enqueued query together with its result.
 async fn insert_query(
     pool: &PgPool,
+    query_id: &str,
     requestor_id: i64,
     user_id: Option<i64>,
     user_ids: Vec<i64>,
@@ -491,8 +516,7 @@ async fn insert_query(
     content: Vec<u8>,
     filename: String,
     content_type: &str,
-) -> Result<String, ApiError> {
-    let query_id = uuid::Uuid::new_v4().to_string();
+) -> Result<(), ApiError> {
     sqlx::query(
         r#"
         INSERT INTO page_view_queries (
@@ -502,7 +526,7 @@ async fn insert_query(
         VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, 'finished', $8, $9, $10, now())
         "#,
     )
-    .bind(&query_id)
+    .bind(query_id)
     .bind(requestor_id)
     .bind(user_id)
     .bind(user_ids)
@@ -514,7 +538,7 @@ async fn insert_query(
     .bind(content_type)
     .execute(pool)
     .await?;
-    Ok(query_id)
+    Ok(())
 }
 
 /// Load one query by its id.
@@ -534,16 +558,18 @@ async fn find_query(pool: &PgPool, query_id: &str) -> Result<Option<QueryRow>, A
 }
 
 /// The result file of a finished query.
-fn result_response(row: &QueryRow) -> Result<Response, ApiError> {
+fn result_response(row: &QueryRow) -> Result<Response, PvError> {
+    if row.status != "finished" {
+        // Canvas `PageViews::Common::InvalidResultError`.
+        return Err(ApiError::BadRequest(
+            "Query results are not in a valid state for download".to_string(),
+        )
+        .into());
+    }
     let content = row.content.clone().unwrap_or_default();
     if content.is_empty() {
         // Canvas `PageViews::Common::NoContentError` -> `head :no_content`.
         return Ok(StatusCode::NO_CONTENT.into_response());
-    }
-    if row.status != "finished" {
-        return Err(ApiError::BadRequest(
-            "Query results are not in a valid state for download".to_string(),
-        ));
     }
     let mut response = Response::new(Body::from(content));
     let headers = response.headers_mut();
@@ -556,10 +582,9 @@ fn result_response(row: &QueryRow) -> Result<Response, ApiError> {
         )
         .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
     );
-    let filename = row
-        .filename
-        .clone()
-        .unwrap_or_else(|| format!("{}.{}", row.id, extension_for(&row.results_format)));
+    let filename = row.filename.clone().unwrap_or_else(|| {
+        format!("{}.{}", row.id, extension_for(&row.results_format))
+    });
     let disposition = format!("attachment; filename=\"{filename}\"");
     if let Ok(value) = HeaderValue::from_str(&disposition) {
         headers.insert(header::CONTENT_DISPOSITION, value);
@@ -588,7 +613,7 @@ async fn index(
     Path(user_id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
     auth: AuthUser,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, PvError> {
     let target_user_id = resolve_user_segment(&user_id, auth.id)?;
     ensure_user(&state.db, target_user_id).await?;
     authorize_view_statistics(&state.db, &auth, target_user_id).await?;
@@ -604,14 +629,16 @@ async fn index(
         if start > Utc::now() {
             return Err(ApiError::BadRequest(
                 "start_time cannot be in the future".to_string(),
-            ));
+            )
+            .into());
         }
     }
     if let (Some(start), Some(end)) = (start_time, end_time) {
         if end < start {
             return Err(ApiError::BadRequest(
                 "end_time must be after start_time".to_string(),
-            ));
+            )
+            .into());
         }
     }
 
@@ -625,9 +652,9 @@ async fn index(
     // (`PageView.for_user` / `AccountFilter.filter`); a site admin and the
     // user themself see everything.
     let account_ids = if target_user_id == auth.id || is_site_admin(&auth) {
-        Vec::new()
+        None
     } else {
-        administered_account_ids(&state.db, auth.id).await?
+        Some(administered_account_ids(&state.db, auth.id).await?)
     };
 
     let rows: Vec<PageViewRow> = sqlx::query_as(
@@ -651,18 +678,14 @@ async fn index(
     .bind(target_user_id)
     .bind(start_time)
     .bind(end_time)
-    .bind(if account_ids.is_empty() {
-        None
-    } else {
-        Some(account_ids)
-    })
+    .bind(account_ids)
     .bind(per_page)
     .bind(offset)
     .fetch_all(&state.db)
     .await?;
 
     let views: Vec<Value> = rows.iter().map(page_view_json).collect();
-    Ok(Json(Value::Array(views)))
+    Ok(Json(Value::Array(views)).into_response())
 }
 
 // ---------------------------------------------------------------------------
@@ -675,7 +698,7 @@ async fn query(
     Path(user_id): Path<String>,
     auth: AuthUser,
     body: Bytes,
-) -> Result<Response, ApiError> {
+) -> Result<Response, PvError> {
     let body = parse_body(&body)?;
 
     // Canvas: `params.require(%i[user_id start_date end_date results_format])`.
@@ -689,29 +712,24 @@ async fn query(
 
     // Canvas: the enqueue service validates the request and raises an
     // `ArgumentError`, which the controller answers with a generic 400.
-    let (start, end) = match parse_month_range(&start_date, &end_date) {
-        Ok(range) => range,
-        Err(_) => {
-            return Err(ApiError::BadRequest(
-                "Page Views received an invalid or malformed request.".to_string(),
-            ))
-        }
-    };
-    if !FORMATS.contains(&results_format.as_str()) {
-        return Err(ApiError::BadRequest(
-            "Page Views received an invalid or malformed request.".to_string(),
-        ));
-    }
+    let (start, end) = validate_query_request(&start_date, &end_date, &results_format).map_err(
+        |_| ApiError::BadRequest("Page Views received an invalid or malformed request.".to_string()),
+    )?;
 
     let account_ids = if target_user_id == auth.id || is_site_admin(&auth) {
-        Vec::new()
+        None
     } else {
-        administered_account_ids(&state.db, auth.id).await?
+        Some(administered_account_ids(&state.db, auth.id).await?)
     };
-    let rows = fetch_page_views_for_range(&state.db, target_user_id, start, end, &account_ids).await?;
+    let rows =
+        fetch_page_views_for_range(&state.db, target_user_id, start, end, account_ids.as_deref())
+            .await?;
     let content = build_result_content(&rows, &results_format);
-    let query_id = insert_query(
+
+    let query_id = uuid::Uuid::new_v4().to_string();
+    insert_query(
         &state.db,
+        &query_id,
         auth.id,
         Some(target_user_id),
         Vec::new(),
@@ -719,7 +737,7 @@ async fn query(
         end,
         &results_format,
         content,
-        format!("{query_id_placeholder}.{ext}", query_id_placeholder = "", ext = extension_for(&results_format)),
+        format!("{}.{}", query_id, extension_for(&results_format)),
         content_type_for(&results_format),
     )
     .await?;
@@ -741,7 +759,7 @@ async fn poll_query(
     State(state): State<AppState>,
     Path((user_id, query_id)): Path<(String, String)>,
     auth: AuthUser,
-) -> Result<Response, ApiError> {
+) -> Result<Response, PvError> {
     if !is_uuid(&query_id) {
         return Ok(canvas_error(StatusCode::BAD_REQUEST, "Invalid query ID"));
     }
@@ -778,7 +796,7 @@ async fn query_results(
     State(state): State<AppState>,
     Path((user_id, query_id)): Path<(String, String)>,
     auth: AuthUser,
-) -> Result<Response, ApiError> {
+) -> Result<Response, PvError> {
     if !is_uuid(&query_id) {
         return Ok(canvas_error(StatusCode::BAD_REQUEST, "Invalid query ID"));
     }
@@ -795,7 +813,7 @@ async fn query_results(
             ))
         }
     };
-    result_response(&row)
+    Ok(result_response(&row)?)
 }
 
 // ---------------------------------------------------------------------------
@@ -807,7 +825,7 @@ async fn batch_query(
     State(state): State<AppState>,
     auth: AuthUser,
     body: Bytes,
-) -> Result<Response, ApiError> {
+) -> Result<Response, PvError> {
     let body = parse_body(&body)?;
 
     // Canvas: `params.require(%i[user_ids start_date end_date results_format])`.
@@ -842,43 +860,28 @@ async fn batch_query(
 
     // Canvas: the enqueue service raises an `ArgumentError`, which the batch
     // route answers with the message of the error.
-    let (start, end) = parse_month_range(&start_date, &end_date).map_err(|message| {
-        ApiError::BadRequest(message)
-    })?;
-    if !FORMATS.contains(&results_format.as_str()) {
-        return Ok(canvas_error(
-            StatusCode::BAD_REQUEST,
-            "Format must be one of csv, jsonl",
-        ));
-    }
-    if user_ids.is_empty() {
-        return Ok(canvas_error(
-            StatusCode::BAD_REQUEST,
-            "User IDs cannot be empty",
-        ));
-    }
-    if user_ids.iter().any(|id| *id <= 0) {
-        return Ok(canvas_error(
-            StatusCode::BAD_REQUEST,
-            "All user IDs must be positive numbers",
-        ));
-    }
+    let (start, end) =
+        validate_batch_request(&start_date, &end_date, &results_format, &user_ids)
+            .map_err(ApiError::BadRequest)?;
 
     let mut rows: Vec<PageViewRow> = Vec::new();
     for user_id in &user_ids {
         let account_ids = if *user_id == auth.id || is_site_admin(&auth) {
-            Vec::new()
+            None
         } else {
-            administered_account_ids(&state.db, auth.id).await?
+            Some(administered_account_ids(&state.db, auth.id).await?)
         };
         let mut user_rows =
-            fetch_page_views_for_range(&state.db, *user_id, start, end, &account_ids).await?;
+            fetch_page_views_for_range(&state.db, *user_id, start, end, account_ids.as_deref())
+                .await?;
         rows.append(&mut user_rows);
     }
 
     let content = build_result_content(&rows, &results_format);
-    let query_id = insert_query(
+    let query_id = uuid::Uuid::new_v4().to_string();
+    insert_query(
         &state.db,
+        &query_id,
         auth.id,
         None,
         user_ids,
@@ -886,7 +889,7 @@ async fn batch_query(
         end,
         &results_format,
         content,
-        format!("{}.{}", uuid::Uuid::new_v4(), extension_for(&results_format)),
+        format!("{}.{}", query_id, extension_for(&results_format)),
         content_type_for(&results_format),
     )
     .await?;
@@ -907,7 +910,7 @@ async fn poll_batch_query(
     State(state): State<AppState>,
     Path(query_id): Path<String>,
     auth: AuthUser,
-) -> Result<Response, ApiError> {
+) -> Result<Response, PvError> {
     if !is_uuid(&query_id) {
         return Ok(canvas_error(StatusCode::BAD_REQUEST, "Invalid query ID"));
     }
@@ -923,7 +926,7 @@ async fn poll_batch_query(
     // The batch query has no user in the path, so only the requestor of the
     // query (or a site admin) may read it.
     if row.requestor_id != auth.id && !is_site_admin(&auth) {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::Forbidden.into());
     }
 
     let results_url = if row.status == "finished" {
@@ -943,7 +946,7 @@ async fn batch_query_results(
     State(state): State<AppState>,
     Path(query_id): Path<String>,
     auth: AuthUser,
-) -> Result<Response, ApiError> {
+) -> Result<Response, PvError> {
     if !is_uuid(&query_id) {
         return Ok(canvas_error(StatusCode::BAD_REQUEST, "Invalid query ID"));
     }
@@ -957,9 +960,9 @@ async fn batch_query_results(
         }
     };
     if row.requestor_id != auth.id && !is_site_admin(&auth) {
-        return Err(ApiError::Forbidden);
+        return Err(ApiError::Forbidden.into());
     }
-    result_response(&row)
+    Ok(result_response(&row)?)
 }
 
 // ---------------------------------------------------------------------------
@@ -972,8 +975,9 @@ fn parse_body(body: &Bytes) -> Result<Value, ApiError> {
     if body.is_empty() {
         return Ok(json!({}));
     }
-    serde_json::from_slice(body)
-        .map_err(|_| ApiError::BadRequest("Page Views received an invalid or malformed request.".to_string()))
+    serde_json::from_slice(body).map_err(|_| {
+        ApiError::BadRequest("Page Views received an invalid or malformed request.".to_string())
+    })
 }
 
 /// Canvas `params.require(:name)` — a missing parameter is a 400.
@@ -987,7 +991,10 @@ fn require_param(body: &Value, name: &str) -> Result<String, ApiError> {
 /// Canvas `params.require(:user_ids)` — the ids may be numbers or strings.
 fn require_param_list(body: &Value, name: &str) -> Result<Vec<i64>, ApiError> {
     let missing = || ApiError::BadRequest(format!("Parameter {name} is missing."));
-    let items = body.get(name).and_then(|value| value.as_array()).ok_or_else(missing)?;
+    let items = body
+        .get(name)
+        .and_then(|value| value.as_array())
+        .ok_or_else(missing)?;
     let mut ids = Vec::with_capacity(items.len());
     for item in items {
         let id = match item {
@@ -1002,21 +1009,60 @@ fn require_param_list(body: &Value, name: &str) -> Result<Vec<i64>, ApiError> {
 
 /// The month range of a query request.
 ///
-/// Canvas `PageViews::EnqueueQueryService#parse_date_only` and
-/// `PageViews::Common::AsyncQueryRequest#validate!`:
-/// the dates are `YYYY-MM-DD`, the end date is not before the start date and
-/// both dates are the first day of a month.
-fn parse_month_range(
-    start_date: &str,
-    end_date: &str,
-) -> Result<(NaiveDate, NaiveDate), String> {
+/// Canvas `PageViews::EnqueueQueryService#parse_date_only`: the dates are
+/// `YYYY-MM-DD` and have to be real calendar dates.
+fn parse_month_range(start_date: &str, end_date: &str) -> Result<(NaiveDate, NaiveDate), String> {
     let start = parse_date_only(start_date)?;
     let end = parse_date_only(end_date)?;
+    Ok((start, end))
+}
+
+/// Canvas `PageViews::Common::AsyncQueryRequest#validate!`.
+///
+/// The order of the checks is the order of the Ruby struct: the dates, the
+/// month interval and last the format.
+fn validate_query_request(
+    start_date: &str,
+    end_date: &str,
+    format: &str,
+) -> Result<(NaiveDate, NaiveDate), String> {
+    let (start, end) = parse_month_range(start_date, end_date)?;
     if start > end {
         return Err("Start date must be before or equal to end date".to_string());
     }
     if start.day() != 1 || end.day() != 1 {
         return Err("Only full-month intervals are supported".to_string());
+    }
+    if !FORMATS.contains(&format) {
+        return Err(format!("Format must be one of {}", FORMATS.join(", ")));
+    }
+    Ok((start, end))
+}
+
+/// Canvas `PageViews::Common::AsyncBatchQueryRequest#validate!` — the dates
+/// are parsed first (the service does that before the request is built), then
+/// the format is checked, then the interval and the user ids.
+fn validate_batch_request(
+    start_date: &str,
+    end_date: &str,
+    format: &str,
+    user_ids: &[i64],
+) -> Result<(NaiveDate, NaiveDate), String> {
+    let (start, end) = parse_month_range(start_date, end_date)?;
+    if !FORMATS.contains(&format) {
+        return Err(format!("Format must be one of {}", FORMATS.join(", ")));
+    }
+    if start > end {
+        return Err("Start date must be before or equal to end date".to_string());
+    }
+    if start.day() != 1 || end.day() != 1 {
+        return Err("Only full-month intervals are supported".to_string());
+    }
+    if user_ids.is_empty() {
+        return Err("User IDs cannot be empty".to_string());
+    }
+    if user_ids.iter().any(|id| *id <= 0) {
+        return Err("All user IDs must be positive numbers".to_string());
     }
     Ok((start, end))
 }
