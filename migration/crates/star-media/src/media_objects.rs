@@ -437,7 +437,7 @@ async fn can_read_group(db: &PgPool, user_id: i64, group_id: i64) -> Result<bool
             .bind(group_id)
             .fetch_optional(db)
             .await?;
-    let Some((Some(course_id))) = course else {
+    let Some((Some(course_id),)) = course else {
         return Ok(false);
     };
 

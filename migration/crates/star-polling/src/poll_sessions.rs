@@ -254,7 +254,7 @@ async fn index(
     let poll = load_poll(&app.db, poll_id).await?;
 
     // authorized_action(@poll, @current_user, :update)
-    if !poll_grants_update(&app.db, auth, &poll).await? {
+    if !poll_grants_update(&app.db, &auth, &poll).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -479,7 +479,7 @@ async fn set_published(
     let session = load_session(&app.db, poll.id, id).await?;
 
     // authorized_action(@poll_session, @current_user, :publish)
-    if !poll_grants_update(&app.db, &auth, &poll).await? {
+    if !poll_grants_update(&app.db, auth, &poll).await? {
         return Err(ApiError::Forbidden);
     }
 
