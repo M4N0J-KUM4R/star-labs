@@ -8405,6 +8405,371 @@ pub fn router() -> Router<AppState> {
 }
 
 // ---------------------------------------------------------------------------
+// UI shell loaders (star-ui, issue #71)
+//
+// Pub loaders extracted so the server-rendered shell renders exactly what the
+// REST API serves without duplicating SQL in the UI crate. Each loader is
+// data-only: authorization stays with the caller (the shell gates every
+// course-scoped page through star_courses::load_course_for_viewer /
+// check_teacher_or_admin first).
+// ---------------------------------------------------------------------------
+
+/// One assignment row for the shell's assignments index / gradebook, carrying
+/// its group placement and the viewer's submission state.
+///
+/// `submission_types` has no column in star-db (see star-graphql
+/// CreateAssignmentInput), so the shell renders submission-type from the
+/// viewer's submission row only (`submissions.submission_type`).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct UiAssignment {
+    pub id: i64,
+    pub course_id: i64,
+    pub title: String,
+    pub description: Option<String>,
+    pub points_possible: f64,
+    pub due_at: Option<DateTime<Utc>>,
+    pub workflow_state: String,
+    /// `assignment_groups.id` — NULL when the assignment has no group.
+    pub assignment_group_id: Option<i64>,
+    /// `assignment_groups.name` — NULL when the assignment has no group.
+    pub assignment_group_name: Option<String>,
+    /// `assignment_groups.position` — 0 for groupless assignments so they
+    /// sort first inside the synthetic "Ungrouped" bucket.
+    pub assignment_group_position: Option<i32>,
+    /// The viewer's submission workflow_state ("submitted"/"graded"), or NULL
+    /// when no submissions row exists for (assignment, viewer).
+    pub submission_state: Option<String>,
+    /// The viewer's submission_type, when a submission exists.
+    pub submission_type: Option<String>,
+    /// The viewer's score, when graded.
+    pub submission_score: Option<f64>,
+}
+
+/// Load every non-deleted assignment of a course with its group placement and
+/// the given viewer's submission state — ONE grouped query (assignments LEFT
+/// JOIN assignment_groups LEFT JOIN the viewer's submissions) so the index and
+/// gradebook pages never run N+1 per-assignment lookups.
+///
+/// Ordering matches the API list (`created_at`), tie-broken by id; the shell
+/// groups rows client-of-the-handler side by `assignment_group_position`.
+pub async fn load_course_assignments_with_groups(
+    db: &PgPool,
+    course_id: i64,
+    viewer_id: i64,
+) -> Result<Vec<UiAssignment>, ApiError> {
+    let rows: Vec<UiAssignment> = sqlx::query_as(
+        r#"
+        SELECT a.id, a.course_id, a.title, a.description, a.points_possible::float8,
+               a.due_at, a.workflow_state,
+               a.assignment_group_id, g.name AS assignment_group_name,
+               g.position AS assignment_group_position,
+               s.workflow_state AS submission_state,
+               s.submission_type AS submission_type,
+               s.score::float8 AS submission_score
+        FROM assignments a
+        LEFT JOIN assignment_groups g ON g.id = a.assignment_group_id
+        LEFT JOIN submissions s ON s.assignment_id = a.id AND s.user_id = $2
+        WHERE a.course_id = $1 AND a.workflow_state <> 'deleted'
+        ORDER BY a.created_at ASC, a.id ASC
+        "#,
+    )
+    .bind(course_id)
+    .bind(viewer_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+/// One student row of the gradebook grid: the enrollment and one cell per
+/// assignment (score or `-`), plus the course total.
+#[derive(Debug, Clone, Serialize)]
+pub struct UiGradebookRow {
+    pub user_id: i64,
+    pub user_name: String,
+    /// One cell per assignment, in the same order as the assignments list
+    /// passed to [`load_gradebook_rows`].
+    pub cells: Vec<UiGradebookCell>,
+    /// sum(graded scores) / sum(points possible of graded) * 100, or None
+    /// when nothing is graded yet (same shape as compute_grade_percent).
+    pub current_grade: Option<f64>,
+}
+
+/// One gradebook cell: the submission state pill data + score.
+#[derive(Debug, Clone, Serialize)]
+pub struct UiGradebookCell {
+    pub assignment_id: i64,
+    /// "submitted" | "graded" | None (no submissions row).
+    pub submission_state: Option<String>,
+    pub score: Option<f64>,
+    pub points_possible: f64,
+}
+
+/// One enrolled student of the course (any role; Canvas gradebook lists
+/// students, but the grid stays useful for tiny courses with mixed roles).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct UiGradebookStudent {
+    pub user_id: i64,
+    pub user_name: String,
+}
+
+/// Load the gradebook grid rows: enrollments of the course joined with every
+/// submission those users have for the course's assignments — two queries
+/// total (enrollments + submissions), never one per cell.
+///
+/// Assignments come from the caller (already filtered/ordered by
+/// [`load_course_assignments_with_groups`]); the cells are aligned to that
+/// order so `rows[i].cells[j]` is student i's submission for assignment j.
+pub async fn load_gradebook_rows(
+    db: &PgPool,
+    course_id: i64,
+    assignments: &[UiAssignment],
+) -> Result<Vec<UiGradebookRow>, ApiError> {
+    let students: Vec<UiGradebookStudent> = sqlx::query_as(
+        r#"
+        SELECT u.id AS user_id, u.name AS user_name
+        FROM enrollments e
+        JOIN users u ON u.id = e.user_id
+        WHERE e.course_id = $1 AND e.workflow_state <> 'deleted'
+        ORDER BY u.name ASC, u.id ASC
+        "#,
+    )
+    .bind(course_id)
+    .fetch_all(db)
+    .await?;
+
+    // (assignment_id, user_id) -> (state, score) for the whole course.
+    let sub_rows: Vec<(i64, i64, Option<String>, Option<f64>)> = sqlx::query_as(
+        r#"
+        SELECT s.assignment_id, s.user_id, s.workflow_state, s.score::float8
+        FROM submissions s
+        JOIN assignments a ON a.id = s.assignment_id
+        WHERE a.course_id = $1 AND a.workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(course_id)
+    .fetch_all(db)
+    .await?;
+
+    use std::collections::HashMap;
+    let mut by_key: HashMap<(i64, i64), (Option<String>, Option<f64>)> =
+        HashMap::with_capacity(sub_rows.len());
+    for (assignment_id, user_id, state, score) in sub_rows {
+        by_key.insert((assignment_id, user_id), (state, score));
+    }
+
+    let mut rows = Vec::with_capacity(students.len());
+    for student in students {
+        let mut cells = Vec::with_capacity(assignments.len());
+        let mut sum_score = 0.0;
+        let mut sum_possible = 0.0;
+        for assignment in assignments {
+            let (state, score) = by_key
+                .get(&(assignment.id, student.user_id))
+                .cloned()
+                .unwrap_or((None, None));
+            if let Some(score) = score {
+                sum_score += score;
+                sum_possible += assignment.points_possible;
+            }
+            cells.push(UiGradebookCell {
+                assignment_id: assignment.id,
+                submission_state: state,
+                score,
+                points_possible: assignment.points_possible,
+            });
+        }
+        let current_grade = if sum_possible > 0.0 {
+            Some((sum_score / sum_possible) * 100.0)
+        } else {
+            None
+        };
+        rows.push(UiGradebookRow {
+            user_id: student.user_id,
+            user_name: student.user_name,
+            cells,
+            current_grade,
+        });
+    }
+    Ok(rows)
+}
+
+/// Create an assignment from the shell's form fields.
+///
+/// Same INSERT shape as the REST `create_assignment` handler (title
+/// validation, points COALESCE 0), plus the form's assignment_group_id /
+/// workflow_state selections. Returns the created row's id.
+pub async fn create_assignment_record(
+    db: &PgPool,
+    course_id: i64,
+    title: &str,
+    description: Option<&str>,
+    points_possible: Option<f64>,
+    due_at: Option<DateTime<Utc>>,
+    assignment_group_id: Option<i64>,
+    workflow_state: &str,
+) -> Result<i64, ApiError> {
+    if title.trim().is_empty() {
+        return Err(ApiError::Validation("title is required".into()));
+    }
+    if let Some(pp) = points_possible {
+        if pp < 0.0 {
+            return Err(ApiError::Validation("points_possible must be >= 0".into()));
+        }
+    }
+
+    let (id,): (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO assignments
+            (course_id, title, description, points_possible, due_at,
+             assignment_group_id, workflow_state)
+        VALUES ($1, $2, $3, COALESCE($4, 0), $5, $6, $7)
+        RETURNING id
+        "#,
+    )
+    .bind(course_id)
+    .bind(title.trim())
+    .bind(description)
+    .bind(points_possible)
+    .bind(due_at)
+    .bind(assignment_group_id)
+    .bind(workflow_state)
+    .fetch_one(db)
+    .await?;
+    Ok(id)
+}
+
+/// Update an assignment from the shell's edit form (same partial-merge
+/// semantics as the REST PUT: omitted fields keep their values).
+pub async fn update_assignment_record(
+    db: &PgPool,
+    assignment_id: i64,
+    title: Option<&str>,
+    description: Option<&str>,
+    points_possible: Option<f64>,
+    due_at: Option<DateTime<Utc>>,
+    assignment_group_id: Option<i64>,
+    workflow_state: Option<&str>,
+) -> Result<(), ApiError> {
+    let (
+        existing_title,
+        existing_description,
+        existing_points,
+        existing_due,
+        existing_group,
+        existing_state,
+    ): (
+        String,
+        Option<String>,
+        f64,
+        Option<DateTime<Utc>>,
+        Option<i64>,
+        String,
+    ) = sqlx::query_as(
+        r#"
+        SELECT title, description, points_possible::float8, due_at,
+               assignment_group_id, workflow_state
+        FROM assignments WHERE id = $1
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_optional(db)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+
+    let title = title.map(str::trim).filter(|t| !t.is_empty());
+    let title = title.map(String::from).unwrap_or(existing_title);
+    let description = description.map(String::from).or(existing_description);
+    let points_possible = points_possible.unwrap_or(existing_points);
+    let due_at = due_at.or(existing_due);
+    let assignment_group_id = assignment_group_id.or(existing_group);
+    let workflow_state = workflow_state.map(String::from).unwrap_or(existing_state);
+
+    sqlx::query(
+        r#"
+        UPDATE assignments
+        SET title = $2, description = $3, points_possible = $4, due_at = $5,
+            assignment_group_id = $6, workflow_state = $7, updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(&title)
+    .bind(&description)
+    .bind(points_possible)
+    .bind(due_at)
+    .bind(assignment_group_id)
+    .bind(&workflow_state)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
+/// Upsert the viewer's own text-entry submission — the same
+/// ON CONFLICT (assignment_id, user_id) shape as the REST `create_submission`
+/// handler, so a re-submit updates the existing row instead of colliding.
+pub async fn upsert_own_text_submission(
+    db: &PgPool,
+    assignment_id: i64,
+    user_id: i64,
+    body: &str,
+) -> Result<i64, ApiError> {
+    let (id,): (i64,) = sqlx::query_as(
+        r#"
+        INSERT INTO submissions (assignment_id, user_id, body, submission_type, anonymous_id)
+        VALUES ($1, $2, $3, 'online_text_entry', gen_random_uuid()::text)
+        ON CONFLICT (assignment_id, user_id) DO UPDATE
+        SET body = $3, submission_type = 'online_text_entry', submitted_at = now(),
+            updated_at = now(),
+            anonymous_id = COALESCE(submissions.anonymous_id, gen_random_uuid()::text)
+        RETURNING id
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(user_id)
+    .bind(body)
+    .fetch_one(db)
+    .await?;
+    Ok(id)
+}
+
+/// One row of the teacher's read-only submissions table on assignment show.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct UiAssignmentSubmission {
+    pub id: i64,
+    pub user_id: i64,
+    pub user_name: String,
+    pub body: Option<String>,
+    pub score: Option<f64>,
+    pub submission_type: Option<String>,
+    pub workflow_state: String,
+    pub submitted_at: DateTime<Utc>,
+    pub graded_at: Option<DateTime<Utc>>,
+}
+
+/// Load all submissions of one assignment with the submitting user's name —
+/// the teacher-facing read-only table on the assignment show page. The
+/// interactive grading UI is issue #108.
+pub async fn load_assignment_submissions(
+    db: &PgPool,
+    assignment_id: i64,
+) -> Result<Vec<UiAssignmentSubmission>, ApiError> {
+    let rows: Vec<UiAssignmentSubmission> = sqlx::query_as(
+        r#"
+        SELECT s.id, s.user_id, u.name AS user_name, s.body, s.score::float8,
+               s.submission_type, s.workflow_state, s.submitted_at, s.graded_at
+        FROM submissions s
+        JOIN users u ON u.id = s.user_id
+        WHERE s.assignment_id = $1
+        ORDER BY u.name ASC, s.user_id ASC
+        "#,
+    )
+    .bind(assignment_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 

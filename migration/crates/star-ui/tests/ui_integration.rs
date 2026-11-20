@@ -732,3 +732,598 @@ async fn next_param_round_trips_through_login() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// Assignments + gradebook journey (issue #71)
+// ---------------------------------------------------------------------------
+
+/// Seed helpers for the journey tests. Same sentinel discipline as the
+/// course tests: unique run prefix, cleanup at the end.
+async fn seed_assignment_group(pool: &PgPool, course_id: i64, name: &str, position: i32) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO assignment_groups (course_id, name, position) \
+         VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(course_id)
+    .bind(name)
+    .bind(position)
+    .fetch_one(pool)
+    .await
+    .expect("seed assignment group")
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn seed_assignment(
+    pool: &PgPool,
+    course_id: i64,
+    group_id: Option<i64>,
+    title: &str,
+    description: Option<&str>,
+    points: f64,
+    workflow_state: &str,
+) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO assignments \
+         (course_id, assignment_group_id, title, description, points_possible, workflow_state) \
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+    )
+    .bind(course_id)
+    .bind(group_id)
+    .bind(title)
+    .bind(description)
+    .bind(points)
+    .bind(workflow_state)
+    .fetch_one(pool)
+    .await
+    .expect("seed assignment")
+}
+
+async fn seed_submission(
+    pool: &PgPool,
+    assignment_id: i64,
+    user_id: i64,
+    body: &str,
+    score: Option<f64>,
+    workflow_state: &str,
+) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO submissions \
+         (assignment_id, user_id, body, submission_type, score, workflow_state) \
+         VALUES ($1, $2, $3, 'online_text_entry', $4, $5) RETURNING id",
+    )
+    .bind(assignment_id)
+    .bind(user_id)
+    .bind(body)
+    .bind(score)
+    .bind(workflow_state)
+    .fetch_one(pool)
+    .await
+    .expect("seed submission")
+}
+
+/// A session cookie helper: mint the JWT directly (the login flow is covered
+/// by the earlier tests) and attach it to requests.
+fn session_cookie(user_id: i64, role: &str) -> axum_extra::extract::cookie::Cookie<'static> {
+    let token = star_auth::create_token(user_id, role, JWT_SECRET).expect("mint");
+    axum_extra::extract::cookie::Cookie::new("star_session", token)
+}
+
+/// Issue #71: teacher sees groups + rows + unpublished styling on the
+/// assignments index; a student sees published rows with their submission
+/// pill and no "Add Assignment"; an unenrolled non-admin gets no data.
+#[tokio::test]
+async fn assignments_index_roles_and_grouping() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "ateacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "astudent", "student", "not-a-real-hash").await;
+    let outsider = seed_user(&pool, &prefix, "aoutsider", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Assignments Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    let group_a = seed_assignment_group(&pool, course, "Essays", 1).await;
+    let group_b = seed_assignment_group(&pool, course, "Quizzes", 2).await;
+    let essay = seed_assignment(
+        &pool,
+        course,
+        Some(group_a),
+        "Essay One",
+        Some("<p>Write about <b>topics</b>.</p>"),
+        10.0,
+        "published",
+    )
+    .await;
+    let _quiz = seed_assignment(
+        &pool,
+        course,
+        Some(group_b),
+        "Quiz One",
+        None,
+        5.0,
+        "unpublished",
+    )
+    .await;
+    seed_submission(&pool, essay, student, "my essay text", Some(8.0), "graded").await;
+
+    // Teacher: groups + rows + unpublished styling + Add Assignment.
+    let resp = server
+        .get(&format!("/courses/{course}/assignments"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(body.contains("Essays"), "group heading renders");
+    assert!(body.contains("Quizzes"), "second group renders");
+    assert!(body.contains("Essay One"), "assignment row renders");
+    assert!(body.contains("ig-row-unpublished"), "unpublished style");
+    assert!(body.contains("id=\"add_assignment\""), "teacher add button");
+    assert!(body.contains("15"), "total points 10+5 rendered");
+
+    // Group order: Essays bucket before Quizzes bucket.
+    let pos_a = body.find("Essays").expect("essays heading");
+    let pos_b = body.find("Quizzes").expect("quizzes heading");
+    assert!(pos_a < pos_b, "groups ordered by position");
+
+    // Student: published rows + own submission pill, no unpublished, no add.
+    let resp = server
+        .get(&format!("/courses/{course}/assignments"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body = resp.text();
+    assert!(body.contains("Essay One"));
+    assert!(
+        !body.contains("Quiz One"),
+        "unpublished hidden from student"
+    );
+    assert!(
+        !body.contains("add_assignment"),
+        "no add button for student"
+    );
+    assert!(
+        body.contains("pill-graded") && body.contains("Graded"),
+        "graded pill for own submission"
+    );
+
+    // Unenrolled non-admin: no data (404-before-403 gate).
+    let resp = server
+        .get(&format!("/courses/{course}/assignments"))
+        .add_cookie(session_cookie(outsider, "student"))
+        .await;
+    assert!(
+        resp.status_code() == 403 || resp.status_code() == 404,
+        "unenrolled user must not see the assignments index"
+    );
+    assert!(!resp.text().contains("Essay One"), "no data leak");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Issue #71: assignment show renders the description safe (tags stripped),
+/// the due date and points; a student text-entry submit creates the
+/// submission row and flips the state pill.
+#[tokio::test]
+async fn assignment_show_and_student_submit() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "bteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "bstudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Submit Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let group = seed_assignment_group(&pool, course, "Homework", 1).await;
+    let hw = seed_assignment(
+        &pool,
+        course,
+        Some(group),
+        "Homework One",
+        Some("<p>Read <script>alert('x')</script><strong>chapter 2</strong>.</p>"),
+        10.0,
+        "published",
+    )
+    .await;
+
+    // Student show: description safe (tags stripped, no script tag), submit
+    // form present, "Not Submitted" pill.
+    let resp = server
+        .get(&format!("/courses/{course}/assignments/{hw}"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(body.contains("Homework One"));
+    assert!(
+        !body.contains("<script>alert"),
+        "script tag must be stripped from the description"
+    );
+    assert!(body.contains("chapter 2"), "text content preserved");
+    assert!(body.contains("id=\"submit_assignment\""), "submit form");
+    assert!(
+        body.contains("pill-unsubmitted") && body.contains("Not Submitted"),
+        "not-submitted pill before submitting"
+    );
+    assert!(body.contains("10"), "points render");
+
+    // CSRF cookie comes from the show page; POST the text entry.
+    let csrf = resp
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf cookie issued")
+        .value()
+        .to_string();
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/{hw}/submit"))
+        .add_cookie(session_cookie(student, "student"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "body": "My homework answers",
+            "_csrf": csrf
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 303, "submit redirects: {}", resp.text());
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/assignments/{hw}?submitted=1").as_str()
+    );
+
+    // The submission row exists in the DB (same upsert shape as the API).
+    let (count, state, body_text): (i64, String, String) = sqlx::query_as(
+        "SELECT COUNT(*), MAX(workflow_state), MAX(body) FROM submissions \
+         WHERE assignment_id = $1 AND user_id = $2",
+    )
+    .bind(hw)
+    .bind(student)
+    .fetch_one(&pool)
+    .await
+    .expect("query submission");
+    assert_eq!(count, 1, "exactly one submission row");
+    assert_eq!(state, "submitted");
+    assert_eq!(body_text, "My homework answers");
+
+    // Show again: the pill now reads Submitted.
+    let resp = server
+        .get(&format!("/courses/{course}/assignments/{hw}"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    assert!(
+        resp.text().contains("pill-submitted")
+            && resp.text().contains("Submitted")
+            && !resp.text().contains("Not Submitted"),
+        "state pill flipped after submit"
+    );
+
+    // Teacher show: read-only submissions table with the student row.
+    let resp = server
+        .get(&format!("/courses/{course}/assignments/{hw}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body = resp.text();
+    assert!(body.contains("id=\"submissions_table\""), "teacher table");
+    assert!(body.contains("bstudent"), "student name in table");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Issue #71: teacher POST /assignments/new creates the row (it appears in
+/// the list); a student POST is 403.
+#[tokio::test]
+async fn new_assignment_create_and_gates() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "cteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "cstudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Create Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let group = seed_assignment_group(&pool, course, "Projects", 1).await;
+
+    // Student cannot even load the form.
+    let resp = server
+        .get(&format!("/courses/{course}/assignments/new"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student GET new -> 403");
+
+    // Teacher loads the form (with the group option).
+    let resp = server
+        .get(&format!("/courses/{course}/assignments/new"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(body.contains("Add Assignment"));
+    assert!(body.contains("Projects"), "group option listed");
+    let csrf = resp
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+
+    // Student POST -> 403 (before any insert).
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/new"))
+        .add_cookie(session_cookie(student, "student"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "name": "Hacked",
+            "points_possible": "1",
+            "_csrf": csrf,
+            "published": "published"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student POST new -> 403");
+
+    // Teacher POST creates the assignment.
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/new"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "name": "Project One",
+            "description": "Build something",
+            "points_possible": "25",
+            "due_date": "2026-12-01",
+            "due_time": "17:00",
+            "assignment_group_id": group.to_string(),
+            "_csrf": csrf,
+            "published": "published"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 303, "create redirects: {}", resp.text());
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/assignments").as_str()
+    );
+
+    // The row exists with the right values.
+    let row: Option<(String, f64, Option<i64>, String)> = sqlx::query_as(
+        "SELECT title, points_possible::float8, assignment_group_id, workflow_state \
+         FROM assignments WHERE course_id = $1 AND title = 'Project One'",
+    )
+    .bind(course)
+    .fetch_optional(&pool)
+    .await
+    .expect("query assignment");
+    let Some((title, points, group_id, state)) = row else {
+        panic!("created assignment row missing");
+    };
+    assert_eq!(title, "Project One");
+    assert_eq!(points, 25.0);
+    assert_eq!(group_id, Some(group));
+    assert_eq!(state, "published");
+
+    // It appears in the teacher's index.
+    let resp = server
+        .get(&format!("/courses/{course}/assignments"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert!(resp.text().contains("Project One"), "row appears in list");
+
+    // Validation: empty name re-renders the form with 422, no row created.
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/new"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new("star_csrf", csrf))
+        .form(&serde_json::json!({
+            "name": "  ",
+            "_csrf": "",
+            "published": "published"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 422, "empty name -> 422");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Issue #71: the grades page shows the student's own scores + the course
+/// total; a teacher can view a specific student via ?student_id=; a student
+/// cannot view another student.
+#[tokio::test]
+async fn grades_page_scores_and_totals() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "dteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "dstudent", "student", "not-a-real-hash").await;
+    let other = seed_user(&pool, &prefix, "dother", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Grades Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    seed_enrollment(&pool, other, course, "student").await;
+    let group = seed_assignment_group(&pool, course, "Exams", 1).await;
+    let exam = seed_assignment(
+        &pool,
+        course,
+        Some(group),
+        "Exam One",
+        None,
+        20.0,
+        "published",
+    )
+    .await;
+    let extra = seed_assignment(
+        &pool,
+        course,
+        Some(group),
+        "Exam Two",
+        None,
+        30.0,
+        "published",
+    )
+    .await;
+    // student: 16/20 graded on exam one, submitted (ungraded) on exam two.
+    seed_submission(&pool, exam, student, "answers", Some(16.0), "graded").await;
+    seed_submission(&pool, extra, student, "answers two", None, "submitted").await;
+
+    // Student's own grades: score + total 16/20 = 80%.
+    let resp = server
+        .get(&format!("/courses/{course}/grades"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(body.contains("id=\"grades_summary\""), "summary table");
+    assert!(body.contains("Exam One"));
+    assert!(body.contains("Exam Two"));
+    assert!(body.contains("16 / 20"), "graded score renders");
+    assert!(body.contains("80%"), "percent 16/20 = 80%");
+    assert!(body.contains("id=\"final_grade\""), "total block");
+    assert!(
+        body.contains("pill-graded") && body.contains("pill-submitted"),
+        "state pills per row"
+    );
+
+    // Teacher with ?student_id= sees the same summary for the student.
+    let resp = server
+        .get(&format!("/courses/{course}/grades?student_id={student}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "teacher view: {}", resp.text());
+    assert!(resp.text().contains("16 / 20"));
+    assert!(resp.text().contains("80%"));
+
+    // A student cannot view another student's grades.
+    let resp = server
+        .get(&format!("/courses/{course}/grades?student_id={other}"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "cross-student view -> 403");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Issue #71: the teacher gradebook grid renders one row per enrollment and
+/// one column per assignment with correct cells; the CSV export serves
+/// text/csv with a header and data row; students get 403.
+#[tokio::test]
+async fn gradebook_grid_and_csv() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "eteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "estudent", "student", "not-a-real-hash").await;
+    let student2 = seed_user(&pool, &prefix, "estudent2", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Grid Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    seed_enrollment(&pool, student2, course, "student").await;
+    let group = seed_assignment_group(&pool, course, "Labs", 1).await;
+    let lab1 = seed_assignment(
+        &pool,
+        course,
+        Some(group),
+        "Lab One",
+        None,
+        10.0,
+        "published",
+    )
+    .await;
+    let lab2 = seed_assignment(
+        &pool,
+        course,
+        Some(group),
+        "Lab Two",
+        None,
+        10.0,
+        "published",
+    )
+    .await;
+    // student: 9/10 graded on lab1, nothing on lab2.
+    seed_submission(&pool, lab1, student, "lab one text", Some(9.0), "graded").await;
+    // student2: submitted lab2, ungraded.
+    seed_submission(&pool, lab2, student2, "lab two text", None, "submitted").await;
+
+    // Teacher grid.
+    let resp = server
+        .get(&format!("/courses/{course}/gradebook"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(body.contains("id=\"gradebook_grid\""), "grid table");
+    assert!(
+        body.contains("Lab One") && body.contains("Lab Two"),
+        "columns"
+    );
+    // One row per enrollment (3 incl. teacher).
+    let row_count = body.matches("gradebook-row").count();
+    assert_eq!(row_count, 3, "one row per enrollment, got {row_count}");
+    // Cells: student has 9 on lab1; student2 has a submitted pill on lab2.
+    assert!(body.contains("gradebook-score\">9<"), "score cell");
+    assert!(
+        body.contains("pill-submitted\">submitted<"),
+        "submitted state cell"
+    );
+
+    // Student -> 403 (grid is teacher-only).
+    let resp = server
+        .get(&format!("/courses/{course}/gradebook"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student gradebook -> 403");
+
+    // CSV: content-type + header + a data row.
+    let resp = server
+        .get(&format!("/courses/{course}/gradebook.csv"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        content_type.starts_with("text/csv"),
+        "content-type: {content_type}"
+    );
+    let csv = resp.text();
+    assert!(
+        csv.starts_with("Student,Lab One,Lab Two,Total"),
+        "csv: {csv}"
+    );
+    let lines: Vec<&str> = csv.lines().collect();
+    assert!(lines.len() >= 4, "header + 3 enrollment rows");
+    // The student's row carries the 9 score.
+    let student_row = lines
+        .iter()
+        .find(|l| l.contains("estudent,") && !l.contains("estudent2"))
+        .expect("student row in csv");
+    assert!(student_row.contains("9"), "score in csv: {student_row}");
+
+    // Student CSV -> 403.
+    let resp = server
+        .get(&format!("/courses/{course}/gradebook.csv"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student csv -> 403");
+
+    cleanup(&pool, &prefix).await;
+}

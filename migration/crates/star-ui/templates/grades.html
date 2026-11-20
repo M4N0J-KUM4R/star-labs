@@ -1,0 +1,59 @@
+{% extends "layouts/course.html" %}
+{# Grades page (issue #71) — Canvas gradebooks#grade_summary, server-rendered
+   for the current student (teachers may pass ?student_id=): one row per
+   assignment with due date, submission state pill and score, plus the course
+   total, percent and letter grade (star-grading-standards). #}
+{% block content %}
+  <div id="grade-summary-content" class="grade-summary">
+    <div class="ic-Action-header">
+      <h1 class="grades-heading">Grades for {{ student_name }}</h1>
+      <div class="ic-Action-header__actions">
+        {% if is_teacher %}
+        <a id="view_gradebook_link" class="btn" href="/courses/{{ course_id }}/gradebook">View Gradebook</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div id="student-grades-right-content" class="student-grades-right-content">
+      <div class="student_assignment final_grade">
+        <span class="total-grade-label">Total:</span>
+        <span class="grade" id="final_grade">{{ total_label }}</span>
+        <span class="percent" id="final_grade_percent">{{ percent_label }}</span>
+        {% if let Some(letter) = letter_grade.clone() %}
+        <span class="final-letter-grade" id="final_letter_grade_text">{{ letter }}</span>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="table-wrapper">
+      <table id="grades_summary" class="ic-Table ic-Table--hover-row">
+        <thead>
+          <tr>
+            <th scope="col" class="title">Name</th>
+            <th scope="col" class="due">Due</th>
+            <th scope="col" class="status">Status</th>
+            <th scope="col" class="assignment_score">Score</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr class="student_assignment" data-assignment-id="{{ row.assignment_id }}">
+            <th scope="row" class="title">
+              <a class="assignment-link" href="/courses/{{ course_id }}/assignments/{{ row.assignment_id }}">{{ row.title }}</a>
+              {% if let Some(group) = row.group_name.clone() %}
+              <span class="context">{{ group }}</span>
+              {% endif %}
+            </th>
+            <td class="due">{{ row.due_label }}</td>
+            <td class="status"><span class="submission-pill pill-{{ row.pill_class }}">{{ row.pill_label }}</span></td>
+            <td class="assignment_score">{{ row.score_label }}</td>
+          </tr>
+          {% endfor %}
+          {% if rows.is_empty() %}
+          <tr class="no-grades-row"><td colspan="4">There are no graded items in this course yet.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endblock content %}
