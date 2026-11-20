@@ -51,7 +51,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{header::HeaderName, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{delete, get, options, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -842,10 +842,13 @@ pub fn router() -> axum::Router<AppState> {
         // Canvas files#icon_metadata (SVG parse).
         .route("/files/{id}/icon_metadata", get(get_icon_metadata))
         .route("/courses/{courseId}/files/{id}", get(get_course_file))
-        .route(
-            "/groups/{groupId}/files",
-            get(list_group_files).post(create_group_file),
-        )
+        // GET /groups/{groupId}/files is owned by star-groups (it queries the
+        // group_files table); registering it here too would panic when
+        // star-http merges the routers (same path + method). Canvas routes
+        // the GET to files#api_index (routes.rb:2143) — star-groups'
+        // list_group_files serves that shape — while the POST
+        // (groups#create_file, routes.rb:2127) lives here.
+        .route("/groups/{groupId}/files", post(create_group_file))
         .route("/groups/{groupId}/files/quota", get(get_group_files_quota))
         .route("/groups/{groupId}/files/{id}", delete(delete_group_file))
         .route("/users/{userId}/files", get(list_user_files))
@@ -1405,15 +1408,13 @@ async fn get_user_file(
 async fn post_file(
     State(state): State<AppState>,
     Path(file_id): Path<i64>,
-    auth: AuthUser,
+    _auth: AuthUser,
 ) -> Result<impl IntoResponse, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM files WHERE id = $1")
+    let row: (i64,) = sqlx::query_as("SELECT id FROM files WHERE id = $1")
         .bind(file_id)
         .fetch_optional(&state.db)
-        .await?;
-    if row.is_none() {
-        return Err(ApiError::NotFound);
-    }
+        .await?
+        .ok_or(ApiError::NotFound)?;
     Ok(Json(serde_json::json!({ "message": "file upload acknowledged" })).into_response())
 }
 
@@ -1422,7 +1423,7 @@ async fn post_file(
 async fn create_success_get(
     State(state): State<AppState>,
     Path(file_id): Path<i64>,
-    Query(params): Query<CreateSuccessQuery>,
+    Query(_params): Query<CreateSuccessQuery>,
     auth: AuthUser,
 ) -> Result<Json<CreateSuccessResponse>, ApiError> {
     let sql = format!("{ATTACHMENT_SELECT} WHERE f.id = $1 AND f.workflow_state <> 'deleted'");
@@ -1511,7 +1512,7 @@ async fn get_icon_metadata(
     Path(file_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let row: Option<(String,)> = sqlx::query_as(
+    let row: (String,) = sqlx::query_as(
         "SELECT content_type FROM files WHERE id = $1 AND workflow_state <> 'deleted'",
     )
     .bind(file_id)
@@ -1532,38 +1533,23 @@ async fn get_icon_metadata(
     })))
 }
 
-/// GET /groups/{groupId}/files — list files for a group context.
-async fn list_group_files(
-    State(state): State<AppState>,
-    Path(group_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<Vec<AttachmentResponse>>, ApiError> {
-    let group: Option<(i64, Option<i64>)> = sqlx::query_as(
-        "SELECT id, course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'",
-    )
-    .bind(group_id)
-    .fetch_optional(&state.db)
-    .await?;
-    let (group_id_val, _course_id) = group.ok_or(ApiError::NotFound)?;
-
-    // Groups are not courses; check group membership instead of course teaching rights.
-    let allowed = user_in_group(&state.db, auth.id, group_id_val).await? || is_admin(&auth);
-    if !allowed {
-        return Err(ApiError::Forbidden);
-    }
-
-    // star-lms files are course-scoped; group files list is empty (scope unresolved).
-    Ok(Json(Vec::new()))
-}
-
-/// POST /groups/{groupId}/files — create a file entry in a group context.
+/// POST /groups/{groupId}/files — create file metadata in a group context.
+///
+/// Canvas groups#create_file (groups_controller.rb:1043) is an upload
+/// preflight (api_attachment_preflight); star-lms is metadata-only, so this
+/// inserts a group_files row directly. Auth mirrors Canvas
+/// authorized_action(attachment, :create): group member or admin.
 async fn create_group_file(
     State(state): State<AppState>,
     Path(group_id): Path<i64>,
-    Json(payload): Json<serde_json::Value>,
     auth: AuthUser,
-) -> Result<Json<AttachmentResponse>, ApiError> {
-    let group: Option<(i64, Option<i64>)> = sqlx::query_as(
+    Json(payload): Json<CreateFileRequest>,
+) -> Result<(StatusCode, Json<GroupFileResponse>), ApiError> {
+    if payload.filename.trim().is_empty() {
+        return Err(ApiError::Validation("filename is required".into()));
+    }
+
+    let group: (i64, Option<i64>) = sqlx::query_as(
         "SELECT id, course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'",
     )
     .bind(group_id)
@@ -1577,9 +1563,42 @@ async fn create_group_file(
         return Err(ApiError::Forbidden);
     }
 
-    Err(ApiError::NotImplemented(
-        "group-scoped file creation is not yet supported".into(),
-    ))
+    // display_name defaults to filename (Canvas infer_display_name).
+    let display_name = payload
+        .display_name
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| payload.filename.clone());
+    let folder = payload
+        .folder
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "group files".to_string());
+
+    let row = sqlx::query_as::<_, GroupFileRow>(
+        r#"
+        INSERT INTO group_files
+            (group_id, uploader_id, folder, filename, display_name, content_type, size)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        RETURNING id, group_id, folder, filename,
+                  COALESCE(display_name, filename) AS display_name,
+                  content_type, size, created_at, updated_at
+        "#,
+    )
+    .bind(group_id_val)
+    .bind(auth.id)
+    .bind(folder)
+    .bind(&payload.filename)
+    .bind(&display_name)
+    .bind(
+        payload
+            .content_type
+            .as_deref()
+            .unwrap_or("application/octet-stream"),
+    )
+    .bind(payload.size.unwrap_or(0))
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(GroupFileResponse::from(row))))
 }
 
 /// DELETE /groups/{groupId}/files/{id} — delete a group file.
@@ -1588,21 +1607,38 @@ async fn delete_group_file(
     Path((group_id, file_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    let group: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'")
-            .bind(group_id)
-            .fetch_optional(&state.db)
-            .await?
-            .ok_or(ApiError::NotFound)?;
+    let group: (i64, Option<i64>) = sqlx::query_as(
+        "SELECT id, course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+    let (_, course_id) = group;
 
-    let can_manage =
-        user_teacher_of_course(&state.db, auth.id, group.0, &auth.role).await? || is_admin(&auth);
+    // Group files live in group_files (course_id NULL for account groups);
+    // manage rights come from the group's course when it has one.
+    let mut can_manage = is_admin(&auth);
+    if !can_manage {
+        if let Some(course_id) = course_id {
+            can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+        }
+    }
     if !can_manage {
         return Err(ApiError::Forbidden);
     }
 
-    sqlx::query("UPDATE files SET workflow_state = 'deleted', updated_at = NOW() WHERE id = $1")
+    sqlx::query("UPDATE group_files SET updated_at = NOW() WHERE id = $1 AND group_id = $2")
         .bind(file_id)
+        .bind(group_id)
+        .execute(&state.db)
+        .await?;
+
+    // Canvas attachments#destroy soft-deletes; group_files has no
+    // workflow_state, so remove the metadata row (metadata-only table).
+    sqlx::query("DELETE FROM group_files WHERE id = $1 AND group_id = $2")
+        .bind(file_id)
+        .bind(group_id)
         .execute(&state.db)
         .await?;
 
@@ -1615,7 +1651,7 @@ async fn get_group_files_quota(
     Path(group_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<QuotaResponse>, ApiError> {
-    let group: Option<(i64, Option<i64>)> = sqlx::query_as(
+    let group: (i64, Option<i64>) = sqlx::query_as(
         "SELECT id, course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'",
     )
     .bind(group_id)
@@ -1632,7 +1668,11 @@ async fn get_group_files_quota(
     }
 
     // star-lms: no group-level storage_quota; return zero quota.
-    Ok(Json(QuotaResponse { quota: 0, used: 0 }))
+    // Canvas api_quota renders { quota, quota_used } (files_controller.rb:255).
+    Ok(Json(QuotaResponse {
+        quota: 0,
+        quota_used: 0,
+    }))
 }
 
 /// GET /users/{userId}/files — list a user's uploaded files.
@@ -1648,28 +1688,26 @@ async fn list_user_files(
     }
 
     let (per_page, offset) = pagination(params.page, params.per_page);
-    let course_id = params.course_id.unwrap_or(0);
 
+    // Canvas files#api_index for a user context lists the user's files across
+    // contexts (no course filter); star-lms scopes by uploader_id.
     let files = sqlx::query_as::<_, FileRow>(
         r#"
         SELECT id, course_id, folder, folder_id, filename, display_name,
                content_type, size, created_at, updated_at
         FROM files
-        WHERE uploader_id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+        WHERE uploader_id = $1 AND workflow_state <> 'deleted'
         ORDER BY created_at DESC
-        LIMIT $3 OFFSET $4
+        LIMIT $2 OFFSET $3
         "#,
     )
     .bind(user_id)
-    .bind(course_id)
     .bind(per_page)
     .bind(offset)
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(
-        files.into_iter().map(FileResponse::from_row).collect(),
-    ))
+    Ok(Json(files.into_iter().map(FileResponse::from).collect()))
 }
 
 /// GET /users/{userId}/files/quota — Canvas files#quota for a user.
@@ -1693,7 +1731,10 @@ async fn get_user_files_quota(
     // Default 50 MB quota; courses.storage_quota is not user-scoped in star-lms.
     let quota: i64 = 52_428_800; // 50 MiB
 
-    Ok(Json(QuotaResponse { quota, used }))
+    Ok(Json(QuotaResponse {
+        quota,
+        quota_used: used,
+    }))
 }
 
 // ─── existing get_file_ref handler follows ──────────────────────────────────
@@ -2512,13 +2553,14 @@ async fn list_group_folders_and_files(
     Query(params): Query<FoldersAndFilesQuery>,
     auth: AuthUser,
 ) -> Result<Json<ContextFoldersAndFiles>, ApiError> {
-    let group: Option<(i64, Option<i64>)> = sqlx::query_as(
+    let group: (i64, Option<i64>) = sqlx::query_as(
         "SELECT id, course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'",
     )
     .bind(group_id)
     .fetch_optional(&state.db)
-    .await?;
-    let (_, course_id) = group.ok_or(ApiError::NotFound)?;
+    .await?
+    .ok_or(ApiError::NotFound)?;
+    let (_, course_id) = group;
 
     let mut can_manage = is_admin(&auth);
     if !can_manage {
@@ -4153,7 +4195,8 @@ mod tests {
 
     #[test]
     fn file_response_json_includes_canvas_fields() {
-        // FileResponse is what list_user_files and list_group_files return.
+        // FileResponse is what list_user_files returns (the group GET is
+        // served by star-groups' list_group_files).
         use crate::FileResponse;
         let now = Utc::now();
         let row = FileRow {
@@ -4168,7 +4211,7 @@ mod tests {
             created_at: now,
             updated_at: now,
         };
-        let resp = FileResponse::from_row(row);
+        let resp = FileResponse::from(row);
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["display_name"], "Handout.pdf");
         assert_eq!(json["content-type"], "application/pdf");
@@ -4178,14 +4221,15 @@ mod tests {
 
     #[test]
     fn group_file_response_includes_quota_fields() {
-        // QuotaResponse: { quota, used }.
+        // Canvas api_quota renders { quota, quota_used }
+        // (files_controller.rb:255).
         let resp = QuotaResponse {
             quota: 50_000_000,
-            used: 10_000_000,
+            quota_used: 10_000_000,
         };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["quota"], 50_000_000);
-        assert_eq!(json["used"], 10_000_000);
+        assert_eq!(json["quota_used"], 10_000_000);
     }
 
     #[test]
@@ -4214,10 +4258,11 @@ mod tests {
     }
 
     #[test]
-    fn create_group_file_requires_teacher_or_admin() {
-        // Handler checks: is_admin || user_teacher_of_course.
-        fn can_manage(is_admin: bool, is_teacher: bool) -> bool {
-            is_admin || is_teacher
+    fn create_group_file_requires_member_or_admin() {
+        // Canvas groups#create_file guards with authorized_action(attachment,
+        // :create); star-lms checks group membership (user_in_group) or admin.
+        fn can_manage(is_admin: bool, is_member: bool) -> bool {
+            is_admin || is_member
         }
         assert!(can_manage(true, false));
         assert!(can_manage(false, true));
@@ -4225,35 +4270,30 @@ mod tests {
     }
 
     #[test]
-    fn delete_group_file_soft_deletes() {
-        // Handler sets workflow_state = 'deleted' — verified via SQL.
-        // The soft-delete path is the only one; no hard delete on group files.
-        let sql = "UPDATE files SET workflow_state = 'deleted', updated_at = NOW() WHERE id = $1";
-        assert!(sql.contains("workflow_state = 'deleted'"));
+    fn delete_group_file_removes_metadata_row() {
+        // group_files is a metadata-only table with no workflow_state column,
+        // so the handler hard-deletes the row (Canvas attachments#destroy
+        // soft-deletes because its attachments table carries file state).
+        let sql = "DELETE FROM group_files WHERE id = $1 AND group_id = $2";
+        assert!(sql.contains("DELETE FROM group_files"));
     }
 
     #[test]
     fn group_files_quota_returns_zero_when_no_group_quota() {
-        // star-lms has no group-level storage_quota; quota=0, used=0.
-        let resp = QuotaResponse { quota: 0, used: 0 };
+        // star-lms has no group-level storage_quota; quota=0, quota_used=0.
+        let resp = QuotaResponse {
+            quota: 0,
+            quota_used: 0,
+        };
         let json = serde_json::to_value(&resp).unwrap();
         assert_eq!(json["quota"], 0);
-        assert_eq!(json["used"], 0);
-    }
-
-    #[test]
-    fn list_group_files_returns_empty_when_scope_unresolved() {
-        // star-lms files are course-scoped; group files list is empty.
-        let files: Vec<AttachmentResponse> = Vec::new();
-        let json = serde_json::to_value(&files).unwrap();
-        assert!(json.is_array());
-        assert!(json.as_array().unwrap().is_empty());
+        assert_eq!(json["quota_used"], 0);
     }
 
     #[test]
     fn delete_group_file_checks_group_exists() {
         // Handler: group must exist and not be deleted.
-        let sql = "SELECT id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'";
+        let sql = "SELECT id, course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'";
         assert!(sql.contains("workflow_state <> 'deleted'"));
     }
 }
