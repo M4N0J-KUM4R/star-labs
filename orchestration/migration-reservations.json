@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0216",
- "next_available": "0217",
+ "max_merged": "0217",
+ "next_available": "0218",
  "reservations": {
   "0001": {
    "issue": null,
@@ -664,12 +664,17 @@
   },
   "0215": {
    "issue": null,
-   "note": "merged by wave (no issue)",
+   "note": "star-features: CSP settings (csp_settings_controller)",
    "status": "merged"
   },
   "0216": {
    "issue": null,
    "note": "star-calendar: planner overrides (planner_overrides_controller)",
+   "status": "merged"
+  },
+  "0217": {
+   "issue": null,
+   "note": "star-content: content migration contexts",
    "status": "merged"
   }
  }
