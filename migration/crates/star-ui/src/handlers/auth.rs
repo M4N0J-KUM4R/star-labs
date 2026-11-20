@@ -298,7 +298,7 @@ const FORGOT_CONFIRMATION: &str =
 
 fn forgot_page(jar: CookieJar, email: String, confirmation: String, error: String) -> Response {
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
-    let (_, body_class, css_url, env_json) = auth_page_shell();
+    let (body_class, css_url, env_json) = auth_page_shell();
     let page = ForgotPasswordPage {
         title: "Forgot Password".to_string(),
         body_class,
@@ -430,7 +430,7 @@ pub async fn reset_password_form(
         Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
     };
     let (jar, csrf_token) = ensure_csrf_cookie(jar);
-    let (_, body_class, css_url, env_json) = auth_page_shell();
+    let (body_class, css_url, env_json) = auth_page_shell();
     let page = ResetPasswordPage {
         title: "Change Password".to_string(),
         body_class,
