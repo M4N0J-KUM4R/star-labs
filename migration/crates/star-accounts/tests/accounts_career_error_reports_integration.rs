@@ -125,6 +125,20 @@ async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str
     .expect("seed enrollment");
 }
 
+/// A plain member of the account (no admin right).
+async fn seed_account_member(pool: &PgPool, account_id: i64, user_id: i64) {
+    sqlx::query(
+        "INSERT INTO account_users (account_id, user_id, role, workflow_state) \
+         VALUES ($1, $2, 'member', 'active') \
+         ON CONFLICT (account_id, user_id) DO NOTHING",
+    )
+    .bind(account_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .expect("seed account member");
+}
+
 async fn seed_account_admin(pool: &PgPool, account_id: i64, user_id: i64) {
     sqlx::query(
         "INSERT INTO account_users (account_id, user_id, role, workflow_state) \
@@ -498,7 +512,7 @@ async fn the_accessibility_summary_counts_the_course_statistics() {
 
     // Canvas answers 401 — not 403 — for a caller that may read the account
     // but may not see the accessibility tab.
-    seed_account_user(&pool, account, student).await;
+    seed_account_member(&pool, account, student).await;
     let resp = server
         .get(&format!("/accounts/{account}/accessibility_issue_summary"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
