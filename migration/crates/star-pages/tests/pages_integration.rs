@@ -543,7 +543,7 @@ async fn title_availability_conflict_when_page_exists() {
         .get(&format!(
             "/courses/{course}/page_title_availability?title=Existing Title"
         ))
-        .add_header(axum::http::header::AUTHORIZATION, bearer)
+        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
