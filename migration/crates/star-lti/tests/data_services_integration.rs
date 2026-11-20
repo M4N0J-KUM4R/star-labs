@@ -1,4 +1,4 @@
-//! Integration tests for star-lti data_services, line_items, and tool_proxy.
+//! Integration tests for star-lti data_services and line_items.
 //!
 //! Conventions (mirrors the rest of the workspace):
 //! - Skipped cleanly when DATABASE_URL is not set (prints SKIP and returns).
@@ -318,65 +318,6 @@ async fn line_items_crud() {
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 404, "not found after delete");
-
-    cleanup(&pool, &prefix).await;
-}
-
-// ---------------------------------------------------------------------------
-// Tool Proxy tests
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn tool_proxy_routes() {
-    let Some((server, pool, prefix)) = setup().await else {
-        eprintln!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
-    let account = seed_account(&pool, &prefix, "root", None).await;
-    let course = seed_course(&pool, &prefix, "main", account).await;
-
-    seed_account_admin(&pool, account, admin).await;
-
-    // Create tool proxy in account.
-    let created_account = server
-        .post(&format!("/api/lti/accounts/{account}/tool_proxy"))
-        .add_header(AUTHORIZATION, auth(admin, "admin"))
-        .json(&json!({}))
-        .await;
-    assert_eq!(
-        created_account.status_code(),
-        201,
-        "create in account: {}",
-        created_account.text()
-    );
-    let tp_account: Value = created_account.json();
-    let guid = tp_account["tool_proxy_guid"]
-        .as_str()
-        .expect("tool_proxy_guid");
-
-    // Show tool proxy by guid.
-    let resp = server.get(&format!("/api/lti/tool_proxy/{guid}")).await;
-    assert_eq!(resp.status_code(), 200, "show: {}", resp.text());
-
-    // Create tool proxy in course.
-    let created_course = server
-        .post(&format!("/api/lti/courses/{course}/tool_proxy"))
-        .add_header(AUTHORIZATION, auth(admin, "admin"))
-        .json(&json!({}))
-        .await;
-    assert_eq!(
-        created_course.status_code(),
-        201,
-        "create in course: {}",
-        created_course.text()
-    );
-    let tp_course: Value = created_course.json();
-    assert!(tp_course["tool_proxy_guid"]
-        .as_str()
-        .unwrap()
-        .starts_with("course-"));
 
     cleanup(&pool, &prefix).await;
 }

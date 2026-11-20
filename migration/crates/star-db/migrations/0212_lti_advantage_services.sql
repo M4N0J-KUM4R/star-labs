@@ -1,9 +1,12 @@
--- Migration 0212: LTI Advantage services (line items, data services, tool proxy).
+-- Migration 0212: LTI Advantage services tables (line items + data services).
 --
 -- Canvas: app/controllers/lti/line_items_controller.rb,
---         app/controllers/lti/data_services_controller.rb,
---         app/controllers/lti/tool_proxy_controller.rb.
--- Column lists mirror the *_COLUMNS constants in star-lti.
+--         app/controllers/lti/data_services_controller.rb.
+-- Column lists mirror LINE_ITEM_COLUMNS (star-lti/src/line_items.rs) and
+-- SUBSCRIPTION_COLUMNS (star-lti/src/data_services.rs).
+--
+-- lti_tool_proxies is intentionally NOT created here: PR #163 (star-lti
+-- tool_proxy routes) owns it via 0115_lti_ims_registrations.sql.
 
 CREATE TABLE IF NOT EXISTS lti_line_items (
     id              BIGSERIAL PRIMARY KEY,
@@ -39,18 +42,3 @@ CREATE TABLE IF NOT EXISTS lti_data_service_subscriptions (
 
 CREATE INDEX IF NOT EXISTS idx_lti_data_service_subscriptions_account
     ON lti_data_service_subscriptions(account_id);
-
-CREATE TABLE IF NOT EXISTS lti_tool_proxies (
-    id              BIGSERIAL PRIMARY KEY,
-    guid            TEXT NOT NULL,
-    context_type    TEXT,
-    context_id      BIGINT,
-    account_id      BIGINT REFERENCES accounts(id) ON DELETE CASCADE,
-    raw_data        JSONB NOT NULL DEFAULT '{}',
-    workflow_state  TEXT NOT NULL DEFAULT 'active',
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_lti_tool_proxies_guid
-    ON lti_tool_proxies(guid);
