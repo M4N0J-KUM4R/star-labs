@@ -1032,9 +1032,9 @@ pub async fn quiz_create(
                 ("Dashboard".to_string(), "/dashboard".to_string()),
                 (ctx.course_name.clone(), format!("/courses/{course_id}")),
                 (
-                "Quizzes".to_string(),
-                format!("/courses/{course_id}/quizzes"),
-            ),
+                    "Quizzes".to_string(),
+                    format!("/courses/{course_id}/quizzes"),
+                ),
             ],
             csrf_token: ctx.csrf_token,
             tabs: ctx.tabs,
