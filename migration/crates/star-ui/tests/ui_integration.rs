@@ -1577,12 +1577,9 @@ async fn discussion_show_create_topic_entry_and_reply() {
     )
     .await;
     assert_eq!(csrf_page.status_code(), 403, "student blocked from form");
-    let csrf = csrf_page
-        .cookies()
-        .get("star_csrf")
-        .expect("csrf")
-        .value()
-        .to_string();
+    // The 403 page never sets a CSRF cookie, and the teacher gate rejects
+    // before CSRF validation matters — any well-formed token exercises it.
+    let csrf = "0123456789abcdef0123456789abcdef".to_string();
     let resp = server
         .post(&format!("/courses/{course}/discussions"))
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
