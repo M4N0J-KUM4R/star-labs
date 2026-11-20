@@ -933,6 +933,19 @@ pub fn router() -> Router<AppState> {
         .route("/show_k5_dashboard", get(show_k5_dashboard))
         // Canvas users_controller#clear_cache.
         .route("/users/{id}/clear_cache", post(clear_cache))
+        // Canvas user_observees controller — 7 routes:
+        // observers (who watches this user), observees (who this user watches),
+        // create/show/update/delete observee links.
+        .route("/users/{userId}/observers", get(list_observers))
+        .route("/users/{userId}/observees", get(list_observees))
+        .route("/users/{userId}/observees", post(create_observee))
+        .route(
+            "/users/{userId}/observees/{observeeId}",
+            get(get_observee)
+                .put(update_observee)
+                .delete(delete_observee),
+        )
+        .route("/users/{userId}/observers/{observerId}", get(get_observer))
         // Canvas users_controller#set_text_editor_preference /
         // #set_files_ui_version_preference (user preferences, migration 0123).
         .route(
@@ -2584,6 +2597,431 @@ async fn user_has_role(pool: &PgPool, user_id: i64, role: &str) -> Result<bool, 
             .await
             .map_err(ApiError::from)?;
     Ok(row.is_some())
+}
+
+// --------------------------------------------------------------------------
+// User-observees (observer enrollment) types
+// --------------------------------------------------------------------------
+
+/// Canvas UserObservee / Observer JSON shape:
+/// `{"id": <user_id>, "name": ..., "display_name": ..., "enrollments": [...]}`
+/// The enrollments array holds the course-scoped observer links.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ObserveeResponse {
+    pub id: i64,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub enrollments: Vec<ObserverEnrollmentJson>,
+}
+
+/// One observer-link record embedded in an observee response.
+/// course_id = NULL means "all courses" (global observer link).
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct ObserverEnrollmentJson {
+    pub course_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub course_name: Option<String>,
+    pub enrollment_state: String,
+}
+
+/// 6-tuple returned by observee queries:
+/// (user_id, name, display_name, course_id, course_name, workflow_state)
+type ObserveeRow = (
+    i64,
+    String,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    String,
+);
+
+/// Observer link created by POST /users/{userId}/observees.
+#[derive(Debug, Deserialize)]
+pub struct CreateObserveeRequest {
+    pub user_id: i64,
+    pub course_id: Option<i64>,
+}
+
+/// Course-scoped update for PUT /users/{userId}/observees/{observeeId}.
+#[derive(Debug, Deserialize)]
+pub struct UpdateObserveeRequest {
+    pub course_id: Option<i64>,
+}
+
+// --------------------------------------------------------------------------
+// User-observees helpers
+// --------------------------------------------------------------------------
+
+/// Check whether `auth_user` may read/modify observee links for `user_id`.
+async fn authorize_observee_access(
+    state: &AppState,
+    auth: &AuthUser,
+    user_id: i64,
+) -> Result<(), ApiError> {
+    let role = get_user_role(&state.db, auth.id).await?;
+    let role = role.unwrap_or_else(|| "student".to_string());
+    if is_self(auth.id, user_id) || is_admin(&role) {
+        return Ok(());
+    }
+    // Observers may manage their own observee links.
+    let observer_link: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM observer_enrollments WHERE observer_id = $1 LIMIT 1")
+            .bind(auth.id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+    if observer_link.is_some() {
+        return Ok(());
+    }
+    Err(ApiError::Forbidden)
+}
+
+/// Load all observees for a given observer user, optionally scoped to a
+/// course.  Each distinct (user_id, course_id) pair is returned as one
+/// ObserverEnrollmentJson entry; the user name is emitted once.
+async fn load_observees(
+    pool: &PgPool,
+    observer_id: i64,
+    course_id: Option<i64>,
+) -> Result<Vec<ObserveeResponse>, ApiError> {
+    let rows: Vec<ObserveeRow> = sqlx::query_as(
+        r#"
+            SELECT oe.user_id,
+                   u.name,
+                   NULL::text          AS display_name,
+                   oe.course_id,
+                   c.name              AS course_name,
+                   oe.workflow_state
+            FROM observer_enrollments oe
+            JOIN users u ON u.id = oe.user_id
+            LEFT JOIN courses c ON c.id = oe.course_id
+            WHERE oe.observer_id = $1
+              AND ($2::bigint IS NULL OR oe.course_id = $2)
+            ORDER BY u.name, oe.course_id
+            "#,
+    )
+    .bind(observer_id)
+    .bind(course_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Group by observee user id; collapse multiple course links into one
+    // enrollments array per user.
+    let mut by_user: BTreeMap<i64, ObserveeResponse> = BTreeMap::new();
+    for (user_id, name, display_name, cid, course_name, workflow_state) in rows {
+        let entry = by_user.entry(user_id).or_insert_with(|| ObserveeResponse {
+            id: user_id,
+            name,
+            display_name,
+            enrollments: Vec::new(),
+        });
+        entry.enrollments.push(ObserverEnrollmentJson {
+            course_id: cid,
+            course_name,
+            enrollment_state: workflow_state,
+        });
+    }
+    Ok(by_user.into_values().collect())
+}
+
+/// Load all observers for a given observee user (users who watch this user).
+async fn load_observers(pool: &PgPool, user_id: i64) -> Result<Vec<UserResponse>, ApiError> {
+    let observers: Vec<UserResponse> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT u.id, u.name, COALESCE(u.sortable_name, u.name) AS sortable_name,
+               u.email, u.role, u.created_at
+        FROM observer_enrollments oe
+        JOIN users u ON u.id = oe.observer_id
+        WHERE oe.user_id = $1
+        ORDER BY u.name
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(observers)
+}
+
+// --------------------------------------------------------------------------
+// User-observees handlers
+// --------------------------------------------------------------------------
+
+/// GET /users/{userId}/observers — list observers of this user.
+async fn list_observers(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(user_id): Path<i64>,
+) -> Result<Json<Vec<UserResponse>>, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+    load_observers(&state.db, user_id).await.map(Json)
+}
+
+/// GET /users/{userId}/observees — list users this user observes.
+async fn list_observees(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(user_id): Path<i64>,
+    Query(params): Query<ObserveeQuery>,
+) -> Result<Json<Vec<ObserveeResponse>>, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+    load_observees(&state.db, user_id, params.course_id)
+        .await
+        .map(Json)
+}
+
+/// Query params for GET /users/{userId}/observees.
+#[derive(Debug, Default, Deserialize)]
+pub struct ObserveeQuery {
+    pub course_id: Option<i64>,
+}
+
+/// POST /users/{userId}/observees — link a user as an observee.
+async fn create_observee(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(user_id): Path<i64>,
+    Json(payload): Json<CreateObserveeRequest>,
+) -> Result<Json<ObserveeResponse>, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+
+    // The observee must exist.
+    ensure_user_exists(&state.db, payload.user_id).await?;
+
+    // Validate course_id if provided.
+    if let Some(cid) = payload.course_id {
+        let course: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+            .bind(cid)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+        if course.is_none() {
+            return Err(ApiError::NotFound);
+        }
+    }
+
+    sqlx::query(
+        r#"
+            INSERT INTO observer_enrollments (observer_id, user_id, course_id)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (observer_id, user_id, course_id) DO UPDATE
+                SET updated_at = now()
+            "#,
+    )
+    .bind(user_id)
+    .bind(payload.user_id)
+    .bind(payload.course_id)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let rows: Vec<ObserveeRow> = sqlx::query_as(
+        r#"
+            SELECT oe.user_id, u.name, NULL::text,
+                   oe.course_id, c.name, oe.workflow_state
+            FROM observer_enrollments oe
+            JOIN users u ON u.id = oe.user_id
+            LEFT JOIN courses c ON c.id = oe.course_id
+            WHERE oe.observer_id = $1 AND oe.user_id = $2
+              AND oe.course_id IS NOT DISTINCT FROM $3
+            ORDER BY oe.course_id
+            "#,
+    )
+    .bind(user_id)
+    .bind(payload.user_id)
+    .bind(payload.course_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let row = rows.first().ok_or(ApiError::NotFound)?;
+
+    let (uid, name, display_name, cid, course_name, workflow_state) = row.clone();
+
+    Ok(Json(ObserveeResponse {
+        id: uid,
+        name,
+        display_name,
+        enrollments: vec![ObserverEnrollmentJson {
+            course_id: cid,
+            course_name,
+            enrollment_state: workflow_state,
+        }],
+    }))
+}
+
+/// GET /users/{userId}/observees/{observeeId} — fetch one observee record.
+async fn get_observee(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((user_id, observee_id)): Path<(i64, i64)>,
+) -> Result<Json<ObserveeResponse>, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+
+    let rows: Vec<ObserveeRow> = sqlx::query_as(
+        r#"
+            SELECT oe.user_id, u.name, NULL::text,
+                   oe.course_id, c.name, oe.workflow_state
+            FROM observer_enrollments oe
+            JOIN users u ON u.id = oe.user_id
+            LEFT JOIN courses c ON c.id = oe.course_id
+            WHERE oe.observer_id = $1 AND oe.user_id = $2
+            ORDER BY oe.course_id
+            "#,
+    )
+    .bind(user_id)
+    .bind(observee_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let first = rows.first().ok_or(ApiError::NotFound)?;
+    let (uid, name, display_name, _, _, _) = first.clone();
+
+    let enrollments: Vec<ObserverEnrollmentJson> = rows
+        .into_iter()
+        .map(
+            |(_, _, _, cid, course_name, workflow_state)| ObserverEnrollmentJson {
+                course_id: cid,
+                course_name,
+                enrollment_state: workflow_state,
+            },
+        )
+        .collect();
+
+    Ok(Json(ObserveeResponse {
+        id: uid,
+        name,
+        display_name,
+        enrollments,
+    }))
+}
+
+/// GET /users/{userId}/observers/{observerId} — fetch one observer record.
+async fn get_observer(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((user_id, observer_id)): Path<(i64, i64)>,
+) -> Result<Json<UserResponse>, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+
+    let observer: Option<UserResponse> = sqlx::query_as(
+        r#"
+        SELECT u.id, u.name, COALESCE(u.sortable_name, u.name) AS sortable_name,
+               u.email, u.role, u.created_at
+        FROM observer_enrollments oe
+        JOIN users u ON u.id = oe.observer_id
+        WHERE oe.user_id = $1 AND oe.observer_id = $2
+        "#,
+    )
+    .bind(user_id)
+    .bind(observer_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    observer.ok_or(ApiError::NotFound).map(Json)
+}
+
+/// PUT /users/{userId}/observees/{observeeId} — update the course scope of an
+/// existing observee link.
+async fn update_observee(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((user_id, observee_id)): Path<(i64, i64)>,
+    Json(payload): Json<UpdateObserveeRequest>,
+) -> Result<Json<ObserveeResponse>, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+
+    if let Some(cid) = payload.course_id {
+        let course: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+            .bind(cid)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+        if course.is_none() {
+            return Err(ApiError::NotFound);
+        }
+    }
+
+    sqlx::query(
+        r#"
+            UPDATE observer_enrollments
+            SET course_id = $3, updated_at = now()
+            WHERE observer_id = $1 AND user_id = $2
+            "#,
+    )
+    .bind(user_id)
+    .bind(observee_id)
+    .bind(payload.course_id)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let rows: Vec<ObserveeRow> = sqlx::query_as(
+        r#"
+            SELECT oe.user_id, u.name, NULL::text,
+                   oe.course_id, c.name, oe.workflow_state
+            FROM observer_enrollments oe
+            JOIN users u ON u.id = oe.user_id
+            LEFT JOIN courses c ON c.id = oe.course_id
+            WHERE oe.observer_id = $1 AND oe.user_id = $2
+              AND oe.course_id IS NOT DISTINCT FROM $3
+            ORDER BY oe.course_id
+            "#,
+    )
+    .bind(user_id)
+    .bind(observee_id)
+    .bind(payload.course_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let row = rows.first().ok_or(ApiError::NotFound)?;
+
+    let (uid, name, display_name, cid, course_name, workflow_state) = row.clone();
+
+    Ok(Json(ObserveeResponse {
+        id: uid,
+        name,
+        display_name,
+        enrollments: vec![ObserverEnrollmentJson {
+            course_id: cid,
+            course_name,
+            enrollment_state: workflow_state,
+        }],
+    }))
+}
+
+/// DELETE /users/{userId}/observees/{observeeId} — remove an observee link.
+async fn delete_observee(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((user_id, observee_id)): Path<(i64, i64)>,
+) -> Result<StatusCode, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+
+    let result =
+        sqlx::query("DELETE FROM observer_enrollments WHERE observer_id = $1 AND user_id = $2")
+            .bind(user_id)
+            .bind(observee_id)
+            .execute(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // --------------------------------------------------------------------------
