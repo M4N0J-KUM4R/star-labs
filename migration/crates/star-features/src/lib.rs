@@ -1345,8 +1345,11 @@ async fn environment(
 // Router
 // ---------------------------------------------------------------------------
 
+mod csp_settings;
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(csp_settings::router())
         .route("/accounts/{accountId}/features", get(index_account))
         .route(
             "/accounts/{accountId}/features/enabled",
