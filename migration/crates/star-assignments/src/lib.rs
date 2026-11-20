@@ -2403,6 +2403,7 @@ async fn mark_rubric_assessment_read(
         true,
     )
     .await
+    .map(|_| StatusCode::NO_CONTENT)
 }
 
 /// DELETE /courses/{courseId}/rubric_assessments/{id}/read
@@ -2432,6 +2433,7 @@ async fn mark_rubric_assessment_unread(
         false,
     )
     .await
+    .map(|_| StatusCode::NO_CONTENT)
 }
 
 /// PUT /courses/{courseId}/assignment_annotations/{id}/read
@@ -2463,6 +2465,7 @@ async fn mark_document_annotation_read(
         true,
     )
     .await
+    .map(|_| StatusCode::NO_CONTENT)
 }
 
 /// DELETE /courses/{courseId}/assignment_annotations/{id}/read
@@ -2493,6 +2496,7 @@ async fn mark_document_annotation_unread(
         false,
     )
     .await
+    .map(|_| StatusCode::NO_CONTENT)
 }
 
 /// Section read-state helpers: load course_id from section, then delegate.
@@ -2559,7 +2563,9 @@ async fn section_mark_rubric_assessment_read(
     Path((section_id, rubric_assessment_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    section_flip_rubric_read(&state, section_id, rubric_assessment_id, &auth, true).await
+    section_flip_rubric_read(&state, section_id, rubric_assessment_id, &auth, true)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
 }
 
 /// DELETE /sections/{sectionId}/rubric_assessments/{id}/read
@@ -2568,7 +2574,9 @@ async fn section_mark_rubric_assessment_unread(
     Path((section_id, rubric_assessment_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    section_flip_rubric_read(&state, section_id, rubric_assessment_id, &auth, false).await
+    section_flip_rubric_read(&state, section_id, rubric_assessment_id, &auth, false)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
 }
 
 /// PUT /sections/{sectionId}/assignment_annotations/{id}/read
@@ -2577,7 +2585,9 @@ async fn section_mark_document_annotation_read(
     Path((section_id, annotation_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    section_flip_annotation_read(&state, section_id, annotation_id, &auth, true).await
+    section_flip_annotation_read(&state, section_id, annotation_id, &auth, true)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
 }
 
 /// DELETE /sections/{sectionId}/assignment_annotations/{id}/read
@@ -2586,7 +2596,9 @@ async fn section_mark_document_annotation_unread(
     Path((section_id, annotation_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    section_flip_annotation_read(&state, section_id, annotation_id, &auth, false).await
+    section_flip_annotation_read(&state, section_id, annotation_id, &auth, false)
+        .await
+        .map(|_| StatusCode::NO_CONTENT)
 }
 
 /// GET /courses/{courseId}/assignments/{assignmentId}/gradeable_students —
@@ -2780,14 +2792,14 @@ async fn multiple_gradeable_students(
             .filter(|p| p.starts_with("student_ids[]="))
             .map(|p| {
                 p.strip_prefix("student_ids[]=")
-                    .and_then(|v| urlencoding::decode(v).ok())
+                    .and_then(|v| decode_query_component(v).ok())
                     .and_then(|v| v.parse::<i64>().ok())
             })
             .collect::<Option<Vec<i64>>>()
     });
 
     let anonymize =
-        allow_new_anonymous_id && assignment_anonymize_students(&state.db, assignment_id).await?;
+        allow_new_anonymous_id && assignment_anonymize_students_moderated(&state.db, assignment_id).await?;
 
     let direction = if descending { "DESC" } else { "ASC" };
     let order_by = if anonymize {
