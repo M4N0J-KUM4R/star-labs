@@ -222,8 +222,8 @@ async fn create_line_item(
         return Ok((
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "scoreMaximum must be non-negative" })),
-        ))
-        .into_response();
+        )
+            .into_response());
     }
 
     let resource_id = payload.resource_id;
@@ -250,8 +250,8 @@ async fn create_line_item(
             return Ok((
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(json!({ "error": "Failed to create Canvas assignment" })),
-            ))
-            .into_response();
+            )
+                .into_response());
         }
     };
 
