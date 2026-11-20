@@ -26,6 +26,17 @@
 --   * The one-active-control-per-(deployment, context) unique index
 --     (Canvas Lti::ContextControlService.unique_check_attrs).
 
+-- The dump's lti_context_controls.deployment_id foreign key points at
+-- context_external_tools (Canvas models deployments as
+-- ContextExternalTool); this workspace's deployments live in
+-- lti_deployments (migration 0078), so no control could ever satisfy the
+-- dumped constraint. Rewire it.
+ALTER TABLE lti_context_controls
+    DROP CONSTRAINT IF EXISTS fk_lti_context_controls_deployment_id;
+ALTER TABLE lti_context_controls
+    ADD CONSTRAINT fk_lti_context_controls_deployment_lti_deployments
+    FOREIGN KEY (deployment_id) REFERENCES lti_deployments(id) ON DELETE CASCADE;
+
 ALTER TABLE lti_context_controls ALTER COLUMN account_id DROP NOT NULL;
 ALTER TABLE lti_context_controls ALTER COLUMN course_id DROP NOT NULL;
 ALTER TABLE lti_context_controls ALTER COLUMN created_at TYPE timestamptz;

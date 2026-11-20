@@ -1243,9 +1243,9 @@ async fn display_path_names(
 ) -> Result<Vec<String>, ApiError> {
     let rows: Vec<(i64, String)> = sqlx::query_as(
         "WITH RECURSIVE up AS ( \
-             SELECT id, parent_account_id FROM accounts WHERE id = $1 \
+             SELECT id, name, parent_account_id FROM accounts WHERE id = $1 \
              UNION ALL \
-             SELECT a.id, a.parent_account_id FROM accounts a \
+             SELECT a.id, a.name, a.parent_account_id FROM accounts a \
              JOIN up ON a.id = up.parent_account_id \
          ) SELECT id, name FROM up",
     )
@@ -1273,19 +1273,58 @@ async fn record_overlay_version(
     caused_by_reset: bool,
     user_id: i64,
 ) -> Result<(), ApiError> {
-    // lti_overlay_id stands in for Canvas' separate Lti::Overlay row — the
-    // workspace keeps the live overlay on lti_registrations.overlay — and
-    // diff stores the full new overlay snapshot (Canvas stores a JSON
-    // patch; both columns are NOT NULL from the Canvas schema dump).
+    // The Canvas schema (migration 0224) keeps one Lti::Overlay row per
+    // registration+account with the live data, and versions reference it
+    // through the lti_overlay_id foreign key. The workspace keeps the live
+    // overlay on lti_registrations.overlay; the lti_overlays row is
+    // maintained in sync so the FK holds. diff stores the full new overlay
+    // snapshot (Canvas stores a JSON patch; the column is NOT NULL from the
+    // Canvas schema dump).
+    let existing: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM lti_overlays \
+         WHERE registration_id = $1 AND account_id = $2 AND workflow_state <> 'deleted' \
+         LIMIT 1",
+    )
+    .bind(registration_id)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+    let lti_overlay_id: i64 = match existing {
+        Some((overlay_row_id,)) => {
+            sqlx::query("UPDATE lti_overlays SET data = $3, updated_at = now() WHERE id = $2")
+                .bind(registration_id)
+                .bind(overlay_row_id)
+                .bind(overlay)
+                .execute(pool)
+                .await?;
+            overlay_row_id
+        }
+        None => {
+            sqlx::query_scalar(
+                "INSERT INTO lti_overlays \
+             (registration_id, account_id, root_account_id, workflow_state, data, \
+              created_at, updated_at) \
+             VALUES ($1, $2, $3, 'active', $4, now(), now()) RETURNING id",
+            )
+            .bind(registration_id)
+            .bind(account_id)
+            .bind(root_account_id)
+            .bind(overlay)
+            .fetch_one(pool)
+            .await?
+        }
+    };
+
     sqlx::query(
         "INSERT INTO lti_overlay_versions \
          (registration_id, account_id, root_account_id, lti_overlay_id, overlay, \
           diff, caused_by_reset, created_by_id, created_at, updated_at) \
-         VALUES ($1, $2, $3, $1, $4, $4, $5, $6, now(), now())",
+         VALUES ($1, $2, $3, $4, $5, $5, $6, $7, now(), now())",
     )
     .bind(registration_id)
     .bind(account_id)
     .bind(root_account_id)
+    .bind(lti_overlay_id)
     .bind(overlay)
     .bind(caused_by_reset)
     .bind(user_id)
@@ -1931,7 +1970,6 @@ struct UpdateRequestRow {
     created_by_id: Option<i64>,
     accepted_at: Option<DateTime<Utc>>,
     rejected_at: Option<DateTime<Utc>>,
-    updated_by_id: Option<i64>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -1939,7 +1977,7 @@ struct UpdateRequestRow {
 async fn update_request_json(pool: &PgPool, rur_id: i64) -> Result<Option<Value>, ApiError> {
     let row: Option<UpdateRequestRow> = sqlx::query_as(
         "SELECT id, root_account_id, lti_registration_id, uuid, created_by_id, \
-                accepted_at, rejected_at, updated_by_id, created_at, updated_at \
+                accepted_at, rejected_at, created_at, updated_at \
          FROM lti_registration_update_requests WHERE id = $1",
     )
     .bind(rur_id)
@@ -1972,9 +2010,9 @@ async fn update_request_json(pool: &PgPool, rur_id: i64) -> Result<Option<Value>
     if let Some(user) = user_summary(pool, rur.created_by_id).await? {
         json["created_by"] = user;
     }
-    if let Some(user) = user_summary(pool, rur.updated_by_id).await? {
-        json["updated_by"] = user;
-    }
+    // The workspace's lti_registration_update_requests (migration 0115)
+    // carries no updated_by column, so Canvas' updated_by is always null.
+    json["updated_by"] = Value::Null;
     Ok(Some(json))
 }
 

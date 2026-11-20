@@ -678,10 +678,20 @@ async fn client_id_utid_domain_and_install_status() {
     let admin_id = seed_user(&pool, &prefix, "admin", "admin").await;
     seed_account_admin(&pool, account_id, admin_id).await;
 
-    let mut configuration = sample_configuration();
-    configuration["unified_tool_id"] = json!("utid-123");
-    let registration =
-        create_registration(&server, account_id, admin_id, &prefix, configuration).await;
+    // Canvas carries unified_tool_id on the registration itself, not inside
+    // the configuration.
+    let response = server
+        .post(&format!("/accounts/{account_id}/lti_registrations"))
+        .add_header(AUTHORIZATION, auth(admin_id, "admin"))
+        .json(&json!({
+            "name": format!("{prefix}-tool"),
+            "vendor": "Example Vendor",
+            "unified_tool_id": "utid-123",
+            "configuration": sample_configuration(),
+        }))
+        .await;
+    assert_eq!(response.status_code(), 201, "body: {}", response.text());
+    let registration: Value = response.json();
     let id = registration["id"].as_i64().unwrap();
 
     // show by client id (:1462-1480).
