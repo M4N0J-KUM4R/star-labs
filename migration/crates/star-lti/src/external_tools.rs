@@ -1010,17 +1010,23 @@ async fn delete_course_tool(
     State(state): State<AppState>,
     Path((course_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Json<Value>, ApiError> {
     require_course(&state.db, course_id).await?;
     if !can_manage_course_tools(&state.db, &auth, course_id).await? {
         return Err(ApiError::Forbidden);
     }
-    let _ = find_course_tool(&state.db, course_id, id).await?;
-    sqlx::query("UPDATE external_tools SET workflow_state = 'deleted' WHERE id = $1")
-        .bind(id)
-        .execute(&state.db)
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
+    let tool = find_course_tool(&state.db, course_id, id).await?;
+    // Canvas delete_tool renders the destroyed tool's JSON (controller.rb:
+    // 2143-2149), with workflow_state 'deleted' on the returned record.
+    sqlx::query(
+        "UPDATE external_tools SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await?;
+    let mut deleted = tool_json(&tool, false, None);
+    deleted["workflow_state"] = json!("deleted");
+    Ok(Json(deleted))
 }
 
 /// `PUT /accounts/{account_id}/external_tools/{id}` — update an account tool.
@@ -1049,17 +1055,23 @@ async fn delete_account_tool(
     State(state): State<AppState>,
     Path((account_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Json<Value>, ApiError> {
     require_account(&state.db, account_id).await?;
     if !can_manage_account(&state.db, &auth, account_id).await? {
         return Err(ApiError::Forbidden);
     }
-    let _ = find_account_tool(&state.db, account_id, id).await?;
-    sqlx::query("UPDATE external_tools SET workflow_state = 'deleted' WHERE id = $1")
-        .bind(id)
-        .execute(&state.db)
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
+    let tool = find_account_tool(&state.db, account_id, id).await?;
+    // Canvas delete_tool renders the destroyed tool's JSON (controller.rb:
+    // 2143-2149).
+    sqlx::query(
+        "UPDATE external_tools SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await?;
+    let mut deleted = tool_json(&tool, false, None);
+    deleted["workflow_state"] = json!("deleted");
+    Ok(Json(deleted))
 }
 
 /// Shared update logic for both contexts.
@@ -1095,7 +1107,8 @@ async fn apply_update(
          custom_fields = COALESCE($24, custom_fields), \
          selection_width = COALESCE($25, selection_width), \
          selection_height = COALESCE($26, selection_height), \
-         not_selectable = COALESCE($27, not_selectable) \
+         not_selectable = COALESCE($27, not_selectable), \
+         updated_at = now() \
          WHERE id = $1 AND workflow_state <> 'deleted' \
          RETURNING {TOOL_COLUMNS}"
     );
@@ -1434,33 +1447,60 @@ async fn account_migration_info(
 // New handlers: group tools (route 16)
 // --------------------------------------------------------------------------
 
+/// Canvas group read gate (app/models/group.rb:662): course-level groups
+/// grant :read when the containing course grants :read, so course
+/// teachers/admins and group members may both read group tools.
+async fn can_read_group_tools(
+    state: &AppState,
+    group_id: i64,
+    auth: &AuthUser,
+) -> Result<(), ApiError> {
+    let course: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT course_id FROM groups WHERE id = $1")
+            .bind(group_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let Some((course_id,)) = course else {
+        return Err(ApiError::NotFound);
+    };
+
+    let member: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM group_memberships \
+         WHERE group_id = $1 AND user_id = $2 AND workflow_state <> 'deleted' LIMIT 1",
+    )
+    .bind(group_id)
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await?;
+    if member.is_some() {
+        return Ok(());
+    }
+
+    if let Some(course_id) = course_id {
+        if can_read_course(&state.db, auth, course_id).await? {
+            return Ok(());
+        }
+    }
+    Err(ApiError::Forbidden)
+}
+
 /// `GET /groups/{group_id}/external_tools` — list tools for a group.
 async fn list_group_tools(
     State(state): State<AppState>,
     Path(group_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<Vec<Value>>, ApiError> {
-    // Group existence check: groups has no group_id column — select the id.
-    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM groups WHERE id = $1")
-        .bind(group_id)
-        .fetch_optional(&state.db)
-        .await?;
-    row.ok_or(ApiError::NotFound)?;
+    can_read_group_tools(&state, group_id, &auth).await?;
 
-    let member: Option<(i64,)> = sqlx::query_as(
-        "SELECT 1 FROM group_memberships          WHERE group_id = $1 AND user_id = $2 AND workflow_state <> 'deleted' LIMIT 1",
-    )
-    .bind(group_id)
-    .bind(auth.id)
-    .fetch_optional(&state.db)
-    .await?;
-    if member.is_none() {
-        return Err(ApiError::Forbidden);
-    }
-
+    // Canvas resolves a Group's tools through its course
+    // (Lti::ToolFinderUtils.contexts_to_search: Group -> [:self, :recursive];
+    // Group#context_external_tools is none, group.rb:196-198, so the course
+    // chain supplies the tools).
     let sql = format!(
         "SELECT {TOOL_COLUMNS} FROM external_tools \
-         WHERE context_type = 'Group' AND context_id = $1 AND workflow_state <> 'deleted' \
+         WHERE context_type = 'Course' AND context_id = \
+               (SELECT course_id FROM groups WHERE id = $1) \
+           AND workflow_state <> 'deleted' \
          ORDER BY id ASC"
     );
     let rows: Vec<ExternalToolRow> = sqlx::query_as(&sql)
@@ -1479,27 +1519,14 @@ async fn show_group_tool(
     Path((group_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM groups WHERE id = $1")
-        .bind(group_id)
-        .fetch_optional(&state.db)
-        .await?;
-    row.ok_or(ApiError::NotFound)?;
+    can_read_group_tools(&state, group_id, &auth).await?;
 
-    let member: Option<(i64,)> = sqlx::query_as(
-        "SELECT 1 FROM group_memberships          WHERE group_id = $1 AND user_id = $2 AND workflow_state <> 'deleted' LIMIT 1",
-    )
-    .bind(group_id)
-    .bind(auth.id)
-    .fetch_optional(&state.db)
-    .await?;
-    if member.is_none() {
-        return Err(ApiError::Forbidden);
-    }
-
+    // Canvas resolves the tool through the group's course chain.
     let sql = format!(
         "SELECT {TOOL_COLUMNS} FROM external_tools \
-         WHERE id = $1 AND context_type = 'Group' AND context_id = $2 \
-         AND workflow_state <> 'deleted'"
+         WHERE id = $1 AND context_type = 'Course' \
+           AND context_id = (SELECT course_id FROM groups WHERE id = $2) \
+           AND workflow_state <> 'deleted'"
     );
     let tool: Option<ExternalToolRow> = sqlx::query_as(&sql)
         .bind(id)
