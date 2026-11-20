@@ -1009,19 +1009,23 @@ async fn group_tools_returns_tools_with_context_id() {
 }
 
 // ---------------------------------------------------------------------------
-// New route tests: eula_launch (stub → 503)
+// New route tests: eula_launch (brief route 17 — 200 placeholder)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn eula_launch_returns_503() {
+async fn eula_launch_stub_and_guards() {
     let Some((server, pool, prefix)) = setup().await else {
         return;
     };
     let account_id = seed_account(&pool, &prefix, "acct").await;
     let course_id = seed_course(&pool, &prefix, "course", account_id).await;
     let teacher_id = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    let student_id = seed_user(&pool, &prefix, "student", "student").await;
     seed_enrollment(&pool, teacher_id, course_id, "teacher").await;
+    seed_enrollment(&pool, student_id, course_id, "student").await;
 
+    // 1.3 tool (default) — teacher passes require_access_to_context and
+    // require_1_3_tool, gets the 200 placeholder.
     let resp = create_course_tool(
         &server,
         course_id,
@@ -1041,9 +1045,63 @@ async fn eula_launch_returns_503() {
             auth(teacher_id, "teacher"),
         )
         .await;
-    assert_eq!(resp.status_code(), 503);
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["message"], "eula_launch not implemented");
 
-    teardown(&pool, &[teacher_id], account_id, course_id).await;
+    // Non-member (unenrolled, non-admin) → 403.
+    let outsider_id = seed_user(&pool, &prefix, "outsider", "student").await;
+    let resp = server
+        .get(&format!(
+            "/courses/{course_id}/external_tools/{tool_id}/eula_launch"
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(outsider_id, "student"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 403);
+
+    // Non-1.3 tool → 400 (require_1_3_tool).
+    let resp = create_course_tool(
+        &server,
+        course_id,
+        &auth(teacher_id, "teacher"),
+        json!({ "name": "Legacy Tool", "url": "https://tool.example.com/legacy", "lti_version": "1.1" }),
+    )
+    .await;
+    let legacy: Value = resp.json();
+    let legacy_id = legacy["id"].as_i64().unwrap();
+    let resp = server
+        .get(&format!(
+            "/courses/{course_id}/external_tools/{legacy_id}/eula_launch"
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(teacher_id, "teacher"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+
+    // Unknown tool → 404 (require_tool).
+    let resp = server
+        .get(&format!(
+            "/courses/{course_id}/external_tools/987654/eula_launch"
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(teacher_id, "teacher"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 404);
+
+    teardown(
+        &pool,
+        &[teacher_id, student_id, outsider_id],
+        account_id,
+        course_id,
+    )
+    .await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1174,6 +1232,137 @@ async fn update_course_tool_updated_only() {
     assert_ne!(updated2["updated_at"].as_str().unwrap_or(""), orig_updated);
 
     teardown(&pool, &[teacher_id], account_id, course_id).await;
+}
+
+// ---------------------------------------------------------------------------
+// New route tests: brief route 15 — GET show account tool
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn show_account_tool_happy_and_negative() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let admin_id = seed_user(&pool, &prefix, "admin", "student").await;
+    let outsider_id = seed_user(&pool, &prefix, "outsider", "student").await;
+    seed_account_user(&pool, account_id, admin_id).await;
+
+    let resp = server
+        .post(&format!("/accounts/{account_id}/external_tools"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .json(&json!({ "name": "Shown Tool", "url": "https://tool.example.com" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let tool: Value = resp.json();
+    let tool_id = tool["id"].as_i64().unwrap();
+
+    // Happy path: 200 tool JSON with the serializer fields.
+    let resp = server
+        .get(&format!("/accounts/{account_id}/external_tools/{tool_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let shown: Value = resp.json();
+    assert_eq!(shown["name"], "Shown Tool");
+    assert_eq!(shown["context_type"], "Account");
+    assert!(shown["message_settings"].is_object());
+    assert!(shown["unified_tool_id"].is_null());
+
+    // Non-admin → 403.
+    let resp = server
+        .get(&format!("/accounts/{account_id}/external_tools/{tool_id}"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(outsider_id, "student"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 403);
+
+    // Unknown tool → 404.
+    let resp = server
+        .get(&format!("/accounts/{account_id}/external_tools/987654"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404);
+
+    teardown(&pool, &[admin_id, outsider_id], account_id, 0).await;
+}
+
+// ---------------------------------------------------------------------------
+// New route tests: brief route 11 — course-scoped visible_course_nav_tools
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn visible_course_nav_tools_scoped_to_course() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let course_id = seed_course(&pool, &prefix, "course", account_id).await;
+    let teacher_id = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    let outsider_id = seed_user(&pool, &prefix, "outsider", "student").await;
+    seed_enrollment(&pool, teacher_id, course_id, "teacher").await;
+    let bearer = auth(teacher_id, "teacher");
+
+    // A course_navigation tool and a placementless tool.
+    let resp = server
+        .post(&format!("/courses/{course_id}/external_tools"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .json(&json!({
+            "name": "Nav Tool",
+            "url": "https://tool.example.com/nav",
+            "tool_configuration": { "placements": { "course_navigation": {} } }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    let resp = server
+        .post(&format!("/courses/{course_id}/external_tools"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .json(&json!({ "name": "No Placement Tool", "url": "https://tool.example.com/x" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // Happy path: 200 array with context_id/context_name enrichment.
+    let resp = server
+        .get(&format!(
+            "/courses/{course_id}/external_tools/visible_course_nav_tools"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let tools: Value = resp.json();
+    let arr = tools.as_array().unwrap();
+    assert!(
+        arr.iter().any(|t| t["name"] == "Nav Tool"),
+        "nav tool missing: {tools}"
+    );
+    for tool in arr {
+        assert_eq!(tool["context_id"], json!(course_id));
+        assert!(tool["context_name"].as_str().is_some());
+    }
+
+    // Unenrolled, non-admin → 403.
+    let resp = server
+        .get(&format!(
+            "/courses/{course_id}/external_tools/visible_course_nav_tools"
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(outsider_id, "student"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 403);
+
+    // Unknown course → 404.
+    let resp = server
+        .get("/courses/987654/external_tools/visible_course_nav_tools")
+        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 404);
+
+    teardown(&pool, &[teacher_id, outsider_id], account_id, course_id).await;
 }
 
 #[tokio::test]
