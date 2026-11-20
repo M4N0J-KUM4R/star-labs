@@ -2302,8 +2302,8 @@ async fn resolve_path_impl(
                         let parent: Option<FolderRow> = fetch_folder(db, pid).await?;
                         match parent {
                             Some(p) => {
-                                ancestors.push(p);
                                 parent_id = p.parent_folder_id;
+                                ancestors.push(p);
                             }
                             None => break,
                         }
@@ -2448,7 +2448,7 @@ pub struct FolderShowQuery {
 async fn show_course_folder(
     State(state): State<AppState>,
     Path((course_id, id)): Path<(i64, String)>,
-    Query(params): Query<FolderShowQuery>,
+    Query(_params): Query<FolderShowQuery>,
     auth: AuthUser,
 ) -> Result<Json<FolderResponse>, ApiError> {
     let folder_id: i64 = id.parse().map_err(|_| ApiError::NotFound)?;
@@ -2584,8 +2584,8 @@ async fn list_all_user_folders(
 async fn create_user_folder_ctx(
     State(state): State<AppState>,
     Path(user_id): Path<i64>,
-    Json(payload): Json<CreateFolderRequest>,
     auth: AuthUser,
+    Json(payload): Json<CreateFolderRequest>,
 ) -> Result<Response, ApiError> {
     if auth.id != user_id && !is_admin(&auth) {
         return Err(ApiError::Forbidden);
@@ -2843,7 +2843,7 @@ async fn copy_file_to_folder(
     .bind(source_file_id)
     .fetch_optional(&state.db)
     .await?;
-    let (src_id, src_filename, src_display, src_ct, src_size, _src_folder_id) =
+    let (_src_id, src_filename, src_display, src_ct, src_size, _src_folder_id) =
         source_row.ok_or(ApiError::NotFound)?;
 
     // Check on_duplicate.
@@ -3019,7 +3019,10 @@ async fn find_or_create_unique_folder(
     context_type: &str,
     context_id: i64,
     root_id: i64,
-    unique_type: &str,
+    // Canvas identifies unique folders by a folders.unique_type column
+    // (app/models/folder.rb Folder.unique_folder); the star schema has no
+    // such column, so lookup falls back to the default name below.
+    _unique_type: &str,
     default_name: &str,
 ) -> Result<FolderRow, ApiError> {
     // Try to find existing.
