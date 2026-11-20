@@ -61,10 +61,6 @@ impl BlockEditorTemplateRow {
     /// Canvas `block_editor_template_json` — the model attributes plus the
     /// Canvas global id.
     fn to_json(&self, with_node_tree: bool, with_thumbnail: bool) -> Value {
-        fn ts(value: &DateTime<Utc>) -> String {
-            value.to_rfc3339_opts(SecondsFormat::Secs, true)
-        }
-
         let mut value = json!({
             "id": self.id,
             "name": self.name,
