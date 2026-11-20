@@ -239,7 +239,7 @@ fn param_value<'a>(params: &'a HashMap<String, String>, key: &str) -> Option<&'a
 fn includes(params: &HashMap<String, String>) -> Vec<String> {
     params
         .iter()
-        .filter(|(key, _)| key == "include[]" || key == "include")
+        .filter(|(key, _)| key.as_str() == "include[]" || key.as_str() == "include")
         .map(|(_, value)| value.trim().to_string())
         .filter(|value| !value.is_empty())
         .collect()
