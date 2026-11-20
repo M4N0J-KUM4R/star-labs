@@ -70,6 +70,7 @@ pub struct CreateSubscriptionRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
 pub struct SubscriptionFields {
     pub context_id: Option<String>,
     pub context_type: Option<String>,
@@ -325,7 +326,7 @@ async fn update_subscription(
         .bind(id)
         .bind(&context_type)
         .bind(&context_id)
-        .bind(&event_types)
+        .bind(serde_json::json!(&event_types))
         .bind(&format)
         .bind(&transport_type)
         .bind(&transport_metadata)
