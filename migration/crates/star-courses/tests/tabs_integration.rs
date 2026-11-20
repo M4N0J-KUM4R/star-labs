@@ -319,14 +319,17 @@ async fn course_tab_update_hides_reorders_and_rejects_pinned_tabs() {
     assert_eq!(body["hidden"], true);
     assert_eq!(body["visibility"], "admins");
 
-    // Show it again.
+    // Show it again.  Canvas only renders `hidden` when the tab is hidden,
+    // so the key is absent again once the tab is visible.
     let resp = server
         .put(&format!("/courses/{course}/tabs/announcements"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&serde_json::json!({ "hidden": "false" }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json::<Value>()["hidden"], false);
+    let body: Value = resp.json();
+    assert!(body.get("hidden").is_none(), "body: {body}");
+    assert_eq!(body["visibility"], "public");
 
     // Home is pinned and cannot be managed.
     let resp = server

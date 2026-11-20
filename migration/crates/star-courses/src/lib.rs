@@ -4258,7 +4258,6 @@ fn tab_error(status: StatusCode, message: &str) -> axum::response::Response {
     use axum::response::IntoResponse;
     (status, Json(json!({ "error": message }))).into_response()
 }
-
 /// Build one navigation tab in Canvas' `Api::V1::Tab#tab_json` shape.
 fn nav_tab(id: &str, label: &str, html_url: String, position: i64) -> CourseTab {
     CourseTab {
@@ -4490,7 +4489,7 @@ async fn update_course_tab(
     Path((course_id, tab_id)): Path<(i64, String)>,
     auth: AuthUser,
     Json(payload): Json<UpdateCourseTab>,
-) -> Result<Json<CourseTab>, ApiError> {
+) -> Result<axum::response::Response, ApiError> {
     if !course_exists(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
     }
@@ -4565,15 +4564,18 @@ async fn update_course_tab(
         }
     }
 
-    // Move the tab to its new slot.
+    // Move the tab to its new slot.  Canvas positions the full tab list
+    // (Home is pinned first), so a manageable tab sits one slot further
+    // down than its index in the manageable list.
     if let Some(new_position) = payload.position {
         if let Some(index) = order.iter().position(|id| id == &tab_id) {
+            let hidden_value = hidden.get(index).copied().unwrap_or(false);
             order.remove(index);
             hidden.remove(index);
-            let target = (new_position - 1).max(0) as usize;
+            let target = (new_position - 2).max(0) as usize;
             let target = target.min(order.len());
             order.insert(target, tab_id.clone());
-            hidden.insert(target, hidden.get(index).copied().unwrap_or(false));
+            hidden.insert(target, hidden_value);
         }
     }
 
@@ -4610,7 +4612,8 @@ async fn update_course_tab(
     .await?;
     let tabs = build_course_tabs(course_id, include_settings, &configs);
     let updated = tabs.into_iter().find(|tab| tab.id == tab_id).unwrap_or(tab);
-    Ok(Json(updated))
+    use axum::response::IntoResponse;
+    Ok(Json(updated).into_response())
 }
 
 // ---------------------------------------------------------------------------
