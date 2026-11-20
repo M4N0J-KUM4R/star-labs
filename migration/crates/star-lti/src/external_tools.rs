@@ -10,10 +10,31 @@
 //! - `GET    /courses/{course_id}/external_tools/{id}` — show course tool
 //! - `GET    /accounts/{account_id}/external_tools` — list account tools
 //! - `POST   /accounts/{account_id}/external_tools` — create account tool
+//! - `GET    /accounts/{account_id}/external_tools/{id}` — show account tool
 //! - `POST   /accounts/{account_id}/external_tools/rce_favorites/{id}` — mark
 //! - `DELETE /accounts/{account_id}/external_tools/rce_favorites/{id}` — unmark
 //! - `GET    /external_tools/visible_course_nav_tools` — nav tools for
 //!   `context_codes[]=course_<id>`
+//!
+//! Slice lti-1 additions (brief `/Users/manojkumar/lms-migration/orchestration/briefs/lti-1.md`):
+//!
+//! - `PUT    /courses/{course_id}/external_tools/{id}` — update
+//! - `DELETE /courses/{course_id}/external_tools/{id}` — soft delete
+//! - `PUT    /accounts/{account_id}/external_tools/{id}` — update
+//! - `DELETE /accounts/{account_id}/external_tools/{id}` — soft delete
+//! - `POST   /courses/{course_id}/create_tool_with_verification` — create
+//! - `POST   /accounts/{account_id}/create_tool_with_verification` — create
+//! - `GET    /courses/{course_id}/external_tools/sessionless_launch` — 503
+//!   until Redis exists (brief ambiguity 3)
+//! - `GET    /accounts/{account_id}/external_tools/sessionless_launch` — 503
+//! - `POST   /accounts/{account_id}/external_tools/top_nav_favorites/{id}`
+//! - `DELETE /accounts/{account_id}/external_tools/top_nav_favorites/{id}`
+//! - `GET    /courses/{course_id}/external_tools/visible_course_nav_tools`
+//! - `GET    /courses/{course_id}/external_tools/{id}/migration_info`
+//! - `GET    /accounts/{account_id}/external_tools/{id}/migration_info`
+//! - `GET    /groups/{group_id}/external_tools` — tools via the group's course
+//! - `GET    /courses/{course_id}/external_tools/{id}/eula_launch` — 200
+//!   placeholder until LTI launch rendering exists (brief route 17)
 //!
 //! These live in their own table (`external_tools`, migration 0085) and never
 //! touch the phase-3 `lti_registrations` table.
@@ -45,13 +66,17 @@ const MAX_RCE_FAVORITES: usize = 2;
 /// Canvas' privacy levels for external tools.
 const PRIVACY_LEVELS: [&str; 4] = ["anonymous", "name_only", "email_only", "public"];
 
-/// Columns selected for an [`ExternalToolRow`].
+/// Columns selected for an [`ExternalToolRow`]. `unified_tool_id` is Canvas
+/// `ContextExternalTool#unified_tool_id` (lib/api/v1/external_tools.rb:49),
+/// resolved through the tool's LTI registration link.
 const TOOL_COLUMNS: &str = "id, name, description, url, domain, consumer_id, consumer_key, \
      privacy_level, workflow_state, developer_key_id, lti_registration_id, deployment_id, \
      course_id, account_id, context_type, context_id, tool_type, lti_version, icon_url, text, \
      enabled, visible, open_in_new_tab, root_url, ownership_type, tool_configuration, \
      custom_fields, selection_width, selection_height, not_selectable, created_by_id, \
-     created_at, updated_at";
+     created_at, updated_at, \
+     (SELECT r.unified_tool_id FROM lti_registrations r WHERE r.id = lti_registration_id) \
+     AS unified_tool_id";
 
 // ---------------------------------------------------------------------------
 // Rows
@@ -94,6 +119,9 @@ struct ExternalToolRow {
     created_by_id: Option<i64>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    /// Canvas `ContextExternalTool#unified_tool_id` — resolved from the
+    /// linked LTI registration (see TOOL_COLUMNS).
+    unified_tool_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -366,6 +394,8 @@ fn tool_json(
         "selection_height": tool.selection_height,
         "not_selectable": tool.not_selectable,
         "is_rce_favorite": is_rce_favorite,
+        "unified_tool_id": tool.unified_tool_id,
+        "message_settings": tool.tool_configuration.get("message_settings").cloned().unwrap_or(json!({})),
         "placements": placements,
     });
     // Canvas external_tools.rb:44 only emits is_top_nav_favorite when the
@@ -490,9 +520,14 @@ pub fn router() -> Router<AppState> {
             "/courses/{course_id}/external_tools/{id}",
             put(update_course_tool).delete(delete_course_tool),
         )
+        // Route 15: GET show (API path) — Canvas routes.rb:1704 nests show
+        // under the account scope as well; account reads are admin-gated,
+        // matching list_account_tools.
         .route(
             "/accounts/{account_id}/external_tools/{id}",
-            put(update_account_tool).delete(delete_account_tool),
+            get(show_account_tool)
+                .put(update_account_tool)
+                .delete(delete_account_tool),
         )
         // New: create_tool_with_verification (routes 5-6)
         .route(
@@ -511,6 +546,11 @@ pub fn router() -> Router<AppState> {
         .route(
             "/accounts/{account_id}/external_tools/sessionless_launch",
             get(account_sessionless_launch),
+        )
+        // Brief route 11 — Canvas routes.rb:1703, course-scoped nav tools.
+        .route(
+            "/courses/{course_id}/external_tools/visible_course_nav_tools",
+            get(visible_course_nav_tools),
         )
         // Canvas routes.rb:1695-1696 — top_nav_favorites exist only for
         // accounts, and only POST (add) + DELETE (remove). There is no list
@@ -606,6 +646,30 @@ async fn show_course_tool(
     }
     let tool = find_course_tool(&state.db, course_id, id).await?;
     Ok(Json(tool_json(&tool, false, None)))
+}
+
+/// `GET /accounts/{account_id}/external_tools/{id}` — show one account tool
+/// (brief route 15, `external_tools#show` API path). Account-scoped reads are
+/// admin-gated, mirroring `list_account_tools`.
+async fn show_account_tool(
+    State(state): State<AppState>,
+    Path((account_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let tool = find_account_tool(&state.db, account_id, id).await?;
+    let favorites = rce_favorite_ids(&state.db, "Account", account_id).await?;
+    let top_nav = top_nav_favorite_ids(&state.db, "Account", account_id).await?;
+    let is_top_nav = has_placement(&tool.tool_configuration, "top_navigation")
+        .then(|| top_nav.contains(&tool.id));
+    Ok(Json(tool_json(
+        &tool,
+        favorites.contains(&tool.id),
+        is_top_nav,
+    )))
 }
 
 /// `GET /accounts/{account_id}/external_tools` — list the tools configured for
@@ -952,36 +1016,63 @@ async fn all_visible_nav_tools(
         if !can_read_course(&state.db, &auth, course_id).await? {
             return Err(ApiError::Forbidden);
         }
-
-        let course_name: (String,) = sqlx::query_as("SELECT name FROM courses WHERE id = $1")
-            .bind(course_id)
-            .fetch_one(&state.db)
-            .await?;
-        let course_name = course_name.0;
-
-        let sql = format!(
-            "SELECT {TOOL_COLUMNS} FROM external_tools \
-             WHERE context_type = 'Course' AND context_id = $1 \
-             AND workflow_state <> 'deleted' AND enabled AND visible ORDER BY id ASC"
-        );
-        let rows: Vec<ExternalToolRow> = sqlx::query_as(&sql)
-            .bind(course_id)
-            .fetch_all(&state.db)
-            .await?;
-
-        for tool in rows {
-            let has_placements = tool.tool_configuration.get("placements").is_some();
-            if has_placements && !has_placement(&tool.tool_configuration, "course_navigation") {
-                continue;
-            }
-            let mut value = tool_json(&tool, false, None);
-            value["context_id"] = json!(course_id);
-            value["context_name"] = json!(course_name);
-            data.push(value);
-        }
+        data.extend(visible_nav_tools_for_course(&state.db, course_id).await?);
     }
 
     Ok(Json(data).into_response())
+}
+
+/// Course nav tools enriched with `context_id` / `context_name`, shared by
+/// `all_visible_nav_tools` (global, `context_codes[]`) and
+/// `visible_course_nav_tools` (brief route 11, course-scoped).
+///
+/// Canvas external_tools_controller.rb:1854-1861:
+/// `external_tools_json_for_courses([@context])` — enabled + visible tools,
+/// filtered to the `course_navigation` placement, each result enriched with
+/// the course id and name.
+async fn visible_nav_tools_for_course(db: &PgPool, course_id: i64) -> Result<Vec<Value>, ApiError> {
+    let course_name: (String,) = sqlx::query_as("SELECT name FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_one(db)
+        .await?;
+    let course_name = course_name.0;
+
+    let sql = format!(
+        "SELECT {TOOL_COLUMNS} FROM external_tools \
+         WHERE context_type = 'Course' AND context_id = $1 \
+         AND workflow_state <> 'deleted' AND enabled AND visible ORDER BY id ASC"
+    );
+    let rows: Vec<ExternalToolRow> = sqlx::query_as(&sql).bind(course_id).fetch_all(db).await?;
+
+    let mut data = Vec::new();
+    for tool in rows {
+        let has_placements = tool.tool_configuration.get("placements").is_some();
+        if has_placements && !has_placement(&tool.tool_configuration, "course_navigation") {
+            continue;
+        }
+        let mut value = tool_json(&tool, false, None);
+        value["context_id"] = json!(course_id);
+        value["context_name"] = json!(course_name);
+        data.push(value);
+    }
+    Ok(data)
+}
+
+/// `GET /courses/{course_id}/external_tools/visible_course_nav_tools` — brief
+/// route 11 (Canvas external_tools_controller.rb:1854-1861). Only the Course
+/// context is supported by Canvas; here the path is course-scoped so the 400
+/// "Only course context is supported" branch is unreachable.
+async fn visible_course_nav_tools(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    require_course(&state.db, course_id).await?;
+    if !can_read_course(&state.db, &auth, course_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let data = visible_nav_tools_for_course(&state.db, course_id).await?;
+    Ok(Json(data))
 }
 
 // --------------------------------------------------------------------------
@@ -1541,8 +1632,27 @@ async fn show_group_tool(
 // New handlers: eula_launch (route 17, stub)
 // --------------------------------------------------------------------------
 
-/// `GET /courses/{course_id}/external_tools/{id}/eula_launch` — stub 503.
-/// Canvas launches an OIDC eula flow; star-lms has no launch endpoint yet.
-async fn eula_launch() -> StatusCode {
-    StatusCode::SERVICE_UNAVAILABLE
+/// `GET /courses/{course_id}/external_tools/{id}/eula_launch` — brief route
+/// 17 (Canvas `lti/eula_launch_controller.rb:20-54`). Guard order:
+/// `require_tool` → 404, `require_access_to_context` → 403,
+/// `require_1_3_tool` → 400. Canvas renders the LTI launch HTML; this
+/// workspace has no LTI launch renderer yet, so the API returns the 200
+/// placeholder from the brief until launch rendering exists.
+async fn eula_launch(
+    State(state): State<AppState>,
+    Path((course_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    require_course(&state.db, course_id).await?;
+    if !can_read_course(&state.db, &auth, course_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let tool = find_course_tool(&state.db, course_id, id).await?;
+    // require_1_3_tool: EULA launches are an LTI 1.3 feature.
+    if tool.lti_version != "1.3" {
+        return Ok(bad_request(
+            "EULA launch requires an LTI 1.3 tool".to_string(),
+        ));
+    }
+    Ok(Json(json!({ "message": "eula_launch not implemented" })).into_response())
 }
