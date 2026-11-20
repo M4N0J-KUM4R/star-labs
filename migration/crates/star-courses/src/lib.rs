@@ -2509,7 +2509,7 @@ async fn get_course_permissions(
     }
 
     let is_enrolled = !is_admin(&auth)
-        && sqlx::query_as(
+        && sqlx::query_as::<_, (i32,)>(
             r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1"#,
         )
         .bind(auth.id)
@@ -2519,7 +2519,7 @@ async fn get_course_permissions(
         .is_some();
 
     let is_teacher = is_enrolled
-        && sqlx::query_as(r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' LIMIT 1"#)
+        && sqlx::query_as::<_, (i32,)>(r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' LIMIT 1"#)
             .bind(auth.id)
             .bind(course_id)
             .fetch_optional(&state.db)
