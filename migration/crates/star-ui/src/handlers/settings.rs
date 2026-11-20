@@ -235,17 +235,14 @@ pub async fn course_settings(
     };
 
     let course = ctx.course.clone();
-    render_settings(
-        &app,
-        &user,
+    let render = SettingsRender {
         course_id,
-        &course,
-        None,
-        String::new(),
+        course: &course,
+        form: None,
+        error: String::new(),
         notices,
-        jar,
-    )
-    .await
+    };
+    render_settings(&app, &user, render, jar).await
 }
 
 /// POST /courses/{id}/settings — CSRF-checked form save.
