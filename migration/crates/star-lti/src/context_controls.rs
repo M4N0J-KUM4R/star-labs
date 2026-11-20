@@ -226,7 +226,7 @@ async fn control_path_for(
     .fetch_all(pool)
     .await?;
     let mut ids: Vec<String> = rows.into_iter().rev().map(|(id,)| id.to_string()).collect();
-    if course_id.is_some() {
+    if let Some(course_id) = course_id {
         ids.push(format!("c{course_id}"));
     }
     Ok(ids.join("_"))
