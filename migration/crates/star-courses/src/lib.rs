@@ -1690,6 +1690,306 @@ async fn update_course_settings(
 }
 
 // ---------------------------------------------------------------------------
+// Course permissions, recent students, search_users (Canvas API v1)
+// ---------------------------------------------------------------------------
+
+/// Query params for GET /courses/{courseId}/permissions.
+#[derive(Debug, Default, Deserialize)]
+pub struct CoursePermissionsQuery {
+    #[serde(default)]
+    pub permissions: Vec<String>,
+}
+
+/// A single permission grant returned by GET /courses/{id}/permissions.
+#[derive(Debug, Clone, Serialize)]
+pub struct CoursePermissionGrant {
+    #[serde(rename = "read")]
+    pub read: bool,
+    #[serde(rename = "read_roster")]
+    pub read_roster: bool,
+    #[serde(rename = "view_all_grades")]
+    pub view_all_grades: bool,
+    #[serde(rename = "manage_grades")]
+    pub manage_grades: bool,
+    #[serde(rename = "update")]
+    pub update: bool,
+    #[serde(rename = "delete")]
+    pub delete: bool,
+    #[serde(rename = "manage")]
+    pub manage: bool,
+    #[serde(rename = "use_student_view")]
+    pub use_student_view: bool,
+}
+
+/// GET /courses/{courseId}/permissions — Canvas `CoursesController#permissions`.
+///
+/// Returns which permissions the caller has on the course, keyed by ability
+/// name. Enrolled users get read/read_roster; teachers additionally get
+/// update/manage; admins get everything.  Requires `read` on the course.
+async fn get_course_permissions(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<CoursePermissionGrant>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let is_enrolled = !is_admin(&auth)
+        && sqlx::query_as(r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1"#)
+            .bind(auth.id)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?
+            .is_some();
+
+    let is_teacher = is_enrolled
+        && sqlx::query_as(r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' LIMIT 1"#)
+            .bind(auth.id)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?
+            .is_some();
+
+    let grants = CoursePermissionGrant {
+        read: is_enrolled || is_admin(&auth),
+        read_roster: is_enrolled || is_admin(&auth),
+        view_all_grades: is_teacher || is_admin(&auth),
+        manage_grades: is_teacher || is_admin(&auth),
+        update: is_teacher || is_admin(&auth),
+        delete: is_admin(&auth),
+        manage: is_teacher || is_admin(&auth),
+        use_student_view: is_teacher || is_admin(&auth),
+    };
+
+    Ok(Json(grants))
+}
+
+/// Query params for GET /courses/{courseId}/recent_students.
+#[derive(Debug, Default, Deserialize)]
+pub struct RecentStudentsQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+}
+
+/// A student record with last-login timestamp (Canvas `users_json`).
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct RecentStudent {
+    pub id: i64,
+    pub name: String,
+    pub short_name: String,
+    pub sortable_name: String,
+    pub email: String,
+    pub avatar_url: Option<String>,
+    pub last_login: Option<DateTime<Utc>>,
+}
+
+/// Paginated recent students response.
+#[derive(Debug, Clone, Serialize)]
+pub struct PaginatedRecentStudents {
+    pub data: Vec<RecentStudent>,
+    pub page: i64,
+    pub per_page: i64,
+    pub total: i64,
+}
+
+/// GET /courses/{courseId}/recent_students — Canvas `CoursesController#recent_students`.
+///
+/// Requires `read_reports` (teacher/admin). Returns students who have logged
+/// in, ordered by `last_login DESC NULLS LAST`, paginated.
+async fn list_recent_students(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Query(query): Query<RecentStudentsQuery>,
+) -> Result<Json<PaginatedRecentStudents>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    // Only teachers and admins can see recent students (read_reports ability).
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let (page, per_page, offset) = Pagination {
+        page: query.page,
+        per_page: query.per_page,
+    }
+    .resolve();
+
+    let (total,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(DISTINCT e.user_id)
+        FROM enrollments e
+        JOIN users u ON u.id = e.user_id
+        WHERE e.course_id = $1 AND e.role = 'student' AND u.last_login IS NOT NULL
+        "#,
+    )
+    .bind(course_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let students: Vec<RecentStudent> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT ON (u.id)
+               u.id, u.name, u.name AS short_name,
+               COALESCE(u.sortable_name, u.name) AS sortable_name,
+               u.email, p.avatar_url, u.last_login
+        FROM enrollments e
+        JOIN users u ON u.id = e.user_id
+        LEFT JOIN user_profiles p ON p.user_id = u.id
+        WHERE e.course_id = $1 AND e.role = 'student' AND u.last_login IS NOT NULL
+        ORDER BY u.id, u.last_login DESC NULLS LAST
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(course_id)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(PaginatedRecentStudents {
+        data: students,
+        page,
+        per_page,
+        total,
+    }))
+}
+
+/// Query params for GET /courses/{courseId}/search_users (Canvas subset).
+/// Mirrors `CourseUserListQuery` but also accepts include_inactive (admin only).
+#[derive(Debug, Default, Deserialize)]
+pub struct SearchUsersQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+    pub search_term: Option<String>,
+    pub enrollment_type: Option<String>,
+    pub enrollment_role: Option<String>,
+    pub enrollment_state: Option<String>,
+    pub sort: Option<String>,
+    pub order: Option<String>,
+    pub include_inactive: Option<bool>,
+    pub section_ids: Option<Vec<i64>>,
+    pub differentiation_tag_id: Option<i64>,
+    pub user_id: Option<i64>,
+    #[serde(rename = "include[]", default)]
+    pub include: Vec<String>,
+}
+
+/// GET /courses/{courseId}/search_users — Canvas `CoursesController#search_users`.
+///
+/// Alias of the users endpoint with additional filter params. Requires
+/// `read_roster` or `view_all_grades` or `manage_grades`.  The response shape
+/// is the same `PaginatedCourseUsers` as the users endpoint.
+async fn search_course_users(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Query(query): Query<SearchUsersQuery>,
+) -> Result<Json<PaginatedCourseUsers>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    // Permission check: read_roster OR view_all_grades OR manage_grades.
+    let is_enrolled_or_admin =
+        check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await?;
+    let is_teacher_or_admin =
+        check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+
+    if !is_enrolled_or_admin && !is_teacher_or_admin {
+        // Check if they have read_roster equivalent (enrolled or admin covers it).
+        return Err(ApiError::Forbidden);
+    }
+
+    let (page, per_page, offset) = Pagination {
+        page: query.page,
+        per_page: query.per_page,
+    }
+    .resolve();
+
+    let search = query
+        .search_term
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("%{s}%"));
+
+    // enrollment_type filter — maps Canvas enrollment type names to role values.
+    let role_filter = match query.enrollment_type.as_deref() {
+        Some("StudentEnrollment") => Some("student"),
+        Some("TeacherEnrollment") => Some("teacher"),
+        Some("TaEnrollment") => Some("ta"),
+        Some("DesignerEnrollment") => Some("designer"),
+        Some("ObserverEnrollment") => Some("observer"),
+        _ => None,
+    };
+
+    let (total,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(DISTINCT u.id)
+        FROM enrollments e
+        JOIN users u ON u.id = e.user_id
+        WHERE e.course_id = $1
+          AND ($2::text IS NULL OR u.name ILIKE $2 OR u.email ILIKE $2)
+          AND ($3::text IS NULL OR e.role = $3)
+        "#,
+    )
+    .bind(course_id)
+    .bind(&search)
+    .bind(role_filter)
+    .fetch_one(&state.db)
+    .await?;
+
+    let order_col = match query.sort.as_deref() {
+        Some("name") => "sortable_name",
+        Some("email") => "email",
+        Some("recent_login") => "last_login",
+        _ => "sortable_name",
+    };
+    let order_dir = match query.order.as_deref() {
+        Some("asc") => "ASC",
+        _ => "DESC",
+    };
+
+    let rows: Vec<CourseUserRow> = sqlx::query_as(&format!(
+        r#"
+        SELECT DISTINCT ON (u.id)
+               u.id, u.name,
+               COALESCE(u.sortable_name, u.name) AS sortable_name,
+               u.email, e.role, u.created_at
+        FROM enrollments e
+        JOIN users u ON u.id = e.user_id
+        WHERE e.course_id = $1
+          AND ($2::text IS NULL OR u.name ILIKE $2 OR u.email ILIKE $2)
+          AND ($3::text IS NULL OR e.role = $3)
+        ORDER BY u.id, (e.role = 'teacher') DESC, e.role
+        ORDER BY {} {}
+        LIMIT $4 OFFSET $5
+        "#,
+        order_col, order_dir
+    ))
+    .bind(course_id)
+    .bind(&search)
+    .bind(role_filter)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(PaginatedCourseUsers {
+        data: rows.into_iter().map(Into::into).collect(),
+        page,
+        per_page,
+        total,
+    }))
+}
+
+// ---------------------------------------------------------------------------
 // Course roster (Canvas API v1)
 // ---------------------------------------------------------------------------
 
@@ -3209,7 +3509,7 @@ pub fn router() -> Router<AppState> {
         .route("/sections/{id}", get(get_section))
         .route("/sections/{id}", put(update_section))
         .route("/sections/{id}", delete(delete_section))
-        // Course settings, roster and navigation tabs (Canvas API v1)
+        // Course settings, roster, navigation tabs and permissions
         .route(
             "/courses/{courseId}/settings",
             get(get_course_settings).put(update_course_settings),
@@ -3217,6 +3517,9 @@ pub fn router() -> Router<AppState> {
         .route("/courses/{courseId}/users", get(list_course_users))
         .route("/courses/{courseId}/users/{userId}", get(get_course_user))
         .route("/courses/{courseId}/tabs", get(list_course_tabs))
+        .route("/courses/{courseId}/permissions", get(get_course_permissions))
+        .route("/courses/{courseId}/recent_students", get(list_recent_students))
+        .route("/courses/{courseId}/search_users", get(search_course_users))
         // Content shares, activity stream, user courses and ping
         .route(
             "/courses/{courseId}/content_share_users",
