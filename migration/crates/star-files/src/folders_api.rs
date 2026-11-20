@@ -334,7 +334,7 @@ async fn list_group_folder_duplicates(
     }
 
     let Some(folder) = fetch_folder(&state.db, folder_id).await? else {
-        return Ok(canvas_not_found());
+        return Err(ApiError::NotFound);
     };
     if folder.context_type != "Group" || folder.context_id != group.id {
         // Canvas render_unauthorized_action.

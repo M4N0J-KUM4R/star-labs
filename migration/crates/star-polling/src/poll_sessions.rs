@@ -198,10 +198,7 @@ fn session_params(body: &Value) -> Result<SessionParams, ApiError> {
             Some(raw) => Some(parse_id(raw)?),
             None => None,
         },
-        has_public_results: match inner.get("has_public_results") {
-            Some(raw) => Some(parse_bool(raw)),
-            None => None,
-        },
+        has_public_results: inner.get("has_public_results").map(parse_bool),
     })
 }
 
@@ -257,7 +254,7 @@ async fn index(
     let poll = load_poll(&app.db, poll_id).await?;
 
     // authorized_action(@poll, @current_user, :update)
-    if !poll_grants_update(&app.db, &auth, &poll).await? {
+    if !poll_grants_update(&app.db, auth, &poll).await? {
         return Err(ApiError::Forbidden);
     }
 

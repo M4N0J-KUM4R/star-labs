@@ -332,7 +332,7 @@ fn valid_include_params() -> Vec<&'static str> {
 /// Returns the rendered error body (`ActiveModel::Errors` serialized as
 /// `{ "style": ["..."] }`) or `None` when the arguments are valid.
 fn validate_args(args: &ShowArgs) -> Option<Value> {
-    let mut errs: Map<String, String> = Map::new();
+    let mut errs: Map<String, Value> = Map::new();
 
     let invalid_style = args
         .style
@@ -341,10 +341,10 @@ fn validate_args(args: &ShowArgs) -> Option<Value> {
     if invalid_style {
         errs.insert(
             "style".to_string(),
-            format!(
+            json!(format!(
                 "invalid style requested. Must be one of the following: {}",
                 VALID_STYLE_ARGS.join(", ")
-            ),
+            )),
         );
     }
 
@@ -361,10 +361,10 @@ fn validate_args(args: &ShowArgs) -> Option<Value> {
     if !invalid.is_empty() {
         errs.insert(
             "include".to_string(),
-            format!(
+            json!(format!(
                 "invalid include value requested. Must be one of the following: {}",
                 valid_include_params().join(", ")
-            ),
+            )),
         );
     } else {
         let associations: Vec<&str> = args
@@ -376,10 +376,10 @@ fn validate_args(args: &ShowArgs) -> Option<Value> {
         if associations.len() > 1 {
             errs.insert(
                 "include".to_string(),
-                format!(
+                json!(format!(
                     "cannot list multiple association includes. Multiple given: {}",
                     associations.join(", ")
-                ),
+                )),
             );
         }
 
@@ -392,10 +392,10 @@ fn validate_args(args: &ShowArgs) -> Option<Value> {
         if assessments.len() > 1 {
             errs.insert(
                 "include".to_string(),
-                format!(
+                json!(format!(
                     "cannot list multiple assessment includes. Multiple given: {}",
                     assessments.join(", ")
-                ),
+                )),
             );
         }
 
