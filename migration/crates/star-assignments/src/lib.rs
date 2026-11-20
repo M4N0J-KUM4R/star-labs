@@ -8672,7 +8672,7 @@ async fn submission_read_state(
 
 /// Canvas `mark_rubric_assessments_read` / `mark_document_annotations_read` —
 /// only the student who owns the submission may mark it read.
-async fn mark_submission_read(
+async fn mark_submission_read_family(
     state: &AppState,
     auth: &AuthUser,
     course_id: i64,
@@ -8718,7 +8718,7 @@ async fn course_mark_rubric_assessments_read(
     Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mark_submission_read(
+    mark_submission_read_family(
         &state,
         &auth,
         course_id,
@@ -8754,7 +8754,7 @@ async fn course_mark_document_annotations_read(
     Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    mark_submission_read(
+    mark_submission_read_family(
         &state,
         &auth,
         course_id,
@@ -8794,7 +8794,7 @@ async fn section_mark_rubric_assessments_read(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
     ensure_section_user(&state.db, section_id, user_id).await?;
-    mark_submission_read(
+    mark_submission_read_family(
         &state,
         &auth,
         course_id,
@@ -8834,7 +8834,7 @@ async fn section_mark_document_annotations_read(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
     ensure_section_user(&state.db, section_id, user_id).await?;
-    mark_submission_read(
+    mark_submission_read_family(
         &state,
         &auth,
         course_id,
@@ -8855,9 +8855,6 @@ async fn section_for_students(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
 
-    let Json(list) =
-        list_student_submissions(State(state), Path(course_id), RawQuery(raw_query), auth).await?;
-
     // Only the students of the section are visible in this context.
     let students: Vec<i64> = sqlx::query_scalar(
         "SELECT DISTINCT user_id FROM enrollments \
@@ -8866,6 +8863,9 @@ async fn section_for_students(
     .bind(section_id)
     .fetch_all(&state.db)
     .await?;
+
+    let Json(list) =
+        list_student_submissions(State(state), Path(course_id), RawQuery(raw_query), auth).await?;
 
     let filtered: Vec<serde_json::Value> = list
         .as_array()
