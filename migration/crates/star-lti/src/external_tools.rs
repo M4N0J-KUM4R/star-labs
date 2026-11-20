@@ -35,6 +35,9 @@
 //! - `GET    /groups/{group_id}/external_tools` — tools via the group's course
 //! - `GET    /courses/{course_id}/external_tools/{id}/eula_launch` — 200
 //!   placeholder until LTI launch rendering exists (brief route 17)
+//! - `GET    /api/lti/courses/{course_id}/jwt_token` — signed launch token
+//! - `GET    /api/lti/accounts/{account_id}/jwt_token` — signed launch token
+//!   (Canvas config/routes.rb:3153-3160, outside `/api/v1`)
 //!
 //! These live in their own table (`external_tools`, migration 0085) and never
 //! touch the phase-3 `lti_registrations` table.
@@ -50,6 +53,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
+use url::Url;
 
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
@@ -232,6 +236,17 @@ pub struct CreateToolWithVerificationRequest {
     pub context_id: Option<i64>,
     pub context_type: Option<String>,
     pub config_settings: Option<String>,
+}
+
+/// Query params for the jwt_token endpoints.
+///
+/// Canvas external_tools_controller.rb:1678-1682 reads `tool_launch_url`
+/// (matched against tool URLs and domains) and `tool_id` (the preferred
+/// tool).
+#[derive(Debug, Deserialize, Default)]
+pub struct JwtTokenQuery {
+    pub tool_launch_url: Option<String>,
+    pub tool_id: Option<i64>,
 }
 
 // --------------------------------------------------------------------------
@@ -488,6 +503,198 @@ async fn find_account_tool(
 }
 
 // ---------------------------------------------------------------------------
+// jwt_token lookups (Canvas `Lti::ToolFinder.from_url`, scoped)
+// ---------------------------------------------------------------------------
+
+/// The slice of `external_tools` jwt_token reads. `shared_secret` is included
+/// although TOOL_COLUMNS omits it — tool JSON never renders it, but the
+/// launch token is signed with it.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct JwtToolRow {
+    id: i64,
+    url: String,
+    domain: Option<String>,
+    consumer_key: Option<String>,
+    shared_secret: Option<String>,
+}
+
+/// An account and its ancestors — the context chain Canvas
+/// `contexts_to_search` walks. A NULL root (a course without an account)
+/// yields an empty chain.
+async fn account_chain(pool: &PgPool, root: Option<i64>) -> Result<Vec<i64>, ApiError> {
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "WITH RECURSIVE up AS ( \
+             SELECT id, parent_account_id FROM accounts WHERE id = $1 \
+             UNION ALL \
+             SELECT a.id, a.parent_account_id FROM accounts a \
+             JOIN up ON a.id = up.parent_account_id \
+         ) SELECT id FROM up",
+    )
+    .bind(root)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|(id,)| id).collect())
+}
+
+/// Active tools in the context chain, nearest context first — the candidate
+/// list `Lti::ToolFinder.from_url` orders over (app/services/lti/
+/// tool_finder.rb:249-318; the LTI 1.3 and duplicate-identity preference
+/// clauses are scoped out — the workspace models no duplicate identity
+/// hashes).
+async fn launch_candidates(
+    pool: &PgPool,
+    context_type: &str,
+    context_id: i64,
+    account_chain: &[i64],
+) -> Result<Vec<JwtToolRow>, ApiError> {
+    let rows: Vec<JwtToolRow> = sqlx::query_as(
+        "SELECT id, url, domain, consumer_key, shared_secret FROM external_tools \
+         WHERE workflow_state <> 'deleted' \
+           AND (($1::text = 'Course' AND context_type = 'Course' AND context_id = $2) \
+             OR (context_type = 'Account' AND context_id = ANY($3))) \
+         ORDER BY CASE WHEN $1::text = 'Course' AND context_type = 'Course' THEN 0 ELSE 1 END, \
+                  ARRAY_POSITION($3::bigint[], context_id), \
+                  id ASC",
+    )
+    .bind(context_type)
+    .bind(context_id)
+    .bind(account_chain.to_vec())
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Canvas `ContextExternalTool.standardize_url` (context_external_tool.rb:
+/// 957-967): trim, default the scheme to http, normalize — the `url` crate
+/// lowercases hosts and drops default ports.
+fn standardize_url(raw: &str) -> Option<Url> {
+    let trimmed = raw.trim();
+    let prefixed;
+    let input = if trimmed.contains("://") {
+        trimmed
+    } else {
+        prefixed = format!("http://{trimmed}");
+        &prefixed
+    };
+    Url::parse(input).ok()
+}
+
+/// The query pairs of a standardized URL, sorted — Canvas standardize_url
+/// sorts them so exact matching is order-insensitive.
+fn sorted_query(url: &Url) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = url
+        .query_pairs()
+        .map(|pair| (pair.0.into_owned(), pair.1.into_owned()))
+        .collect();
+    pairs.sort();
+    pairs
+}
+
+fn path_or_root(url: &Url) -> &str {
+    if url.path().is_empty() {
+        "/"
+    } else {
+        url.path()
+    }
+}
+
+/// Canvas `ContextExternalTool#matches_url?` (context_external_tool.rb:
+/// 1017-1037): scheme, host, port and path on standardized URLs; the sorted
+/// query only on the exact pass (`match_queries_exactly:`).
+fn url_matches(tool_url: &str, launch: &Url, exact_query: bool) -> bool {
+    let Some(tool) = standardize_url(tool_url) else {
+        return false;
+    };
+    if tool.scheme() != launch.scheme()
+        || tool.host_str() != launch.host_str()
+        || tool.port() != launch.port()
+        || path_or_root(&tool) != path_or_root(launch)
+    {
+        return false;
+    }
+    if exact_query {
+        sorted_query(&tool) == sorted_query(launch)
+    } else {
+        true
+    }
+}
+
+/// Canvas `ContextExternalTool#matches_tool_domain?`
+/// (context_external_tool.rb:1039-1048): the launch host, with its explicit
+/// port when present, must end with `.{domain}`.
+fn domain_matches(tool_domain: &str, launch: &Url) -> bool {
+    let domain = tool_domain
+        .trim()
+        .trim_start_matches("https://")
+        .trim_start_matches("http://")
+        .to_lowercase();
+    if domain.is_empty() {
+        return false;
+    }
+    let Some(host) = launch.host_str() else {
+        return false;
+    };
+    let host_with_port = match launch.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    };
+    format!(".{host_with_port}").ends_with(&format!(".{domain}"))
+}
+
+/// Canvas `ContextExternalTool#matches_host?` (context_external_tool.rb:
+/// 1010-1015): the launch host equals the tool URL's host, or the tool
+/// domain matches.
+fn tool_matches_host(tool: &JwtToolRow, launch: &Url) -> bool {
+    if tool
+        .domain
+        .as_deref()
+        .is_some_and(|domain| domain_matches(domain, launch))
+    {
+        return true;
+    }
+    standardize_url(&tool.url).is_some_and(|tool_url| tool_url.host_str() == launch.host_str())
+}
+
+/// Canvas `Lti::ToolFinder.from_url` scoped to the context chain
+/// (app/services/lti/tool_finder.rb:197-247): the preferred tool wins when
+/// it is available in the searched contexts and matches the launch host —
+/// or outright when no launch URL is given (:216-217); otherwise the first
+/// exact-URL, then query-ignoring-URL, then domain match, in candidate
+/// order.
+fn pick_tool(
+    candidates: &[JwtToolRow],
+    launch_url: Option<&Url>,
+    tool_id: Option<i64>,
+) -> Option<JwtToolRow> {
+    if let Some(tool) = tool_id.and_then(|id| candidates.iter().find(|tool| tool.id == id)) {
+        match launch_url {
+            None => return Some(tool.clone()),
+            Some(launch) if tool_matches_host(tool, launch) => {
+                return Some(tool.clone());
+            }
+            Some(_) => {}
+        }
+    }
+    let launch = launch_url?;
+    candidates
+        .iter()
+        .find(|tool| url_matches(&tool.url, launch, true))
+        .or_else(|| {
+            candidates
+                .iter()
+                .find(|tool| url_matches(&tool.url, launch, false))
+        })
+        .or_else(|| {
+            candidates.iter().find(|tool| {
+                tool.domain
+                    .as_deref()
+                    .is_some_and(|d| domain_matches(d, launch))
+            })
+        })
+        .cloned()
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -580,6 +787,24 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{course_id}/external_tools/{id}/eula_launch",
             get(eula_launch),
+        )
+}
+
+/// Router for the Canvas `/api/lti` jwt_token routes.
+///
+/// Canvas registers `get "#{prefix}/jwt_token"` for the course and account
+/// prefixes inside the `/api/lti` route set (config/routes.rb:3153-3160), so
+/// the paths carry the prefix and the router mounts through
+/// `lti_advantage_router` (star-http merges that at the application root).
+pub fn advantage_router() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/api/lti/courses/{course_id}/jwt_token",
+            get(course_jwt_token),
+        )
+        .route(
+            "/api/lti/accounts/{account_id}/jwt_token",
+            get(account_jwt_token),
         )
 }
 
@@ -1655,4 +1880,134 @@ async fn eula_launch(
         ));
     }
     Ok(Json(json!({ "message": "eula_launch not implemented" })).into_response())
+}
+
+// ---------------------------------------------------------------------------
+// New handlers: jwt_token (Canvas /api/lti routes)
+// ---------------------------------------------------------------------------
+
+/// `GET /api/lti/courses/{course_id}/jwt_token` — a signed launch token for
+/// a tool available in the course.
+///
+/// Canvas external_tools_controller.rb:613-620 skips `require_user` for
+/// jwt_token, but `require_access_to_context` (:2116-2121) still demands
+/// course `grants_right?(:read)`, so the endpoint is member/admin gated in
+/// practice.
+async fn course_jwt_token(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Query(params): Query<JwtTokenQuery>,
+) -> Result<Json<Value>, ApiError> {
+    require_course(&state.db, course_id).await?;
+    if !can_read_course(&state.db, &auth, course_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let title: Option<(String,)> = sqlx::query_as("SELECT name FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?;
+    issue_jwt_token(
+        &state,
+        "Course",
+        course_id,
+        course_account_id(&state.db, course_id).await?,
+        title.map(|(name,)| name),
+        &params,
+    )
+    .await
+}
+
+/// `GET /api/lti/accounts/{account_id}/jwt_token` — a signed launch token
+/// for a tool available in the account.
+///
+/// Canvas `require_access_to_context` (:2116-2118) only calls `require_user`
+/// for account contexts: any logged-in user passes, no admin role is
+/// checked.
+async fn account_jwt_token(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    _auth: AuthUser,
+    Query(params): Query<JwtTokenQuery>,
+) -> Result<Json<Value>, ApiError> {
+    require_account(&state.db, account_id).await?;
+    let title: Option<(String,)> = sqlx::query_as("SELECT name FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await?;
+    issue_jwt_token(
+        &state,
+        "Account",
+        account_id,
+        Some(account_id),
+        title.map(|(name,)| name),
+        &params,
+    )
+    .await
+}
+
+/// Shared jwt_token body — Canvas external_tools_controller.rb:1678-1690:
+/// find the tool by launch URL (or the preferred id) in the context chain,
+/// 404 when nothing matches, then render
+/// `{ jwt_token: Canvas::Security.create_jwt(params, nil, shared_secret) }`.
+async fn issue_jwt_token(
+    state: &AppState,
+    context_type: &str,
+    context_id: i64,
+    chain_root: Option<i64>,
+    title: Option<String>,
+    params: &JwtTokenQuery,
+) -> Result<Json<Value>, ApiError> {
+    let chain = account_chain(&state.db, chain_root).await?;
+    let candidates = launch_candidates(&state.db, context_type, context_id, &chain).await?;
+    let launch_url = params
+        .tool_launch_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty())
+        .and_then(standardize_url);
+    let tool =
+        pick_tool(&candidates, launch_url.as_ref(), params.tool_id).ok_or(ApiError::NotFound)?;
+
+    // The token is signed with the tool's shared secret
+    // (Canvas::Security.create_jwt, gems/canvas_security/lib/
+    // canvas_security.rb:238-247 — HS256, no exp claim because jwt_token
+    // passes expires=nil). An LTI 1.3-only tool has no secret; Canvas
+    // raises there, this answers the Canvas 400 envelope instead.
+    let shared_secret = tool
+        .shared_secret
+        .clone()
+        .filter(|secret| !secret.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("Tool has no shared secret".to_string()))?;
+
+    // Canvas passes the launch params through after rejecting oauth_* ones
+    // and adds consumer_key + iat (controller.rb:1685-1690). The payload
+    // below is the workspace's scoped launch set — full BLTI variable
+    // expansion belongs to the LTI launch renderer (see the
+    // sessionless_launch stubs). resource_link_id substitutes the tool id
+    // for Canvas' opaque identifier (context_external_tool.rb:1192-1215);
+    // the workspace schema has no opaque id column.
+    let payload = json!({
+        "lti_message_type": "basic-lti-launch-request",
+        "lti_version": "LTI-1p0",
+        "context_id": format!("{}_{}", context_type.to_lowercase(), context_id),
+        "context_title": title,
+        "resource_link_id": format!(
+            "{}_{}_tool_{}",
+            context_type.to_lowercase(),
+            context_id,
+            tool.id
+        ),
+        "consumer_key": tool.consumer_key,
+        "iat": Utc::now().timestamp(),
+    });
+
+    let token = jsonwebtoken::encode(
+        &jsonwebtoken::Header::default(),
+        &payload,
+        &jsonwebtoken::EncodingKey::from_secret(shared_secret.as_bytes()),
+    )
+    .map_err(|e| ApiError::Db(e.to_string()))?;
+
+    Ok(Json(json!({ "jwt_token": token })))
 }
