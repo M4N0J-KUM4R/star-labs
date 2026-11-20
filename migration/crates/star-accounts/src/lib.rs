@@ -4,8 +4,8 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
-    routing::{delete, get, post},
+    http::{HeaderMap, StatusCode},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -16,6 +16,9 @@ use std::collections::HashMap;
 
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
+
+pub mod career;
+pub mod error_reports;
 
 // --------------------------------------------------------------------------
 // Domain types
@@ -958,6 +961,788 @@ async fn fetch_admin(
     Ok(row.map(AccountAdmin::from))
 }
 
+// ---------------------------------------------------------------------------
+// Canvas `AccountsController` — the routes the parity report counted as
+// missing, and the deprecated user scoped account notification aliases.
+// ---------------------------------------------------------------------------
+
+/// Canvas allows at most 100 users in one bulk update.
+const MAX_USERS_PER_BULK_UPDATE: usize = 100;
+
+/// Optional authentication: the Canvas routes that skip `require_user` also
+/// serve anonymous callers.
+pub(crate) async fn optional_user(headers: &HeaderMap, state: &AppState) -> Option<AuthUser> {
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")?;
+    let claims = star_auth::verify_token(token, &state.jwt_secret)?;
+    let (role,): (String,) = sqlx::query_as("SELECT role FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_optional(&state.db)
+        .await
+        .ok()??;
+    Some(AuthUser {
+        id: claims.sub,
+        role,
+    })
+}
+
+/// One query parameter of a request.
+fn param_value<'a>(params: &'a [(String, String)], key: &str) -> Option<&'a str> {
+    params
+        .iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.as_str())
+}
+
+/// The `page` and `per_page` of a request (Canvas defaults to 50, max 100).
+fn page_params(params: &[(String, String)]) -> (i64, i64) {
+    let number = |key: &str| param_value(params, key).and_then(|value| value.parse::<i64>().ok());
+    let page = number("page").unwrap_or(1).max(1);
+    let per_page = number("per_page").unwrap_or(50).clamp(1, 100);
+    (per_page, (page - 1) * per_page)
+}
+
+/// The `user_ids` of a bulk update (Rails reads `user_ids[]`).
+fn parse_user_id_list(params: &[(String, String)]) -> Vec<i64> {
+    params
+        .iter()
+        .filter(|(key, _)| key == "user_ids[]" || key == "user_ids")
+        .filter_map(|(_, value)| value.parse::<i64>().ok())
+        .collect()
+}
+
+/// The settings of the root account.
+async fn root_account_settings(pool: &PgPool) -> Result<Value, ApiError> {
+    let row: Option<(Value,)> = sqlx::query_as(
+        "SELECT settings FROM accounts \
+         WHERE parent_account_id IS NULL AND workflow_state <> 'deleted' \
+         ORDER BY id ASC LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row
+        .map(|(settings,)| settings)
+        .unwrap_or(Value::Object(Map::new())))
+}
+
+/// The settings of one account.
+async fn account_settings(pool: &PgPool, account_id: i64) -> Result<Value, ApiError> {
+    let row: Option<(Value,)> = sqlx::query_as("SELECT settings FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row
+        .map(|(settings,)| settings)
+        .unwrap_or(Value::Object(Map::new())))
+}
+
+/// The root account of an account (None when the account is the root).
+async fn root_account_of(pool: &PgPool, account_id: i64) -> Result<Option<i64>, ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        r#"
+        WITH RECURSIVE ancestors AS (
+            SELECT id, parent_account_id, 0 AS depth FROM accounts WHERE id = $1
+            UNION ALL
+            SELECT a.id, a.parent_account_id, anc.depth + 1
+            FROM accounts a JOIN ancestors anc ON a.id = anc.parent_account_id
+        )
+        SELECT id FROM ancestors ORDER BY depth DESC LIMIT 1
+        "#,
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(match row {
+        Some((root,)) if root == account_id => None,
+        Some((root,)) => Some(root),
+        None => None,
+    })
+}
+
+/// The account and its ancestors (Canvas `Account#account_chain`).
+async fn account_chain(pool: &PgPool, account_id: i64) -> Result<Vec<(i64, String)>, ApiError> {
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        r#"
+        WITH RECURSIVE ancestors AS (
+            SELECT id, name, parent_account_id, 0 AS depth FROM accounts WHERE id = $1
+            UNION ALL
+            SELECT a.id, a.name, a.parent_account_id, anc.depth + 1
+            FROM accounts a JOIN ancestors anc ON a.id = anc.parent_account_id
+        )
+        SELECT id, name FROM ancestors ORDER BY depth ASC
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Canvas `account_json(read_only: true)` — the attribute fields plus the
+/// default time zone.
+async fn read_only_account_json(pool: &PgPool, account_id: i64) -> Result<Option<Value>, ApiError> {
+    let row: Option<(i64, String, Option<i64>, String, Option<String>, String)> = sqlx::query_as(
+        "SELECT id, name, parent_account_id, workflow_state, uuid, default_time_zone \
+         FROM accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some((id, name, parent_account_id, workflow_state, uuid, default_time_zone)) = row else {
+        return Ok(None);
+    };
+    let root_account_id = root_account_of(pool, id).await?;
+
+    Ok(Some(json!({
+        "id": id,
+        "name": name,
+        "parent_account_id": parent_account_id,
+        "root_account_id": root_account_id,
+        "workflow_state": workflow_state,
+        "uuid": uuid,
+        "default_time_zone": default_time_zone,
+    })))
+}
+
+/// Canvas `account_json` — the full field set.
+async fn account_json(pool: &PgPool, account_id: i64) -> Result<Option<Value>, ApiError> {
+    let row: Option<(
+        i64,
+        String,
+        Option<i64>,
+        String,
+        Option<String>,
+        String,
+        Option<i64>,
+        Option<i64>,
+        Option<i64>,
+    )> = sqlx::query_as(
+        "SELECT id, name, parent_account_id, workflow_state, uuid, default_time_zone, \
+                default_storage_quota_mb, default_user_storage_quota_mb, \
+                default_group_storage_quota_mb \
+         FROM accounts WHERE id = $1",
+    )
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+
+    let Some((
+        id,
+        name,
+        parent_account_id,
+        workflow_state,
+        uuid,
+        default_time_zone,
+        default_storage_quota_mb,
+        default_user_storage_quota_mb,
+        default_group_storage_quota_mb,
+    )) = row
+    else {
+        return Ok(None);
+    };
+    let root_account_id = root_account_of(pool, id).await?;
+
+    Ok(Some(json!({
+        "id": id,
+        "name": name,
+        "parent_account_id": parent_account_id,
+        "root_account_id": root_account_id,
+        "workflow_state": workflow_state,
+        "uuid": uuid,
+        "default_time_zone": default_time_zone,
+        "default_storage_quota_mb": default_storage_quota_mb,
+        "default_user_storage_quota_mb": default_user_storage_quota_mb,
+        "default_group_storage_quota_mb": default_group_storage_quota_mb,
+        "sis_account_id": Value::Null,
+        "sis_import_id": Value::Null,
+        "integration_id": Value::Null,
+        "course_template_id": Value::Null,
+    })))
+}
+
+/// Canvas `progress_json` — the port applies the work synchronously, so the
+/// progress is already completed when the answer is written.
+fn progress_json(context_id: i64, user_id: i64, tag: &str) -> Value {
+    json!({
+        "id": 0,
+        "context_id": context_id,
+        "context_type": "Account",
+        "user_id": user_id,
+        "tag": tag,
+        "completion": 100,
+        "workflow_state": "completed",
+        "created_at": Utc::now(),
+        "updated_at": Utc::now(),
+        "message": Value::Null,
+        "url": "/api/v1/progress/0",
+    })
+}
+
+/// GET /settings/environment — Canvas `AccountsController#environment`.
+///
+/// The root account's public settings; the inbox settings are only exposed
+/// when the site admin `inbox_settings` feature is enabled.
+async fn get_settings_environment(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    let settings = root_account_settings(&state.db).await?;
+    let mut response = Map::new();
+
+    for key in ["calendar_contexts_limit", "open_registration"] {
+        if let Some(value) = settings.get(key) {
+            response.insert(key.to_string(), value.clone());
+        }
+    }
+
+    if inbox_settings_enabled(&state.db).await? {
+        for key in [
+            "enable_inbox_signature_block",
+            "disable_inbox_signature_block_for_students",
+            "enable_inbox_auto_response",
+            "disable_inbox_auto_response_for_students",
+        ] {
+            if let Some(value) = settings.get(key) {
+                response.insert(key.to_string(), value.clone());
+            }
+        }
+    }
+
+    Ok(Json(Value::Object(response)))
+}
+
+/// Canvas `ApplicationController#js_env_root_account_settings`: the inbox
+/// settings need the site admin `inbox_settings` feature.
+async fn inbox_settings_enabled(pool: &PgPool) -> Result<bool, ApiError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT state FROM feature_flags \
+         WHERE context_type = 'Account' AND context_id = 1 AND feature = 'inbox_settings' LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(state,)| state == "enabled").unwrap_or(false))
+}
+
+/// GET /course_accounts — Canvas `AccountsController#course_accounts`.
+///
+/// The accounts in which the caller has an admin enrollment in a course. The
+/// route is public, so an anonymous caller gets an empty list.
+async fn list_course_accounts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<Vec<(String, String)>>,
+) -> Result<Json<Value>, ApiError> {
+    let Some(user) = optional_user(&headers, &state).await else {
+        return Ok(Json(Value::Array(Vec::new())));
+    };
+
+    let (per_page, offset) = page_params(&params);
+    let rows: Vec<(i64,)> = sqlx::query_as(
+        "SELECT DISTINCT c.account_id FROM courses c \
+         JOIN enrollments e ON e.course_id = c.id \
+         WHERE e.user_id = $1 AND e.role IN ('teacher', 'ta', 'designer') \
+           AND e.workflow_state <> 'deleted' AND c.account_id IS NOT NULL \
+         ORDER BY c.account_id LIMIT $2 OFFSET $3",
+    )
+    .bind(user.id)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut list = Vec::with_capacity(rows.len());
+    for (account_id,) in rows {
+        if let Some(value) = read_only_account_json(&state.db, account_id).await? {
+            list.push(value);
+        }
+    }
+    Ok(Json(Value::Array(list)))
+}
+
+/// GET /horizon_accounts — Canvas `AccountsController#horizon_accounts`.
+///
+/// The accounts the caller administers. The route is public, so an anonymous
+/// caller gets an empty list.
+async fn list_horizon_accounts(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<Vec<(String, String)>>,
+) -> Result<Json<Value>, ApiError> {
+    let Some(user) = optional_user(&headers, &state).await else {
+        return Ok(Json(Value::Array(Vec::new())));
+    };
+
+    let (per_page, offset) = page_params(&params);
+    let ids = adminable_account_ids(&state.db, &user).await?;
+
+    let mut list = Vec::new();
+    for account_id in ids
+        .into_iter()
+        .skip(offset as usize)
+        .take(per_page as usize)
+    {
+        if let Some(value) = account_json(&state.db, account_id).await? {
+            list.push(value);
+        }
+    }
+    Ok(Json(Value::Array(list)))
+}
+
+/// DELETE /accounts/{id}/users — Canvas `AccountsController#remove_users`.
+async fn remove_account_users(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Query(params): Query<Vec<(String, String)>>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    // Canvas: @account.grants_right?(@current_user, :manage_users_in_bulk)
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let user_ids = parse_user_id_list(&params);
+    if user_ids.len() > MAX_USERS_PER_BULK_UPDATE {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "errors": "Too many users to update at once." })),
+        ));
+    }
+
+    if !user_ids.is_empty() {
+        sqlx::query("DELETE FROM account_users WHERE account_id = $1 AND user_id = ANY($2)")
+            .bind(account_id)
+            .bind(&user_ids)
+            .execute(&state.db)
+            .await?;
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(progress_json(
+            account_id,
+            auth.id,
+            "remove_users_from_account",
+        )),
+    ))
+}
+
+/// PUT /accounts/{id}/users/bulk_update — Canvas `AccountsController#update_users`.
+///
+/// The only permitted attribute is `user[event]`, which suspends or
+/// unsuspends the memberships of the listed users.
+async fn bulk_update_account_users(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Query(params): Query<Vec<(String, String)>>,
+    body: Option<Json<Value>>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let user_ids = parse_user_id_list(&params);
+    if user_ids.len() > MAX_USERS_PER_BULK_UPDATE {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "errors": "Too many users to update at once." })),
+        ));
+    }
+
+    let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
+    let event = payload
+        .get("user")
+        .and_then(|user| user.get("event"))
+        .and_then(Value::as_str)
+        .or_else(|| param_value(&params, "user[event]"))
+        .unwrap_or("")
+        .to_string();
+
+    if !user_ids.is_empty() {
+        match event.as_str() {
+            "suspend" => {
+                sqlx::query(
+                    "UPDATE account_users SET workflow_state = 'suspended' \
+                     WHERE account_id = $1 AND user_id = ANY($2)",
+                )
+                .bind(account_id)
+                .bind(&user_ids)
+                .execute(&state.db)
+                .await?;
+            }
+            "unsuspend" => {
+                sqlx::query(
+                    "UPDATE account_users SET workflow_state = 'active' \
+                     WHERE account_id = $1 AND user_id = ANY($2)",
+                )
+                .bind(account_id)
+                .bind(&user_ids)
+                .execute(&state.db)
+                .await?;
+            }
+            _ => {}
+        }
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(progress_json(account_id, auth.id, "update_multiple_users")),
+    ))
+}
+
+/// PUT /accounts/{id}/users/{userId}/restore — Canvas `AccountsController#restore_user`.
+///
+/// Only the root account restores a deleted user.
+async fn restore_account_user(
+    State(state): State<AppState>,
+    Path((account_id, user_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    // Canvas: `raise ActiveRecord::RecordNotFound unless @account.root_account?`
+    if root_account_id(&state.db).await? != Some(account_id) {
+        return Err(ApiError::NotFound);
+    }
+
+    let user: Option<(String, Option<String>)> =
+        sqlx::query_as("SELECT workflow_state, sortable_name FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let Some((workflow_state, sortable_name)) = user else {
+        return Err(ApiError::NotFound);
+    };
+    // Canvas: `raise ActiveRecord::RecordNotFound if user.try(:frd_deleted?)`
+    if workflow_state == "frd_deleted" {
+        return Err(ApiError::NotFound);
+    }
+
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas refuses when the account already has an active membership for a
+    // user that is not deleted.
+    let active_member: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM account_users \
+         WHERE account_id = $1 AND user_id = $2 AND workflow_state = 'active' LIMIT 1",
+    )
+    .bind(account_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if active_member.is_some() && workflow_state != "deleted" {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "errors": "User not deleted" })),
+        ));
+    }
+
+    sqlx::query(
+        "UPDATE users SET workflow_state = 'registered' \
+         WHERE id = $1 AND workflow_state = 'deleted'",
+    )
+    .bind(user_id)
+    .execute(&state.db)
+    .await?;
+    sqlx::query(
+        "UPDATE account_users SET workflow_state = 'active' \
+         WHERE account_id = $1 AND user_id = $2",
+    )
+    .bind(account_id)
+    .bind(user_id)
+    .execute(&state.db)
+    .await?;
+
+    let row: Option<(i64, String, DateTime<Utc>)> =
+        sqlx::query_as("SELECT id, name, created_at FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let Some((id, name, created_at)) = row else {
+        return Err(ApiError::NotFound);
+    };
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "id": id,
+            "name": name,
+            "sortable_name": sortable_name,
+            "short_name": name.split_whitespace().next().unwrap_or(&name),
+            "created_at": created_at,
+            "sis_user_id": Value::Null,
+            "integration_id": Value::Null,
+            "sis_import_id": Value::Null,
+            "root_account": Value::Null,
+            "login_id": Value::Null,
+            "pronouns": Value::Null,
+            "merged_into_user_id": Value::Null,
+        })),
+    ))
+}
+
+/// GET /accounts/{account_id}/quiz_ip_filters — Canvas
+/// `AccountsController#quiz_ip_filters`.
+///
+/// The filters live in `account.settings[:ip_filters]`, a hash of name to
+/// filter, and the account chain is searched.
+async fn list_quiz_ip_filters(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Query(params): Query<Vec<(String, String)>>,
+) -> Result<Json<Value>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    // Canvas: authorized_action(@account, @current_user, :read)
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let search_term = param_value(&params, "search_term")
+        .map(|term| term.trim().to_lowercase())
+        .filter(|term| !term.is_empty());
+
+    let mut filters: Vec<Value> = Vec::new();
+    for (chain_id, chain_name) in account_chain(&state.db, account_id).await? {
+        let settings = account_settings(&state.db, chain_id).await?;
+        let Some(Value::Object(map)) = settings.get("ip_filters") else {
+            continue;
+        };
+        for (name, filter) in map {
+            if let Some(term) = &search_term {
+                if !name.to_lowercase().contains(term) {
+                    continue;
+                }
+            }
+            filters.push(json!({
+                "name": name,
+                "account": chain_name,
+                "filter": filter,
+            }));
+        }
+    }
+    filters.sort_by(|left, right| {
+        left["name"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(right["name"].as_str().unwrap_or_default())
+    });
+
+    Ok(Json(json!({ "quiz_ip_filters": filters })))
+}
+
+/// GET /accounts/{account_id}/accessibility_issue_summary — Canvas
+/// `AccountsController#accessibility_issue_summary`.
+///
+/// Canvas answers 401 — not 403 — when the caller may not see the
+/// accessibility tab of the account.
+async fn accessibility_issue_summary(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Query(params): Query<Vec<(String, String)>>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if !is_admin(&auth) && !is_account_admin(&state.db, auth.id, account_id).await? {
+        return Ok((
+            StatusCode::UNAUTHORIZED,
+            Json(json!({ "error": "Not authorized to view accessibility data" })),
+        ));
+    }
+
+    let term_id =
+        param_value(&params, "enrollment_term_id").and_then(|value| value.parse::<i64>().ok());
+    let (active, resolved): (Option<i64>, Option<i64>) = sqlx::query_as(
+        "SELECT COALESCE(SUM(s.active_issue_count), 0), COALESCE(SUM(s.resolved_issue_count), 0) \
+         FROM courses c \
+         LEFT JOIN accessibility_course_statistics s \
+           ON s.course_id = c.id AND s.workflow_state = 'active' \
+         WHERE c.account_id = $1 AND c.workflow_state <> 'deleted' \
+           AND ($2::bigint IS NULL OR c.enrollment_term_id = $2)",
+    )
+    .bind(account_id)
+    .bind(term_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((
+        StatusCode::OK,
+        Json(json!({
+            "active": active.unwrap_or(0),
+            "resolved": resolved.unwrap_or(0),
+        })),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// The deprecated user scoped account notification aliases.
+//
+// Canvas `AccountNotificationsController` answers the same actions under
+// `/accounts/:account_id/users/:user_id/account_notifications`; the path user
+// has to be the caller, otherwise the request is a 404.
+// ---------------------------------------------------------------------------
+
+/// The notifications the caller closed (Canvas keeps them in the
+/// `closed_notifications` user preference).
+async fn closed_notifications(pool: &PgPool, user_id: i64) -> Result<Vec<i64>, ApiError> {
+    let row: Option<(Value,)> = sqlx::query_as(
+        "SELECT COALESCE(preferences -> 'closed_notifications', '[]'::jsonb) \
+         FROM user_preferences WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row
+        .and_then(|(value,)| value.as_array().cloned())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|item| item.as_i64())
+        .collect())
+}
+
+/// GET /accounts/{account_id}/users/{user_id}/account_notifications — Canvas
+/// `AccountNotificationsController#user_index_deprecated`.
+async fn list_user_account_notifications(
+    State(state): State<AppState>,
+    Path((account_id, user_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Query(params): Query<Vec<(String, String)>>,
+) -> Result<Json<Value>, ApiError> {
+    // Canvas: check_user_param -> 404 when the path user is not the caller.
+    if user_id != auth.id {
+        return Err(ApiError::NotFound);
+    }
+
+    let include_all = value_to_boolean(param_value(&params, "include_all"));
+    if include_all && !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let notifications =
+        fetch_notifications(&state.db, Some(account_id), None, 100, 0, include_all).await?;
+
+    let show_is_closed = value_to_boolean(param_value(&params, "show_is_closed"));
+    let closed = closed_notifications(&state.db, auth.id).await?;
+
+    let list: Vec<Value> = notifications
+        .into_iter()
+        .map(|notification| {
+            let mut value = serde_json::to_value(&notification).unwrap_or(Value::Null);
+            if show_is_closed {
+                if let Some(map) = value.as_object_mut() {
+                    map.insert(
+                        "closed".to_string(),
+                        json!(closed.contains(&notification.id)),
+                    );
+                }
+            }
+            value
+        })
+        .collect();
+
+    Ok(Json(Value::Array(list)))
+}
+
+/// GET /accounts/{account_id}/users/{user_id}/account_notifications/{id} —
+/// Canvas `AccountNotificationsController#show_deprecated`.
+async fn show_user_account_notification(
+    State(state): State<AppState>,
+    Path((_account_id, user_id, notification_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    if user_id != auth.id {
+        return Err(ApiError::NotFound);
+    }
+
+    let notification = fetch_notification(&state.db, notification_id, true)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(
+        serde_json::to_value(&notification).unwrap_or(Value::Null),
+    ))
+}
+
+/// DELETE /accounts/{account_id}/users/{user_id}/account_notifications/{id} —
+/// Canvas `AccountNotificationsController#user_close_notification_deprecated`.
+///
+/// Without `remove` the notification is closed for the caller, with it the
+/// notification is deleted for everyone and the caller needs `:manage_alerts`.
+async fn close_user_account_notification(
+    State(state): State<AppState>,
+    Path((account_id, user_id, notification_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Query(params): Query<Vec<(String, String)>>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if user_id != auth.id {
+        return Err(ApiError::NotFound);
+    }
+
+    let notification = fetch_notification(&state.db, notification_id, true)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    if value_to_boolean(param_value(&params, "remove")) {
+        // Canvas: require_account_admin -> 403 {"status": "forbidden"}
+        if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+            return Ok((
+                StatusCode::FORBIDDEN,
+                Json(json!({ "status": "forbidden" })),
+            ));
+        }
+        sqlx::query("UPDATE account_notifications SET workflow_state = 'deleted' WHERE id = $1")
+            .bind(notification_id)
+            .execute(&state.db)
+            .await?;
+    } else {
+        // The notification is closed for the caller only.
+        let mut closed = closed_notifications(&state.db, auth.id).await?;
+        if !closed.contains(&notification_id) {
+            closed.push(notification_id);
+        }
+        sqlx::query(
+            r#"
+            INSERT INTO user_preferences (user_id, preferences)
+            VALUES ($1, jsonb_build_object('closed_notifications', to_jsonb($2::bigint[])))
+            ON CONFLICT (user_id) DO UPDATE
+            SET preferences = user_preferences.preferences
+                    || jsonb_build_object('closed_notifications', to_jsonb($2::bigint[])),
+                updated_at = now()
+            "#,
+        )
+        .bind(auth.id)
+        .bind(&closed)
+        .execute(&state.db)
+        .await?;
+    }
+
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::to_value(&notification).unwrap_or(Value::Null)),
+    ))
+}
+
 // --------------------------------------------------------------------------
 // Router
 // --------------------------------------------------------------------------
@@ -1030,11 +1815,50 @@ pub fn router() -> Router<AppState> {
         )
         .route("/accounts/{id}/help_links", get(get_account_help_links))
         .route("/accounts/{id}/permissions", get(get_account_permissions))
+        // Canvas Api::V1::Accounts#environment / #course_accounts /
+        // #horizon_accounts
+        .route("/settings/environment", get(get_settings_environment))
+        .route("/course_accounts", get(list_course_accounts))
+        .route("/horizon_accounts", get(list_horizon_accounts))
+        // Canvas Api::V1::Accounts#remove_users / #update_users / #restore_user
+        .route(
+            "/accounts/{id}/users",
+            get(list_account_users).delete(remove_account_users),
+        )
+        .route(
+            "/accounts/{id}/users/bulk_update",
+            put(bulk_update_account_users),
+        )
+        .route(
+            "/accounts/{id}/users/{userId}/restore",
+            put(restore_account_user),
+        )
+        // Canvas Api::V1::Accounts#quiz_ip_filters /
+        // #accessibility_issue_summary
+        .route(
+            "/accounts/{account_id}/quiz_ip_filters",
+            get(list_quiz_ip_filters),
+        )
+        .route(
+            "/accounts/{account_id}/accessibility_issue_summary",
+            get(accessibility_issue_summary),
+        )
+        // The deprecated user scoped account notification aliases.
+        .route(
+            "/accounts/{account_id}/users/{user_id}/account_notifications",
+            get(list_user_account_notifications),
+        )
+        .route(
+            "/accounts/{account_id}/users/{user_id}/account_notifications/{id}",
+            get(show_user_account_notification).delete(close_user_account_notification),
+        )
         // Canvas SubAccountsController#destroy
         .route(
             "/accounts/{id}/sub_accounts/{subAccountId}",
             delete(delete_sub_account),
         )
+        .merge(career::router())
+        .merge(error_reports::router())
 }
 
 // --------------------------------------------------------------------------
