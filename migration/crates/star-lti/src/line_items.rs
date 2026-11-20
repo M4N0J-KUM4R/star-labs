@@ -33,10 +33,6 @@ use crate::can_manage_account;
 // Constants
 // ---------------------------------------------------------------------------
 
-const SUBSCRIPTION_COLUMNS: &str =
-    "id, course_id, created_at, updated_at, submission_types, due_at, points_possible, \
-     workflow_state, title, description, is_concluded";
-
 const LINE_ITEM_COLUMNS: &str =
     "id, course_id, assignment_id, label, resource_id, tag, score_maximum, \
      created_at, updated_at, workflow_state";
@@ -72,10 +68,6 @@ pub struct ListLineItemsQuery {
 /// Body for `POST /api/lti/courses/{courseId}/line_items`.
 #[derive(Debug, Deserialize)]
 pub struct CreateLineItemRequest {
-    #[serde(rename = "submissionType")]
-    submission_type: Option<String>,
-    #[serde(rename = "dueAt")]
-    due_at: Option<String>,
     #[serde(rename = "scoreMaximum")]
     score_maximum: f64,
     pub label: String,
@@ -86,10 +78,6 @@ pub struct CreateLineItemRequest {
 
 #[derive(Debug, Deserialize)]
 pub struct UpdateLineItemRequest {
-    #[serde(rename = "submissionType")]
-    submission_type: Option<String>,
-    #[serde(rename = "dueAt")]
-    due_at: Option<String>,
     #[serde(rename = "scoreMaximum")]
     score_maximum: Option<f64>,
     pub label: Option<String>,
@@ -176,20 +164,26 @@ async fn list_line_items(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Query(_params): Query<ListLineItemsQuery>,
+    Query(params): Query<ListLineItemsQuery>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     require_course(&state.db, course_id).await?;
     if !can_manage_account(&state.db, &auth, course_id).await? {
         return Err(ApiError::Forbidden);
     }
 
+    let per_page = params.per_page.unwrap_or(10).clamp(1, 100);
+    let page = params.page.unwrap_or(1).max(1);
+    let offset = (page - 1) * per_page;
+
     let sql = format!(
         "SELECT {LINE_ITEM_COLUMNS} FROM lti_line_items \
          WHERE course_id = $1 AND workflow_state <> 'deleted' \
-         ORDER BY created_at DESC"
+         ORDER BY created_at DESC LIMIT $2 OFFSET $3"
     );
     let rows: Vec<LineItemRow> = sqlx::query_as(&sql)
         .bind(course_id)
+        .bind(per_page)
+        .bind(offset)
         .fetch_all(&state.db)
         .await?;
 

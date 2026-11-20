@@ -32,9 +32,7 @@ use crate::can_manage_account;
 // Constants
 // ---------------------------------------------------------------------------
 
-const TOOL_PROXY_COLUMNS: &str =
-    "id, guid, context_type, context_id, account_id, developer_key_id, \
-     shared_secret, raw_data, workflow_state, created_at, updated_at";
+const TOOL_PROXY_COLUMNS: &str = "id, guid, raw_data, created_at, updated_at";
 
 // ---------------------------------------------------------------------------
 // Domain row
@@ -44,13 +42,7 @@ const TOOL_PROXY_COLUMNS: &str =
 struct ToolProxyRow {
     id: i64,
     guid: String,
-    context_type: String,
-    context_id: Option<i64>,
-    account_id: Option<i64>,
-    developer_key_id: Option<i64>,
-    shared_secret: String,
     raw_data: Value,
-    workflow_state: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -62,10 +54,7 @@ struct ToolProxyRow {
 /// Body for `POST /api/lti/courses/{course_id}/tool_proxy`
 /// and `POST /api/lti/accounts/{account_id}/tool_proxy`.
 #[derive(Debug, Deserialize)]
-pub struct CreateToolProxyRequest {
-    #[serde(rename = "tc_half_shared_secret")]
-    tc_half_shared_secret: Option<String>,
-}
+pub struct CreateToolProxyRequest {}
 
 // ---------------------------------------------------------------------------
 // Lookups
@@ -105,7 +94,7 @@ async fn require_course(pool: &PgPool, course_id: i64) -> Result<(), ApiError> {
 fn tool_proxy_json(tp: &ToolProxyRow) -> Value {
     let mut out = tp.raw_data.clone();
     // Merge in DB-computed fields that may differ from stored raw_data.
-    out.as_object_mut().map(|obj| {
+    if let Some(obj) = out.as_object_mut() {
         obj.insert("tool_proxy_guid".to_string(), json!(tp.guid));
         obj.insert("id".to_string(), json!(tp.id));
         obj.insert(
@@ -115,7 +104,7 @@ fn tool_proxy_json(tp: &ToolProxyRow) -> Value {
         obj.insert("@type".to_string(), json!("ToolProxy"));
         obj.insert("created_at".to_string(), json!(tp.created_at));
         obj.insert("updated_at".to_string(), json!(tp.updated_at));
-    });
+    }
     out
 }
 

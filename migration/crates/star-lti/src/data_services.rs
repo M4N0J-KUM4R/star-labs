@@ -11,7 +11,7 @@
 //! - `DELETE /accounts/{accountId}/data_services/{id}`      — destroy subscription
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
@@ -65,12 +65,6 @@ struct SubscriptionRow {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Deserialize)]
-pub struct ListSubscriptionsQuery {
-    pub page: Option<i64>,
-    pub per_page: Option<i64>,
-}
-
-#[derive(Debug, Deserialize)]
 pub struct CreateSubscriptionRequest {
     pub subscription: Option<SubscriptionFields>,
 }
@@ -85,7 +79,6 @@ pub struct SubscriptionFields {
     pub transport_type: Option<String>,
     pub owner_id: Option<String>,
     pub state: Option<String>,
-    pub updated_by: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -175,7 +168,6 @@ async fn list_subscriptions(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
-    Query(_params): Query<ListSubscriptionsQuery>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     require_account(&state.db, account_id).await?;
     if !can_manage_account(&state.db, &auth, account_id).await? {
