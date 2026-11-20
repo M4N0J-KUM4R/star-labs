@@ -99,7 +99,9 @@ fn is_per_request_value(head: &str, value: &str) -> bool {
         && value.bytes().all(|b| b.is_ascii_hexdigit());
     // Email echo: the name="email" input re-echoes the submitted address.
     // It belongs to the same tag when no '>' separates the two attributes.
-    let is_email = head.rfind("name=\"email\"").is_some_and(|p| !head[p..].contains('>'));
+    let is_email = head
+        .rfind("name=\"email\"")
+        .is_some_and(|p| !head[p..].contains('>'));
     is_csrf || is_email
 }
 

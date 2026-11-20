@@ -1,10 +1,7 @@
 //! Handler modules for the star-ui shell.
 
-<<<<<<< HEAD
-pub mod auth;
-=======
 pub mod assignments;
->>>>>>> origin/main
+pub mod auth;
 pub mod course;
 pub mod course_context;
 pub mod dashboard;
