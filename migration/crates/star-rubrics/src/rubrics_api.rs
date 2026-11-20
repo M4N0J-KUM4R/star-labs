@@ -405,8 +405,7 @@ fn validate_args(args: &ShowArgs) -> Option<Value> {
         if args.style.is_some() && !include_assessments {
             errs.insert(
                 "style".to_string(),
-                "invalid parameters. Style parameter passed without requesting assessments"
-                    .to_string(),
+                json!("invalid parameters. Style parameter passed without requesting assessments"),
             );
         }
     }
