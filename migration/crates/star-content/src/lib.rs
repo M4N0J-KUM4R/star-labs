@@ -25,12 +25,25 @@
 //!
 //! where `{context}` is one of `courses`, `accounts`, `groups`, `users`.
 //!
+//! The ePub and web zip export routes (`epub_exports.rs`, `web_zip_exports.rs`)
+//! and the deprecated course-copy API (`content_imports.rs`) live here as well:
+//! - `/epub_exports`                                  — courses with their latest export
+//! - `/courses/{courseId}/epub_exports`               — create an ePub export
+//! - `/courses/{courseId}/epub_exports/{id}`          — show an ePub export
+//! - `/courses/{courseId}/web_zip_exports`            — list web zip exports
+//! - `/courses/{courseId}/web_zip_exports/{id}`       — show a web zip export
+//! - `/courses/{courseId}/course_copy`                — start a course copy
+//! - `/courses/{courseId}/course_copy/{id}`           — the status of a course copy
+//!
 //! The sub-crates own all handlers and domain logic; this crate only
 //! provides a single merged `Router<AppState>` for inclusion in `star-http`.
 
 pub mod content_exports;
+pub mod content_imports;
 pub mod content_migrations;
+pub mod epub_exports;
 pub mod migration_issues;
+pub mod web_zip_exports;
 
 use axum::Router;
 use star_common::AppState;
@@ -43,6 +56,9 @@ pub fn router() -> Router<AppState> {
         .merge(star_modules::router())
         .merge(content_exports::router())
         .merge(content_migrations::router())
+        .merge(epub_exports::router())
+        .merge(web_zip_exports::router())
+        .merge(content_imports::router())
         .merge(migration_issues::router())
 }
 
