@@ -565,10 +565,20 @@ pub fn router() -> Router<AppState> {
         )
         .merge(external_tools::router())
         .merge(data_services::router())
-        .merge(dynamic_registration::router())
-        .merge(line_items::router())
         .merge(tool_proxy::router())
         .merge(support_helpers::router())
+}
+
+/// Router for the Canvas `/api/lti` family (LTI Advantage services).
+///
+/// Canvas serves these routes outside `/api/v1` (`ApiRouteSet.draw(self,
+/// "/api/lti")`), so the paths carry the `/api/lti` prefix and the router is
+/// mounted at the application root — see `star-http/src/main.rs`.
+pub fn lti_advantage_router() -> Router<AppState> {
+    Router::new()
+        .merge(dynamic_registration::advantage_router())
+        .merge(line_items::router())
+        .merge(tool_proxy::advantage_router())
 }
 
 // ---------------------------------------------------------------------------
