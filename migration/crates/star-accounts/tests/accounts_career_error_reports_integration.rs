@@ -298,6 +298,18 @@ async fn the_course_and_horizon_account_lists_answer_the_accounts_of_the_caller(
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     assert!(resp.json::<Value>().as_array().expect("array").is_empty());
 
+    // The horizon accounts are the accounts of the horizon sub tree of the
+    // root account (Canvas `adminable_horizon_accounts_scope`).
+    sqlx::query(
+        "UPDATE accounts SET settings = settings || \
+            jsonb_build_object('horizon_account_ids', jsonb_build_array($1::bigint)) \
+         WHERE id = (SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1)",
+    )
+    .bind(account)
+    .execute(&pool)
+    .await
+    .expect("seed the horizon account ids");
+
     let resp = server
         .get("/horizon_accounts")
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
@@ -477,7 +489,16 @@ async fn the_accessibility_summary_counts_the_course_statistics() {
     assert_eq!(body["active"], 4);
     assert_eq!(body["resolved"], 2);
 
-    // Canvas answers 401 — not 403 — for a caller that may not see the tab.
+    // A caller without the read right on the account is a 403.
+    let resp = server
+        .get(&format!("/accounts/{account}/accessibility_issue_summary"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // Canvas answers 401 — not 403 — for a caller that may read the account
+    // but may not see the accessibility tab.
+    seed_account_user(&pool, account, student).await;
     let resp = server
         .get(&format!("/accounts/{account}/accessibility_issue_summary"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
@@ -521,12 +542,12 @@ async fn the_user_scoped_notification_aliases_are_scoped_to_the_caller() {
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     assert_eq!(resp.json::<Value>()["id"], notification);
 
-    // Another user is a 404.
+    // The path user has to be the caller, so another user is a 404.
     let resp = server
         .get(&format!(
             "/accounts/{account}/users/{other}/account_notifications"
         ))
-        .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
