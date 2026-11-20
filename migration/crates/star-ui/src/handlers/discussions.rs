@@ -206,23 +206,23 @@ async fn load_course_context(
     course_id: i64,
     user: &SessionUser,
     origin: &str,
-) -> Result<CourseContext, Response> {
+) -> Result<CourseContext, Box<Response>> {
     let course = star_courses::load_course_for_viewer(&app.db, course_id, &auth_of(user))
         .await
-        .map_err(|e| from_api_error(&e, origin).into_response())?;
+        .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?;
     let tabs = star_courses::load_course_tabs(&app.db, course_id, &auth_of(user))
         .await
-        .map_err(|e| from_api_error(&e, origin).into_response())?;
+        .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?;
     let (preferences, use_high_contrast) = queries::load_preferences(&app.db, user.id)
         .await
-        .map_err(|e| from_api_error(&e, origin).into_response())?;
+        .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?;
     let user_name = queries::load_user_name(&app.db, user.id)
         .await
-        .map_err(|e| from_api_error(&e, origin).into_response())?
+        .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?
         .unwrap_or_default();
     let unread_badge = conversations_ui::load_unread_count(&app.db, user.id)
         .await
-        .map_err(|e| from_api_error(&e, origin).into_response())?;
+        .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?;
     Ok(CourseContext {
         course_name: course.name,
         tabs,
@@ -246,7 +246,7 @@ pub async fn discussions_index(
 
     let ctx = match load_course_context(&app, course_id, &user, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let rows: Vec<TopicIndexRow> =
@@ -256,12 +256,9 @@ pub async fn discussions_index(
         };
 
     let can_create =
-        match star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
+        star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
             .await
-        {
-            Ok(flag) => flag,
-            Err(_) => false,
-        };
+            .unwrap_or(false);
 
     let topics: Vec<TopicRow> = rows
         .into_iter()
@@ -336,16 +333,13 @@ pub async fn discussion_new(
 
     let ctx = match load_course_context(&app, course_id, &user, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let teacher =
-        match star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
+        star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(&user))
             .await
-        {
-            Ok(flag) => flag,
-            Err(_) => false,
-        };
+            .unwrap_or(false);
     if !teacher {
         return from_api_error(&ApiError::Forbidden, &origin).into_response();
     }
@@ -456,7 +450,7 @@ pub async fn discussion_show(
 
     let ctx = match load_course_context(&app, course_id, &user, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let detail =
@@ -471,12 +465,9 @@ pub async fn discussion_show(
     // pre-mark unread state still renders in the page's marker; a failure to
     // write the read row is non-fatal — the page renders, the state lags.
     let was_unread =
-        match discussions_ui::load_topic_read_state(&app.db, course_id, topic_id, &auth_of(&user))
+        discussions_ui::load_topic_read_state(&app.db, course_id, topic_id, &auth_of(&user))
             .await
-        {
-            Ok(unread) => unread,
-            Err(_) => false,
-        };
+            .unwrap_or(false);
     let _ = discussions_ui::mark_topic_read_for_viewer(
         &app.db,
         course_id,

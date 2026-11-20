@@ -183,17 +183,17 @@ async fn load_inbox_context(
     app: &AppState,
     user: &SessionUser,
     origin: &str,
-) -> Result<InboxContext, Response> {
+) -> Result<InboxContext, Box<Response>> {
     let (preferences, use_high_contrast) = queries::load_preferences(&app.db, user.id)
         .await
-        .map_err(|e| from_api_error(&e, origin).into_response())?;
+        .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?;
     let user_name = queries::load_user_name(&app.db, user.id)
         .await
-        .map_err(|e| from_api_error(&e, origin).into_response())?
+        .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?
         .unwrap_or_default();
     let unread_badge = conversations_ui::load_unread_count(&app.db, user.id)
         .await
-        .map_err(|e| from_api_error(&e, origin).into_response())?;
+        .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?;
     Ok(InboxContext {
         preferences,
         use_high_contrast,
@@ -221,7 +221,7 @@ pub async fn conversations_index(
 
     let ctx = match load_inbox_context(&app, &user, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let filter = InboxFilter::from_str_opt(query.filter.as_deref());
@@ -298,7 +298,7 @@ pub async fn conversation_compose(
 
     let ctx = match load_inbox_context(&app, &user, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let recipients: Vec<RecipientView> =
@@ -407,7 +407,7 @@ pub async fn conversation_show(
 
     let ctx = match load_inbox_context(&app, &user, &origin).await {
         Ok(ctx) => ctx,
-        Err(resp) => return resp,
+        Err(resp) => return *resp,
     };
 
     let thread =

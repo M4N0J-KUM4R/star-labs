@@ -1840,11 +1840,15 @@ async fn inbox_unread_open_reply_mark_all_and_compose() {
         ))
         // Vec<String> forms decode repeated keys, so send recipients as
         // urlencoded pairs rather than a JSON array (serde_urlencoded cannot
-        // serialize arrays).
+        // serialize arrays). `.bytes()` sets the body without touching the
+        // content type (unlike `.text()`).
         .add_header("content-type", "application/x-www-form-urlencoded")
-        .raw_body(format!(
-            "_csrf={csrf}&recipients={teacher}&subject=New+compose+subject&body=Composed+through+the+form."
-        ))
+        .bytes(
+            format!(
+                "_csrf={csrf}&recipients={teacher}&subject=New+compose+subject&body=Composed+through+the+form."
+            )
+            .into(),
+        )
         .await;
     assert_eq!(resp.status_code(), 303, "compose PRG: {}", resp.text());
     let location = resp
