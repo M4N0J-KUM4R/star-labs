@@ -414,6 +414,768 @@ async fn visible_nav_tools_shape_and_error_cases() {
     teardown(&pool, &[teacher_id, outsider_id], account_id, course_id).await;
 }
 
+// -----------------------------------------------------------------------------
+// New route tests: update / delete
+// ---------------------------------------------------------------------------
+
+async fn update_course_tool(
+    server: &TestServer,
+    course_id: i64,
+    tool_id: i64,
+    bearer: &str,
+    body: Value,
+) -> axum_test::TestResponse {
+    server
+        .put(&format!("/courses/{course_id}/external_tools/{tool_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer.to_string())
+        .json(&body)
+        .await
+}
+
+async fn delete_course_tool(
+    server: &TestServer,
+    course_id: i64,
+    tool_id: i64,
+    bearer: &str,
+) -> axum_test::TestResponse {
+    server
+        .delete(&format!("/courses/{course_id}/external_tools/{tool_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer.to_string())
+        .await
+}
+
+async fn update_account_tool(
+    server: &TestServer,
+    account_id: i64,
+    tool_id: i64,
+    bearer: &str,
+    body: Value,
+) -> axum_test::TestResponse {
+    server
+        .put(&format!("/accounts/{account_id}/external_tools/{tool_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer.to_string())
+        .json(&body)
+        .await
+}
+
+async fn delete_account_tool(
+    server: &TestServer,
+    account_id: i64,
+    tool_id: i64,
+    bearer: &str,
+) -> axum_test::TestResponse {
+    server
+        .delete(&format!("/accounts/{account_id}/external_tools/{tool_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer.to_string())
+        .await
+}
+
+#[tokio::test]
+async fn update_and_delete_course_tool() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let course_id = seed_course(&pool, &prefix, "course", account_id).await;
+    let teacher_id = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    let student_id = seed_user(&pool, &prefix, "student", "student").await;
+    seed_enrollment(&pool, teacher_id, course_id, "teacher").await;
+    seed_enrollment(&pool, student_id, course_id, "student").await;
+
+    // Student cannot update
+    let resp = update_course_tool(
+        &server,
+        course_id,
+        1,
+        &auth(student_id, "student"),
+        json!({ "name": "Hacked" }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 403);
+
+    // Create a tool
+    let resp = create_course_tool(
+        &server,
+        course_id,
+        &auth(teacher_id, "teacher"),
+        json!({ "name": "Original", "url": "https://tool.example.com" }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200);
+    let tool: Value = resp.json();
+    let tool_id = tool["id"].as_i64().unwrap();
+
+    // Update it
+    let resp = update_course_tool(
+        &server,
+        course_id,
+        tool_id,
+        &auth(teacher_id, "teacher"),
+        json!({ "name": "Updated Name", "description": "New desc" }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let updated: Value = resp.json();
+    assert_eq!(updated["name"], "Updated Name");
+    assert_eq!(updated["description"], "New desc");
+    assert!(updated["updated_at"].as_str().is_some());
+
+    // Student cannot delete
+    let resp = delete_course_tool(&server, course_id, tool_id, &auth(student_id, "student")).await;
+    assert_eq!(resp.status_code(), 403);
+
+    // Delete it
+    let resp = delete_course_tool(&server, course_id, tool_id, &auth(teacher_id, "teacher")).await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // Verify gone
+    let resp = server
+        .get(&format!("/courses/{course_id}/external_tools/{tool_id}"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(teacher_id, "teacher"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 404);
+
+    teardown(&pool, &[teacher_id, student_id], account_id, course_id).await;
+}
+
+#[tokio::test]
+async fn update_and_delete_account_tool() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let admin_id = seed_user(&pool, &prefix, "admin", "student").await;
+    let outsider_id = seed_user(&pool, &prefix, "outsider", "student").await;
+    seed_account_user(&pool, account_id, admin_id).await;
+
+    // Non-admin cannot update
+    let resp = update_account_tool(
+        &server,
+        account_id,
+        1,
+        &auth(outsider_id, "student"),
+        json!({ "name": "Nope" }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 403);
+
+    // Create tool
+    let resp = server
+        .post(&format!("/accounts/{account_id}/external_tools"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .json(&json!({ "name": "Original", "url": "https://tool.example.com" }))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let tool: Value = resp.json();
+    let tool_id = tool["id"].as_i64().unwrap();
+
+    // Update
+    let resp = update_account_tool(
+        &server,
+        account_id,
+        tool_id,
+        &auth(admin_id, "student"),
+        json!({ "name": "Updated Account Tool" }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let updated: Value = resp.json();
+    assert_eq!(updated["name"], "Updated Account Tool");
+
+    // Delete
+    let resp = delete_account_tool(&server, account_id, tool_id, &auth(admin_id, "student")).await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // Verify gone
+    let resp = server
+        .get(&format!("/accounts/{account_id}/external_tools"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .await;
+    let tools: Value = resp.json();
+    let ids: Vec<i64> = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["id"].as_i64())
+        .collect();
+    assert!(!ids.contains(&tool_id), "tool should be deleted");
+
+    teardown(&pool, &[admin_id, outsider_id], account_id, 0).await;
+}
+
+// ---------------------------------------------------------------------------
+// New route tests: create_tool_with_verification
+// ---------------------------------------------------------------------------
+
+async fn create_course_tool_with_verification(
+    server: &TestServer,
+    course_id: i64,
+    bearer: &str,
+    body: Value,
+) -> axum_test::TestResponse {
+    server
+        .post(&format!(
+            "/courses/{course_id}/create_tool_with_verification"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, bearer.to_string())
+        .json(&body)
+        .await
+}
+
+async fn create_account_tool_with_verification(
+    server: &TestServer,
+    account_id: i64,
+    bearer: &str,
+    body: Value,
+) -> axum_test::TestResponse {
+    server
+        .post(&format!(
+            "/accounts/{account_id}/create_tool_with_verification"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, bearer.to_string())
+        .json(&body)
+        .await
+}
+
+#[tokio::test]
+async fn create_course_tool_with_verification_returns_tool() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let course_id = seed_course(&pool, &prefix, "course", account_id).await;
+    let teacher_id = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    seed_enrollment(&pool, teacher_id, course_id, "teacher").await;
+
+    let resp = create_course_tool_with_verification(
+        &server,
+        course_id,
+        &auth(teacher_id, "teacher"),
+        // Canvas external_tools_controller.rb:1594-1602 only permits these
+        // params; the URL must ride inside config_settings.
+        json!({
+            "name": "Verified Tool",
+            "consumer_key": "key",
+            "shared_secret": "secret",
+            "app_center_id": "app-1",
+            "config_settings": "{\"url\": \"https://tool.example.com/lti\"}"
+        }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let tool: Value = resp.json();
+    assert_eq!(tool["name"], "Verified Tool");
+    assert_eq!(tool["workflow_state"], "active");
+
+    teardown(&pool, &[teacher_id], account_id, course_id).await;
+}
+
+#[tokio::test]
+async fn create_account_tool_with_verification_returns_tool() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let admin_id = seed_user(&pool, &prefix, "admin", "student").await;
+    seed_account_user(&pool, account_id, admin_id).await;
+
+    let resp = create_account_tool_with_verification(
+        &server,
+        account_id,
+        &auth(admin_id, "student"),
+        json!({
+            "name": "Verified Account Tool",
+            "consumer_key": "key",
+            "shared_secret": "secret",
+            "app_center_id": "app-2",
+            "config_settings": "{\"url\": \"https://tool.example.com/lti\"}"
+        }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let tool: Value = resp.json();
+    assert_eq!(tool["name"], "Verified Account Tool");
+
+    teardown(&pool, &[admin_id], account_id, 0).await;
+}
+
+// ---------------------------------------------------------------------------
+// New route tests: sessionless_launch (stub → 503)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn sessionless_launch_returns_503() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let course_id = seed_course(&pool, &prefix, "course", account_id).await;
+    let teacher_id = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    seed_enrollment(&pool, teacher_id, course_id, "teacher").await;
+    let bearer = auth(teacher_id, "teacher");
+
+    let resp = server
+        .get(&format!(
+            "/courses/{course_id}/external_tools/sessionless_launch?url=https://tool.example.com"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 503);
+
+    let admin_id = seed_user(&pool, &prefix, "admin", "student").await;
+    seed_account_user(&pool, account_id, admin_id).await;
+    let resp = server
+        .get(&format!(
+            "/accounts/{account_id}/external_tools/sessionless_launch?url=https://tool.example.com"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 503);
+
+    teardown(&pool, &[teacher_id, admin_id], account_id, course_id).await;
+}
+
+// ---------------------------------------------------------------------------
+// New route tests: top_nav_favorites
+// Canvas routes.rb:1695-1696 — account-scoped POST + DELETE only.
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn account_top_nav_favorites_add_requires_top_navigation_placement() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let admin_id = seed_user(&pool, &prefix, "admin", "student").await;
+    seed_account_user(&pool, account_id, admin_id).await;
+
+    // Create a tool WITHOUT the top_navigation placement
+    let resp = server
+        .post(&format!("/accounts/{account_id}/external_tools"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .json(&json!({ "name": "No Placement", "url": "https://tool.example.com" }))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let tool: Value = resp.json();
+    let tool_id = tool["id"].as_i64().unwrap();
+
+    // Canvas controller.rb:1764-1766: no top_navigation placement → 400
+    let resp = server
+        .post(&format!(
+            "/accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+
+    teardown(&pool, &[admin_id], account_id, 0).await;
+}
+
+#[tokio::test]
+async fn account_top_nav_favorites_add_and_remove() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let admin_id = seed_user(&pool, &prefix, "admin", "student").await;
+    seed_account_user(&pool, account_id, admin_id).await;
+
+    // Create a tool with top_nav placement
+    let resp = server
+        .post(&format!("/accounts/{account_id}/external_tools"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .json(&json!({
+            "name": "Account Top Nav",
+            "url": "https://tool.example.com",
+            "tool_configuration": { "placements": { "top_navigation": {} } }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let tool: Value = resp.json();
+    let tool_id = tool["id"].as_i64().unwrap();
+
+    // Add — controller.rb:1781 renders {top_nav_favorite_tool_ids: [...]}
+    let resp = server
+        .post(&format!(
+            "/accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let fav: Value = resp.json();
+    assert!(fav["top_nav_favorite_tool_ids"]
+        .as_array()
+        .unwrap()
+        .contains(&json!(tool_id)));
+
+    // Delete — controller.rb:1800 renders the updated id list
+    let resp = server
+        .delete(&format!(
+            "/accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let after: Value = resp.json();
+    assert!(after["top_nav_favorite_tool_ids"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    teardown(&pool, &[admin_id], account_id, 0).await;
+}
+
+#[tokio::test]
+async fn account_top_nav_favorites_rejects_more_than_two() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let admin_id = seed_user(&pool, &prefix, "admin", "student").await;
+    seed_account_user(&pool, account_id, admin_id).await;
+
+    // Three tools with the top_navigation placement
+    let mut tool_ids = Vec::new();
+    for i in 0..3 {
+        let resp = server
+            .post(&format!("/accounts/{account_id}/external_tools"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+            .json(&json!({
+                "name": format!("Top Nav {i}"),
+                "url": "https://tool.example.com",
+                "tool_configuration": { "placements": { "top_navigation": {} } }
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        let tool: Value = resp.json();
+        tool_ids.push(tool["id"].as_i64().unwrap());
+    }
+
+    // Canvas controller.rb:1779: "Cannot have more than 2 favorited tools"
+    for id in &tool_ids {
+        let resp = server
+            .post(&format!(
+                "/accounts/{account_id}/external_tools/top_nav_favorites/{id}"
+            ))
+            .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+            .await;
+        let expected = if *id == tool_ids[2] { 400 } else { 200 };
+        assert_eq!(resp.status_code(), expected, "body: {}", resp.text());
+    }
+
+    teardown(&pool, &[admin_id], account_id, 0).await;
+}
+
+// ---------------------------------------------------------------------------
+// New route tests: migration_info
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn course_and_account_migration_info() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let course_id = seed_course(&pool, &prefix, "course", account_id).await;
+    let teacher_id = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    seed_enrollment(&pool, teacher_id, course_id, "teacher").await;
+    let admin_id = seed_user(&pool, &prefix, "admin", "student").await;
+    seed_account_user(&pool, account_id, admin_id).await;
+
+    // Create tools
+    let resp = create_course_tool(
+        &server,
+        course_id,
+        &auth(teacher_id, "teacher"),
+        json!({ "name": "Course Migration Tool", "url": "https://tool.example.com" }),
+    )
+    .await;
+    let course_tool: Value = resp.json();
+    let course_tool_id = course_tool["id"].as_i64().unwrap();
+
+    let resp = server
+        .post(&format!("/accounts/{account_id}/external_tools"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .json(&json!({ "name": "Account Migration Tool", "url": "https://tool.example.com" }))
+        .await;
+    let account_tool: Value = resp.json();
+    let account_tool_id = account_tool["id"].as_i64().unwrap();
+
+    // Course migration info
+    let resp = server
+        .get(&format!(
+            "/courses/{course_id}/external_tools/{course_tool_id}/migration_info"
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(teacher_id, "teacher"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    // Canvas controller.rb:1004 renders {migration_running: false} when no
+    // migration is running.
+    let info: Value = resp.json();
+    assert_eq!(info["migration_running"], json!(false));
+
+    // Account migration info
+    let resp = server
+        .get(&format!(
+            "/accounts/{account_id}/external_tools/{account_tool_id}/migration_info"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    teardown(&pool, &[teacher_id, admin_id], account_id, course_id).await;
+}
+
+// ---------------------------------------------------------------------------
+// New route tests: group tools
+// ---------------------------------------------------------------------------
+
+async fn seed_group(pool: &PgPool, prefix: &str, name: &str, course_id: i64) -> i64 {
+    sqlx::query_scalar("INSERT INTO groups (name, course_id) VALUES ($1, $2) RETURNING id")
+        .bind(format!("{prefix}-{name}"))
+        .bind(course_id)
+        .fetch_one(pool)
+        .await
+        .expect("seed group")
+}
+
+#[tokio::test]
+async fn group_tools_returns_tools_with_context_id() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let course_id = seed_course(&pool, &prefix, "course", account_id).await;
+    let teacher_id = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    seed_enrollment(&pool, teacher_id, course_id, "teacher").await;
+    let group_id = seed_group(&pool, &prefix, "group", course_id).await;
+    let bearer = auth(teacher_id, "teacher");
+
+    // Create a course tool visible to the group
+    let resp = create_course_tool(
+        &server,
+        course_id,
+        &bearer,
+        json!({ "name": "Group Tool", "url": "https://tool.example.com" }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200);
+
+    let resp = server
+        .get(&format!("/groups/{group_id}/external_tools"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let tools: Value = resp.json();
+    let tool_names: Vec<&str> = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|t| t["name"].as_str())
+        .collect();
+    assert!(
+        tool_names.contains(&"Group Tool"),
+        "should contain Group Tool, got {tool_names:?}"
+    );
+
+    // Show single group tool
+    let resp = create_course_tool(
+        &server,
+        course_id,
+        &bearer,
+        json!({ "name": "Visible Group Tool", "url": "https://tool.example.com/vg" }),
+    )
+    .await;
+    let tool: Value = resp.json();
+    let tool_id = tool["id"].as_i64().unwrap();
+
+    let resp = server
+        .get(&format!("/groups/{group_id}/external_tools/{tool_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let shown: Value = resp.json();
+    assert_eq!(shown["name"], "Visible Group Tool");
+
+    teardown(&pool, &[teacher_id], account_id, course_id).await;
+}
+
+// ---------------------------------------------------------------------------
+// New route tests: eula_launch (stub → 503)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn eula_launch_returns_503() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let course_id = seed_course(&pool, &prefix, "course", account_id).await;
+    let teacher_id = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    seed_enrollment(&pool, teacher_id, course_id, "teacher").await;
+
+    let resp = create_course_tool(
+        &server,
+        course_id,
+        &auth(teacher_id, "teacher"),
+        json!({ "name": "Eula Tool", "url": "https://tool.example.com" }),
+    )
+    .await;
+    let tool: Value = resp.json();
+    let tool_id = tool["id"].as_i64().unwrap();
+
+    let resp = server
+        .get(&format!(
+            "/courses/{course_id}/external_tools/{tool_id}/eula_launch"
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(teacher_id, "teacher"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 503);
+
+    teardown(&pool, &[teacher_id], account_id, course_id).await;
+}
+
+// ---------------------------------------------------------------------------
+// New route tests: visible_course_nav_tools includes placements
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn visible_nav_tools_includes_placements() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let course_id = seed_course(&pool, &prefix, "course", account_id).await;
+    let teacher_id = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    seed_enrollment(&pool, teacher_id, course_id, "teacher").await;
+
+    let resp = create_course_tool(
+        &server,
+        course_id,
+        &auth(teacher_id, "teacher"),
+        json!({
+            "name": "Placed Tool",
+            "url": "https://tool.example.com",
+            "tool_configuration": {
+                "placements": {
+                    "course_navigation": {},
+                    "global_navigation": {}
+                }
+            }
+        }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200);
+
+    let resp = server
+        .get("/external_tools/visible_course_nav_tools")
+        .add_query_params([("context_codes[]", format!("course_{course_id}"))])
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(teacher_id, "teacher"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let tools: Value = resp.json();
+    let placed = tools
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "Placed Tool");
+    assert!(
+        placed.is_some(),
+        "Placed Tool should be in visible nav tools"
+    );
+    let placed = placed.unwrap();
+    let placements = placed["placements"].clone();
+    assert!(
+        placements.is_array(),
+        "placements should be an array, got {placements}"
+    );
+    assert!(
+        placements
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p["placement"] == "course_navigation" || p["enabled"] == true),
+        "should have course_navigation placement"
+    );
+
+    teardown(&pool, &[teacher_id], account_id, course_id).await;
+}
+
+// ---------------------------------------------------------------------------
+// New route tests: update respects updated_only flag
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn update_course_tool_updated_only() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let course_id = seed_course(&pool, &prefix, "course", account_id).await;
+    let teacher_id = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    seed_enrollment(&pool, teacher_id, course_id, "teacher").await;
+
+    let resp = create_course_tool(
+        &server,
+        course_id,
+        &auth(teacher_id, "teacher"),
+        json!({
+            "name": "Orig Name",
+            "description": "Orig Desc",
+            "url": "https://tool.example.com"
+        }),
+    )
+    .await;
+    let tool: Value = resp.json();
+    let tool_id = tool["id"].as_i64().unwrap();
+    let orig_updated = tool["updated_at"].as_str().unwrap().to_string();
+
+    // Update with updated_only=false (default): all fields merged
+    let resp = update_course_tool(
+        &server,
+        course_id,
+        tool_id,
+        &auth(teacher_id, "teacher"),
+        json!({ "name": "New Name", "updated_only": false }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200);
+    let updated: Value = resp.json();
+    assert_eq!(updated["name"], "New Name");
+
+    // Update with updated_only=true: only supplied fields
+    let resp = update_course_tool(
+        &server,
+        course_id,
+        tool_id,
+        &auth(teacher_id, "teacher"),
+        json!({ "description": "New Desc", "updated_only": true }),
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let updated2: Value = resp.json();
+    assert_eq!(updated2["description"], "New Desc");
+    assert_eq!(updated2["name"], "New Name"); // unchanged
+                                              // Any update refreshes updated_at.
+    assert_ne!(updated2["updated_at"].as_str().unwrap_or(""), orig_updated);
+
+    teardown(&pool, &[teacher_id], account_id, course_id).await;
+}
+
 #[tokio::test]
 async fn external_tools_require_authentication() {
     let Some((server, _pool, _prefix)) = setup().await else {
