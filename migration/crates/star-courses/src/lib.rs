@@ -4359,13 +4359,13 @@ async fn list_group_tabs(
     Path(group_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<Vec<CourseTab>>, ApiError> {
-    let group: Option<(Option<i64>, Option<i64>)> = sqlx::query_as(
-        "SELECT course_id, account_id FROM groups WHERE id = $1 AND workflow_state != 'deleted'",
+    let group: Option<(Option<i64>,)> = sqlx::query_as(
+        "SELECT course_id FROM groups WHERE id = $1 AND workflow_state != 'deleted'",
     )
     .bind(group_id)
     .fetch_optional(&state.db)
     .await?;
-    let Some((course_id, account_id)) = group else {
+    let Some((course_id,)) = group else {
         return Err(ApiError::NotFound);
     };
 
@@ -4380,9 +4380,15 @@ async fn list_group_tabs(
     let mut can_read = member.is_some();
     if let Some(course_id) = course_id {
         can_read |= check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
-    }
-    if let Some(account_id) = account_id {
-        can_read |= check_account_admin(&state.db, auth.id, account_id, &auth).await?;
+        // An account admin of the course' account may read the group too.
+        let course: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+                .bind(course_id)
+                .fetch_optional(&state.db)
+                .await?;
+        if let Some((Some(account_id),)) = course {
+            can_read |= check_account_admin(&state.db, auth.id, account_id, &auth).await?;
+        }
     }
     if !can_read {
         return Err(ApiError::NotFound);

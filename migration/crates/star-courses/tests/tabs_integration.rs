@@ -102,16 +102,13 @@ async fn seed_teacher(pool: &PgPool, user_id: i64, course_id: i64) {
         .expect("seed teacher");
 }
 
-async fn seed_group(pool: &PgPool, course_id: i64, account_id: i64, name: &str) -> i64 {
-    sqlx::query_scalar(
-        "INSERT INTO groups (course_id, account_id, name) VALUES ($1, $2, $3) RETURNING id",
-    )
-    .bind(course_id)
-    .bind(account_id)
-    .bind(name)
-    .fetch_one(pool)
-    .await
-    .expect("seed group")
+async fn seed_group(pool: &PgPool, course_id: i64, name: &str) -> i64 {
+    sqlx::query_scalar("INSERT INTO groups (course_id, name) VALUES ($1, $2) RETURNING id")
+        .bind(course_id)
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .expect("seed group")
 }
 
 async fn seed_membership(pool: &PgPool, group_id: i64, user_id: i64) {
@@ -223,7 +220,7 @@ async fn group_tabs_are_visible_to_members_and_teachers() {
     seed_account_user(&pool, account, admin).await;
     let course = seed_course(&pool, &prefix, "Course", account).await;
     seed_teacher(&pool, teacher, course).await;
-    let group = seed_group(&pool, course, account, "Group").await;
+    let group = seed_group(&pool, course, "Group").await;
     seed_membership(&pool, group, member).await;
 
     let resp = server

@@ -65,13 +65,19 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str) -> i64 {
 }
 
 async fn seed_assignment(pool: &PgPool, prefix: &str, name: &str) -> i64 {
-    sqlx::query_scalar(
-        "INSERT INTO assignments (title, workflow_state) VALUES ($1, 'published') RETURNING id",
-    )
-    .bind(format!("{prefix}-{name}"))
-    .fetch_one(pool)
-    .await
-    .expect("seed assignment")
+    let course: i64 =
+        sqlx::query_scalar("INSERT INTO courses (name, course_code) VALUES ($1, $2) RETURNING id")
+            .bind(format!("{prefix}-course"))
+            .bind(format!("{prefix}-course"))
+            .fetch_one(pool)
+            .await
+            .expect("seed course");
+    sqlx::query_scalar("INSERT INTO assignments (course_id, title) VALUES ($1, $2) RETURNING id")
+        .bind(course)
+        .bind(format!("{prefix}-{name}"))
+        .fetch_one(pool)
+        .await
+        .expect("seed assignment")
 }
 
 fn auth(user_id: i64) -> String {
@@ -86,7 +92,13 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     .bind(format!("{prefix}%@test.local"))
     .execute(pool)
     .await;
-    let _ = sqlx::query("DELETE FROM assignments WHERE title LIKE $1")
+    let _ = sqlx::query(
+        "DELETE FROM assignments WHERE course_id IN (SELECT id FROM courses WHERE course_code LIKE $1)",
+    )
+    .bind(format!("{prefix}%"))
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
         .await;
