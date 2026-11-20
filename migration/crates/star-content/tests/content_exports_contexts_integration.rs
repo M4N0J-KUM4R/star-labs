@@ -253,6 +253,21 @@ async fn a_user_export_is_scoped_to_its_owner() {
     let export: Value = resp.json();
     let export_id = export["id"].as_i64().expect("export id");
 
+    // The owner reads the export.
+    let resp = server
+        .get(&format!("/users/{user}/content_exports/{export_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["id"], export_id);
+
+    // Another user may not read it.
+    let resp = server
+        .get(&format!("/users/{user}/content_exports/{export_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
     let resp = server
         .get(&format!("/users/{user}/content_exports"))
         .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
