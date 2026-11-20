@@ -21,8 +21,9 @@ CREATE TABLE IF NOT EXISTS rubric_imports (
     -- Polymorphic context (Account or Course).
     context_id      BIGINT NOT NULL,
     context_type    TEXT NOT NULL,  -- 'Account' | 'Course'
-    -- The uploaded CSV attachment (self-referential; mirrors Canvas pattern).
-    attachment_id   BIGINT REFERENCES attachments(id) ON DELETE SET NULL,
+    -- The uploaded CSV attachment id. star-lms has no attachments table yet, so this is a
+    -- plain id column with no foreign key (Canvas: rubric_imports.attachment_id).
+    attachment_id   BIGINT,
     -- The user who initiated the import.
     user_id         BIGINT REFERENCES users(id) ON DELETE SET NULL,
     -- Processing state; mirrors Canvas workflow states.
