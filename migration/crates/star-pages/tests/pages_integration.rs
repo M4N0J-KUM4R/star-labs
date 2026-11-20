@@ -541,7 +541,7 @@ async fn title_availability_conflict_when_page_exists() {
 
     let resp = server
         .get(&format!(
-            "/courses/{course}/page_title_availability?title=Existing Title"
+            "/courses/{course}/page_title_availability?title=Existing%20Title"
         ))
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
@@ -552,7 +552,7 @@ async fn title_availability_conflict_when_page_exists() {
     // current_page_id excludes itself from conflict check.
     let resp = server
         .get(&format!(
-            "/courses/{course}/page_title_availability?title=Existing Title&current_page_id={existing}"
+            "/courses/{course}/page_title_availability?title=Existing%20Title&current_page_id={existing}"
         ))
         .add_header(axum::http::header::AUTHORIZATION, bearer)
         .await;
@@ -602,7 +602,7 @@ async fn group_title_availability_always_no_conflict() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     let group: i64 =
         sqlx::query_scalar("INSERT INTO groups (name, course_id) VALUES ($1, $2) RETURNING id")
-            .bind(&format!("{prefix}-Group"))
+            .bind(format!("{prefix}-Group"))
             .bind(course)
             .fetch_one(&pool)
             .await
@@ -637,7 +637,7 @@ async fn group_alt_text_happy_path() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     let group: i64 =
         sqlx::query_scalar("INSERT INTO groups (name, course_id) VALUES ($1, $2) RETURNING id")
-            .bind(&format!("{prefix}-Group"))
+            .bind(format!("{prefix}-Group"))
             .bind(course)
             .fetch_one(&pool)
             .await
@@ -667,7 +667,7 @@ async fn group_alt_text_requires_auth() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     let group: i64 =
         sqlx::query_scalar("INSERT INTO groups (name, course_id) VALUES ($1, $2) RETURNING id")
-            .bind(&format!("{prefix}-Group"))
+            .bind(format!("{prefix}-Group"))
             .bind(course)
             .fetch_one(&pool)
             .await
