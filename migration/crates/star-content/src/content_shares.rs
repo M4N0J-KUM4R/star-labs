@@ -29,11 +29,11 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use std::collections::HashMap;
 
@@ -155,13 +155,14 @@ async fn content_share_json(
     map.insert("receivers".to_string(), Value::Array(receivers));
 
     // The export of the share, with the content type it points at.
-    let export: Option<crate::content_exports::ContentExportRow> = sqlx::query_as(&format!(
-        "SELECT {} FROM content_exports WHERE id = $1",
-        crate::content_exports::EXPORT_COLUMNS
-    ))
-    .bind(share.content_export_id)
-    .fetch_optional(pool)
-    .await?;
+    let export: Option<crate::content_exports::ContentExportRow> =
+        sqlx::query_as::<_, crate::content_exports::ContentExportRow>(&format!(
+            "SELECT {} FROM content_exports WHERE id = $1",
+            crate::content_exports::EXPORT_COLUMNS
+        ))
+        .bind(share.content_export_id)
+        .fetch_optional(pool)
+        .await?;
 
     if let Some(export) = export {
         let settings: Option<Value> =
@@ -171,10 +172,7 @@ async fn content_share_json(
                 .await?;
         let content_type =
             content_type_from_export_settings(settings.as_ref().unwrap_or(&Value::Null));
-        map.insert(
-            "content_type".to_string(),
-            content_type.unwrap_or(Value::Null),
-        );
+        map.insert("content_type".to_string(), json!(content_type));
         map.insert("content_export".to_string(), export.to_json(&[]));
 
         // A course export carries its source course.
@@ -615,7 +613,7 @@ async fn show_content_share(
     }
 
     // Canvas: `@user.content_shares.find(params[:id])`
-    let row: Option<ContentShareRow> = sqlx::query_as(
+    let row = sqlx::query_as::<_, ContentShareRow>(
         "SELECT id, name, user_id, content_export_id, sender_id, read_state, type AS share_type, \
                 created_at, updated_at \
          FROM content_shares WHERE id = $1 AND user_id = $2",

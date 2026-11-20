@@ -72,17 +72,17 @@ pub(crate) const EXPORT_COLUMNS: &str = "id, course_id, user_id, context_type, \
 
 #[derive(Debug, sqlx::FromRow)]
 pub(crate) struct ContentExportRow {
-    id: i64,
-    course_id: Option<i64>,
-    user_id: Option<i64>,
-    context_type: Option<String>,
-    export_type: String,
-    workflow_state: String,
-    progress: i32,
-    new_quizzes_export_state: Option<String>,
-    new_quizzes_export_url: Option<String>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) course_id: Option<i64>,
+    pub(crate) user_id: Option<i64>,
+    pub(crate) context_type: Option<String>,
+    pub(crate) export_type: String,
+    pub(crate) workflow_state: String,
+    pub(crate) progress: i32,
+    pub(crate) new_quizzes_export_state: Option<String>,
+    pub(crate) new_quizzes_export_url: Option<String>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 impl ContentExportRow {
