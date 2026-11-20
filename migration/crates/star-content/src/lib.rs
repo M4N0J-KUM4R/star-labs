@@ -26,7 +26,9 @@
 //! provides a single merged `Router<AppState>` for inclusion in `star-http`.
 
 pub mod content_exports;
+pub mod content_exports_ext;
 pub mod content_migrations;
+pub mod content_shares;
 pub mod migration_issues;
 
 use axum::Router;
@@ -39,8 +41,10 @@ pub fn router() -> Router<AppState> {
         .merge(star_announcements::router())
         .merge(star_modules::router())
         .merge(content_exports::router())
+        .merge(content_exports_ext::router())
         .merge(content_migrations::router())
         .merge(migration_issues::router())
+        .merge(content_shares::router())
 }
 
 #[cfg(test)]
