@@ -478,14 +478,14 @@ pub(crate) async fn fetch_module_item(
     };
 
     // Visibility flows through the module's course.
-    let (course_id,): Option<(i64,)> = sqlx::query_as(
+    let course: Option<(i64,)> = sqlx::query_as(
         "SELECT course_id FROM modules WHERE id = $1 AND workflow_state != 'deleted'",
     )
     .bind(row.module_id)
     .fetch_optional(pool)
     .await
     .map_err(db_err)?;
-    let Some((course_id,)) = course_id else {
+    let Some((course_id,)) = course else {
         return Ok(None);
     };
 
