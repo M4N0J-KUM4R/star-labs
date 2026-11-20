@@ -45,6 +45,7 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 mod external_tools;
+mod lti_registrations;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -548,6 +549,50 @@ pub fn router() -> Router<AppState> {
         .route(
             "/accounts/{account_id}/lti_registrations/{registration_id}/deployments",
             get(list_deployments_scoped).post(create_deployment_scoped),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{registration_id}/deployments/{deployment_id}",
+            get(show_deployment_scoped).delete(delete_deployment_scoped),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/configuration/validate",
+            post(validate_lti_configuration),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/check_domain_duplicates",
+            get(check_domain_duplicates),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{id}",
+            put(update_registration),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{id}/reset",
+            put(reset_registration),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{id}/bind",
+            post(bind_registration),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{id}/unbind",
+            delete(unbind_registration),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registration_by_client_id/{client_id}",
+            get(show_by_client_id),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/by_utid/{utid}",
+            get(show_by_utid),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/install_status/{client_id}",
+            get(install_status),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{registration_id}/deployments/{deployment_id}/context_search",
+            get(context_search),
         )
         // Brief-compatible flat paths.
         .route(

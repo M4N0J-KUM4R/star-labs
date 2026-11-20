@@ -496,3 +496,418 @@ async fn deployments_lifecycle_and_soft_delete() {
 
     cleanup(&pool, &prefix).await;
 }
+
+#[tokio::test]
+async fn validate_lti_configuration_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "root", None).await;
+    seed_account_admin(&pool, account, admin).await;
+    let path = format!("/accounts/{account}/lti_registrations/configuration/validate");
+
+    // Valid configuration returns 200.
+    let response = server
+        .post(&path)
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "lti_configuration": {
+                "title": "My Tool",
+                "target_link_uri": "https://example.com/launch"
+            }
+        }))
+        .await;
+    assert_eq!(response.status_code(), 200, "valid config: {}", response.text());
+    let body: Value = response.json();
+    assert_eq!(body["configuration"]["title"], "My Tool");
+    assert_eq!(
+        body["configuration"]["redirect_uris"],
+        json!(["https://example.com/launch"])
+    );
+
+    // Missing title -> 422.
+    let response = server
+        .post(&path)
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "lti_configuration": { "target_link_uri": "https://example.com/launch" } }))
+        .await;
+    assert_eq!(response.status_code(), 422, "missing title: {}", response.text());
+
+    // Missing target_link_uri -> 422.
+    let response = server
+        .post(&path)
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "lti_configuration": { "title": "No URI" } }))
+        .await;
+    assert_eq!(response.status_code(), 422, "missing uri: {}", response.text());
+
+    // Both lti_configuration and url -> 422.
+    let response = server
+        .post(&path)
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "lti_configuration": { "title": "A", "target_link_uri": "https://a.com" },
+            "url": "https://b.com/config.json"
+        }))
+        .await;
+    assert_eq!(response.status_code(), 422, "both provided: {}", response.text());
+
+    // Neither provided -> 422.
+    let response = server
+        .post(&path)
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(response.status_code(), 422, "neither provided: {}", response.text());
+
+    // Non-admin gets 403.
+    let student = seed_user(&pool, &prefix, "student", "student").await;
+    let response = server
+        .post(&path)
+        .add_header(AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "lti_configuration": { "title": "X", "target_link_uri": "https://x.com" } }))
+        .await;
+    assert_eq!(response.status_code(), 403, "non-admin: {}", response.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn check_domain_duplicates_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "root", None).await;
+    seed_account_admin(&pool, account, admin).await;
+
+    let _reg = create_registration(&server, account, admin, &prefix).await;
+
+    let response = server
+        .get(&format!(
+            "/accounts/{account}/lti_registrations/check_domain_duplicates?domain=example.com"
+        ))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 200, "domain hit: {}", response.text());
+    let body: Value = response.json();
+    assert!(body["duplicates"].as_array().expect("array").len() >= 1);
+
+    let response = server
+        .get(&format!(
+            "/accounts/{account}/lti_registrations/check_domain_duplicates?domain=nonexistent.biz"
+        ))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 200, "no hit: {}", response.text());
+    let body: Value = response.json();
+    assert!(body["duplicates"].as_array().expect("array").is_empty());
+
+    let response = server
+        .get(&format!("/accounts/{account}/lti_registrations/check_domain_duplicates"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 200, "empty domain: {}", response.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn update_and_reset_registration_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "root", None).await;
+    seed_account_admin(&pool, account, admin).await;
+
+    let created = create_registration(&server, account, admin, &prefix).await;
+    let id = created["id"].as_i64().expect("id");
+    let path = format!("/accounts/{account}/lti_registrations/{id}");
+
+    let response = server
+        .put(&path)
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "name": "Updated Tool Name",
+            "admin_nickname": "Short Name"
+        }))
+        .await;
+    assert_eq!(response.status_code(), 200, "update: {}", response.text());
+    let updated: Value = response.json();
+    assert_eq!(updated["name"], "Updated Tool Name");
+    assert_eq!(updated["admin_nickname"], "Short Name");
+
+    let response = server
+        .put(&path)
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "configuration": { "title": "Patched Title", "description": "Added description" }
+        }))
+        .await;
+    assert_eq!(response.status_code(), 200, "patch config: {}", response.text());
+
+    let response = server
+        .put(&path)
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(response.status_code(), 200, "empty update: {}", response.text());
+
+    let response = server
+        .put(&format!("/accounts/{account}/lti_registrations/{id}/reset"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(response.status_code(), 200, "reset: {}", response.text());
+
+    let response = server
+        .put(&format!("/accounts/{account}/lti_registrations/999999/reset"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(response.status_code(), 404, "missing reset: {}", response.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn bind_and_unbind_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "root", None).await;
+    seed_account_admin(&pool, account, admin).await;
+
+    let created = create_registration(&server, account, admin, &prefix).await;
+    let id = created["id"].as_i64().expect("id");
+
+    let response = server
+        .post(&format!("/accounts/{account}/lti_registrations/{id}/bind"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "workflow_state": "on" }))
+        .await;
+    assert_eq!(response.status_code(), 200, "bind on: {}", response.text());
+    let binding: Value = response.json();
+    assert_eq!(binding["workflow_state"], "on");
+
+    let response = server
+        .post(&format!("/accounts/{account}/lti_registrations/{id}/bind"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "workflow_state": "off" }))
+        .await;
+    assert_eq!(response.status_code(), 200, "bind off: {}", response.text());
+    let binding: Value = response.json();
+    assert_eq!(binding["workflow_state"], "off");
+
+    let response = server
+        .post(&format!("/accounts/{account}/lti_registrations/{id}/bind"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "workflow_state": "invalid" }))
+        .await;
+    assert_eq!(response.status_code(), 400, "bad state: {}", response.text());
+
+    let response = server
+        .delete(&format!("/accounts/{account}/lti_registrations/{id}/unbind"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 400, "local unbind rejected: {}", response.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn show_by_client_id_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "root", None).await;
+    seed_account_admin(&pool, account, admin).await;
+
+    let created = create_registration(&server, account, admin, &prefix).await;
+    let id = created["id"].as_i64().expect("id");
+
+    let response = server
+        .get(&format!("/accounts/{account}/lti_registration_by_client_id/{id}"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 200, "by client id: {}", response.text());
+    let found: Value = response.json();
+    assert_eq!(found["id"].as_i64(), Some(id));
+
+    let response = server
+        .get(&format!("/accounts/{account}/lti_registration_by_client_id/999999"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 404, "unknown client: {}", response.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn show_by_utid_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "root", None).await;
+    seed_account_admin(&pool, account, admin).await;
+
+    let response = server
+        .post(&format!("/accounts/{account}/lti_registrations"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "name": "UTID Test Tool",
+            "configuration": {
+                "title": "UTID Test Tool",
+                "target_link_uri": "https://example.com/launch",
+                "unified_tool_id": "test-utid-12345"
+            }
+        }))
+        .await;
+    assert_eq!(response.status_code(), 201, "create: {}", response.text());
+
+    let response = server
+        .get(&format!(
+            "/accounts/{account}/lti_registrations/by_utid/{}",
+            "test-utid-12345"
+        ))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 200, "by utid: {}", response.text());
+    let found: Value = response.json();
+    assert_eq!(found["name"], "UTID Test Tool");
+
+    let response = server
+        .get(&format!("/accounts/{account}/lti_registrations/by_utid/nonexistent"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 404, "unknown utid: {}", response.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn deployment_show_and_delete_scoped() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "root", None).await;
+    seed_account_admin(&pool, account, admin).await;
+
+    let registration = create_registration(&server, account, admin, &prefix).await;
+    let id = registration["id"].as_i64().expect("id");
+
+    let response = server
+        .post(&format!("/accounts/{account}/lti_registrations/{id}/deployments"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(response.status_code(), 200, "create deployment: {}", response.text());
+    let deployment: Value = response.json();
+    let dep_id = deployment["id"].as_i64().expect("deployment id");
+
+    let response = server
+        .get(&format!(
+            "/accounts/{account}/lti_registrations/{id}/deployments/{dep_id}"
+        ))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 200, "show scoped: {}", response.text());
+
+    let response = server
+        .delete(&format!(
+            "/accounts/{account}/lti_registrations/{id}/deployments/{dep_id}"
+        ))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 204, "delete scoped: {}", response.text());
+
+    let response = server
+        .get(&format!(
+            "/accounts/{account}/lti_registrations/{id}/deployments/{dep_id}"
+        ))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 404, "show after delete: {}", response.text());
+
+    let response = server
+        .get(&format!(
+            "/accounts/{account}/lti_registrations/{id}/deployments/999999"
+        ))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 404, "unknown deployment: {}", response.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn context_search_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "root", None).await;
+    seed_account_admin(&pool, account, admin).await;
+
+    let registration = create_registration(&server, account, admin, &prefix).await;
+    let id = registration["id"].as_i64().expect("id");
+
+    let response = server
+        .post(&format!("/accounts/{account}/lti_registrations/{id}/deployments"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(response.status_code(), 200, "create deployment: {}", response.text());
+    let deployment: Value = response.json();
+    let dep_id = deployment["id"].as_i64().expect("deployment id");
+
+    let response = server
+        .get(&format!(
+            "/accounts/{account}/lti_registrations/{id}/deployments/{dep_id}/context_search?search_term=test"
+        ))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 200, "search: {}", response.text());
+    let body: Value = response.json();
+    assert!(body["results"].is_array());
+
+    let response = server
+        .get(&format!(
+            "/accounts/{account}/lti_registrations/{id}/deployments/{dep_id}/context_search"
+        ))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 200, "empty search: {}", response.text());
+
+    let response = server
+        .get(&format!(
+            "/accounts/{account}/lti_registrations/{id}/deployments/999999/context_search?search_term=test"
+        ))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 404, "missing deployment: {}", response.text());
+
+    cleanup(&pool, &prefix).await;
+}
