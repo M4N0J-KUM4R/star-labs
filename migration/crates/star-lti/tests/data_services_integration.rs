@@ -195,13 +195,14 @@ async fn data_services_crud() {
     let shown: Value = resp.json();
     assert_eq!(shown["id"].as_i64(), Some(id));
 
-    // Update the subscription.
+    // Update the subscription (Canvas reads PascalCase subscription[State],
+    // data_services_controller.rb L154/L166).
     let updated = server
         .put(&show_path)
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "subscription": {
-                "state": "Deleted"
+                "State": "Deleted"
             }
         }))
         .await;
