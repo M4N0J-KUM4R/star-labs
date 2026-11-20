@@ -513,6 +513,11 @@ pub fn router() -> Router<AppState> {
             "/users/{user_id}/communication_channels/{communication_channel_id}/notification_preferences/{notification}",
             get(show_channel_preference_scoped),
         )
+        // Per-channel notification preference categories (Canvas `category_index`)
+        .route(
+            "/users/{user_id}/communication_channels/{communication_channel_id}/notification_preference_categories",
+            get(list_channel_preference_categories_scoped),
+        )
         // Per-channel notification preferences, scoped by (type, address)
         .route(
             "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences",
@@ -1458,6 +1463,37 @@ async fn find_channel_preference(
     }))
 }
 
+/// Derive the distinct category slugs that have at least one stored preference
+/// for the given channel.  When the channel has no stored preferences, the
+/// static `NOTIFICATION_CATEGORIES` list is returned as a fallback.
+async fn derive_categories_for_channel(
+    pool: &sqlx::PgPool,
+    channel_id: i64,
+) -> Result<Vec<String>, ApiError> {
+    let rows: Vec<(String,)> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT category
+        FROM notification_preferences
+        WHERE communication_channel_id = $1
+        ORDER BY category ASC
+        "#,
+    )
+    .bind(channel_id)
+    .fetch_all(pool)
+    .await?;
+
+    let stored: Vec<String> = rows.into_iter().map(|(c,)| c).collect();
+    if stored.is_empty() {
+        // No preferences stored for this channel — fall back to the full static list.
+        Ok(NOTIFICATION_CATEGORIES
+            .iter()
+            .map(|s| s.to_string())
+            .collect())
+    } else {
+        Ok(stored)
+    }
+}
+
 /// GET /users/{user_id}/communication_channels/{communication_channel_id}/notification_preferences
 /// Canvas' `index`: every stored preference for the channel, wrapped in the
 /// `notification_preferences` envelope. Reads are self-or-admin (Canvas
@@ -1495,6 +1531,27 @@ async fn show_channel_preference_scoped(
     let row = find_channel_preference(&state.db, target_user_id, channel_id, &notification).await?;
     Ok(Json(CommunicationChannelPreferencesResponse {
         notification_preferences: vec![row],
+    }))
+}
+
+/// GET /users/{user_id}/communication_channels/{communication_channel_id}/notification_preference_categories
+/// Canvas' `category_index`: derive the set of category slugs that have at
+/// least one stored preference for the channel.  Falls back to all static
+/// slugs when the channel has no stored preferences.
+async fn list_channel_preference_categories_scoped(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, channel_id)): Path<(String, i64)>,
+) -> Result<Json<NotificationPreferenceCategoriesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_read(&auth, target_user_id)?;
+    owned_channel_exists(&state.db, target_user_id, channel_id).await?;
+
+    // Try to derive categories from stored preferences for this channel.
+    let categories = derive_categories_for_channel(&state.db, channel_id).await?;
+    Ok(Json(NotificationPreferenceCategoriesResponse {
+        categories,
     }))
 }
 
@@ -1759,11 +1816,13 @@ async fn bounced_communication_channels(
         .as_ref()
         .map(|b| format!("AND cc.last_bounce_at <= '{}'", b.replace("'", "''")));
 
-    let pattern_filter = params
-        .pattern
-        .as_ref()
-        .map(|p| format!("AND (lower(cc.path) LIKE '%{}%' OR lower(cc.last_bounce_summary) LIKE '%{}%')",
-            p.replace("'", "''"), p.replace("'", "''")));
+    let pattern_filter = params.pattern.as_ref().map(|p| {
+        format!(
+            "AND (lower(cc.path) LIKE '%{}%' OR lower(cc.last_bounce_summary) LIKE '%{}%')",
+            p.replace("'", "''"),
+            p.replace("'", "''")
+        )
+    });
 
     let with_invalid = params.with_invalid_paths.unwrap_or(false);
     let invalid_filter = if with_invalid {
@@ -1783,10 +1842,16 @@ async fn bounced_communication_channels(
         where_clauses.push(format!("lower(cc.path_type) = lower($2)"));
     }
     if after_filter.is_some() {
-        where_clauses.push(format!("cc.last_bounce_at >= '{}'", params.after.as_ref().unwrap().replace("'", "''")));
+        where_clauses.push(format!(
+            "cc.last_bounce_at >= '{}'",
+            params.after.as_ref().unwrap().replace("'", "''")
+        ));
     }
     if before_filter.is_some() {
-        where_clauses.push(format!("cc.last_bounce_at <= '{}'", params.before.as_ref().unwrap().replace("'", "''")));
+        where_clauses.push(format!(
+            "cc.last_bounce_at <= '{}'",
+            params.before.as_ref().unwrap().replace("'", "''")
+        ));
     }
     if pattern_filter.is_some() {
         where_clauses.push(format!(
@@ -1821,9 +1886,7 @@ async fn bounced_communication_channels(
         {}
         ORDER BY {}
         "#,
-        "au.account_id = $1",
-        where_sql,
-        order_col
+        "au.account_id = $1", where_sql, order_col
     );
 
     let mut query = sqlx::query_as::<_, BouncedChannelRow>(&sql).bind(account_id);
@@ -1845,8 +1908,7 @@ async fn bounced_communication_channels_csv(
     Query(params): Query<BouncedReportQuery>,
 ) -> Result<String, ApiError> {
     let Json(BouncedChannelsResponse { channels }) =
-        bounced_communication_channels(State(state), auth, Path(account_id), Query(params))
-            .await?;
+        bounced_communication_channels(State(state), auth, Path(account_id), Query(params)).await?;
     Ok(channels_to_csv(&channels))
 }
 
@@ -1951,11 +2013,10 @@ async fn bulk_reset_bounce_counts(
     }
 
     // Verify account exists.
-    let account_exists: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
-            .bind(account_id)
-            .fetch_optional(&state.db)
-            .await?;
+    let account_exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     if account_exists.is_none() {
         return Err(ApiError::NotFound);
@@ -1997,11 +2058,10 @@ async fn unconfirmed_communication_channels(
         return Err(ApiError::Forbidden);
     }
 
-    let account_exists: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
-            .bind(account_id)
-            .fetch_optional(&state.db)
-            .await?;
+    let account_exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     if account_exists.is_none() {
         return Err(ApiError::NotFound);
@@ -2042,8 +2102,7 @@ async fn unconfirmed_communication_channels_csv(
     Query(params): Query<BouncedReportQuery>,
 ) -> Result<String, ApiError> {
     let Json(BouncedChannelsResponse { channels }) =
-        unconfirmed_communication_channels(state, auth, Path(account_id), Query(params))
-            .await?;
+        unconfirmed_communication_channels(state, auth, Path(account_id), Query(params)).await?;
     Ok(channels_to_csv(&channels))
 }
 
@@ -2063,11 +2122,10 @@ async fn bulk_confirm_unconfirmed(
         return Err(ApiError::Forbidden);
     }
 
-    let account_exists: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
-            .bind(account_id)
-            .fetch_optional(&state.db)
-            .await?;
+    let account_exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     if account_exists.is_none() {
         return Err(ApiError::NotFound);
@@ -2241,8 +2299,7 @@ fn channels_to_csv(rows: &[BouncedChannelRow]) -> String {
         out.push_str(&row.bounce_count.to_string());
         out.push(',');
         out.push_str(
-            &row
-                .last_bounce_at
+            &row.last_bounce_at
                 .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
                 .unwrap_or_default(),
         );
