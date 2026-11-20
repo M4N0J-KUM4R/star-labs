@@ -659,27 +659,27 @@ async fn update_setting(
     let graph_body = content_type.contains(TOOL_SETTINGS_JSON);
     let simple_body = content_type.contains(TOOL_SETTINGS_SIMPLE_JSON);
     if !graph_body && !simple_body {
-        return bad_request();
+        return *bad_request();
     }
 
     let Ok(payload) = serde_json::from_slice::<Value>(&body) else {
-        return bad_request();
+        return *bad_request();
     };
 
     let custom = if graph_body {
         let Some(entries) = payload.get("@graph").and_then(Value::as_array) else {
-            return bad_request();
+            return *bad_request();
         };
         if entries.len() != 1 {
-            return bad_request();
+            return *bad_request();
         }
         let Some(custom) = entries[0].get("custom") else {
-            return bad_request();
+            return *bad_request();
         };
         custom.clone()
     } else {
         if payload.get("@graph").is_some() {
-            return bad_request();
+            return *bad_request();
         }
         payload.clone()
     };
@@ -696,7 +696,7 @@ async fn update_setting(
             .execute(&state.db)
             .await
     {
-        return server_error(error);
+        return *server_error(error);
     }
 
     // Canvas answers `head :ok` — 200 with an empty body.
