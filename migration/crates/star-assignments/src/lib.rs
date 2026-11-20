@@ -9582,12 +9582,13 @@ pub async fn update_assignment_record(
 
     let title = update.title.map(str::trim).filter(|t| !t.is_empty());
     let title = title.map(String::from).unwrap_or(existing.title);
-    let description = update.description.map(String::from).or(existing.description);
+    let description = update
+        .description
+        .map(String::from)
+        .or(existing.description);
     let points_possible = update.points_possible.unwrap_or(existing.points_possible);
     let due_at = update.due_at.or(existing.due_at);
-    let assignment_group_id = update
-        .assignment_group_id
-        .or(existing.assignment_group_id);
+    let assignment_group_id = update.assignment_group_id.or(existing.assignment_group_id);
     let workflow_state = update
         .workflow_state
         .map(String::from)
