@@ -654,11 +654,14 @@ async fn create_course_tool_with_verification_returns_tool() {
         &server,
         course_id,
         &auth(teacher_id, "teacher"),
+        // Canvas external_tools_controller.rb:1594-1602 only permits these
+        // params; the URL must ride inside config_settings.
         json!({
             "name": "Verified Tool",
-            "url": "https://tool.example.com/lti",
-            "privacy_level": "anonymous",
-            "verification_url": "https://tool.example.com/lti/oidc/init"
+            "consumer_key": "key",
+            "shared_secret": "secret",
+            "app_center_id": "app-1",
+            "config_settings": "{\"url\": \"https://tool.example.com/lti\"}"
         }),
     )
     .await;
@@ -685,9 +688,10 @@ async fn create_account_tool_with_verification_returns_tool() {
         &auth(admin_id, "student"),
         json!({
             "name": "Verified Account Tool",
-            "url": "https://tool.example.com/lti",
-            "privacy_level": "public",
-            "verification_url": "https://tool.example.com/lti/oidc/init"
+            "consumer_key": "key",
+            "shared_secret": "secret",
+            "app_center_id": "app-2",
+            "config_settings": "{\"url\": \"https://tool.example.com/lti\"}"
         }),
     )
     .await;
@@ -738,91 +742,11 @@ async fn sessionless_launch_returns_503() {
 
 // ---------------------------------------------------------------------------
 // New route tests: top_nav_favorites
+// Canvas routes.rb:1695-1696 — account-scoped POST + DELETE only.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn course_top_nav_favorites_get_add_delete() {
-    let Some((server, pool, prefix)) = setup().await else {
-        return;
-    };
-    let account_id = seed_account(&pool, &prefix, "acct").await;
-    let course_id = seed_course(&pool, &prefix, "course", account_id).await;
-    let teacher_id = seed_user(&pool, &prefix, "teacher", "teacher").await;
-    seed_enrollment(&pool, teacher_id, course_id, "teacher").await;
-    let bearer = auth(teacher_id, "teacher");
-
-    // Create a tool with top_nav placement
-    let resp = create_course_tool(
-        &server,
-        course_id,
-        &bearer,
-        json!({
-            "name": "Top Nav Tool",
-            "url": "https://tool.example.com",
-            "tool_configuration": { "placements": { "top_navigation": {} } }
-        }),
-    )
-    .await;
-    assert_eq!(resp.status_code(), 200);
-    let tool: Value = resp.json();
-    let tool_id = tool["id"].as_i64().unwrap();
-
-    // GET list (empty)
-    let resp = server
-        .get(&format!(
-            "/courses/{course_id}/external_tools/top_nav_favorites"
-        ))
-        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
-        .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let list: Value = resp.json();
-    assert!(list["top_nav_favorite_tool_ids"]
-        .as_array()
-        .unwrap()
-        .is_empty());
-
-    // Add favorite
-    let resp = server
-        .post(&format!(
-            "/courses/{course_id}/external_tools/top_nav_favorites/{tool_id}"
-        ))
-        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
-        .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let fav: Value = resp.json();
-    assert!(fav["top_nav_favorite_tool_ids"]
-        .as_array()
-        .unwrap()
-        .contains(&json!(tool_id)));
-
-    // Duplicate add → 400
-    let resp = server
-        .post(&format!(
-            "/courses/{course_id}/external_tools/top_nav_favorites/{tool_id}"
-        ))
-        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
-        .await;
-    assert_eq!(resp.status_code(), 400);
-
-    // Remove
-    let resp = server
-        .delete(&format!(
-            "/courses/{course_id}/external_tools/top_nav_favorites/{tool_id}"
-        ))
-        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
-        .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let after: Value = resp.json();
-    assert!(after["top_nav_favorite_tool_ids"]
-        .as_array()
-        .unwrap()
-        .is_empty());
-
-    teardown(&pool, &[teacher_id], account_id, course_id).await;
-}
-
-#[tokio::test]
-async fn account_top_nav_favorites_get_add_delete() {
+async fn account_top_nav_favorites_add_requires_top_navigation_placement() {
     let Some((server, pool, prefix)) = setup().await else {
         return;
     };
@@ -830,7 +754,38 @@ async fn account_top_nav_favorites_get_add_delete() {
     let admin_id = seed_user(&pool, &prefix, "admin", "student").await;
     seed_account_user(&pool, account_id, admin_id).await;
 
-    // Create tool
+    // Create a tool WITHOUT the top_navigation placement
+    let resp = server
+        .post(&format!("/accounts/{account_id}/external_tools"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .json(&json!({ "name": "No Placement", "url": "https://tool.example.com" }))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let tool: Value = resp.json();
+    let tool_id = tool["id"].as_i64().unwrap();
+
+    // Canvas controller.rb:1764-1766: no top_navigation placement → 400
+    let resp = server
+        .post(&format!(
+            "/accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+
+    teardown(&pool, &[admin_id], account_id, 0).await;
+}
+
+#[tokio::test]
+async fn account_top_nav_favorites_add_and_remove() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let admin_id = seed_user(&pool, &prefix, "admin", "student").await;
+    seed_account_user(&pool, account_id, admin_id).await;
+
+    // Create a tool with top_nav placement
     let resp = server
         .post(&format!("/accounts/{account_id}/external_tools"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
@@ -844,20 +799,7 @@ async fn account_top_nav_favorites_get_add_delete() {
     let tool: Value = resp.json();
     let tool_id = tool["id"].as_i64().unwrap();
 
-    // GET
-    let resp = server
-        .get(&format!(
-            "/accounts/{account_id}/external_tools/top_nav_favorites"
-        ))
-        .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
-        .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert!(resp.json()["top_nav_favorite_tool_ids"]
-        .as_array()
-        .unwrap()
-        .is_empty());
-
-    // Add
+    // Add — controller.rb:1781 renders {top_nav_favorite_tool_ids: [...]}
     let resp = server
         .post(&format!(
             "/accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}"
@@ -865,8 +807,13 @@ async fn account_top_nav_favorites_get_add_delete() {
         .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let fav: Value = resp.json();
+    assert!(fav["top_nav_favorite_tool_ids"]
+        .as_array()
+        .unwrap()
+        .contains(&json!(tool_id)));
 
-    // Delete
+    // Delete — controller.rb:1800 renders the updated id list
     let resp = server
         .delete(&format!(
             "/accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}"
@@ -874,6 +821,52 @@ async fn account_top_nav_favorites_get_add_delete() {
         .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let after: Value = resp.json();
+    assert!(after["top_nav_favorite_tool_ids"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    teardown(&pool, &[admin_id], account_id, 0).await;
+}
+
+#[tokio::test]
+async fn account_top_nav_favorites_rejects_more_than_two() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "acct").await;
+    let admin_id = seed_user(&pool, &prefix, "admin", "student").await;
+    seed_account_user(&pool, account_id, admin_id).await;
+
+    // Three tools with the top_navigation placement
+    let mut tool_ids = Vec::new();
+    for i in 0..3 {
+        let resp = server
+            .post(&format!("/accounts/{account_id}/external_tools"))
+            .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+            .json(&json!({
+                "name": format!("Top Nav {i}"),
+                "url": "https://tool.example.com",
+                "tool_configuration": { "placements": { "top_navigation": {} } }
+            }))
+            .await;
+        assert_eq!(resp.status_code(), 200);
+        let tool: Value = resp.json();
+        tool_ids.push(tool["id"].as_i64().unwrap());
+    }
+
+    // Canvas controller.rb:1779: "Cannot have more than 2 favorited tools"
+    for id in &tool_ids {
+        let resp = server
+            .post(&format!(
+                "/accounts/{account_id}/external_tools/top_nav_favorites/{id}"
+            ))
+            .add_header(axum::http::header::AUTHORIZATION, auth(admin_id, "student"))
+            .await;
+        let expected = if *id == tool_ids[2] { 400 } else { 200 };
+        assert_eq!(resp.status_code(), expected, "body: {}", resp.text());
+    }
 
     teardown(&pool, &[admin_id], account_id, 0).await;
 }
@@ -1146,7 +1139,7 @@ async fn update_course_tool_updated_only() {
     .await;
     let tool: Value = resp.json();
     let tool_id = tool["id"].as_i64().unwrap();
-    let orig_updated = tool["updated_at"].as_str().unwrap();
+    let orig_updated = tool["updated_at"].as_str().unwrap().to_string();
 
     // Update with updated_only=false (default): all fields merged
     let resp = update_course_tool(
@@ -1174,7 +1167,8 @@ async fn update_course_tool_updated_only() {
     let updated2: Value = resp.json();
     assert_eq!(updated2["description"], "New Desc");
     assert_eq!(updated2["name"], "New Name"); // unchanged
-    assert!(updated2["updated_at"].as_str().is_some());
+                                              // Any update refreshes updated_at.
+    assert_ne!(updated2["updated_at"].as_str().unwrap_or(""), orig_updated);
 
     teardown(&pool, &[teacher_id], account_id, course_id).await;
 }

@@ -22,7 +22,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -190,46 +190,20 @@ pub struct UpdateToolRequest {
 
 /// Body for `POST /courses/{course_id}/create_tool_with_verification` and
 /// `POST /accounts/{account_id}/create_tool_with_verification`.
+///
+/// Canvas external_tools_controller.rb:1594-1602 permits exactly these 7
+/// params: consumer_key, shared_secret, name, app_center_id, context_id,
+/// context_type, config_settings. Everything else is ignored, so the
+/// request struct carries nothing more.
 #[derive(Debug, Deserialize, Default)]
 pub struct CreateToolWithVerificationRequest {
     pub consumer_key: Option<String>,
     pub shared_secret: Option<String>,
     pub name: Option<String>,
     pub app_center_id: Option<String>,
-    pub config_settings: Option<String>,
     pub context_id: Option<i64>,
     pub context_type: Option<String>,
-    pub privacy_level: Option<String>,
-    pub workflow_state: Option<String>,
-    pub icon_url: Option<String>,
-    pub text: Option<String>,
-    pub enabled: Option<bool>,
-    pub visible: Option<bool>,
-    pub open_in_new_tab: Option<bool>,
-    pub root_url: Option<String>,
-    pub ownership_type: Option<String>,
-    pub tool_type: Option<String>,
-    pub lti_version: Option<String>,
-    pub developer_key_id: Option<i64>,
-    pub lti_registration_id: Option<i64>,
-    pub deployment_id: Option<i64>,
-    pub tool_configuration: Option<Value>,
-    pub custom_fields: Option<Value>,
-    pub selection_width: Option<i32>,
-    pub selection_height: Option<i32>,
-    pub not_selectable: Option<bool>,
-}
-
-/// Query params for `GET /courses/{course_id}/external_tools/sessionless_launch`
-/// and `GET /accounts/{account_id}/external_tools/sessionless_launch`.
-#[derive(Debug, Deserialize, Default)]
-pub struct SessionlessLaunchQuery {
-    pub id: Option<i64>,
-    pub url: Option<String>,
-    pub launch_type: Option<String>,
-    pub assignment_id: Option<i64>,
-    pub module_item_id: Option<i64>,
-    pub resource_link_lookup_uuid: Option<String>,
+    pub config_settings: Option<String>,
 }
 
 // --------------------------------------------------------------------------
@@ -376,9 +350,14 @@ fn tool_json(
         "selection_height": tool.selection_height,
         "not_selectable": tool.not_selectable,
         "is_rce_favorite": is_rce_favorite,
-        "is_top_nav_favorite": is_top_nav_favorite.unwrap_or(false),
         "placements": placements,
     });
+    // Canvas external_tools.rb:44 only emits is_top_nav_favorite when the
+    // tool can be a top-nav favorite (top_navigation placement); it never
+    // renders `false`, so the key is added conditionally.
+    if let Some(fav) = is_top_nav_favorite {
+        json["is_top_nav_favorite"] = json!(fav);
+    }
     json
 }
 
@@ -517,22 +496,12 @@ pub fn router() -> Router<AppState> {
             "/accounts/{account_id}/external_tools/sessionless_launch",
             get(account_sessionless_launch),
         )
-        // New: top_nav_favorites (routes 9-10)
-        .route(
-            "/courses/{course_id}/external_tools/top_nav_favorites",
-            get(course_top_nav_favorites),
-        )
-        .route(
-            "/courses/{course_id}/external_tools/top_nav_favorites/{tool_id}",
-            post(add_course_top_nav_favorite),
-        )
-        .route(
-            "/accounts/{account_id}/external_tools/top_nav_favorites",
-            get(account_top_nav_favorites),
-        )
+        // Canvas routes.rb:1695-1696 — top_nav_favorites exist only for
+        // accounts, and only POST (add) + DELETE (remove). There is no list
+        // route and no course-scoped variant.
         .route(
             "/accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}",
-            post(add_account_top_nav_favorite),
+            post(add_account_top_nav_favorite).delete(remove_account_top_nav_favorite),
         )
         // New: migration_info (routes 12-13)
         .route(
@@ -987,7 +956,7 @@ async fn all_visible_nav_tools(
             if has_placements && !has_placement(&tool.tool_configuration, "course_navigation") {
                 continue;
             }
-            let mut value = tool_json(&tool, false);
+            let mut value = tool_json(&tool, false, None);
             value["context_id"] = json!(course_id);
             value["context_name"] = json!(course_name);
             data.push(value);
@@ -1012,9 +981,10 @@ async fn update_course_tool(
     if !can_manage_course_tools(&state.db, &auth, course_id).await? {
         return Err(ApiError::Forbidden);
     }
-    let tool = find_course_tool(&state.db, course_id, id).await?;
+    // The lookup is the 404 guard for a tool outside this course.
+    find_course_tool(&state.db, course_id, id).await?;
     let updated = apply_update(&state.db, id, payload).await?;
-    Ok(Json(tool_json(&updated, false)))
+    Ok(Json(tool_json(&updated, false, None)))
 }
 
 /// `DELETE /courses/{course_id}/external_tools/{id}` — soft-delete a course tool.
@@ -1049,7 +1019,11 @@ async fn update_account_tool(
     let _ = find_account_tool(&state.db, account_id, id).await?;
     let updated = apply_update(&state.db, id, payload).await?;
     let favorites = rce_favorite_ids(&state.db, "Account", account_id).await?;
-    Ok(Json(tool_json(&updated, favorites.contains(&updated.id))))
+    Ok(Json(tool_json(
+        &updated,
+        favorites.contains(&updated.id),
+        None,
+    )))
 }
 
 /// `DELETE /accounts/{account_id}/external_tools/{id}` — soft-delete an account tool.
@@ -1164,7 +1138,6 @@ async fn create_course_tool_with_verification(
         course_id,
         Some(course_id),
         account_id,
-        "account",
     )
     .await?
     {
@@ -1193,7 +1166,6 @@ async fn create_account_tool_with_verification(
         account_id,
         None,
         Some(account_id),
-        "account",
     )
     .await?
     {
@@ -1201,10 +1173,14 @@ async fn create_account_tool_with_verification(
         Err(r) => return Ok(r),
     };
     let favorites = rce_favorite_ids(&state.db, "Account", account_id).await?;
-    Ok(Json(tool_json(&tool, favorites.contains(&tool.id))).into_response())
+    Ok(Json(tool_json(&tool, favorites.contains(&tool.id), None)).into_response())
 }
 
-/// Shared create-with-verification path.
+/// Shared create-with-verification path. Only the 7 params Canvas permits
+/// (external_tools_controller.rb:1594-1602) are honored; the URL comes from
+/// the app center config URL derived from app_center_id + config_settings
+/// (controller.rb:1605: `config_url = app_api.get_app_config_url(...)`,
+/// `config_type = "by_url"`).
 async fn create_tool_verified(
     pool: &PgPool,
     auth: &AuthUser,
@@ -1213,8 +1189,25 @@ async fn create_tool_verified(
     context_id: i64,
     course_id: Option<i64>,
     account_id: Option<i64>,
-    default_ownership: &str,
 ) -> Result<Result<ExternalToolRow, Response>, ApiError> {
+    // Canvas accepts context_id/context_type params (controller.rb:1599)
+    // but the tool is created in the route's context; when the caller
+    // supplies them they must agree with that context.
+    if let Some(provided) = payload.context_id {
+        if provided != context_id {
+            return Ok(Err(tool_errors(vec![format!(
+                "Context id {provided} does not match route context {context_id}"
+            )])));
+        }
+    }
+    if let Some(provided) = payload.context_type.as_deref() {
+        if !provided.eq_ignore_ascii_case(context_type) {
+            return Ok(Err(tool_errors(vec![format!(
+                "Context type {provided} does not match route context {context_type}"
+            )])));
+        }
+    }
+
     // Use name from payload or app_center_id, fall back to blank error
     let name = payload
         .name
@@ -1226,89 +1219,39 @@ async fn create_tool_verified(
         return Ok(Err(tool_errors(vec!["Name can't be blank".to_string()])));
     };
 
-    // Derive URL from config_settings if not provided
+    // Canvas sets config_type "by_url" with a URL derived from the app
+    // center; star-lms has no AppCenter, so config_settings must carry the
+    // tool url itself.
     let url = payload
         .config_settings
         .as_ref()
         .and_then(|cs| serde_json::from_str::<Value>(cs).ok())
-        .and_then(|v| v.get("url").and_then(|u| u.as_str()).map(String::from))
-        .or_else(|| None);
-
-    let privacy_level = payload
-        .privacy_level
-        .clone()
-        .unwrap_or_else(|| "anonymous".to_string());
-    if !PRIVACY_LEVELS.contains(&privacy_level.as_str()) {
-        return Ok(Err(tool_errors(vec![format!(
-            "Privacy level is not included in the list: {privacy_level}"
-        )])))?;
-    }
-
-    let workflow_state = payload
-        .workflow_state
-        .clone()
-        .unwrap_or_else(|| "active".to_string());
-    let tool_configuration = payload
-        .tool_configuration
-        .clone()
-        .unwrap_or_else(|| json!({}));
-    let custom_fields = payload.custom_fields.clone().unwrap_or_else(|| json!({}));
-    let ownership_type = payload
-        .ownership_type
-        .clone()
-        .unwrap_or_else(|| default_ownership.to_string());
+        .and_then(|v| v.get("url").and_then(|u| u.as_str()).map(String::from));
+    let Some(url) = url else {
+        return Ok(Err(tool_errors(vec!["Url can't be blank".to_string()])));
+    };
 
     let sql = format!(
         "INSERT INTO external_tools \
-         (name, url, domain, consumer_key, shared_secret, privacy_level, workflow_state, \
-          developer_key_id, lti_registration_id, deployment_id, \
+         (name, url, consumer_key, shared_secret, privacy_level, workflow_state, \
           course_id, account_id, context_type, context_id, tool_type, lti_version, \
-          icon_url, text, enabled, visible, open_in_new_tab, root_url, ownership_type, \
-          tool_configuration, custom_fields, selection_width, selection_height, not_selectable, \
-          created_by_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, \
-                 $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29) \
+          enabled, visible, open_in_new_tab, ownership_type, tool_configuration, \
+          custom_fields, created_by_id) \
+         VALUES ($1, $2, $3, $4, 'anonymous', 'active', \
+                 $5, $6, $7, $8, 'lti', '1.3', \
+                 true, true, false, $9, '{{}}', '{{}}', $10) \
          RETURNING {TOOL_COLUMNS}"
     );
     let tool: ExternalToolRow = sqlx::query_as(&sql)
         .bind(name)
         .bind(url)
-        .bind(payload.domain.as_ref())
         .bind(payload.consumer_key.as_ref())
         .bind(payload.shared_secret.as_ref())
-        .bind(privacy_level)
-        .bind(workflow_state)
-        .bind(payload.developer_key_id)
-        .bind(payload.lti_registration_id)
-        .bind(payload.deployment_id)
         .bind(course_id)
         .bind(account_id)
         .bind(context_type)
         .bind(context_id)
-        .bind(
-            payload
-                .tool_type
-                .clone()
-                .unwrap_or_else(|| "lti".to_string()),
-        )
-        .bind(
-            payload
-                .lti_version
-                .clone()
-                .unwrap_or_else(|| "1.3".to_string()),
-        )
-        .bind(payload.icon_url.as_ref())
-        .bind(payload.text.as_ref())
-        .bind(payload.enabled.unwrap_or(true))
-        .bind(payload.visible.unwrap_or(true))
-        .bind(payload.open_in_new_tab.unwrap_or(false))
-        .bind(payload.root_url.as_ref())
-        .bind(ownership_type)
-        .bind(tool_configuration)
-        .bind(custom_fields)
-        .bind(payload.selection_width)
-        .bind(payload.selection_height)
-        .bind(payload.not_selectable.unwrap_or(false))
+        .bind("account")
         .bind(auth.id)
         .fetch_one(pool)
         .await?;
@@ -1377,69 +1320,48 @@ async fn set_top_nav_favorites(
     Ok(())
 }
 
-/// `GET /courses/{course_id}/external_tools/top_nav_favorites` — list top-nav favorite tools for course.
-async fn course_top_nav_favorites(
+/// `POST /accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}` —
+/// Canvas `add_top_nav_favorite` (external_tools_controller.rb:1760-1791):
+/// requires manage_lti_add, 404 when the tool is unknown, 400 when the tool
+/// lacks the top_navigation placement, 400 when more than 2 tools would be
+/// favorited; on success renders `{top_nav_favorite_tool_ids: [...]}`.
+async fn add_account_top_nav_favorite(
     State(state): State<AppState>,
-    Path(course_id): Path<i64>,
+    Path((account_id, tool_id)): Path<(i64, i64)>,
     auth: AuthUser,
-) -> Result<Json<Vec<Value>>, ApiError> {
-    require_course(&state.db, course_id).await?;
-    if !can_read_course(&state.db, &auth, course_id).await? {
-        return Err(ApiError::Forbidden);
-    }
-    let ids = top_nav_favorite_ids(&state.db, "Course", course_id).await?;
-    let mut data = Vec::new();
-    for tool_id in ids {
-        if let Ok(tool) = find_tool_by_id(&state.db, tool_id).await {
-            data.push(tool_json(&tool, false));
-        }
-    }
-    Ok(Json(data))
-}
-
-/// `POST /courses/{course_id}/external_tools/top_nav_favorites/{tool_id}` — add a top-nav favorite tool.
-async fn add_course_top_nav_favorite(
-    State(state): State<AppState>,
-    Path((course_id, tool_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-) -> Result<Json<Value>, ApiError> {
-    require_course(&state.db, course_id).await?;
-    if !can_manage_course_tools(&state.db, &auth, course_id).await? {
-        return Err(ApiError::Forbidden);
-    }
-    let _ = find_course_tool(&state.db, course_id, tool_id).await?;
-    let mut ids = top_nav_favorite_ids(&state.db, "Course", course_id).await?;
-    if !ids.contains(&tool_id) {
-        ids.push(tool_id);
-        set_top_nav_favorites(&state.db, "Course", course_id, &ids).await?;
-    }
-    let tool = find_tool_by_id(&state.db, tool_id).await?;
-    Ok(Json(tool_json(&tool, false)))
-}
-
-/// `GET /accounts/{account_id}/external_tools/top_nav_favorites` — list top-nav favorite tools for account.
-async fn account_top_nav_favorites(
-    State(state): State<AppState>,
-    Path(account_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<Vec<Value>>, ApiError> {
+) -> Result<Response, ApiError> {
     require_account(&state.db, account_id).await?;
     if !can_manage_account(&state.db, &auth, account_id).await? {
         return Err(ApiError::Forbidden);
     }
-    let ids = top_nav_favorite_ids(&state.db, "Account", account_id).await?;
-    let favorites = rce_favorite_ids(&state.db, "Account", account_id).await?;
-    let mut data = Vec::new();
-    for tool_id in ids {
-        if let Ok(tool) = find_tool_by_id(&state.db, tool_id).await {
-            data.push(tool_json(&tool, favorites.contains(&tool_id)));
-        }
+    let tool = find_account_tool(&state.db, account_id, tool_id).await?;
+
+    // Canvas: "Tool does not have top_navigation placement" → 400.
+    if !has_placement(&tool.tool_configuration, "top_navigation") {
+        return Ok(bad_request(
+            "Tool does not have top_navigation placement".to_string(),
+        ));
     }
-    Ok(Json(data))
+
+    let mut ids = top_nav_favorite_ids(&state.db, "Account", account_id).await?;
+    if !ids.contains(&tool_id) {
+        ids.push(tool_id);
+    }
+    // Canvas: "Cannot have more than 2 favorited tools" → 400.
+    if ids.len() > 2 {
+        return Ok(bad_request(
+            "Cannot have more than 2 favorited tools".to_string(),
+        ));
+    }
+    set_top_nav_favorites(&state.db, "Account", account_id, &ids).await?;
+    Ok(Json(json!({ "top_nav_favorite_tool_ids": ids })).into_response())
 }
 
-/// `POST /accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}` — add a top-nav favorite tool.
-async fn add_account_top_nav_favorite(
+/// `DELETE /accounts/{account_id}/external_tools/top_nav_favorites/{tool_id}` —
+/// Canvas `remove_top_nav_favorite` (external_tools_controller.rb:1793-1802):
+/// requires manage_lti_delete, removes the id when present, always renders
+/// `{top_nav_favorite_tool_ids: [...]}`.
+async fn remove_account_top_nav_favorite(
     State(state): State<AppState>,
     Path((account_id, tool_id)): Path<(i64, i64)>,
     auth: AuthUser,
@@ -1448,15 +1370,10 @@ async fn add_account_top_nav_favorite(
     if !can_manage_account(&state.db, &auth, account_id).await? {
         return Err(ApiError::Forbidden);
     }
-    let _ = find_account_tool(&state.db, account_id, tool_id).await?;
     let mut ids = top_nav_favorite_ids(&state.db, "Account", account_id).await?;
-    if !ids.contains(&tool_id) {
-        ids.push(tool_id);
-        set_top_nav_favorites(&state.db, "Account", account_id, &ids).await?;
-    }
-    let tool = find_tool_by_id(&state.db, tool_id).await?;
-    let favorites = rce_favorite_ids(&state.db, "Account", account_id).await?;
-    Ok(Json(tool_json(&tool, favorites.contains(&tool_id))))
+    ids.retain(|id| *id != tool_id);
+    set_top_nav_favorites(&state.db, "Account", account_id, &ids).await?;
+    Ok(Json(json!({ "top_nav_favorite_tool_ids": ids })))
 }
 
 // --------------------------------------------------------------------------
@@ -1501,16 +1418,6 @@ async fn account_migration_info(
 // New handlers: group tools (route 16)
 // --------------------------------------------------------------------------
 
-/// Fetch a tool by ID regardless of context.
-async fn find_tool_by_id(pool: &PgPool, id: i64) -> Result<ExternalToolRow, ApiError> {
-    let sql = format!(
-        "SELECT {TOOL_COLUMNS} FROM external_tools \
-         WHERE id = $1 AND workflow_state <> 'deleted'"
-    );
-    let row: Option<ExternalToolRow> = sqlx::query_as(&sql).bind(id).fetch_optional(pool).await?;
-    row.ok_or(ApiError::NotFound)
-}
-
 /// `GET /groups/{group_id}/external_tools` — list tools for a group.
 async fn list_group_tools(
     State(state): State<AppState>,
@@ -1524,12 +1431,13 @@ async fn list_group_tools(
         .await?;
     row.ok_or(ApiError::NotFound)?;
 
-    let member: Option<(i64,)> =
-        sqlx::query_as("SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2 LIMIT 1")
-            .bind(group_id)
-            .bind(auth.id)
-            .fetch_optional(&state.db)
-            .await?;
+    let member: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM group_memberships          WHERE group_id = $1 AND user_id = $2 AND workflow_state <> 'deleted' LIMIT 1",
+    )
+    .bind(group_id)
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await?;
     if member.is_none() {
         return Err(ApiError::Forbidden);
     }
@@ -1544,7 +1452,9 @@ async fn list_group_tools(
         .fetch_all(&state.db)
         .await?;
 
-    Ok(Json(rows.iter().map(|t| tool_json(t, false)).collect()))
+    Ok(Json(
+        rows.iter().map(|t| tool_json(t, false, None)).collect(),
+    ))
 }
 
 /// `GET /groups/{group_id}/external_tools/{id}` — show one group tool.
@@ -1559,12 +1469,13 @@ async fn show_group_tool(
         .await?;
     row.ok_or(ApiError::NotFound)?;
 
-    let member: Option<(i64,)> =
-        sqlx::query_as("SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2 LIMIT 1")
-            .bind(group_id)
-            .bind(auth.id)
-            .fetch_optional(&state.db)
-            .await?;
+    let member: Option<(i64,)> = sqlx::query_as(
+        "SELECT 1 FROM group_memberships          WHERE group_id = $1 AND user_id = $2 AND workflow_state <> 'deleted' LIMIT 1",
+    )
+    .bind(group_id)
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await?;
     if member.is_none() {
         return Err(ApiError::Forbidden);
     }
@@ -1579,7 +1490,7 @@ async fn show_group_tool(
         .bind(group_id)
         .fetch_optional(&state.db)
         .await?;
-    tool.map(|t| Json(tool_json(&t, false)))
+    tool.map(|t| Json(tool_json(&t, false, None)))
         .ok_or(ApiError::NotFound)
 }
 
