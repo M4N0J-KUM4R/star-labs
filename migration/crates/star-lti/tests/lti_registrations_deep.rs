@@ -196,7 +196,7 @@ async fn update_reset_and_histories() {
     assert_eq!(updated["name"], "Renamed Tool");
     assert_eq!(updated["admin_nickname"], "Renicknamed");
     assert_eq!(updated["overlay"]["privacy_level"], "public");
-    assert!(updated["overlay_versions"].as_array().unwrap().len() >= 1);
+    assert!(!updated["overlay_versions"].as_array().unwrap().is_empty());
     assert_eq!(updated["overlaid_configuration"]["privacy_level"], "public");
 
     // Invalid workflow_state and dynamic-registration configuration updates
