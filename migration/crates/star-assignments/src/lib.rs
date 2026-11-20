@@ -4457,460 +4457,110 @@ async fn section_assignment_override_alias(
 }
 
 // ---------------------------------------------------------------------------
-// Moderated grading (Canvas ModeratedGradingController / ProvisionalGrade,
-// ProvisionalGradeSelection, ModerationGrader, AssignmentExtension; spec
-// p5-rest-assignments.md §5, slice F).
-//
-// Routes:
-//   POST   .../courses/:course_id/assignments/:assignment_id/extensions
-//   GET    .../courses/:course_id/assignments/:assignment_id/moderated_students
-//   POST   .../courses/:course_id/assignments/:assignment_id/moderated_students
-//   GET    .../courses/:course_id/assignments/:assignment_id/provisional_grades/status
-//   PUT    .../courses/:course_id/assignments/:assignment_id/provisional_grades/:provisional_grade_id/select
-//   PUT    .../courses/:course_id/assignments/:assignment_id/provisional_grades/bulk_select
-//   POST   .../courses/:course_id/assignments/:assignment_id/provisional_grades/publish
-//   GET    .../courses/:course_id/assignments/:assignment_id/anonymous_provisional_grades/status
-//   POST   .../sections/:section_id/assignments/:assignment_id/submissions
+// Assignment extensions + section-scoped submission create (Canvas
+// AssignmentExtensionsController#create and the section twin of
+// submissions#create from the routes.rb context loop; the moderated /
+// provisional grading routes live above via main's implementations).
 // ---------------------------------------------------------------------------
 
-/// POST .../courses/:course_id/assignments/:assignment_id/extensions — create or
-/// update a per-student late-policy extension (Canvas AssignmentExtension).
+/// POST .../courses/:course_id/assignments/:assignment_id/extensions — Canvas
+/// AssignmentExtensionsController#create. The body carries an array of
+/// `{user_id, extra_attempts}`; Canvas stores extra attempts on the
+/// student's submission row (there is no assignment_extensions table) and
+/// answers 200 with `{assignment_extensions: [...]}`. Entries whose user has
+/// no submission yet are skipped from the response (Canvas only updates
+/// `@context.submissions.where(...)`); invalid payloads are 400s.
 async fn create_assignment_extension(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
     auth: AuthUser,
     Json(payload): Json<serde_json::Value>,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    ensure_course_not_deleted(&state.db, course_id).await?;
-    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let user_id = payload
-        .get("user_id")
-        .and_then(|v| v.as_i64())
-        .ok_or_else(|| ApiError::Validation("user_id is required".into()))?;
-    let seconds_late_extension = payload
-        .get("seconds_late_extension")
-        .and_then(|v| v.as_i64())
-        .unwrap_or(0);
-
-    sqlx::query(
-        r#"
-        INSERT INTO assignment_extensions (assignment_id, user_id, seconds_late_extension)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (assignment_id, user_id) DO UPDATE
-        SET seconds_late_extension = EXCLUDED.seconds_late_extension,
-            updated_at = now()
-        "#,
-    )
-    .bind(assignment_id)
-    .bind(user_id)
-    .bind(seconds_late_extension)
-    .execute(&state.db)
-    .await?;
-
-    let row: (i64,) = sqlx::query_as(
-        "SELECT id FROM assignment_extensions WHERE assignment_id = $1 AND user_id = $2",
-    )
-    .bind(assignment_id)
-    .bind(user_id)
-    .fetch_one(&state.db)
-    .await?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({ "id": row.0, "assignment_id": assignment_id, "user_id": user_id, "seconds_late_extension": seconds_late_extension })),
-    ))
-}
-
-/// GET .../courses/:course_id/assignments/:assignment_id/moderated_students —
-/// list the moderation set (moderated_grading_selections) for an assignment.
-async fn moderation_set_index(
-    State(state): State<AppState>,
-    Path((course_id, assignment_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    ensure_course_not_deleted(&state.db, course_id).await?;
-    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let rows: Vec<(i64, i64, Option<i64>)> = sqlx::query_as(
-        r#"
-        SELECT student_id, assignment_id, selected_provisional_grade_id
-        FROM moderated_grading_selections
-        WHERE assignment_id = $1
-        ORDER BY student_id
-        "#,
-    )
-    .bind(assignment_id)
-    .fetch_all(&state.db)
-    .await?;
-
-    let result: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|(student_id, assignment_id, selected_provisional_grade_id)| {
-            serde_json::json!({
-                "student_id": student_id,
-                "assignment_id": assignment_id,
-                "selected_provisional_grade_id": selected_provisional_grade_id,
-            })
-        })
-        .collect();
-
-    Ok(Json(result))
-}
-
-/// POST .../courses/:course_id/assignments/:assignment_id/moderated_students —
-/// add a student to the moderation set (Canvas Selection#create).
-async fn moderation_set_create(
-    State(state): State<AppState>,
-    Path((course_id, assignment_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-    Json(payload): Json<serde_json::Value>,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    ensure_course_not_deleted(&state.db, course_id).await?;
-    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let student_id = payload
-        .get("student_id")
-        .and_then(|v| v.as_i64())
-        .ok_or_else(|| ApiError::Validation("student_id is required".into()))?;
-
-    let row: (i64,) = sqlx::query_as(
-        r#"
-        INSERT INTO moderated_grading_selections (assignment_id, student_id)
-        VALUES ($1, $2)
-        ON CONFLICT (assignment_id, student_id) DO UPDATE SET student_id = EXCLUDED.student_id
-        RETURNING id
-        "#,
-    )
-    .bind(assignment_id)
-    .bind(student_id)
-    .fetch_one(&state.db)
-    .await?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(serde_json::json!({ "id": row.0, "assignment_id": assignment_id, "student_id": student_id })),
-    ))
-}
-
-/// GET .../courses/:course_id/assignments/:assignment_id/provisional_grades/status —
-/// return provisional grade counts per student for the assignment (Canvas
-/// ProvisionalGrade#status).
-async fn provisional_grades_status(
-    State(state): State<AppState>,
-    Path((course_id, assignment_id)): Path<(i64, i64)>,
-    auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     ensure_course_not_deleted(&state.db, course_id).await?;
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
 
+    // Canvas: authorized_action?(@assignment, @current_user, :create) — the
+    // course-scoped manage right; crate mapping is check_teacher_or_admin.
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
-    let rows: Vec<(i64, Option<i64>)> = sqlx::query_as(
-        r#"
-        SELECT user_id, COUNT(*)::bigint AS provisional_count
-        FROM provisional_grades
-        WHERE submission_id IN (SELECT id FROM submissions WHERE assignment_id = $1)
-        GROUP BY user_id
-        "#,
-    )
-    .bind(assignment_id)
-    .fetch_all(&state.db)
-    .await?;
-
-    let students: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|(user_id, count)| {
-            serde_json::json!({
-                "user_id": user_id,
-                "provisional_count": count,
-                "has_selected_grade": false
-            })
-        })
-        .collect();
-
-    Ok(Json(serde_json::json!({ "students": students })))
-}
-
-/// PUT .../courses/:course_id/assignments/:assignment_id/provisional_grades/:provisional_grade_id/select
-/// — select a provisional grade as the final grade for a student.
-async fn provisional_grades_select(
-    State(state): State<AppState>,
-    Path((course_id, assignment_id, provisional_grade_id)): Path<(i64, i64, i64)>,
-    auth: AuthUser,
-    Json(payload): Json<serde_json::Value>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    ensure_course_not_deleted(&state.db, course_id).await?;
-    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    // Verify the provisional grade exists and belongs to this assignment.
-    let pg: Option<(i64, i64, Option<f64>, Option<String>)> = sqlx::query_as(
-        r#"
-        SELECT pg.id, pg.submission_id, pg.score, pg.grade
-        FROM provisional_grades pg
-        JOIN submissions s ON s.id = pg.submission_id
-        WHERE pg.id = $1 AND s.assignment_id = $2
-        "#,
-    )
-    .bind(provisional_grade_id)
-    .bind(assignment_id)
-    .fetch_optional(&state.db)
-    .await?;
-
-    let (submission_id, score, grade) = match pg {
-        Some((_, sid, sc, gr)) => (sid, sc, gr),
-        None => return Err(ApiError::NotFound),
+    // Canvas: reject! "missing required key :assignment_extensions", 400.
+    let Some(extensions) = payload
+        .get("assignment_extensions")
+        .and_then(|v| v.as_array())
+    else {
+        return Err(ApiError::BadRequest(
+            "missing required key :assignment_extensions".into(),
+        ));
     };
 
-    // Mark this provisional grade as final and upsert the selection.
-    sqlx::query(
-        r#"
-        UPDATE provisional_grades SET final = TRUE WHERE id = $1
-        "#,
-    )
-    .bind(provisional_grade_id)
-    .execute(&state.db)
-    .await?;
-
-    let student_id: i64 = sqlx::query_scalar("SELECT user_id FROM submissions WHERE id = $1")
-        .bind(submission_id)
-        .fetch_one(&state.db)
-        .await?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO moderated_grading_selections (assignment_id, student_id, selected_provisional_grade_id)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (assignment_id, student_id) DO UPDATE
-        SET selected_provisional_grade_id = EXCLUDED.selected_provisional_grade_id
-        "#,
-    )
-    .bind(assignment_id)
-    .bind(student_id)
-    .bind(provisional_grade_id)
-    .execute(&state.db)
-    .await?;
-
-    Ok(Json(serde_json::json!({
-        "assignment_id": assignment_id,
-        "student_id": student_id,
-        "selected_provisional_grade_id": provisional_grade_id,
-        "score": score,
-        "grade": grade,
-    })))
-}
-
-/// PUT .../courses/:course_id/assignments/:assignment_id/provisional_grades/bulk_select
-/// — select multiple provisional grades in one call (Canvas ProvisionalGrade#bulk_select).
-async fn provisional_grades_bulk_select(
-    State(state): State<AppState>,
-    Path((course_id, assignment_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-    body: Bytes,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    ensure_course_not_deleted(&state.db, course_id).await?;
-    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let payload: serde_json::Value = serde_json::from_slice(&body)
-        .map_err(|_| ApiError::BadRequest("invalid JSON body".into()))?;
-
-    let selections = payload
-        .get("selections")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| ApiError::Validation("selections array is required".into()))?;
-
-    let mut results: Vec<serde_json::Value> = Vec::new();
-    let mut errors: Vec<serde_json::Value> = Vec::new();
-
-    for (i, sel) in selections.iter().enumerate() {
-        let student_id = match sel.get("student_id").and_then(|v| v.as_i64()) {
-            Some(id) => id,
-            None => {
-                errors.push(serde_json::json!({ "index": i, "error": "student_id required" }));
-                continue;
-            }
-        };
-        let provisional_grade_id = match sel.get("provisional_grade_id").and_then(|v| v.as_i64()) {
-            Some(id) => id,
-            None => {
-                errors.push(serde_json::json!({ "index": i, "error": "provisional_grade_id required" }));
-                continue;
-            }
-        };
-
-        // Verify pg belongs to this assignment.
-        let pg: Option<(i64, i64)> = sqlx::query_as(
-            r#"
-            SELECT pg.id, pg.submission_id
-            FROM provisional_grades pg
-            JOIN submissions s ON s.id = pg.submission_id
-            WHERE pg.id = $1 AND s.assignment_id = $2
-            "#,
-        )
-        .bind(provisional_grade_id)
-        .bind(assignment_id)
-        .fetch_optional(&state.db)
-        .await?;
-
-        match pg {
-            Some((pg_id, submission_id)) => {
-                sqlx::query("UPDATE provisional_grades SET final = TRUE WHERE id = $1")
-                    .bind(pg_id)
-                    .execute(&state.db)
-                    .await?;
-
-                sqlx::query(
-                    r#"
-                    INSERT INTO moderated_grading_selections (assignment_id, student_id, selected_provisional_grade_id)
-                    VALUES ($1, $2, $3)
-                    ON CONFLICT (assignment_id, student_id) DO UPDATE
-                    SET selected_provisional_grade_id = EXCLUDED.selected_provisional_grade_id
-                    "#,
-                )
-                .bind(assignment_id)
-                .bind(student_id)
-                .bind(pg_id)
-                .execute(&state.db)
-                .await?;
-
-                results.push(serde_json::json!({
-                    "student_id": student_id,
-                    "selected_provisional_grade_id": pg_id,
-                    "submission_id": submission_id,
-                }));
-            }
-            None => {
-                errors.push(serde_json::json!({
-                    "index": i,
-                    "student_id": student_id,
-                    "error": "provisional_grade not found for this assignment"
-                }));
-            }
+    // Canvas: every entry needs both user_id and extra_attempts, else 400.
+    for ext in extensions {
+        if ext.get("user_id").and_then(|v| v.as_i64()).is_none()
+            || ext.get("extra_attempts").and_then(|v| v.as_i64()).is_none()
+        {
+            return Err(ApiError::BadRequest(
+                ":assignment_extensions must be in this format: { user_id: 1, extra_attempts: 2 }"
+                    .into(),
+            ));
         }
     }
 
+    // Apply each extension to the student's submission for this assignment.
+    // Canvas requires extra_attempts >= 0 (Submission numericality) — invalid
+    // values are a 400 with the per-user error list.
+    let mut applied: Vec<serde_json::Value> = Vec::new();
+    let mut errors: Vec<serde_json::Value> = Vec::new();
+    for ext in extensions {
+        let user_id = ext.get("user_id").and_then(|v| v.as_i64()).unwrap();
+        let extra_attempts = ext.get("extra_attempts").and_then(|v| v.as_i64()).unwrap();
+        if extra_attempts < 0 {
+            errors.push(serde_json::json!({
+                "user_id": user_id,
+                "errors": ["Extra attempts must be greater than or equal to 0"],
+            }));
+            continue;
+        }
+        let updated: Option<()> = sqlx::query_scalar(
+            r#"
+            UPDATE submissions
+            SET extra_attempts = $3, updated_at = now()
+            WHERE assignment_id = $1 AND user_id = $2
+            RETURNING 1
+            "#,
+        )
+        .bind(assignment_id)
+        .bind(user_id)
+        .bind(extra_attempts)
+        .fetch_optional(&state.db)
+        .await?;
+        if updated.is_some() {
+            applied.push(serde_json::json!({
+                "user_id": user_id,
+                "extra_attempts": extra_attempts,
+            }));
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(ApiError::BadRequest(
+            serde_json::to_string(&serde_json::json!({ "errors": errors }))
+                .unwrap_or_else(|_| "invalid assignment extensions".into()),
+        ));
+    }
+
+    // Canvas: render json: { assignment_extensions: } — 200, not 201.
     Ok(Json(serde_json::json!({
-        "results": results,
-        "errors": errors,
+        "assignment_extensions": applied,
     })))
 }
 
-/// POST .../courses/:course_id/assignments/:assignment_id/provisional_grades/publish
-/// — publish all final provisional grades (Canvas ProvisionalGrade#publish).
-async fn provisional_grades_publish(
-    State(state): State<AppState>,
-    Path((course_id, assignment_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    ensure_course_not_deleted(&state.db, course_id).await?;
-    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    // Copy final provisional grades into submissions.
-    let published: (i64,) = sqlx::query_as(
-        r#"
-        UPDATE submissions s
-        SET score = pg.score,
-            graded_at = pg.graded_at,
-            grader_id = pg.scorer_id,
-            workflow_state = 'graded',
-            updated_at = now()
-        FROM provisional_grades pg
-        WHERE pg.submission_id = s.id
-          AND s.assignment_id = $1
-          AND pg.final = TRUE
-        RETURNING s.id
-        "#,
-    )
-    .bind(assignment_id)
-    .fetch_one(&state.db)
-    .await?;
-
-    // Set grades_published_at on the assignment.
-    sqlx::query(
-        "UPDATE assignments SET grades_published_at = now() WHERE id = $1",
-    )
-    .bind(assignment_id)
-    .execute(&state.db)
-    .await?;
-
-    Ok(Json(serde_json::json!({
-        "assignment_id": assignment_id,
-        "grades_published_at": chrono::Utc::now(),
-        "published_count": 1,
-    })))
-}
-
-/// GET .../courses/:course_id/assignments/:assignment_id/anonymous_provisional_grades/status
-/// — anonymous view of provisional grade counts (Canvas anonymous provisional).
-async fn anonymous_provisional_grades_status(
-    State(state): State<AppState>,
-    Path((course_id, assignment_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    ensure_course_not_deleted(&state.db, course_id).await?;
-    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-
-    // Any enrolled user can see this; check enrollment.
-    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    // Count provisional grades grouped by anonymous_id.
-    let rows: Vec<(String, i64)> = sqlx::query_as(
-        r#"
-        SELECT s.anonymous_id, COUNT(*)::bigint AS provisional_count
-        FROM provisional_grades pg
-        JOIN submissions s ON s.id = pg.submission_id
-        WHERE s.assignment_id = $1
-        GROUP BY s.anonymous_id
-        "#,
-    )
-    .bind(assignment_id)
-    .fetch_all(&state.db)
-    .await?;
-
-    let students: Vec<serde_json::Value> = rows
-        .into_iter()
-        .map(|(anonymous_id, count)| {
-            serde_json::json!({
-                "anonymous_id": anonymous_id,
-                "provisional_count": count,
-            })
-        })
-        .collect();
-
-    Ok(Json(serde_json::json!({ "students": students })))
-}
-
-/// POST .../sections/:section_id/assignments/:assignment_id/submissions — section
-/// twin of the course-level submissions#create. Canvas resolves the section to
-/// its course, scopes enrollment to the section, and creates the submission.
+/// POST .../sections/:section_id/assignments/:assignment_id/submissions — the
+/// section twin of submissions#create (Canvas routes.rb generates the same
+/// route for sections and courses). Resolves the section to its course,
+/// requires the caller to be enrolled in the section, then runs the same
+/// upsert as the course-level create_submission.
 async fn section_create_submission(
     State(state): State<AppState>,
     Path((section_id, assignment_id)): Path<(i64, i64)>,
@@ -4920,12 +4570,11 @@ async fn section_create_submission(
     let course_id = load_section_course(&state.db, section_id).await?;
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
 
-    // Verify caller is enrolled in this section.
+    // The submission belongs to the course; the caller must be enrolled in
+    // this specific section (Canvas scopes @context to the section).
     if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
-
-    // Canvas requires the student to be enrolled in the section.
     let enrolled: Option<(i32,)> = sqlx::query_as(
         r#"
         SELECT 1 FROM enrollments
@@ -4944,14 +4593,15 @@ async fn section_create_submission(
         return Err(ApiError::Forbidden);
     }
 
-    let row: Submission = sqlx::query_as(
+    // Same upsert as the course-level create_submission.
+    let submission: Submission = sqlx::query_as(
         r#"
-        INSERT INTO submissions (assignment_id, user_id, body, workflow_state)
-        VALUES ($1, $2, $3, 'submitted')
+        INSERT INTO submissions (assignment_id, user_id, body, submission_type, anonymous_id)
+        VALUES ($1, $2, $3, 'online_text_entry', gen_random_uuid()::text)
         ON CONFLICT (assignment_id, user_id) DO UPDATE
-        SET body = EXCLUDED.body, submitted_at = now(), updated_at = now()
-        RETURNING id, assignment_id, user_id, body, score,
-                  submitted_at, created_at, updated_at
+        SET body = $3, submission_type = 'online_text_entry', submitted_at = now(),
+            anonymous_id = COALESCE(submissions.anonymous_id, gen_random_uuid()::text)
+        RETURNING id, assignment_id, user_id, body, score::float8, submitted_at, created_at, updated_at
         "#,
     )
     .bind(assignment_id)
@@ -4960,7 +4610,7 @@ async fn section_create_submission(
     .fetch_one(&state.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(row)))
+    Ok((StatusCode::CREATED, Json(submission)))
 }
 
 // ---------------------------------------------------------------------------
@@ -5882,40 +5532,12 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/assignments/{assignmentId}/accessibility/queue_scan",
             post(assignment_accessibility_queue_scan),
         )
-        // Moderated grading (Canvas ModeratedGradingController, slice F)
+        // Assignment extensions (Canvas AssignmentExtensionsController).
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/extensions",
             post(create_assignment_extension),
         )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/moderated_students",
-            get(moderation_set_index),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/moderated_students",
-            post(moderation_set_create),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/provisional_grades/status",
-            get(provisional_grades_status),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/provisional_grades/{provisional_grade_id}/select",
-            put(provisional_grades_select),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/provisional_grades/bulk_select",
-            put(provisional_grades_bulk_select),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/provisional_grades/publish",
-            post(provisional_grades_publish),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/anonymous_provisional_grades/status",
-            get(anonymous_provisional_grades_status),
-        )
-        // Submissions section twin (Canvas submissions#create for sections)
+        // Submissions section twin (Canvas submissions#create for sections).
         .route(
             "/sections/{sectionId}/assignments/{assignmentId}/submissions",
             post(section_create_submission),
