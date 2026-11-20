@@ -35,7 +35,7 @@
 use axum::{
     extract::State,
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 use serde_json::{json, Map, Value};
@@ -553,7 +553,7 @@ async fn create_career_user_experience(
     )
     .fetch_optional(&state.db)
     .await?;
-    let Some(root_account_id) = row else {
+    let Some((root_account_id,)) = row else {
         return Err(ApiError::NotFound);
     };
 
@@ -598,7 +598,7 @@ async fn destroy_career_user_experience(
     )
     .fetch_optional(&state.db)
     .await?;
-    let Some(root_account_id) = row else {
+    let Some((root_account_id,)) = row else {
         return Err(ApiError::NotFound);
     };
 
