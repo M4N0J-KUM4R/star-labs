@@ -246,6 +246,13 @@ async fn user_content_migrations_are_scoped_to_the_user() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
+    let ids: Vec<i64> = body
+        .as_array()
+        .expect("array")
+        .iter()
+        .map(|m| m["id"].as_i64().expect("id"))
+        .collect();
+    assert_eq!(ids, vec![migration]);
     assert_eq!(body.as_array().map(|items| items.len()), Some(1));
 
     // Another user does not see it.
