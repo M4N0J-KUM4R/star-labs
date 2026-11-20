@@ -1,0 +1,45 @@
+{% extends "layouts/course.html" %}
+{# New discussion topic form — Canvas discussion_topics#new. Teacher-gated
+   upstream (students get the 403 page before this renders). The form posts
+   to POST /courses/{id}/discussions (PRG redirect to the new topic).
+   Deviation: no delayed_post field (no column in this schema). #}
+{% block content %}
+  <div id="discussion_new" class="discussion-new">
+    <div class="ic-Action-header">
+      <div class="ic-Action-header__Primary">
+        <h1 class="discussion-new__title">New Discussion</h1>
+      </div>
+      <div class="ic-Action-header__Secondary">
+        <a href="/courses/{{ course_id }}/discussions" class="Button">Back to Discussions</a>
+      </div>
+    </div>
+
+    {% if !error.is_empty() %}
+    <div class="ic-flash error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <form id="new_discussion_form" method="post" action="/courses/{{ course_id }}/discussions" class="discussion-new__form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="discussion_title">Title</label>
+        <input class="ic-Input" type="text" id="discussion_title" name="title" required maxlength="255" autofocus>
+      </div>
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="discussion_message">Message</label>
+        <textarea class="ic-Input discussion-message" id="discussion_message" name="message" rows="10" placeholder="Start the discussion…"></textarea>
+      </div>
+      <div class="ic-Form-control discussion-new__options">
+        <input type="checkbox" id="discussion_pinned" name="pinned">
+        <label class="ic-Label ic-Label--inline" for="discussion_pinned">Pin this discussion to the top</label>
+      </div>
+      <div class="ic-Form-control discussion-new__options">
+        <input type="checkbox" id="discussion_locked" name="locked">
+        <label class="ic-Label ic-Label--inline" for="discussion_locked">Lock this discussion (no new comments)</label>
+      </div>
+      <div class="discussion-new__actions">
+        <button type="submit" class="Button Button--primary">Create Discussion</button>
+        <a href="/courses/{{ course_id }}/discussions" class="Button button-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock content %}
