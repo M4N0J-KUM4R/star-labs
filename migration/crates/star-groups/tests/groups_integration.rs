@@ -1059,3 +1059,169 @@ async fn preview_html_succeeds_for_group_member() {
 
     cleanup(&pool, &prefix).await;
 }
+
+#[tokio::test]
+async fn get_membership_returns_membership_with_user() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let group = seed_group(&pool, course, &format!("{prefix}-Group")).await;
+
+    // Create membership
+    let resp = server
+        .post(&format!("/groups/{group}/memberships"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "user_id": student }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    let created: Value = resp.json();
+    let membership_id = created["id"].as_i64().expect("membership id");
+
+    // Teacher reads the membership
+    let resp = server
+        .get(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["id"].as_i64(), Some(membership_id));
+    assert_eq!(body["user_id"].as_i64(), Some(student));
+    assert_eq!(body["group_id"].as_i64(), Some(group));
+    assert!(body["user_name"].is_string());
+    assert!(body["user_email"].is_string());
+    assert!(body["moderator"].is_boolean());
+
+    // The member themselves can also read their own membership
+    let resp = server
+        .get(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // Outsider cannot read
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let resp = server
+        .get(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn get_membership_by_user_returns_membership() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let group = seed_group(&pool, course, &format!("{prefix}-Group")).await;
+
+    // Create membership
+    let resp = server
+        .post(&format!("/groups/{group}/memberships"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "user_id": student }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+
+    // GET by user id
+    let resp = server
+        .get(&format!("/groups/{group}/users/{student}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["user_id"].as_i64(), Some(student));
+    assert_eq!(body["group_id"].as_i64(), Some(group));
+
+    // "self" resolves to the authenticated user
+    let resp = server
+        .get(&format!("/groups/{group}/users/self"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["user_id"].as_i64(), Some(student));
+
+    // Non-existent user returns 404
+    let resp = server
+        .get(&format!("/groups/{group}/users/99999999"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn update_membership_accepts_and_sets_moderator() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let group = seed_group(&pool, course, &format!("{prefix}-Group")).await;
+
+    // Create membership (invited state)
+    let resp = server
+        .post(&format!("/groups/{group}/memberships"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "user_id": student }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    let created: Value = resp.json();
+    let membership_id = created["id"].as_i64().expect("membership id");
+    assert_eq!(created["workflow_state"], "invited");
+
+    // Accept the membership (teacher promotes to accepted)
+    let resp = server
+        .put(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "workflow_state": "accepted" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["workflow_state"], "accepted");
+
+    // Set moderator flag
+    let resp = server
+        .put(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "moderator": true }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["moderator"], true);
+
+    // Non-teacher cannot accept a membership (not owner)
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let resp = server
+        .put(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .json(&json!({ "workflow_state": "accepted" }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // Cannot set invalid workflow_state
+    let resp = server
+        .put(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "workflow_state": "invalid_state" }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}

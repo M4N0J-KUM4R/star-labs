@@ -214,6 +214,21 @@ async fn core_tables_have_expected_columns() {
                 "updated_at",
             ],
         ),
+        // group_memberships.moderator added in 0214 (Canvas
+        // init_canvas_db.rb:2793 t.boolean :moderator); star-groups reads it
+        // via COALESCE(gm.moderator, false).
+        (
+            "group_memberships",
+            &[
+                "id",
+                "group_id",
+                "user_id",
+                "workflow_state",
+                "created_at",
+                "updated_at",
+                "moderator",
+            ],
+        ),
     ];
 
     for (table, columns) in expected {

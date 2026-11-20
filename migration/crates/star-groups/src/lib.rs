@@ -82,7 +82,7 @@ pub struct GroupMembership {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Full membership with user info for responses.
+/// Full membership with user info for responses (Canvas group_membership_json).
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct MembershipWithUser {
     pub id: i64,
@@ -93,6 +93,19 @@ pub struct MembershipWithUser {
     pub workflow_state: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Whether the member has moderator privileges.
+    #[serde(default)]
+    pub moderator: bool,
+}
+
+/// Request to update a membership (accept request, set moderator).
+/// Canvas params are snake_case (`@argument workflow_state` /
+/// UPDATABLE_MEMBERSHIP_ATTRIBUTES = %w[workflow_state moderator],
+/// group_memberships_controller.rb:245,253-256) — no camelCase rename.
+#[derive(Debug, Deserialize)]
+pub struct UpdateMembership {
+    pub workflow_state: Option<String>,
+    pub moderator: Option<bool>,
 }
 
 /// Request to add a user to a group.
@@ -672,12 +685,24 @@ pub fn router() -> Router<AppState> {
         .route("/groups/{groupId}/memberships", get(list_memberships))
         .route(
             "/groups/{groupId}/memberships/{membershipId}",
+            get(get_membership),
+        )
+        .route(
+            "/groups/{groupId}/memberships/{membershipId}",
+            put(update_membership),
+        )
+        .route(
+            "/groups/{groupId}/memberships/{membershipId}",
             delete(delete_membership),
         )
         // Canvas groups#users / group_memberships#create/destroy_bulk
         .route("/groups/{groupId}/users", get(list_group_users))
         .route("/groups/{groupId}/users", post(add_group_user))
         .route("/groups/{groupId}/users", delete(bulk_remove_group_users))
+        .route(
+            "/groups/{groupId}/users/{userId}",
+            get(get_membership_by_user),
+        )
         .route(
             "/groups/{groupId}/users/{userId}",
             delete(remove_group_user),
@@ -1091,7 +1116,8 @@ async fn create_membership(
     let membership: MembershipWithUser = sqlx::query_as(
         r#"
         SELECT gm.id, gm.group_id, gm.user_id, u.name as user_name, u.email as user_email,
-               gm.workflow_state, gm.created_at, gm.updated_at
+               gm.workflow_state, gm.created_at, gm.updated_at,
+               COALESCE(gm.moderator, false) AS moderator
         FROM group_memberships gm
         JOIN users u ON u.id = gm.user_id
         WHERE gm.group_id = $1 AND gm.user_id = $2
@@ -1129,7 +1155,8 @@ async fn list_memberships(
     let memberships: Vec<MembershipWithUser> = sqlx::query_as(
         r#"
         SELECT gm.id, gm.group_id, gm.user_id, u.name as user_name, u.email as user_email,
-               gm.workflow_state, gm.created_at, gm.updated_at
+               gm.workflow_state, gm.created_at, gm.updated_at,
+               COALESCE(gm.moderator, false) AS moderator
         FROM group_memberships gm
         JOIN users u ON u.id = gm.user_id
         WHERE gm.group_id = $1 AND gm.workflow_state != 'deleted'
@@ -1187,6 +1214,169 @@ async fn delete_membership(
     }
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /groups/{groupId}/memberships/{membershipId} — get a single membership
+/// (Canvas group_memberships#show).
+async fn get_membership(
+    State(state): State<AppState>,
+    Path((group_id, membership_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<MembershipWithUser>, ApiError> {
+    // Verify group exists
+    if fetch_active_group_join_level(&state.db, group_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound);
+    }
+
+    // Auth: :read on membership — requires teacher/admin OR membership itself
+    let membership: Option<MembershipWithUser> = sqlx::query_as(
+        r#"
+        SELECT gm.id, gm.group_id, gm.user_id, u.name as user_name, u.email as user_email,
+               gm.workflow_state, gm.created_at, gm.updated_at,
+               COALESCE(gm.moderator, false) AS moderator
+        FROM group_memberships gm
+        JOIN users u ON u.id = gm.user_id
+        WHERE gm.id = $1 AND gm.group_id = $2 AND gm.workflow_state != 'deleted'
+        "#,
+    )
+    .bind(membership_id)
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let membership = membership.ok_or(ApiError::NotFound)?;
+
+    // Members can read their own membership; teachers/admins can read all
+    if membership.user_id != auth.id
+        && !is_teacher_in_group(&state.db, auth.id, group_id, &auth).await?
+    {
+        return Err(ApiError::Forbidden);
+    }
+
+    Ok(Json(membership))
+}
+
+/// PUT /groups/{groupId}/memberships/{membershipId} — update a membership
+/// (accept a request, set moderator). (Canvas group_memberships#update)
+async fn update_membership(
+    State(state): State<AppState>,
+    Path((group_id, membership_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateMembership>,
+) -> Result<Json<MembershipWithUser>, ApiError> {
+    if fetch_active_group_join_level(&state.db, group_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound);
+    }
+
+    // Fetch existing membership
+    let existing: Option<(i64, String)> = sqlx::query_as(
+        "SELECT user_id, workflow_state FROM group_memberships \
+         WHERE id = $1 AND group_id = $2 AND workflow_state != 'deleted'",
+    )
+    .bind(membership_id)
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let (user_id, _old_state) = existing.ok_or(ApiError::NotFound)?;
+
+    // Auth: :update on membership — teacher/admin or the member themselves
+    if user_id != auth.id && !is_teacher_in_group(&state.db, auth.id, group_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // workflow_state may only be set to "accepted" (accept a request)
+    let new_state = if let Some(ws) = &payload.workflow_state {
+        if ws != "accepted" {
+            return Err(ApiError::BadRequest(
+                "workflow_state can only be set to 'accepted'".into(),
+            ));
+        }
+        ws.clone()
+    } else {
+        // No state change; keep existing
+        sqlx::query_scalar("SELECT workflow_state FROM group_memberships WHERE id = $1")
+            .bind(membership_id)
+            .fetch_one(&state.db)
+            .await?
+    };
+
+    let updated: MembershipWithUser = sqlx::query_as(
+        r#"
+        UPDATE group_memberships
+        SET workflow_state = $2,
+            moderator = COALESCE($3, moderator),
+            updated_at = now()
+        WHERE id = $1
+        RETURNING id, group_id, user_id,
+                  (SELECT name FROM users WHERE id = (SELECT user_id FROM group_memberships WHERE id = $1)) AS user_name,
+                  (SELECT email FROM users WHERE id = (SELECT user_id FROM group_memberships WHERE id = $1)) AS user_email,
+                  workflow_state, created_at, updated_at,
+                  COALESCE(moderator, false) AS moderator
+        "#,
+    )
+    .bind(membership_id)
+    .bind(&new_state)
+    .bind(payload.moderator)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(updated))
+}
+
+/// GET /groups/{groupId}/users/{userId} — get a membership by user id
+/// (Canvas group_memberships#show, `userId` variant).
+async fn get_membership_by_user(
+    State(state): State<AppState>,
+    Path((group_id, user_ref)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<MembershipWithUser>, ApiError> {
+    if fetch_active_group_join_level(&state.db, group_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound);
+    }
+
+    let user_id = if user_ref == "self" {
+        auth.id
+    } else {
+        user_ref
+            .parse::<i64>()
+            .map_err(|_| ApiError::BadRequest("user id must be an integer or 'self'".into()))?
+    };
+
+    let membership: Option<MembershipWithUser> = sqlx::query_as(
+        r#"
+        SELECT gm.id, gm.group_id, gm.user_id, u.name as user_name, u.email as user_email,
+               gm.workflow_state, gm.created_at, gm.updated_at,
+               COALESCE(gm.moderator, false) AS moderator
+        FROM group_memberships gm
+        JOIN users u ON u.id = gm.user_id
+        WHERE gm.group_id = $1 AND gm.user_id = $2 AND gm.workflow_state != 'deleted'
+        "#,
+    )
+    .bind(group_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let membership = membership.ok_or(ApiError::NotFound)?;
+
+    // Same auth rules as get_membership
+    if membership.user_id != auth.id
+        && !is_teacher_in_group(&state.db, auth.id, group_id, &auth).await?
+    {
+        return Err(ApiError::Forbidden);
+    }
+
+    Ok(Json(membership))
 }
 
 // ---------------------------------------------------------------------------
