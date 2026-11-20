@@ -2774,25 +2774,44 @@ async fn create_observee(
         }
     }
 
-    let row: Option<ObserveeRow> = sqlx::query_as(
+    sqlx::query(
         r#"
             INSERT INTO observer_enrollments (observer_id, user_id, course_id)
             VALUES ($1, $2, $3)
             ON CONFLICT (observer_id, user_id, course_id) DO UPDATE
                 SET updated_at = now()
-            RETURNING
-                oe.user_id, u.name, NULL::text, oe.course_id, c.name, oe.workflow_state
             "#,
     )
     .bind(user_id)
     .bind(payload.user_id)
     .bind(payload.course_id)
-    .fetch_optional(&state.db)
+    .execute(&state.db)
     .await
     .map_err(ApiError::from)?;
 
+    let rows: Vec<ObserveeRow> = sqlx::query_as(
+        r#"
+            SELECT oe.user_id, u.name, NULL::text,
+                   oe.course_id, c.name, oe.workflow_state
+            FROM observer_enrollments oe
+            JOIN users u ON u.id = oe.user_id
+            LEFT JOIN courses c ON c.id = oe.course_id
+            WHERE oe.observer_id = $1 AND oe.user_id = $2
+              AND oe.course_id IS NOT DISTINCT FROM $3
+            ORDER BY oe.course_id
+            "#,
+    )
+    .bind(user_id)
+    .bind(payload.user_id)
+    .bind(payload.course_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let row = rows.first().ok_or(ApiError::NotFound)?;
+
     let (uid, name, display_name, cid, course_name, workflow_state) =
-        row.ok_or(ApiError::NotFound)?;
+        *row;
 
     Ok(Json(ObserveeResponse {
         id: uid,
@@ -2903,24 +2922,43 @@ async fn update_observee(
         }
     }
 
-    let row: Option<ObserveeRow> = sqlx::query_as(
+    sqlx::query(
         r#"
             UPDATE observer_enrollments
             SET course_id = $3, updated_at = now()
             WHERE observer_id = $1 AND user_id = $2
-            RETURNING
-                oe.user_id, u.name, NULL::text, oe.course_id, c.name, oe.workflow_state
             "#,
     )
     .bind(user_id)
     .bind(observee_id)
     .bind(payload.course_id)
-    .fetch_optional(&state.db)
+    .execute(&state.db)
     .await
     .map_err(ApiError::from)?;
 
+    let rows: Vec<ObserveeRow> = sqlx::query_as(
+        r#"
+            SELECT oe.user_id, u.name, NULL::text,
+                   oe.course_id, c.name, oe.workflow_state
+            FROM observer_enrollments oe
+            JOIN users u ON u.id = oe.user_id
+            LEFT JOIN courses c ON c.id = oe.course_id
+            WHERE oe.observer_id = $1 AND oe.user_id = $2
+              AND oe.course_id IS NOT DISTINCT FROM $3
+            ORDER BY oe.course_id
+            "#,
+    )
+    .bind(user_id)
+    .bind(observee_id)
+    .bind(payload.course_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let row = rows.first().ok_or(ApiError::NotFound)?;
+
     let (uid, name, display_name, cid, course_name, workflow_state) =
-        row.ok_or(ApiError::NotFound)?;
+        row;
 
     Ok(Json(ObserveeResponse {
         id: uid,
