@@ -2471,7 +2471,34 @@ async fn update_course_grading_period(
     }
 
     let params = payload.into_single()?;
-    let updated = update_grading_period_row(&state, period, &params).await?;
+    let title = match &params.title {
+        Some(title) => {
+            let title = title.trim().to_string();
+            if title.is_empty() {
+                return Err(ApiError::Validation("title cannot be empty".into()));
+            }
+            title
+        }
+        None => period.title.clone(),
+    };
+    let start_date = match &params.start_date {
+        Some(value) => parse_grading_period_date(value)?,
+        None => period.start_date,
+    };
+    let end_date = match &params.end_date {
+        Some(value) => parse_grading_period_date(value)?,
+        None => period.end_date,
+    };
+    let close_date = match &params.close_date {
+        Some(value) => parse_grading_period_date(value)?,
+        None => period.close_date,
+    };
+    let weight = params.weight.or(period.weight);
+
+    let updated = write_grading_period(
+        &state, period, title, start_date, end_date, close_date, weight,
+    )
+    .await?;
 
     Ok(Json(GradingPeriodsResponse {
         grading_periods: vec![GradingPeriodResponse::from_row(updated, true, Utc::now())],
@@ -2621,36 +2648,15 @@ async fn course_account_id(pool: &PgPool, course_id: i64) -> Result<i64, ApiErro
 }
 
 /// Write one grading period.
-async fn update_grading_period_row(
+async fn write_grading_period(
     state: &AppState,
     period: GradingPeriod,
-    params: &GradingPeriodParams,
+    title: String,
+    start_date: DateTime<Utc>,
+    end_date: DateTime<Utc>,
+    close_date: DateTime<Utc>,
+    weight: Option<f64>,
 ) -> Result<GradingPeriod, ApiError> {
-    let title = match &params.title {
-        Some(title) => {
-            let title = title.trim().to_string();
-            if title.is_empty() {
-                return Err(ApiError::Validation("title cannot be empty".into()));
-            }
-            title
-        }
-        None => period.title.clone(),
-    };
-
-    let start_date = match &params.start_date {
-        Some(value) => parse_grading_period_date(value)?,
-        None => period.start_date,
-    };
-    let end_date = match &params.end_date {
-        Some(value) => parse_grading_period_date(value)?,
-        None => period.end_date,
-    };
-    let close_date = match &params.close_date {
-        Some(value) => parse_grading_period_date(value)?,
-        None => period.close_date,
-    };
-    let weight = params.weight.or(period.weight);
-
     let window = GradingPeriodWindow {
         start_date,
         end_date,
@@ -2716,7 +2722,23 @@ async fn batch_update_periods(
             .find(|period| period.title == title)
             .cloned()
         {
-            Some(period) => periods.push(update_grading_period_row(state, period, param).await?),
+            Some(period) => {
+                // Canvas `find_or_build_periods`: the close date of a period
+                // without one is its end date.
+                let weight = param.weight.or(period.weight);
+                periods.push(
+                    write_grading_period(
+                        state,
+                        period,
+                        title.to_string(),
+                        start_date,
+                        end_date,
+                        close_date,
+                        weight,
+                    )
+                    .await?,
+                );
+            }
             None => {
                 let row: GradingPeriod = sqlx::query_as(
                     r#"INSERT INTO grading_periods
