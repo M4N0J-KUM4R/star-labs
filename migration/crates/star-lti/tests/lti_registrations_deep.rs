@@ -621,7 +621,7 @@ async fn deployments_show_delete_context_search() {
     // The course's display path names its account chain, root excluded —
     // here just the sub account.
     let path = courses[0]["display_path"].as_array().unwrap();
-    assert_eq!(path, &json!([format!("{prefix}-sub")]));
+    assert_eq!(path, &vec![json!(format!("{prefix}-sub"))]);
     let response = server
         .get(&format!(
             "/accounts/{root_account}/lti_registrations/{id}/deployments/{deployment_id}/context_search?only_children_of={sub_account}"
