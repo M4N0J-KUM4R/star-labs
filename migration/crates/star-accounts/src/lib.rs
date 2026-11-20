@@ -1205,6 +1205,23 @@ async fn account_json(pool: &PgPool, account_id: i64) -> Result<Option<Value>, A
     })))
 }
 
+/// Canvas `check_permission_for_tab`: the account admin right.
+async fn has_account_admin_right(
+    pool: &PgPool,
+    user_id: i64,
+    account_id: i64,
+) -> Result<bool, ApiError> {
+    let row: Option<(String,)> = sqlx::query_as(
+        "SELECT role FROM account_users \
+         WHERE account_id = $1 AND user_id = $2 AND workflow_state = 'active' LIMIT 1",
+    )
+    .bind(account_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(role,)| role == "admin").unwrap_or(false))
+}
+
 /// Canvas `progress_json` — the port applies the work synchronously, so the
 /// progress is already completed when the answer is written.
 fn progress_json(context_id: i64, user_id: i64, tag: &str) -> Value {
@@ -1334,10 +1351,12 @@ async fn list_horizon_accounts(
     // The root accounts of those accounts carry the horizon account ids.
     let mut roots: Vec<i64> = Vec::new();
     for account_id in &adminable {
-        if let Some(root) = root_account_of(&state.db, *account_id).await? {
-            if !roots.contains(&root) {
-                roots.push(root);
-            }
+        // The root account of the account; the account itself when it is a root.
+        let root = root_account_of(&state.db, *account_id)
+            .await?
+            .unwrap_or(*account_id);
+        if !roots.contains(&root) {
+            roots.push(root);
         }
     }
 
@@ -1667,7 +1686,7 @@ async fn accessibility_issue_summary(
     if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
-    if !is_admin(&auth) && !is_account_admin(&state.db, auth.id, account_id).await? {
+    if !is_admin(&auth) && !has_account_admin_right(&state.db, auth.id, account_id).await? {
         return Ok((
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "Not authorized to view accessibility data" })),
