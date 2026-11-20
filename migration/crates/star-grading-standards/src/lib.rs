@@ -2095,6 +2095,213 @@ async fn delete_course_blackout_date(
 }
 
 // ---------------------------------------------------------------------------
+// Blackout dates: the per-item routes Canvas exposes next to the collection
+// (config/routes.rb, `scope(controller: :blackout_dates)`)
+// ---------------------------------------------------------------------------
+
+/// Canvas renders a new, unsaved blackout date for the context, so every
+/// field but the context is null.
+#[derive(Debug, Clone, Serialize)]
+pub struct BlackoutDateNewResponse {
+    pub id: Option<i64>,
+    pub context_id: i64,
+    pub context_type: String,
+    pub start_date: Option<DateTime<Utc>>,
+    pub end_date: Option<DateTime<Utc>>,
+    pub event_title: Option<String>,
+    pub description: Option<String>,
+    pub parent_grading_period_id: Option<i64>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+fn new_blackout_date(context_type: &str, context_id: i64) -> BlackoutDateNewResponse {
+    BlackoutDateNewResponse {
+        id: None,
+        context_id,
+        context_type: context_type.to_string(),
+        start_date: None,
+        end_date: None,
+        event_title: None,
+        description: None,
+        parent_grading_period_id: None,
+        created_at: None,
+        updated_at: None,
+    }
+}
+
+/// GET /courses/{courseId}/blackout_dates/new — Canvas `blackout_dates#new`.
+async fn new_course_blackout_date(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<BlackoutDateNewResponse>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(new_blackout_date("Course", course_id)))
+}
+
+/// GET /accounts/{accountId}/blackout_dates/new — Canvas `blackout_dates#new`.
+async fn new_account_blackout_date(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<BlackoutDateNewResponse>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(new_blackout_date("Account", account_id)))
+}
+
+/// GET /courses/{courseId}/blackout_dates/{id} — Canvas `blackout_dates#show`.
+async fn show_course_blackout_date(
+    State(state): State<AppState>,
+    Path((course_id, blackout_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<BlackoutDateResponse>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let row = fetch_blackout_date(&state.db, blackout_id, "Course", course_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(BlackoutDateResponse::from(row)))
+}
+
+/// GET /accounts/{accountId}/blackout_dates/{id} — Canvas `blackout_dates#show`.
+async fn show_account_blackout_date(
+    State(state): State<AppState>,
+    Path((account_id, blackout_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<BlackoutDateResponse>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let row = fetch_blackout_date(&state.db, blackout_id, "Account", account_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(BlackoutDateResponse::from(row)))
+}
+
+/// PUT /courses/{courseId}/blackout_dates/{id} — Canvas `blackout_dates#update`.
+async fn update_course_blackout_date(
+    State(state): State<AppState>,
+    Path((course_id, blackout_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<BlackoutDateParams>,
+) -> Result<Json<BlackoutDateResponse>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if fetch_blackout_date(&state.db, blackout_id, "Course", course_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound);
+    }
+    let window = validate_blackout_window(&payload)?;
+    if let Some(gp_id) = window.parent_grading_period_id {
+        require_grading_period_exists(&state.db, gp_id).await?;
+    }
+    let updated =
+        update_blackout_date(&state.db, blackout_id, "Course", course_id, &window).await?;
+    Ok(Json(BlackoutDateResponse::from(updated)))
+}
+
+/// PUT /accounts/{accountId}/blackout_dates/{id} — Canvas `blackout_dates#update`.
+async fn update_account_blackout_date(
+    State(state): State<AppState>,
+    Path((account_id, blackout_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<BlackoutDateParams>,
+) -> Result<Json<BlackoutDateResponse>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if fetch_blackout_date(&state.db, blackout_id, "Account", account_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound);
+    }
+    let window = validate_blackout_window(&payload)?;
+    if let Some(gp_id) = window.parent_grading_period_id {
+        require_grading_period_exists(&state.db, gp_id).await?;
+    }
+    let updated =
+        update_blackout_date(&state.db, blackout_id, "Account", account_id, &window).await?;
+    Ok(Json(BlackoutDateResponse::from(updated)))
+}
+
+/// DELETE /accounts/{accountId}/blackout_dates/{id} — Canvas
+/// `blackout_dates#destroy`.
+async fn delete_account_blackout_date(
+    State(state): State<AppState>,
+    Path((account_id, blackout_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let row = fetch_blackout_date(&state.db, blackout_id, "Account", account_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    sqlx::query("DELETE FROM blackout_dates WHERE id = $1")
+        .bind(row.id)
+        .execute(&state.db)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The UPDATE behind the two per-item blackout date routes.
+async fn update_blackout_date(
+    pool: &PgPool,
+    id: i64,
+    context_type: &str,
+    context_id: i64,
+    window: &BlackoutDateWindow,
+) -> Result<BlackoutDate, ApiError> {
+    let row = sqlx::query_as(
+        r#"UPDATE blackout_dates
+               SET title = $4,
+                   description = $5,
+                   start_date = $6,
+                   end_date = $7,
+                   parent_grading_period_id = $8,
+                   updated_at = now()
+             WHERE id = $1 AND context_type = $2 AND context_id = $3
+           RETURNING id, context_id, context_type, title, description, start_date, end_date,
+                     parent_grading_period_id, created_at, updated_at"#,
+    )
+    .bind(id)
+    .bind(context_type)
+    .bind(context_id)
+    .bind(&window.title)
+    .bind(&window.description)
+    .bind(window.start_date)
+    .bind(window.end_date)
+    .bind(window.parent_grading_period_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -2156,6 +2363,24 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/blackout_dates/{id}",
             delete(delete_course_blackout_date),
+        )
+        .route(
+            "/courses/{courseId}/blackout_dates/new",
+            get(new_course_blackout_date),
+        )
+        .route(
+            "/courses/{courseId}/blackout_dates/{id}",
+            get(show_course_blackout_date).put(update_course_blackout_date),
+        )
+        .route(
+            "/accounts/{accountId}/blackout_dates/new",
+            get(new_account_blackout_date),
+        )
+        .route(
+            "/accounts/{accountId}/blackout_dates/{id}",
+            get(show_account_blackout_date)
+                .put(update_account_blackout_date)
+                .delete(delete_account_blackout_date),
         )
         .route(
             "/accounts/{accountId}/blackout_dates",
