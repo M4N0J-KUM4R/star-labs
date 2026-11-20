@@ -148,6 +148,23 @@ pub async fn load_topic_index(
     Ok(rows)
 }
 
+/// The raw topic row `load_topic_for_viewer` reads (a named FromRow struct
+/// instead of an 11-tuple — clippy::type_complexity).
+#[derive(Debug, sqlx::FromRow)]
+struct TopicCoreRow {
+    id: i64,
+    course_id: i64,
+    title: String,
+    message: Option<String>,
+    workflow_state: String,
+    discussion_type: String,
+    pinned: bool,
+    locked: bool,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+    author_name: Option<String>,
+}
+
 /// Load one topic with its flat entry list (author names included) behind the
 /// same enrolled-or-admin gate as `GET .../discussion_topics/{id}`: 404 when
 /// the topic does not exist / is deleted / belongs to another course or a
@@ -162,19 +179,7 @@ pub async fn load_topic_for_viewer(
         return Err(ApiError::Forbidden);
     }
 
-    let topic: Option<(
-        i64,
-        i64,
-        String,
-        Option<String>,
-        String,
-        String,
-        bool,
-        bool,
-        DateTime<Utc>,
-        DateTime<Utc>,
-        Option<String>,
-    )> = sqlx::query_as(
+    let topic: Option<TopicCoreRow> = sqlx::query_as(
         r#"
         SELECT t.id, t.course_id, t.title, t.message, t.workflow_state,
                t.discussion_type, t.pinned, t.locked, t.created_at, t.updated_at,
@@ -190,9 +195,12 @@ pub async fn load_topic_for_viewer(
     .fetch_optional(db)
     .await?;
 
-    let Some((
+    let Some(topic) = topic else {
+        return Err(ApiError::NotFound);
+    };
+    let TopicCoreRow {
         id,
-        topic_course_id,
+        course_id: topic_course_id,
         title,
         message,
         workflow_state,
@@ -202,10 +210,7 @@ pub async fn load_topic_for_viewer(
         created_at,
         updated_at,
         author_name,
-    )) = topic
-    else {
-        return Err(ApiError::NotFound);
-    };
+    } = topic;
     debug_assert_eq!(topic_course_id, course_id);
 
     let entries: Vec<TopicEntryRow> = sqlx::query_as(

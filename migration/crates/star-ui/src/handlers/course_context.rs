@@ -34,6 +34,8 @@ pub(crate) struct CourseContext {
     pub preferences: crate::env::EnvPreferences,
     pub use_high_contrast: bool,
     pub user_name: String,
+    /// The viewer's unread conversation count (global nav inbox badge).
+    pub unread_badge: i64,
     /// `true` when the viewer is a teacher of this course (or an admin).
     pub is_teacher: bool,
     /// `true` when the viewer holds a student enrollment in this course.
@@ -68,6 +70,10 @@ pub(crate) async fn course_context(
         .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?
         .unwrap_or_default();
 
+    let unread_badge = star_conversations::ui::load_unread_count(&app.db, user.id)
+        .await
+        .map_err(|e| Box::new(from_api_error(&e, origin).into_response()))?;
+
     let is_teacher =
         star_courses::check_teacher_or_admin(&app.db, user.id, course_id, &auth_of(user))
             .await
@@ -93,6 +99,7 @@ pub(crate) async fn course_context(
         preferences,
         use_high_contrast,
         user_name,
+        unread_badge,
         is_teacher,
         is_student,
     })
