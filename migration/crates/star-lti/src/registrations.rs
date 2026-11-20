@@ -200,6 +200,8 @@ struct RegistrationRow {
 /// A row of `lti_registration_account_bindings`.
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct BindingRow {
+    id: i64,
+    registration_id: i64,
     account_id: i64,
     root_account_id: Option<i64>,
     workflow_state: String,
@@ -243,8 +245,6 @@ struct UpdateRequestRow {
 /// A row of `lti_deployments`.
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct DeploymentRow {
-    id: i64,
-    registration_id: i64,
     context_type: String,
     context_id: i64,
 }
@@ -2318,7 +2318,8 @@ pub async fn apply_update_request(
 
     if accepted {
         let target = find_active_registration(&state.db, request.lti_registration_id).await?;
-        apply_registration_update_request(&state.db, &target, &request, payload.overlay).await?;
+        apply_registration_update_request(&state.db, &target, &request, payload.overlay.clone())
+            .await?;
 
         // Canvas writes a history entry for the applied update request.
         if table_exists(&state.db, "lti_registration_history_entries").await? {
