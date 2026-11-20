@@ -1277,10 +1277,15 @@ async fn record_overlay_version(
     caused_by_reset: bool,
     user_id: i64,
 ) -> Result<(), ApiError> {
+    // lti_overlay_id stands in for Canvas' separate Lti::Overlay row — the
+    // workspace keeps the live overlay on lti_registrations.overlay — and
+    // diff stores the full new overlay snapshot (Canvas stores a JSON
+    // patch; both columns are NOT NULL from the Canvas schema dump).
     sqlx::query(
         "INSERT INTO lti_overlay_versions \
-         (registration_id, account_id, root_account_id, overlay, caused_by_reset, created_by_id) \
-         VALUES ($1, $2, $3, $4, $5, $6)",
+         (registration_id, account_id, root_account_id, lti_overlay_id, overlay, \
+          diff, caused_by_reset, created_by_id, created_at, updated_at) \
+         VALUES ($1, $2, $3, $1, $4, $4, $5, $6, now(), now())",
     )
     .bind(registration_id)
     .bind(account_id)
@@ -1336,6 +1341,7 @@ struct OverlayVersionRow {
     id: i64,
     account_id: i64,
     root_account_id: Option<i64>,
+    lti_overlay_id: i64,
     overlay: Value,
     diff: Option<Value>,
     caused_by_reset: bool,
@@ -1345,8 +1351,8 @@ struct OverlayVersionRow {
 
 async fn overlay_version_json(pool: &PgPool, version_id: i64) -> Result<Option<Value>, ApiError> {
     let row: Option<OverlayVersionRow> = sqlx::query_as(
-        "SELECT id, account_id, root_account_id, overlay, diff, caused_by_reset, \
-                created_by_id, created_at \
+        "SELECT id, account_id, root_account_id, lti_overlay_id, overlay, diff, \
+                caused_by_reset, created_by_id, created_at \
          FROM lti_overlay_versions WHERE id = $1",
     )
     .bind(version_id)
@@ -1359,7 +1365,7 @@ async fn overlay_version_json(pool: &PgPool, version_id: i64) -> Result<Option<V
         "id": version.id,
         "account_id": version.account_id,
         "root_account_id": version.root_account_id,
-        "lti_overlay_id": Value::Null,
+        "lti_overlay_id": version.lti_overlay_id,
         "overlay": version.overlay,
         "diff": version.diff,
         "caused_by_reset": version.caused_by_reset,

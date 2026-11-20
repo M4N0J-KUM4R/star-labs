@@ -52,6 +52,7 @@ struct ContextControlRow {
     deployment_id: i64,
     account_id: Option<i64>,
     course_id: Option<i64>,
+    path: String,
     available: bool,
     workflow_state: String,
     created_by_id: Option<i64>,
@@ -61,7 +62,7 @@ struct ContextControlRow {
 }
 
 const CONTROL_COLUMNS: &str = "id, registration_id, deployment_id, account_id, course_id, \
-     available, workflow_state, created_by_id, updated_by_id, created_at, updated_at";
+     path, available, workflow_state, created_by_id, updated_by_id, created_at, updated_at";
 
 /// Body for `POST .../controls` — one of `account_id` / `course_id`, an
 /// optional `deployment_id` (defaults to the registration's root-account
@@ -191,9 +192,28 @@ async fn display_path(pool: &PgPool, account_id: i64) -> Result<Vec<String>, Api
     Ok(chain.into_iter().map(|(_, name)| name).collect())
 }
 
-/// The `path` column Canvas materializes (`calculate_path_for_account_ids`)
-/// — the account chain ids joined with underscores.
-async fn control_path(pool: &PgPool, account_id: i64) -> Result<String, ApiError> {
+/// The `path` column Canvas materializes
+/// (`Lti::ContextControl.calculate_path_for_account_ids`): the account
+/// chain ids joined with underscores, root first; course controls append
+/// `c{course_id}`.
+async fn control_path_for(
+    pool: &PgPool,
+    account_id: Option<i64>,
+    course_id: Option<i64>,
+) -> Result<String, ApiError> {
+    let chain_account = if let Some(course_id) = course_id {
+        let row: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+                .bind(course_id)
+                .fetch_optional(pool)
+                .await?;
+        row.and_then(|(account_id,)| account_id)
+    } else {
+        account_id
+    };
+    let Some(chain_account) = chain_account else {
+        return Ok(String::new());
+    };
     let rows: Vec<(i64,)> = sqlx::query_as(
         "WITH RECURSIVE up AS ( \
              SELECT id, parent_account_id FROM accounts WHERE id = $1 \
@@ -202,21 +222,20 @@ async fn control_path(pool: &PgPool, account_id: i64) -> Result<String, ApiError
              JOIN up ON a.id = up.parent_account_id \
          ) SELECT id FROM up",
     )
-    .bind(account_id)
+    .bind(chain_account)
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .into_iter()
-        .rev()
-        .map(|(id,)| id.to_string())
-        .collect::<Vec<_>>()
-        .join("_"))
+    let mut ids: Vec<String> = rows.into_iter().rev().map(|(id,)| id.to_string()).collect();
+    if course_id.is_some() {
+        ids.push(format!("c{course_id}"));
+    }
+    Ok(ids.join("_"))
 }
 
 /// Canvas `lti_context_control_json` (lib/api/v1/lti/context_control.rb)
 /// with the calculated attrs.
 async fn control_json(pool: &PgPool, control: &ContextControlRow) -> Result<Value, ApiError> {
-    let (context_name, display_path, path, subaccount_count, course_count, child_control_count) =
+    let (context_name, display_path, subaccount_count, course_count, child_control_count) =
         if let Some(account_id) = control.account_id {
             let name = sqlx::query_as::<_, (String,)>("SELECT name FROM accounts WHERE id = $1")
                 .bind(account_id)
@@ -224,7 +243,6 @@ async fn control_json(pool: &PgPool, control: &ContextControlRow) -> Result<Valu
                 .await?
                 .map(|(name,)| name);
             let display = display_path(pool, account_id).await?;
-            let path = control_path(pool, account_id).await?;
             let (subaccounts,): (i64,) = sqlx::query_as(
                 "WITH RECURSIVE down AS ( \
                      SELECT id FROM accounts WHERE id = $1 \
@@ -264,7 +282,6 @@ async fn control_json(pool: &PgPool, control: &ContextControlRow) -> Result<Valu
             (
                 name.map(|n| json!(n)).unwrap_or(Value::Null),
                 display,
-                path,
                 subaccounts,
                 courses,
                 children,
@@ -278,7 +295,6 @@ async fn control_json(pool: &PgPool, control: &ContextControlRow) -> Result<Valu
             (
                 name.map(|n| json!(n)).unwrap_or(Value::Null),
                 vec![],
-                String::new(),
                 0,
                 0,
                 0,
@@ -295,7 +311,7 @@ async fn control_json(pool: &PgPool, control: &ContextControlRow) -> Result<Valu
         "created_at": control.created_at,
         "updated_at": control.updated_at,
         "available": control.available,
-        "path": path,
+        "path": control.path,
         "context_name": context_name,
         "child_control_count": child_control_count,
         "subaccount_count": subaccount_count,
@@ -357,11 +373,12 @@ async fn upsert_control(
         return Ok(row);
     }
 
+    let path = control_path_for(pool, account_id, course_id).await?;
     let sql = format!(
         "INSERT INTO lti_context_controls \
-         (registration_id, deployment_id, account_id, course_id, root_account_id, available, \
-          workflow_state, created_by_id, updated_by_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, 'active', $7, $7) \
+         (registration_id, deployment_id, account_id, course_id, root_account_id, path, \
+          available, workflow_state, created_by_id, updated_by_id, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $8, now(), now()) \
          RETURNING {CONTROL_COLUMNS}"
     );
     let row: ContextControlRow = sqlx::query_as(&sql)
@@ -370,6 +387,7 @@ async fn upsert_control(
         .bind(account_id)
         .bind(course_id)
         .bind(root_account_id)
+        .bind(path)
         .bind(available)
         .bind(user_id)
         .fetch_one(pool)
