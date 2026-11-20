@@ -218,7 +218,19 @@ struct ImsRow {
     id: i64,
     developer_key_id: Option<i64>,
     registration_url: Option<String>,
-    unified_tool_id: Option<String>,
+}
+
+/// A row of `lti_overlay_versions`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct OverlayVersionRow {
+    id: i64,
+    account_id: Option<i64>,
+    root_account_id: Option<i64>,
+    lti_overlay_id: Option<i64>,
+    diff: Value,
+    caused_by_reset: bool,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
 }
 
 /// A row of `lti_registration_update_requests`.
@@ -955,16 +967,7 @@ async fn overlay_versions(pool: &PgPool) -> Result<Vec<Value>, ApiError> {
         return Ok(Vec::new());
     }
 
-    let rows: Vec<(
-        i64,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Value,
-        bool,
-        DateTime<Utc>,
-        DateTime<Utc>,
-    )> = sqlx::query_as(
+    let rows: Vec<OverlayVersionRow> = sqlx::query_as(
         "SELECT id, account_id, root_account_id, lti_overlay_id, diff, caused_by_reset, \
                 created_at, updated_at \
          FROM lti_overlay_versions ORDER BY created_at DESC LIMIT $1",
@@ -1413,9 +1416,7 @@ fn resolve_workflow_state(value: Option<&str>) -> Option<(&'static str, &'static
 
 /// Canvas `validate_workflow_state`.
 fn validate_workflow_state(ctx: &Ctx, value: Option<&str>) -> Option<Response> {
-    let Some(value) = value else {
-        return None;
-    };
+    let value = value?;
     if resolve_workflow_state(Some(value)).is_some() && value != "allow" {
         return None;
     }
