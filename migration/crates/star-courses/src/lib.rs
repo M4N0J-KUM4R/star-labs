@@ -16,6 +16,8 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod ai_experiences;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -4650,6 +4652,8 @@ async fn update_course_tab(
 /// Build the courses router.
 pub fn router() -> Router<AppState> {
     Router::new()
+        // Canvas AiExperiencesController / AiConversationsController.
+        .merge(ai_experiences::router())
         .route("/courses", get(list_courses))
         .route("/courses", post(create_course))
         .route("/accounts/{id}/courses", post(create_course_in_account))
