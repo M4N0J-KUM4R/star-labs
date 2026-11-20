@@ -353,15 +353,20 @@ async fn resolve_setting(
     tool_proxy_guid: Option<&str>,
     context: SettingContext,
 ) -> Result<(ToolSettingRow, i64), Box<Response>> {
+    // Canvas `authenticate_api_call` runs for every request.
+    let token_proxy = authenticate(state, headers).await?;
+
     let proxy = match tool_proxy_guid {
         Some(guid) => {
+            // Canvas: the guid of the path has to name the tool proxy of the
+            // token, otherwise the request is unauthorized.
             let proxy = tool_proxy_by_guid(&state.db, guid).await?;
             match proxy {
-                Some(proxy) => proxy,
-                None => return Err(not_found()),
+                Some(proxy) if proxy == token_proxy => proxy,
+                _ => return Err(unauthorized()),
             }
         }
-        None => authenticate(state, headers).await?,
+        None => token_proxy,
     };
 
     let setting = find_setting(&state.db, proxy, context).await?;
