@@ -909,7 +909,7 @@ pub fn router() -> axum::Router<AppState> {
         // Route order matters: more specific (wildcard) routes before simpler :id routes.
         // resolve_path — must precede show handlers to avoid /by_path matching /{id}
         .route(
-            "/courses/{courseId}/folders/by_path/:full_path",
+            "/courses/{courseId}/folders/by_path/{*full_path}",
             get(resolve_path_course_named),
         )
         .route(
@@ -917,57 +917,37 @@ pub fn router() -> axum::Router<AppState> {
             get(resolve_path_course),
         )
         .route(
-            "/users/{userId}/folders/by_path/:full_path",
+            "/users/{userId}/folders/by_path/{*full_path}",
             get(resolve_path_user_named),
         )
+        .route("/users/{userId}/folders/by_path", get(resolve_path_user))
         .route(
-            "/users/{userId}/folders/by_path",
-            get(resolve_path_user),
-        )
-        .route(
-            "/groups/{groupId}/folders/by_path/:full_path",
+            "/groups/{groupId}/folders/by_path/{*full_path}",
             get(resolve_path_group_named),
         )
-        .route(
-            "/groups/{groupId}/folders/by_path",
-            get(resolve_path_group),
-        )
+        .route("/groups/{groupId}/folders/by_path", get(resolve_path_group))
         // icon_maker — unique named folder (registered before :id to avoid conflict)
         .route(
             "/courses/{courseId}/folders/icon_maker",
             get(icon_maker_folder_course),
         )
         // media — unique named folders (registered before :id)
-        .route("/courses/{courseId}/folders/media", get(media_folder_course))
+        .route(
+            "/courses/{courseId}/folders/media",
+            get(media_folder_course),
+        )
         .route("/users/{userId}/folders/media", get(media_folder_user))
         // context-scoped show — simple :id lookup in context
-        .route(
-            "/courses/{courseId}/folders/{id}",
-            get(show_course_folder),
-        )
-        .route(
-            "/users/{userId}/folders/{id}",
-            get(show_user_folder),
-        )
-        .route(
-            "/groups/{groupId}/folders/{id}",
-            get(show_group_folder),
-        )
+        .route("/courses/{courseId}/folders/{id}", get(show_course_folder))
+        .route("/users/{userId}/folders/{id}", get(show_user_folder))
+        .route("/groups/{groupId}/folders/{id}", get(show_group_folder))
         // list_all_folders — GET /context/folders (not to be confused with create)
-        .route(
-            "/courses/{courseId}/folders",
-            get(list_all_course_folders),
-        )
+        .route("/courses/{courseId}/folders", get(list_all_course_folders))
         .route("/users/{userId}/folders", get(list_all_user_folders))
         // create folder in context — POST /context/folders
-        .route(
-            "/courses/{courseId}/folders",
-            post(create_course_folder_ctx),
-        )
-        .route(
-            "/users/{userId}/folders",
-            post(create_user_folder_ctx),
-        )
+        // (POST /courses/{courseId}/folders is already registered above via
+        // create_course_folder; Canvas routes.rb declares it exactly once.)
+        .route("/users/{userId}/folders", post(create_user_folder_ctx))
         // context-scoped duplicates (registered before generic /folders/{id}/duplicates)
         .route(
             "/users/{userId}/folders/{id}/duplicates",
@@ -2251,9 +2231,6 @@ async fn resolve_path_under_root(
     if components.is_empty() {
         return fetch_folder(db, root_id).await;
     }
-    let [head, rest @ ..] = components else {
-        return fetch_folder(db, root_id).await;
-    };
     let sql = if can_view_hidden {
         format!(
             "{FOLDER_SELECT} WHERE f.parent_folder_id = $1 AND f.name = $2 \
@@ -2266,15 +2243,25 @@ async fn resolve_path_under_root(
              AND f.locked = FALSE LIMIT 1"
         )
     };
-    let child: Option<FolderRow> = sqlx::query_as::<_, FolderRow>(&sql)
-        .bind(root_id)
-        .bind(head)
-        .fetch_optional(db)
-        .await?;
-    match child {
-        Some(folder) => resolve_path_under_root(db, folder.id, rest, can_view_hidden).await,
-        None => Ok(None),
+    // Iterative walk (Canvas Folder.resolve_path): descend one named
+    // component at a time from the root; any miss ends the search.
+    let mut current_id = root_id;
+    let mut last: Option<FolderRow> = None;
+    for head in components {
+        let child: Option<FolderRow> = sqlx::query_as::<_, FolderRow>(&sql)
+            .bind(current_id)
+            .bind(*head)
+            .fetch_optional(db)
+            .await?;
+        match child {
+            Some(folder) => {
+                current_id = folder.id;
+                last = Some(folder);
+            }
+            None => return Ok(None),
+        }
     }
+    Ok(last)
 }
 
 /// Shared resolve_path body. Finds a folder by slash-separated path within
@@ -2304,22 +2291,7 @@ async fn resolve_path_impl(
         if let Some(folder) =
             resolve_path_under_root(db, root.id, &components, can_view_hidden).await?
         {
-            // Collect full path: prepend ancestors (including root) to target.
-            let mut path: Vec<FolderRow> = Vec::new();
-            let mut current: Option<FolderRow> = Some(folder);
-            while let Some(f) = current {
-                path.push(f);
-                current = f.parent_folder_id
-                    .and_then(|pid| {
-                        // Sync block to break the borrow cycle via db fetch.
-                        let pid = pid;
-                        // Use blocking fetch to avoid async recursion complexity.
-                        None::<Option<FolderRow>>
-                    })
-                    .flatten();
-            }
-            // Simpler: just return the target + root (Canvas resolve_path returns all matched folders).
-            // Canvas returns all folders matched: [root, subfolder1, ..., target].
+            // Canvas returns all matched folders: [root, subfolder1, ..., target].
             // Build ancestors for the response.
             let mut ancestors: Vec<FolderRow> = Vec::new();
             let mut parent_id = folder.parent_folder_id;
@@ -2327,8 +2299,7 @@ async fn resolve_path_impl(
                 match parent_id {
                     None => break,
                     Some(pid) => {
-                        let parent: Option<FolderRow> =
-                            fetch_folder(db, pid).await?;
+                        let parent: Option<FolderRow> = fetch_folder(db, pid).await?;
                         match parent {
                             Some(p) => {
                                 ancestors.push(p);
@@ -2363,7 +2334,8 @@ async fn resolve_path_course(
     Query(params): Query<ResolvePathQuery>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
-    let can_view_hidden = user_has_granular_file_perm(&state.db, auth.id, course_id, &auth.role).await?;
+    let can_view_hidden =
+        user_has_granular_file_perm(&state.db, auth.id, course_id, &auth.role).await?;
     let allowed = can_view_hidden
         || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
     if !allowed {
@@ -2404,7 +2376,8 @@ async fn resolve_path_user(
     if auth.id != user_id && !is_admin(&auth) {
         return Err(ApiError::Forbidden);
     }
-    let can_view_hidden = user_has_granular_file_perm(&state.db, auth.id, user_id, &auth.role).await?;
+    let can_view_hidden =
+        user_has_granular_file_perm(&state.db, auth.id, user_id, &auth.role).await?;
     let result = resolve_path_impl(&state.db, "User", user_id, &params, can_view_hidden).await;
     match result {
         Ok(json) => Ok(json.into_response()),
@@ -2436,8 +2409,7 @@ async fn resolve_path_group(
     Query(params): Query<ResolvePathQuery>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
-    let can_view_hidden = is_admin(&auth)
-        || user_in_group(&state.db, auth.id, group_id).await?;
+    let can_view_hidden = is_admin(&auth) || user_in_group(&state.db, auth.id, group_id).await?;
     if !can_view_hidden {
         return Err(ApiError::Forbidden);
     }
@@ -2487,8 +2459,8 @@ async fn show_course_folder(
         return Err(ApiError::NotFound);
     }
     let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
-    let allowed = can_manage
-        || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
+    let allowed =
+        can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
     if !allowed {
         return Err(ApiError::Forbidden);
     }
@@ -2546,16 +2518,23 @@ async fn list_all_course_folders(
     auth: AuthUser,
 ) -> Result<Json<Vec<FolderResponse>>, ApiError> {
     let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
-    let allowed = can_manage
-        || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
+    let allowed =
+        can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
     if !allowed {
         return Err(ApiError::Forbidden);
     }
     ensure_root_folder(&state.db, course_id).await?;
     let (per_page, offset) = pagination(params.page, params.per_page);
     let by_position = params.sort_by.as_deref() == Some("position");
-    let rows = fetch_context_folders(&state.db, course_id, can_manage, by_position, per_page, offset)
-        .await?;
+    let rows = fetch_context_folders(
+        &state.db,
+        course_id,
+        can_manage,
+        by_position,
+        per_page,
+        offset,
+    )
+    .await?;
     Ok(Json(
         rows.into_iter()
             .map(|row| FolderResponse::from_row(row, can_manage))
@@ -2601,56 +2580,13 @@ async fn list_all_user_folders(
 
 // ── create folder in context ─────────────────────────────────────────────────
 
-/// POST /courses/{courseId}/folders — create folder in course.
-async fn create_course_folder_ctx(
-    State(state): State<AppState>,
-    Path(course_id): Path<i64>,
-    Json(payload): Json<CreateFolderRequest>,
-    auth: AuthUser,
-) -> Result<Json<FolderResponse>, ApiError> {
-    let allowed = user_has_granular_file_perm(&state.db, auth.id, course_id, &auth.role).await?;
-    if !allowed {
-        return Err(ApiError::Forbidden);
-    }
-    let root = ensure_root_folder(&state.db, course_id).await?;
-    let parent_id = payload.parent_folder_id.unwrap_or(root.id);
-    let parent = fetch_folder(&state.db, parent_id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    if parent.context_type != "Course" || parent.context_id != course_id {
-        return Ok(canvas_not_found().into());
-    }
-    let name = normalize_folder_name(payload.name.as_deref());
-    // Check duplicate.
-    if fetch_child_by_name(&state.db, parent_id, &name).await?.is_some() {
-        return Err(ApiError::Conflict(format!("folder '{}' already exists", name)));
-    }
-    let position = next_position(&state.db, parent_id).await?;
-    let full_name = format!("{}/{}", parent.full_name, name);
-    let new_folder = NewFolder {
-        name,
-        full_name,
-        context_type: "Course".to_string(),
-        context_id: course_id,
-        parent_id,
-        workflow_state: payload.hidden.unwrap_or(false).to_string(),
-        position,
-        locked: payload.locked.unwrap_or(false),
-        lock_at: payload.lock_at,
-        unlock_at: payload.unlock_at,
-        for_submissions: false,
-    };
-    let folder = insert_folder(&state.db, new_folder).await?;
-    Ok(Json(FolderResponse::from_row(folder, true)))
-}
-
 /// POST /users/{userId}/folders — create folder in user context.
 async fn create_user_folder_ctx(
     State(state): State<AppState>,
     Path(user_id): Path<i64>,
     Json(payload): Json<CreateFolderRequest>,
     auth: AuthUser,
-) -> Result<Json<FolderResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     if auth.id != user_id && !is_admin(&auth) {
         return Err(ApiError::Forbidden);
     }
@@ -2691,21 +2627,34 @@ async fn create_user_folder_ctx(
         .await?
         .ok_or(ApiError::NotFound)?;
     if parent.context_type != "User" || parent.context_id != user_id {
-        return Ok(canvas_not_found().into());
+        return Ok(canvas_not_found());
     }
     let name = normalize_folder_name(payload.name.as_deref());
-    if fetch_child_by_name(&state.db, parent_id, &name).await?.is_some() {
-        return Err(ApiError::Conflict(format!("folder '{}' already exists", name)));
+    if fetch_child_by_name(&state.db, parent_id, &name)
+        .await?
+        .is_some()
+    {
+        return Err(ApiError::Conflict(format!(
+            "folder '{}' already exists",
+            name
+        )));
     }
     let position = next_position(&state.db, parent_id).await?;
     let full_name = format!("{}/{}", parent.full_name, name);
+    // Canvas Folder#hidden= maps the hidden param onto workflow_state
+    // 'hidden'/'visible' (app/models/folder.rb), never a raw boolean.
+    let workflow_state = if payload.hidden.unwrap_or(false) {
+        "hidden"
+    } else {
+        "visible"
+    };
     let new_folder = NewFolder {
         name,
         full_name,
         context_type: "User".to_string(),
         context_id: user_id,
         parent_id,
-        workflow_state: payload.hidden.unwrap_or(false).to_string(),
+        workflow_state: workflow_state.to_string(),
         position,
         locked: payload.locked.unwrap_or(false),
         lock_at: payload.lock_at,
@@ -2713,7 +2662,7 @@ async fn create_user_folder_ctx(
         for_submissions: false,
     };
     let folder = insert_folder(&state.db, new_folder).await?;
-    Ok(Json(FolderResponse::from_row(folder, true)))
+    Ok(Json(FolderResponse::from_row(folder, true)).into_response())
 }
 
 // ── icon_maker_folder ────────────────────────────────────────────────────────
@@ -2844,7 +2793,9 @@ async fn list_user_folder_duplicates(
         return Err(ApiError::NotFound);
     }
     let Some(parent_id) = folder.parent_folder_id else {
-        return Ok(Json(DuplicatesResponse { duplicates: Vec::new() }));
+        return Ok(Json(DuplicatesResponse {
+            duplicates: Vec::new(),
+        }));
     };
     let sql = format!(
         "{FOLDER_SELECT} WHERE f.parent_folder_id = $1 AND f.name = $2 \
@@ -2882,9 +2833,9 @@ async fn copy_file_to_folder(
         return Err(ApiError::Forbidden);
     }
 
-    let source_file_id = payload.source_file_id.ok_or(ApiError::BadRequest(
-        "source_file_id is required".into(),
-    ))?;
+    let source_file_id = payload
+        .source_file_id
+        .ok_or(ApiError::BadRequest("source_file_id is required".into()))?;
     let source_row: Option<(i64, String, String, String, i64, Option<i64>)> = sqlx::query_as(
         r#"SELECT id, filename, display_name, content_type, size, folder_id
            FROM files WHERE id = $1 AND workflow_state <> 'deleted'"#,
@@ -2994,9 +2945,9 @@ async fn copy_folder_to_folder(
         return Err(ApiError::Forbidden);
     }
 
-    let source_folder_id = payload.source_folder_id.ok_or(ApiError::BadRequest(
-        "source_folder_id is required".into(),
-    ))?;
+    let source_folder_id = payload
+        .source_folder_id
+        .ok_or(ApiError::BadRequest("source_folder_id is required".into()))?;
     let source = fetch_folder(&state.db, source_folder_id)
         .await?
         .ok_or(ApiError::NotFound)?;
@@ -3732,7 +3683,7 @@ async fn get_course_content_licenses(
 // ─── folder DB helpers ─────────────────────────────────────────────────────
 
 /// Raw folders row with file/subfolder counts (column order matches queries).
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 struct FolderRow {
     id: i64,
     name: String,
