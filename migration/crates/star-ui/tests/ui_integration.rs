@@ -1260,7 +1260,7 @@ async fn quiz_submit_grades_and_results() {
     let course = seed_course(&pool, &prefix, "Submit Course", "available").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
-    let (quiz, mc, essay) = seed_graded_quiz(&pool, course).await;
+    let (quiz, mc, _essay) = seed_graded_quiz(&pool, course).await;
 
     // Start + load the take page.
     let (csrf_cookie, csrf) = csrf_pair();
@@ -1301,7 +1301,7 @@ async fn quiz_submit_grades_and_results() {
         .expect("essay question");
 
     let (csrf_cookie, csrf) = csrf_pair();
-    let body_pairs = vec![
+    let body_pairs = [
         ("_csrf".to_string(), csrf.clone()),
         (format!("question_{mc}"), "7".to_string()),
         (format!("question_{tf_id}"), "22".to_string()),
@@ -1354,7 +1354,7 @@ async fn quiz_submit_grades_and_results() {
     assert!(body.contains("Incorrect"));
     assert!(body.contains("Needs review"));
     assert!(body.contains("My essay"));
-    assert!(body.contains(&format!("attempt 0")));
+    assert!(body.contains("attempt 0"));
 
     // Teacher views the student's results (submissions table + results page).
     let show = server
