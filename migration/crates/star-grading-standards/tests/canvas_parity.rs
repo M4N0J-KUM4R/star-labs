@@ -356,15 +356,11 @@ fn test_create_grading_period() {
     });
 
     let resp = do_post(&format!("/accounts/{account_id}/grading_periods"), &payload);
-    assert_eq!(
-        resp.status().as_u16(),
-        201,
-        "Expected 201, got {}: {}",
-        resp.status(),
-        resp.text()
-    );
+    let status = resp.status().as_u16();
+    let text = resp.text().unwrap_or_default();
+    assert_eq!(status, 201, "Expected 201, got {}: {}", status, text);
 
-    let body: serde_json::Value = resp.json().unwrap();
+    let body: serde_json::Value = serde_json::from_str(&text).unwrap();
     let periods = body["grading_periods"].as_array().expect("periods array");
     assert!(!periods.is_empty());
     assert_eq!(periods[0]["title"], "Parity Test Period");
@@ -384,9 +380,11 @@ fn test_list_account_grading_periods() {
 
     let account_id = env::var("STAR_PARITY_ACCOUNT_ID").unwrap_or("1".to_string());
     let resp = do_get(&format!("/accounts/{account_id}/grading_periods"));
-    assert_eq!(resp.status().as_u16(), 200, "Expected 200: {}", resp.text());
+    let status = resp.status().as_u16();
+    let text = resp.text().unwrap_or_default();
+    assert_eq!(status, 200, "Expected 200: {}", text);
 
-    let body: serde_json::Value = resp.json().unwrap();
+    let body: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert!(
         body["grading_periods"].is_array(),
         "response must have grading_periods array"
@@ -432,8 +430,10 @@ fn test_get_grading_period() {
     let period_id = body["grading_periods"][0]["id"].as_i64().unwrap();
 
     let resp = do_get(&format!("/grading_periods/{period_id}"));
-    assert_eq!(resp.status().as_u16(), 200, "Expected 200: {}", resp.text());
-    let get_body: serde_json::Value = resp.json().unwrap();
+    let status = resp.status().as_u16();
+    let text = resp.text().unwrap_or_default();
+    assert_eq!(status, 200, "Expected 200: {}", text);
+    let get_body: serde_json::Value = serde_json::from_str(&text).unwrap();
     let periods = get_body["grading_periods"]
         .as_array()
         .expect("wrapped array");
@@ -480,8 +480,10 @@ fn test_update_grading_period() {
             "weight": 33.3
         }),
     );
-    assert_eq!(resp.status().as_u16(), 200, "Expected 200: {}", resp.text());
-    let body: serde_json::Value = resp.json().unwrap();
+    let status = resp.status().as_u16();
+    let text = resp.text().unwrap_or_default();
+    assert_eq!(status, 200, "Expected 200: {}", text);
+    let body: serde_json::Value = serde_json::from_str(&text).unwrap();
     assert_eq!(body["grading_periods"][0]["title"], "Updated Title");
     assert_eq!(body["grading_periods"][0]["weight"], 33.3);
 }
@@ -537,8 +539,10 @@ fn test_list_account_grading_schemes() {
 
     let account_id = env::var("STAR_PARITY_ACCOUNT_ID").unwrap_or("1".to_string());
     let resp = do_get(&format!("/accounts/{account_id}/grading_schemes"));
-    assert_eq!(resp.status().as_u16(), 200, "Expected 200: {}", resp.text());
-    let schemes: Vec<GradingSchemeResponse> = resp.json().unwrap();
+    let status = resp.status().as_u16();
+    let text = resp.text().unwrap_or_default();
+    assert_eq!(status, 200, "Expected 200: {}", text);
+    let schemes: Vec<GradingSchemeResponse> = serde_json::from_str(&text).unwrap();
     println!(
         "Listed {} grading schemes for account {}",
         schemes.len(),
@@ -572,15 +576,11 @@ fn test_create_grading_scheme() {
     });
 
     let resp = do_post(&format!("/accounts/{account_id}/grading_schemes"), &payload);
-    assert_eq!(
-        resp.status().as_u16(),
-        200,
-        "Expected 200, got {}: {}",
-        resp.status(),
-        resp.text()
-    );
+    let status = resp.status().as_u16();
+    let text = resp.text().unwrap_or_default();
+    assert_eq!(status, 200, "Expected 200, got {}: {}", status, text);
 
-    let scheme: GradingSchemeResponse = resp.json().unwrap();
+    let scheme: GradingSchemeResponse = serde_json::from_str(&text).unwrap();
     assert_eq!(scheme.title, "Parity Test Scheme");
     assert_eq!(scheme.data.len(), 5);
     assert_eq!(scheme.data[0].name, "A");
@@ -620,8 +620,10 @@ fn test_get_grading_scheme() {
     let scheme_id = created.id.parse::<i64>().expect("numeric id string");
 
     let resp = do_get(&format!("/grading_schemes/{scheme_id}"));
-    assert_eq!(resp.status().as_u16(), 200, "Expected 200: {}", resp.text());
-    let shown: GradingSchemeResponse = resp.json().unwrap();
+    let status = resp.status().as_u16();
+    let text = resp.text().unwrap_or_default();
+    assert_eq!(status, 200, "Expected 200: {}", text);
+    let shown: GradingSchemeResponse = serde_json::from_str(&text).unwrap();
     assert_eq!(shown.id, created.id);
     assert_eq!(shown.title, "Get Scheme Test");
 }
@@ -670,8 +672,10 @@ fn test_update_grading_scheme() {
             "data": updated_data
         }),
     );
-    assert_eq!(resp.status().as_u16(), 200, "Expected 200: {}", resp.text());
-    let updated: GradingSchemeResponse = resp.json().unwrap();
+    let status = resp.status().as_u16();
+    let text = resp.text().unwrap_or_default();
+    assert_eq!(status, 200, "Expected 200: {}", text);
+    let updated: GradingSchemeResponse = serde_json::from_str(&text).unwrap();
     assert_eq!(updated.title, "Renamed Scheme");
     assert_eq!(updated.data.len(), 3);
 }
