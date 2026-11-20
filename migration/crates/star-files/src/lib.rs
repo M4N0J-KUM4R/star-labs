@@ -861,6 +861,14 @@ pub fn router() -> axum::Router<AppState> {
             "/courses/{courseId}/usage_rights",
             put(set_course_usage_rights),
         )
+        .route(
+            "/groups/{groupId}/usage_rights",
+            put(set_group_usage_rights),
+        )
+        .route(
+            "/users/{userId}/usage_rights",
+            put(set_user_usage_rights),
+        )
         // Canvas UsageRightsController#remove_usage_rights.
         .route(
             "/courses/{courseId}/usage_rights",
@@ -878,6 +886,14 @@ pub fn router() -> axum::Router<AppState> {
         .route(
             "/courses/{courseId}/content_licenses",
             get(get_course_content_licenses),
+        )
+        .route(
+            "/groups/{groupId}/content_licenses",
+            get(get_group_content_licenses),
+        )
+        .route(
+            "/users/{userId}/content_licenses",
+            get(get_user_content_licenses),
         )
 }
 
@@ -2545,6 +2561,281 @@ async fn set_course_usage_rights(
         file_ids,
     })
     .into_response())
+}
+
+/// PUT /groups/{groupId}/usage_rights — Canvas set_usage_rights for a
+/// Group context.
+///
+/// Deviation: star-lms file metadata is course-scoped (files.course_id NOT
+/// NULL) and group files live in a separate metadata-only group_files table,
+/// so there are no group-context attachments to update; the endpoint creates
+/// the usage_rights row with correct polymorphic type and answers the Canvas
+/// envelope `{message, file_ids: []}` with 200.
+async fn set_group_usage_rights(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<UsageRightsRequest>,
+) -> Result<Response, ApiError> {
+    let file_ids = payload.file_ids.unwrap_or_default();
+    let folder_ids = payload.folder_ids.unwrap_or_default();
+    if file_ids.is_empty() && folder_ids.is_empty() {
+        return Ok(canvas_error(
+            StatusCode::BAD_REQUEST,
+            "Must supply 'file_ids' and/or 'folder_ids' parameter",
+        ));
+    }
+    let Some(usage) = payload.usage_rights else {
+        return Ok(canvas_error(
+            StatusCode::BAD_REQUEST,
+            "No 'usage_rights' object supplied",
+        ));
+    };
+    let Some(use_justification) = usage
+        .use_justification
+        .filter(|value| valid_use_justification(value))
+    else {
+        return Ok(canvas_error(
+            StatusCode::BAD_REQUEST,
+            "Invalid use_justification",
+        ));
+    };
+
+    // Lookup the group and its course_id for authorization.
+    let group: Option<(Option<i64>,)> = sqlx::query_as(
+        "SELECT course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (course_id,) = group.ok_or(ApiError::NotFound)?;
+
+    // Canvas: manage_files_edit on the group context.
+    // Admins are always allowed; otherwise group members (or parent course
+    // teachers for groups with a course_id) are allowed.
+    let mut allowed = is_admin(&auth);
+    if !allowed {
+        if let Some(cid) = course_id {
+            allowed =
+                user_teacher_of_course(&state.db, auth.id, cid, &auth.role).await?;
+        }
+    }
+    if !allowed {
+        allowed = user_in_group(&state.db, auth.id, group_id).await?;
+    }
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Insert or reuse a usage_rights row with context_type='Group'.
+    let existing: Option<i64> = sqlx::query_scalar(
+        r#"
+        SELECT id FROM usage_rights
+        WHERE context_type = 'Group' AND context_id = $1
+          AND use_justification = $2
+          AND legal_copyright IS NOT DISTINCT FROM $3
+          AND license IS NOT DISTINCT FROM $4
+        LIMIT 1
+        "#,
+    )
+    .bind(group_id)
+    .bind(&use_justification)
+    .bind(usage.legal_copyright.as_deref())
+    .bind(usage.license.as_deref())
+    .fetch_optional(&state.db)
+    .await?;
+
+    let _usage_rights_id = match existing {
+        Some(id) => id,
+        None => {
+            sqlx::query_scalar(
+                r#"
+                INSERT INTO usage_rights
+                    (context_type, context_id, use_justification, legal_copyright, license)
+                VALUES ('Group', $1, $2, $3, $4)
+                RETURNING id
+                "#,
+            )
+            .bind(group_id)
+            .bind(&use_justification)
+            .bind(usage.legal_copyright.as_deref())
+            .bind(usage.license.as_deref())
+            .fetch_one(&state.db)
+            .await?
+        }
+    };
+
+    // No group files to update (see doc comment); return empty file list.
+    Ok(Json(UsageRightsResponse {
+        legal_copyright: usage.legal_copyright,
+        use_justification,
+        license_name: usage
+            .license
+            .as_deref()
+            .and_then(license_name)
+            .map(str::to_string),
+        license: usage.license,
+        message: "0 files updated".to_string(),
+        file_ids: Vec::new(),
+    })
+    .into_response())
+}
+
+/// PUT /users/{userId}/usage_rights — Canvas set_usage_rights for a
+/// User context.
+///
+/// Deviation: star-lms file metadata is course-scoped, so a user context has
+/// no usage-rights rows of its own; the endpoint creates the row with correct
+/// polymorphic type and answers `{message, file_ids: []}` with 200.
+async fn set_user_usage_rights(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<UsageRightsRequest>,
+) -> Result<Response, ApiError> {
+    let file_ids = payload.file_ids.unwrap_or_default();
+    let folder_ids = payload.folder_ids.unwrap_or_default();
+    if file_ids.is_empty() && folder_ids.is_empty() {
+        return Ok(canvas_error(
+            StatusCode::BAD_REQUEST,
+            "Must supply 'file_ids' and/or 'folder_ids' parameter",
+        ));
+    }
+    let Some(usage) = payload.usage_rights else {
+        return Ok(canvas_error(
+            StatusCode::BAD_REQUEST,
+            "No 'usage_rights' object supplied",
+        ));
+    };
+    let Some(use_justification) = usage
+        .use_justification
+        .filter(|value| valid_use_justification(value))
+    else {
+        return Ok(canvas_error(
+            StatusCode::BAD_REQUEST,
+            "Invalid use_justification",
+        ));
+    };
+
+    // Canvas: a user context only authorizes the user themselves (or admin).
+    if auth.id != user_id && !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Insert or reuse a usage_rights row with context_type='User'.
+    let existing: Option<i64> = sqlx::query_scalar(
+        r#"
+        SELECT id FROM usage_rights
+        WHERE context_type = 'User' AND context_id = $1
+          AND use_justification = $2
+          AND legal_copyright IS NOT DISTINCT FROM $3
+          AND license IS NOT DISTINCT FROM $4
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .bind(&use_justification)
+    .bind(usage.legal_copyright.as_deref())
+    .bind(usage.license.as_deref())
+    .fetch_optional(&state.db)
+    .await?;
+
+    let _usage_rights_id = match existing {
+        Some(id) => id,
+        None => {
+            sqlx::query_scalar(
+                r#"
+                INSERT INTO usage_rights
+                    (context_type, context_id, use_justification, legal_copyright, license)
+                VALUES ('User', $1, $2, $3, $4)
+                RETURNING id
+                "#,
+            )
+            .bind(user_id)
+            .bind(&use_justification)
+            .bind(usage.legal_copyright.as_deref())
+            .bind(usage.license.as_deref())
+            .fetch_one(&state.db)
+            .await?
+        }
+    };
+
+    // No user files to update; return empty file list.
+    Ok(Json(UsageRightsResponse {
+        legal_copyright: usage.legal_copyright,
+        use_justification,
+        license_name: usage
+            .license
+            .as_deref()
+            .and_then(license_name)
+            .map(str::to_string),
+        license: usage.license,
+        message: "0 files updated".to_string(),
+        file_ids: Vec::new(),
+    })
+    .into_response())
+}
+
+/// GET /groups/{groupId}/content_licenses — Canvas
+/// UsageRightsController#licenses for a Group context.
+///
+/// The license list is context-free (same eight entries for all contexts).
+async fn get_group_content_licenses(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<LicenseEntry>>, ApiError> {
+    // Verify the group exists.
+    let exists: (bool,) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM groups WHERE id = $1 AND workflow_state <> 'deleted')",
+    )
+    .bind(group_id)
+    .fetch_one(&state.db)
+    .await?;
+    if !exists.0 {
+        return Err(ApiError::NotFound);
+    }
+
+    // Authorization: admin, parent course teacher, or group member.
+    let group: Option<(Option<i64>,)> = sqlx::query_as(
+        "SELECT course_id FROM groups WHERE id = $1",
+    )
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let course_id = group.and_then(|r| r.0);
+
+    let mut allowed = is_admin(&auth);
+    if !allowed {
+        if let Some(cid) = course_id {
+            allowed = user_teacher_of_course(&state.db, auth.id, cid, &auth.role).await?;
+        }
+    }
+    if !allowed {
+        allowed = user_in_group(&state.db, auth.id, group_id).await?;
+    }
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    Ok(Json(canvas_licenses()))
+}
+
+/// GET /users/{userId}/content_licenses — Canvas
+/// UsageRightsController#licenses for a User context.
+///
+/// The license list is context-free (same eight entries for all contexts).
+async fn get_user_content_licenses(
+    State(_state): State<AppState>,
+    Path(user_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<LicenseEntry>>, ApiError> {
+    // Authorization: user is themselves or admin.
+    if auth.id != user_id && !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    Ok(Json(canvas_licenses()))
 }
 
 /// DELETE /courses/{courseId}/usage_rights — Canvas

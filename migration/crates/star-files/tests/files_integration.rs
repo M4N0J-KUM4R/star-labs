@@ -480,3 +480,212 @@ async fn content_licenses_matches_canvas_list() {
 
     cleanup(&pool, &prefix).await;
 }
+
+#[tokio::test]
+async fn set_group_usage_rights_answers_canvas_envelope() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let admin = seed_user(&pool, &prefix, "GroupURAdmin", "admin").await;
+    let course = seed_course(&pool, &prefix, "GroupURCourse").await;
+    let group = sqlx::query_scalar(
+        "INSERT INTO groups (name, course_id) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(format!("{prefix}-GroupURGroup"))
+    .bind(course)
+    .fetch_one(&pool)
+    .await
+    .expect("seed group");
+
+    let resp = server
+        .put(&format!("/groups/{group}/usage_rights"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "file_ids": [],
+            "folder_ids": [],
+            "usage_rights": {
+                "use_justification": "own_copyright",
+                "legal_copyright": "(C) 2025",
+                "license": "private"
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["use_justification"], "own_copyright");
+    assert_eq!(body["license"], "private");
+    assert_eq!(body["message"], "0 files updated");
+    assert!(body["file_ids"].as_array().unwrap().is_empty());
+
+    // Non-member gets 403.
+    let outsider = seed_user(&pool, &prefix, "GroupUROutsider", "student").await;
+    let resp = server
+        .put(&format!("/groups/{group}/usage_rights"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .json(&json!({
+            "usage_rights": { "use_justification": "own_copyright" }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // Bad use_justification gets 400.
+    let resp = server
+        .put(&format!("/groups/{group}/usage_rights"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "usage_rights": { "use_justification": "invalid" }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+
+    // Cleanup: delete usage_rights with Group context.
+    let _ = sqlx::query(
+        "DELETE FROM usage_rights WHERE context_type = 'Group' AND context_id = $1",
+    )
+    .bind(group)
+    .execute(&pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM groups WHERE id = $1")
+        .bind(group)
+        .execute(&pool)
+        .await;
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn set_user_usage_rights_answers_canvas_envelope() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let user = seed_user(&pool, &prefix, "UserURUser", "student").await;
+
+    let resp = server
+        .put(&format!("/users/{user}/usage_rights"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .json(&json!({
+            "file_ids": [],
+            "folder_ids": [],
+            "usage_rights": {
+                "use_justification": "fair_use",
+                "license": "cc_by"
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["use_justification"], "fair_use");
+    assert_eq!(body["license"], "cc_by");
+    assert_eq!(body["message"], "0 files updated");
+
+    // Another user gets 403.
+    let other = seed_user(&pool, &prefix, "UserUROther", "student").await;
+    let resp = server
+        .put(&format!("/users/{other}/usage_rights"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .json(&json!({
+            "usage_rights": { "use_justification": "own_copyright" }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // Admin can set for any user.
+    let admin = seed_user(&pool, &prefix, "UserURAdmin2", "admin").await;
+    let resp = server
+        .put(&format!("/users/{user}/usage_rights"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "usage_rights": { "use_justification": "public_domain" }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // Cleanup.
+    let _ = sqlx::query("DELETE FROM usage_rights WHERE context_type = 'User' AND context_id = $1")
+        .bind(user)
+        .execute(&pool)
+        .await;
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn get_group_content_licenses_returns_eight_entries() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let admin = seed_user(&pool, &prefix, "GroupLicAdmin", "admin").await;
+    let course = seed_course(&pool, &prefix, "GroupLicCourse").await;
+    let group = sqlx::query_scalar(
+        "INSERT INTO groups (name, course_id) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(format!("{prefix}-GroupLicGroup"))
+    .bind(course)
+    .fetch_one(&pool)
+    .await
+    .expect("seed group");
+
+    let resp = server
+        .get(&format!("/groups/{group}/content_licenses"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let list = body.as_array().expect("license array");
+    assert_eq!(list.len(), 8, "{body}");
+    assert_eq!(list[0]["id"], "private");
+    assert_eq!(list[0]["name"], "Private (Copyrighted)");
+    assert_eq!(list[0]["url"], "http://en.wikipedia.org/wiki/Copyright");
+
+    // Nonexistent group returns 404.
+    let resp = server
+        .get("/groups/999999/content_licenses")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    // Cleanup.
+    let _ = sqlx::query("DELETE FROM groups WHERE id = $1")
+        .bind(group)
+        .execute(&pool)
+        .await;
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn get_user_content_licenses_returns_eight_entries() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let user = seed_user(&pool, &prefix, "UserLicUser", "student").await;
+
+    let resp = server
+        .get(&format!("/users/{user}/content_licenses"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let list = body.as_array().expect("license array");
+    assert_eq!(list.len(), 8, "{body}");
+    assert_eq!(list[0]["id"], "private");
+
+    // Another user gets 403.
+    let other = seed_user(&pool, &prefix, "UserLicOther", "student").await;
+    let resp = server
+        .get(&format!("/users/{other}/content_licenses"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // Admin can read any user's licenses.
+    let admin = seed_user(&pool, &prefix, "UserLicAdmin", "admin").await;
+    let resp = server
+        .get(&format!("/users/{user}/content_licenses"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
