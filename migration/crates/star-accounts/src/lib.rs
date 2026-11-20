@@ -1116,10 +1116,13 @@ async fn site_admin_account(pool: &PgPool) -> Result<Option<i64>, ApiError> {
     Ok(row.map(|(id,)| id))
 }
 
+/// The columns of the read only account JSON.
+type ReadOnlyAccountRow = (i64, String, Option<i64>, String, Option<String>, String);
+
 /// Canvas `account_json(read_only: true)` — the attribute fields plus the
 /// default time zone.
 async fn read_only_account_json(pool: &PgPool, account_id: i64) -> Result<Option<Value>, ApiError> {
-    let row: Option<(i64, String, Option<i64>, String, Option<String>, String)> = sqlx::query_as(
+    let row: Option<ReadOnlyAccountRow> = sqlx::query_as(
         "SELECT id, name, parent_account_id, workflow_state, uuid, default_time_zone \
          FROM accounts WHERE id = $1",
     )
