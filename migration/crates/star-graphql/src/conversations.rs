@@ -85,7 +85,6 @@ struct ConversationParticipantRow {
 pub struct Conversation {
     id: i64,
     subject: String,
-    workflow_state: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -508,7 +507,6 @@ async fn fetch_conversation(
     Ok(row.map(|row| Conversation {
         id: row.id,
         subject: row.subject,
-        workflow_state: row.workflow_state,
         created_at: row.created_at,
         updated_at: row.updated_at,
     }))

@@ -300,14 +300,11 @@ impl GroupMembership {
 #[derive(Debug, Clone)]
 pub struct GroupSet {
     id: i64,
-    course_id: Option<i64>,
-    account_id: Option<i64>,
     name: String,
     self_signup: Option<String>,
     group_limit: Option<i32>,
     auto_leader: Option<String>,
     non_collaborative: bool,
-    workflow_state: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -439,14 +436,11 @@ fn group_from_row(row: GroupRow) -> Group {
 fn group_set_from_row(row: GroupSetRow) -> GroupSet {
     GroupSet {
         id: row.id,
-        course_id: row.course_id,
-        account_id: row.account_id,
         name: row.name,
         self_signup: row.self_signup,
         group_limit: row.group_limit,
         auto_leader: row.auto_leader,
         non_collaborative: row.non_collaborative,
-        workflow_state: row.workflow_state,
         created_at: row.created_at,
         updated_at: row.updated_at,
     }

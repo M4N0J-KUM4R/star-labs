@@ -51,7 +51,6 @@ struct FileRow {
     size: i64,
     folder_id: Option<i64>,
     workflow_state: String,
-    hidden: bool,
     locked: bool,
     lock_at: Option<DateTime<Utc>>,
     unlock_at: Option<DateTime<Utc>>,
@@ -319,7 +318,7 @@ impl Folder {
         let rows: Vec<FileRow> = sqlx::query_as(
             r#"
             SELECT id, filename, display_name, content_type, size, folder_id,
-                   workflow_state, hidden, locked, lock_at, unlock_at, created_at, updated_at
+                   workflow_state, locked, lock_at, unlock_at, created_at, updated_at
             FROM files
             WHERE folder_id = $1 AND workflow_state != 'deleted'
             ORDER BY id

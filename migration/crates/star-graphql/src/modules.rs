@@ -100,7 +100,6 @@ const MODULE_ITEM_JOIN_SQL: &str = "FROM module_items mi \
 #[derive(Debug, Clone)]
 pub struct Module {
     id: i64,
-    course_id: i64,
     name: String,
     position: i32,
     workflow_state: String,
@@ -187,8 +186,6 @@ impl Module {
 pub struct ModuleItem {
     id: i64,
     module_id: i64,
-    item_type: String,
-    item_id: i64,
     title: Option<String>,
     indent: i32,
     position: i32,
@@ -317,7 +314,6 @@ pub(crate) async fn fetch_module_page(
                 cursor,
                 node: Module {
                     id: row.id,
-                    course_id: row.course_id,
                     name: row.name,
                     position: row.position,
                     workflow_state: row.workflow_state,
@@ -386,8 +382,6 @@ async fn fetch_module_items(
                 node: ModuleItem {
                     id: row.id,
                     module_id: row.module_id,
-                    item_type: row.item_type,
-                    item_id: row.item_id,
                     title: row.title,
                     indent: row.indent,
                     position: row.position,
@@ -443,7 +437,6 @@ async fn fetch_module(
 
     Ok(row.map(|row| Module {
         id: row.id,
-        course_id: row.course_id,
         name: row.name,
         position: row.position,
         workflow_state: row.workflow_state,
@@ -496,8 +489,6 @@ pub(crate) async fn fetch_module_item(
     Ok(Some(ModuleItem {
         id: row.id,
         module_id: row.module_id,
-        item_type: row.item_type,
-        item_id: row.item_id,
         title: row.title,
         indent: row.indent,
         position: row.position,

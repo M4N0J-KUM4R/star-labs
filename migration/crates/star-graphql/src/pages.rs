@@ -92,7 +92,6 @@ pub enum ProgressState {
 #[derive(Debug, Clone)]
 pub struct Page {
     id: i64,
-    course_id: i64,
     title: String,
     body: Option<String>,
     url: Option<String>,
@@ -330,7 +329,6 @@ pub(crate) async fn fetch_page_page(
                 cursor,
                 node: Page {
                     id: row.id,
-                    course_id: row.course_id,
                     title: row.title,
                     body: row.body,
                     url: row.url,
