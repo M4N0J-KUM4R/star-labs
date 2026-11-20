@@ -257,6 +257,42 @@ pub struct RubricAssociationResponse {
     pub association_count: i64,
 }
 
+// ---------------------------------------------------------------------------
+// Peer review domain types (Canvas AssessmentRequest)
+// ---------------------------------------------------------------------------
+
+/// Canvas-shaped peer review (stored as `assessment_requests`).
+///
+/// Maps to Canvas `AssessmentRequest` (lib/api/v1/assessment_request.rb):
+/// { id, user_id, assessor_id, asset_id, asset_type, workflow_state }
+/// where `asset` is always a Submission and `asset_type` is 'Submission'.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PeerReview {
+    pub id: i64,
+    pub user_id: i64,
+    pub assessor_id: i64,
+    pub asset_id: i64,
+    pub asset_type: String,
+    pub workflow_state: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Query params for listing peer reviews.
+#[derive(Debug, Deserialize)]
+pub struct PeerReviewsQuery {
+    pub include: Option<String>,
+    // Canvas also accepts submission_id as a query param for scoped listing,
+    // but our route structure handles that via the URL path.
+}
+
+/// Request to create a peer review: only `user_id` (the reviewer) is accepted.
+/// The asset (submission) is always taken from the URL path.
+#[derive(Debug, Deserialize)]
+pub struct CreatePeerReviewRequest {
+    pub user_id: i64,
+}
+
 /// Response of `POST /courses/{courseId}/rubrics/{rubricId}/associations`.
 #[derive(Debug, Serialize)]
 pub struct AssociationCreateResponse {
@@ -1495,9 +1531,339 @@ async fn delete_rubric_association(
     Ok(Json(deleted))
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Peer Reviews (Canvas AssessmentRequest, peer_reviews_api_controller.rb)
+//
+// Routes:
+//   GET    /courses/{courseId}/assignments/{assignmentId}/peer_reviews
+//   GET    /courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
+//   POST   /courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
+//   DELETE /courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
+//   POST   /courses/{courseId}/assignments/{assignmentId}/allocate
+// -----------------------------------------------------------------------------
+
+/// Verify the assignment exists and belongs to the course.
+async fn verify_assignment_course(
+    pool: &PgPool,
+    course_id: i64,
+    assignment_id: i64,
+) -> Result<i64, ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM assignments WHERE id = $1 AND course_id = $2 AND workflow_state != 'deleted'",
+    )
+    .bind(assignment_id)
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(|(id,)| id).ok_or(ApiError::NotFound)
+}
+
+/// Verify the submission exists and belongs to the assignment.
+async fn verify_submission_assignment(
+    pool: &PgPool,
+    assignment_id: i64,
+    submission_id: i64,
+) -> Result<i64, ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM submissions WHERE id = $1 AND assignment_id = $2",
+    )
+    .bind(submission_id)
+    .bind(assignment_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.map(|(id,)| id).ok_or(ApiError::NotFound)
+}
+
+/// Build a Canvas-shaped peer review JSON from a row.
+/// `includes` is a comma-separated list: "user", "assessor", "submission_comments".
+async fn serialize_peer_review(
+    pool: &PgPool,
+    review: &PeerReview,
+    includes: &Option<String>,
+) -> Result<serde_json::Value, ApiError> {
+    let mut obj = serde_json::json!({
+        "id": review.id,
+        "user_id": review.user_id,
+        "assessor_id": review.assessor_id,
+        "asset_id": review.asset_id,
+        "asset_type": review.asset_type,
+        "workflow_state": review.workflow_state,
+    });
+
+    if let Some(inc) = includes {
+        let inc_list: Vec<&str> = inc.split(',').map(|s| s.trim()).collect();
+
+        if inc_list.contains(&"user") {
+            let user_row: Option<(String,)> =
+                sqlx::query_as("SELECT name FROM users WHERE id = $1")
+                    .bind(review.user_id)
+                    .fetch_optional(pool)
+                    .await?;
+            if let Some((name,)) = user_row {
+                obj["user"] = serde_json::json!({
+                    "id": review.user_id,
+                    "display_name": name,
+                });
+            }
+        }
+
+        if inc_list.contains(&"assessor") {
+            let assessor_row: Option<(String,)> =
+                sqlx::query_as("SELECT name FROM users WHERE id = $1")
+                    .bind(review.assessor_id)
+                    .fetch_optional(pool)
+                    .await?;
+            if let Some((name,)) = assessor_row {
+                obj["assessor"] = serde_json::json!({
+                    "id": review.assessor_id,
+                    "display_name": name,
+                });
+            }
+        }
+    }
+
+    Ok(obj)
+}
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/peer_reviews
+///
+/// Teachers/Admin see all reviews; students see only their own (assessee).
+async fn list_peer_reviews(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    Query(params): Query<PeerReviewsQuery>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let assignment_id = verify_assignment_course(&state.db, course_id, assignment_id).await?;
+
+    let is_admin_user = is_admin(&auth);
+    let is_teacher = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+
+    // Students see only their own peer reviews; teachers/admins see all.
+    let reviews: Vec<PeerReview> = if is_admin_user || is_teacher {
+        sqlx::query_as(
+            r#"
+            SELECT id, user_id, assessor_id, asset_id, asset_type, workflow_state,
+                   created_at, updated_at
+            FROM assessment_requests
+            WHERE asset_id IN (SELECT id FROM submissions WHERE assignment_id = $1)
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(assignment_id)
+        .fetch_all(&state.db)
+        .await?
+    } else {
+        sqlx::query_as(
+            r#"
+            SELECT id, user_id, assessor_id, asset_id, asset_type, workflow_state,
+                   created_at, updated_at
+            FROM assessment_requests
+            WHERE asset_id IN (SELECT id FROM submissions WHERE assignment_id = $1)
+              AND user_id = $2
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(assignment_id)
+        .bind(auth.id)
+        .fetch_all(&state.db)
+        .await?
+    };
+
+    let mut results = Vec::new();
+    for review in reviews {
+        results.push(serialize_peer_review(&state.db, &review, &params.include).await?);
+    }
+
+    Ok(Json(results))
+}
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
+async fn list_submission_peer_reviews(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, submission_id)): Path<(i64, i64, i64)>,
+    Query(params): Query<PeerReviewsQuery>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let assignment_id =
+        verify_assignment_course(&state.db, course_id, assignment_id).await?;
+    let _submission_id =
+        verify_submission_assignment(&state.db, assignment_id, submission_id).await?;
+
+    let is_admin_user = is_admin(&auth);
+    let is_teacher = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+
+    // Students see only reviews where they are the assessee; teachers/admins see all.
+    let reviews: Vec<PeerReview> = if is_admin_user || is_teacher {
+        sqlx::query_as(
+            r#"
+            SELECT id, user_id, assessor_id, asset_id, asset_type, workflow_state,
+                   created_at, updated_at
+            FROM assessment_requests
+            WHERE asset_id = $1
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(submission_id)
+        .fetch_all(&state.db)
+        .await?
+    } else {
+        sqlx::query_as(
+            r#"
+            SELECT id, user_id, assessor_id, asset_id, asset_type, workflow_state,
+                   created_at, updated_at
+            FROM assessment_requests
+            WHERE asset_id = $1 AND user_id = $2
+            ORDER BY id ASC
+            "#,
+        )
+        .bind(submission_id)
+        .bind(auth.id)
+        .fetch_all(&state.db)
+        .await?
+    };
+
+    let mut results = Vec::new();
+    for review in reviews {
+        results.push(serialize_peer_review(&state.db, &review, &params.include).await?);
+    }
+
+    Ok(Json(results))
+}
+
+/// POST /courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
+///
+/// Requires teacher/admin. Returns the created PeerReview JSON.
+async fn create_peer_review(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, submission_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<CreatePeerReviewRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let assignment_id =
+        verify_assignment_course(&state.db, course_id, assignment_id).await?;
+    let submission_id =
+        verify_submission_assignment(&state.db, assignment_id, submission_id).await?;
+
+    // The reviewer must not be the same as the submission owner.
+    let submission_owner: Option<(i64,)> = sqlx::query_as(
+        "SELECT user_id FROM submissions WHERE id = $1",
+    )
+    .bind(submission_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    if let Some((owner_id,)) = submission_owner {
+        if payload.user_id == owner_id {
+            return Err(ApiError::Validation("reviewer and student cannot be the same".into()));
+        }
+    }
+
+    // Verify the reviewer is a student enrolled in the course.
+    let reviewer_enrollment: Option<(String,)> = sqlx::query_as(
+        "SELECT role FROM enrollments WHERE user_id = $1 AND course_id = $2 AND workflow_state != 'deleted' LIMIT 1",
+    )
+    .bind(payload.user_id)
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let _reviewer_role = reviewer_enrollment
+        .map(|(r,)| r)
+        .ok_or(ApiError::Validation("reviewer must be a course student".into()))?;
+
+    // Upsert: UNIQUE(asset_id, assessor_id) prevents duplicates.
+    // user_id = submission owner (the assessee), assessor_id = reviewer (payload.user_id).
+    let owner_id = submission_owner.map(|(o,)| o);
+    let review: PeerReview = sqlx::query_as(
+        r#"
+        INSERT INTO assessment_requests (user_id, assessor_id, asset_id, asset_type, workflow_state)
+        VALUES ($1, $2, $3, 'Submission', 'assigned')
+        ON CONFLICT (asset_id, assessor_id) DO UPDATE SET updated_at = now()
+        RETURNING id, user_id, assessor_id, asset_id, asset_type, workflow_state, created_at, updated_at
+        "#,
+    )
+    .bind(owner_id)
+    .bind(payload.user_id)
+    .bind(submission_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok((StatusCode::CREATED, Json(serde_json::json!({
+        "id": review.id,
+        "user_id": review.user_id,
+        "assessor_id": review.assessor_id,
+        "asset_id": review.asset_id,
+        "asset_type": review.asset_type,
+        "workflow_state": review.workflow_state,
+    }))))
+}
+
+/// DELETE /courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
+///
+/// Requires teacher/admin. Returns the deleted PeerReview JSON (Canvas shape).
+async fn delete_peer_review(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, submission_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Query(params): Query<CreatePeerReviewRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let assignment_id =
+        verify_assignment_course(&state.db, course_id, assignment_id).await?;
+    let submission_id =
+        verify_submission_assignment(&state.db, assignment_id, submission_id).await?;
+
+    let review: Option<PeerReview> = sqlx::query_as(
+        r#"
+        SELECT id, user_id, assessor_id, asset_id, asset_type, workflow_state,
+               created_at, updated_at
+        FROM assessment_requests
+        WHERE asset_id = $1 AND assessor_id = $2
+        "#,
+    )
+    .bind(submission_id)
+    .bind(params.user_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let review = review.ok_or(ApiError::NotFound)?;
+
+    sqlx::query("DELETE FROM assessment_requests WHERE id = $1")
+        .bind(review.id)
+        .execute(&state.db)
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "id": review.id,
+        "user_id": review.user_id,
+        "assessor_id": review.assessor_id,
+        "asset_id": review.asset_id,
+        "asset_type": review.asset_type,
+        "workflow_state": review.workflow_state,
+    })))
+}
+
+// -----------------------------------------------------------------------------
 // Canvas nested route aliases
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Ensure `rubric_id` exists and belongs to `course_id`.
 /// Missing and mismatched rubrics both map to 404 so a course-scoped alias
@@ -1517,6 +1883,237 @@ async fn verify_rubric_course(
         _ => Err(ApiError::NotFound),
     }
 }
+
+// -----------------------------------------------------------------------------
+// Rubric imports (Canvas RubricsApiController#upload / #upload_status /
+// #rubrics_by_import_id)
+//
+// star-lms stores rubrics as normalized rows, so import processing creates
+// rubric_criteria and rubric_ratings rows. The import record tracks workflow
+// state and progress for polling.
+// -----------------------------------------------------------------------------
+
+/// Canvas-shaped rubric import response.
+/// Maps to Canvas `RubricImport` JSON (app/models/rubric_import.rb).
+#[derive(Debug, Serialize)]
+pub struct RubricImportResponse {
+    pub id: i64,
+    pub user_id: Option<i64>,
+    pub attachment_id: Option<i64>,
+    pub workflow_state: String,
+    pub progress: i32,
+    pub error_count: i32,
+    pub error_data: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<serde_json::Value>,
+}
+
+/// Request body for POST .../rubrics/upload.
+#[derive(Debug, Deserialize)]
+pub struct UploadRubricRequest {
+    pub attachment_id: Option<i64>,
+}
+
+/// Insert a new rubric_imports row and bump it to 'created' so the async
+/// processor can pick it up. The attachment_id references an already-uploaded
+/// file in the attachments table (created via the files API).
+async fn create_rubric_import(
+    pool: &PgPool,
+    context_id: i64,
+    context_type: &str,
+    user_id: Option<i64>,
+    attachment_id: i64,
+) -> Result<RubricImportResponse, ApiError> {
+    let row: RubricImportResponse = sqlx::query_as(
+        r#"
+        INSERT INTO rubric_imports (context_id, context_type, attachment_id, user_id, workflow_state)
+        VALUES ($1, $2, $3, $4, 'created')
+        RETURNING
+            id, user_id, attachment_id, workflow_state,
+            progress, error_count, error_data, created_at, updated_at
+        "#,
+    )
+    .bind(context_id)
+    .bind(context_type)
+    .bind(attachment_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(row)
+}
+
+/// Query params for upload_status.
+#[derive(Debug, Deserialize)]
+pub struct UploadStatusQuery {
+    pub id: Option<String>,
+}
+
+/// POST /courses/{courseId}/rubrics/upload  → 201
+///
+/// Accepts a JSON body with `attachment_id` referencing an already-uploaded
+/// CSV file. Creates the RubricImport record and returns it immediately.
+/// Canvas processes the file asynchronously; star-lms follows the same pattern.
+async fn upload_rubric(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<UploadRubricRequest>,
+) -> Result<(StatusCode, Json<RubricImportResponse>), ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let course_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM courses WHERE id = $1)")
+            .bind(course_id)
+            .fetch_one(&state.db)
+            .await?;
+    if !course_exists {
+        return Err(ApiError::NotFound);
+    }
+
+    let attachment_id = payload
+        .attachment_id
+        .ok_or_else(|| ApiError::Validation("attachment_id is required".into()))?;
+
+    let mut import = create_rubric_import(
+        &state.db,
+        course_id,
+        "Course",
+        Some(auth.id),
+        attachment_id,
+    )
+    .await?;
+
+    import.user = Some(serde_json::json!({
+        "id": auth.id,
+        "display_name": auth.name,
+    }));
+    import.attachment = Some(serde_json::json!({
+        "id": attachment_id,
+    }));
+
+    Ok((StatusCode::CREATED, Json(import)))
+}
+
+/// GET /courses/{courseId}/rubrics/upload_status
+async fn get_upload_status(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    Query(params): Query<UploadStatusQuery>,
+    auth: AuthUser,
+) -> Result<Json<RubricImportResponse>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let import_id = if let Some(ref id_str) = params.id {
+        if id_str == "latest" {
+            sqlx::query_scalar(
+                r#"
+                SELECT id FROM rubric_imports
+                WHERE context_id = $1 AND context_type = 'Course'
+                ORDER BY created_at DESC LIMIT 1
+                "#,
+            )
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?
+        } else {
+            id_str.parse::<i64>().ok()
+        }
+    } else {
+        sqlx::query_scalar(
+            r#"
+            SELECT id FROM rubric_imports
+            WHERE context_id = $1 AND context_type = 'Course'
+            ORDER BY created_at DESC LIMIT 1
+            "#,
+        )
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?
+    };
+
+    let import_id = import_id.ok_or(ApiError::NotFound)?;
+
+    let mut import: RubricImportResponse = sqlx::query_as(
+        r#"
+        SELECT id, user_id, attachment_id, workflow_state,
+               progress, error_count, error_data, created_at, updated_at
+        FROM rubric_imports WHERE id = $1
+        "#,
+    )
+    .bind(import_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+
+    if import.user_id.is_some() {
+        let user_row: Option<(String,)> = sqlx::query_as(
+            "SELECT name FROM users WHERE id = $1",
+        )
+        .bind(import.user_id)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some((name,)) = user_row {
+            import.user = Some(serde_json::json!({
+                "id": import.user_id,
+                "display_name": name,
+            }));
+        }
+    }
+
+    Ok(Json(import))
+}
+
+/// GET /courses/{courseId}/rubrics/rubrics_by_import_id/{id}
+///
+/// Returns all rubrics created by a specific import.
+async fn get_rubrics_by_import_id(
+    State(state): State<AppState>,
+    Path((course_id, import_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Rubric>>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let import_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM rubric_imports WHERE id = $1 AND context_id = $2)",
+    )
+    .bind(import_id)
+    .bind(course_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    if !import_exists {
+        return Err(ApiError::NotFound);
+    }
+
+    let rubrics: Vec<Rubric> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, title, points_possible, workflow_state, created_at, updated_at
+        FROM rubrics
+        WHERE rubric_imports_id = $1 AND workflow_state != 'deleted'
+        ORDER BY created_at ASC
+        "#,
+    )
+    .bind(import_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(rubrics))
+}
+
+// -----------------------------------------------------------------------------
+// Canvas nested route aliases
+// -----------------------------------------------------------------------------
 
 /// GET /courses/{courseId}/rubrics/{id}  → 200 (Canvas nested alias).
 async fn get_course_rubric(
@@ -1889,7 +2486,33 @@ pub fn router() -> Router<AppState> {
             "/rubric_associations/{id}",
             delete(delete_rubric_association),
         )
+        // Peer review routes (Canvas AssessmentRequest / peer_reviews_api_controller.rb)
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/peer_reviews",
+            get(list_peer_reviews),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
+            get(list_submission_peer_reviews),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
+            post(create_peer_review),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
+            delete(delete_peer_review),
+        )
         .route("/rubrics/upload_template", get(upload_template))
+        .route("/courses/{courseId}/rubrics/upload", post(upload_rubric))
+        .route(
+            "/courses/{courseId}/rubrics/upload_status",
+            get(get_upload_status),
+        )
+        .route(
+            "/courses/{courseId}/rubrics/rubrics_by_import_id/{id}",
+            get(get_rubrics_by_import_id),
+        )
         .route(
             "/courses/{courseId}/rubrics/download_rubrics",
             post(download_course_rubrics),
