@@ -1,0 +1,65 @@
+{% extends "layouts/course.html" %}
+{# Topic show — Canvas discussion_topics#show, ported from the legacy
+   server-rendered partials (_entry.html.erb / _sub_entry.html.erb):
+   .discussion-topic header (author, post date) + .message.user_content body,
+   then the entry list and the reply form.
+   Deviation: entries render FLAT (the threaded /view endpoint is missing in
+   the Rust API); a reply carries parent_id rendered as "in reply to". #}
+{% block content %}
+  <div id="discussion_show" class="discussion-show" data-topic-id="{{ topic_id }}">
+    <div class="discussion-topic{% if unread %} unread{% endif %}" id="topic_{{ topic_id }}">
+      <div class="discussion-topic__header">
+        <h1 class="discussion-topic__title">{{ topic_title }}</h1>
+        <span class="topic-flag topic-flag--pinned">{% if pinned %}📌 Pinned{% endif %}</span>
+        <span class="topic-flag topic-flag--locked">{% if locked %}🔒 Locked{% endif %}</span>
+        <div class="discussion-topic__meta">
+          <span class="user_name">{{ topic_author }}</span>
+          <span class="post_date">{{ created_at }}</span>
+        </div>
+      </div>
+      <div class="message user_content">{{ topic_message|safe }}</div>
+    </div>
+
+    <div class="discussion-entries" id="discussion_entries">
+      <h2 class="discussion-entries__title screenreader-only">Replies</h2>
+      {% if entries.is_empty() %}
+      <p class="discussion-entries__empty">No replies have been posted yet.</p>
+      {% endif %}
+      {% for entry in entries %}
+      <div class="communication_sub_message entry" id="entry_{{ entry.id }}">
+        <div class="entry__header">
+          <span class="user_name">{{ entry.author_name }}</span>
+          {% if let Some(parent) = entry.parent_id %}
+          <span class="entry__in-reply-to">in reply to <a href="#entry_{{ parent }}">entry {{ parent }}</a></span>
+          {% endif %}
+          <span class="post_date">{{ entry.created_at }}</span>
+        </div>
+        <div class="message user_content">{{ entry.message|safe }}</div>
+        <div class="entry__reply">
+          <form class="add_sub_message_form" method="post" action="/courses/{{ course_id }}/discussions/{{ topic_id }}/entries">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <input type="hidden" name="parent_id" value="{{ entry.id }}">
+            <label class="screenreader-only" for="reply_message_{{ entry.id }}">Reply</label>
+            <textarea class="ic-Input reply-textarea" id="reply_message_{{ entry.id }}" name="message" rows="3" required placeholder="Reply to {{ entry.author_name }}…"></textarea>
+            <button type="submit" class="Button Button--small submit_button">Post Reply</button>
+          </form>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="discussion-reply-all">
+      <h2 class="discussion-reply-all__title">Add a Reply</h2>
+      {% if locked %}
+      <p class="discussion-reply-all__locked">This discussion is locked; new replies are disabled.</p>
+      {% else %}
+      <form id="discussion_entry_form" method="post" action="/courses/{{ course_id }}/discussions/{{ topic_id }}/entries">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <label class="screenreader-only" for="entry_message">Reply</label>
+        <textarea class="ic-Input reply-textarea" id="entry_message" name="message" rows="5" required placeholder="Write your reply…"></textarea>
+        <button type="submit" class="Button Button--primary">Post Reply</button>
+      </form>
+      {% endif %}
+    </div>
+  </div>
+{% endblock content %}

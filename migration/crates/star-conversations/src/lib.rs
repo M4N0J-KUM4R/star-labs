@@ -36,6 +36,10 @@ use std::collections::HashMap;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+// Server-rendered inbox loaders (star-ui, issue #72): pub loaders extracted
+// the same way star-courses extracted load_course_for_viewer.
+pub mod ui;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -310,7 +314,8 @@ pub struct UnreadCount {
 // ---------------------------------------------------------------------------
 
 /// Check if a user is an active participant in a conversation.
-async fn is_participant(
+/// `pub(crate)`: shared with the UI loader module (ui.rs).
+pub(crate) async fn is_participant(
     pool: &PgPool,
     conversation_id: i64,
     user_id: i64,

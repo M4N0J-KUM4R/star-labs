@@ -10,6 +10,8 @@ star-dashboard = { path = "../star-dashboard" }
 star-courses = { path = "../star-courses" }
 star-pages = { path = "../star-pages" }
 star-modules = { path = "../star-modules" }
+star-discussions = { path = "../star-discussions" }
+star-conversations = { path = "../star-conversations" }
 axum = { workspace = true }
 axum-extra = { workspace = true }
 sqlx = { workspace = true }

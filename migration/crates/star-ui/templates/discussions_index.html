@@ -1,0 +1,55 @@
+{% extends "layouts/course.html" %}
+{# Discussions index — Canvas discussion_topics#index (classic topic table:
+   title, author, unread, replies, last activity, pinned/locked icons).
+   Teacher sees the "+ Discussion" button (user_can_create via
+   moderate_forum); the unread dot is per-viewer read state. #}
+{% block content %}
+  <div id="discussions_index" class="discussions-index">
+    <div class="ic-Action-header">
+      <div class="ic-Action-header__Primary">
+        <h1 class="screenreader-only">Discussions</h1>
+        <h2 class="discussions-index__title">Discussions</h2>
+      </div>
+      <div class="ic-Action-header__Secondary">
+        {% if can_create %}
+        <a href="/courses/{{ course_id }}/discussions/new" class="Button Button--primary" id="add_discussion">+ Discussion</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <table class="discussions-index__table" id="discussion_topics_table">
+      <caption class="screenreader-only">Discussion topics for {{ course_name }}</caption>
+      <thead>
+        <tr>
+          <th scope="col" class="topic-unread-col"><span class="screenreader-only">Read state</span></th>
+          <th scope="col">Topic</th>
+          <th scope="col">Author</th>
+          <th scope="col">Replies</th>
+          <th scope="col">Last Activity</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if topics.is_empty() %}
+        <tr class="discussions-index__empty">
+          <td colspan="5">No discussion topics have been added to this course yet.</td>
+        </tr>
+        {% endif %}
+        {% for topic in topics %}
+        <tr class="discussion-topic-row{% if topic.unread %} unread{% endif %}" id="discussion_topic_{{ topic.id }}" data-topic-id="{{ topic.id }}">
+          <td class="topic-unread-col">
+            {% if topic.unread %}<span class="unread-mark" title="Unread" aria-label="Unread topic">●</span>{% endif %}
+          </td>
+          <td class="topic-title-cell">
+            <a class="discussion-topic-title" href="/courses/{{ course_id }}/discussions/{{ topic.id }}">{{ topic.title }}</a>
+            {% if topic.pinned %}<span class="topic-flag topic-flag--pinned" title="Pinned">📌 Pinned</span>{% endif %}
+            {% if topic.locked %}<span class="topic-flag topic-flag--locked" title="Locked">🔒 Locked</span>{% endif %}
+          </td>
+          <td class="topic-author">{{ topic.author_name }}</td>
+          <td class="topic-replies">{{ topic.entry_count }}</td>
+          <td class="topic-last-activity">{% if let Some(at) = topic.last_reply_at %}{{ at }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock content %}

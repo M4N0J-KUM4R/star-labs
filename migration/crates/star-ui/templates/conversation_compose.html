@@ -1,0 +1,45 @@
+{% extends "layouts/authenticated.html" %}
+{# Compose — Canvas conversations compose dialog as a plain page: recipients
+   multi-select (fed by the same recipient index the API's find_recipients
+   serves), subject, body. POST /conversations, PRG to the new thread. #}
+{% block content %}
+  <div id="conversation_compose" class="conversation-compose">
+    <header class="conversation-compose__header panel">
+      <div class="panel__primary">
+        <h1 class="conversation-compose__title">New Conversation</h1>
+      </div>
+      <div class="panel__secondary">
+        <a href="/conversations" class="Button">Back to Inbox</a>
+      </div>
+    </header>
+
+    {% if !error.is_empty() %}
+    <div class="ic-flash error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <form id="compose_form" method="post" action="/conversations" class="conversation-compose__form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="compose_recipients">Recipients</label>
+        <select class="ic-Input compose-recipients" id="compose_recipients" name="recipients" multiple required size="5" aria-describedby="compose_recipients_help">
+          {% for recipient in recipients %}
+          <option value="{{ recipient.id }}">{{ recipient.label }}</option>
+          {% endfor %}
+        </select>
+        <p class="ic-Help" id="compose_recipients_help">Hold Ctrl / Cmd to select multiple recipients.</p>
+      </div>
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="compose_subject">Subject</label>
+        <input class="ic-Input" type="text" id="compose_subject" name="subject" required maxlength="255" autofocus>
+      </div>
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="compose_body">Message</label>
+        <textarea class="ic-Input compose-body" id="compose_body" name="body" rows="8" required placeholder="Write your message…"></textarea>
+      </div>
+      <div class="conversation-compose__actions">
+        <button type="submit" class="Button Button--primary">Send</button>
+        <a href="/conversations" class="Button button-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock content %}

@@ -732,3 +732,681 @@ async fn next_param_round_trips_through_login() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// Discussions + inbox journey (issue #72)
+// ---------------------------------------------------------------------------
+
+/// Seed a discussion topic; returns its id.
+async fn seed_topic(
+    pool: &PgPool,
+    course_id: i64,
+    author_id: i64,
+    title: &str,
+    message: &str,
+) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO discussion_topics (course_id, title, message, user_id) \
+         VALUES ($1, $2, $3, $4) RETURNING id",
+    )
+    .bind(course_id)
+    .bind(title)
+    .bind(message)
+    .bind(author_id)
+    .fetch_one(pool)
+    .await
+    .expect("seed topic")
+}
+
+/// Seed a discussion entry (root when parent is None); returns its id.
+async fn seed_entry(
+    pool: &PgPool,
+    topic_id: i64,
+    user_id: i64,
+    message: &str,
+    parent: Option<i64>,
+) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO discussion_entries (topic_id, parent_id, user_id, message) \
+         VALUES ($1, $2, $3, $4) RETURNING id",
+    )
+    .bind(topic_id)
+    .bind(parent)
+    .bind(user_id)
+    .bind(message)
+    .fetch_one(pool)
+    .await
+    .expect("seed entry")
+}
+
+/// Seed a two-participant conversation with one message; returns its id.
+async fn seed_conversation(
+    pool: &PgPool,
+    author_id: i64,
+    recipient_id: i64,
+    subject: &str,
+    body: &str,
+) -> i64 {
+    let mut tx = pool.begin().await.expect("begin");
+    let id: i64 = sqlx::query_scalar(
+        "INSERT INTO conversations (subject) VALUES ($1) RETURNING id",
+    )
+    .bind(subject)
+    .fetch_one(&mut *tx)
+    .await
+    .expect("seed conversation");
+    for (uid, read) in [(author_id, true), (recipient_id, false)] {
+        sqlx::query(
+            "INSERT INTO conversation_participants \
+             (conversation_id, user_id, workflow_state, last_message_at, read_at) \
+             VALUES ($1, $2, 'active', now(), CASE WHEN $3 THEN now() ELSE NULL END)",
+        )
+        .bind(id)
+        .bind(uid)
+        .bind(read)
+        .execute(&mut *tx)
+        .await
+        .expect("seed participant");
+    }
+    sqlx::query(
+        "INSERT INTO conversation_messages (conversation_id, author_id, body) \
+         VALUES ($1, $2, $3)",
+    )
+    .bind(id)
+    .bind(author_id)
+    .bind(body)
+    .execute(&mut *tx)
+    .await
+    .expect("seed message");
+    tx.commit().await.expect("commit");
+    id
+}
+
+/// Fetch a shell page with the session cookie (CSRF cookie attached too, so
+/// follow-up POSTs can double-submit).
+async fn get_with_session(server: &TestServer, path: &str, session: &str) -> axum_test::TestResponse {
+    server
+        .get(path)
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            session.to_string(),
+        ))
+        .await
+}
+
+/// The discussions index gates on enrollment, shows the teacher-only
+/// "+ Discussion" button, and carries the per-viewer unread marker that
+/// clears after the topic is viewed.
+#[tokio::test]
+async fn discussions_index_teacher_button_and_unread_marker() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "dteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "dstudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Disc Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let topic = seed_topic(
+        &pool,
+        course,
+        teacher,
+        "Unread Topic",
+        "<p>Read me</p>",
+    )
+    .await;
+    let _ = seed_entry(&pool, topic, teacher, "first entry", None).await;
+
+    let teacher_token = star_auth::create_token(teacher, "teacher", JWT_SECRET).expect("mint");
+    let student_token = star_auth::create_token(student, "student", JWT_SECRET).expect("mint");
+
+    // Teacher: create button present.
+    let resp = get_with_session(
+        &server,
+        &format!("/courses/{course}/discussions"),
+        &teacher_token,
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(body.contains("add_discussion"), "teacher sees + Discussion");
+    assert!(body.contains("Unread Topic"));
+
+    // Student: no create button, unread marker on the un-viewed topic.
+    let resp = get_with_session(
+        &server,
+        &format!("/courses/{course}/discussions"),
+        &student_token,
+    )
+    .await;
+    assert_eq!(resp.status_code(), 200);
+    let body = resp.text();
+    assert!(
+        !body.contains("add_discussion"),
+        "student must not see + Discussion"
+    );
+    let unread_row = format!("discussion_topic_{topic}\"");
+    assert!(body.contains(&unread_row), "topic row present");
+    assert!(
+        body.contains("unread-mark"),
+        "unread marker expected for student on the un-viewed topic"
+    );
+
+    // Viewing the topic marks it read: the re-fetched index has no marker.
+    let show = get_with_session(
+        &server,
+        &format!("/courses/{course}/discussions/{topic}"),
+        &student_token,
+    )
+    .await;
+    assert_eq!(show.status_code(), 200, "body: {}", show.text());
+
+    let resp = get_with_session(
+        &server,
+        &format!("/courses/{course}/discussions"),
+        &student_token,
+    )
+    .await;
+    let body = resp.text();
+    assert!(
+        !body.contains("unread-mark"),
+        "marker gone after viewing the topic"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Topic show renders the body HTML, entries with author names; teacher
+/// creates a topic via POST (PRG), student posts an entry and a reply.
+#[tokio::test]
+async fn discussion_show_create_topic_entry_and_reply() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "steacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "sstudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Show Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    let teacher_token = star_auth::create_token(teacher, "teacher", JWT_SECRET).expect("mint");
+    let student_token = star_auth::create_token(student, "student", JWT_SECRET).expect("mint");
+
+    // Teacher creates a topic through the form (PRG -> topic page).
+    let csrf_page = get_with_session(
+        &server,
+        &format!("/courses/{course}/discussions/new"),
+        &teacher_token,
+    )
+    .await;
+    assert_eq!(csrf_page.status_code(), 200, "teacher gets the form");
+    let csrf = csrf_page
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+
+    let resp = server
+        .post(&format!("/courses/{course}/discussions"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            teacher_token.clone(),
+        ))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_csrf": csrf,
+            "title": "Form Created Topic",
+            "message": "<p>Hello <strong>world</strong></p>"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 303, "PRG redirect: {}", resp.text());
+    let location = resp
+        .headers()
+        .get("location")
+        .expect("location")
+        .to_str()
+        .unwrap()
+        .to_string();
+    let topic_id: i64 = location
+        .rsplit('/')
+        .next()
+        .and_then(|s| s.parse().ok())
+        .expect("topic id in redirect");
+
+    // The row exists in the DB.
+    let count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM discussion_topics WHERE id = $1 AND title = 'Form Created Topic'",
+    )
+    .bind(topic_id)
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(count.0, 1, "teacher-created topic row appears");
+
+    // Topic show: body HTML renders safe, title present.
+    let show = get_with_session(&server, &location, &student_token).await;
+    assert_eq!(show.status_code(), 200);
+    let body = show.text();
+    assert!(body.contains("Form Created Topic"));
+    assert!(body.contains("<strong>world</strong>"), "body HTML is safe");
+
+    // Student posts a root entry through the form.
+    let csrf_page = get_with_session(&server, &location, &student_token).await;
+    let csrf = csrf_page
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+    let resp = server
+        .post(&format!("/courses/{course}/discussions/{topic_id}/entries"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            student_token.clone(),
+        ))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({"_csrf": csrf, "message": "Student entry one"}))
+        .await;
+    assert_eq!(resp.status_code(), 303, "entry PRG: {}", resp.text());
+
+    // The entry appears on the show page with the author name.
+    let show = get_with_session(&server, &location, &student_token).await;
+    let body = show.text();
+    assert!(body.contains("Student entry one"), "entry rendered");
+    assert!(body.contains("sstudent"), "entry author name rendered");
+
+    // Reply to that entry (parent_id set on the inline reply form).
+    let entry_id: (i64,) = sqlx::query_as(
+        "SELECT id FROM discussion_entries WHERE topic_id = $1 AND message = 'Student entry one'",
+    )
+    .bind(topic_id)
+    .fetch_one(&pool)
+    .await
+    .expect("entry id");
+    let csrf_page = get_with_session(&server, &location, &student_token).await;
+    let csrf = csrf_page
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+    let resp = server
+        .post(&format!("/courses/{course}/discussions/{topic_id}/entries"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            student_token.clone(),
+        ))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_csrf": csrf,
+            "message": "Inline reply to entry",
+            "parent_id": entry_id.0
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 303, "reply PRG: {}", resp.text());
+
+    let show = get_with_session(&server, &location, &student_token).await;
+    let body = show.text();
+    assert!(body.contains("Inline reply to entry"), "reply rendered");
+    assert!(
+        body.contains(&format!("entry_{}", entry_id.0)),
+        "reply references its parent entry"
+    );
+
+    // The reply row carries parent_id in the DB.
+    let replies: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM discussion_entries \
+         WHERE topic_id = $1 AND message = 'Inline reply to entry' AND parent_id = $2",
+    )
+    .bind(topic_id)
+    .bind(entry_id.0)
+    .fetch_one(&pool)
+    .await
+    .expect("reply count");
+    assert_eq!(replies.0, 1, "reply stored with parent_id");
+
+    // A student cannot create topics: POST answers 403.
+    let csrf_page = get_with_session(
+        &server,
+        &format!("/courses/{course}/discussions/new"),
+        &student_token,
+    )
+    .await;
+    assert_eq!(csrf_page.status_code(), 403, "student blocked from form");
+    let csrf = csrf_page
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+    let resp = server
+        .post(&format!("/courses/{course}/discussions"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            student_token.clone(),
+        ))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_csrf": csrf,
+            "title": "Student Topic",
+            "message": "should not exist"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student cannot create topics");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// The tab alias `/courses/{id}/discussion_topics` serves the same index
+/// page as `/courses/{id}/discussions` (the tabs API emits html_url with
+/// the discussion_topics suffix).
+#[tokio::test]
+async fn discussion_topics_alias_serves_the_index() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "ateacher", "teacher", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Alias Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let topic = seed_topic(&pool, course, teacher, "Alias Topic", "body").await;
+
+    let token = star_auth::create_token(teacher, "teacher", JWT_SECRET).expect("mint");
+
+    let a = get_with_session(&server, &format!("/courses/{course}/discussions"), &token).await;
+    let b = get_with_session(
+        &server,
+        &format!("/courses/{course}/discussion_topics"),
+        &token,
+    )
+    .await;
+    assert_eq!(a.status_code(), 200);
+    assert_eq!(b.status_code(), 200);
+    let a_body = a.text();
+    let b_body = b.text();
+    assert_eq!(a_body, b_body, "alias serves the identical page");
+    assert!(a_body.contains("Alias Topic"));
+    let _ = topic;
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// The inbox: unread styling on a seeded conversation, open marks it read,
+/// reply appends a message, mark-all-read clears the unread count badge,
+/// compose creates a conversation the recipient can see.
+#[tokio::test]
+async fn inbox_unread_open_reply_mark_all_and_compose() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "iteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "istudent", "student", "not-a-real-hash").await;
+    let conversation = seed_conversation(
+        &pool,
+        teacher,
+        student,
+        "Question about homework",
+        "What is due tomorrow?",
+    )
+    .await;
+
+    let student_token = star_auth::create_token(student, "student", JWT_SECRET).expect("mint");
+    let teacher_token = star_auth::create_token(teacher, "teacher", JWT_SECRET).expect("mint");
+
+    // Inbox shows the unread-styled conversation + global nav badge.
+    let resp = get_with_session(&server, "/conversations", &student_token).await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(body.contains("Question about homework"));
+    assert!(
+        body.contains(&format!("conversation_{conversation}\"")),
+        "conversation row present"
+    );
+    assert!(
+        body.contains("conversation-item unread"),
+        "unread style on the un-opened conversation"
+    );
+    assert!(
+        body.contains("global_nav_conversations_unread_badge"),
+        "global nav unread badge shows for a nonzero count"
+    );
+
+    // Opening the thread marks it read (participant names + body render).
+    let thread = get_with_session(
+        &server,
+        &format!("/conversations/{conversation}"),
+        &student_token,
+    )
+    .await;
+    assert_eq!(thread.status_code(), 200, "body: {}", thread.text());
+    let body = thread.text();
+    assert!(body.contains("What is due tomorrow?"), "message body");
+    assert!(body.contains("iteacher"), "participant names render");
+
+    // The badge is gone on the next inbox fetch.
+    let resp = get_with_session(&server, "/conversations", &student_token).await;
+    let body = resp.text();
+    assert!(
+        !body.contains("global_nav_conversations_unread_badge"),
+        "badge cleared after opening the conversation"
+    );
+
+    // Reply through the form; the message appears on the thread.
+    let csrf_page = get_with_session(
+        &server,
+        &format!("/conversations/{conversation}"),
+        &student_token,
+    )
+    .await;
+    let csrf = csrf_page
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+    let resp = server
+        .post(&format!("/conversations/{conversation}/add_message"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            student_token.clone(),
+        ))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({"_csrf": csrf, "body": "The reading is due."}))
+        .await;
+    assert_eq!(resp.status_code(), 303, "reply PRG: {}", resp.text());
+    let thread = get_with_session(
+        &server,
+        &format!("/conversations/{conversation}"),
+        &student_token,
+    )
+    .await;
+    assert!(thread.text().contains("The reading is due."));
+
+    // Teacher (recipient of the reply) sees the conversation unread again
+    // (add_message resets every non-author's read_at).
+    let resp = get_with_session(&server, "/conversations", &teacher_token).await;
+    let body = resp.text();
+    assert!(
+        body.contains("global_nav_conversations_unread_badge"),
+        "reply makes the thread unread for the other participant"
+    );
+
+    // Teacher replies, then marks everything read; the badge clears.
+    let csrf_page = get_with_session(
+        &server,
+        &format!("/conversations/{conversation}"),
+        &teacher_token,
+    )
+    .await;
+    let csrf = csrf_page
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+    let resp = server
+        .post(&format!("/conversations/{conversation}/add_message"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            teacher_token.clone(),
+        ))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({"_csrf": csrf, "body": "Thanks!"}))
+        .await;
+    assert_eq!(resp.status_code(), 303);
+
+    let csrf_page = get_with_session(&server, "/conversations", &teacher_token).await;
+    let csrf = csrf_page
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+    let resp = server
+        .post("/conversations/mark_all_read")
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            teacher_token.clone(),
+        ))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({"_csrf": csrf}))
+        .await;
+    assert_eq!(resp.status_code(), 303, "mark-all-read PRG");
+
+    let resp = get_with_session(&server, "/conversations", &teacher_token).await;
+    let body = resp.text();
+    assert!(
+        !body.contains("global_nav_conversations_unread_badge"),
+        "mark-all-read clears the unread badge"
+    );
+
+    // Student composes a NEW conversation to the teacher via the form.
+    let compose = get_with_session(&server, "/conversations/compose", &student_token).await;
+    assert_eq!(compose.status_code(), 200, "body: {}", compose.text());
+    let body = compose.text();
+    assert!(body.contains("compose_form"));
+    assert!(body.contains(&format!("value=\"{teacher}\"")), "recipient option");
+    let csrf = compose
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+    let resp = server
+        .post("/conversations")
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            student_token.clone(),
+        ))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_csrf": csrf,
+            "recipients": [teacher],
+            "subject": "New compose subject",
+            "body": "Composed through the form."
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 303, "compose PRG: {}", resp.text());
+    let location = resp
+        .headers()
+        .get("location")
+        .expect("location")
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    // The recipient (teacher) sees it in their inbox, unread.
+    let resp = get_with_session(&server, "/conversations", &teacher_token).await;
+    let body = resp.text();
+    assert!(
+        body.contains("New compose subject"),
+        "composed conversation visible to the recipient"
+    );
+
+    // The PRG target renders the new thread for the composer.
+    let thread = get_with_session(&server, &location, &student_token).await;
+    assert_eq!(thread.status_code(), 200);
+    assert!(thread.text().contains("Composed through the form."));
+
+    // A non-participant gets 404 on the private thread.
+    let outsider = seed_user(&pool, &prefix, "ioutsider", "student", "not-a-real-hash").await;
+    let outsider_token = star_auth::create_token(outsider, "student", JWT_SECRET).expect("mint");
+    let resp = get_with_session(&server, &location, &outsider_token).await;
+    assert_eq!(resp.status_code(), 404, "non-participant gets 404");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Unenrolled non-admin users get no discussion data: the shell routes gate
+/// through load_course_for_viewer, so the course name never leaks.
+#[tokio::test]
+async fn unenrolled_user_gets_no_discussion_data() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "gteacher", "teacher", "not-a-real-hash").await;
+    let outsider = seed_user(&pool, &prefix, "goutsider", "student", "not-a-real-hash").await;
+    let secret = format!("{prefix}-SecretDiscussionCourse");
+    let course = seed_course(&pool, &prefix, &secret, "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let topic = seed_topic(&pool, course, teacher, "Secret Topic", "secret body").await;
+
+    let outsider_token = star_auth::create_token(outsider, "student", JWT_SECRET).expect("mint");
+
+    for path in [
+        format!("/courses/{course}/discussions"),
+        format!("/courses/{course}/discussion_topics"),
+        format!("/courses/{course}/discussions/{topic}"),
+        format!("/courses/{course}/discussions/new"),
+    ] {
+        let resp = get_with_session(&server, &path, &outsider_token).await;
+        assert!(
+            resp.status_code() == 403 || resp.status_code() == 404,
+            "unenrolled non-admin must not see {path}"
+        );
+        assert!(
+            !resp.text().contains(&secret),
+            "course name must not leak on {path}"
+        );
+        assert!(
+            !resp.text().contains("Secret Topic"),
+            "topic title must not leak on {path}"
+        );
+    }
+
+    cleanup(&pool, &prefix).await;
+}
