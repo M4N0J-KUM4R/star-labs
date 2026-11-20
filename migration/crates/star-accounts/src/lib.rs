@@ -14,6 +14,8 @@ use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 use std::collections::HashMap;
 
+pub mod learn_platform;
+
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
@@ -1980,6 +1982,7 @@ pub fn router() -> Router<AppState> {
         )
         .merge(career::router())
         .merge(error_reports::router())
+        .merge(learn_platform::router())
 }
 
 // --------------------------------------------------------------------------
