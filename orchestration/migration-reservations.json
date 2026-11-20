@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0220",
- "next_available": "0221",
+ "max_merged": "0221",
+ "next_available": "0222",
  "reservations": {
   "0001": {
    "issue": null,
@@ -690,6 +690,11 @@
   "0220": {
    "issue": null,
    "note": "star-content: content export settings, block editor templates and course settings",
+   "status": "merged"
+  },
+  "0221": {
+   "issue": null,
+   "note": "star-lti: the LTI tool settings",
    "status": "merged"
   }
  }
