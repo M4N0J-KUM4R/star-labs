@@ -54,7 +54,6 @@ use crate::{
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct ModuleRow {
     id: i64,
-    course_id: i64,
     name: String,
     position: i32,
     workflow_state: String,
@@ -69,8 +68,6 @@ struct ModuleRow {
 struct ModuleItemRow {
     id: i64,
     module_id: i64,
-    item_type: String,
-    item_id: i64,
     position: i32,
     title: Option<String>,
     indent: i32,
@@ -287,7 +284,7 @@ pub(crate) async fn fetch_module_page(
 
     let mut rows: Vec<ModuleRow> = sqlx::query_as(
         r#"
-        SELECT id, course_id, name, position, workflow_state, created_at, updated_at
+        SELECT id, name, position, workflow_state, created_at, updated_at
         FROM modules
         WHERE course_id = $1
           AND workflow_state != 'deleted'
@@ -355,7 +352,7 @@ async fn fetch_module_items(
 
     let rows: Vec<ModuleItemRow> = sqlx::query_as(&format!(
         r#"
-        SELECT mi.id, mi.module_id, mi.item_type, mi.item_id, mi.position,
+        SELECT mi.id, mi.module_id, mi.position,
                mi.indent, mi.workflow_state, mi.created_at, mi.updated_at,
                {MODULE_ITEM_TITLE_SQL}
         {MODULE_ITEM_JOIN_SQL}
@@ -425,7 +422,7 @@ async fn fetch_module(
 ) -> Result<Option<Module>, async_graphql::Error> {
     let row: Option<ModuleRow> = sqlx::query_as(
         r#"
-        SELECT id, course_id, name, position, workflow_state, created_at, updated_at
+        SELECT id, name, position, workflow_state, created_at, updated_at
         FROM modules
         WHERE id = $1 AND workflow_state != 'deleted'
         "#,
@@ -455,7 +452,7 @@ pub(crate) async fn fetch_module_item(
 ) -> Result<Option<ModuleItem>, async_graphql::Error> {
     let row: Option<ModuleItemRow> = sqlx::query_as(&format!(
         r#"
-        SELECT mi.id, mi.module_id, mi.item_type, mi.item_id, mi.position,
+        SELECT mi.id, mi.module_id, mi.position,
                mi.indent, mi.workflow_state, mi.created_at, mi.updated_at,
                {MODULE_ITEM_TITLE_SQL}
         {MODULE_ITEM_JOIN_SQL}

@@ -44,7 +44,6 @@ use crate::{db_err, decode_cursor, encode_cursor, PageInfo, DEFAULT_PAGE_SIZE, M
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct PageRow {
     id: i64,
-    course_id: i64,
     title: String,
     body: Option<String>,
     url: Option<String>,
@@ -302,7 +301,7 @@ pub(crate) async fn fetch_page_page(
 
     let mut rows: Vec<PageRow> = sqlx::query_as(
         r#"
-        SELECT id, course_id, title, body, url, workflow_state, front_page,
+        SELECT id, title, body, url, workflow_state, front_page,
                created_at, updated_at
         FROM pages
         WHERE course_id = $1

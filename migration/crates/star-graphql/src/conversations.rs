@@ -47,7 +47,6 @@ use crate::{
 struct ConversationRow {
     id: i64,
     subject: String,
-    workflow_state: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -495,7 +494,7 @@ async fn fetch_conversation(
 ) -> Result<Option<Conversation>, async_graphql::Error> {
     let row: Option<ConversationRow> = sqlx::query_as(
         r#"
-        SELECT id, subject, workflow_state, created_at, updated_at
+        SELECT id, subject, created_at, updated_at
         FROM conversations
         WHERE id = $1
         "#,

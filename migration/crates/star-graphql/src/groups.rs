@@ -72,14 +72,11 @@ struct GroupMembershipRow {
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct GroupSetRow {
     id: i64,
-    course_id: Option<i64>,
-    account_id: Option<i64>,
     name: String,
     self_signup: Option<String>,
     group_limit: Option<i32>,
     auto_leader: Option<String>,
     non_collaborative: bool,
-    workflow_state: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -588,8 +585,8 @@ pub(crate) async fn fetch_group_set_page(
 
     let mut rows: Vec<GroupSetRow> = sqlx::query_as(
         r#"
-        SELECT id, course_id, account_id, name, self_signup, group_limit,
-               auto_leader, non_collaborative, workflow_state, created_at, updated_at
+        SELECT id, name, self_signup, group_limit,
+               auto_leader, non_collaborative, created_at, updated_at
         FROM group_categories
         WHERE course_id = $1
           AND workflow_state != 'deleted'
@@ -652,8 +649,8 @@ async fn fetch_group_set(
 ) -> Result<Option<GroupSet>, async_graphql::Error> {
     let row: Option<GroupSetRow> = sqlx::query_as(
         r#"
-        SELECT id, course_id, account_id, name, self_signup, group_limit,
-               auto_leader, non_collaborative, workflow_state, created_at, updated_at
+        SELECT id, name, self_signup, group_limit,
+               auto_leader, non_collaborative, created_at, updated_at
         FROM group_categories
         WHERE id = $1 AND workflow_state != 'deleted'
         "#,
