@@ -868,13 +868,11 @@ pub fn router() -> axum::Router<AppState> {
         // Canvas files#icon_metadata (SVG parse).
         .route("/files/{id}/icon_metadata", get(get_icon_metadata))
         .route("/courses/{courseId}/files/{id}", get(get_course_file))
-        // GET /groups/{groupId}/files is owned by star-groups (it queries the
-        // group_files table); registering it here too would panic when
-        // star-http merges the routers (same path + method). Canvas routes
-        // the GET to files#api_index (routes.rb:2143) — star-groups'
-        // list_group_files serves that shape — while the POST
-        // (groups#create_file, routes.rb:2127) lives here.
-        .route("/groups/{groupId}/files", post(create_group_file))
+        // /groups/{groupId}/files (GET and POST) is owned entirely by
+        // star-groups: it queries the metadata-only group_files table for
+        // both api_index (routes.rb:2143) and groups#create_file
+        // (routes.rb:2127). Registering either method here too would panic
+        // when star-http merges the routers (same path + method).
         .route("/groups/{groupId}/files/quota", get(get_group_files_quota))
         .route(
             "/groups/{groupId}/files/{id}",
@@ -1619,74 +1617,6 @@ async fn get_icon_metadata(
         "height": 64,
         "viewBox": "0 0 64 64"
     })))
-}
-
-/// POST /groups/{groupId}/files — create file metadata in a group context.
-///
-/// Canvas groups#create_file (groups_controller.rb:1043) is an upload
-/// preflight (api_attachment_preflight); star-lms is metadata-only, so this
-/// inserts a group_files row directly. Auth mirrors Canvas
-/// authorized_action(attachment, :create): group member or admin.
-async fn create_group_file(
-    State(state): State<AppState>,
-    Path(group_id): Path<i64>,
-    auth: AuthUser,
-    Json(payload): Json<CreateFileRequest>,
-) -> Result<(StatusCode, Json<GroupFileResponse>), ApiError> {
-    if payload.filename.trim().is_empty() {
-        return Err(ApiError::Validation("filename is required".into()));
-    }
-
-    let group: (i64, Option<i64>) = sqlx::query_as(
-        "SELECT id, course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'",
-    )
-    .bind(group_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(ApiError::NotFound)?;
-    let (group_id_val, _course_id) = group;
-
-    let can_manage = is_admin(&auth) || user_in_group(&state.db, auth.id, group_id_val).await?;
-    if !can_manage {
-        return Err(ApiError::Forbidden);
-    }
-
-    // display_name defaults to filename (Canvas infer_display_name).
-    let display_name = payload
-        .display_name
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| payload.filename.clone());
-    let folder = payload
-        .folder
-        .filter(|s| !s.trim().is_empty())
-        .unwrap_or_else(|| "group files".to_string());
-
-    let row = sqlx::query_as::<_, GroupFileRow>(
-        r#"
-        INSERT INTO group_files
-            (group_id, uploader_id, folder, filename, display_name, content_type, size)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING id, group_id, folder, filename,
-                  COALESCE(display_name, filename) AS display_name,
-                  content_type, size, created_at, updated_at
-        "#,
-    )
-    .bind(group_id_val)
-    .bind(auth.id)
-    .bind(folder)
-    .bind(&payload.filename)
-    .bind(&display_name)
-    .bind(
-        payload
-            .content_type
-            .as_deref()
-            .unwrap_or("application/octet-stream"),
-    )
-    .bind(payload.size.unwrap_or(0))
-    .fetch_one(&state.db)
-    .await?;
-
-    Ok((StatusCode::CREATED, Json(GroupFileResponse::from(row))))
 }
 
 /// DELETE /groups/{groupId}/files/{id} — delete a group file.
@@ -5055,15 +4985,19 @@ mod tests {
     #[test]
     fn create_success_response_serializes_attachment() {
         // create_success_get returns CreateSuccessResponse { attachment, preview_url, enhanced_preview_url }
+        // CreateSuccessQuery carries Canvas api_create_success's lookup
+        // params: uuid + on_duplicate (files_controller.rb:1229-1231).
         use crate::CreateSuccessQuery;
-        // Query fields
         let q: CreateSuccessQuery = serde_json::from_value(serde_json::json!({
-            "no_redirect": true,
-            "preview_only": true
+            "uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "on_duplicate": "overwrite"
         }))
         .unwrap();
-        assert!(q.no_redirect);
-        assert!(q.preview_only);
+        assert_eq!(
+            q.uuid.as_deref(),
+            Some("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+        );
+        assert_eq!(q.on_duplicate.as_deref(), Some("overwrite"));
     }
 
     #[test]
