@@ -2594,17 +2594,16 @@ pub struct ObserverEnrollmentJson {
     pub enrollment_state: String,
 }
 
-/// Raw observer_enrollments row (joined to users for name lookup).
-#[derive(Debug, Clone, sqlx::FromRow)]
-struct ObserverEnrollmentRow {
-    observer_id: i64,
-    user_id: i64,
-    course_id: Option<i64>,
-    workflow_state: String,
-    course_name: Option<String>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
+/// 6-tuple returned by observee queries:
+/// (user_id, name, display_name, course_id, course_name, workflow_state)
+type ObserveeRow = (
+    i64,
+    String,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    String,
+);
 
 /// Observer link created by POST /users/{userId}/observees.
 #[derive(Debug, Deserialize)]
@@ -2655,14 +2654,7 @@ async fn load_observees(
     observer_id: i64,
     course_id: Option<i64>,
 ) -> Result<Vec<ObserveeResponse>, ApiError> {
-    let rows: Vec<(
-        i64,
-        String,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-        String,
-    )> = sqlx::query_as(
+    let rows: Vec<ObserveeRow> = sqlx::query_as(
         r#"
             SELECT oe.user_id,
                    u.name,
@@ -2782,14 +2774,7 @@ async fn create_observee(
         }
     }
 
-    let row: Option<(
-        i64,
-        String,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-        String,
-    )> = sqlx::query_as(
+    let row: Option<ObserveeRow> = sqlx::query_as(
         r#"
             INSERT INTO observer_enrollments (observer_id, user_id, course_id)
             VALUES ($1, $2, $3)
@@ -2830,14 +2815,7 @@ async fn get_observee(
     ensure_user_exists(&state.db, user_id).await?;
     authorize_observee_access(&state, &auth, user_id).await?;
 
-    let rows: Vec<(
-        i64,
-        String,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-        String,
-    )> = sqlx::query_as(
+    let rows: Vec<ObserveeRow> = sqlx::query_as(
         r#"
             SELECT oe.user_id, u.name, NULL::text,
                    oe.course_id, c.name, oe.workflow_state
@@ -2925,14 +2903,7 @@ async fn update_observee(
         }
     }
 
-    let row: Option<(
-        i64,
-        String,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-        String,
-    )> = sqlx::query_as(
+    let row: Option<ObserveeRow> = sqlx::query_as(
         r#"
             UPDATE observer_enrollments
             SET course_id = $3, updated_at = now()
