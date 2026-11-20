@@ -109,7 +109,15 @@ jobs:
           exit 1
 
       - name: Seed smoke fixture
-        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f browser-smoke/fixtures/seed.sql
+        # seed.sql is the base fixture; journey PRs append seed-<topic>.sql
+        # fragments (applied in glob order) so parallel journeys don't
+        # conflict on one file.
+        run: |
+          set -e
+          for f in browser-smoke/fixtures/seed*.sql; do
+            echo "applying $f"
+            psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$f"
+          done
 
       - name: Run Playwright
         working-directory: browser-smoke
