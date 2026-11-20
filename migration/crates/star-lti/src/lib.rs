@@ -650,7 +650,9 @@ pub fn router() -> Router<AppState> {
         // Canvas-nested registration paths.
         .route(
             "/accounts/{account_id}/lti_registrations/{id}",
-            get(show_registration_scoped).delete(delete_registration_scoped),
+            get(show_registration_scoped)
+                .put(update_registration_scoped)
+                .delete(delete_registration_scoped),
         )
         .route(
             "/accounts/{account_id}/lti_registrations/{registration_id}/deployments",
@@ -666,12 +668,6 @@ pub fn router() -> Router<AppState> {
             get(list_deployments).post(create_deployment),
         )
         // Issue #69 — registration lifecycle (registrations_controller.rb).
-        .route(
-            "/accounts/{account_id}/lti_registrations/{id}",
-            get(show_registration_scoped)
-                .put(update_registration_scoped)
-                .delete(delete_registration_scoped),
-        )
         .route(
             "/accounts/{account_id}/lti_registrations/{registration_id}/bind",
             post(bind_registration).delete(unbind_registration),
