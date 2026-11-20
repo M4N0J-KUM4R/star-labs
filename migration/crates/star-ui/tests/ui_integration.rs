@@ -312,7 +312,10 @@ async fn dashboard_renders_cards_and_env_contract() {
     let token = star_auth::create_token(user, "student", JWT_SECRET).expect("mint");
     let resp = server
         .get("/dashboard")
-        .add_cookie(axum_test::http::Cookie::new("star_session", token.clone()))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            token.clone(),
+        ))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body = resp.text();
@@ -422,7 +425,7 @@ async fn course_home_tabs_and_content_branches() {
     seed_module(&pool, modules_course, "Module Two", 2).await;
 
     let token = star_auth::create_token(user, "student", JWT_SECRET).expect("mint");
-    let cookie = axum_test::http::Cookie::new("star_session", token.clone());
+    let cookie = axum_extra::extract::cookie::Cookie::new("star_session", token.clone());
 
     // Wiki-branch course: front page body rendered, tabs in API order, ENV.
     let resp = server
@@ -485,7 +488,10 @@ async fn course_home_tabs_and_content_branches() {
     let teacher_token = star_auth::create_token(teacher, "teacher", JWT_SECRET).expect("mint");
     let resp = server
         .get(&format!("/courses/{wiki_course}"))
-        .add_cookie(axum_test::http::Cookie::new("star_session", teacher_token))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            teacher_token,
+        ))
         .await;
     assert_eq!(resp.status_code(), 200);
     assert!(
@@ -523,7 +529,10 @@ async fn unenrolled_user_gets_no_course_data() {
     let token = star_auth::create_token(outsider, "student", JWT_SECRET).expect("mint");
     let resp = server
         .get(&format!("/courses/{course}"))
-        .add_cookie(axum_test::http::Cookie::new("star_session", token))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            token,
+        ))
         .await;
     assert!(
         resp.status_code() == 403 || resp.status_code() == 404,
@@ -576,7 +585,7 @@ async fn logout_invalidates_session_server_side() {
     // Dashboard works with the session.
     let dash = server
         .get("/dashboard")
-        .add_cookie(axum_test::http::Cookie::new(
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_session",
             session.clone(),
         ))
@@ -595,11 +604,11 @@ async fn logout_invalidates_session_server_side() {
     // Logout (CSRF double-submit).
     let resp = server
         .post("/logout")
-        .add_cookie(axum_test::http::Cookie::new(
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_session",
             session.clone(),
         ))
-        .add_cookie(axum_test::http::Cookie::new(
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
             login_csrf.clone(),
         ))
@@ -623,7 +632,10 @@ async fn logout_invalidates_session_server_side() {
     // The old session cookie is rejected: /dashboard redirects to /login.
     let dash = server
         .get("/dashboard")
-        .add_cookie(axum_test::http::Cookie::new("star_session", session))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            session,
+        ))
         .await;
     assert!(
         dash.status_code() == 303 || dash.status_code() == 302,

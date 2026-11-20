@@ -162,8 +162,8 @@ pub fn check_csrf(jar: &CookieJar, form_token: &str) -> Result<(), ()> {
 /// and the token the form must embed. The cookie is deliberately NOT
 /// HttpOnly so a future JS layer can echo it in headers (Canvas parity).
 pub fn ensure_csrf_cookie(jar: CookieJar) -> (CookieJar, String) {
-    if let Some(cookie) = jar.get(CSRF_COOKIE) {
-        return (jar, cookie.value().to_string());
+    if let Some(value) = jar.get(CSRF_COOKIE).map(|c| c.value().to_string()) {
+        return (jar, value);
     }
     let token = generate_csrf_token();
     let jar = jar.add(
@@ -185,6 +185,7 @@ pub fn session_cookie(jwt: &str) -> Cookie<'static> {
         .path("/")
         .http_only(true)
         .same_site(SameSite::Lax)
+        .build()
 }
 
 /// Build the expired `star_session` cookie that clears the session client-side.
@@ -194,6 +195,7 @@ pub fn clear_session_cookie() -> Cookie<'static> {
         .http_only(true)
         .same_site(SameSite::Lax)
         .expires(time::OffsetDateTime::UNIX_EPOCH)
+        .build()
 }
 
 #[cfg(test)]

@@ -77,8 +77,8 @@ pub fn from_api_error(err: &ApiError, origin: &str) -> ErrorPage {
             StatusCode::CONFLICT,
             "The request conflicted with the current state.",
         ),
-        ApiError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg),
-        ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg),
+        ApiError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.as_str()),
+        ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.as_str()),
         ApiError::Db(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "Something went wrong on our side.",

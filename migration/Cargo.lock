@@ -3440,6 +3440,7 @@ dependencies = [
  "axum-extra",
  "axum-test",
  "chrono",
+ "jsonwebtoken",
  "rand 0.8.8",
  "serde",
  "serde_json",

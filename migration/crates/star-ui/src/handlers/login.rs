@@ -71,7 +71,7 @@ pub struct LoginForm {
 
 /// GET /login — public; issues `star_csrf` when absent and renders the form.
 pub async fn login_form(
-    State(app): State<AppState>,
+    State(_app): State<AppState>,
     Query(query): Query<LoginQuery>,
     jar: CookieJar,
 ) -> Response {
