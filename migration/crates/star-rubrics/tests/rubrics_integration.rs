@@ -122,6 +122,12 @@ fn auth(user_id: i64, role: &str) -> String {
 
 async fn cleanup(pool: &PgPool, prefix: &str) {
     let _ = sqlx::query(
+        "DELETE FROM assessment_requests WHERE asset_id IN (SELECT id FROM submissions WHERE assignment_id IN (SELECT id FROM assignments WHERE course_id IN (SELECT id FROM courses WHERE course_code LIKE $1)))",
+    )
+    .bind(format!("{prefix}%"))
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
         "DELETE FROM rubrics WHERE course_id IN (SELECT id FROM courses WHERE course_code LIKE $1)",
     )
     .bind(format!("{prefix}%"))
