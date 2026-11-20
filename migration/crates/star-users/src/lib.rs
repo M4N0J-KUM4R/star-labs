@@ -933,6 +933,37 @@ pub fn router() -> Router<AppState> {
         .route("/show_k5_dashboard", get(show_k5_dashboard))
         // Canvas users_controller#clear_cache.
         .route("/users/{id}/clear_cache", post(clear_cache))
+        // Canvas users_controller#set_text_editor_preference /
+        // #set_files_ui_version_preference (user preferences, migration 0123).
+        .route(
+            "/users/{id}/text_editor_preference",
+            put(set_text_editor_preference),
+        )
+        .route(
+            "/users/{id}/files_ui_version_preference",
+            put(set_files_ui_version_preference),
+        )
+        // Canvas users_controller#get_new_user_tutorial_statuses /
+        // #set_new_user_tutorial_status (current-user only).
+        .route(
+            "/users/{id}/new_user_tutorial_statuses",
+            get(get_new_user_tutorial_statuses),
+        )
+        .route(
+            "/users/{id}/new_user_tutorial_statuses/{page_name}",
+            put(set_new_user_tutorial_status),
+        )
+        // Canvas users_controller#merge_into — simple and cross-account forms.
+        .route(
+            "/users/{id}/merge_into/{destination_user_id}",
+            put(merge_into),
+        )
+        .route(
+            "/users/{id}/merge_into/accounts/{destination_account_id}/users/{destination_user_id}",
+            put(merge_into_cross_account),
+        )
+        // Canvas users_controller#split.
+        .route("/users/{id}/split", post(split_user))
 }
 
 // --------------------------------------------------------------------------
@@ -2553,6 +2584,822 @@ async fn user_has_role(pool: &PgPool, user_id: i64, role: &str) -> Result<bool, 
             .await
             .map_err(ApiError::from)?;
     Ok(row.is_some())
+}
+
+// --------------------------------------------------------------------------
+// Users controller tail group B: preferences, merge_into, split (#57,
+// migration 0123: user_preferences + user_merges).
+// --------------------------------------------------------------------------
+
+/// Canvas `User#set_preference` / `#get_preference` backed by the
+/// `user_preferences` JSONB document (migration 0123). Setting None removes
+/// the key so it reads back as null, mirroring Canvas' serialized hash.
+async fn set_user_preference(
+    pool: &PgPool,
+    user_id: i64,
+    key: &str,
+    value: Option<&serde_json::Value>,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        r#"
+        INSERT INTO user_preferences (user_id, preferences)
+        VALUES ($1, jsonb_build_object($2::text, $3::jsonb))
+        ON CONFLICT (user_id) DO UPDATE
+        SET preferences = CASE
+                WHEN $3::jsonb = 'null'::jsonb
+                THEN user_preferences.preferences - $2::text
+                ELSE user_preferences.preferences || jsonb_build_object($2::text, $3::jsonb)
+            END,
+            updated_at = now()
+        "#,
+    )
+    .bind(user_id)
+    .bind(key)
+    .bind(value.unwrap_or(&serde_json::Value::Null))
+    .execute(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(())
+}
+
+/// Read one preference key (null when unset).
+async fn get_user_preference(
+    pool: &PgPool,
+    user_id: i64,
+    key: &str,
+) -> Result<serde_json::Value, ApiError> {
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT COALESCE(preferences -> $2::text, 'null'::jsonb) \
+         FROM user_preferences WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .bind(key)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(row.map(|(v,)| v).unwrap_or(serde_json::Value::Null))
+}
+
+/// Canvas users_controller#set_text_editor_preference (~line 2045).
+///
+/// `api_find` (404) then `[:manage, :manage_user_details]` (self or admin).
+/// Canvas raises `ActiveRecord::RecordInvalid` for values outside
+/// rce/block_editor/"" — an unhandled 500; reproduced as a 500. The empty
+/// string clears the preference (stored as null, read back as null).
+async fn set_text_editor_preference(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+    Json(payload): Json<TextEditorPreferenceRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = authorize_preference_update(&state, &auth, &raw_user_id).await?;
+
+    let pref = payload.text_editor_preference.as_deref();
+    if !matches!(pref, Some("rce") | Some("block_editor") | Some("") | None) {
+        // Canvas: raise ActiveRecord::RecordInvalid -> 500
+        return Err(ApiError::Db("Record invalid".into()));
+    }
+    let value = match pref {
+        Some("") | None => None,
+        Some(v) => Some(serde_json::json!(v)),
+    };
+    set_user_preference(&state.db, user_id, "text_editor_preference", value.as_ref()).await?;
+    let stored = get_user_preference(&state.db, user_id, "text_editor_preference").await?;
+    Ok(Json(
+        serde_json::json!({ "text_editor_preference": stored }),
+    ))
+}
+
+/// Body for PUT /users/{id}/text_editor_preference.
+#[derive(Debug, Default, Deserialize)]
+pub struct TextEditorPreferenceRequest {
+    pub text_editor_preference: Option<String>,
+}
+
+/// Canvas users_controller#set_files_ui_version_preference (~line 2080).
+///
+/// Same permission as the text editor route; invalid values (outside
+/// v1/v2) are a 400 `{"message": "Invalid files_ui_version provided"}`.
+async fn set_files_ui_version_preference(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+    Json(payload): Json<FilesUiVersionRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = authorize_preference_update(&state, &auth, &raw_user_id).await?;
+
+    let Some(version) = payload.files_ui_version.as_deref() else {
+        return Err(ApiError::BadRequest(
+            "Invalid files_ui_version provided".into(),
+        ));
+    };
+    if !matches!(version, "v1" | "v2") {
+        return Err(ApiError::BadRequest(
+            "Invalid files_ui_version provided".into(),
+        ));
+    }
+    let value = serde_json::json!(version);
+    set_user_preference(&state.db, user_id, "files_ui_version", Some(&value)).await?;
+    let stored = get_user_preference(&state.db, user_id, "files_ui_version").await?;
+    Ok(Json(serde_json::json!({ "files_ui_version": stored })))
+}
+
+/// Body for PUT /users/{id}/files_ui_version_preference.
+#[derive(Debug, Default, Deserialize)]
+pub struct FilesUiVersionRequest {
+    pub files_ui_version: Option<String>,
+}
+
+/// Resolve the user and enforce Canvas'
+/// `authorized_action(user, @current_user, [:manage, :manage_user_details])`:
+/// self or an admin (the star-lams stand-in for manage_user_details, which
+/// Canvas grants alongside manage_user_logins).
+async fn authorize_preference_update(
+    state: &AppState,
+    auth: &AuthUser,
+    raw_user_id: &str,
+) -> Result<i64, ApiError> {
+    let user_id = resolve_path_user(raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+    if !is_self(auth.id, user_id) && !is_admin(&auth.role) {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(user_id)
+}
+
+/// Canvas `valid_names` list for new_user_tutorial_statuses.
+const TUTORIAL_PAGE_NAMES: [&str; 15] = [
+    "home",
+    "modules",
+    "pages",
+    "assignments",
+    "quizzes",
+    "settings",
+    "files",
+    "people",
+    "announcements",
+    "grades",
+    "discussions",
+    "syllabus",
+    "collaborations",
+    "import",
+    "conferences",
+];
+
+/// Canvas users_controller#get_new_user_tutorial_statuses (~line 1866).
+/// Current-user only: 401 JSON message when the id is someone else, then
+/// the `:manage` right (self always has it), then
+/// `{new_user_tutorial_statuses: {collapsed: {page: bool, ...}}}`.
+async fn get_new_user_tutorial_statuses(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = resolve_path_user(&raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+    if user_id != auth.id {
+        return Err(ApiError::Unauthorized);
+    }
+    let statuses = get_user_preference(&state.db, user_id, "new_user_tutorial_statuses").await?;
+    let collapsed = statuses.as_object().cloned().unwrap_or_default();
+    Ok(Json(serde_json::json!({
+        "new_user_tutorial_statuses": { "collapsed": collapsed }
+    })))
+}
+
+/// Canvas users_controller#set_new_user_tutorial_status (~line 1876).
+/// Current-user only (401), page_name must be in the valid list (400
+/// `{"message": "Invalid Page Name Provided"}`), `collapsed` coerced with
+/// `value_to_boolean`, response mirrors the GET.
+async fn set_new_user_tutorial_status(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, page_name)): Path<(String, String)>,
+    Json(payload): Json<TutorialStatusRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = resolve_path_user(&raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+    if user_id != auth.id {
+        return Err(ApiError::Unauthorized);
+    }
+    if !TUTORIAL_PAGE_NAMES.contains(&page_name.as_str()) {
+        return Err(ApiError::BadRequest("Invalid Page Name Provided".into()));
+    }
+    // The deserializer already applies Canvas' value_to_boolean coercion.
+    let collapsed = payload.collapsed.unwrap_or(false);
+
+    let mut statuses = get_user_preference(&state.db, user_id, "new_user_tutorial_statuses")
+        .await?
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    statuses.insert(page_name.clone(), serde_json::json!(collapsed));
+    let value = serde_json::json!(statuses);
+    set_user_preference(
+        &state.db,
+        user_id,
+        "new_user_tutorial_statuses",
+        Some(&value),
+    )
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "new_user_tutorial_statuses": { "collapsed": statuses }
+    })))
+}
+
+/// Body for PUT /users/{id}/new_user_tutorial_statuses/{page_name};
+/// `collapsed` accepts the Canvas boolean coercions.
+#[derive(Debug, Default, Deserialize)]
+pub struct TutorialStatusRequest {
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub collapsed: Option<bool>,
+}
+
+/// Canvas `:merge` right (app/models/user.rb ~line 1551): granted when a
+/// pseudonym of the user grants `:update`, i.e. the caller holds
+/// `manage_user_logins` on the user's account. star-lms stand-in: the
+/// global admin role or a root-account account_users admin.
+async fn can_merge_users(state: &AppState, auth: &AuthUser) -> Result<bool, ApiError> {
+    if is_admin(&auth.role) {
+        return Ok(true);
+    }
+    let admin: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM account_users WHERE account_id = 1 AND user_id = $1 AND role = 'admin'",
+    )
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(admin.is_some())
+}
+
+/// Snapshot of the merged-away user recorded at merge time (Canvas
+/// UserMergeDataItem `user_name` / pseudonym data).
+#[derive(Debug, sqlx::FromRow)]
+struct MergeSnapshot {
+    name: Option<String>,
+    email: Option<String>,
+    sortable_name: Option<String>,
+    password_hash: Option<String>,
+}
+
+/// A splitable `user_merges` row (Canvas UserMergeData active + splitable).
+#[derive(Debug, sqlx::FromRow)]
+struct SplitCandidate {
+    id: i64,
+    from_user_id: i64,
+    name: Option<String>,
+    email: Option<String>,
+    sortable_name: Option<String>,
+    password_hash: Option<String>,
+}
+
+/// Path params for the simple merge form
+/// PUT /users/{id}/merge_into/{destination_user_id}.
+#[derive(Debug, Deserialize)]
+pub struct MergeIntoPath {
+    pub id: String,
+    pub destination_user_id: String,
+}
+
+/// Path params for the cross-account form
+/// PUT /users/{id}/merge_into/accounts/{destination_account_id}/users/{destination_user_id}.
+#[derive(Debug, Deserialize)]
+pub struct MergeIntoAccountPath {
+    pub id: String,
+    pub destination_account_id: String,
+    pub destination_user_id: String,
+}
+
+/// Canvas users_controller#merge_into (~line 2736).
+///
+/// Order: `api_find(from)` 404 → `:merge` on from_user 403 → resolve the
+/// destination account (`Account.find_by_domain` else `Account.find`, the
+/// site root when absent) → `api_find(into_user)` 404 → `:merge` on
+/// into_user 403 → merge → 200 with the surviving user's JSON.
+///
+/// The merge mirrors lib/user_merge.rb for the tables this schema has:
+/// enrollments and submissions move to the surviving user (unique-index
+/// conflicts keep the survivor's row, matching Canvas' swap logic that
+/// preserves the graded one), account_users move unless the survivor
+/// already has one on that account, communication channels move unless the
+/// path is taken (the loser is retired), stream items and dashboard
+/// positions move, preferences merge (survivor's win), and the merged-away
+/// user row is deleted after its snapshot is recorded in `user_merges`
+/// (Canvas soft-deletes it and stores UserMergeData).
+async fn merge_into(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(path): Path<MergeIntoPath>,
+) -> Result<Json<UserResponse>, ApiError> {
+    merge_into_impl(state, auth, &path.id, None, &path.destination_user_id).await
+}
+async fn merge_into_cross_account(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(path): Path<MergeIntoAccountPath>,
+) -> Result<Json<UserResponse>, ApiError> {
+    merge_into_impl(
+        state,
+        auth,
+        &path.id,
+        Some(&path.destination_account_id),
+        &path.destination_user_id,
+    )
+    .await
+}
+
+async fn merge_into_impl(
+    state: AppState,
+    auth: AuthUser,
+    raw_from: &str,
+    raw_destination_account: Option<&str>,
+    raw_into: &str,
+) -> Result<Json<UserResponse>, ApiError> {
+    let from_user = resolve_path_user(raw_from, auth.id)?;
+    ensure_user_exists(&state.db, from_user).await?;
+    if !can_merge_users(&state, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Cross-account form: the destination account gates api_find(User, ...).
+    if let Some(raw_account) = raw_destination_account {
+        let account_id: i64 = raw_account.parse().map_err(|_| ApiError::NotFound)?;
+        let account: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+        account.ok_or(ApiError::NotFound)?;
+    }
+
+    let into_user = resolve_path_user(raw_into, auth.id)?;
+    ensure_user_exists(&state.db, into_user).await?;
+    if !can_merge_users(&state, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if from_user == into_user {
+        // Canvas: `return if target_user == from_user` — the action renders
+        // nothing, which Rails answers as an empty 200.
+        return Ok(Json(user_response(&state.db, into_user).await?));
+    }
+
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| ApiError::Db(e.to_string()))?;
+
+    // Snapshot the merged-away user for split (Canvas UserMergeDataItem).
+    let snapshot: Option<MergeSnapshot> =
+        sqlx::query_as("SELECT name, email, sortable_name, password_hash FROM users WHERE id = $1")
+            .bind(from_user)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(ApiError::from)?;
+    let MergeSnapshot {
+        name: from_name,
+        email: from_email,
+        sortable_name: from_sortable,
+        password_hash: from_hash,
+    } = snapshot.ok_or(ApiError::NotFound)?;
+    sqlx::query(
+        r#"
+        INSERT INTO user_merges
+            (user_id, from_user_id, from_name, from_email, from_sortable_name,
+             from_password_hash, workflow_state)
+        VALUES ($1, $2, $3, $4, $5, $6, 'active')
+        "#,
+    )
+    .bind(into_user)
+    .bind(from_user)
+    .bind(&from_name)
+    .bind(&from_email)
+    .bind(&from_sortable)
+    .bind(&from_hash)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Enrollments move; pairs already unique on (user, course, role) keep
+    // the survivor's row (Canvas keeps the better workflow state of the
+    // pair — the survivor's row stays).
+    sqlx::query(
+        r#"
+        UPDATE enrollments e
+        SET user_id = $2, updated_at = now()
+        WHERE e.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM enrollments e2
+               WHERE e2.user_id = $2 AND e2.course_id = e.course_id AND e2.role = e.role)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Submissions move when the survivor has none for the assignment
+    // (Canvas swaps colliding pairs so no submission is lost).
+    sqlx::query(
+        r#"
+        UPDATE submissions s
+        SET user_id = $2, updated_at = now()
+        WHERE s.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM submissions s2
+               WHERE s2.user_id = $2 AND s2.assignment_id = s.assignment_id)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // account_users move unless the survivor already administers the account.
+    sqlx::query(
+        r#"
+        UPDATE account_users au
+        SET user_id = $2, updated_at = now()
+        WHERE au.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM account_users a2 WHERE a2.user_id = $2 AND a2.account_id = au.account_id)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Communication channels: move free paths, retire conflicting ones.
+    sqlx::query(
+        r#"
+        UPDATE communication_channels cc
+        SET user_id = $2, updated_at = now()
+        WHERE cc.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM communication_channels c2
+               WHERE c2.user_id = $2 AND c2.path = cc.path AND c2.path_type = cc.path_type)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        "UPDATE communication_channels SET workflow_state = 'retired', updated_at = now() \
+         WHERE user_id = $1",
+    )
+    .bind(from_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Per-user rows move with the user. Tables with a uniqueness tied to
+    // user_id + a context column (dashboard_positions, user_colors,
+    // favorites, todo_ignores) or user_id alone (user_settings) skip rows
+    // the survivor already has — Canvas soft-deletes those losers.
+    for table in [
+        "stream_items",
+        "todo_ignores",
+        "user_files",
+        "access_tokens",
+        "planner_notes",
+    ] {
+        sqlx::query(&format!(
+            "UPDATE {table} SET user_id = $2, updated_at = now() WHERE user_id = $1"
+        ))
+        .bind(from_user)
+        .bind(into_user)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+    }
+    sqlx::query(
+        r#"
+        UPDATE dashboard_positions dp
+        SET user_id = $2, updated_at = now()
+        WHERE dp.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM dashboard_positions dp2
+               WHERE dp2.user_id = $2 AND dp2.course_id = dp.course_id)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        r#"
+        UPDATE user_colors uc
+        SET user_id = $2, updated_at = now()
+        WHERE uc.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM user_colors uc2
+               WHERE uc2.user_id = $2 AND uc2.context = uc.context)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        r#"
+        UPDATE favorites f
+        SET user_id = $2, updated_at = now()
+        WHERE f.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM favorites f2
+               WHERE f2.user_id = $2 AND f2.context_type = f.context_type
+                 AND f2.context_id = f.context_id)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        r#"
+        UPDATE todo_ignores ti
+        SET user_id = $2, updated_at = now()
+        WHERE ti.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM todo_ignores ti2
+               WHERE ti2.user_id = $2 AND ti2.asset_type = ti.asset_type
+                 AND ti2.asset_id = ti.asset_id AND ti2.purpose = ti.purpose
+                 AND ti2.permanent = ti.permanent)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        r#"
+        UPDATE user_settings us
+        SET manual_mark_as_read = us.manual_mark_as_read OR victim.manual_mark_as_read,
+            collapse_global_nav = us.collapse_global_nav OR victim.collapse_global_nav,
+            collapse_course_nav = us.collapse_course_nav OR victim.collapse_course_nav,
+            hide_dashcard_color_overlays =
+                us.hide_dashcard_color_overlays OR victim.hide_dashcard_color_overlays,
+            release_notes_badge_disabled =
+                us.release_notes_badge_disabled OR victim.release_notes_badge_disabled,
+            comment_library_suggestions_enabled =
+                us.comment_library_suggestions_enabled
+                OR victim.comment_library_suggestions_enabled,
+            elementary_dashboard_disabled =
+                us.elementary_dashboard_disabled OR victim.elementary_dashboard_disabled,
+            default_to_block_editor =
+                us.default_to_block_editor OR victim.default_to_block_editor,
+            widget_dashboard_user_preference =
+                us.widget_dashboard_user_preference OR victim.widget_dashboard_user_preference,
+            widget_dashboard_dark_mode =
+                us.widget_dashboard_dark_mode OR victim.widget_dashboard_dark_mode,
+            updated_at = now()
+        FROM (
+            SELECT * FROM user_settings WHERE user_id = $1
+        ) victim
+        WHERE us.user_id = $2
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query("DELETE FROM user_settings WHERE user_id = $1")
+        .bind(from_user)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+
+    // Preferences merge (survivor's keys win, Canvas merges the hashes).
+    sqlx::query(
+        r#"
+        UPDATE user_preferences up
+        SET preferences = COALESCE(moved.preferences, '{}'::jsonb) || up.preferences,
+            updated_at = now()
+        FROM (
+            SELECT preferences FROM user_preferences WHERE user_id = $1
+        ) moved
+        WHERE up.user_id = $2
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query("DELETE FROM user_preferences WHERE user_id = $1")
+        .bind(from_user)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+
+    // Canvas: from_user.update!(merged_into_user: target); from_user.destroy
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(from_user)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+
+    tx.commit().await.map_err(|e| ApiError::Db(e.to_string()))?;
+
+    Ok(Json(user_response(&state.db, into_user).await?))
+}
+
+/// Canvas users_controller#split (~line 2832).
+///
+/// Order: `api_find` 404 → `UserMergeData.active.splitable.exists?`
+/// (400 `{"message": "Nothing to split off of this user"}` FIRST, before
+/// the permission) → `:merge` right → SplitUsers.split_db_users → array of
+/// the resulting users sorted by short_name.
+///
+/// Split re-creates the merged-away user from the `user_merges` snapshot
+/// (Canvas restores its name/preferences from UserMergeDataItem and a
+/// fresh "registered" user), moves enrollments/submissions/channels back
+/// (skipping rows the survivor legitimately owns), marks the merge deleted
+/// and returns both users.
+async fn split_user(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<Vec<UserResponse>>, ApiError> {
+    let user_id = resolve_path_user(&raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+
+    // Canvas: active (not deleted/failed) AND splitable (< 180 days old).
+    let merge: Option<SplitCandidate> = sqlx::query_as(
+        r#"
+            SELECT id, from_user_id,
+                   from_name AS name, from_email AS email,
+                   from_sortable_name AS sortable_name,
+                   from_password_hash AS password_hash
+            FROM user_merges
+            WHERE user_id = $1
+              AND workflow_state = 'active'
+              AND created_at > now() - interval '180 days'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            "#,
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    let Some(SplitCandidate {
+        id: merge_id,
+        from_user_id,
+        name: from_name,
+        email: from_email,
+        sortable_name: from_sortable,
+        password_hash: from_hash,
+    }) = merge
+    else {
+        return Err(ApiError::BadRequest(
+            "Nothing to split off of this user".into(),
+        ));
+    };
+
+    if !can_merge_users(&state, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| ApiError::Db(e.to_string()))?;
+
+    // Re-create the merged-away user (Canvas: User.new(name: ...,
+    // workflow_state: "registered"); the email must stay unique — when the
+    // survivor took it over (channels moved, not duplicated), keep it only
+    // on the restored user and fall back otherwise).
+    let survivor_email: Option<(String,)> = sqlx::query_as("SELECT email FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+    let mut restored_email = from_email.clone().unwrap_or_default();
+    if let Some((survivor,)) = &survivor_email {
+        if Some(survivor.clone()) == from_email {
+            // The survivor kept the address; give the restored user a
+            // derived one (Canvas would have moved the pseudonym away).
+            restored_email = format!("restored-{from_user_id}-{survivor}");
+        }
+    }
+    let restored_name = from_name.unwrap_or_else(|| "restored user".to_string());
+    let restored_sortable = from_sortable.unwrap_or_else(|| match restored_name.rsplit_once(' ') {
+        Some((first, last)) => format!("{last}, {first}"),
+        None => restored_name.clone(),
+    });
+    let restored_hash = from_hash.unwrap_or_default();
+    let restored_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO users (name, sortable_name, email, password_hash, role)
+        VALUES ($1, $2, $3, $4, 'student')
+        RETURNING id
+        "#,
+    )
+    .bind(&restored_name)
+    .bind(&restored_sortable)
+    .bind(&restored_email)
+    .bind(&restored_hash)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Move enrollments back unless the survivor has one for the course+role.
+    sqlx::query(
+        r#"
+        UPDATE enrollments e
+        SET user_id = $2, updated_at = now()
+        WHERE e.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM enrollments e2
+               WHERE e2.user_id = $2 AND e2.course_id = e.course_id AND e2.role = e.role)
+        "#,
+    )
+    .bind(user_id)
+    .bind(restored_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Submissions back where the survivor has none for the assignment.
+    sqlx::query(
+        r#"
+        UPDATE submissions s
+        SET user_id = $2, updated_at = now()
+        WHERE s.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM submissions s2
+               WHERE s2.user_id = $2 AND s2.assignment_id = s.assignment_id)
+        "#,
+    )
+    .bind(user_id)
+    .bind(restored_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Communication channels back where the survivor doesn't own the path.
+    sqlx::query(
+        r#"
+        UPDATE communication_channels cc
+        SET user_id = $2, updated_at = now()
+        WHERE cc.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM communication_channels c2
+               WHERE c2.user_id = $2 AND c2.path = cc.path AND c2.path_type = cc.path_type)
+        "#,
+    )
+    .bind(user_id)
+    .bind(restored_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Canvas: merge_data.destroy sets workflow_state 'deleted'.
+    sqlx::query(
+        "UPDATE user_merges SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(merge_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    tx.commit().await.map_err(|e| ApiError::Db(e.to_string()))?;
+
+    // Canvas sorts the pair by short_name.
+    let mut users = vec![
+        user_response(&state.db, user_id).await?,
+        user_response(&state.db, restored_id).await?,
+    ];
+    users.sort_by(|a, b| a.sortable_name.cmp(&b.sortable_name));
+    Ok(Json(users))
+}
+
+/// Fetch the Canvas user JSON shape for one user.
+async fn user_response(pool: &PgPool, user_id: i64) -> Result<UserResponse, ApiError> {
+    let user: Option<UserResponse> = sqlx::query_as(
+        "SELECT id, name, COALESCE(sortable_name, name) AS sortable_name, email, role, created_at \
+         FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    user.ok_or(ApiError::NotFound)
 }
 
 #[cfg(test)]
