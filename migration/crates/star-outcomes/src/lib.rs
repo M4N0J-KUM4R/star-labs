@@ -31,7 +31,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{header::LOCATION, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -201,8 +201,8 @@ fn is_global_admin(auth: &AuthUser) -> bool {
 
 /// Check global outcome group manage access: global admin only.
 async fn check_global_group_manage_access(
-    pool: &PgPool,
-    user_id: i64,
+    _pool: &PgPool,
+    _user_id: i64,
     _group: &LearningOutcomeGroup,
     auth: &AuthUser,
 ) -> Result<bool, ApiError> {
@@ -1591,11 +1591,7 @@ async fn global_outcome_group_account_chain(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(
-        rows.iter()
-            .map(|g| group_json(g, true))
-            .collect(),
-    ))
+    Ok(Json(rows.iter().map(|g| group_json(g, true)).collect()))
 }
 
 /// GET /accounts/{accountId}/outcome_groups/account_chain
@@ -1627,9 +1623,7 @@ async fn account_outcome_group_account_chain(
     .await?;
 
     Ok(Json(
-        rows.iter()
-            .map(|g| group_json(g, can_manage))
-            .collect(),
+        rows.iter().map(|g| group_json(g, can_manage)).collect(),
     ))
 }
 
@@ -1659,9 +1653,7 @@ async fn course_outcome_group_account_chain(
 
     let can_manage = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
     Ok(Json(
-        rows.iter()
-            .map(|g| group_json(g, can_manage))
-            .collect(),
+        rows.iter().map(|g| group_json(g, can_manage)).collect(),
     ))
 }
 
@@ -1833,7 +1825,7 @@ async fn create_course_outcome_subgroup(
         return Err(ApiError::Forbidden);
     }
 
-    let parent = fetch_course_outcome_group(&state.db, course_id, group_id).await?;
+    fetch_course_outcome_group(&state.db, course_id, group_id).await?;
     if payload.title.trim().is_empty() {
         return Err(ApiError::Validation("title is required".into()));
     }
@@ -2048,8 +2040,7 @@ async fn list_account_outcome_group_links(
     .bind(&outcome_ids)
     .fetch_all(&state.db)
     .await?;
-    let outcomes: HashMap<i64, LearningOutcome> =
-        outcomes.into_iter().map(|o| (o.id, o)).collect();
+    let outcomes: HashMap<i64, LearningOutcome> = outcomes.into_iter().map(|o| (o.id, o)).collect();
 
     let assessed_ids: Vec<i64> = sqlx::query_scalar(
         "SELECT DISTINCT outcome_id FROM learning_outcome_results WHERE outcome_id = ANY($1)",
@@ -2124,10 +2115,7 @@ pub fn router() -> Router<AppState> {
             get(list_account_outcome_subgroups),
         )
         // global root redirect
-        .route(
-            "/global/root_outcome_group",
-            get(global_root_outcome_group),
-        )
+        .route("/global/root_outcome_group", get(global_root_outcome_group))
         // global outcome groups
         .route(
             "/global/outcome_groups/{id}",
