@@ -47,11 +47,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
     };
 
     // Build router that includes all three sub-routers.
-    let app = star_lti::router()
-        .merge(star_lti::data_services::router())
-        .merge(star_lti::line_items::router())
-        .merge(star_lti::tool_proxy::router())
-        .with_state(state);
+    let app = star_lti::router().with_state(state);
 
     let server = TestServer::new(app).expect("build TestServer");
     let prefix = run_prefix();
