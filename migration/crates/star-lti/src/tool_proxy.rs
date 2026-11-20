@@ -178,6 +178,7 @@ async fn update_tool_proxy_course(
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
     can_manage_tool_proxy(&state.db, &auth, "Course", course_id).await?;
+    let _ = find_tool_proxy_in_context(&state.db, tool_proxy_id, "Course", course_id).await?;
 
     let row: Option<(String,)> = sqlx::query_as(
         "UPDATE lti_tool_proxies SET workflow_state = $2, updated_at = now() \
@@ -237,7 +238,7 @@ async fn accept_tool_proxy_update_course(
     .await?;
 
     match row {
-        Some((payload,)) => {
+        Some((_payload,)) => {
             // Clear update_payload after acceptance.
             sqlx::query(
                 "UPDATE lti_tool_proxies SET update_payload = NULL, updated_at = now() \
@@ -279,6 +280,7 @@ async fn update_tool_proxy_account(
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
     can_manage_tool_proxy(&state.db, &auth, "Account", account_id).await?;
+    let _ = find_tool_proxy_in_context(&state.db, tool_proxy_id, "Account", account_id).await?;
 
     let row: Option<(String,)> = sqlx::query_as(
         "UPDATE lti_tool_proxies SET workflow_state = $2, updated_at = now() \
@@ -337,7 +339,7 @@ async fn accept_tool_proxy_update_account(
     .await?;
 
     match row {
-        Some((payload,)) => {
+        Some((_payload,)) => {
             sqlx::query(
                 "UPDATE lti_tool_proxies SET update_payload = NULL, updated_at = now() \
                  WHERE id = $1",

@@ -36,8 +36,6 @@ use crate::can_manage_account;
 // Constants
 // ---------------------------------------------------------------------------
 
-const REGISTRATION_TOKEN_EXPIRATION_SECS: i64 = 3600;
-
 // ---------------------------------------------------------------------------
 // Domain rows
 // ---------------------------------------------------------------------------
@@ -265,6 +263,10 @@ async fn ims_registration_json(
         "logo_uri": ims.logo_uri,
         "scopes": ims.scopes,
         "lti_tool_configuration": ims.lti_tool_configuration,
+        "dynamic_registration": ims.dynamic_registration,
+        "internal_service": ims.internal_service,
+        "created_by_id": ims.created_by_id,
+        "updated_by_id": ims.updated_by_id,
         "created_at": ims.created_at,
         "updated_at": ims.updated_at,
         // Canvas always embeds the parent registration data:
@@ -327,35 +329,35 @@ pub fn router() -> Router<AppState> {
             get(registration_token),
         )
         .route(
-            "/accounts/{account_id}/registrations/uuid/:registration_uuid",
+            "/accounts/{account_id}/registrations/uuid/{registration_uuid}",
             get(show_ims_registration_by_uuid),
         )
         .route(
-            "/accounts/{account_id}/lti_registrations/uuid/:registration_uuid",
+            "/accounts/{account_id}/lti_registrations/uuid/{registration_uuid}",
             get(show_registration_by_uuid),
         )
         .route(
-            "/accounts/{account_id}/lti_registration_update_request/uuid/:registration_uuid",
+            "/accounts/{account_id}/lti_registration_update_request/uuid/{registration_uuid}",
             get(show_update_request_by_uuid),
         )
         .route(
-            "/accounts/{account_id}/registrations/:registration_id",
+            "/accounts/{account_id}/registrations/{registration_id}",
             get(show_ims_registration),
         )
         .route(
-            "/accounts/{account_id}/registrations/:registration_id/overlay",
+            "/accounts/{account_id}/registrations/{registration_id}/overlay",
             put(update_registration_overlay),
         )
         .route("/accounts/{account_id}/dr_iframe", get(dr_iframe))
         .route(
-            "/accounts/{account_id}/registrations/:registration_id/view",
+            "/accounts/{account_id}/registrations/{registration_id}/view",
             get(registration_view),
         )
         // Flat paths (no account scope)
         .route("/registrations", post(create_registration))
-        .route("/registrations/:registration_id", put(update_registration))
+        .route("/registrations/{registration_id}", put(update_registration))
         .route(
-            "/registrations/:registration_id",
+            "/registrations/{registration_id}",
             get(show_registration_configuration),
         )
 }
@@ -411,10 +413,7 @@ async fn registration_token(
     )
     .map_err(|e| ApiError::Db(e.to_string()))?;
 
-    let oidc_configuration_url = format!(
-        "https://{}/api/lti/ims/authorize",
-        domain
-    );
+    let oidc_configuration_url = format!("https://{}/api/lti/ims/authorize", domain);
 
     Ok(Json(json!({
         "uuid": uuid,
@@ -799,15 +798,15 @@ async fn show_registration_configuration(
 
     let json = json!({
         "client_id": ims.developer_key_id.map(|id| id.to_string()).unwrap_or_default(),
-        "application_type": "web",
-        "grant_types": ["client_credentials", "implicit"],
+        "application_type": payload.application_type,
+        "grant_types": payload.grant_types,
+        "response_types": payload.response_types,
         "initiate_login_uri": ims.initiate_login_uri,
         "redirect_uris": ims.redirect_uris,
-        "response_types": ["id_token"],
         "client_name": ims.client_name,
         "jwks_uri": ims.jwks_uri,
         "logo_uri": ims.logo_uri,
-        "token_endpoint_auth_method": "private_key_jwt",
+        "token_endpoint_auth_method": payload.token_endpoint_auth_method,
         "scope": ims.scopes,
         "https://purl.imsglobal.org/spec/lti-tool-configuration": ims.lti_tool_configuration,
         "registration_client_uri": format!("/accounts/{}/registrations/{}/view", registration.account_id, registration_id),
