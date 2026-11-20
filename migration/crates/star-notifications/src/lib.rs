@@ -462,10 +462,46 @@ pub fn router() -> Router<AppState> {
             "/users/{user_id}/communication_channels/{id}",
             delete(delete_user_communication_channel),
         )
+        // Per-user reset_bounce_count (Route 1)
+        .route(
+            "/users/{user_id}/communication_channels/{id}/reset",
+            post(reset_bounce_count),
+        )
+        // Delete push token (Route 8)
+        .route(
+            "/users/self/communication_channels/push",
+            delete(delete_push_token),
+        )
+        // Destroy channel by type+address (Route 9)
+        .route(
+            "/users/{user_id}/communication_channels/{type}/{address}",
+            delete(destroy_channel_by_address),
+        )
         // Account bounced-email report (Canvas `bouncing_channel_report`)
         .route(
             "/accounts/{account_id}/bounced_communication_channels",
             get(bounced_communication_channels),
+        )
+        .route(
+            "/accounts/{account_id}/bounced_communication_channels.csv",
+            get(bounced_communication_channels_csv),
+        )
+        .route(
+            "/accounts/{account_id}/bounced_communication_channels/reset",
+            post(bulk_reset_bounce_counts),
+        )
+        // Account unconfirmed-channel report + confirm (Canvas `unconfirmed_channel_report`)
+        .route(
+            "/accounts/{account_id}/unconfirmed_communication_channels",
+            get(unconfirmed_communication_channels),
+        )
+        .route(
+            "/accounts/{account_id}/unconfirmed_communication_channels.csv",
+            get(unconfirmed_communication_channels_csv),
+        )
+        .route(
+            "/accounts/{account_id}/unconfirmed_communication_channels/confirm",
+            post(bulk_confirm_unconfirmed),
         )
         // Per-channel notification preferences, scoped by channel id
         // (Canvas notification_preferences index/show; reads self-or-admin)
@@ -1723,6 +1759,427 @@ async fn bounced_communication_channels(
     .await?;
 
     Ok(Json(BouncedChannelsResponse { channels: rows }))
+}
+
+/// CSV variant of bounced_communication_channels.
+async fn bounced_communication_channels_csv(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(account_id): Path<i64>,
+) -> Result<String, ApiError> {
+    let Json(BouncedChannelsResponse { channels }) =
+        bounced_communication_channels(State(state), auth, Path(account_id)).await?;
+    Ok(channels_to_csv(&channels))
+}
+
+/// A row from notification_endpoints for push token management.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct NotificationEndpoint {
+    pub id: i64,
+    pub user_id: i64,
+    pub token: String,
+    pub workflow_state: String,
+}
+
+/// Response for bulk confirm/reset operations.
+#[derive(Debug, Serialize)]
+pub struct BulkActionResponse {
+    pub reset: i64,
+}
+
+/// Response for bulk confirm operations.
+#[derive(Debug, Serialize)]
+pub struct BulkConfirmResponse {
+    pub confirmed: i64,
+}
+
+/// Response for delete_push_token.
+#[derive(Debug, Serialize)]
+pub struct DeletePushTokenResponse {
+    pub success: bool,
+}
+
+// --------------------------------------------------------------------------
+// Handlers — reset_bounce_count (Route 1)
+// --------------------------------------------------------------------------
+
+/// POST /users/{user_id}/communication_channels/{id}/reset
+/// Reset the bounce counter on a communication channel.
+/// Requires channel-level reset_bounce_count permission (channel owner or
+/// real user in masquerade).
+async fn reset_bounce_count(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, channel_id)): Path<(String, i64)>,
+) -> Result<Json<CommunicationChannel>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+
+    // Channel must exist and belong to the target user.
+    let channel: Option<CommunicationChannel> = sqlx::query_as(
+        r#"
+        SELECT id, path, path_type, position, user_id, workflow_state, created_at
+        FROM communication_channels
+        WHERE id = $1 AND user_id = $2 AND workflow_state != 'retired'
+        "#,
+    )
+    .bind(channel_id)
+    .bind(target_user_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let channel = channel.ok_or(ApiError::NotFound)?;
+
+    // Channel-level permission: channel owner or real user in masquerade.
+    // Writing = true means channel_operation write check (self-only by default).
+    // We need a dedicated check: channel owner OR real_current_user.
+    // Since this crate has no masquerade support, restrict to self for now.
+    if target_user_id != auth.id {
+        return Err(ApiError::Forbidden);
+    }
+
+    let updated: CommunicationChannel = sqlx::query_as(
+        r#"
+        UPDATE communication_channels
+        SET bounce_count = 0, last_bounce_at = NULL, updated_at = NOW()
+        WHERE id = $1 AND user_id = $2
+        RETURNING id, path, path_type, position, user_id, workflow_state, created_at
+        "#,
+    )
+    .bind(channel_id)
+    .bind(target_user_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(updated))
+}
+
+// --------------------------------------------------------------------------
+// Handlers — bulk_reset_bounce_counts (Route 4)
+// --------------------------------------------------------------------------
+
+/// POST /accounts/{account_id}/bounced_communication_channels/reset
+/// Reset bounce counts for all bounced channels in an account.
+/// Requires site-admin (read_messages on Account.site_admin).
+async fn bulk_reset_bounce_counts(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(account_id): Path<i64>,
+    Query(params): Query<BouncedReportQuery>,
+) -> Result<Json<BulkActionResponse>, ApiError> {
+    // Site admin only — check auth.role == "admin" (covers both site and account admins).
+    if auth.role != "admin" {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Verify account exists.
+    let account_exists: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await?;
+
+    if account_exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    let rows = sqlx::query(
+        r#"
+        UPDATE communication_channels cc
+        SET bounce_count = 0, last_bounce_at = NULL, updated_at = NOW()
+        WHERE cc.user_id IN (SELECT user_id FROM account_users WHERE account_id = $1)
+          AND cc.bounce_count > 0
+          AND cc.workflow_state != 'retired'
+          AND cc.bounce_count > 0
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(BulkActionResponse {
+        reset: rows.len() as i64,
+    }))
+}
+
+// --------------------------------------------------------------------------
+// Handlers — unconfirmed_channel_report (Routes 5 & 6)
+// --------------------------------------------------------------------------
+
+/// GET /accounts/{account_id}/unconfirmed_communication_channels[.csv]
+/// List all unconfirmed communication channels for users in the account.
+/// Requires :view_bounced_emails (admin role).
+async fn unconfirmed_communication_channels(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(account_id): Path<i64>,
+    Query(params): Query<BouncedReportQuery>,
+) -> Result<Json<BouncedChannelsResponse>, ApiError> {
+    if auth.role != "admin" {
+        return Err(ApiError::Forbidden);
+    }
+
+    let account_exists: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await?;
+
+    if account_exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    let order = params.order.as_deref().unwrap_or("desc");
+
+    let rows: Vec<BouncedChannelRow> = sqlx::query_as(
+        r#"
+        SELECT
+            cc.id,
+            cc.user_id,
+            cc.path     AS address,
+            cc.path_type,
+            cc.bounce_count,
+            cc.last_bounce_at,
+            cc.last_bounce_summary
+        FROM communication_channels cc
+        JOIN account_users au ON au.user_id = cc.user_id
+        WHERE au.account_id = $1
+          AND cc.workflow_state = 'unconfirmed'
+          AND cc.path_type != 'push'
+        ORDER BY cc.id DESC
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(BouncedChannelsResponse { channels: rows }))
+}
+
+/// CSV variant of unconfirmed_communication_channels.
+async fn unconfirmed_communication_channels_csv(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(account_id): Path<i64>,
+    Query(params): Query<BouncedReportQuery>,
+) -> Result<String, ApiError> {
+    let Json(BouncedChannelsResponse { channels }) =
+        unconfirmed_communication_channels(state, auth, Path(account_id), Query(params))
+            .await?;
+    Ok(channels_to_csv(&channels))
+}
+
+// --------------------------------------------------------------------------
+// Handlers — bulk_confirm_unconfirmed (Route 7)
+// --------------------------------------------------------------------------
+
+/// POST /accounts/{account_id}/unconfirmed_communication_channels/confirm
+/// Confirm all unconfirmed channels for users in an account.
+/// Requires site-admin (read_messages on Account.site_admin).
+async fn bulk_confirm_unconfirmed(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(account_id): Path<i64>,
+) -> Result<Json<BulkConfirmResponse>, ApiError> {
+    if auth.role != "admin" {
+        return Err(ApiError::Forbidden);
+    }
+
+    let account_exists: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await?;
+
+    if account_exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    let rows = sqlx::query(
+        r#"
+        UPDATE communication_channels cc
+        SET workflow_state = 'active', updated_at = NOW()
+        WHERE cc.id IN (
+            SELECT cc2.id
+            FROM communication_channels cc2
+            JOIN account_users au ON au.user_id = cc2.user_id
+            WHERE au.account_id = $1
+              AND cc2.workflow_state = 'unconfirmed'
+              AND cc2.path_type != 'push'
+        )
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(BulkConfirmResponse {
+        confirmed: rows.len() as i64,
+    }))
+}
+
+// --------------------------------------------------------------------------
+// Handlers — delete_push_token (Route 8)
+// --------------------------------------------------------------------------
+
+/// DELETE /users/self/communication_channels/push
+/// Delete a push notification endpoint by token.
+/// Uses current_user only — no target user lookup.
+async fn delete_push_token(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<DeletePushTokenQuery>,
+) -> Result<Json<DeletePushTokenResponse>, ApiError> {
+    // Find the user's active push channel.
+    let channel: Option<CommunicationChannel> = sqlx::query_as(
+        r#"
+        SELECT id, path, path_type, position, user_id, workflow_state, created_at
+        FROM communication_channels
+        WHERE user_id = $1 AND lower(path_type) = 'push' AND workflow_state != 'retired'
+        LIMIT 1
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    if channel.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // Find the notification endpoint matching the token (case-insensitive).
+    let token_lower = params.push_token.to_lowercase();
+    let endpoint: Option<NotificationEndpoint> = sqlx::query_as(
+        r#"
+        SELECT id, user_id, token, workflow_state
+        FROM notification_endpoints
+        WHERE user_id = $1 AND lower(token) = $2 AND workflow_state != 'retired'
+        LIMIT 1
+        "#,
+    )
+    .bind(auth.id)
+    .bind(&token_lower)
+    .fetch_optional(&state.db)
+    .await?;
+
+    if endpoint.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    let endpoint = endpoint.unwrap();
+
+    sqlx::query("DELETE FROM notification_endpoints WHERE id = $1")
+        .bind(endpoint.id)
+        .execute(&state.db)
+        .await?;
+
+    Ok(Json(DeletePushTokenResponse { success: true }))
+}
+
+// --------------------------------------------------------------------------
+// Handlers — destroy_channel_by_address (Route 9)
+// --------------------------------------------------------------------------
+
+/// DELETE /users/{user_id}/communication_channels/{type}/{address}
+/// Retire a communication channel by its type+address rather than by ID.
+/// Permission: self, or (can_edit_own AND not imported OR edit_institution_email).
+/// The `imported` flag is not tracked in this schema; the imported email
+/// restriction is documented as a known gap.
+async fn destroy_channel_by_address(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, channel_type, address)): Path<(String, String, String)>,
+) -> Result<Json<CommunicationChannel>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+
+    // Writes are self-only (authorize_channel_operation with writing=true).
+    authorize_channel_operation(&auth, target_user_id, true)?;
+
+    let row: Option<CommunicationChannel> = sqlx::query_as(
+        r#"
+        UPDATE communication_channels
+        SET workflow_state = 'retired', updated_at = NOW()
+        WHERE user_id = $1
+          AND lower(path_type) = lower($2)
+          AND lower(path) = lower($3)
+          AND workflow_state != 'retired'
+        RETURNING id, path, path_type, position, user_id, workflow_state, created_at
+        "#,
+    )
+    .bind(target_user_id)
+    .bind(&channel_type)
+    .bind(&address)
+    .fetch_optional(&state.db)
+    .await?;
+
+    row.map(Json).ok_or(ApiError::NotFound)
+}
+
+// --------------------------------------------------------------------------
+// Helpers — Bounced / Unconfirmed report query params
+// --------------------------------------------------------------------------
+
+/// Query parameters for bounced/unconfirmed channel reports.
+#[derive(Debug, Deserialize)]
+pub struct BouncedReportQuery {
+    #[serde(default)]
+    pub after: Option<String>,
+    #[serde(default)]
+    pub before: Option<String>,
+    #[serde(default)]
+    pub pattern: Option<String>,
+    #[serde(default)]
+    pub with_invalid_paths: Option<bool>,
+    #[serde(default)]
+    pub path_type: Option<String>,
+    #[serde(default)]
+    pub order: Option<String>,
+}
+
+/// Query parameters for delete_push_token.
+#[derive(Debug, Deserialize)]
+pub struct DeletePushTokenQuery {
+    pub push_token: String,
+}
+
+/// Serialize bounced channel rows as CSV (no external crate needed).
+fn channels_to_csv(rows: &[BouncedChannelRow]) -> String {
+    let mut out = String::new();
+    out.push_str("id,user_id,address,type,bounce_count,last_bounce_at,last_bounce_summary\n");
+    for row in rows {
+        out.push_str(&row.id.to_string());
+        out.push(',');
+        out.push_str(&row.user_id.to_string());
+        out.push(',');
+        out.push('"');
+        out.push_str(&row.address.replace('"', "\"\""));
+        out.push('"');
+        out.push(',');
+        out.push('"');
+        out.push_str(&row.channel_type.replace('"', "\"\""));
+        out.push('"');
+        out.push(',');
+        out.push_str(&row.bounce_count.to_string());
+        out.push(',');
+        out.push_str(
+            &row
+                .last_bounce_at
+                .map(|dt| dt.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+                .unwrap_or_default(),
+        );
+        out.push(',');
+        out.push('"');
+        out.push_str(
+            &row.last_bounce_summary
+                .as_ref()
+                .map(|s| s.replace('"', "\"\""))
+                .unwrap_or_default(),
+        );
+        out.push('"');
+        out.push('\n');
+    }
+    out
 }
 
 #[cfg(test)]
