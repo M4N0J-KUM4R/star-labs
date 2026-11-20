@@ -282,6 +282,9 @@ async fn course_account_chain(pool: &PgPool, course_id: i64) -> Result<Vec<i64>,
     let Some((account_id,)) = row else {
         return Ok(Vec::new());
     };
+    let Some(account_id) = account_id else {
+        return Ok(Vec::new());
+    };
 
     let mut chain = Vec::new();
     let mut current = account_id;
