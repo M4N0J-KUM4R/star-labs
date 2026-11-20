@@ -99,15 +99,10 @@ pub async fn list_jobs_json(
 async fn list_running(db: &PgPool, flavor: &str) -> Result<impl IntoResponse, ApiError> {
     let where_clause = running_where_clause(flavor);
 
-    let sql = format!(
-        "SELECT {JOB_V2_COLUMNS} FROM jobs WHERE {where_clause} ORDER BY id DESC"
-    );
+    let sql = format!("SELECT {JOB_V2_COLUMNS} FROM jobs WHERE {where_clause} ORDER BY id DESC");
     let rows: Vec<JobV2> = sqlx::query_as(&sql).fetch_all(db).await?;
 
-    let jobs: Vec<Value> = rows
-        .iter()
-        .map(|j| job_v2_to_json(j, false))
-        .collect();
+    let jobs: Vec<Value> = rows.iter().map(|j| job_v2_to_json(j, false)).collect();
 
     Ok(Json(RunningResponse { running: jobs }))
 }
@@ -116,9 +111,7 @@ async fn list_running(db: &PgPool, flavor: &str) -> Result<impl IntoResponse, Ap
 fn running_where_clause(flavor: &str) -> String {
     let base = "workflow_state = 'running' OR locked_at IS NOT NULL";
     match flavor {
-        "failed" => {
-            "workflow_state = 'failed' OR failed_at IS NOT NULL".to_string()
-        }
+        "failed" => "workflow_state = 'failed' OR failed_at IS NOT NULL".to_string(),
         "future" => {
             format!("{base} AND run_at > now()")
         }
@@ -141,14 +134,14 @@ async fn list_tags(db: &PgPool, flavor: &str, limit: i64) -> Result<impl IntoRes
         LIMIT $1
         "#
     );
-    let rows: Vec<TagCountRow> = sqlx::query_as(&sql)
-        .bind(limit)
-        .fetch_all(db)
-        .await?;
+    let rows: Vec<TagCountRow> = sqlx::query_as(&sql).bind(limit).fetch_all(db).await?;
 
     let tags: Vec<TagCount> = rows
         .into_iter()
-        .map(|r| TagCount { tag: r.tag, count: r.count })
+        .map(|r| TagCount {
+            tag: r.tag,
+            count: r.count,
+        })
         .collect();
 
     Ok(Json(TagsResponse { tags }))
@@ -169,7 +162,9 @@ async fn list_jobs(
     offset: i64,
 ) -> Result<impl IntoResponse, ApiError> {
     let where_clause = flavor_where_clause(flavor);
-    let q_filter = q.as_ref().map(|s| format!("AND tag ILIKE '%{}'", s.replace('\'', "''")));
+    let q_filter = q
+        .as_ref()
+        .map(|s| format!("AND tag ILIKE '%{}'", s.replace('\'', "''")));
 
     let mut sql = format!(
         r#"
@@ -181,7 +176,10 @@ async fn list_jobs(
     if let Some(ref f) = q_filter {
         sql.push_str(f);
     }
-    sql.push_str(&format!(" ORDER BY id DESC LIMIT {} OFFSET {}", limit, offset));
+    sql.push_str(&format!(
+        " ORDER BY id DESC LIMIT {} OFFSET {}",
+        limit, offset
+    ));
 
     let rows: Vec<JobV2> = sqlx::query_as(&sql).fetch_all(db).await?;
 
@@ -190,14 +188,9 @@ async fn list_jobs(
     if let Some(ref f) = q_filter {
         count_sql.push_str(f);
     }
-    let total: i64 = sqlx::query_scalar(&count_sql)
-        .fetch_one(db)
-        .await?;
+    let total: i64 = sqlx::query_scalar(&count_sql).fetch_one(db).await?;
 
-    let jobs: Vec<Value> = rows
-        .iter()
-        .map(|j| job_v2_to_json(j, false))
-        .collect();
+    let jobs: Vec<Value> = rows.iter().map(|j| job_v2_to_json(j, false)).collect();
 
     Ok(Json(JobsResponse { jobs, total }))
 }
@@ -206,8 +199,13 @@ async fn list_jobs(
 fn flavor_where_clause(flavor: &str) -> String {
     match flavor {
         "failed" => "workflow_state = 'failed' OR failed_at IS NOT NULL".to_string(),
-        "future" => "workflow_state = 'queued' AND run_at > now() AND locked_at IS NULL".to_string(),
-        "current" | _ => "workflow_state NOT IN ('failed') AND (workflow_state != 'failed' OR failed_at IS NULL)".to_string(),
+        "future" => {
+            "workflow_state = 'queued' AND run_at > now() AND locked_at IS NULL".to_string()
+        }
+        "current" | _ => {
+            "workflow_state NOT IN ('failed') AND (workflow_state != 'failed' OR failed_at IS NULL)"
+                .to_string()
+        }
     }
 }
 
@@ -289,7 +287,9 @@ pub async fn batch_update(
                     .await?;
                 ids.len() as i64
             } else {
-                return Err(ApiError::BadRequest("job_ids required for force_delete".into()));
+                return Err(ApiError::BadRequest(
+                    "job_ids required for force_delete".into(),
+                ));
             }
         }
         "destroy" => {
@@ -314,7 +314,9 @@ pub async fn batch_update(
                 .await?;
                 updated.rows_affected() as i64
             } else {
-                return Err(ApiError::BadRequest("q (strand name) required for unblock".into()));
+                return Err(ApiError::BadRequest(
+                    "q (strand name) required for unblock".into(),
+                ));
             }
         }
         "resize" => {
@@ -328,7 +330,9 @@ pub async fn batch_update(
                 .await?;
                 updated.rows_affected() as i64
             } else {
-                return Err(ApiError::BadRequest("q (strand name) required for resize".into()));
+                return Err(ApiError::BadRequest(
+                    "q (strand name) required for resize".into(),
+                ));
             }
         }
         "strand" => {
@@ -341,7 +345,9 @@ pub async fn batch_update(
                     .await?;
                 updated.rows_affected() as i64
             } else {
-                return Err(ApiError::BadRequest("q (old strand name) required for strand action".into()));
+                return Err(ApiError::BadRequest(
+                    "q (old strand name) required for strand action".into(),
+                ));
             }
         }
         "update" => {

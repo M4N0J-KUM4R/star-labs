@@ -123,9 +123,7 @@ pub async fn search_jobs(
         bind_idx += 1;
     }
 
-    sql.push_str(&format!(
-        " GROUP BY {col} ORDER BY count DESC LIMIT 100"
-    ));
+    sql.push_str(&format!(" GROUP BY {col} ORDER BY count DESC LIMIT 100"));
 
     let mut qb = sqlx::query_as::<_, SearchGroupRow>(&sql)
         .bind(format!("%{}%", params.term.replace('\'', "''")));
@@ -205,7 +203,9 @@ pub async fn grouped_info(
 
     sql.push_str(&format!(
         " GROUP BY {col} ORDER BY {} LIMIT {} OFFSET {}",
-        group_order_clause(order, group), limit, offset
+        group_order_clause(order, group),
+        limit,
+        offset
     ));
 
     let mut qb = sqlx::query_as::<_, GroupedRowDb>(&sql);
@@ -222,8 +222,17 @@ pub async fn grouped_info(
     let result: Vec<GroupedRow> = rows
         .into_iter()
         .map(|row| {
-            let info = compute_group_info(&bucket, row.earliest_run_at, row.earliest_locked_at, row.latest_failed_at);
-            let orphaned = if include_orphaned { Some(row.has_orphaned) } else { None };
+            let info = compute_group_info(
+                &bucket,
+                row.earliest_run_at,
+                row.earliest_locked_at,
+                row.latest_failed_at,
+            );
+            let orphaned = if include_orphaned {
+                Some(row.has_orphaned)
+            } else {
+                None
+            };
 
             match group {
                 Group::Tag => GroupedRow {
