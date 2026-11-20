@@ -32,9 +32,10 @@ use star_common::AppState;
 /// of the app router in star-http.
 ///
 /// Route-order note: axum 0.8 matches STATIC segments before path parameters
-/// at the same depth, so `/courses/{id}/discussions` wins over
-/// `/courses/{id}/{tab}` regardless of registration order; the discussion
-/// routes are still registered first to keep that property local and visible.
+/// at the same depth, so `/courses/{id}/discussions` (and the quiz routes)
+/// win over `/courses/{id}/{tab}` regardless of registration order; the
+/// specific routes are still registered first to keep that property local
+/// and visible.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", get(handlers::login::root))
@@ -105,6 +106,28 @@ pub fn router() -> Router<AppState> {
             post(handlers::conversations::conversation_reply),
         )
         .route("/courses/{id}", get(handlers::course::course_home))
+        // Quiz-taking journey (issue #109) — specific before generic.
+        .route("/courses/{id}/quizzes", get(handlers::quiz::quiz_list))
+        .route(
+            "/courses/{id}/quizzes/new",
+            get(handlers::quiz::quiz_new).post(handlers::quiz::quiz_create),
+        )
+        .route(
+            "/courses/{id}/quizzes/{qid}",
+            get(handlers::quiz::quiz_show),
+        )
+        .route(
+            "/courses/{id}/quizzes/{qid}/take",
+            get(handlers::quiz::quiz_take).post(handlers::quiz::quiz_take_start),
+        )
+        .route(
+            "/courses/{id}/quizzes/{qid}/submissions/{sid}",
+            get(handlers::quiz::quiz_results),
+        )
+        .route(
+            "/courses/{id}/quizzes/{qid}/submissions/{sid}/submit",
+            post(handlers::quiz::quiz_submit),
+        )
         // Assignments journey (issue #71) — BEFORE the generic tab route.
         .route(
             "/courses/{id}/assignments",

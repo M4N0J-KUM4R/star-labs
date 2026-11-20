@@ -3460,8 +3460,10 @@ dependencies = [
  "star-grading-standards",
  "star-modules",
  "star-pages",
+ "star-quizzes",
  "time",
  "tokio",
+ "url",
 ]
 
 [[package]]

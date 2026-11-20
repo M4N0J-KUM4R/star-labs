@@ -10,3 +10,4 @@ pub mod discussions;
 pub mod error;
 pub mod grades;
 pub mod login;
+pub mod quiz;
