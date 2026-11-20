@@ -32,8 +32,9 @@
 //! - PUT    /users/{userId}/notification_preference_categories/{category}
 
 use axum::{
-    extract::{Path, State},
-    http::StatusCode,
+    extract::{Path, Query, State},
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -466,6 +467,48 @@ pub fn router() -> Router<AppState> {
         .route(
             "/accounts/{account_id}/bounced_communication_channels",
             get(bounced_communication_channels),
+        )
+        // communication_channels tail (#62)
+        // Canvas `reset_bounce_count` (routes.rb:2053).
+        .route(
+            "/users/{user_id}/communication_channels/{id}",
+            post(reset_bounce_count),
+        )
+        // Canvas `delete_push_token` (routes.rb:2062) — literal self/push
+        // segments win over the {type}/{address} params below.
+        .route(
+            "/users/self/communication_channels/push",
+            delete(delete_push_token),
+        )
+        // Canvas `destroy` by (type, address) (routes.rb:2063); the greedy
+        // `[^/?]+` address constraint matches axum's single-param behavior.
+        .route(
+            "/users/{user_id}/communication_channels/{type}/{address}",
+            delete(delete_user_communication_channel_by_address),
+        )
+        // Canvas `bouncing_channel_report` CSV variant (`.csv` is part of
+        // the path via `defaults: { format: :csv }`).
+        .route(
+            "/accounts/{account_id}/bounced_communication_channels.csv",
+            get(bounced_channels_report_csv),
+        )
+        // Canvas `unconfirmed_channel_report`, JSON + CSV variants.
+        .route(
+            "/accounts/{account_id}/unconfirmed_communication_channels",
+            get(unconfirmed_channels_report),
+        )
+        .route(
+            "/accounts/{account_id}/unconfirmed_communication_channels.csv",
+            get(unconfirmed_channels_report_csv),
+        )
+        // Canvas `bulk_reset_bounce_counts` / `bulk_confirm`.
+        .route(
+            "/accounts/{account_id}/bounced_communication_channels/reset",
+            post(bulk_reset_bounce_counts),
+        )
+        .route(
+            "/accounts/{account_id}/unconfirmed_communication_channels/confirm",
+            post(bulk_confirm_channels),
         )
         // Per-channel notification preferences, scoped by channel id
         // (Canvas notification_preferences index/show; reads self-or-admin)
@@ -1723,6 +1766,665 @@ async fn bounced_communication_channels(
     .await?;
 
     Ok(Json(BouncedChannelsResponse { channels: rows }))
+}
+
+// --------------------------------------------------------------------------
+// Handlers — communication_channels tail (#62: reset_bounce_count, destroy
+// by type/address, delete_push_token, bounced CSV, unconfirmed reports,
+// bulk reset, bulk confirm)
+// --------------------------------------------------------------------------
+
+/// Canvas `CommunicationChannel::TYPE_PUSH`.
+const CHANNEL_TYPE_PUSH: &str = "push";
+
+/// Canvas `communication_channel_json` with the `:read_bounce_details`
+/// extras (lib/api/v1/communication_channel.rb) — full field set with the
+/// `path_description` → `address` and `path_type` → `type` renames. Push
+/// channels render `address` as the "For All Devices" label.
+#[derive(Debug, Serialize, sqlx::FromRow)]
+pub struct CommunicationChannelDetail {
+    pub id: i64,
+    pub user_id: i64,
+    pub position: i32,
+    pub workflow_state: String,
+    pub created_at: Option<DateTime<Utc>>,
+    /// Canvas `#path_description`: "For All Devices" for push, else the path.
+    #[sqlx(rename = "path")]
+    pub address: String,
+    #[serde(rename = "type")]
+    #[sqlx(rename = "path_type")]
+    pub channel_type: String,
+    pub bounce_count: i32,
+    pub last_bounce_at: Option<DateTime<Utc>>,
+    pub last_transient_bounce_at: Option<DateTime<Utc>>,
+    pub last_suppression_bounce_at: Option<DateTime<Utc>>,
+    pub last_bounce_summary: Option<String>,
+    pub last_transient_bounce_summary: Option<String>,
+}
+
+/// Canvas `Account.site_admin.grants_right?(user, :read_messages)` — the
+/// right behind `reset_bounce_count`, `read_bounce_details` and the two bulk
+/// actions. star-lms models site admins as `users.role = 'admin'`.
+fn is_site_admin(auth: &AuthUser) -> bool {
+    auth.role == "admin"
+}
+
+/// POST /users/{user_id}/communication_channels/{id} — Canvas
+/// `#reset_bounce_count` (communication_channels_controller.rb:507).
+///
+/// Resolves the user (`api_find`, 404 unknown), finds the channel among
+/// unretired ones (404 unknown or retired), then requires the channel
+/// `reset_bounce_count` right — per the model policy (set_policy, line 112)
+/// that is site-admin `read_messages` only; the masquerading
+/// `@real_current_user` branch has no star equivalent. Resets `bounce_count`
+/// to 0 and renders the channel JSON with bounce fields (a site admin also
+/// holds `read_bounce_details`).
+async fn reset_bounce_count(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, id)): Path<(String, i64)>,
+) -> Result<Json<CommunicationChannelDetail>, ApiError> {
+    // Canvas order: api_find(User) → unretired.find(id) → grants_right? —
+    // so 404s for unknown user/channel fire before the 401.
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+
+    let exists: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM communication_channels WHERE id = $1 AND user_id = $2 AND workflow_state != 'retired'",
+    )
+    .bind(id)
+    .bind(target_user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // Policy: `given { |user| Account.site_admin.grants_right?(user,
+    // :read_messages) } can :reset_bounce_count` — site admins only.
+    if !is_site_admin(&auth) {
+        return Err(ApiError::Unauthorized);
+    }
+
+    // `reset_bounce_count!` (bounce_count = 0 + save).
+    let row: Option<CommunicationChannelDetail> = sqlx::query_as(
+        r#"
+        UPDATE communication_channels
+        SET bounce_count = 0, updated_at = NOW()
+        WHERE id = $1 AND user_id = $2 AND workflow_state != 'retired'
+        RETURNING id, user_id, position, workflow_state, created_at,
+                  path, path_type, bounce_count,
+                  last_bounce_at, last_transient_bounce_at,
+                  last_suppression_bounce_at,
+                  last_bounce_summary, last_transient_bounce_summary
+        "#,
+    )
+    .bind(id)
+    .bind(target_user_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    match row {
+        Some(mut channel) => {
+            // `path_description`/`address`: "For All Devices" for push.
+            if channel.channel_type == CHANNEL_TYPE_PUSH {
+                channel.address = "For All Devices".to_string();
+            }
+            Ok(Json(channel))
+        }
+        None => Err(ApiError::NotFound),
+    }
+}
+
+/// DELETE /users/{user_id}/communication_channels/{type}/{address} — Canvas
+/// `#destroy` resolved by (type, address) (controller:554, routes.rb:2063).
+///
+/// Same rights as destroy-by-id; the channel is looked up among unretired
+/// ones by `(user, path_type, path)` — Canvas `by_path` lowercases both
+/// sides — 404 when absent. Retires the channel and renders its JSON.
+async fn delete_user_communication_channel_by_address(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, channel_type, address)): Path<(String, String, String)>,
+) -> Result<Json<CommunicationChannel>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_channel_operation(&auth, target_user_id, true)?;
+
+    // The route constraint is greedy `[^/?]+`; axum's `{address}` param
+    // matches exactly that (anything but `/`, and `%2F` stays encoded).
+    let row: Option<CommunicationChannel> = sqlx::query_as(
+        r#"
+        UPDATE communication_channels
+        SET workflow_state = 'retired', updated_at = NOW()
+        WHERE user_id = $1 AND lower(path_type) = lower($2)
+          AND lower(path) = lower($3) AND workflow_state != 'retired'
+        RETURNING id, path, path_type, position, user_id, workflow_state, created_at
+        "#,
+    )
+    .bind(target_user_id)
+    .bind(channel_type)
+    .bind(address)
+    .fetch_optional(&state.db)
+    .await?;
+
+    row.map(Json).ok_or(ApiError::NotFound)
+}
+
+/// DELETE /users/self/communication_channels/push — Canvas
+/// `#delete_push_token` (controller:588).
+///
+/// Self only (the path carries the literal `self`, never a real user id).
+/// Finds the caller's unretired push channel (404 when none), then destroys
+/// the notification endpoints whose token matches `push_token`
+/// case-insensitively. star-lms has no `notification_endpoints` table, so
+/// the push channel itself is retired — the API-visible effect (the user's
+/// push channel is gone, `{success: true}`) matches Canvas.
+async fn delete_push_token(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    body: Option<Json<serde_json::Value>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Canvas reads params[:push_token] (form body or query); there is no
+    // endpoints table to match it against, so it is accepted and ignored.
+    let _push_token = body
+        .as_ref()
+        .and_then(|Json(v)| v.get("push_token"))
+        .and_then(|t| t.as_str());
+
+    let retired: Option<(i64,)> = sqlx::query_as(
+        r#"
+        UPDATE communication_channels
+        SET workflow_state = 'retired', updated_at = NOW()
+        WHERE user_id = $1 AND path_type = $2 AND workflow_state != 'retired'
+        RETURNING id
+        "#,
+    )
+    .bind(auth.id)
+    .bind(CHANNEL_TYPE_PUSH)
+    .fetch_optional(&state.db)
+    .await?;
+
+    if retired.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(Json(serde_json::json!({ "success": true })))
+}
+
+/// Selection filters shared by the bounced/unconfirmed reports and their
+/// bulk twins (Canvas `bulk_action_args`: after, before, pattern,
+/// with_invalid_paths, path_type, order).
+#[derive(Debug, Default)]
+pub struct ChannelReportQuery {
+    pub after: Option<String>,
+    pub before: Option<String>,
+    pub pattern: Option<String>,
+    pub with_invalid_paths: bool,
+    pub path_type: Option<String>,
+    /// `order` defaults to asc; only "desc" (case-insensitive) flips it.
+    pub desc: bool,
+}
+
+impl ChannelReportQuery {
+    /// Parsed from raw key/value pairs, Rails-style (repeated keys allowed).
+    fn from_pairs(pairs: &[(String, String)]) -> Self {
+        let mut query = ChannelReportQuery::default();
+        for (key, value) in pairs {
+            match key.as_str() {
+                "after" => query.after = Some(value.clone()),
+                "before" => query.before = Some(value.clone()),
+                "pattern" => query.pattern = Some(value.clone()),
+                "with_invalid_paths" => {
+                    query.with_invalid_paths = matches!(
+                        value.trim().to_ascii_lowercase().as_str(),
+                        "true" | "1" | "yes"
+                    )
+                }
+                "path_type" => query.path_type = Some(value.clone()),
+                "order" => query.desc = value.trim().eq_ignore_ascii_case("desc"),
+                _ => {}
+            }
+        }
+        query
+    }
+
+    /// Canvas `path_like(pattern.tr("*", "%"))`:
+    /// `lower(path) LIKE lower(pattern)` — `*` becomes the SQL wildcard and
+    /// the pattern is used verbatim (no implicit wrapping).
+    fn pattern(&self) -> Option<String> {
+        self.pattern.as_deref().map(|p| p.replace('*', "%"))
+    }
+
+    /// Canvas drops invalid email paths unless `with_invalid_paths` is set
+    /// (`path_type != 'email' or lower(path) LIKE '%_@%_.%_'`).
+    fn email_validity_clause(&self) -> &'static str {
+        if self.with_invalid_paths {
+            ""
+        } else {
+            " AND (cc.path_type != 'email' OR lower(cc.path) LIKE '%_@%_.%_')"
+        }
+    }
+}
+
+/// Resolve the account segment: `self` maps to the domain root account
+/// (Canvas `#account`); a numeric id must exist (404 otherwise).
+async fn resolve_report_account(state: &AppState, raw: &str) -> Result<i64, ApiError> {
+    let account_id = if raw == "self" {
+        1
+    } else {
+        raw.parse::<i64>()
+            .ok()
+            .filter(|id| *id > 0)
+            .ok_or(ApiError::NotFound)?
+    };
+    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await?;
+    exists.map(|(id,)| id).ok_or(ApiError::NotFound)
+}
+
+/// Account `view_bounced_emails` gate for both reports (JSON + CSV).
+/// star-lms approximation: site admins and `account_users` admins of the
+/// account (same join the existing JSON bounce report uses).
+async fn can_view_bounced_emails(
+    state: &AppState,
+    auth: &AuthUser,
+    account_id: i64,
+) -> Result<bool, ApiError> {
+    if is_site_admin(auth) {
+        return Ok(true);
+    }
+    let admin: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM account_users WHERE user_id = $1 AND account_id = $2 AND role = 'admin' LIMIT 1",
+    )
+    .bind(auth.id)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
+    Ok(admin.is_some())
+}
+
+/// One row of either report: the shared identity columns plus both
+/// action-specific tails (bounce fields for ResetBounceCounts, created_at
+/// for Confirm). Nulls are rendered as empty strings by `#column_data`'s
+/// `to_s` on nil? No — Canvas' `column_data` maps `nil&.to_s` in the JSON
+/// variant and leaves empty cells in CSV; both collapse to "" here.
+#[derive(Debug, sqlx::FromRow)]
+struct ReportRow {
+    user_id: i64,
+    user_name: String,
+    id: i64,
+    path_type: String,
+    path: String,
+    last_bounce_at: Option<DateTime<Utc>>,
+    last_bounce_summary: Option<String>,
+    created_at: Option<DateTime<Utc>>,
+}
+
+impl ReportRow {
+    /// Canvas `#column_data` — identity columns then the action columns,
+    /// dates ISO8601, nulls as empty strings.
+    fn columns(&self, action: BulkAction) -> Vec<String> {
+        let mut cols = vec![
+            self.user_id.to_string(),
+            self.user_name.clone(),
+            self.id.to_string(),
+            self.path_type.clone(),
+            self.path.clone(),
+        ];
+        match action {
+            BulkAction::ResetBounceCounts => {
+                cols.push(
+                    self.last_bounce_at
+                        .map(|t| t.to_rfc3339())
+                        .unwrap_or_default(),
+                );
+                cols.push(self.last_bounce_summary.clone().unwrap_or_default());
+            }
+            BulkAction::Confirm => {
+                cols.push(self.created_at.map(|t| t.to_rfc3339()).unwrap_or_default());
+            }
+        }
+        cols
+    }
+}
+
+/// The two Canvas `BulkActions` subclasses this controller exposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BulkAction {
+    ResetBounceCounts,
+    Confirm,
+}
+
+impl BulkAction {
+    /// Canvas `#column_headers`.
+    fn headers(self) -> Vec<&'static str> {
+        let base = [
+            "User ID",
+            "Name",
+            "Communication channel ID",
+            "Type",
+            "Path",
+        ];
+        let tail: &[&'static str] = match self {
+            BulkAction::ResetBounceCounts => &["Date of most recent bounce", "Bounce reason"],
+            BulkAction::Confirm => &["Created at"],
+        };
+        base.iter().chain(tail.iter()).copied().collect()
+    }
+
+    /// Canvas `matching_channels` shared shape: unretired channels of the
+    /// account's users (`User.of_account`), then the per-subclass filter.
+    /// star-lms has no `user_account_associations` table, so account
+    /// membership is approximated by `account_users` — the same join the
+    /// existing JSON bounce report uses.
+    fn select_sql(self) -> &'static str {
+        match self {
+            BulkAction::ResetBounceCounts => {
+                // filter: bounce_count > 0, order by last_bounce_at
+                r#"
+                SELECT cc.user_id, u.name AS user_name, cc.id, cc.path_type, cc.path,
+                       cc.last_bounce_at, cc.last_bounce_summary, NULL::timestamptz AS created_at
+                FROM communication_channels cc
+                JOIN account_users au ON au.user_id = cc.user_id
+                JOIN users u ON u.id = cc.user_id
+                WHERE au.account_id = $1
+                  AND cc.bounce_count > 0
+                  AND cc.workflow_state != 'retired'
+                  AND ($2::timestamptz IS NULL OR cc.last_bounce_at < $2)
+                  AND ($3::timestamptz IS NULL OR cc.last_bounce_at > $3)
+                  AND ($4::text IS NULL OR cc.path_type = $4)
+                  AND ($5::text IS NULL OR lower(cc.path) LIKE lower($5))
+                "#
+            }
+            BulkAction::Confirm => {
+                // filter: workflow_state = 'unconfirmed', order by created_at
+                r#"
+                SELECT cc.user_id, u.name AS user_name, cc.id, cc.path_type, cc.path,
+                       cc.last_bounce_at, cc.last_bounce_summary, cc.created_at
+                FROM communication_channels cc
+                JOIN account_users au ON au.user_id = cc.user_id
+                JOIN users u ON u.id = cc.user_id
+                WHERE au.account_id = $1
+                  AND cc.workflow_state = 'unconfirmed'
+                  AND ($2::timestamptz IS NULL OR cc.created_at < $2)
+                  AND ($3::timestamptz IS NULL OR cc.created_at > $3)
+                  AND ($4::text IS NULL OR cc.path_type = $4)
+                  AND ($5::text IS NULL OR lower(cc.path) LIKE lower($5))
+                "#
+            }
+        }
+    }
+
+    /// Sort column (`last_bounce_at` / `created_at`).
+    fn order_column(self) -> &'static str {
+        match self {
+            BulkAction::ResetBounceCounts => "cc.last_bounce_at",
+            BulkAction::Confirm => "cc.created_at",
+        }
+    }
+
+    /// The `matching_channels` scope with a single-column `cc.id` projection
+    /// for the set-based bulk actions (`query_scalar` needs one column).
+    fn ids_sql(self) -> String {
+        self.select_sql()
+            .replacen(
+                "SELECT cc.user_id, u.name AS user_name, cc.id, cc.path_type, cc.path,
+                       cc.last_bounce_at, cc.last_bounce_summary, NULL::timestamptz AS created_at",
+                "SELECT cc.id",
+                1,
+            )
+            .replacen(
+                "SELECT cc.user_id, u.name AS user_name, cc.id, cc.path_type, cc.path,
+                       cc.last_bounce_at, cc.last_bounce_summary, cc.created_at",
+                "SELECT cc.id",
+                1,
+            )
+    }
+}
+
+/// Parse a timestamp filter; `None` on unparseable input, matching Rails
+/// `Time.zone.parse` returning nil (the filter is then ignored).
+fn parse_filter_time(raw: &Option<String>) -> Result<Option<DateTime<Utc>>, ApiError> {
+    Ok(raw.as_deref().and_then(|s| s.parse::<DateTime<Utc>>().ok()))
+}
+
+/// Fetch the report rows for one action + account + filters, ordered and
+/// capped at Canvas' 10_000-row report limit.
+async fn report_rows(
+    state: &AppState,
+    action: BulkAction,
+    account_id: i64,
+    query: &ChannelReportQuery,
+) -> Result<Vec<ReportRow>, ApiError> {
+    let before = parse_filter_time(&query.before)?;
+    let after = parse_filter_time(&query.after)?;
+    let order = if query.desc { "DESC" } else { "ASC" };
+    let sql = format!(
+        "{}{} ORDER BY {} {} NULLS LAST, cc.id {}\nLIMIT 10000",
+        action.select_sql(),
+        query.email_validity_clause(),
+        action.order_column(),
+        order,
+        order,
+    );
+    let rows: Vec<ReportRow> = sqlx::query_as(&sql)
+        .bind(account_id)
+        .bind(before)
+        .bind(after)
+        .bind(&query.path_type)
+        .bind(query.pattern())
+        .fetch_all(&state.db)
+        .await?;
+    Ok(rows)
+}
+
+/// GET /accounts/{account_id}/bounced_communication_channels.csv — Canvas
+/// `#bouncing_channel_report` CSV variant (ResetBounceCounts report,
+/// `defaults: { format: :csv }` route).
+async fn bounced_channels_report_csv(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_account_id): Path<String>,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Result<Response, ApiError> {
+    let account_id = resolve_report_account(&state, &raw_account_id).await?;
+    if !can_view_bounced_emails(&state, &auth, account_id).await? {
+        return Err(ApiError::Unauthorized);
+    }
+    let query = ChannelReportQuery::from_pairs(&pairs);
+    let rows = report_rows(&state, BulkAction::ResetBounceCounts, account_id, &query).await?;
+
+    let headers = BulkAction::ResetBounceCounts
+        .headers()
+        .iter()
+        .map(|h| h.to_string())
+        .collect::<Vec<_>>();
+    let mut csv = csv_row(&headers);
+    for row in &rows {
+        csv.push_str(&csv_row(&row.columns(BulkAction::ResetBounceCounts)));
+    }
+    Ok(csv_response("bounced_communication_channels.csv", csv))
+}
+
+/// GET /accounts/{account_id}/unconfirmed_communication_channels — Canvas
+/// `#unconfirmed_channel_report` JSON variant (Confirm report).
+async fn unconfirmed_channels_report(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_account_id): Path<String>,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Result<Response, ApiError> {
+    let account_id = resolve_report_account(&state, &raw_account_id).await?;
+    if !can_view_bounced_emails(&state, &auth, account_id).await? {
+        return Err(ApiError::Unauthorized);
+    }
+    let query = ChannelReportQuery::from_pairs(&pairs);
+    let rows = report_rows(&state, BulkAction::Confirm, account_id, &query).await?;
+
+    // Canvas `#json_report`: one array of header strings, then one array per
+    // row with every cell stringified (nulls stay null).
+    let mut data: Vec<serde_json::Value> = vec![serde_json::json!(BulkAction::Confirm.headers())];
+    for row in &rows {
+        data.push(serde_json::json!(row.columns(BulkAction::Confirm)));
+    }
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json".to_string())],
+        serde_json::to_string(&data).unwrap_or_default(),
+    )
+        .into_response())
+}
+
+/// GET /accounts/{account_id}/unconfirmed_communication_channels.csv —
+/// Canvas `#unconfirmed_channel_report` CSV variant.
+async fn unconfirmed_channels_report_csv(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_account_id): Path<String>,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Result<Response, ApiError> {
+    let account_id = resolve_report_account(&state, &raw_account_id).await?;
+    if !can_view_bounced_emails(&state, &auth, account_id).await? {
+        return Err(ApiError::Unauthorized);
+    }
+    let query = ChannelReportQuery::from_pairs(&pairs);
+    let rows = report_rows(&state, BulkAction::Confirm, account_id, &query).await?;
+
+    let headers = BulkAction::Confirm
+        .headers()
+        .iter()
+        .map(|h| h.to_string())
+        .collect::<Vec<_>>();
+    let mut csv = csv_row(&headers);
+    for row in &rows {
+        csv.push_str(&csv_row(&row.columns(BulkAction::Confirm)));
+    }
+    Ok(csv_response("unconfirmed_communication_channels.csv", csv))
+}
+
+/// POST /accounts/{account_id}/bounced_communication_channels/reset —
+/// Canvas `#bulk_reset_bounce_counts` (`BulkActions::ResetBounceCounts`).
+///
+/// Site-admin `read_messages` (not just the account report right). Canvas
+/// schedules the reset via `delay` and answers
+/// `{scheduled_reset_approximate_count: N}`; star-lms performs the reset
+/// inline but returns the same payload (a background sender belongs to
+/// #45 / MIG-04).
+async fn bulk_reset_bounce_counts(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_account_id): Path<String>,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !is_site_admin(&auth) {
+        return Err(ApiError::Unauthorized);
+    }
+    let account_id = resolve_report_account(&state, &raw_account_id).await?;
+    let query = ChannelReportQuery::from_pairs(&pairs);
+    let rows = report_rows(&state, BulkAction::ResetBounceCounts, account_id, &query).await?;
+
+    let ids: Vec<i64> = rows.iter().map(|r| r.id).collect();
+    if !ids.is_empty() {
+        sqlx::query(
+            "UPDATE communication_channels SET bounce_count = 0, updated_at = NOW() WHERE id = ANY($1)",
+        )
+        .bind(&ids)
+        .execute(&state.db)
+        .await?;
+    }
+
+    Ok(Json(
+        serde_json::json!({ "scheduled_reset_approximate_count": rows.len() }),
+    ))
+}
+
+/// POST /accounts/{account_id}/unconfirmed_communication_channels/confirm —
+/// Canvas `#bulk_confirm` (`BulkActions::Confirm`).
+///
+/// Site-admin `read_messages`; confirms every matching unconfirmed channel
+/// synchronously (`update_all(workflow_state: "active")`) and answers
+/// `{confirmed_count: N}`.
+async fn bulk_confirm_channels(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_account_id): Path<String>,
+    Query(pairs): Query<Vec<(String, String)>>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !is_site_admin(&auth) {
+        return Err(ApiError::Unauthorized);
+    }
+    let account_id = resolve_report_account(&state, &raw_account_id).await?;
+    let query = ChannelReportQuery::from_pairs(&pairs);
+
+    // Set-based update_all over the same matching_channels scope; the report
+    // ORDER BY is irrelevant to the result, so only the matching ids are
+    // fetched (`ids_sql` is the same scope with a single-column projection,
+    // because `query_scalar` needs exactly one column).
+    let before = parse_filter_time(&query.before)?;
+    let after = parse_filter_time(&query.after)?;
+    let sql = format!(
+        "{}{}",
+        BulkAction::Confirm.ids_sql(),
+        query.email_validity_clause(),
+    );
+    let ids: Vec<i64> = sqlx::query_scalar(&sql)
+        .bind(account_id)
+        .bind(before)
+        .bind(after)
+        .bind(&query.path_type)
+        .bind(query.pattern())
+        .fetch_all(&state.db)
+        .await?;
+
+    if !ids.is_empty() {
+        sqlx::query(
+            "UPDATE communication_channels SET workflow_state = 'active', updated_at = NOW() WHERE id = ANY($1)",
+        )
+        .bind(&ids)
+        .execute(&state.db)
+        .await?;
+    }
+
+    Ok(Json(serde_json::json!({ "confirmed_count": ids.len() })))
+}
+
+/// RFC 4180 quoting, same rule as star-rubrics `csv_escape`.
+fn csv_escape(value: &str) -> String {
+    if value.contains(',') || value.contains('"') || value.contains('\n') || value.contains('\r') {
+        format!("\"{}\"", value.replace('"', "\"\""))
+    } else {
+        value.to_string()
+    }
+}
+
+/// One CSV line (cells joined by commas, trailing newline).
+fn csv_row(cells: &[String]) -> String {
+    let mut line = cells
+        .iter()
+        .map(|c| csv_escape(c))
+        .collect::<Vec<_>>()
+        .join(",");
+    line.push('\n');
+    line
+}
+
+/// `text/csv` attachment, same shape as star-rubrics `csv_response`.
+fn csv_response(filename: &str, body: String) -> Response {
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "text/csv".to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("attachment; filename=\"{filename}\""),
+            ),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 #[cfg(test)]
