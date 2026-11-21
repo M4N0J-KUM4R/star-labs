@@ -137,8 +137,9 @@ pub async fn load_grading_assessment(
     rubric_id: i64,
     submission_id: i64,
 ) -> Result<Option<RubricAssessment>, ApiError> {
+    let columns = crate::ASSESSMENT_COLUMNS;
     let sql = format!(
-        "SELECT {ASSESSMENT_COLUMNS} FROM rubric_assessments \
+        "SELECT {columns} FROM rubric_assessments \
          WHERE rubric_id = $1 AND submission_id = $2 \
            AND assessment_type = 'grading' AND workflow_state <> 'deleted' \
          ORDER BY id ASC LIMIT 1"
