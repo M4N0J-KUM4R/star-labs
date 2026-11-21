@@ -122,7 +122,7 @@ pub(crate) async fn verify_advantage_access(
             .await
             .map_err(|_| advantage_error(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
 
-    let developer_key_id = row.ok_or_else(|| {
+    let developer_key_id = row.map(|(id,)| id).ok_or_else(|| {
         advantage_error(
             StatusCode::UNAUTHORIZED,
             "Unknown or inactive Developer Key",

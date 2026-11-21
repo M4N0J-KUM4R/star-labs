@@ -369,49 +369,47 @@ async fn create_score(
     }
 
     let result_id: i64 = match existing {
-        Some((existing_id, _)) => {
-            let row: Option<(i64,)> = sqlx::query_as(
-                "UPDATE lti_results \
+        Some((existing_id, _)) => sqlx::query_as::<_, (i64,)>(
+            "UPDATE lti_results \
                  SET result_score = $1, result_maximum = $2, comment = $3, \
                      activity_progress = $4, grading_progress = $5, \
                      updated_at = $6 \
                  WHERE id = $7 \
                  RETURNING id",
-            )
-            .bind(body.score_given)
-            .bind(body.score_maximum)
-            .bind(&body.comment)
-            .bind(body.activity_progress.as_deref())
-            .bind(body.grading_progress.as_deref())
-            .bind(timestamp)
-            .bind(existing_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|_| advantage_error(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
-            row.map(|(id,)| id)
-        }
-        None => {
-            let row: Option<(i64,)> = sqlx::query_as(
-                "INSERT INTO lti_results \
+        )
+        .bind(body.score_given)
+        .bind(body.score_maximum)
+        .bind(&body.comment)
+        .bind(body.activity_progress.as_deref())
+        .bind(body.grading_progress.as_deref())
+        .bind(timestamp)
+        .bind(existing_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .map(|(id,)| id),
+        None => sqlx::query_as::<_, (i64,)>(
+            "INSERT INTO lti_results \
                  (result_score, result_maximum, comment, activity_progress, \
                   grading_progress, lti_line_item_id, user_id, created_at, \
                   updated_at, workflow_state, root_account_id) \
                  VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, 'active', 1) \
                  RETURNING id",
-            )
-            .bind(body.score_given)
-            .bind(body.score_maximum)
-            .bind(&body.comment)
-            .bind(body.activity_progress.as_deref())
-            .bind(body.grading_progress.as_deref())
-            .bind(line_item_id)
-            .bind(user_id)
-            .bind(timestamp)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|_| advantage_error(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
-            row.map(|(id,)| id)
-        }
+        )
+        .bind(body.score_given)
+        .bind(body.score_maximum)
+        .bind(&body.comment)
+        .bind(body.activity_progress.as_deref())
+        .bind(body.grading_progress.as_deref())
+        .bind(line_item_id)
+        .bind(user_id)
+        .bind(timestamp)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .map(|(id,)| id),
     }
     .unwrap_or_else(|| 0);
 
