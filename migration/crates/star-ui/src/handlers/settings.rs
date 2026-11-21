@@ -275,18 +275,14 @@ pub async fn course_settings_save(
     // Same rule the REST create/update validation applies to names.
     if form.name.trim().is_empty() {
         let course = ctx.course.clone();
-        let msg = "Name is required.".to_string();
-        let mut resp = render_settings(
-            &app,
-            &user,
+        let render = SettingsRender {
             course_id,
-            &course,
-            Some(&form),
-            msg,
-            Vec::new(),
-            jar,
-        )
-        .await;
+            course: &course,
+            form: Some(&form),
+            error: "Name is required.".to_string(),
+            notices: Vec::new(),
+        };
+        let mut resp = render_settings(&app, &user, render, jar).await;
         *resp.status_mut() = StatusCode::UNPROCESSABLE_ENTITY;
         return resp;
     }
