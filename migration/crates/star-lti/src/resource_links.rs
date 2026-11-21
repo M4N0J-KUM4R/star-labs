@@ -300,9 +300,9 @@ impl TypeContext {
         // Canvas `collaboration_lookup_uuids`
         // (`ExternalToolCollaboration.where(context: @context)`).
         let collabs: Vec<(String,)> = sqlx::query_as(&format!(
-            "SELECT resource_link_lookup_uuid FROM collaborations \
+            "SELECT resource_link_lookup_uuid::text FROM collaborations \
                  WHERE context_id = $1 AND context_type = 'Course' \
-                 AND resource_link_lookup_uuid = ANY($2) {state_clause}"
+                 AND resource_link_lookup_uuid = ANY($2::uuid[]) {state_clause}"
         ))
         .bind(course_id)
         .bind(&uuids)
