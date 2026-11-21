@@ -15,7 +15,7 @@
 use axum::body::Bytes;
 use axum::http::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE};
 use axum_test::TestServer;
-use serde_json::{json, Value};
+use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 use star_common::AppState;
 
@@ -295,6 +295,136 @@ async fn a_setting_that_does_not_exist_is_a_404() {
         )
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+// Issue #40 — the bubble graph (tool_setting_controller.rb):
+// `bubble=all` walks the setting levels LtiLink -> ToolProxyBinding ->
+// ToolProxy, and `bubble=distinct` keeps only the keys not seen at a lower
+// level; with the simple media type the distinct graph is merged into one
+// flat map where the higher level wins.
+#[tokio::test]
+async fn the_bubble_graph_walks_the_setting_levels() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let (tool_proxy_id, guid) = seed_tool_proxy(&pool, &prefix).await;
+    let course = seed_course(&pool, &prefix).await;
+    let resource_link = format!("{prefix}-resource-link");
+
+    // Three levels: ToolProxy (no context), ToolProxyBinding (course),
+    // LtiLink (course + resource link). The link overrides `shared`, adds
+    // `link_only`; the binding adds `binding_only`.
+    sqlx::query(
+        "INSERT INTO tool_settings (tool_proxy_id, context_type, context_id, resource_link_id, custom) \
+         VALUES ($1, NULL, NULL, NULL, $2)",
+    )
+    .bind(tool_proxy_id)
+    .bind(json!({ "proxy_only": "proxy", "shared": "proxy" }))
+    .execute(&pool)
+    .await
+    .expect("seed tool proxy setting");
+
+    sqlx::query(
+        "INSERT INTO tool_settings (tool_proxy_id, context_type, context_id, resource_link_id, custom) \
+         VALUES ($1, 'Course', $2, NULL, $3)",
+    )
+    .bind(tool_proxy_id)
+    .bind(course)
+    .bind(json!({ "binding_only": "binding" }))
+    .execute(&pool)
+    .await
+    .expect("seed binding setting");
+
+    sqlx::query(
+        "INSERT INTO tool_settings (tool_proxy_id, context_type, context_id, resource_link_id, custom) \
+         VALUES ($1, 'Course', $2, $3, $4)",
+    )
+    .bind(tool_proxy_id)
+    .bind(course)
+    .bind(&resource_link)
+    .bind(json!({ "link_only": "link", "shared": "link" }))
+    .execute(&pool)
+    .await
+    .expect("seed link setting");
+
+    let link_path = format!(
+        "/api/lti/tool_proxy/{guid}/courses/{course}/resource_link_id/{resource_link}/tool_setting"
+    );
+
+    // bubble=all answers the full three-level graph, link first.
+    let resp = server
+        .get(&format!("{link_path}?bubble=all"))
+        .add_header(
+            AUTHORIZATION,
+            format!("Bearer {}", access_token(&guid, "ToolSettings")),
+        )
+        .add_header(ACCEPT, TOOL_SETTINGS_JSON)
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let graph = body["@graph"].as_array().expect("graph");
+    assert_eq!(graph.len(), 3, "all three levels: {graph:?}");
+    assert_eq!(graph[0]["@type"], "LtiLink");
+    assert_eq!(graph[0]["custom"]["shared"], "link");
+    assert_eq!(graph[0]["custom"]["link_only"], "link");
+    assert_eq!(graph[1]["@type"], "ToolProxyBinding");
+    assert_eq!(graph[1]["custom"]["binding_only"], "binding");
+    assert_eq!(graph[2]["@type"], "ToolProxy");
+    assert_eq!(graph[2]["custom"]["proxy_only"], "proxy");
+
+    // bubble=distinct with the graph media type: the binding and proxy
+    // levels lose the keys the link level already answered.
+    let resp = server
+        .get(&format!("{link_path}?bubble=distinct"))
+        .add_header(
+            AUTHORIZATION,
+            format!("Bearer {}", access_token(&guid, "ToolSettings")),
+        )
+        .add_header(ACCEPT, TOOL_SETTINGS_JSON)
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let graph = body["@graph"].as_array().expect("graph");
+    assert_eq!(graph.len(), 3);
+    assert_eq!(graph[0]["custom"].as_object().map(Map::len), Some(2));
+    assert!(graph[1]["custom"]
+        .as_object()
+        .expect("binding custom")
+        .get("shared")
+        .is_none());
+    assert_eq!(graph[1]["custom"]["binding_only"], "binding");
+    assert_eq!(graph[2]["custom"].as_object().map(Map::len), Some(1));
+
+    // bubble=distinct with the simple media type: one flat map, the link
+    // level wins for `shared`.
+    let resp = server
+        .get(&format!("{link_path}?bubble=distinct"))
+        .add_header(
+            AUTHORIZATION,
+            format!("Bearer {}", access_token(&guid, "ToolSettings")),
+        )
+        .add_header(ACCEPT, TOOL_SETTINGS_SIMPLE_JSON)
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let flat: Value = resp.json();
+    assert_eq!(flat["shared"], "link");
+    assert_eq!(flat["link_only"], "link");
+    assert_eq!(flat["binding_only"], "binding");
+    assert_eq!(flat["proxy_only"], "proxy");
+
+    // bubble=all is only legal with the tool settings media type.
+    let resp = server
+        .get(&format!("{link_path}?bubble=all"))
+        .add_header(
+            AUTHORIZATION,
+            format!("Bearer {}", access_token(&guid, "ToolSettings")),
+        )
+        .add_header(ACCEPT, TOOL_SETTINGS_SIMPLE_JSON)
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }
