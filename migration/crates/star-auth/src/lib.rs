@@ -1952,7 +1952,7 @@ async fn oauth2_token(
 enum OAuthClientError {
     UnknownClient,
     InvalidSecret,
-    Lookup(sqlx::Error),
+    Lookup(ApiError),
 }
 
 fn oauth_client_error_response(error: OAuthClientError) -> Response {
