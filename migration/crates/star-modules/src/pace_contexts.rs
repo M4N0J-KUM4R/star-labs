@@ -145,10 +145,10 @@ async fn section_contexts(
         "SELECT id, name FROM course_sections \
          WHERE course_id = $1 AND workflow_state <> 'deleted'",
     );
-    if let Some(search_term) = params
+    if params
         .search_term
         .as_deref()
-        .filter(|term| !term.is_empty())
+        .is_some_and(|term| !term.is_empty())
     {
         sql.push_str(" AND name ILIKE $2");
     }
@@ -202,10 +202,10 @@ async fn student_contexts(
          WHERE e.course_id = $1 \
            AND e.workflow_state IN ('active', 'creation_pending', 'invited')",
     );
-    if let Some(search_term) = params
+    if params
         .search_term
         .as_deref()
-        .filter(|term| !term.is_empty())
+        .is_some_and(|term| !term.is_empty())
     {
         sql.push_str(" AND u.name ILIKE $2");
     }

@@ -161,10 +161,10 @@ async fn student_bulk_pace_edit_view(
          FROM enrollments e JOIN users u ON u.id = e.user_id \
          WHERE e.course_id = $1 AND e.workflow_state = 'active'",
     );
-    if let Some(section) = params
+    if params
         .filter_section
         .as_deref()
-        .filter(|value| !value.is_empty())
+        .is_some_and(|value| !value.is_empty())
     {
         sql.push_str(" AND e.course_section_id = $2");
     }

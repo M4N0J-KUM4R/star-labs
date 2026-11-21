@@ -101,7 +101,7 @@ pub fn router() -> Router<AppState> {
 /// `GET /users/:user_id/observer_alert_thresholds` — thresholds#index.
 async fn index(
     State(state): State<AppState>,
-    Path(user_id): Path<i64>,
+    Path(_user_id): Path<i64>,
     auth: AuthUser,
     Query(params): Query<ListQuery>,
 ) -> Result<Response, ApiError> {
@@ -110,7 +110,7 @@ async fn index(
         "SELECT {THRESHOLD_COLUMNS} FROM observer_alert_thresholds \
          WHERE observer_id = $1 AND workflow_state <> 'deleted'"
     );
-    if let Some(student_id) = params.student_id {
+    if params.student_id.is_some() {
         sql.push_str(" AND user_id = $2");
     }
     sql.push_str(" ORDER BY id ASC");

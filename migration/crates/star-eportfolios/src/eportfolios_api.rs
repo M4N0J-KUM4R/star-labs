@@ -668,9 +668,9 @@ async fn can_moderate_portfolio(
     auth: &AuthUser,
     portfolio: &PortfolioRow,
 ) -> Result<bool, PortfolioError> {
-    portfolio.is_active()
+    Ok(portfolio.is_active()
         && portfolio.user_id != auth.id
-        && can_moderate_user_content(pool, auth, portfolio.user_id).await?
+        && can_moderate_user_content(pool, auth, portfolio.user_id).await?)
 }
 
 /// Canvas `Eportfolio` policy — `:restore`.
@@ -683,7 +683,8 @@ async fn can_restore_portfolio(
     auth: &AuthUser,
     portfolio: &PortfolioRow,
 ) -> Result<bool, PortfolioError> {
-    portfolio.user_id != auth.id && can_moderate_user_content(pool, auth, portfolio.user_id).await?
+    Ok(portfolio.user_id != auth.id
+        && can_moderate_user_content(pool, auth, portfolio.user_id).await?)
 }
 
 /// Canvas `verified_user_check` — `Account#user_needs_verification?`.

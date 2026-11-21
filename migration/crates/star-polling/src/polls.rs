@@ -88,7 +88,6 @@ pub fn router() -> Router<AppState> {
 struct Poll {
     id: i64,
     user_id: i64,
-    course_id: Option<i64>,
     question: String,
     description: Option<String>,
     created_at: DateTime<Utc>,
@@ -100,7 +99,6 @@ struct PollChoice {
     id: i64,
     poll_id: i64,
     name: String,
-    description: Option<String>,
     is_correct: bool,
     position: Option<i32>,
 }
@@ -190,7 +188,7 @@ async fn index_polls(
         .await?;
 
     let polls: Vec<Poll> = sqlx::query_as(
-        "SELECT id, user_id, course_id, question, description, created_at FROM polls \
+        "SELECT id, user_id, question, description, created_at FROM polls \
          WHERE user_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2 OFFSET $3",
     )
     .bind(auth.id)
@@ -330,7 +328,7 @@ async fn index_choices(
         .await?;
 
     let choices: Vec<PollChoice> = sqlx::query_as(
-        "SELECT id, poll_id, name, description, is_correct, position FROM poll_choices \
+        "SELECT id, poll_id, name, is_correct, position FROM poll_choices \
          WHERE poll_id = $1 ORDER BY position ASC NULLS LAST, id ASC LIMIT $2 OFFSET $3",
     )
     .bind(poll_id)
@@ -484,7 +482,7 @@ async fn load_poll(db: &PgPool, poll_id: i64) -> Result<Poll, ApiError> {
 /// The choice of a poll — 404 when it does not belong to the poll.
 async fn load_choice(db: &PgPool, poll_id: i64, choice_id: i64) -> Result<PollChoice, ApiError> {
     sqlx::query_as(
-        "SELECT id, poll_id, name, description, is_correct, position FROM poll_choices \
+        "SELECT id, poll_id, name, is_correct, position FROM poll_choices \
          WHERE id = $1 AND poll_id = $2",
     )
     .bind(choice_id)

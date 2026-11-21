@@ -699,7 +699,7 @@ async fn account_flag(
 
 /// Canvas `api_find(Account.active, id)` — a missing or deleted account is a
 /// 404.
-async fn load_account(pool: &PgPool, account_id: i64) -> Result<Option<i64>, ApiError> {
+async fn load_account(pool: &PgPool, account_id: i64) -> Result<Option<bool>, ApiError> {
     let row: Option<(Option<i64>,)> = sqlx::query_as(
         "SELECT parent_account_id FROM accounts \
          WHERE id = $1 AND workflow_state <> 'deleted'",
@@ -707,7 +707,8 @@ async fn load_account(pool: &PgPool, account_id: i64) -> Result<Option<i64>, Api
     .bind(account_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.and_then(|(parent,)| parent))
+    // Canvas `context_is_root_account?`: the account has no parent.
+    Ok(row.map(|(parent,)| parent.is_none()))
 }
 
 /// Canvas `api_find(User, id)` — `self` is the current user, an unknown id
@@ -1355,9 +1356,17 @@ async fn account_logins(
     Query(pagination): Query<PaginationQuery>,
     auth: AuthUser,
 ) -> Result<Json<Value>, UsersApiError> {
-    let Some(parent_account_id) = load_account(&app.db, account_id).await? else {
-        return Err(ApiError::NotFound.into());
-    };
+    // The account has to exist (404) and it has to be a root account (400).
+    match load_account(&app.db, account_id).await? {
+        None => return Err(ApiError::NotFound.into()),
+        Some(false) => {
+            return Err(canvas_message(
+                StatusCode::BAD_REQUEST,
+                "Action must be called on a root account.",
+            ));
+        }
+        Some(true) => {}
+    }
 
     let query = parse_query(raw_query.as_deref());
     let target_user_id = match user_id_param(&query, &json!({})) {
@@ -1367,14 +1376,6 @@ async fn account_logins(
 
     if !can_read_user(&app.db, &auth, target_user_id).await? {
         return Err(ApiError::Forbidden.into());
-    }
-
-    // Canvas `context_is_root_account?`.
-    if parent_account_id.is_some() {
-        return Err(canvas_message(
-            StatusCode::BAD_REQUEST,
-            "Action must be called on a root account.",
-        ));
     }
 
     let rows = account_pseudonyms(&app.db, account_id, target_user_id).await?;
@@ -1429,9 +1430,17 @@ async fn create_login(
     auth: AuthUser,
     body: Bytes,
 ) -> Result<Json<Value>, UsersApiError> {
-    let Some(parent_account_id) = load_account(&app.db, account_id).await? else {
-        return Err(ApiError::NotFound.into());
-    };
+    // The account has to exist (404) and it has to be a root account (400).
+    match load_account(&app.db, account_id).await? {
+        None => return Err(ApiError::NotFound.into()),
+        Some(false) => {
+            return Err(canvas_message(
+                StatusCode::BAD_REQUEST,
+                "Action must be called on a root account.",
+            ));
+        }
+        Some(true) => {}
+    }
     let params = parse_body(&body)?;
 
     // Canvas `get_user`.
@@ -1439,14 +1448,6 @@ async fn create_login(
         Some(raw) => resolve_user(&app.db, &raw, &auth).await?,
         None => auth.id,
     };
-
-    // Canvas `context_is_root_account?`.
-    if parent_account_id.is_some() {
-        return Err(canvas_message(
-            StatusCode::BAD_REQUEST,
-            "Action must be called on a root account.",
-        ));
-    }
 
     // Canvas: `params[:login] ||= {}; params[:pseudonym] = params[:login]`.
     let login = params.get("login").cloned().unwrap_or(json!({}));
