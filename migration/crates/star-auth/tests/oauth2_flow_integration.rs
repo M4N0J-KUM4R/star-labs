@@ -897,9 +897,16 @@ async fn oauth2_refresh_grant_and_revocation() {
         .content_type("application/x-www-form-urlencoded")
         .await;
     assert_eq!(resp.status_code(), 200, "refresh again: {}", resp.text());
+    // The second refresh regenerated the access token again — only this
+    // value is live now.
+    let live_access = resp.json::<Value>()["access_token"]
+        .as_str()
+        .expect("live access")
+        .to_string();
 
-    // The regenerated (rotated) access token killed the old value: revoking
-    // with the OLD token fails with Canvas's message, the NEW one succeeds.
+    // The regenerated (rotated) access token killed the old values:
+    // revoking with the FIRST token fails with Canvas's message, the
+    // current one succeeds.
     let resp = server
         .delete("/login/oauth2/token")
         .add_header(
@@ -918,7 +925,7 @@ async fn oauth2_refresh_grant_and_revocation() {
         .delete("/login/oauth2/token")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            format!("Bearer {new_access}"),
+            format!("Bearer {live_access}"),
         )
         .await;
     assert_eq!(resp.status_code(), 200, "revoke: {}", resp.text());
