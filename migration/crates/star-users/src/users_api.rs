@@ -780,8 +780,9 @@ async fn pseudonym_passwordable(
     }
 }
 
-/// Row shape of `load_pseudonym` (factored out for clippy::type_complexity).
-type PseudonymRow = (
+/// Row shape of `load_pseudonym` (factored out for clippy::type_complexity;
+/// distinct from `PseudonymRow`, which is the read-path projection).
+type PseudonymStateRow = (
     i64,
     i64,
     i64,
@@ -800,7 +801,7 @@ type PseudonymRow = (
 /// Canvas `Pseudonym.active` — every login that is not deleted.
 async fn load_pseudonym(pool: &PgPool, raw_id: &str) -> Result<PseudonymState, ApiError> {
     let id = raw_id.parse::<i64>().map_err(|_| ApiError::NotFound)?;
-    let row: Option<PseudonymRow> = sqlx::query_as(
+    let row: Option<PseudonymStateRow> = sqlx::query_as(
         r#"
         SELECT id, user_id, account_id, unique_id, sis_user_id, integration_id,
                authentication_provider_id, declared_user_type, workflow_state, created_at,
