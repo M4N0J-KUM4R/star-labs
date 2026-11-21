@@ -200,6 +200,7 @@ async fn student_contexts(
         "SELECT DISTINCT ON (e.user_id) e.id, e.user_id, e.course_section_id, u.name \
          FROM enrollments e JOIN users u ON u.id = e.user_id \
          WHERE e.course_id = $1 \
+           AND e.role = 'student' \
            AND e.workflow_state IN ('active', 'creation_pending', 'invited')",
     );
     if params

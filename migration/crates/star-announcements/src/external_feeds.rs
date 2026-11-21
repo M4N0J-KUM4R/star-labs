@@ -176,8 +176,8 @@ async fn create(
 
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO external_feeds (user_id, context_id, context_type, url, header_match, \
-             verbosity, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, now()) RETURNING id",
+             verbosity, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, now(), now()) RETURNING id",
     )
     .bind(auth.id)
     .bind(context.context_id())

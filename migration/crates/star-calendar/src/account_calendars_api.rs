@@ -223,7 +223,7 @@ async fn index(
         validate_search_term(term)?;
     }
     let (per_page, offset) = page_params(&query);
-    let pattern = search_term.map(|term| like_pattern(term));
+    let pattern = search_term.map(like_pattern);
 
     let rows: Vec<AccountCalendarRow> = sqlx::query_as::<_, AccountCalendarRow>(&index_sql())
         .bind(auth.id)
@@ -361,7 +361,7 @@ async fn bulk_update(
         .collect();
     let mut seen: Vec<&Value> = Vec::new();
     for id in ids.iter() {
-        if seen.iter().any(|other| *other == *id) {
+        if seen.contains(id) {
             return Err(canvas_bad_request("Duplicate IDs"));
         }
         seen.push(*id);
@@ -484,7 +484,7 @@ async fn all_calendars(
 
     let managed = administrated_account_ids(&state.db, auth.id).await?;
     let rows: Vec<AccountCalendarRow> = if search_term.is_some() || filter.is_some() {
-        let pattern = search_term.map(|term| like_pattern(term));
+        let pattern = search_term.map(like_pattern);
         let visible = filter.map(|value| value == "visible");
         sqlx::query_as::<_, AccountCalendarRow>(&all_calendars_search_sql())
             .bind(account.id)

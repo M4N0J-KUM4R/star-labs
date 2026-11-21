@@ -197,7 +197,7 @@ async fn seed_feature(pool: &PgPool, account_id: i64, feature: &str) {
 async fn seed_blackout_date(pool: &PgPool, course_id: i64, start: &str, end: &str) {
     sqlx::query(
         "INSERT INTO blackout_dates (context_id, context_type, title, start_date, end_date) \
-         VALUES ($1, 'Course', 'Break', $2, $3)",
+         VALUES ($1, 'Course', 'Break', $2::timestamptz, $3::timestamptz)",
     )
     .bind(course_id)
     .bind(start)

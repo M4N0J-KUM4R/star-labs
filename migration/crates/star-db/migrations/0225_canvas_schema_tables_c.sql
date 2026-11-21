@@ -36,8 +36,8 @@ CREATE TABLE master_courses_master_migrations (
     exports_started_at               timestamp,
     imports_queued_at                timestamp,
     workflow_state                   varchar(255) NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     imports_completed_at             timestamp,
     comment                          text,
     send_notification                boolean NOT NULL DEFAULT false,
@@ -50,8 +50,8 @@ CREATE TABLE master_courses_master_templates (
     course_id                        bigint NOT NULL,
     full_course                      boolean NOT NULL DEFAULT true,
     workflow_state                   varchar(255),
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     active_migration_id              bigint,
     default_restrictions             text,
     use_default_restrictions_by_type boolean NOT NULL DEFAULT false,
@@ -78,7 +78,7 @@ CREATE TABLE mentions (
     user_id                          bigint NOT NULL,
     root_account_id                  bigint NOT NULL,
     workflow_state                   varchar(255) NOT NULL DEFAULT 'active',
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -120,8 +120,8 @@ CREATE TABLE microsoft_sync_groups (
     last_manually_synced_at          timestamp,
     last_error                       text,
     root_account_id                  bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     ms_group_id                      varchar,
     last_error_report_id             bigint,
     debug_info                       text
@@ -133,7 +133,7 @@ CREATE TABLE microsoft_sync_partial_sync_changes (
     user_id                          bigint NOT NULL,
     root_account_id                  bigint NOT NULL,
     enrollment_type                  varchar NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -142,8 +142,8 @@ CREATE TABLE microsoft_sync_user_mappings (
     root_account_id                  bigint NOT NULL,
     user_id                          bigint NOT NULL,
     aad_id                           varchar,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     needs_updating                   boolean NOT NULL DEFAULT false
 );
 
@@ -154,8 +154,8 @@ CREATE TABLE moderated_grading_provisional_grades (
     graded_at                        timestamp,
     scorer_id                        bigint NOT NULL,
     submission_id                    bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     final                            boolean NOT NULL DEFAULT false,
     source_provisional_grade_id      bigint,
     graded_anonymously               boolean
@@ -168,8 +168,8 @@ CREATE TABLE nav_menu_links (
     label                            varchar(255) NOT NULL,
     url                              varchar(2048) NOT NULL,
     workflow_state                   varchar(255) NOT NULL DEFAULT 'active',
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     root_account_id                  bigint NOT NULL,
     course_nav                       boolean NOT NULL DEFAULT false,
     account_nav                      boolean NOT NULL DEFAULT false,
@@ -186,8 +186,8 @@ CREATE TABLE notification_endpoints (
     access_token_id                  bigint NOT NULL,
     token                            varchar(255) NOT NULL,
     arn                              varchar(255) NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     workflow_state                   varchar NOT NULL DEFAULT 'active'
 );
 
@@ -199,7 +199,7 @@ CREATE TABLE notification_policy_overrides (
     notification_id                  bigint,
     workflow_state                   varchar NOT NULL DEFAULT 'active',
     frequency                        varchar,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -216,8 +216,8 @@ CREATE TABLE oauth_client_configs (
     throttle_upfront_cost            integer,
     updated_by_id                    bigint NOT NULL,
     workflow_state                   varchar NOT NULL DEFAULT 'active',
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     CONSTRAINT chk_type_enum CHECK (type IN ('custom', 'product', 'client_id', 'lti_advantage', 'service_user_key', 'token', 'user', 'tool', 'session', 'ip')),
     CONSTRAINT chk_workflow_state_enum_11 CHECK (workflow_state IN ('active', 'deleted'))
 );
@@ -232,7 +232,7 @@ CREATE TABLE oauth_requests (
     user_id                          bigint,
     original_host_with_port          varchar(255),
     service                          varchar(255),
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -241,8 +241,8 @@ CREATE TABLE observer_alert_thresholds (
     alert_type                       varchar NOT NULL,
     threshold                        varchar,
     workflow_state                   varchar NOT NULL DEFAULT 'active',
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     user_id                          bigint NOT NULL,
     observer_id                      bigint NOT NULL
 );
@@ -256,8 +256,8 @@ CREATE TABLE observer_alerts (
     workflow_state                   varchar NOT NULL DEFAULT 'unread',
     action_date                      timestamp NOT NULL,
     title                            varchar NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     user_id                          bigint NOT NULL,
     observer_id                      bigint NOT NULL
 );
@@ -268,7 +268,7 @@ CREATE TABLE observer_pairing_codes (
     code                             varchar(10) NOT NULL,
     expires_at                       timestamp NOT NULL,
     workflow_state                   varchar NOT NULL DEFAULT 'active',
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -277,7 +277,7 @@ CREATE TABLE one_time_passwords (
     user_id                          bigint NOT NULL,
     code                             varchar NOT NULL,
     used                             boolean NOT NULL DEFAULT false,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -288,8 +288,8 @@ CREATE TABLE originality_reports (
     originality_report_attachment_id bigint,
     originality_report_url           text,
     originality_report_lti_url       text,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     submission_id                    bigint NOT NULL,
     workflow_state                   varchar NOT NULL DEFAULT 'pending',
     link_id                          text,
@@ -306,7 +306,7 @@ CREATE TABLE outcome_calculation_methods (
     calculation_method               varchar(255) NOT NULL,
     workflow_state                   varchar NOT NULL DEFAULT 'active',
     root_account_id                  bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -317,8 +317,8 @@ CREATE TABLE outcome_friendly_descriptions (
     workflow_state                   varchar NOT NULL DEFAULT 'active',
     root_account_id                  bigint,
     description                      text NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     learning_outcome_id              bigint NOT NULL
 );
 
@@ -326,8 +326,8 @@ CREATE TABLE outcome_import_errors (
     id                               BIGSERIAL PRIMARY KEY,
     outcome_import_id                bigint NOT NULL,
     message                          varchar(255) NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     row                              integer,
     failure                          boolean NOT NULL DEFAULT false
 );
@@ -341,16 +341,16 @@ CREATE TABLE outcome_imports (
     attachment_id                    bigint,
     progress                         integer,
     ended_at                         timestamp,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     data                             json,
     learning_outcome_group_id        bigint
 );
 
 CREATE TABLE outcome_proficiencies (
     id                               BIGSERIAL PRIMARY KEY,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     root_account_id                  bigint,
     context_id                       bigint NOT NULL,
     context_type                     varchar(255) NOT NULL,
@@ -364,8 +364,8 @@ CREATE TABLE outcome_proficiency_ratings (
     points                           double precision NOT NULL,
     mastery                          boolean NOT NULL,
     color                            varchar NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     root_account_id                  bigint,
     workflow_state                   varchar NOT NULL DEFAULT 'active'
 );
@@ -380,8 +380,8 @@ CREATE TABLE outcome_rollups (
     aggregate_score                  double precision NOT NULL,
     last_calculated_at               timestamp NOT NULL,
     workflow_state                   varchar NOT NULL DEFAULT 'active',
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     submitted_at                     timestamp,
     results_count                    integer NOT NULL DEFAULT 0,
     title                            varchar(255),
@@ -396,7 +396,7 @@ CREATE TABLE page_comments (
     page_id                          bigint,
     page_type                        varchar(255),
     user_id                          bigint,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -412,8 +412,8 @@ CREATE TABLE page_views (
     controller                       varchar(255),
     action                           varchar(255),
     interaction_seconds              double precision,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     developer_key_id                 bigint,
     user_request                     boolean,
     render_time                      double precision,
@@ -434,8 +434,8 @@ CREATE TABLE parallel_importers (
     workflow_state                   varchar(255) NOT NULL,
     index                            bigint NOT NULL,
     batch_size                       bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     started_at                       timestamp,
     ended_at                         timestamp,
     importer_type                    varchar(255) NOT NULL,
@@ -448,8 +448,8 @@ CREATE TABLE plugin_settings (
     id                               BIGSERIAL PRIMARY KEY,
     name                             varchar(255) NOT NULL DEFAULT '',
     settings                         text,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     disabled                         boolean
 );
 
@@ -458,8 +458,8 @@ CREATE TABLE polling_poll_choices (
     text                             varchar(255),
     is_correct                       boolean NOT NULL DEFAULT false,
     poll_id                          bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     position                         integer
 );
 
@@ -470,7 +470,7 @@ CREATE TABLE polling_poll_sessions (
     course_id                        bigint NOT NULL,
     course_section_id                bigint,
     poll_id                          bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -479,8 +479,8 @@ CREATE TABLE polling_poll_submissions (
     poll_id                          bigint NOT NULL,
     poll_choice_id                   bigint NOT NULL,
     user_id                          bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     poll_session_id                  bigint NOT NULL
 );
 
@@ -488,8 +488,8 @@ CREATE TABLE polling_polls (
     id                               BIGSERIAL PRIMARY KEY,
     question                         varchar(255),
     description                      varchar(255),
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     user_id                          bigint NOT NULL
 );
 
@@ -498,8 +498,8 @@ CREATE TABLE post_policies (
     post_manually                    boolean NOT NULL DEFAULT false,
     course_id                        bigint,
     assignment_id                    bigint,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     root_account_id                  bigint
 );
 
@@ -525,8 +525,8 @@ CREATE TABLE progresses (
     completion                       double precision,
     delayed_job_id                   varchar(255),
     workflow_state                   varchar(255) NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     message                          text,
     cache_key_context                varchar(255),
     results                          text
@@ -552,8 +552,8 @@ CREATE TABLE pseudonyms (
     current_login_ip                 varchar(255),
     reset_password_token             varchar(255) NOT NULL DEFAULT '',
     position                         integer,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     password_auto_generated          boolean,
     deleted_at                       timestamp,
     sis_batch_id                     bigint,
@@ -573,8 +573,8 @@ CREATE TABLE purgatories (
     id                               BIGSERIAL PRIMARY KEY,
     attachment_id                    bigint NOT NULL,
     deleted_by_user_id               bigint,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     workflow_state                   varchar NOT NULL DEFAULT 'active',
     old_filename                     varchar NOT NULL,
     old_display_name                 varchar(255),
@@ -591,8 +591,8 @@ CREATE TABLE quiz_groups (
     pick_count                       integer,
     question_points                  double precision,
     position                         integer,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     migration_id                     varchar(255),
     assessment_question_bank_id      bigint,
     root_account_id                  bigint
@@ -604,7 +604,7 @@ CREATE TABLE quiz_migration_alerts (
     migration_type                   varchar,
     user_id                          bigint NOT NULL,
     course_id                        bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -613,7 +613,7 @@ CREATE TABLE quiz_question_regrades (
     quiz_regrade_id                  bigint NOT NULL,
     quiz_question_id                 bigint NOT NULL,
     regrade_option                   varchar(255) NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -622,7 +622,7 @@ CREATE TABLE quiz_regrade_runs (
     quiz_regrade_id                  bigint NOT NULL,
     started_at                       timestamp,
     finished_at                      timestamp,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -631,7 +631,7 @@ CREATE TABLE quiz_regrades (
     user_id                          bigint NOT NULL,
     quiz_id                          bigint NOT NULL,
     quiz_version                     integer NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -641,7 +641,7 @@ CREATE TABLE quiz_submission_events (
     event_type                       varchar(255) NOT NULL,
     quiz_submission_id               bigint NOT NULL,
     event_data                       text,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     client_timestamp                 timestamp,
     root_account_id                  bigint
 );
@@ -659,8 +659,8 @@ CREATE TABLE report_snapshots (
     id                               BIGSERIAL PRIMARY KEY,
     report_type                      varchar(255),
     data                             text,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     account_id                       bigint
 );
 
@@ -675,7 +675,7 @@ CREATE TABLE rubric_assessment_imports (
     progress                         integer NOT NULL DEFAULT 0,
     error_count                      integer NOT NULL DEFAULT 0,
     error_data                       json,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -688,7 +688,7 @@ CREATE TABLE scheduled_posts (
     root_account_id                  bigint NOT NULL,
     post_policy_id                   bigint NOT NULL,
     assignment_id                    bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -699,7 +699,7 @@ CREATE TABLE scheduled_smart_alerts (
     context_id                       bigint NOT NULL,
     due_at                           timestamp NOT NULL,
     root_account_id                  bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -707,8 +707,8 @@ CREATE TABLE score_metadata (
     id                               BIGSERIAL PRIMARY KEY,
     score_id                         bigint NOT NULL,
     calculation_details              json NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     workflow_state                   varchar NOT NULL DEFAULT 'active'
 );
 
@@ -719,8 +719,8 @@ CREATE TABLE score_statistics (
     maximum                          double precision NOT NULL,
     mean                             double precision NOT NULL,
     count                            integer NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     root_account_id                  bigint,
     lower_q                          double precision,
     median                           double precision,
@@ -754,7 +754,7 @@ CREATE TABLE session_persistence_tokens (
     token_salt                       varchar(255) NOT NULL,
     crypted_token                    varchar(255) NOT NULL,
     pseudonym_id                     bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -762,8 +762,8 @@ CREATE TABLE settings (
     id                               BIGSERIAL PRIMARY KEY,
     name                             varchar(255),
     value                            text,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     secret                           boolean NOT NULL DEFAULT false
 );
 
@@ -772,7 +772,7 @@ CREATE TABLE shared_brand_configs (
     name                             varchar(255),
     account_id                       bigint,
     brand_config_md5                 varchar(32) NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -785,7 +785,7 @@ CREATE TABLE sis_batch_errors (
     file                             varchar(255),
     failure                          boolean NOT NULL DEFAULT false,
     row                              integer,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     row_info                         text
 );
 
@@ -798,7 +798,7 @@ CREATE TABLE sis_batch_roll_back_data (
     updated_workflow_state           varchar(255) NOT NULL,
     batch_mode_delete                boolean NOT NULL DEFAULT false,
     workflow_state                   varchar(255) NOT NULL DEFAULT 'active',
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -808,8 +808,8 @@ CREATE TABLE sis_batches (
     ended_at                         timestamp,
     workflow_state                   varchar(255) NOT NULL,
     data                             text,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     attachment_id                    bigint,
     progress                         integer,
     processing_errors                text,
@@ -836,7 +836,7 @@ CREATE TABLE sis_post_grades_statuses (
     status                           varchar(255) NOT NULL,
     message                          varchar(255) NOT NULL,
     grades_posted_at                 timestamp NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -846,7 +846,7 @@ CREATE TABLE standard_grade_statuses (
     status_name                      varchar NOT NULL,
     hidden                           boolean NOT NULL DEFAULT false,
     root_account_id                  bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -887,8 +887,8 @@ CREATE TABLE submission_texts (
     text                             text NOT NULL,
     attempt                          integer NOT NULL,
     contains_images                  boolean NOT NULL DEFAULT false,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     submission_type                  varchar
 );
 
@@ -911,8 +911,8 @@ CREATE TABLE switchman_shards (
     "default"                        boolean NOT NULL DEFAULT false,
     settings                         text,
     delayed_jobs_shard_id            bigint,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     block_stranded                   boolean DEFAULT false,
     jobs_held                        boolean DEFAULT false,
     migrate_from_delayed_jobs_shard_id bigint
@@ -922,8 +922,8 @@ CREATE TABLE temporary_enrollment_pairings (
     id                               BIGSERIAL PRIMARY KEY,
     root_account_id                  bigint NOT NULL,
     workflow_state                   varchar(255) NOT NULL DEFAULT 'active',
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     created_by_id                    bigint,
     deleted_by_id                    bigint,
     ending_enrollment_state          text
@@ -932,9 +932,9 @@ CREATE TABLE temporary_enrollment_pairings (
 CREATE TABLE terms_of_service_contents (
     id                               BIGSERIAL PRIMARY KEY,
     content                          text NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
-    terms_updated_at                 timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
+    terms_updated_at                 timestamp NOT NULL DEFAULT now(),
     workflow_state                   varchar NOT NULL,
     account_id                       bigint
 );
@@ -945,8 +945,8 @@ CREATE TABLE terms_of_services (
     passive                          boolean NOT NULL DEFAULT true,
     terms_of_service_content_id      bigint,
     account_id                       bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     workflow_state                   varchar NOT NULL
 );
 
@@ -959,8 +959,8 @@ CREATE TABLE thumbnails (
     size                             integer NOT NULL,
     width                            integer,
     height                           integer,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     uuid                             varchar(255),
     namespace                        varchar(255)
 );
@@ -977,8 +977,8 @@ CREATE TABLE translation_feedback (
     disliked                         boolean NOT NULL DEFAULT false,
     feedback_notes                   text,
     feature_slug                     varchar(255),
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     CONSTRAINT chk_require_context_6 CHECK (((course_id IS NOT NULL)::int) = 1),
     CONSTRAINT chk_require_content CHECK (((discussion_topic_id IS NOT NULL)::int + (discussion_entry_id IS NOT NULL)::int) = 1),
     CONSTRAINT chk_translation_feedback_liked_disliked CHECK (NOT (liked AND disliked))
@@ -989,8 +989,8 @@ CREATE TABLE user_account_associations (
     user_id                          bigint NOT NULL,
     account_id                       bigint NOT NULL,
     depth                            integer,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     root_account_id                  bigint NOT NULL
 );
 
@@ -1001,7 +1001,7 @@ CREATE TABLE user_lmgb_outcome_orderings (
     course_id                        bigint NOT NULL,
     learning_outcome_id              bigint NOT NULL,
     position                         integer NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -1009,8 +1009,8 @@ CREATE TABLE user_merge_data (
     id                               BIGSERIAL PRIMARY KEY,
     user_id                          bigint NOT NULL,
     from_user_id                     bigint NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     workflow_state                   varchar(255) NOT NULL DEFAULT 'active'
 );
 
@@ -1036,8 +1036,8 @@ CREATE TABLE user_observers (
     user_id                          bigint NOT NULL,
     observer_id                      bigint NOT NULL,
     workflow_state                   varchar(255) NOT NULL DEFAULT 'active',
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     sis_batch_id                     bigint,
     root_account_id                  bigint NOT NULL
 );
@@ -1065,7 +1065,7 @@ CREATE TABLE user_profile_links (
     url                              varchar(4096),
     title                            varchar(255),
     user_profile_id                  bigint,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -1076,8 +1076,8 @@ CREATE TABLE user_services (
     secret                           varchar(255),
     protocol                         varchar(255),
     service                          varchar(255) NOT NULL,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     service_user_url                 varchar(255),
     service_user_id                  varchar(255) NOT NULL,
     service_user_name                varchar(255),
@@ -1112,8 +1112,8 @@ CREATE TABLE web_conference_participants (
     user_id                          bigint,
     web_conference_id                bigint,
     participation_type               varchar(255),
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     root_account_id                  bigint NOT NULL
 );
 
@@ -1130,8 +1130,8 @@ CREATE TABLE web_conferences (
     started_at                       timestamp,
     description                      text,
     duration                         double precision,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     uuid                             varchar(255),
     invited_user_ids                 varchar(255),
     ended_at                         timestamp,
@@ -1151,7 +1151,7 @@ CREATE TABLE wiki_page_lookups (
     root_account_id                  bigint NOT NULL,
     context_id                       bigint NOT NULL,
     context_type                     varchar(255) NOT NULL,
-    created_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
     updated_at                       timestamp NOT NULL
 );
 
@@ -1162,8 +1162,8 @@ CREATE TABLE wiki_pages (
     body                             text,
     workflow_state                   varchar(255) NOT NULL,
     user_id                          bigint,
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     url                              text,
     protected_editing                boolean DEFAULT false,
     editing_roles                    varchar(255),
@@ -1187,8 +1187,8 @@ CREATE TABLE wiki_pages (
 CREATE TABLE wikis (
     id                               BIGSERIAL PRIMARY KEY,
     title                            varchar(255),
-    created_at                       timestamp NOT NULL,
-    updated_at                       timestamp NOT NULL,
+    created_at                       timestamp NOT NULL DEFAULT now(),
+    updated_at                       timestamp NOT NULL DEFAULT now(),
     front_page_url                   text,
     has_no_front_page                boolean,
     root_account_id                  bigint
