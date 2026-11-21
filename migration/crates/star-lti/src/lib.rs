@@ -80,7 +80,6 @@ mod data_services;
 mod dynamic_registration;
 mod external_tools;
 mod line_items;
-mod lti_apps;
 mod support_helpers;
 mod tool_proxy;
 mod tool_setting;

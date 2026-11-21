@@ -69,7 +69,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, NaiveDateTime, Utc};

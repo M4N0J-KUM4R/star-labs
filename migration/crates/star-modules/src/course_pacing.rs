@@ -455,14 +455,15 @@ async fn course_settings_json(db: &PgPool, course_id: i64) -> Value {
     .bind(course_id)
     .fetch_optional(db)
     .await
-    .ok()
-    .flatten();
+    .ok();
 
     let mut merged = Map::new();
-    for raw in [row.0, row.1].into_iter().flatten() {
-        if let Ok(Value::Object(object)) = serde_json::from_str::<Value>(&raw) {
-            for (key, value) in object {
-                merged.insert(key, value);
+    if let Some((course_settings, section_settings)) = row {
+        for raw in [course_settings, section_settings].into_iter().flatten() {
+            if let Ok(Value::Object(object)) = serde_json::from_str::<Value>(&raw) {
+                for (key, value) in object {
+                    merged.insert(key, value);
+                }
             }
         }
     }
@@ -1775,9 +1776,8 @@ async fn course_or_term_end_date(db: &PgPool, course: &CourseRow) -> Option<Naiv
             .bind(term_id)
             .fetch_optional(db)
             .await
-            .ok()
-            .flatten();
-    row.map(|(end_at,)| end_at.map(|date| date.date_naive()))
+            .ok();
+    row.and_then(|(end_at,)| end_at.map(|date| date.date_naive()))
 }
 
 /// The publish work of the delayed job (Canvas `CoursePace#publish`): pace

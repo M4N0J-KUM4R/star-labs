@@ -935,10 +935,7 @@ async fn pseudonyms_json(
 ///
 /// The provider is looked up in the domain root account, either by its
 /// `auth_type` or by its id. An unknown provider is a 404.
-async fn find_authentication_provider(
-    pool: &PgPool,
-    requested: &str,
-) -> Result<Option<i64>, ApiError> {
+async fn find_authentication_provider(pool: &PgPool, requested: &str) -> Result<i64, ApiError> {
     let root_account_id: Option<(i64,)> = sqlx::query_as(
         "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id LIMIT 1",
     )
@@ -1457,7 +1454,7 @@ async fn create_login(
     // Canvas `find_authentication_provider`.
     let provider_id = if param_present(&login, "authentication_provider_id") {
         let requested = param_str(&login, "authentication_provider_id").unwrap_or_default();
-        find_authentication_provider(&app.db, &requested).await?
+        Some(find_authentication_provider(&app.db, &requested).await?)
     } else {
         None
     };
@@ -1616,7 +1613,7 @@ async fn update_login(
     // Canvas `find_authentication_provider`.
     let provider_id = if param_present(&login, "authentication_provider_id") {
         let requested = param_str(&login, "authentication_provider_id").unwrap_or_default();
-        find_authentication_provider(&app.db, &requested).await?
+        Some(find_authentication_provider(&app.db, &requested).await?)
     } else {
         pseudonym.authentication_provider_id
     };

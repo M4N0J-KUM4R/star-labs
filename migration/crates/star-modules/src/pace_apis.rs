@@ -531,9 +531,9 @@ async fn pace_in_context(
              ORDER BY id ASC LIMIT 1"
         ),
     };
-    let (key,) = match scope {
-        PaceScope::Section(section_id) => (section_id,),
-        PaceScope::Enrollment(enrollment_id) => (enrollment_user_id(db, enrollment_id).await?,),
+    let key = match scope {
+        PaceScope::Section(section_id) => section_id,
+        PaceScope::Enrollment(enrollment_id) => enrollment_user_id(db, enrollment_id).await?,
     };
     let row: Option<PaceRow> = sqlx::query_as(&sql)
         .bind(course_id)
