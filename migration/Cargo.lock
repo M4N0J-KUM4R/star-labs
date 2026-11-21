@@ -2850,6 +2850,7 @@ dependencies = [
  "chrono",
  "http 1.5.0",
  "jsonwebtoken",
+ "rsa",
  "serde",
  "serde_json",
  "sha2",

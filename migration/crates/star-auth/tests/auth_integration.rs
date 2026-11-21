@@ -1957,3 +1957,123 @@ async fn sso_settings_show_and_update() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// Issue #106 — failed-login lockout (Canvas LoginRegistry parity:
+// lib/canvas/security/password_policy.rb DEFAULT_LOGIN_ATTEMPTS=10,
+// login_registry.rb audit_login / too_many_attempts).
+// ---------------------------------------------------------------------------
+
+/// The limiter itself: counting, locking at the Canvas threshold, the
+/// 30-minute release window, and success clearing the counter.
+#[tokio::test]
+async fn login_rate_limiter_counts_locks_and_releases() {
+    let limiter = star_auth::LoginRateLimiter::default();
+    let email = "lockout-user@test.local";
+
+    assert!(!limiter.is_locked(email));
+    // Nine failures: still allowed (Canvas locks ON the 10th consecutive
+    // failure — the 10th request is the one that gets refused).
+    for _ in 0..9 {
+        assert!(!limiter.record_failure(email));
+        assert!(!limiter.is_locked(email), "nine failures must not lock");
+    }
+    // The tenth failure locks the account.
+    assert!(limiter.record_failure(email));
+    assert!(limiter.is_locked(email), "tenth failure locks");
+
+    // A different account is unaffected.
+    assert!(!limiter.is_locked("other-user@test.local"));
+
+    // Success clears the counter even mid-count.
+    limiter.record_success(email);
+    assert!(!limiter.is_locked(email));
+    for _ in 0..5 {
+        assert!(!limiter.record_failure(email));
+    }
+    assert!(!limiter.is_locked(email), "counter restarted from zero");
+
+    // Emails are normalized: case and surrounding whitespace share one
+    // budget (the handlers lower-case before lookup).
+    assert!(!limiter.record_failure("  CaseUser@Test.Local "));
+    assert!(!limiter.record_failure("caseuser@test.local"));
+    assert!(!limiter.is_locked("CASEUSER@test.local"));
+}
+
+/// Through the real route: ten wrong passwords lock the account, the
+/// eleventh is a 403 even with the CORRECT password (Canvas refuses
+/// :too_many_attempts before checking credentials), and a fresh account
+/// with the right password still logs in.
+#[tokio::test]
+async fn login_locks_after_ten_failed_attempts() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let email = format!("{prefix}-lockout@test.local");
+    let created = server
+        .post("/auth/register")
+        .json(&json!({
+            "name": "Lockout Target",
+            "email": email,
+            "password": "correct-horse-battery"
+        }))
+        .await;
+    assert_eq!(
+        created.status_code(),
+        201,
+        "setup register: {}",
+        created.text()
+    );
+
+    // Ten failed attempts: first nine answer 401 ...
+    for attempt in 1..=9 {
+        let resp = server
+            .post("/auth/login")
+            .json(&json!({ "email": email, "password": "not-the-password" }))
+            .await;
+        assert_eq!(
+            resp.status_code(),
+            401,
+            "attempt {attempt} should still be 401"
+        );
+    }
+    // ... the tenth failure locks.
+    let resp = server
+        .post("/auth/login")
+        .json(&json!({ "email": email, "password": "not-the-password" }))
+        .await;
+    assert_eq!(resp.status_code(), 401, "the tenth failure itself is 401");
+
+    // Now even the CORRECT password is refused while locked.
+    let resp = server
+        .post("/auth/login")
+        .json(&json!({ "email": email, "password": "correct-horse-battery" }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        403,
+        "locked account with correct password: {}",
+        resp.text()
+    );
+
+    // A different account is untouched by the lock.
+    let other_email = format!("{prefix}-bystander@test.local");
+    let created = server
+        .post("/auth/register")
+        .json(&json!({
+            "name": "Bystander",
+            "email": other_email,
+            "password": "correct-horse-battery"
+        }))
+        .await;
+    assert_eq!(created.status_code(), 201, "bystander register");
+    let resp = server
+        .post("/auth/login")
+        .json(&json!({ "email": other_email, "password": "correct-horse-battery" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "bystander logs in normally");
+
+    cleanup(&pool, &prefix).await;
+}

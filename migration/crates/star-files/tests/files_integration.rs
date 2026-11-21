@@ -480,3 +480,93 @@ async fn content_licenses_matches_canvas_list() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// Issue #106 — the upload finalisation routes answer with the Canvas
+// `open_cors` headers (files_controller.rb:1812-1818 via before_action
+// :178-181): the request Origin is reflected and credentials are allowed,
+// so the browser that just completed the S3 upload can read the reply.
+// Without an Origin header Canvas emits no allow-origin either (it echoes
+// `request.headers["origin"]`, which is nil).
+#[tokio::test]
+async fn create_success_answers_canvas_open_cors_headers() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    let course = seed_course(&pool, &prefix, "course").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let file = seed_file(&pool, course, teacher, &format!("{prefix}-f.txt")).await;
+
+    // GET with an Origin: reflected origin + credentials + methods.
+    let resp = server
+        .get(&format!("/files/{file}/create_success"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .add_header(axum::http::header::ORIGIN, "https://files.example.com")
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let headers = resp.headers();
+    assert_eq!(
+        headers
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("https://files.example.com"),
+        "Origin must be reflected"
+    );
+    assert_eq!(
+        headers
+            .get("access-control-allow-credentials")
+            .and_then(|v| v.to_str().ok()),
+        Some("true")
+    );
+    assert_eq!(
+        headers
+            .get("access-control-allow-methods")
+            .and_then(|v| v.to_str().ok()),
+        Some("POST, PUT, DELETE, GET, OPTIONS")
+    );
+
+    // POST carries the same headers.
+    let resp = server
+        .post(&format!("/files/{file}/create_success"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .add_header(axum::http::header::ORIGIN, "https://files.example.com")
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(
+        resp.headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("https://files.example.com")
+    );
+
+    // OPTIONS preflight (Canvas routes.rb:2238 api_create_success_cors).
+    // axum-test 17 has no .options() shortcut — the generic .method() takes
+    // the http::Method directly.
+    let resp = server
+        .method(
+            axum::http::Method::OPTIONS,
+            &format!("/files/{file}/create_success"),
+        )
+        .add_header(axum::http::header::ORIGIN, "https://files.example.com")
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    assert_eq!(
+        resp.headers()
+            .get("access-control-allow-origin")
+            .and_then(|v| v.to_str().ok()),
+        Some("https://files.example.com")
+    );
+
+    // Without an Origin header no allow-origin is emitted (Canvas echoes
+    // the request's origin header, which is absent here).
+    let resp = server
+        .get(&format!("/files/{file}/create_success"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert!(resp.headers().get("access-control-allow-origin").is_none());
+
+    cleanup(&pool, &prefix).await;
+}

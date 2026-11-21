@@ -28,6 +28,115 @@ use std::sync::{Mutex, OnceLock};
 use star_common::{ApiError, AppState, Claims};
 
 // ---------------------------------------------------------------------------
+// Login attempt throttling (issue #106 security pass)
+// ---------------------------------------------------------------------------
+
+/// How many consecutive failed logins lock an account — Canvas
+/// `DEFAULT_LOGIN_ATTEMPTS` (`lib/canvas/security/password_policy.rb:28`).
+pub const MAX_FAILED_LOGINS: u32 = 10;
+
+/// How long a lock lasts — Canvas keeps Redis counters with a 30-minute TTL
+/// (`login_registry.rb`), so the workspace equivalent releases the lock on
+/// the same schedule instead of waiting for an administrator.
+const LOCKOUT_WINDOW_SECS: i64 = 30 * 60;
+
+/// Per-account consecutive failed login tracker (issue #106).
+///
+/// Canvas throttles logins through `Canvas::Security::LoginRegistry` with a
+/// Redis hash per pseudonym (`lib/canvas/security/login_registry.rb`):
+/// after `maximum_login_attempts` (default 10) consecutive failures the
+/// next attempt answers `:too_many_attempts` and is refused BEFORE the
+/// password is checked; a successful login clears the counter; the Redis
+/// key expires so stale locks release themselves. star-lms has no Redis,
+/// and the deployment is a single star-http binary, so the same semantics
+/// are kept in process memory: a `Mutex<HashMap>` keyed by lowercase email
+/// with a lock deadline. A restart clears the counters, which only makes
+/// the limit more permissive, never less.
+#[derive(Default)]
+pub struct LoginRateLimiter {
+    inner: Mutex<HashMap<String, FailedAttempts>>,
+}
+
+#[derive(Clone, Copy)]
+struct FailedAttempts {
+    count: u32,
+    /// When the current lock (if any) expires; `None` while only counting.
+    locked_until: Option<DateTime<Utc>>,
+}
+
+impl LoginRateLimiter {
+    /// Whether an attempt for this email is currently allowed.
+    ///
+    /// A lock whose deadline has passed releases itself (Canvas: Redis TTL),
+    /// so the caller only sees `false` while the 30-minute window is open.
+    pub fn is_locked(&self, email: &str) -> bool {
+        let key = email.trim().to_lowercase();
+        let Ok(inner) = self.inner.lock() else {
+            return false; // poisoned lock: fail open, never wedge logins
+        };
+        match inner.get(&key) {
+            Some(attempts) => match attempts.locked_until {
+                Some(until) if until > Utc::now() => true,
+                Some(_) => false, // expired lock — the next recordFailure resets it
+                None => false,
+            },
+            None => false,
+        }
+    }
+
+    /// Record a failed attempt; returns whether the account is now locked.
+    pub fn record_failure(&self, email: &str) -> bool {
+        let key = email.trim().to_lowercase();
+        let Ok(mut inner) = self.inner.lock() else {
+            return false;
+        };
+        let entry = inner.entry(key).or_insert(FailedAttempts {
+            count: 0,
+            locked_until: None,
+        });
+        if entry.locked_until.is_some_and(|until| until <= Utc::now()) {
+            // The previous lock expired — start a fresh window.
+            entry.count = 0;
+            entry.locked_until = None;
+        }
+        entry.count += 1;
+        if entry.count >= MAX_FAILED_LOGINS {
+            entry.locked_until = Some(Utc::now() + Duration::seconds(LOCKOUT_WINDOW_SECS));
+            return true;
+        }
+        false
+    }
+
+    /// Record a successful login: the counter clears (Canvas
+    /// `successful_login!`).
+    pub fn record_success(&self, email: &str) {
+        let key = email.trim().to_lowercase();
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.remove(&key);
+        }
+    }
+
+    /// Drop counters whose lock expired (housekeeping so the map cannot
+    /// grow without bound across unique emails).
+    pub fn prune_expired(&self) {
+        let now = Utc::now();
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.retain(|_, attempts| {
+                !matches!(attempts.locked_until, Some(until) if until <= now) && attempts.count > 0
+            });
+        }
+    }
+}
+
+/// The workspace-global limiter shared by the API login route and the UI
+/// shell's login form — both must count against the same budget or an
+/// attacker just switches surfaces.
+pub fn login_rate_limiter() -> &'static LoginRateLimiter {
+    static LIMITER: std::sync::OnceLock<LoginRateLimiter> = std::sync::OnceLock::new();
+    LIMITER.get_or_init(LoginRateLimiter::default)
+}
+
+// ---------------------------------------------------------------------------
 // Authenticated user (middleware-style extractor)
 // ---------------------------------------------------------------------------
 
@@ -368,6 +477,14 @@ async fn login(
     State(app): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ApiError> {
+    // Refuse locked accounts before touching the database or the password
+    // hash — Canvas `LoginRegistry.audit_login` returns :too_many_attempts
+    // up front (login_registry.rb:68).
+    let limiter = login_rate_limiter();
+    if limiter.is_locked(&req.email) {
+        return Err(ApiError::Forbidden);
+    }
+
     // Fetch user by email.
     let row: Option<(i64, String, String)> =
         sqlx::query_as("SELECT id, password_hash, role FROM users WHERE email = $1")
@@ -376,12 +493,20 @@ async fn login(
             .await
             .map_err(ApiError::from)?;
 
-    let (user_id, password_hash, role) = row.ok_or(ApiError::Unauthorized)?;
+    let Some((user_id, password_hash, role)) = row else {
+        // Unknown email: count the failure too, so the route cannot be used
+        // to enumerate accounts by lockout timing. Same generic 401.
+        limiter.record_failure(&req.email);
+        return Err(ApiError::Unauthorized);
+    };
 
     // Verify password.
     if !verify_password(&req.password, &password_hash) {
+        limiter.record_failure(&req.email);
         return Err(ApiError::Unauthorized);
     }
+    // Success clears the counter (Canvas successful_login!).
+    limiter.record_success(&req.email);
 
     // Load full user details for response.
     let user: UserResponse = sqlx::query_as(
@@ -2343,64 +2468,72 @@ async fn oauth2_auth(
 // JWKS (security#jwks) + InstAccess tokens
 // ---------------------------------------------------------------------------
 
-/// The instance's OAuth signing key. Canvas stores the "oauth2-asymmetric"
+/// The instance's OAuth signing key: Canvas stores the "oauth2-asymmetric"
 /// keypair in its security key storage (`Canvas::OAuth::KeyStorage`) and
-/// publishes only the public half through /login/oauth2/jwks; star embeds a
-/// dedicated 2048-bit RSA instance key (deployment configuration, like
-/// Canvas's credentials file — never a user secret, never served raw).
-const OAUTH_SIGNING_KEY_PEM: &str = "-----BEGIN PRIVATE KEY-----\n\
-MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDcM8s1UdaYot48\n\
-bAnlxdCcfZI/Es9VYh/iE/jpAISvWX4W+PheUm+EMmY59TekfaGlI3Nd3V8uSx+a\n\
-4NvhrYsWagF9fnv1zFSGOWnML7cMMPFBMKr1knjaYo5bVDUZTXlaOCI0dmLeV2d1\n\
-mq+K2TE3/V7jyBN22QIbUDbeej1Yxn4fDgxqKVJNNkgu90nekVF7r9sIySkzPZqM\n\
-ol5LBKMBr5JyVTsnsRH1PQ+sbcCW+VwbQOl3wHnC2p7HhrWtqWkxSjcHUukPBLEb\n\
-QERIKtyukxas+3MyYovHqzNZ+P5jE6WGTmGBDFxSvSb3h2sBgy3JAaIXKoszOmj2\n\
-L5SCm8fRAgMBAAECggEAA4ZMtWDG95B70CnGisf8y9Ryt9G8QdidPAgnzsr0VL4w\n\
-93sqto/JOyt3WWwkZNyh7ru/h/wYHuyS5+67dkRJ2qT9ux2ALHIF1FQs7ljBLE/I\n\
-PMvjoKSkjJJRRwL1Cp+j1p7ZZU+Ty41ImahNMQLC9+t1Tl4QebGFiBxjlHIOc1JK\n\
-a28esC9qtjnsCLSfDzPD4O/zChYqKPPw/BhNWcCM45x7iYWf7Hs4sbL+4nwJyQOi\n\
-R89XasV97e54T8Skyk1egV9jYECtsmiTpWkacN+9jiQgGkNcglNIAb/wm1E5Fcpt\n\
-QvVfWuP5ymB8foT+CuLhwE6P/B6z22y0ipBBuepp8QKBgQD7oVOR7+M6LlReA2h9\n\
-RWQdiL5PGMQESFdigC5Nvxlc8OHleIy3LD4A6pvH104Z96edMsNdejzMUcFeJipN\n\
-FCOBGe2S365QOP6K57x+2bFm5Dzw7/GRDxjliwPgkiL17LhZuwlc4PwLsXejxqR2\n\
-QD31xbnABzSBVpDCRj1Qitc+HQKBgQDgBr+Szq/KHUN3ziyB9u5245xhtaTud6/Q\n\
-E/Lbk4It3bU8Oiu7WpckVxdBIE6vZSKS308fm6z+XEHyuQtAGhgievT8GPy1XiH0\n\
-6Gk09tmCBXj8ZojXO3++4KmtQeYKp8Wvg13VdgH+i7pwpHGVXTtNMsrcxVxMNdhF\n\
-fjYJ2AISRQKBgDFz80irLK0yjcIsSUzVZmeniD9jTqLI1OO27WK6O/HYJY1Ds+QL\n\
-/eOQOC1+UwsncPmkEGE+tNQy/R3TwlyDqLamsdo7u7ZofR4vjQwhHIxsLs3rWj54\n\
-CRyTxZ9NGTHb5B8+cwid7usdZbX6RDg5R/QVd/wVbmw85xZHV6WMo+DBAoGALuja\n\
-1ofXAXBtPzn50eD+AAEbLs6VUaXYN67lrJrPqIEDQTBBFgMbIO3nnaiBMXLw8WY3\n\
-MDwt1jlFSej7dRnBsf6jK+Kjj+q9G4ZK+V8zHmm88sUZpE/+KN7sSK5C2DpXR7Av\n\
-RtJmCoIBsTKN4iPalgirt9zPvdmMhsit0hPcIy0CgYEAzP3sNZC4h0LVzhBrXhWV\n\
-fHc17+K/ITSkmUKu4h8Mj4hzb3gbMpipYqLzaj/qzPGc0xvzO26aeVwRoNyq4P2a\n\
-jO98GCsFs20IULIAw71EWDLzFVAWJVguPretc47UDtRB+Hs4XuxbjL3h2M9ECKP5\n\
-rZjjJHlerHeIK6DQEIDDmro=\n\
------END PRIVATE KEY-----";
+/// publishes only the public half through /login/oauth2/jwks. star loads a
+/// PKCS#8 PEM from `STAR_OAUTH_SIGNING_KEY` when the deployment provides
+/// one, and otherwise generates a fresh 2048-bit keypair on first use —
+/// key material is NEVER committed to the repository (the secret scan
+/// would rightly flag it).
+struct OAuthSigningKey {
+    kid: String,
+    /// JWK `n` (base64url, unpadded).
+    n: String,
+    /// JWK `e` (base64url, unpadded).
+    e: String,
+    /// (year, month) encoded in the kid, for the rotation_check report.
+    created: (i32, u32),
+    encoding: jsonwebtoken::EncodingKey,
+}
 
-/// kid — Canvas encodes the key creation date in the kid
-/// (`CanvasSecurity::JWKKeyPair.time_from_kid`); star uses YYYYMMDD.
-const OAUTH_SIGNING_KEY_KID: &str = "star-oauth-20261101";
-
-/// Creation date encoded in the kid, for the rotation_check report.
-const OAUTH_SIGNING_KEY_CREATED: (i32, u32) = (2026, 11);
-
-/// Public half of `OAUTH_SIGNING_KEY_PEM` (JWK `n`).
-const OAUTH_SIGNING_KEY_N: &str = "3DPLNVHWmKLePGwJ5cXQnH2SPxLPVWIf4hP46QCEr1l-Fvj4XlJvhDJmOfU3pH2hpSNzXd1fLksfmuDb4a2LFmoBfX579cxUhjlpzC-3DDDxQTCq9ZJ42mKOW1Q1GU15WjgiNHZi3ldndZqvitkxN_1e48gTdtkCG1A23no9WMZ-Hw4MailSTTZILvdJ3pFRe6_bCMkpMz2ajKJeSwSjAa-SclU7J7ER9T0PrG3AlvlcG0Dpd8B5wtqex4a1ralpMUo3B1LpDwSxG0BESCrcrpMWrPtzMmKLx6szWfj-YxOlhk5hgQxcUr0m94drAYMtyQGiFyqLMzpo9i-UgpvH0Q";
-
-/// Public exponent (JWK `e`, 65537).
-const OAUTH_SIGNING_KEY_E: &str = "AQAB";
-
-/// Cache-Control max-age for the JWKS response (Canvas sets the key
-/// storage's `max_cache_age` header).
-const JWKS_MAX_CACHE_AGE_SECS: u32 = 3600;
-
-/// Parsed signing key, computed once.
-fn oauth_signing_key() -> &'static Result<jsonwebtoken::EncodingKey, String> {
-    static KEY: OnceLock<Result<jsonwebtoken::EncodingKey, String>> = OnceLock::new();
+fn oauth_signing_key() -> Result<&'static OAuthSigningKey, String> {
+    static KEY: OnceLock<Result<OAuthSigningKey, String>> = OnceLock::new();
     KEY.get_or_init(|| {
-        jsonwebtoken::EncodingKey::from_rsa_pem(OAUTH_SIGNING_KEY_PEM.as_bytes())
-            .map_err(|err| format!("embedded OAuth signing key is invalid: {err}"))
+        use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey};
+        use rsa::traits::PublicKeyParts;
+
+        let private = match std::env::var("STAR_OAUTH_SIGNING_KEY") {
+            Ok(pem) if !pem.trim().is_empty() => rsa::RsaPrivateKey::from_pkcs8_pem(pem.trim())
+                .map_err(|err| {
+                    format!("STAR_OAUTH_SIGNING_KEY is not a valid PKCS#8 PEM: {err}")
+                })?,
+            _ => {
+                // No deployment key: generate a per-process instance key.
+                // Only the public half is ever served; the private half
+                // lives in memory for the life of the process.
+                use argon2::password_hash::rand_core::OsRng;
+                rsa::RsaPrivateKey::new(&mut OsRng, 2048)
+                    .map_err(|err| format!("failed to generate OAuth signing key: {err}"))?
+            }
+        };
+
+        let now = Utc::now();
+        let kid = format!(
+            "star-oauth-{:04}{:02}{:02}",
+            now.year(),
+            now.month(),
+            now.day()
+        );
+        let created = (now.year(), now.month());
+        let public = rsa::RsaPublicKey::from(&private);
+        let pem = private
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .map_err(|err| format!("failed to serialize OAuth signing key: {err}"))?;
+        let encoding = jsonwebtoken::EncodingKey::from_rsa_pem(pem.as_bytes())
+            .map_err(|err| format!("failed to load OAuth signing key: {err}"))?;
+
+        Ok(OAuthSigningKey {
+            kid,
+            // Canvas JWKs use unpadded base64url for n and e
+            // (canvas_security gem -> JSON::JWK).
+            n: base64url_encode(&public.n().to_bytes_be()),
+            e: base64url_encode(&public.e().to_bytes_be()),
+            created,
+            encoding,
+        })
     })
+    .as_ref()
+    .map_err(std::clone::Clone::clone)
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -2415,7 +2548,11 @@ struct JwksQuery {
 fn oauth2_jwks(Query(params): Query<JwksQuery>) -> Response {
     if params.rotation_check.is_some() {
         let today = Utc::now();
-        let this_month = (today.year(), today.month()) == OAUTH_SIGNING_KEY_CREATED;
+        let key = oauth_signing_key();
+        let this_month = match key {
+            Ok(key) => (today.year(), today.month()) == key.created,
+            Err(_) => false,
+        };
         let report = format!(
             "today is day {} and key 0 is {}from this month",
             today.day(),
@@ -2424,14 +2561,20 @@ fn oauth2_jwks(Query(params): Query<JwksQuery>) -> Response {
         return Json(serde_json::json!([report])).into_response();
     }
 
+    let Ok(key) = oauth_signing_key() else {
+        return internal_error(
+            "oauth jwks: signing key unavailable",
+            "signing key generation failed",
+        );
+    };
     let mut response = Json(serde_json::json!({
         "keys": [{
             "kty": "RSA",
             "alg": "RS256",
             "use": "sig",
-            "kid": OAUTH_SIGNING_KEY_KID,
-            "n": OAUTH_SIGNING_KEY_N,
-            "e": OAUTH_SIGNING_KEY_E,
+            "kid": key.kid,
+            "n": key.n,
+            "e": key.e,
         }]
     }))
     .into_response();
@@ -2469,15 +2612,13 @@ async fn create_inst_access_token(
         "iat": now.timestamp(),
         "exp": (now + Duration::seconds(OAUTH_TOKEN_TTL_SECS)).timestamp(),
     });
+    let key = oauth_signing_key().map_err(|err| ApiError::Db(err.clone()))?;
     let header = jsonwebtoken::Header {
         alg: jsonwebtoken::Algorithm::RS256,
-        kid: Some(OAUTH_SIGNING_KEY_KID.to_string()),
+        kid: Some(key.kid.clone()),
         ..Default::default()
     };
-    let key = oauth_signing_key()
-        .as_ref()
-        .map_err(|err| ApiError::Db(err.clone()))?;
-    let token = encode(&header, &claims, key)
+    let token = encode(&header, &claims, &key.encoding)
         .map_err(|err| ApiError::Db(format!("inst access token: {err}")))?;
 
     Ok((

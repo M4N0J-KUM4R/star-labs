@@ -1090,7 +1090,12 @@ async fn oauth2_jwks_shape_and_inst_access_tokens() {
     assert_eq!(jwk["kty"], "RSA");
     assert_eq!(jwk["alg"], "RS256");
     assert_eq!(jwk["use"], "sig");
-    assert_eq!(jwk["kid"], "star-oauth-20261101");
+    // The kid encodes the key's creation date (Canvas
+    // JWKKeyPair.time_from_kid); the key itself is generated at runtime.
+    assert!(
+        jwk["kid"].as_str().unwrap_or("").starts_with("star-oauth-"),
+        "kid: {jwk:?}"
+    );
     assert_eq!(jwk["e"], "AQAB");
     let modulus = b64url_decode(jwk["n"].as_str().expect("n"));
     assert_eq!(modulus.len(), 256, "2048-bit modulus");
@@ -1123,7 +1128,13 @@ async fn oauth2_jwks_shape_and_inst_access_tokens() {
 
     let header: Value = serde_json::from_slice(&b64url_decode(parts[0])).expect("jwt header");
     assert_eq!(header["alg"], "RS256");
-    assert_eq!(header["kid"], "star-oauth-20261101");
+    assert!(
+        header["kid"]
+            .as_str()
+            .unwrap_or("")
+            .starts_with("star-oauth-"),
+        "jwt kid: {header}"
+    );
 
     let claims: Value = serde_json::from_slice(&b64url_decode(parts[1])).expect("jwt claims");
     assert_eq!(claims["sub"], user.to_string());
