@@ -147,8 +147,9 @@ impl IntoResponse for SpeedGraderPage {
                 html,
             )
                 .into_response(),
-            Err(err) => ApiError::Db(format!("speedgrader template render failed: {err}"))
-                .into_response(),
+            Err(err) => {
+                ApiError::Db(format!("speedgrader template render failed: {err}")).into_response()
+            }
         }
     }
 }
@@ -246,11 +247,16 @@ async fn render_page(
     let assignment_id = assignment.id;
 
     // ---- Student selection: Canvas order (name, id); default the first.
-    let students =
-        match star_assignments::ui::load_grading_students(&app.db, course_id, assignment_id).await {
-            Ok(rows) => rows,
-            Err(e) => return from_api_error(&e, &origin).into_response(),
-        };
+    let students = match star_assignments::ui::load_grading_students(
+        &app.db,
+        course_id,
+        assignment_id,
+    )
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => return from_api_error(&e, &origin).into_response(),
+    };
     let student = students
         .iter()
         .find(|s| Some(s.user_id) == input.student_sel)
@@ -268,9 +274,9 @@ async fn render_page(
         };
 
     // ---- Comment feed.
-    let feed = submission.as_ref().map(|sub| {
-        star_submission_comments::ui::load_submission_comment_feed(&app.db, sub.id)
-    });
+    let feed = submission
+        .as_ref()
+        .map(|sub| star_submission_comments::ui::load_submission_comment_feed(&app.db, sub.id));
     let comments: Vec<CommentView> = match feed {
         Some(feed) => match feed.await {
             Ok(rows) => rows
@@ -319,7 +325,9 @@ async fn render_page(
         .unwrap_or(0);
     let (prev_url, next_url) = if students.len() > 1 {
         let prev = student_views[selected_index.saturating_sub(1)].url.clone();
-        let next = student_views[(selected_index + 1) % student_views.len()].url.clone();
+        let next = student_views[(selected_index + 1) % student_views.len()]
+            .url
+            .clone();
         (Some(prev), Some(next))
     } else {
         (None, None)
@@ -342,7 +350,13 @@ async fn render_page(
     let score_label = submission
         .as_ref()
         .and_then(|s| s.score)
-        .map(|score| format!("{} / {}", trim_f64(score), trim_f64(assignment.points_possible)))
+        .map(|score| {
+            format!(
+                "{} / {}",
+                trim_f64(score),
+                trim_f64(assignment.points_possible)
+            )
+        })
         .unwrap_or_else(|| "–".to_string());
     let score_value = submission
         .as_ref()
@@ -480,10 +494,8 @@ impl IntoResponse for SpeedGraderEmptyPage {
                 html,
             )
                 .into_response(),
-            Err(err) => ApiError::Db(format!(
-                "speedgrader empty template render failed: {err}"
-            ))
-            .into_response(),
+            Err(err) => ApiError::Db(format!("speedgrader empty template render failed: {err}"))
+                .into_response(),
         }
     }
 }
@@ -494,7 +506,8 @@ async fn build_rubric_view(
     assignment_id: i64,
     submission_id: Option<i64>,
 ) -> Result<Option<RubricPanelView>, ApiError> {
-    let Some(panel) = star_rubrics::ui::load_assignment_rubric_panel(&app.db, assignment_id).await?
+    let Some(panel) =
+        star_rubrics::ui::load_assignment_rubric_panel(&app.db, assignment_id).await?
     else {
         return Ok(None);
     };

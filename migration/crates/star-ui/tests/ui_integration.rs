@@ -2604,12 +2604,8 @@ async fn seed_rubric(pool: &PgPool, course_id: i64, assignment_id: i64) -> (i64,
     .expect("seed rubric");
 
     let mut criterion_ids = Vec::new();
-    for (position, (description, points)) in [
-        ("Thesis", 5.0),
-        ("Evidence", 5.0),
-    ]
-    .into_iter()
-    .enumerate()
+    for (position, (description, points)) in
+        [("Thesis", 5.0), ("Evidence", 5.0)].into_iter().enumerate()
     {
         let criterion: i64 = sqlx::query_scalar(
             "INSERT INTO rubric_criteria (rubric_id, description, points, position) \
@@ -2625,7 +2621,9 @@ async fn seed_rubric(pool: &PgPool, course_id: i64, assignment_id: i64) -> (i64,
         criterion_ids.push(criterion);
 
         for (rating_pos, (rating_desc, rating_points)) in
-            [("Full", points), ("Partial", points / 2.0)].into_iter().enumerate()
+            [("Full", points), ("Partial", points / 2.0)]
+                .into_iter()
+                .enumerate()
         {
             sqlx::query(
                 "INSERT INTO rubric_ratings (criterion_id, description, points, position) \
@@ -2697,7 +2695,10 @@ async fn speedgrader_queue_and_rubric_panel() {
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body = resp.text();
     assert!(body.contains("id=\"speedgrader\""), "speedgrader page");
-    assert!(body.contains("id=\"speedgrader_grade_form\""), "grading form");
+    assert!(
+        body.contains("id=\"speedgrader_grade_form\""),
+        "grading form"
+    );
     assert!(body.contains("my essay text"), "submission body shown");
     assert!(
         body.contains("Grading Essay"),
@@ -2706,9 +2707,7 @@ async fn speedgrader_queue_and_rubric_panel() {
     // Student nav rows: one per enrollment (3 incl. teacher), ordered.
     let row_count = body.matches("speedgrader-student-row").count();
     assert_eq!(row_count, 3, "one row per enrollment, got {row_count}");
-    let pos1 = body
-        .find(">gstudent<")
-        .expect("first student in the nav");
+    let pos1 = body.find(">gstudent<").expect("first student in the nav");
     let pos2 = body.find(">gstudent2<").expect("second student in the nav");
     assert!(pos1 < pos2, "students ordered by name");
     // Selected student pill + meta.
@@ -2721,7 +2720,10 @@ async fn speedgrader_queue_and_rubric_panel() {
     assert!(body.contains("id=\"speedgrader_rubric\""), "rubric panel");
     assert!(body.contains("Thesis"), "criterion 1");
     assert!(body.contains("Evidence"), "criterion 2");
-    assert!(body.contains(&format!("name=\"criterion_{}\"", criterion_ids[0])), "pick field");
+    assert!(
+        body.contains(&format!("name=\"criterion_{}\"", criterion_ids[0])),
+        "pick field"
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -2737,7 +2739,14 @@ async fn speedgrader_permission_gates() {
 
     let teacher = seed_user(&pool, &prefix, "sgateacher", "teacher", "not-a-real-hash").await;
     let student = seed_user(&pool, &prefix, "sgatestudent", "student", "not-a-real-hash").await;
-    let outsider = seed_user(&pool, &prefix, "sgateoutsider", "student", "not-a-real-hash").await;
+    let outsider = seed_user(
+        &pool,
+        &prefix,
+        "sgateoutsider",
+        "student",
+        "not-a-real-hash",
+    )
+    .await;
     let course = seed_course(&pool, &prefix, "Gate Course", "available").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
@@ -2757,12 +2766,7 @@ async fn speedgrader_permission_gates() {
         .add_cookie(session_cookie(student, "student"))
         .add_cookie(csrf_cookie)
         .add_header("content-type", "application/x-www-form-urlencoded")
-        .bytes(
-            format!(
-                "_csrf={csrf}&assignment_id={essay}&student_id={student}&score=5"
-            )
-            .into(),
-        )
+        .bytes(format!("_csrf={csrf}&assignment_id={essay}&student_id={student}&score=5").into())
         .await;
     assert_eq!(resp.status_code(), 403, "student POST -> 403");
 
@@ -2803,8 +2807,8 @@ async fn speedgrader_grade_round_trip() {
         "published",
     )
     .await;
-    let submission = seed_submission(&pool, essay, student, "round trip text", None, "submitted")
-        .await;
+    let submission =
+        seed_submission(&pool, essay, student, "round trip text", None, "submitted").await;
     let (rubric_id, criterion_ids) = seed_rubric(&pool, course, essay).await;
     let rating_ids: Vec<i64> = sqlx::query_scalar(
         "SELECT id FROM rubric_ratings WHERE criterion_id = $1 ORDER BY position ASC",
@@ -2826,8 +2830,7 @@ async fn speedgrader_grade_round_trip() {
                 "_csrf={csrf}&assignment_id={essay}&student_id={student}\
                  &score=8.5&comment=Nice+work+on+the+thesis\
                  &criterion_{}={}",
-                criterion_ids[0],
-                rating_ids[0]
+                criterion_ids[0], rating_ids[0]
             )
             .into(),
         )
@@ -2877,7 +2880,9 @@ async fn speedgrader_grade_round_trip() {
     .expect("rubric assessment row");
     assert_eq!(assessment.0, 5.0, "rubric total = picked rating points");
     assert!(
-        assessment.1.contains(&format!("\"rating_id\":{}", rating_ids[0])),
+        assessment
+            .1
+            .contains(&format!("\"rating_id\":{}", rating_ids[0])),
         "data carries the pick: {}",
         assessment.1
     );
@@ -2898,31 +2903,27 @@ async fn speedgrader_grade_round_trip() {
     assert!(body.contains(&needle), "rubric pick preselected: {needle}");
 
     // CSRF mismatch on the POST -> 403, nothing persisted.
-    let before: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM submission_comments WHERE submission_id = $1",
-    )
-    .bind(submission)
-    .fetch_one(&pool)
-    .await
-    .expect("count");
+    let before: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM submission_comments WHERE submission_id = $1")
+            .bind(submission)
+            .fetch_one(&pool)
+            .await
+            .expect("count");
     let (csrf_cookie2, _) = csrf_pair();
     let resp = server
         .post(&format!("/courses/{course}/gradebook/speedgrader/grade"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .add_cookie(csrf_cookie2)
         .add_header("content-type", "application/x-www-form-urlencoded")
-        .bytes(
-            format!("_csrf=deadbeef&assignment_id={essay}&student_id={student}&score=1").into(),
-        )
+        .bytes(format!("_csrf=deadbeef&assignment_id={essay}&student_id={student}&score=1").into())
         .await;
     assert_eq!(resp.status_code(), 403, "csrf mismatch -> 403");
-    let after: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM submission_comments WHERE submission_id = $1",
-    )
-    .bind(submission)
-    .fetch_one(&pool)
-    .await
-    .expect("count");
+    let after: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM submission_comments WHERE submission_id = $1")
+            .bind(submission)
+            .fetch_one(&pool)
+            .await
+            .expect("count");
     assert_eq!(before, after, "no comment persisted on csrf failure");
 
     // A blank score re-renders the form with the validation message (422),
@@ -2933,9 +2934,7 @@ async fn speedgrader_grade_round_trip() {
         .add_cookie(session_cookie(teacher, "teacher"))
         .add_cookie(csrf_cookie3)
         .add_header("content-type", "application/x-www-form-urlencoded")
-        .bytes(
-            format!("_csrf={csrf3}&assignment_id={essay}&student_id={student}&score=").into(),
-        )
+        .bytes(format!("_csrf={csrf3}&assignment_id={essay}&student_id={student}&score=").into())
         .await;
     assert_eq!(resp.status_code(), 422, "blank score -> 422");
     assert!(
