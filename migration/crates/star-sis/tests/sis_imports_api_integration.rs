@@ -491,10 +491,18 @@ async fn importing_lists_only_the_running_imports() {
     assert!(!ids.contains(&finished), "body: {body}");
     let states: Vec<String> = imports
         .iter()
-        .map(|item| item["workflow_state"].as_str().unwrap_or_default().to_string())
+        .map(|item| {
+            item["workflow_state"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
         .collect();
     assert!(states.contains(&"importing".to_string()), "body: {body}");
-    assert!(states.contains(&"cleanup_batch".to_string()), "body: {body}");
+    assert!(
+        states.contains(&"cleanup_batch".to_string()),
+        "body: {body}"
+    );
 
     cleanup(&pool, &prefix).await;
 }

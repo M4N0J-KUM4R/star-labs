@@ -613,6 +613,16 @@ fn value_to_boolean(value: Option<&str>) -> bool {
     }
 }
 
+/// Canvas `value_to_boolean` for a parameter that may be a hash — a hash is
+/// truthy, a string follows the usual truthy strings.
+fn truthy_param(value: Option<&Value>) -> bool {
+    match value {
+        Some(Value::Object(_)) | Some(Value::Array(_)) => true,
+        Some(Value::Null) | None => false,
+        Some(other) => value_to_boolean(scalar_text(other).as_deref()),
+    }
+}
+
 /// The query parameters of a request (`per_page`, `page`, `state`, …).
 type QueryParams = BTreeMap<String, String>;
 
@@ -957,11 +967,12 @@ async fn fetch_context_conferences(
               SELECT 1 FROM web_conference_participants p \
               WHERE p.web_conference_id = w.id AND p.user_id = $4))";
 
-    let rows: Vec<ConferenceRow> = sqlx::query_as(&format!(
+    let list_sql = format!(
         "SELECT {CONFERENCE_COLUMNS} FROM web_conferences w \
          WHERE {where_sql} ORDER BY w.created_at DESC, w.id DESC \
          LIMIT $5 OFFSET $6"
-    ))
+    );
+    let rows: Vec<ConferenceRow> = sqlx::query_as(&list_sql)
     .bind(context.context_type())
     .bind(context.context_id())
     .bind(types.to_vec())
@@ -971,9 +982,8 @@ async fn fetch_context_conferences(
     .fetch_all(db)
     .await?;
 
-    let total: (i64,) = sqlx::query_as(&format!(
-        "SELECT COUNT(*) FROM web_conferences w WHERE {where_sql}"
-    ))
+    let count_sql = format!("SELECT COUNT(*) FROM web_conferences w WHERE {where_sql}");
+    let total: (i64,) = sqlx::query_as(&count_sql)
     .bind(context.context_type())
     .bind(context.context_id())
     .bind(types.to_vec())
@@ -1013,11 +1023,12 @@ async fn fetch_user_conferences(
               w.started_at BETWEEN (NOW() - INTERVAL '1 day') AND NOW() \
               AND (w.ended_at IS NULL OR w.ended_at > NOW())))";
 
-    let rows: Vec<ConferenceRow> = sqlx::query_as(&format!(
+    let list_sql = format!(
         "SELECT {CONFERENCE_COLUMNS} FROM web_conferences w \
          WHERE {where_sql} ORDER BY w.created_at DESC, w.id DESC \
          LIMIT $4 OFFSET $5"
-    ))
+    );
+    let rows: Vec<ConferenceRow> = sqlx::query_as(&list_sql)
     .bind(types.to_vec())
     .bind(user_id)
     .bind(live_only)
@@ -1026,9 +1037,8 @@ async fn fetch_user_conferences(
     .fetch_all(db)
     .await?;
 
-    let total: (i64,) = sqlx::query_as(&format!(
-        "SELECT COUNT(*) FROM web_conferences w WHERE {where_sql}"
-    ))
+    let count_sql = format!("SELECT COUNT(*) FROM web_conferences w WHERE {where_sql}");
+    let total: (i64,) = sqlx::query_as(&count_sql)
     .bind(types.to_vec())
     .bind(user_id)
     .bind(live_only)
@@ -1341,10 +1351,9 @@ fn with_pagination_link(
 ) -> Response {
     let links = pagination_links(url, query, pagination.page, pagination.per_page, total);
     let mut response = body.into_response();
-    if let Some(links) = links {
-        if let Ok(value) = header::HeaderValue::from_str(&links) {
-            response.headers_mut().insert(header::LINK, value);
-        }
+    let link_header = links.and_then(|links| header::HeaderValue::from_str(&links).ok());
+    if let Some(value) = link_header {
+        response.headers_mut().insert(header::LINK, value);
     }
     response
 }
@@ -1466,12 +1475,10 @@ async fn create_conference(
     )
     .await?;
 
-    if value_to_boolean(
+    if truthy_param(
         params
             .object("web_conference")
-            .and_then(|attrs| attrs.get("calendar_event"))
-            .and_then(scalar_text)
-            .as_deref(),
+            .and_then(|attrs| attrs.get("calendar_event")),
     ) {
         create_calendar_event(state, resolved.context, &attributes).await?;
     }
@@ -1718,12 +1725,12 @@ async fn insert_conference(
              gen_random_uuid()::text \
          ) RETURNING id",
     )
-    .bind(&attributes.title)
-    .bind(&attributes.conference_type)
+    .bind(attributes.title.as_str())
+    .bind(attributes.conference_type.as_str())
     .bind(context.context_id())
     .bind(context.context_type())
     .bind(user_id)
-    .bind(&attributes.description)
+    .bind(attributes.description.as_deref())
     .bind(attributes.duration)
     .bind(start_at.map(|value| value.naive_utc()))
     .bind(end_at.map(|value| value.naive_utc()))
@@ -1752,7 +1759,7 @@ async fn create_calendar_event(
          VALUES ($1, NULL, $2, $3, $4, 'active', NOW(), NOW())",
     )
     .bind(course_id)
-    .bind(&attributes.title)
+    .bind(attributes.title.as_str())
     .bind(start_at)
     .bind(attributes.end_at)
     .execute(&state.db)
@@ -1762,9 +1769,8 @@ async fn create_calendar_event(
 
 /// Load a conference row.
 async fn load_conference(state: &AppState, conference_id: i64) -> Result<ConferenceRow, ApiError> {
-    let row: ConferenceRow = sqlx::query_as(&format!(
-        "SELECT {CONFERENCE_COLUMNS} FROM web_conferences w WHERE w.id = $1"
-    ))
+    let select_sql = format!("SELECT {CONFERENCE_COLUMNS} FROM web_conferences w WHERE w.id = $1");
+    let row: ConferenceRow = sqlx::query_as(&select_sql)
     .bind(conference_id)
     .fetch_one(&state.db)
     .await?;
@@ -1980,10 +1986,11 @@ async fn recording_ready(
     }
 
     // Canvas `get_conference` — the conference has to be in the context.
-    let row: ConferenceRow = sqlx::query_as(&format!(
+    let select_sql = format!(
         "SELECT {CONFERENCE_COLUMNS} FROM web_conferences w \
          WHERE w.id = $1 AND w.context_type = $2 AND w.context_id = $3"
-    ))
+    );
+    let row: ConferenceRow = sqlx::query_as(&select_sql)
     .bind(conference_id)
     .bind(resolved.context.context_type())
     .bind(resolved.context.context_id())

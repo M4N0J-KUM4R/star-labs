@@ -36,7 +36,9 @@ fn run_prefix() -> String {
 /// The DDL the coordinator has to add: `lti_context_controls` (migration
 /// `0224`) has both context columns `NOT NULL` and a foreign key on
 /// `deployment_id` that points at Canvas' `context_external_tools` instead of
-/// the workspace's `lti_deployments`.
+/// the workspace's `lti_deployments`. Migration `0233` applies the same
+/// statements; they are repeated here so the test also runs against a
+/// database that has not seen it yet.
 const REPAIR_DDL: &[&str] = &[
     "ALTER TABLE lti_context_controls \
        ALTER COLUMN account_id DROP NOT NULL, \
@@ -44,6 +46,9 @@ const REPAIR_DDL: &[&str] = &[
     "ALTER TABLE lti_context_controls DROP CONSTRAINT IF EXISTS chk_require_context_4",
     "ALTER TABLE lti_context_controls \
        DROP CONSTRAINT IF EXISTS fk_lti_context_controls_deployment_id",
+    "ALTER TABLE lti_context_controls \
+       ADD CONSTRAINT fk_lti_context_controls_deployment_id \
+       FOREIGN KEY (deployment_id) REFERENCES lti_deployments (id) ON DELETE CASCADE",
     "CREATE UNIQUE INDEX IF NOT EXISTS index_lti_context_controls_on_account_and_deployment \
        ON lti_context_controls (account_id, deployment_id) WHERE account_id IS NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS index_lti_context_controls_on_course_and_deployment \

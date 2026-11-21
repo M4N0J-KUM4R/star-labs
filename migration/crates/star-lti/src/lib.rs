@@ -52,6 +52,7 @@ mod subscriptions;
 mod context_controls;
 mod deployments;
 mod resource_links;
+mod tool_configurations;
 
 mod data_services;
 mod dynamic_registration;
@@ -559,6 +560,7 @@ pub fn router() -> Router<AppState> {
         .merge(context_controls::router())
         .merge(deployments::router())
         .merge(resource_links::router())
+        .merge(tool_configurations::router())
         .route(
             "/accounts/{account_id}/lti_registrations",
             get(list_registrations).post(create_registration),

@@ -2003,7 +2003,7 @@ async fn outcome_contributing_scores(
     let filtered: Vec<&AlignmentRow> = if only_assignment_alignments {
         alignments
             .iter()
-            .filter(|alignment| alignment.content_type == "Assignment")
+            .filter(|alignment| alignment.content_type.as_deref() == Some("Assignment"))
             .collect()
     } else {
         alignments.iter().collect()
@@ -2114,10 +2114,10 @@ async fn enqueue_outcome_rollup_calculation(
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
 
-    let course_id = params.get("course_id").unwrap_or("").to_string();
+    let course_id_param = params.get("course_id").unwrap_or("").to_string();
     let student_uuid = params.get("student_uuid").unwrap_or("").to_string();
 
-    if course_id.is_empty() || student_uuid.is_empty() {
+    if course_id_param.is_empty() || student_uuid.is_empty() {
         return Ok((
             StatusCode::BAD_REQUEST,
             Json(json!({ "error": "course id and student uuid are required" })),
@@ -2125,9 +2125,18 @@ async fn enqueue_outcome_rollup_calculation(
             .into_response());
     }
 
+    // `Course.find(params[:course_id])` — a missing course is a 404.
+    let Ok(course_id) = course_id_param.parse::<i64>() else {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "Invalid course or student" })),
+        )
+            .into_response());
+    };
+
     let course_exists =
         sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM courses WHERE id = $1)")
-            .bind(course_id.clone())
+            .bind(course_id)
             .fetch_one(pool)
             .await?;
     if !course_exists {
@@ -2145,7 +2154,7 @@ async fn enqueue_outcome_rollup_calculation(
            AND u.uuid = $2
          LIMIT 1",
     )
-    .bind(course_id.clone())
+    .bind(course_id)
     .bind(&student_uuid)
     .fetch_optional(pool)
     .await?;
@@ -2163,7 +2172,7 @@ async fn enqueue_outcome_rollup_calculation(
         "Outcomes::StudentOutcomeRollupCalculationService",
         None,
         "Course",
-        course_id.parse::<i64>().unwrap_or_default(),
+        course_id,
         None,
         Some(format!(
             "calculate_for_student:{}:{}",
@@ -2826,11 +2835,14 @@ async fn aggregate_rollups(
 
     let mut scores = Vec::new();
     for outcome in &ctx.outcomes {
-        let outcome_scores: Vec<&RollupScore> = user_rollups
-            .iter()
-            .flat_map(|rollup| rollup.scores.iter())
-            .filter(|score| score.outcome_id == outcome.id)
-            .collect();
+        let mut outcome_scores: Vec<&RollupScore> = Vec::new();
+        for rollup in &user_rollups {
+            for score in &rollup.scores {
+                if score.outcome_id == outcome.id {
+                    outcome_scores.push(score);
+                }
+            }
+        }
         if outcome_scores.is_empty() {
             continue;
         }
@@ -2878,7 +2890,7 @@ fn serialize_rollup(rollup: &Rollup, context_key: &str, context_id: i64) -> Valu
             .iter()
             .map(serialize_rollup_score)
             .collect::<Vec<Value>>(),
-        "links": { context_key: context_id.to_string() }
+        "links": { context_key => context_id.to_string() }
     })
 }
 

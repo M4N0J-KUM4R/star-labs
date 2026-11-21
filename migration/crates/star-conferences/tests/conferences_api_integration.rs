@@ -222,7 +222,7 @@ async fn seed_provider(pool: &PgPool, prefix: &str) -> (String, String) {
         "INSERT INTO plugin_settings (name, settings, created_at, updated_at, disabled) \
          VALUES ($1, $2, NOW(), NOW(), FALSE)",
     )
-    .bind(&plugin_id)
+    .bind(plugin_id.as_str())
     .bind(json!({ "domain": "bbb.test", "secret_dec": PROVIDER_SECRET }).to_string())
     .execute(pool)
     .await

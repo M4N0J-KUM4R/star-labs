@@ -75,7 +75,6 @@
 //! ```toml
 //! star-auth = { path = "../star-auth" }
 //! sqlx = { workspace = true }
-//! serde = { workspace = true }
 //! serde_json = { workspace = true }
 //! chrono = { workspace = true }
 //! ```
@@ -85,7 +84,7 @@ use axum::{
     extract::{DefaultBodyLimit, Path, RawQuery, State},
     http::{header, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{get, put},
     Json, Router,
 };
 use chrono::{DateTime, NaiveDate, NaiveDateTime};
