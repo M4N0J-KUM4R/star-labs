@@ -21,8 +21,119 @@ use http::request::Parts;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 use star_common::{ApiError, AppState, Claims};
+
+// ---------------------------------------------------------------------------
+// Login attempt throttling (issue #106 security pass)
+// ---------------------------------------------------------------------------
+
+/// How many consecutive failed logins lock an account — Canvas
+/// `DEFAULT_LOGIN_ATTEMPTS` (`lib/canvas/security/password_policy.rb:28`).
+pub const MAX_FAILED_LOGINS: u32 = 10;
+
+/// How long a lock lasts — Canvas keeps Redis counters with a 30-minute TTL
+/// (`login_registry.rb`), so the workspace equivalent releases the lock on
+/// the same schedule instead of waiting for an administrator.
+const LOCKOUT_WINDOW_SECS: i64 = 30 * 60;
+
+/// Per-account consecutive failed login tracker (issue #106).
+///
+/// Canvas throttles logins through `Canvas::Security::LoginRegistry` with a
+/// Redis hash per pseudonym (`lib/canvas/security/login_registry.rb`):
+/// after `maximum_login_attempts` (default 10) consecutive failures the
+/// next attempt answers `:too_many_attempts` and is refused BEFORE the
+/// password is checked; a successful login clears the counter; the Redis
+/// key expires so stale locks release themselves. star-lms has no Redis,
+/// and the deployment is a single star-http binary, so the same semantics
+/// are kept in process memory: a `Mutex<HashMap>` keyed by lowercase email
+/// with a lock deadline. A restart clears the counters, which only makes
+/// the limit more permissive, never less.
+#[derive(Default)]
+pub struct LoginRateLimiter {
+    inner: Mutex<HashMap<String, FailedAttempts>>,
+}
+
+#[derive(Clone, Copy)]
+struct FailedAttempts {
+    count: u32,
+    /// When the current lock (if any) expires; `None` while only counting.
+    locked_until: Option<DateTime<Utc>>,
+}
+
+impl LoginRateLimiter {
+    /// Whether an attempt for this email is currently allowed.
+    ///
+    /// A lock whose deadline has passed releases itself (Canvas: Redis TTL),
+    /// so the caller only sees `false` while the 30-minute window is open.
+    pub fn is_locked(&self, email: &str) -> bool {
+        let key = email.trim().to_lowercase();
+        let Ok(inner) = self.inner.lock() else {
+            return false; // poisoned lock: fail open, never wedge logins
+        };
+        match inner.get(&key) {
+            Some(attempts) => match attempts.locked_until {
+                Some(until) if until > Utc::now() => true,
+                Some(_) => false, // expired lock — the next recordFailure resets it
+                None => false,
+            },
+            None => false,
+        }
+    }
+
+    /// Record a failed attempt; returns whether the account is now locked.
+    pub fn record_failure(&self, email: &str) -> bool {
+        let key = email.trim().to_lowercase();
+        let Ok(mut inner) = self.inner.lock() else {
+            return false;
+        };
+        let entry = inner.entry(key).or_insert(FailedAttempts {
+            count: 0,
+            locked_until: None,
+        });
+        if entry.locked_until.is_some_and(|until| until <= Utc::now()) {
+            // The previous lock expired — start a fresh window.
+            entry.count = 0;
+            entry.locked_until = None;
+        }
+        entry.count += 1;
+        if entry.count >= MAX_FAILED_LOGINS {
+            entry.locked_until = Some(Utc::now() + Duration::seconds(LOCKOUT_WINDOW_SECS));
+            return true;
+        }
+        false
+    }
+
+    /// Record a successful login: the counter clears (Canvas
+    /// `successful_login!`).
+    pub fn record_success(&self, email: &str) {
+        let key = email.trim().to_lowercase();
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.remove(&key);
+        }
+    }
+
+    /// Drop counters whose lock expired (housekeeping so the map cannot
+    /// grow without bound across unique emails).
+    pub fn prune_expired(&self) {
+        let now = Utc::now();
+        if let Ok(mut inner) = self.inner.lock() {
+            inner.retain(|_, attempts| {
+                !matches!(attempts.locked_until, Some(until) if until <= now) && attempts.count > 0
+            });
+        }
+    }
+}
+
+/// The workspace-global limiter shared by the API login route and the UI
+/// shell's login form — both must count against the same budget or an
+/// attacker just switches surfaces.
+pub fn login_rate_limiter() -> &'static LoginRateLimiter {
+    static LIMITER: std::sync::OnceLock<LoginRateLimiter> = std::sync::OnceLock::new();
+    LIMITER.get_or_init(LoginRateLimiter::default)
+}
 
 // ---------------------------------------------------------------------------
 // Authenticated user (middleware-style extractor)
@@ -339,6 +450,14 @@ async fn login(
     State(app): State<AppState>,
     Json(req): Json<LoginRequest>,
 ) -> Result<Json<LoginResponse>, ApiError> {
+    // Refuse locked accounts before touching the database or the password
+    // hash — Canvas `LoginRegistry.audit_login` returns :too_many_attempts
+    // up front (login_registry.rb:68).
+    let limiter = login_rate_limiter();
+    if limiter.is_locked(&req.email) {
+        return Err(ApiError::Forbidden);
+    }
+
     // Fetch user by email.
     let row: Option<(i64, String, String)> =
         sqlx::query_as("SELECT id, password_hash, role FROM users WHERE email = $1")
@@ -347,12 +466,20 @@ async fn login(
             .await
             .map_err(ApiError::from)?;
 
-    let (user_id, password_hash, role) = row.ok_or(ApiError::Unauthorized)?;
+    let Some((user_id, password_hash, role)) = row else {
+        // Unknown email: count the failure too, so the route cannot be used
+        // to enumerate accounts by lockout timing. Same generic 401.
+        limiter.record_failure(&req.email);
+        return Err(ApiError::Unauthorized);
+    };
 
     // Verify password.
     if !verify_password(&req.password, &password_hash) {
+        limiter.record_failure(&req.email);
         return Err(ApiError::Unauthorized);
     }
+    // Success clears the counter (Canvas successful_login!).
+    limiter.record_success(&req.email);
 
     // Load full user details for response.
     let user: UserResponse = sqlx::query_as(

@@ -49,7 +49,7 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::{header::HeaderName, HeaderValue, StatusCode},
+    http::{header::HeaderName, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, options, post, put},
     Json, Router,
@@ -1509,12 +1509,15 @@ async fn post_file(
 
 /// GET /files/{id}/create_success — Canvas files#api_create_success (GET).
 /// Returns the file record after upload finalisation with preview URLs.
+/// The response carries the Canvas `open_cors` headers (the browser that
+/// just finished the S3 upload reads this cross-origin).
 async fn create_success_get(
     State(state): State<AppState>,
     Path(file_id): Path<i64>,
     Query(_params): Query<CreateSuccessQuery>,
+    headers: HeaderMap,
     auth: AuthUser,
-) -> Result<Json<CreateSuccessResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let sql = format!("{ATTACHMENT_SELECT} WHERE f.id = $1 AND f.workflow_state <> 'deleted'");
     let row = sqlx::query_as::<_, AttachmentRow>(&sql)
         .bind(file_id)
@@ -1526,11 +1529,15 @@ async fn create_success_get(
         || is_admin(&auth);
     let attachment = AttachmentResponse::from_row(row, can_manage);
 
-    Ok(Json(CreateSuccessResponse {
-        attachment,
-        preview_url: None,
-        enhanced_preview_url: None,
-    }))
+    Ok(open_cors(
+        Json(CreateSuccessResponse {
+            attachment,
+            preview_url: None,
+            enhanced_preview_url: None,
+        })
+        .into_response(),
+        &headers,
+    ))
 }
 
 /// POST /files/{id}/create_success — Canvas files#api_create_success (POST).
@@ -1538,8 +1545,9 @@ async fn create_success_get(
 async fn create_success_post(
     State(state): State<AppState>,
     Path(file_id): Path<i64>,
+    headers: HeaderMap,
     auth: AuthUser,
-) -> Result<Json<AttachmentResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let sql = format!("{ATTACHMENT_SELECT} WHERE f.id = $1 AND f.workflow_state <> 'deleted'");
     let row = sqlx::query_as::<_, AttachmentRow>(&sql)
         .bind(file_id)
@@ -1549,17 +1557,60 @@ async fn create_success_post(
 
     let can_manage = user_teacher_of_course(&state.db, auth.id, row.course_id, &auth.role).await?
         || is_admin(&auth);
-    Ok(Json(AttachmentResponse::from_row(row, can_manage)))
+    Ok(open_cors(
+        Json(AttachmentResponse::from_row(row, can_manage)).into_response(),
+        &headers,
+    ))
 }
 
-/// OPTIONS /files/{id}/create_success — CORS preflight for the upload finalisation route.
-async fn create_success_options() -> impl IntoResponse {
+/// The CORS headers Canvas puts on the upload finalisation routes
+/// (`open_cors`, app/controllers/files_controller.rb:1812-1818, applied via
+/// `before_action :open_cors` to api_create/api_create_success at :178-181).
+/// The Origin is reflected (Canvas echoes the request origin rather than
+/// keeping a whitelist) together with credentials, so the browser — which
+/// just POSTed the S3 upload completion — can read the JSON reply.
+fn open_cors(mut response: Response, headers: &HeaderMap) -> Response {
+    let origin = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
+    if let Some(origin) = origin {
+        if let Ok(value) = HeaderValue::from_str(origin) {
+            response
+                .headers_mut()
+                .insert("access-control-allow-origin", value);
+        }
+    }
+    response.headers_mut().insert(
+        "access-control-allow-credentials",
+        HeaderValue::from_static("true"),
+    );
+    response.headers_mut().insert(
+        "access-control-allow-methods",
+        HeaderValue::from_static("POST, PUT, DELETE, GET, OPTIONS"),
+    );
+    response.headers_mut().insert(
+        "access-control-request-method",
+        HeaderValue::from_static("*"),
+    );
+    response.headers_mut().insert(
+        "access-control-allow-headers",
+        HeaderValue::from_static(
+            "Origin, X-Requested-With, Content-Type, Accept, Authorization, Accept-Encoding",
+        ),
+    );
+    response
+}
+
+/// OPTIONS /files/{id}/create_success — CORS preflight for the upload
+/// finalisation route (Canvas routes.rb:2238 routes OPTIONS to
+/// `api_create_success_cors`, which answers `head :ok` after `open_cors`).
+async fn create_success_options(headers: HeaderMap) -> impl IntoResponse {
     let mut resp = Response::new(axum::body::Body::empty());
     resp.headers_mut().insert(
         axum::http::header::ALLOW,
-        axum::http::HeaderValue::from_static("GET,POST,OPTIONS"),
+        HeaderValue::from_static("GET,POST,OPTIONS"),
     );
-    resp
+    open_cors(resp, &headers)
 }
 
 /// POST /files/{id}/reset_verifier — Canvas files#reset_verifier.
