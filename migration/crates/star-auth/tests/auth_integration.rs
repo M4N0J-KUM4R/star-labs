@@ -1599,17 +1599,22 @@ async fn tokens_are_scoped_to_their_owner() {
         .await;
     assert_eq!(resp.status_code(), 401, "other create: {}", resp.text());
 
-    // ...and cannot read or delete the owner's token (404, Canvas
-    // RecordNotFound fallback).
-    for method in ["GET", "PUT", "DELETE"] {
-        let path = format!("/users/{owner}/tokens/{id}");
+    // ...and cannot read the owner's token (401, Canvas
+    // render_unauthorized_action on the read right) or modify it (404,
+    // Canvas RecordNotFound fallback for update/destroy).
+    let path = format!("/users/{owner}/tokens/{id}");
+    let resp = server
+        .get(&path)
+        .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        401,
+        "GET by another user: {}",
+        resp.text()
+    );
+    for method in ["PUT", "DELETE"] {
         let resp = match method {
-            "GET" => {
-                server
-                    .get(&path)
-                    .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
-                    .await
-            }
             "PUT" => {
                 server
                     .put(&path)
