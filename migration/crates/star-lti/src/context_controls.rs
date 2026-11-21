@@ -104,13 +104,12 @@ const CONTROLS_MAX_LIST_PAGE_SIZE: i64 = 100;
 
 /// Columns of `lti_context_controls` read by this module.
 const CONTROL_COLUMNS: &str = "id, account_id, course_id, registration_id, app_id, deployment_id, \
-     available, path, workflow_state, created_by_id, updated_by_id, root_account_id, \
-     created_at, updated_at";
+     available, path, workflow_state, created_by_id, updated_by_id, created_at, updated_at";
 
 /// The same columns, qualified for the join against `lti_deployments`.
 const CONTROL_COLUMNS_QUALIFIED: &str = "c.id, c.account_id, c.course_id, c.registration_id, \
      c.app_id, c.deployment_id, c.available, c.path, c.workflow_state, c.created_by_id, \
-     c.updated_by_id, c.root_account_id, c.created_at, c.updated_at";
+     c.updated_by_id, c.created_at, c.updated_at";
 
 /// Columns of `lti_deployments` read by this module.
 const DEPLOYMENT_COLUMNS: &str =
@@ -134,7 +133,6 @@ struct ContextControlRow {
     workflow_state: String,
     created_by_id: Option<i64>,
     updated_by_id: Option<i64>,
-    root_account_id: i64,
     created_at: NaiveDateTime,
     updated_at: NaiveDateTime,
 }
@@ -179,18 +177,9 @@ struct ControlDraft {
     updated_by_id: Option<i64>,
 }
 
-/// The account rows the bulk endpoint needs.
-#[derive(Debug, Clone)]
-struct AccountInfo {
-    id: i64,
-    name: String,
-    root_account_id: i64,
-}
-
 /// The course rows the bulk endpoint needs.
 #[derive(Debug, Clone)]
 struct CourseInfo {
-    id: i64,
     name: String,
     account_id: i64,
 }
@@ -548,7 +537,6 @@ async fn find_control_by_unique(
 async fn control_exists_for_registration(
     pool: &PgPool,
     registration: &RegistrationRow,
-    ctx: &Ctx,
     templates: bool,
     account_id: Option<i64>,
     course_id: Option<i64>,
@@ -565,14 +553,13 @@ async fn control_exists_for_registration(
     };
     let sql = format!(
         "SELECT 1 FROM lti_context_controls \
-         WHERE {registration_column} = $1 AND root_account_id = $2 \
-           AND {context_column} = $3 AND deployment_id = $4 \
+         WHERE {registration_column} = $1 \
+           AND {context_column} = $2 AND deployment_id = $3 \
            AND workflow_state <> '{STATE_DELETED}' \
            AND workflow_state <> '{STATE_DELETED_WITH_CONTEXT}' LIMIT 1"
     );
     let row: Option<(i32,)> = sqlx::query_as(&sql)
         .bind(registration.id)
-        .bind(ctx.account_id)
         .bind(context_value)
         .bind(deployment_id)
         .fetch_optional(pool)
@@ -625,26 +612,18 @@ async fn local_copy_for(
 }
 
 /// Canvas `Account.find(ids)` — a missing row is a 404.
-async fn find_accounts(pool: &PgPool, ids: &[i64]) -> Result<HashMap<i64, AccountInfo>, ApiError> {
+async fn find_accounts(pool: &PgPool, ids: &[i64]) -> Result<HashMap<i64, i64>, ApiError> {
     let mut accounts = HashMap::new();
     for id in ids {
-        let row: Option<(i64, String)> =
-            sqlx::query_as("SELECT id, name FROM accounts WHERE id = $1")
-                .bind(id)
-                .fetch_optional(pool)
-                .await?;
-        let Some((id, name)) = row else {
+        let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?;
+        let Some((id,)) = row else {
             return Err(ApiError::NotFound);
         };
         let root_account_id = root_account_of_account(pool, id).await?;
-        accounts.insert(
-            id,
-            AccountInfo {
-                id,
-                name,
-                root_account_id,
-            },
-        );
+        accounts.insert(id, root_account_id);
     }
     Ok(accounts)
 }
@@ -661,14 +640,7 @@ async fn find_courses(pool: &PgPool, ids: &[i64]) -> Result<HashMap<i64, CourseI
         let Some((id, name, account_id)) = row else {
             return Err(ApiError::NotFound);
         };
-        courses.insert(
-            id,
-            CourseInfo {
-                id,
-                name,
-                account_id,
-            },
-        );
+        courses.insert(id, CourseInfo { name, account_id });
     }
     Ok(courses)
 }
@@ -685,16 +657,7 @@ async fn course_rows(pool: &PgPool, ids: &[i64]) -> Result<HashMap<i64, CourseIn
             .await?;
     Ok(rows
         .into_iter()
-        .map(|(id, name, account_id)| {
-            (
-                id,
-                CourseInfo {
-                    id,
-                    name,
-                    account_id,
-                },
-            )
-        })
+        .map(|(id, name, account_id)| (id, CourseInfo { name, account_id }))
         .collect())
 }
 
@@ -893,17 +856,15 @@ async fn preload_calculated_attrs(
     }
     name_account_ids.sort_unstable();
     name_account_ids.dedup();
-    let account_names = account_names(pool, &name_account_ids).await?;
+    let names = account_names(pool, &name_account_ids).await?;
 
     for control in controls {
         let context_name = match control.course_id {
             Some(course_id) => courses.get(&course_id).map(|course| course.name.clone()),
-            None => control
-                .account_id
-                .and_then(|id| account_names.get(&id).cloned()),
+            None => control.account_id.and_then(|id| names.get(&id).cloned()),
         };
 
-        let display_path = display_path_for(&control.path, &account_names);
+        let display_path = display_path_for(&control.path, &names);
 
         let depth = sibling_rows
             .iter()
@@ -1195,7 +1156,8 @@ async fn show(
     let attrs = preload_calculated_attrs(&state.db, std::slice::from_ref(&control)).await?;
     let empty = CalculatedAttrs::default();
     let attrs = attrs.get(&control.id).unwrap_or(&empty);
-    let users = user_summaries(&state.db, &control_user_ids(&[control.clone()])).await?;
+    let users =
+        user_summaries(&state.db, &control_user_ids(std::slice::from_ref(&control))).await?;
 
     Ok(Json(context_control_json(&control, attrs, &users, templates)).into_response())
 }
@@ -1238,7 +1200,6 @@ async fn create(
     if control_exists_for_registration(
         &state.db,
         &registration,
-        &ctx,
         templates,
         payload.account_id,
         payload.course_id,
@@ -1339,7 +1300,8 @@ async fn create(
     let attrs = preload_calculated_attrs(&state.db, std::slice::from_ref(&control)).await?;
     let empty = CalculatedAttrs::default();
     let attrs = attrs.get(&control.id).unwrap_or(&empty);
-    let users = user_summaries(&state.db, &control_user_ids(&[control.clone()])).await?;
+    let users =
+        user_summaries(&state.db, &control_user_ids(std::slice::from_ref(&control))).await?;
 
     Ok((
         StatusCode::CREATED,
@@ -1442,10 +1404,7 @@ async fn create_many(
         let (account_id, course_id) = (item.account_id, item.course_id);
         let (root_account_id, path) = match account_id {
             Some(account_id) => {
-                let root_account_id = accounts
-                    .get(&account_id)
-                    .map(|account| account.root_account_id)
-                    .unwrap_or(ctx.account_id);
+                let root_account_id = accounts.get(&account_id).copied().unwrap_or(ctx.account_id);
                 let path = calculate_path_for_account_ids(
                     chains.get(&account_id).map(Vec::as_slice).unwrap_or(&[]),
                 );
@@ -1486,8 +1445,17 @@ async fn create_many(
         .collect();
     let mut deployment_course_ids: HashMap<i64, i64> = HashMap::new();
     let mut deployment_account_ids: HashMap<i64, i64> = HashMap::new();
-    for deployment_id in &deployment_ids {
-        let deployment = find_deployment(&state.db, *deployment_id).await?;
+    // Canvas reads the deployments with `ContextExternalTool.where(id: ...)`:
+    // a deployment that does not exist is not an error here, it only makes
+    // the controls that use it invalid.
+    let deployment_sql = format!(
+        "SELECT {DEPLOYMENT_COLUMNS} FROM lti_deployments WHERE id = ANY($1)"
+    );
+    let deployments: Vec<DeploymentRow> = sqlx::query_as(&deployment_sql)
+        .bind(&deployment_ids)
+        .fetch_all(&state.db)
+        .await?;
+    for deployment in deployments {
         if deployment.context_type == "Course" {
             deployment_course_ids.insert(deployment.id, deployment.context_id);
         } else if deployment.context_type == "Account" {
@@ -1545,8 +1513,8 @@ async fn create_many(
     let anchor_context = AnchorContext {
         chains: chains.clone(),
         course_account_ids: courses
-            .values()
-            .map(|course| (course.id, course.account_id))
+            .iter()
+            .map(|(course_id, course)| (*course_id, course.account_id))
             .collect(),
         deployment_account_ids: deployment_account_ids.clone(),
         deployment_course_ids: deployment_course_ids.clone(),
@@ -1634,7 +1602,8 @@ async fn update(
     let attrs = preload_calculated_attrs(&state.db, std::slice::from_ref(&updated)).await?;
     let empty = CalculatedAttrs::default();
     let attrs = attrs.get(&updated.id).unwrap_or(&empty);
-    let users = user_summaries(&state.db, &control_user_ids(&[updated.clone()])).await?;
+    let users =
+        user_summaries(&state.db, &control_user_ids(std::slice::from_ref(&updated))).await?;
 
     Ok(Json(context_control_json(&updated, attrs, &users, templates)).into_response())
 }
@@ -1692,7 +1661,8 @@ async fn delete(
     let attrs = preload_calculated_attrs(&state.db, std::slice::from_ref(&deleted)).await?;
     let empty = CalculatedAttrs::default();
     let attrs = attrs.get(&deleted.id).unwrap_or(&empty);
-    let users = user_summaries(&state.db, &control_user_ids(&[deleted.clone()])).await?;
+    let users =
+        user_summaries(&state.db, &control_user_ids(std::slice::from_ref(&deleted))).await?;
 
     Ok(Json(context_control_json(&deleted, attrs, &users, templates)).into_response())
 }

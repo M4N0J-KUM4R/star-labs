@@ -893,7 +893,7 @@ async fn convert_tag_overrides_turns_tag_overrides_into_adhoc_ones() {
         .await;
     assert_eq!(put.status_code(), 204, "body: {}", put.text());
 
-    let overrides: Vec<(String, Option<i64>, Vec<i64>, Option<DateTime<Utc>>)> = sqlx::query_as(
+    let overrides: Vec<OverrideProbe> = sqlx::query_as(
         "SELECT set_type, set_id, student_ids, due_at FROM learning_object_date_overrides \
          WHERE learning_object_date_id = $1 ORDER BY id",
     )
@@ -904,10 +904,10 @@ async fn convert_tag_overrides_turns_tag_overrides_into_adhoc_ones() {
 
     // The tag override is gone; one ad-hoc override carries the students.
     assert_eq!(overrides.len(), 1);
-    assert_eq!(overrides[0].0, "ADHOC");
-    assert_eq!(overrides[0].1, None);
-    assert_eq!(overrides[0].2, vec![student, other]);
-    assert_eq!(overrides[0].3, Some(due_at));
+    assert_eq!(overrides[0].set_type, "ADHOC");
+    assert_eq!(overrides[0].set_id, None);
+    assert_eq!(overrides[0].student_ids, vec![student, other]);
+    assert_eq!(overrides[0].due_at, Some(due_at));
 
     cleanup(&pool, &prefix).await;
 }

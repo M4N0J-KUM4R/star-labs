@@ -105,6 +105,14 @@
 //!     root_account_id                  bigint NOT NULL
 //! );
 //! ```
+//!
+//! `calendar_events` has no `web_conference_id` column in star-lms, so the
+//! calendar event `create` links to the conference is written without the
+//! back-reference. Adding it would make the link possible:
+//!
+//! ```sql
+//! ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS web_conference_id bigint;
+//! ```
 
 use std::collections::BTreeMap;
 
@@ -116,7 +124,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, Utc};
 use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 use star_auth::AuthUser;
@@ -176,7 +184,7 @@ const BOOLEAN_SETTING_FIELDS: [&str; 6] = [
 
 /// The columns of a `web_conferences` row this module reads.
 const CONFERENCE_COLUMNS: &str = "w.id, w.title, w.conference_type, w.conference_key, \
-     w.context_id, w.context_type, w.user_id, w.started_at, w.description, w.duration, \
+     w.context_id, w.context_type, w.user_id, w.start_at, w.description, w.duration, \
      w.created_at, w.updated_at, w.ended_at, w.end_at, w.context_code, w.settings, \
      w.recording_ready";
 
@@ -266,6 +274,14 @@ impl Context {
         }
     }
 
+    /// The url segment of the context (`courses`, `groups`).
+    fn url_segment(self) -> &'static str {
+        match self {
+            Context::Course(_) => "courses",
+            Context::Group(_) => "groups",
+        }
+    }
+
     /// Canvas `context_code` (`course_5`, `group_7`).
     fn context_code(self) -> String {
         let prefix = match self {
@@ -302,11 +318,12 @@ async fn resolve_context(db: &PgPool, context: Context) -> Result<ResolvedContex
             })
         }
         Context::Group(group_id) => {
-            let row: Option<(Option<i64>,)> =
-                sqlx::query_as("SELECT course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'")
-                    .bind(group_id)
-                    .fetch_optional(db)
-                    .await?;
+            let row: Option<(Option<i64>,)> = sqlx::query_as(
+                "SELECT course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'",
+            )
+            .bind(group_id)
+            .fetch_optional(db)
+            .await?;
             let Some((course_id,)) = row else {
                 return Err(ApiError::NotFound);
             };
@@ -412,6 +429,23 @@ fn classify(plugin_id: &str) -> String {
         .join("")
 }
 
+/// Canvas `String#underscore` for a conference type (`BigBlueButton` ->
+/// `big_blue_button`).
+fn underscore(value: &str) -> String {
+    let mut out = String::new();
+    for (index, ch) in value.chars().enumerate() {
+        if ch.is_uppercase() {
+            if index > 0 {
+                out.push('_');
+            }
+            out.extend(ch.to_lowercase());
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 /// The conference types of the enabled providers (`WebConference.active`).
 fn enabled_conference_types(providers: &[Provider]) -> Vec<String> {
     providers
@@ -435,22 +469,13 @@ fn config_missing_response() -> Response {
 // Parameters
 // ---------------------------------------------------------------------------
 
-/// A nested parameter value — Rails' `params[:user]` is either a hash
-/// (`user[1]=1`) or an array (`user[]=1`).
-#[derive(Debug)]
-enum Nested {
-    Map(BTreeMap<String, String>),
-    List(Vec<String>),
-}
-
 /// Rails' `params` — the query string merged with the request body.
 ///
 /// Canvas accepts a JSON body and a form-urlencoded body; both are parsed
-/// into the same shape.
+/// into the same shape (`user[1]=1` is a hash, `user[]=1` is an array).
 #[derive(Debug, Default)]
 struct Params {
-    scalars: BTreeMap<String, String>,
-    nested: BTreeMap<String, Nested>,
+    root: Value,
 }
 
 impl Params {
@@ -464,7 +489,7 @@ impl Params {
                 Some((key, value)) => (percent_decode(key), percent_decode(value)),
                 None => (percent_decode(pair), String::new()),
             };
-            self.insert(&key, value);
+            insert_path(&mut self.root, &key, Value::String(value));
         }
     }
 
@@ -473,92 +498,80 @@ impl Params {
         let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(body) else {
             return;
         };
-        for (key, value) in &map {
-            self.insert_json(key, value);
+        for (key, value) in map {
+            insert_path(&mut self.root, &key, value);
         }
     }
 
-    /// Store `key=value`; `key[sub]` becomes a nested value.
-    fn insert(&mut self, key: &str, value: String) {
-        let Some(open) = key.find('[') else {
-            self.scalars.insert(key.to_string(), value);
-            return;
-        };
-        let Some(close) = key.find(']') else {
-            self.scalars.insert(key.to_string(), value);
-            return;
-        };
-        if close < open {
-            self.scalars.insert(key.to_string(), value);
-            return;
-        }
-        let base = key[..open].to_string();
-        let inner = &key[open + 1..close];
-        let entry = self.nested.entry(base).or_insert_with(|| {
-            if inner.is_empty() {
-                Nested::List(Vec::new())
-            } else {
-                Nested::Map(BTreeMap::new())
-            }
-        });
-        match entry {
-            Nested::Map(map) => {
-                map.insert(inner.to_string(), value);
-            }
-            Nested::List(list) => list.push(value),
-        }
+    /// The value of a parameter.
+    fn value(&self, name: &str) -> Option<&Value> {
+        self.root.get(name)
     }
 
-    /// Store a JSON value under `key`.
-    fn insert_json(&mut self, key: &str, value: &Value) {
-        match value {
-            Value::String(text) => {
-                self.scalars.insert(key.to_string(), text.clone());
-            }
-            Value::Number(number) => {
-                self.scalars.insert(key.to_string(), number.to_string());
-            }
-            Value::Bool(flag) => {
-                self.scalars.insert(key.to_string(), flag.to_string());
-            }
-            Value::Object(map) => {
-                let mut nested = BTreeMap::new();
-                for (name, value) in map {
-                    if let Some(text) = json_scalar(value) {
-                        nested.insert(name.clone(), text);
-                    }
-                }
-                self.nested.insert(key.to_string(), Nested::Map(nested));
-            }
-            Value::Array(items) => {
-                let list = items.iter().filter_map(json_scalar).collect();
-                self.nested.insert(key.to_string(), Nested::List(list));
-            }
-            Value::Null => {}
-        }
+    /// The value of a parameter as a string (`"1"`, `"true"`, …).
+    fn scalar(&self, name: &str) -> Option<String> {
+        self.value(name).and_then(scalar_text)
     }
 
-    /// The value of a scalar parameter.
-    fn scalar(&self, name: &str) -> Option<&str> {
-        self.scalars.get(name).map(String::as_str)
-    }
-
-    /// The value of a nested hash parameter.
-    fn map(&self, name: &str) -> Option<&BTreeMap<String, String>> {
-        match self.nested.get(name) {
-            Some(Nested::Map(map)) => Some(map),
-            _ => None,
-        }
-    }
-
-    /// The value of a nested parameter.
-    fn nested(&self, name: &str) -> Option<&Nested> {
-        self.nested.get(name)
+    /// The value of a parameter as a hash.
+    fn object(&self, name: &str) -> Option<&Map<String, Value>> {
+        self.value(name).and_then(Value::as_object)
     }
 }
 
+/// Insert `key=value` into a Rails-style parameter tree.
+///
+/// `web_conference[title]` becomes a nested hash, `user[]` an array.
+fn insert_path(root: &mut Value, key: &str, value: Value) {
+    let mut parts: Vec<String> = Vec::new();
+    let mut rest = key;
+    if let Some(open) = rest.find('[') {
+        parts.push(rest[..open].to_string());
+        rest = &rest[open..];
+        while let Some(close) = rest.find(']') {
+            parts.push(rest[1..close].to_string());
+            rest = &rest[close + 1..];
+        }
+    } else {
+        parts.push(rest.to_string());
+    }
+    set_path(root, &parts, value);
+}
+
+/// Write `value` at `parts` of the parameter tree.
+fn set_path(node: &mut Value, parts: &[String], value: Value) {
+    let Some((head, tail)) = parts.split_first() else {
+        return;
+    };
+    if !node.is_object() {
+        *node = Value::Object(Map::new());
+    }
+    let Some(map) = node.as_object_mut() else {
+        return;
+    };
+    if tail.is_empty() {
+        map.insert(head.clone(), value);
+        return;
+    }
+    if tail[0].is_empty() {
+        // `user[]=1` — an array.
+        let entry = map.entry(head.clone()).or_insert(Value::Array(Vec::new()));
+        if let Some(list) = entry.as_array_mut() {
+            list.push(value);
+        }
+        return;
+    }
+    let entry = map
+        .entry(head.clone())
+        .or_insert_with(|| Value::Object(Map::new()));
+    if !entry.is_object() {
+        *entry = Value::Object(Map::new());
+    }
+    set_path(entry, tail, value);
+}
+
 /// The scalar rendering of a JSON value.
-fn json_scalar(value: &Value) -> Option<String> {
+fn scalar_text(value: &Value) -> Option<String> {
     match value {
         Value::String(text) => Some(text.clone()),
         Value::Number(number) => Some(number.to_string()),
@@ -598,6 +611,17 @@ fn percent_decode(input: &str) -> String {
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Canvas `value_to_boolean`.
+fn value_to_boolean(value: Option<&str>) -> bool {
+    match value {
+        Some(value) => matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "on" | "t" | "yes"
+        ),
+        None => false,
+    }
 }
 
 /// The query parameters of a request (`per_page`, `page`, `state`, …).
@@ -759,7 +783,11 @@ async fn can_read_group(db: &PgPool, user_id: i64, group_id: i64) -> Result<bool
 }
 
 /// Canvas `authorized_action(@context, @current_user, :read)`.
-async fn can_read_context(db: &PgPool, auth: &AuthUser, context: Context) -> Result<bool, ApiError> {
+async fn can_read_context(
+    db: &PgPool,
+    auth: &AuthUser,
+    context: Context,
+) -> Result<bool, ApiError> {
     match context {
         Context::Course(course_id) => can_read_course(db, auth.id, course_id).await,
         Context::Group(group_id) => can_read_group(db, auth.id, group_id).await,
@@ -837,10 +865,7 @@ async fn has_granular_content_right(
     .bind(course_id)
     .fetch_all(db)
     .await?;
-    let role_ids: Vec<i64> = roles
-        .iter()
-        .map(|(role,)| builtin_role_id(role))
-        .collect();
+    let role_ids: Vec<i64> = roles.iter().map(|(role,)| builtin_role_id(role)).collect();
     if role_ids.is_empty() {
         return Ok(false);
     }
@@ -870,9 +895,9 @@ async fn has_granular_content_right(
         LIMIT 1
         "#,
     )
-    .bind(GRANULAR_MANAGE_COURSE_CONTENT_PERMISSIONS.as_slice())
+    .bind(GRANULAR_MANAGE_COURSE_CONTENT_PERMISSIONS.to_vec())
     .bind(account_id)
-    .bind(role_ids.as_slice())
+    .bind(role_ids)
     .bind(course_id)
     .fetch_optional(db)
     .await?;
@@ -893,11 +918,7 @@ fn builtin_role_id(role: &str) -> i64 {
 }
 
 /// Whether `user_id` is an admin of `account_id` or of one of its ancestors.
-async fn is_account_admin(
-    db: &PgPool,
-    user_id: i64,
-    account_id: i64,
-) -> Result<bool, ApiError> {
+async fn is_account_admin(db: &PgPool, user_id: i64, account_id: i64) -> Result<bool, ApiError> {
     let row: Option<(i32,)> = sqlx::query_as(
         r#"
         WITH RECURSIVE account_chain AS (
@@ -1149,11 +1170,7 @@ async fn participating_users(
 // ---------------------------------------------------------------------------
 
 /// Canvas `Api::V1::Conferences#api_conference_json`.
-fn api_conference_json(
-    row: &ConferenceRow,
-    participant_ids: &[i64],
-    base: &str,
-) -> Value {
+fn api_conference_json(row: &ConferenceRow, participant_ids: &[i64], base: &str) -> Value {
     json!({
         "id": row.id,
         "title": row.title,
@@ -1178,11 +1195,7 @@ fn api_conference_json(
 }
 
 /// Canvas `WebConference#as_json` — the shape `conferences#create` renders.
-fn model_conference_json(
-    row: &ConferenceRow,
-    participant_ids: &[i64],
-    base: &str,
-) -> Value {
+fn model_conference_json(row: &ConferenceRow, participant_ids: &[i64], base: &str) -> Value {
     json!({
         "id": row.id,
         "title": row.title,
@@ -1315,34 +1328,29 @@ async fn index_conferences(
         .collect();
 
     let body = Json(json!({ "conferences": conferences }));
+    let path = format!(
+        "{base}/{}/{}/conferences",
+        resolved.context.url_segment(),
+        resolved.context.context_id()
+    );
     Ok(with_pagination_link(
         body,
-        headers,
-        query,
         &pagination,
         total,
-        &format!("{base}/courses/{}/conferences", context.context_id()),
+        &path,
+        &link_query(query),
     ))
 }
 
 /// Attach the `Link` header Canvas' `Api.paginate` builds.
 fn with_pagination_link(
     body: Json<Value>,
-    headers: &HeaderMap,
-    query: &QueryParams,
     pagination: &Pagination,
     total: i64,
-    path: &str,
+    url: &str,
+    query: &str,
 ) -> Response {
-    let base = base_url(headers);
-    let url = format!("{base}{path}");
-    let links = pagination_links(
-        &url,
-        &link_query(query),
-        pagination.page,
-        pagination.per_page,
-        total,
-    );
+    let links = pagination_links(url, query, pagination.page, pagination.per_page, total);
     let mut response = body.into_response();
     if let Some(links) = links {
         if let Ok(value) = header::HeaderValue::from_str(&links) {
@@ -1360,11 +1368,12 @@ fn with_pagination_link(
 async fn create_course(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
+    Query(query): Query<QueryParams>,
     headers: HeaderMap,
     auth: AuthUser,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let params = request_params(None, &body);
+    let params = request_params(Some(&query), &body);
     create_conference(&state, &headers, &auth, Context::Course(course_id), &params).await
 }
 
@@ -1372,11 +1381,12 @@ async fn create_course(
 async fn create_group(
     State(state): State<AppState>,
     Path(group_id): Path<i64>,
+    Query(query): Query<QueryParams>,
     headers: HeaderMap,
     auth: AuthUser,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    let params = request_params(None, &body);
+    let params = request_params(Some(&query), &body);
     create_conference(&state, &headers, &auth, Context::Group(group_id), &params).await
 }
 
@@ -1385,12 +1395,11 @@ fn request_params(query: Option<&QueryParams>, body: &Bytes) -> Params {
     let mut params = Params::default();
     if let Some(query) = query {
         for (key, value) in query {
-            params.insert(key, value.clone());
+            insert_path(&mut params.root, key, Value::String(value.clone()));
         }
     }
     let text = String::from_utf8_lossy(body);
-    let trimmed = text.trim_start();
-    if trimmed.starts_with('{') {
+    if text.trim_start().starts_with('{') {
         params.parse_json(body);
     } else {
         params.parse_form(&text);
@@ -1421,13 +1430,23 @@ async fn create_conference(
     }
 
     // Canvas `params.require(:web_conference)`.
-    let Some(web_conference) = params.map("web_conference") else {
+    let Some(web_conference) = params.object("web_conference") else {
         return Err(ApiError::BadRequest(
             "param is missing or the value is empty: web_conference".to_string(),
         ));
     };
 
-    let attributes = ConferenceAttributes::from_params(web_conference, &providers)?;
+    // `sync_attendees` is permitted but `WebConference` has no such
+    // attribute: Rails raises `ActiveModel::UnknownAttributeError`, which
+    // the API answers with a 400.
+    if web_conference.contains_key("sync_attendees") {
+        return Err(ApiError::BadRequest(
+            "unknown attribute 'sync_attendees' for WebConference".to_string(),
+        ));
+    }
+
+    let attributes =
+        ConferenceAttributes::from_params(resolved.context, web_conference, &providers);
     let mut errors: Vec<(String, String)> = Vec::new();
     attributes.validate(&mut errors);
     if !errors.is_empty() {
@@ -1442,14 +1461,31 @@ async fn create_conference(
         auth.id,
         &attributes,
         &base,
+        params,
     )
     .await?;
 
-    // Canvas `member_ids` + `invite_users_from_context` + `add_initiator`.
+    // Canvas `member_ids` + `add_initiator` + `invite_users_from_context`.
     let member_ids = member_ids(state, resolved.context, auth.id, params).await?;
     add_initiator(state, conference_id, auth.id, resolved.root_account_id).await?;
-    invite_users(state, resolved.context, conference_id, &member_ids, resolved.root_account_id)
-        .await?;
+    invite_users(
+        state,
+        resolved.context,
+        conference_id,
+        &member_ids,
+        resolved.root_account_id,
+    )
+    .await?;
+
+    if value_to_boolean(
+        params
+            .object("web_conference")
+            .and_then(|attrs| attrs.get("calendar_event"))
+            .and_then(scalar_text)
+            .as_deref(),
+    ) {
+        create_calendar_event(state, resolved.context, &attributes).await?;
+    }
 
     let row = load_conference(state, conference_id).await?;
     let participants = fetch_participants(state, &[row.clone()]).await?;
@@ -1457,7 +1493,7 @@ async fn create_conference(
     Ok(Json(model_conference_json(&row, ids, &base)).into_response())
 }
 
-/// The validated attributes of a new conference.
+/// The attributes of a new conference.
 struct ConferenceAttributes {
     title: String,
     description: Option<String>,
@@ -1465,32 +1501,26 @@ struct ConferenceAttributes {
     duration: Option<f64>,
     start_at: Option<DateTime<Utc>>,
     end_at: Option<DateTime<Utc>>,
-    user_settings: BTreeMap<String, String>,
+    user_settings: Map<String, Value>,
     lti_settings: Option<Value>,
 }
 
 impl ConferenceAttributes {
     /// Read the permitted parameters of `web_conference`.
     fn from_params(
-        params: &BTreeMap<String, String>,
+        context: Context,
+        params: &Map<String, Value>,
         providers: &[Provider],
-    ) -> Result<Self, ApiError> {
-        let context_type = providers
-            .first()
-            .map(|provider| provider.conference_type.clone())
-            .unwrap_or_default();
-
+    ) -> Self {
         // Canvas `WebConference#conference_type=`: an unknown type leaves the
         // attribute empty, so the presence validation fails.
-        let conference_type = match params.get("conference_type") {
+        let conference_type = match params.get("conference_type").and_then(scalar_text) {
             Some(value) if !value.trim().is_empty() => {
                 let value = value.trim();
-                if value == "LtiConference" {
-                    value.to_string()
-                } else if providers
+                let known = providers
                     .iter()
-                    .any(|provider| provider.conference_type == value)
-                {
+                    .any(|provider| provider.conference_type == value);
+                if value == "LtiConference" || known {
                     value.to_string()
                 } else {
                     String::new()
@@ -1499,51 +1529,38 @@ impl ConferenceAttributes {
             _ => String::new(),
         };
 
-        let user_settings = match params.get("user_settings") {
-            Some(raw) => serde_json::from_str::<Value>(raw)
-                .ok()
-                .and_then(|value| value.as_object().cloned())
-                .map(|map| {
-                    map.into_iter()
-                        .filter_map(|(key, value)| json_scalar(&value).map(|text| (key, text)))
-                        .collect()
-                })
-                .unwrap_or_default(),
-            None => BTreeMap::new(),
-        };
+        let user_settings = params
+            .get("user_settings")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let lti_settings = params.get("lti_settings").cloned();
 
-        let lti_settings = match params.get("lti_settings") {
-            Some(raw) => serde_json::from_str::<Value>(raw).ok(),
-            None => None,
-        };
-
+        // Canvas `infer_conference_details`: a blank title gets the default
+        // name of the context.
         let title = params
             .get("title")
+            .and_then(scalar_text)
             .map(|title| title.trim().to_string())
             .filter(|title| !title.is_empty())
-            .unwrap_or_else(|| {
-                if context_type.is_empty() {
-                    "Web Conference".to_string()
-                } else {
-                    "Web Conference".to_string()
-                }
+            .unwrap_or_else(|| match context {
+                Context::Course(_) => "Course Web Conference".to_string(),
+                Context::Group(_) => "Group Web Conference".to_string(),
             });
 
-        Ok(Self {
+        Self {
             title,
-            description: params
-                .get("description")
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty()),
+            description: params.get("description").and_then(scalar_text),
             conference_type,
             duration: params
                 .get("duration")
+                .and_then(scalar_text)
                 .and_then(|value| value.trim().parse::<f64>().ok()),
-            start_at: params.get("start_at").and_then(parse_time),
-            end_at: params.get("end_at").and_then(parse_time),
+            start_at: params.get("start_at").and_then(scalar_text).and_then(|v| parse_time(&v)),
+            end_at: params.get("end_at").and_then(scalar_text).and_then(|v| parse_time(&v)),
             user_settings,
             lti_settings,
-        })
+        }
     }
 
     /// The Canvas validations of `WebConference`.
@@ -1578,8 +1595,8 @@ impl ConferenceAttributes {
                 .lti_settings
                 .as_ref()
                 .and_then(|settings| settings.get("tool_id"))
-                .and_then(Value::as_str)
-                .map(str::trim)
+                .and_then(scalar_text)
+                .map(|tool_id| tool_id.trim().to_string())
                 .filter(|tool_id| !tool_id.is_empty());
             if tool_id.is_none() {
                 errors.push((
@@ -1596,11 +1613,12 @@ impl ConferenceAttributes {
 fn validation_errors(errors: Vec<(String, String)>) -> Response {
     let mut body: Map<String, Value> = Map::new();
     for (field, message) in errors {
-        body.entry(field)
-            .or_insert_with(|| Value::Array(Vec::new()))
-            .as_array_mut()
-            .expect("array")
-            .push(Value::String(message));
+        let entry = body
+            .entry(field)
+            .or_insert_with(|| Value::Array(Vec::new()));
+        if let Some(list) = entry.as_array_mut() {
+            list.push(Value::String(message));
+        }
     }
     (StatusCode::BAD_REQUEST, Json(Value::Object(body))).into_response()
 }
@@ -1614,10 +1632,10 @@ fn parse_time(value: &str) -> Option<DateTime<Utc>> {
     if let Ok(parsed) = DateTime::parse_from_rfc3339(value) {
         return Some(parsed.with_timezone(&Utc));
     }
-    if let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S") {
+    if let Ok(parsed) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M:%S") {
         return Some(parsed.and_utc());
     }
-    if let Ok(parsed) = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
+    if let Ok(parsed) = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M:%S") {
         return Some(parsed.and_utc());
     }
     chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
@@ -1634,6 +1652,7 @@ async fn insert_conference(
     user_id: i64,
     attributes: &ConferenceAttributes,
     base: &str,
+    params: &Params,
 ) -> Result<i64, ApiError> {
     // Canvas `infer_conference_details`: the end time defaults to the start
     // time plus the duration.
@@ -1652,8 +1671,53 @@ async fn insert_conference(
     let mut settings: Map<String, Value> = Map::new();
     settings.insert(
         "default_return_url".to_string(),
-        Value::String(format!("{base}/{context}/", context.context_code())),
+        Value::String(format!(
+            "{base}/{}/{}",
+            context.url_segment(),
+            context.context_id()
+        )),
     );
+
+    // Canvas: `invite_all_enabled` / `remove_observers_enabled`.
+    let remove_observers = value_to_boolean(
+        params
+            .object("observers")
+            .and_then(|observers| observers.get("remove"))
+            .and_then(scalar_text)
+            .as_deref(),
+    );
+    let user_all = params
+        .object("user")
+        .and_then(|user| user.get("all"))
+        .and_then(scalar_text);
+    let invite_all = params.value("user").is_none() || value_to_boolean(user_all.as_deref())
+        || remove_observers;
+    settings.insert("invite_all".to_string(), Value::Bool(invite_all));
+    if remove_observers {
+        settings.insert("remove_observers".to_string(), Value::Bool(true));
+    }
+
+    // Canvas `lti_settings=`.
+    if let Some(lti_settings) = &attributes.lti_settings {
+        settings.insert("lti_settings".to_string(), lti_settings.clone());
+    }
+
+    // Canvas `merge_user_settings`: only the known user setting fields are
+    // copied into the settings.
+    for field in USER_SETTING_FIELDS {
+        let Some(value) = attributes.user_settings.get(field) else {
+            continue;
+        };
+        let Some(value) = scalar_text(value) else {
+            continue;
+        };
+        let value = if BOOLEAN_SETTING_FIELDS.contains(&field) {
+            Value::Bool(value_to_boolean(Some(&value)))
+        } else {
+            Value::String(value)
+        };
+        settings.insert(field.to_string(), value);
+    }
 
     let conference_id: i64 = sqlx::query_scalar(
         "INSERT INTO web_conferences ( \
@@ -1672,14 +1736,39 @@ async fn insert_conference(
     .bind(user_id)
     .bind(&attributes.description)
     .bind(attributes.duration)
-    .bind(start_at)
-    .bind(end_at)
+    .bind(start_at.map(|value| value.naive_utc()))
+    .bind(end_at.map(|value| value.naive_utc()))
     .bind(context.context_code())
     .bind(Value::Object(settings).to_string())
     .bind(root_account_id)
     .fetch_one(&state.db)
     .await?;
     Ok(conference_id)
+}
+
+/// Canvas `create_or_update_calendar_event_for_conference` — only course
+/// conferences get a calendar event.
+async fn create_calendar_event(
+    state: &AppState,
+    context: Context,
+    attributes: &ConferenceAttributes,
+) -> Result<(), ApiError> {
+    let Context::Course(course_id) = context else {
+        return Ok(());
+    };
+    let start_at = attributes.start_at.unwrap_or_else(Utc::now);
+    sqlx::query(
+        "INSERT INTO calendar_events \
+             (course_id, user_id, title, start_at, end_at, workflow_state, created_at, updated_at) \
+         VALUES ($1, NULL, $2, $3, $4, 'active', NOW(), NOW())",
+    )
+    .bind(course_id)
+    .bind(&attributes.title)
+    .bind(start_at)
+    .bind(attributes.end_at)
+    .execute(&state.db)
+    .await?;
+    Ok(())
 }
 
 /// Load a conference row.
@@ -1701,8 +1790,9 @@ async fn member_ids(
     params: &Params,
 ) -> Result<Vec<i64>, ApiError> {
     let remove_observers = params
-        .map("observers")
+        .object("observers")
         .and_then(|observers| observers.get("remove"))
+        .and_then(scalar_text)
         .map(|value| value == "1")
         .unwrap_or(false);
 
@@ -1717,21 +1807,22 @@ async fn member_ids(
         return Ok(ids);
     }
 
-    if let Some(user) = params.nested("user") {
+    if let Some(user) = params.value("user") {
         match user {
-            Nested::Map(map) => {
-                if map.get("all").map(String::as_str) != Some("1") {
+            Value::Object(map) => {
+                if map.get("all").and_then(scalar_text).as_deref() != Some("1") {
                     // Rails iterates the hash: `id.to_i if val == "1"`.
                     return Ok(map
                         .iter()
-                        .filter(|(_, value)| value.as_str() == "1")
+                        .filter(|(_, value)| scalar_text(value).as_deref() == Some("1"))
                         .filter_map(|(key, _)| key.parse::<i64>().ok())
                         .filter(|id| *id > 0)
                         .collect());
                 }
             }
             // An array yields `(value, nil)` pairs, so no id is ever selected.
-            Nested::List(_) => return Ok(Vec::new()),
+            Value::Array(_) => return Ok(Vec::new()),
+            _ => {}
         }
     }
 
@@ -1832,13 +1923,13 @@ async fn for_user(
         .collect();
 
     let body = Json(json!({ "conferences": conferences }));
+    let path = format!("{base}/conferences");
     Ok(with_pagination_link(
         body,
-        &headers,
-        &query,
         &pagination,
         total,
-        &format!("{base}/conferences"),
+        &path,
+        &link_query(&query),
     ))
 }
 
@@ -1853,8 +1944,14 @@ async fn recording_ready_course(
     raw_query: RawQuery,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    recording_ready(&state, Context::Course(course_id), conference_id, raw_query.as_deref(), &body)
-        .await
+    recording_ready(
+        &state,
+        Context::Course(course_id),
+        conference_id,
+        raw_query.as_deref(),
+        &body,
+    )
+    .await
 }
 
 /// `POST /api/v1/groups/:group_id/conferences/:conference_id/recording_ready`.
@@ -1864,8 +1961,14 @@ async fn recording_ready_group(
     raw_query: RawQuery,
     body: Bytes,
 ) -> Result<Response, ApiError> {
-    recording_ready(&state, Context::Group(group_id), conference_id, raw_query.as_deref(), &body)
-        .await
+    recording_ready(
+        &state,
+        Context::Group(group_id),
+        conference_id,
+        raw_query.as_deref(),
+        &body,
+    )
+    .await
 }
 
 /// The shared implementation of both `recording_ready` routes.
@@ -1899,13 +2002,11 @@ async fn recording_ready(
     .await?
     .ok_or(ApiError::NotFound)?;
 
-    let secret = provider_secret(&providers, &row.conference_type);
-    let Some(secret) = secret else {
+    let Some(secret) = provider_secret(&providers, &row.conference_type) else {
         return Ok(invalid_jwt_token_response());
     };
 
-    let token = signed_parameters(raw_query, body);
-    let Some(token) = token else {
+    let Some(token) = signed_parameters(raw_query, body) else {
         return Ok(invalid_jwt_token_response());
     };
 
@@ -1913,23 +2014,25 @@ async fn recording_ready(
         return Ok(invalid_jwt_token_response());
     };
 
-    let meeting_id = claims.get("meeting_id").and_then(Value::as_str);
-    if meeting_id != row.conference_key.as_deref() {
+    let meeting_id = claims.get("meeting_id").and_then(scalar_text);
+    if meeting_id.as_deref() != row.conference_key.as_deref() {
         return Ok(signed_id_invalid_response());
     }
 
     // Canvas `WebConference#recording_ready!`.
-    sqlx::query("UPDATE web_conferences SET recording_ready = TRUE, updated_at = NOW() WHERE id = $1")
-        .bind(row.id)
-        .execute(&state.db)
-        .await?;
+    sqlx::query(
+        "UPDATE web_conferences SET recording_ready = TRUE, updated_at = NOW() WHERE id = $1",
+    )
+    .bind(row.id)
+    .execute(&state.db)
+    .await?;
 
     Ok((StatusCode::ACCEPTED, Json(json!([]))).into_response())
 }
 
 /// The secret of the provider that owns the conference type.
 fn provider_secret(providers: &[Provider], conference_type: &str) -> Option<String> {
-    let plugin_id = conference_type.to_lowercase();
+    let plugin_id = underscore(conference_type);
     providers
         .iter()
         .find(|provider| provider.plugin_id == plugin_id)
@@ -1939,33 +2042,31 @@ fn provider_secret(providers: &[Provider], conference_type: &str) -> Option<Stri
 /// The `signed_parameters` parameter of the request.
 fn signed_parameters(raw_query: Option<&str>, body: &Bytes) -> Option<String> {
     if let Some(query) = raw_query {
-        for pair in query.split('&') {
-            let (key, value) = match pair.split_once('=') {
-                Some((key, value)) => (percent_decode(key), percent_decode(value)),
-                None => (percent_decode(pair), String::new()),
-            };
-            if key == "signed_parameters" {
-                return Some(value);
-            }
+        if let Some(value) = form_value(query, "signed_parameters") {
+            return Some(value);
         }
     }
 
     let text = String::from_utf8_lossy(body);
-    let trimmed = text.trim_start();
-    if trimmed.starts_with('{') {
+    if text.trim_start().starts_with('{') {
         if let Ok(Value::Object(map)) = serde_json::from_slice::<Value>(body) {
-            if let Some(value) = map.get("signed_parameters").and_then(Value::as_str) {
-                return Some(value.to_string());
+            if let Some(value) = map.get("signed_parameters").and_then(scalar_text) {
+                return Some(value);
             }
         }
         return None;
     }
-    for pair in text.split('&') {
+    form_value(&text, "signed_parameters")
+}
+
+/// The value of a form-urlencoded parameter.
+fn form_value(body: &str, name: &str) -> Option<String> {
+    for pair in body.split('&') {
         let (key, value) = match pair.split_once('=') {
             Some((key, value)) => (percent_decode(key), percent_decode(value)),
             None => (percent_decode(pair), String::new()),
         };
-        if key == "signed_parameters" {
+        if key == name {
             return Some(value);
         }
     }

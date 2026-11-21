@@ -719,9 +719,12 @@ async fn create(
     let mut batch_mode_term = None;
     if value_to_boolean(params.get("batch_mode")) {
         if params.present("batch_mode_term_id") {
-            batch_mode_term =
-                find_enrollment_term(&state.db, account_id, params.get("batch_mode_term_id"))
-                    .await?;
+            batch_mode_term = find_enrollment_term(
+                &state.db,
+                account_id,
+                params.get("batch_mode_term_id").unwrap_or_default(),
+            )
+            .await?;
         }
         if batch_mode_term.is_none() && !params.has("multi_term_batch_mode") {
             return Err(SisError::bad_request(json!({
@@ -1129,7 +1132,7 @@ async fn downloadable_attachments(
          updated_at, unlock_at, locked, lock_at, modified_at, media_entry_id, category \
          FROM attachments WHERE id = ANY($1) AND context_type = 'SisBatch' AND context_id = $2",
     )
-    .bind(ids)
+    .bind(ids.to_vec())
     .bind(batch.id)
     .fetch_all(pool)
     .await
@@ -1871,7 +1874,7 @@ fn url_decode(value: &str) -> String {
                 index += 1;
             }
             b'%' if index + 2 < bytes.len() => {
-                let hex = &value[index + 1..index + 3];
+                let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap_or("");
                 match u8::from_str_radix(hex, 16) {
                     Ok(byte) => {
                         out.push(byte);

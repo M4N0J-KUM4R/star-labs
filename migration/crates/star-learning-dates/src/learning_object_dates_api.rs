@@ -497,11 +497,16 @@ fn override_json(
             json.group_id = row.set_id;
             json.group_category_id = row.group_category_id;
             json.non_collaborative = row.group_non_collaborative;
-            json.title = row.group_name.clone();
+            // Canvas takes the title from the set when the set still exists.
+            if let Some(name) = &row.group_name {
+                json.title = Some(name.clone());
+            }
         }
         Some("CourseSection") => {
             json.course_section_id = row.set_id;
-            json.title = row.section_name.clone();
+            if let Some(name) = &row.section_name {
+                json.title = Some(name.clone());
+            }
         }
         Some("Course") => json.course_id = row.set_id,
         Some("Noop") => json.noop_id = row.set_id,
@@ -714,7 +719,9 @@ async fn learning_object_date_id(
              (course_id, learning_object_type, learning_object_id, only_visible_to_overrides) \
          VALUES ($1, $2, $3, COALESCE($4, false)) \
          ON CONFLICT (learning_object_type, learning_object_id) \
-         DO UPDATE SET updated_at = now() \
+         DO UPDATE SET updated_at = now(), \
+             only_visible_to_overrides = \
+                 COALESCE($4, learning_object_dates.only_visible_to_overrides) \
          RETURNING id",
     )
     .bind(course_id)

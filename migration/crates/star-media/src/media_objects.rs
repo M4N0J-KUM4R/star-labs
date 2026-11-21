@@ -177,7 +177,7 @@ enum MediaScope {
 
 /// A context resolved from a Canvas asset string (`course_17`, `user_9`, …).
 #[derive(Debug, Clone, Copy)]
-enum MediaContext {
+pub(crate) enum MediaContext {
     Course { id: i64 },
     Group { id: i64 },
     User { id: i64 },
@@ -471,7 +471,7 @@ async fn can_read_group(db: &PgPool, user_id: i64, group_id: i64) -> Result<bool
 }
 
 /// Canvas `authorized_action(@context, @current_user, :read)`.
-async fn can_read_context(
+pub(crate) async fn can_read_context(
     db: &PgPool,
     auth: &AuthUser,
     context: &MediaContext,
@@ -493,7 +493,7 @@ async fn can_read_context(
 /// has an attachment the caller needs the attachment's `:update` right,
 /// otherwise the caller needs `:manage_course_content_add` on the context or
 /// has to be the owner of the object.
-async fn can_add_captions(
+pub(crate) async fn can_add_captions(
     db: &PgPool,
     auth: &AuthUser,
     row: &MediaObjectRow,
@@ -536,7 +536,7 @@ async fn can_add_captions(
 }
 
 /// The context a media object was created in.
-fn context_of(row: &MediaObjectRow) -> MediaContext {
+pub(crate) fn context_of(row: &MediaObjectRow) -> MediaContext {
     match (row.context_type.as_deref(), row.context_id) {
         (Some("Course"), Some(id)) => MediaContext::Course { id },
         (Some("Group"), Some(id)) => MediaContext::Group { id },
@@ -551,7 +551,10 @@ fn context_of(row: &MediaObjectRow) -> MediaContext {
 // ---------------------------------------------------------------------------
 
 /// Canvas `Context.find_by_asset_string(params[:context_code])`.
-async fn find_context(db: &PgPool, context_code: &str) -> Result<Option<MediaContext>, ApiError> {
+pub(crate) async fn find_context(
+    db: &PgPool,
+    context_code: &str,
+) -> Result<Option<MediaContext>, ApiError> {
     let code = context_code.trim();
     let Some((kind, id)) = code.rsplit_once('_') else {
         return Ok(None);
