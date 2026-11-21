@@ -65,12 +65,16 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod ags_auth;
+mod ags_results;
+mod ags_scores;
 mod context_controls;
 mod data_services;
 mod dynamic_registration;
 mod external_tools;
 mod line_items;
 mod lti_apps;
+mod nrps;
 mod support_helpers;
 mod tool_proxy;
 mod tool_setting;
@@ -744,6 +748,9 @@ pub fn router() -> Router<AppState> {
 /// Canvas serves these routes outside `/api/v1` (`ApiRouteSet.draw(self,
 /// "/api/lti")`), so the paths carry the `/api/lti` prefix and the router is
 /// mounted at the application root — see `star-http/src/main.rs`.
+/// Test/dev helper: mint an LTI Advantage service token (see `ags_auth`).
+pub use ags_auth::mint_service_token as mint_service_token_for_tests;
+
 pub fn lti_advantage_router() -> Router<AppState> {
     Router::new()
         .merge(dynamic_registration::advantage_router())
@@ -751,6 +758,9 @@ pub fn lti_advantage_router() -> Router<AppState> {
         .merge(tool_proxy::advantage_router())
         .merge(tool_setting::router())
         .merge(external_tools::advantage_router())
+        .merge(ags_scores::router())
+        .merge(ags_results::router())
+        .merge(nrps::router())
 }
 
 // ---------------------------------------------------------------------------
