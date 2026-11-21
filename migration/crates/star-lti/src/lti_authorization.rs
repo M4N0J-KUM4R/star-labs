@@ -125,11 +125,14 @@ async fn authorize(
         return Ok(invalid_grant());
     };
 
-    // Signature verification.
+    // Signature verification (the aud claim is checked against this
+    // endpoint's URL below, like Canvas' JwtValidator).
+    let mut validation = jsonwebtoken::Validation::default();
+    validation.validate_aud = false;
     let claims = jsonwebtoken::decode::<Value>(
         assertion,
         &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
-        &jsonwebtoken::Validation::default(),
+        &validation,
     )
     .map(|data| data.claims)
     .map_err(|_| ApiError::Unauthorized)

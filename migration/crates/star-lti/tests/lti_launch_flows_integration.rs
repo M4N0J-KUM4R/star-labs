@@ -298,7 +298,7 @@ fn decode(token: &str, secret: &str) -> Value {
     validation.required_spec_claims.clear();
     jsonwebtoken::decode::<Value>(
         token,
-        &jsonwebtoken::EncodingKey::from_secret(secret.as_bytes()),
+        &jsonwebtoken::DecodingKey::from_secret(secret.as_bytes()),
         &validation,
     )
     .expect("decode jwt")
@@ -709,7 +709,7 @@ async fn lti2_authorize_returns_an_access_token() {
             ]))
             .await;
         assert_eq!(resp.status_code(), 400, "grant {grant_type}");
-        assert_eq!(resp.json()["error"], "invalid_grant");
+        assert_eq!(resp.json::<Value>()["error"], "invalid_grant");
     }
 
     // The assertion is signed with the developer key's api_key (Canvas
@@ -757,7 +757,10 @@ async fn lti2_authorize_returns_an_access_token() {
         ]))
         .await;
     assert_eq!(resp.status_code(), 200);
-    let claims = decode(resp.json()["access_token"].as_str().unwrap(), JWT_SECRET);
+    let claims = decode(
+        resp.json::<Value>()["access_token"].as_str().unwrap(),
+        JWT_SECRET,
+    );
     assert_eq!(claims["reg_key"], "reg-key-42");
 
     // A wrong signature and a wrong aud are both invalid_grant.
@@ -781,7 +784,7 @@ async fn lti2_authorize_returns_an_access_token() {
         ]))
         .await;
     assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.json()["error"], "invalid_grant");
+    assert_eq!(resp.json::<Value>()["error"], "invalid_grant");
 
     let bad_aud = sign(
         &json!({
@@ -803,7 +806,7 @@ async fn lti2_authorize_returns_an_access_token() {
         ]))
         .await;
     assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.json()["error"], "invalid_grant");
+    assert_eq!(resp.json::<Value>()["error"], "invalid_grant");
 
     // The account variant of the endpoint answers too.
     let resp = server
@@ -1088,7 +1091,7 @@ async fn resource_links_show_supports_the_canvas_id_formats() {
     assert_eq!(resp.status_code(), 404, "deleted link is invisible");
     let resp = get(format!("{base}/{}?include_deleted=true", links.deleted.0)).await;
     assert_eq!(resp.status_code(), 200);
-    assert_eq!(resp.json()["workflow_state"], "deleted");
+    assert_eq!(resp.json::<Value>()["workflow_state"], "deleted");
 
     // Unknown ids are 404 — including malformed uuid formats.
     let resp = get(format!("{base}/99999999")).await;
@@ -1136,9 +1139,9 @@ async fn resource_links_create_validates_in_canvas_order() {
         .json(&json!({"url": "not a url at all"}))
         .await;
     assert_eq!(resp.status_code(), 422);
-    assert_eq!(resp.json()["errors"][0]["code"], "invalid_url");
+    assert_eq!(resp.json::<Value>()["errors"][0]["code"], "invalid_url");
     assert_eq!(
-        resp.json()["errors"][0]["message"],
+        resp.json::<Value>()["errors"][0]["message"],
         "'url' param must be a valid URL"
     );
 
@@ -1149,9 +1152,9 @@ async fn resource_links_create_validates_in_canvas_order() {
         .json(&json!({"url": "https://unknown.example.com/launch"}))
         .await;
     assert_eq!(resp.status_code(), 422);
-    assert_eq!(resp.json()["errors"][0]["code"], "invalid_url");
+    assert_eq!(resp.json::<Value>()["errors"][0]["code"], "invalid_url");
     assert_eq!(
-        resp.json()["errors"][0]["message"],
+        resp.json::<Value>()["errors"][0]["message"],
         "No tool found for the provided URL"
     );
 
@@ -1289,7 +1292,7 @@ async fn resource_links_update_validates_tools_and_urls() {
         .json(&json!({"custom": {"n": 1}}))
         .await;
     assert_eq!(resp.status_code(), 422);
-    assert_eq!(resp.json()["errors"][0]["code"], "invalid_custom");
+    assert_eq!(resp.json::<Value>()["errors"][0]["code"], "invalid_custom");
 
     // Unknown replacement tool.
     let resp = server
@@ -1467,7 +1470,7 @@ async fn deep_linking_response_validates_the_jwt_in_canvas_order() {
         )]))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
-    assert_eq!(resp.json()["jwt"][0], "JWT format is invalid");
+    assert_eq!(resp.json::<Value>()["jwt"][0], "JWT format is invalid");
 
     // Unknown client (iss does not match a developer key).
     let unknown = sign(
@@ -1486,7 +1489,7 @@ async fn deep_linking_response_validates_the_jwt_in_canvas_order() {
         ]))
         .await;
     assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.json()["jwt"][0], "Client not found");
+    assert_eq!(resp.json::<Value>()["jwt"][0], "Client not found");
 
     // Wrong signature.
     let bad_sig = sign(
@@ -1505,7 +1508,7 @@ async fn deep_linking_response_validates_the_jwt_in_canvas_order() {
         ]))
         .await;
     assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.json()["jwt"][0], "JWT verification failure");
+    assert_eq!(resp.json::<Value>()["jwt"][0], "JWT verification failure");
 
     // Wrong audience.
     let bad_aud = sign(
@@ -1524,7 +1527,7 @@ async fn deep_linking_response_validates_the_jwt_in_canvas_order() {
         ]))
         .await;
     assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.json()["base"][0], "the 'aud' is invalid");
+    assert_eq!(resp.json::<Value>()["base"][0], "the 'aud' is invalid");
 
     // Missing data JWT.
     let jwt = deep_linking_jwt(

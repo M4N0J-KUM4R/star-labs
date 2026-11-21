@@ -54,20 +54,12 @@ const ALLOW_LINE_ITEM_PLACEMENTS: [&str; 5] = [
 ];
 
 /// Canvas `Lti::DeepLinkingData::ERROR_TYPES`.
-const DATA_ERRORS: [(&str, &str); 3] = [
-    (
-        "presence_required",
-        "Do not modify the deep_link_return_url in any way.",
-    ),
-    (
-        "invalid_or_malformed",
-        "Do not modify the deep_link_return_url in any way.",
-    ),
-    (
-        "already_used",
-        "Do not attempt to submit content items multiple times.",
-    ),
-];
+#[derive(Debug, Clone, Copy)]
+enum DataJwtError {
+    Missing,
+    Malformed,
+    Reused,
+}
 
 pub(crate) fn advantage_router() -> Router<AppState> {
     Router::new()
@@ -378,22 +370,39 @@ fn decode_unverified(token: &str) -> Option<Value> {
 // data JWT (Canvas Lti::DeepLinkingData)
 // ---------------------------------------------------------------------------
 
-fn data_error(kind: usize) -> Value {
-    let (kind_name, message) = DATA_ERRORS[kind];
-    json!({
-        "data_jwt": [{
-            "attribute": "?data=JWT",
-            "type": kind_name,
-            "message": message,
-        }]
-    })
+fn data_error(kind: DataJwtError) -> Response {
+    let (kind_name, message) = match kind {
+        DataJwtError::Missing => (
+            "presence_required",
+            "Do not modify the deep_link_return_url in any way.",
+        ),
+        DataJwtError::Malformed => (
+            "invalid_or_malformed",
+            "Do not modify the deep_link_return_url in any way.",
+        ),
+        DataJwtError::Reused => (
+            "already_used",
+            "Do not attempt to submit content items multiple times.",
+        ),
+    };
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({
+            "data_jwt": [{
+                "attribute": "?data=JWT",
+                "type": kind_name,
+                "message": message,
+            }]
+        })),
+    )
+        .into_response()
 }
 
 /// Canvas `Lti::DeepLinkingData.from_jwt`: decode (ignoring expiry) and
 /// consume the nonce once.
-fn validate_data_jwt(state: &AppState, raw: Option<&String>) -> Result<Value, Response> {
+fn validate_data_jwt(state: &AppState, raw: Option<&String>) -> Result<Value, DataJwtError> {
     let Some(raw) = raw else {
-        return Err((StatusCode::BAD_REQUEST, Json(data_error(0))).into_response());
+        return Err(DataJwtError::Missing);
     };
     let mut validation = jsonwebtoken::Validation::default();
     validation.validate_aud = false;
@@ -406,13 +415,13 @@ fn validate_data_jwt(state: &AppState, raw: Option<&String>) -> Result<Value, Re
         &validation,
     ) {
         Ok(data) => data.claims,
-        Err(_) => return Err((StatusCode::BAD_REQUEST, Json(data_error(1))).into_response()),
+        Err(_) => return Err(DataJwtError::Malformed),
     };
     let nonce = claims.get("nonce").and_then(|v| v.as_str()).unwrap_or("");
     if nonce.is_empty()
         || !launch_cache::check_and_store_nonce(&format!("nonce:deep_linking_response:{nonce}"))
     {
-        return Err((StatusCode::BAD_REQUEST, Json(data_error(2))).into_response());
+        return Err(DataJwtError::Reused);
     }
     Ok(claims)
 }
@@ -436,7 +445,7 @@ async fn deep_linking_response(
     };
     let data = match validate_data_jwt(&state, params.get("data")) {
         Ok(data) => data,
-        Err(response) => return Ok(response),
+        Err(kind) => return Ok(data_error(kind)),
     };
 
     let placement = data

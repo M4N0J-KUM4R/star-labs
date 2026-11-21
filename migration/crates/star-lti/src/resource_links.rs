@@ -62,7 +62,6 @@ struct ResourceLinkRow {
     id: i64,
     context_external_tool_id: i64,
     workflow_state: String,
-    root_account_id: i64,
     context_id: i64,
     context_type: String,
     custom: Option<Value>,
@@ -75,7 +74,7 @@ struct ResourceLinkRow {
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-const LINK_COLUMNS: &str = "id, context_external_tool_id, workflow_state, root_account_id, \
+const LINK_COLUMNS: &str = "id, context_external_tool_id, workflow_state, \
      context_id, context_type, custom, lookup_uuid, resource_link_uuid, url, lti_1_1_id, \
      title, created_at, updated_at";
 
@@ -257,7 +256,6 @@ fn link_json(
 struct TypeContext {
     module_item_ids: std::collections::HashMap<i64, i64>,
     collaboration_uuids: std::collections::HashSet<String>,
-    include_deleted: bool,
 }
 
 impl TypeContext {
@@ -271,7 +269,6 @@ impl TypeContext {
             return Ok(Self {
                 module_item_ids: Default::default(),
                 collaboration_uuids: Default::default(),
-                include_deleted,
             });
         }
         let ids: Vec<i64> = links.iter().map(|l| l.id).collect();
@@ -312,7 +309,6 @@ impl TypeContext {
         Ok(Self {
             module_item_ids,
             collaboration_uuids,
-            include_deleted,
         })
     }
 
@@ -549,8 +545,7 @@ async fn course_account_chain(pool: &PgPool, course_id: i64) -> Result<Vec<i64>,
 
 async fn insert_link(
     pool: &PgPool,
-    context_type: &str,
-    context_id: i64,
+    course_id: i64,
     tool: &ToolRow,
     url: Option<&str>,
     title: Option<&str>,
@@ -561,13 +556,12 @@ async fn insert_link(
         "INSERT INTO lti_resource_links \
          (context_external_tool_id, workflow_state, root_account_id, context_id, context_type, \
           custom, lookup_uuid, resource_link_uuid, url, lti_1_1_id, title, created_at, updated_at) \
-         VALUES ($1, 'active', $2, $3, $4, $5, $6, $7, $8, NULL, $9, now(), now()) \
+         VALUES ($1, 'active', $2, $3, 'Course', $4, $5, $6, $7, NULL, $8, now(), now()) \
          RETURNING {LINK_COLUMNS}"
     ))
     .bind(tool.id)
     .bind(root_account_id)
-    .bind(context_id)
-    .bind(context_type)
+    .bind(course_id)
     .bind(custom)
     .bind(uuid::Uuid::new_v4().to_string())
     .bind(uuid::Uuid::new_v4().to_string())
@@ -622,7 +616,6 @@ async fn create(
         .unwrap_or(root_account_for_course(&state.db, course_id).await?);
     let link = insert_link(
         &state.db,
-        "Course",
         course_id,
         &tool,
         body.url.as_deref(),
@@ -715,7 +708,6 @@ async fn bulk_create(
         let root_account = tool.account_id.unwrap_or(course_root);
         let link = insert_link(
             &state.db,
-            "Course",
             course_id,
             tool,
             item.url.as_deref(),
