@@ -163,6 +163,7 @@ async fn seed_fixture(pool: &PgPool, prefix: &str) -> Fixture {
     let outsider_id = seed_user(pool, prefix, "Outsider", "user").await;
     seed_enrollment(pool, teacher_id, course_id, "teacher").await;
     seed_enrollment(pool, student_id, course_id, "student").await;
+    seed_enrollment(pool, teacher_id, other_course_id, "teacher").await;
 
     let trigger_assignment_id = seed_assignment(pool, course_id, "Trigger").await;
     let other_trigger_assignment_id = seed_assignment(pool, course_id, "Other trigger").await;
@@ -865,7 +866,8 @@ async fn a_scoring_range_the_request_does_not_mention_is_destroyed() {
 }
 
 #[tokio::test]
-async fn a_rule_is_destroyed() {    let Some((server, pool, prefix)) = setup().await else {
+async fn a_rule_is_destroyed() {
+    let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
@@ -917,6 +919,104 @@ async fn a_rule_is_destroyed() {    let Some((server, pool, prefix)) = setup().a
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
     assert_eq!(body.as_array().expect("rules").len(), 0, "body: {body}");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn an_explicit_null_bound_clears_the_bound() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let fixture = seed_fixture(&pool, &prefix).await;
+
+    let resp = server
+        .post(&format!(
+            "/courses/{}/mastery_paths/rules",
+            fixture.course_id
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(fixture.teacher_id, "teacher"),
+        )
+        .json(&json!({
+            "trigger_assignment_id": fixture.trigger_assignment_id,
+            "scoring_ranges": [{ "lower_bound": 0, "upper_bound": 1 }]
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let rule: Value = resp.json();
+    let rule_id = rule["id"].as_i64().expect("the rule id");
+    let range_id = rule["scoring_ranges"][0]["id"]
+        .as_i64()
+        .expect("the range id");
+
+    // A `null` bound is assigned to the attribute, it does not keep the
+    // bound of the request that is missing.
+    let resp = server
+        .put(&format!(
+            "/courses/{}/mastery_paths/rules/{}",
+            fixture.course_id, rule_id
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(fixture.teacher_id, "teacher"),
+        )
+        .json(&json!({
+            "scoring_ranges": [
+                { "id": range_id, "lower_bound": null, "upper_bound": 1 }
+            ]
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let ranges = body["scoring_ranges"].as_array().expect("the ranges");
+    assert_eq!(ranges.len(), 1, "body: {body}");
+    assert_eq!(ranges[0]["lower_bound"], Value::Null, "body: {body}");
+    assert_eq!(ranges[0]["upper_bound"].as_f64(), Some(1.0), "body: {body}");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn a_rule_of_another_course_is_a_not_found() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let fixture = seed_fixture(&pool, &prefix).await;
+
+    let resp = server
+        .post(&format!(
+            "/courses/{}/mastery_paths/rules",
+            fixture.course_id
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(fixture.teacher_id, "teacher"),
+        )
+        .json(&create_body(
+            fixture.trigger_assignment_id,
+            &fixture.assignment_ids,
+        ))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let rule: Value = resp.json();
+    let rule_id = rule["id"].as_i64().expect("the rule id");
+
+    // The rule belongs to another course, so it is not found there.
+    let resp = server
+        .get(&format!(
+            "/courses/{}/mastery_paths/rules/{}",
+            fixture.other_course_id, rule_id
+        ))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(fixture.teacher_id, "teacher"),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }

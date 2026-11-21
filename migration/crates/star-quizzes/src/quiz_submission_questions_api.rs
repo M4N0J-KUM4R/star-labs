@@ -19,6 +19,10 @@
 //! `src/lib.rs` and merge `quiz_submission_questions_api::router()` into the
 //! crate router — the integration test builds its server from that router.
 //!
+//! Dependency (coordinator): the crate needs `md-5 = { workspace = true }` —
+//! Canvas stores the answer of a blank under the MD5 digest of the blank name
+//! (`AssessmentQuestion.variable_id`).
+//!
 //! Faithfulness notes:
 //!
 //! * The controller's `before_action` chain is reproduced in its order:
@@ -53,7 +57,8 @@
 //!     ADD COLUMN IF NOT EXISTS one_question_at_a_time BOOLEAN NOT NULL DEFAULT false,
 //!     ADD COLUMN IF NOT EXISTS hide_results TEXT,
 //!     ADD COLUMN IF NOT EXISTS one_time_results BOOLEAN NOT NULL DEFAULT false,
-//!     ADD COLUMN IF NOT EXISTS require_lockdown_browser BOOLEAN NOT NULL DEFAULT false;
+//!     ADD COLUMN IF NOT EXISTS require_lockdown_browser BOOLEAN NOT NULL DEFAULT false,
+//!     ADD COLUMN IF NOT EXISTS cant_go_back BOOLEAN NOT NULL DEFAULT false;
 //!
 //! ALTER TABLE quiz_questions
 //!     ADD COLUMN IF NOT EXISTS question_data JSONB;
@@ -558,11 +563,19 @@ fn answer_key(question_id: i64, answer_id: i64) -> String {
 
 /// The key of a blank answer of a question inside `submission_data`.
 ///
-/// Canvas uses `AssessmentQuestion.variable_id(blank)`, an MD5 digest of the
-/// blank name. star-lms has no digest dependency, so the blank name itself is
-/// used — the API output is the same, only the stored key differs.
+/// Canvas uses `AssessmentQuestion.variable_id(blank)`, the MD5 digest of
+/// `"dropdown,<blank>,instructure-key"`.
 fn blank_key(question_id: i64, blank: &str) -> String {
-    format!("question_{question_id}_{blank}")
+    format!("question_{question_id}_{}", blank_id(blank))
+}
+
+/// Canvas `AssessmentQuestion.variable_id` — the digest of the blank name.
+fn blank_id(blank: &str) -> String {
+    use md5::{Digest, Md5};
+
+    let payload = format!("dropdown,{blank},instructure-key");
+    let digest = Md5::digest(payload.as_bytes());
+    digest.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
 /// Canvas `Quizzes::QuizQuestion::AnswerSerializers#serialize` — turn the

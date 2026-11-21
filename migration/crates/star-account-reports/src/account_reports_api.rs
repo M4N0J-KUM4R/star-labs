@@ -94,9 +94,11 @@ pub fn router() -> Router<AppState> {
 /// The error type of the account reports endpoints.
 ///
 /// Canvas renders a missing record as
-/// `{"errors":[{"message":"The specified resource does not exist."}]}` and a
-/// rejected request as `{"error":"..."}`. `star_common::ApiError` renders a
-/// plain text body, so the JSON shapes are restored here.
+/// `{"errors":[{"message":"The specified resource does not exist."}]}`, a
+/// refused request as `{"error":"..."}` and a rejected action as
+/// `{"status":"unauthorized","errors":[{"message":"user not authorized to
+/// perform that action"}]}`. `star_common::ApiError` renders a plain text body,
+/// so the JSON shapes are restored here.
 #[derive(Debug)]
 enum ReportError {
     Api(ApiError),
@@ -127,6 +129,17 @@ impl IntoResponse for ReportError {
             ReportError::Api(ApiError::BadRequest(message)) => {
                 (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
             }
+            // Canvas `render_json_unauthorized` for an authenticated caller:
+            // `{"status":"unauthorized","errors":[{"message":"user not
+            // authorized to perform that action"}]}`.
+            ReportError::Api(ApiError::Forbidden) => (
+                StatusCode::FORBIDDEN,
+                Json(json!({
+                    "status": "unauthorized",
+                    "errors": [{ "message": "user not authorized to perform that action" }],
+                })),
+            )
+                .into_response(),
             ReportError::Api(other) => other.into_response(),
         }
     }

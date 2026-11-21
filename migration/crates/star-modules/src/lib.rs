@@ -24,6 +24,7 @@ use star_common::{ApiError, AppState};
 /// Authenticated user — role must be looked up from DB in handlers.
 use star_auth::AuthUser;
 
+mod conditional_release;
 mod course_pacing;
 mod pace_apis;
 mod pace_contexts;
@@ -1265,6 +1266,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         // The course pacing plans of a course, a section or an enrollment.
         .merge(course_pacing::router())
+        // The conditional release rules of a course.
+        .merge(conditional_release::router())
         // The contexts of a course that can be paced.
         .merge(pace_contexts::router())
         // The pace of a section and the pace of a student enrollment.

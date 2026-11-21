@@ -46,6 +46,8 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
+
+mod quiz_submission_questions_api;
 use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
@@ -2518,6 +2520,8 @@ async fn validate_access_code(
 /// Build the quizzes router.
 pub fn router() -> Router<AppState> {
     Router::new()
+        // The questions of a quiz submission.
+        .merge(quiz_submission_questions_api::router())
         // Course-level
         .route("/courses/{courseId}/quizzes", get(list_course_quizzes))
         .route("/courses/{courseId}/quizzes", post(create_quiz))
