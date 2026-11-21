@@ -26,6 +26,12 @@
 //! The grade passback answers the LTI 1.1 outcome XML; the xAPI, Caliper
 //! and logout services answer `200` with an empty body.
 
+// The internal helpers of this module answer with a pre-rendered
+// `axum::response::Response`, so the error variant is as large as a
+// response body. The lint is silenced for the whole module instead of
+// on every single helper.
+#![allow(clippy::result_large_err)]
+
 use axum::{
     body::Bytes,
     extract::{OriginalUri, Path, State},
@@ -371,7 +377,7 @@ fn signature_of(
 
     // The signature base string: the method, the URL and the normalized
     // parameters.
-    let mut normalized = vec![
+    let mut normalized = [
         percent_encode(params.consumer_key.as_str()),
         percent_encode(params.nonce.as_str()),
         percent_encode(&params.signature_method.to_uppercase()),

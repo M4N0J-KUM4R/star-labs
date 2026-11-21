@@ -984,7 +984,7 @@ async fn load_index_collaborations(
         "#
     );
     let rows: Vec<CollaborationRow> = sqlx::query_as(&sql)
-        .bind(ctx.polymorphic_type())
+        .bind(ctx.kind.polymorphic_type())
         .bind(ctx.id)
         .bind(EXTERNAL_TOOL_COLLABORATION)
         .bind(manages)
@@ -1116,7 +1116,7 @@ async fn past_lti_id(
     )
     .bind(user_id)
     .bind(ctx.id)
-    .bind(ctx.polymorphic_type())
+    .bind(ctx.kind.polymorphic_type())
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|(value,)| value))
@@ -1326,7 +1326,7 @@ async fn potential_collaborators(
         .into_iter()
         .map(|row| UserJson {
             id: row.id,
-            name: row.name,
+            name: row.name.clone(),
             created_at: row.created_at,
             sortable_name: row.sortable_name,
             short_name: row.name,
@@ -1378,7 +1378,7 @@ async fn load_context_collaboration(
     );
     let row: Option<CollaborationRow> = sqlx::query_as(&sql)
         .bind(id)
-        .bind(ctx.polymorphic_type())
+        .bind(ctx.kind.polymorphic_type())
         .bind(ctx.id)
         .fetch_optional(pool)
         .await?;

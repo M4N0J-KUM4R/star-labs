@@ -23,4 +23,4 @@ pub fn router() -> Router<AppState> {
     Router::new().merge(sis_imports_api::router())
 }
 
-mod sis_imports_api;
+pub mod sis_imports_api;

@@ -1,11 +1,10 @@
 //! star-collaborations — course/group collaborations and collaborators (Canvas
 //! CollaborationsApiController) — read + delete API surface.
 //!
-//! Scaffold crate (issue #138): the router is intentionally EMPTY. Feature
-//! workers implement the spec routes here afterwards; they must not need to
-//! touch `migration/Cargo.toml`, `star-http/src/main.rs`, the workflow shard
-//! matrix or `tools/ci/shard_coverage.py` — this crate is already wired into
-//! all of them.
+//! Scaffold crate (issue #138): the router is wired into
+//! `migration/Cargo.toml`, `star-http/src/main.rs`, the workflow shard matrix
+//! and `tools/ci/shard_coverage.py` — feature workers add their routes in
+//! `collaborations_api` without needing to touch any of those files.
 //!
 //! Exposes `pub fn router() -> axum::Router<AppState>`.
 

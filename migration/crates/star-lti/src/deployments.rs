@@ -184,21 +184,28 @@ async fn authorize(db: &PgPool, auth: &AuthUser, account_id: i64) -> Result<(), 
 
 /// Canvas `Api::V1::Lti::Deployment#lti_deployment_json`.
 async fn deployment_json(db: &PgPool, row: &DeploymentRow) -> Result<Value, ApiError> {
-    let context_name = match row.context_type.as_str() {
-        "Course" => {
-            let name: Option<(String,)> = sqlx::query_as("SELECT name FROM courses WHERE id = $1")
-                .bind(row.context_id)
-                .fetch_optional(db)
-                .await?;
-            name.map(|row| row.0)
-        }
-        _ => {
-            let name: Option<(String,)> = sqlx::query_as("SELECT name FROM accounts WHERE id = $1")
-                .bind(row.context_id)
-                .fetch_optional(db)
-                .await?;
-            name.map(|row| row.0)
-        }
+    // The deployment carries the name of its context; fall back to the
+    // account or the course when the deployment does not name one.
+    let context_name = match row.context_name.clone() {
+        Some(name) => Some(name),
+        None => match row.context_type.as_str() {
+            "Course" => {
+                let name: Option<(String,)> =
+                    sqlx::query_as("SELECT name FROM courses WHERE id = $1")
+                        .bind(row.context_id)
+                        .fetch_optional(db)
+                        .await?;
+                name.map(|row| row.0)
+            }
+            _ => {
+                let name: Option<(String,)> =
+                    sqlx::query_as("SELECT name FROM accounts WHERE id = $1")
+                        .bind(row.context_id)
+                        .fetch_optional(db)
+                        .await?;
+                name.map(|row| row.0)
+            }
+        },
     };
     // Canvas reports a disabled deployment as disabled, a deleted one as
     // deleted and every other state as active.
@@ -220,36 +227,39 @@ async fn deployment_json(db: &PgPool, row: &DeploymentRow) -> Result<Value, ApiE
     }))
 }
 
+/// A row of the `lti_context_controls` table.
+#[derive(Debug, sqlx::FromRow)]
+struct ContextControlRow {
+    id: i64,
+    account_id: Option<i64>,
+    course_id: Option<i64>,
+    registration_id: i64,
+    deployment_id: i64,
+    workflow_state: String,
+    available: bool,
+}
+
 /// The context control JSON of a control id.
 async fn context_control_json(db: &PgPool, id: i64) -> Result<Value, ApiError> {
-    let row: Option<(i64, Option<i64>, Option<i64>, i64, i64, String, bool)> = sqlx::query_as(
+    let row: Option<ContextControlRow> = sqlx::query_as(
         "SELECT id, account_id, course_id, registration_id, deployment_id, workflow_state, available \
          FROM lti_context_controls WHERE id = $1",
     )
     .bind(id)
     .fetch_optional(db)
     .await?;
-    let Some((
-        id,
-        account_id,
-        course_id,
-        registration_id,
-        deployment_id,
-        workflow_state,
-        available,
-    )) = row
-    else {
+    let Some(row) = row else {
         return Ok(Value::Null);
     };
 
     Ok(json!({
-        "id": id,
-        "account_id": account_id,
-        "course_id": course_id,
-        "registration_id": registration_id,
-        "deployment_id": deployment_id,
-        "workflow_state": workflow_state,
-        "available": available,
+        "id": row.id,
+        "account_id": row.account_id,
+        "course_id": row.course_id,
+        "registration_id": row.registration_id,
+        "deployment_id": row.deployment_id,
+        "workflow_state": row.workflow_state,
+        "available": row.available,
         "path": "",
         "context_name": "",
         "child_control_count": 0,

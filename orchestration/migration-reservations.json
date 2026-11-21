@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0238",
- "next_available": "0239",
+ "max_merged": "0239",
+ "next_available": "0240",
  "reservations": {
   "0001": {
    "issue": null,
@@ -780,6 +780,11 @@
   "0238": {
    "issue": null,
    "note": "star-lti: the nonces of the LTI 1.1 requests",
+   "status": "merged"
+  },
+  "0239": {
+   "issue": null,
+   "note": "star-lti: the tool setting of an originality report",
    "status": "merged"
   }
  }

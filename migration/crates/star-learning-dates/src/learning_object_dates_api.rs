@@ -870,7 +870,7 @@ async fn convert_tag_overrides(
         .bind(tag.due_at)
         .bind(tag.unlock_at)
         .bind(tag.lock_at)
-        .fetch_one(&mut **tx)
+        .fetch_one(&mut *tx)
         .await?;
 
         for student in students {
@@ -882,7 +882,7 @@ async fn convert_tag_overrides(
     let tag_ids: Vec<i64> = tag_overrides.iter().map(|tag| tag.id).collect();
     sqlx::query("DELETE FROM learning_object_date_overrides WHERE id = ANY($1)")
         .bind(tag_ids.as_slice())
-        .execute(&mut **tx)
+        .execute(&mut *tx)
         .await?;
 
     tx.commit().await?;

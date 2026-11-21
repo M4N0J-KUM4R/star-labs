@@ -28,6 +28,12 @@
 //! tool configuration with its `developer_key` and the `settings` of the
 //! configuration.
 
+// The internal helpers of this module answer with a pre-rendered
+// `axum::response::Response`, so the error variant is as large as a
+// response body. The lint is silenced for the whole module instead of
+// on every single helper.
+#![allow(clippy::result_large_err)]
+
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -80,9 +86,9 @@ struct ConfigurationRequest {
     settings: Option<Value>,
     settings_url: Option<String>,
     developer_key: Option<DeveloperKeyRequest>,
-    redirect_uris: Option<Vec<String>>,
     privacy_level: Option<String>,
     disabled_placements: Option<Vec<String>>,
+    custom_fields: Option<String>,
 }
 
 /// The developer key of a create request.
@@ -90,8 +96,38 @@ struct ConfigurationRequest {
 struct DeveloperKeyRequest {
     name: Option<String>,
     email: Option<String>,
-    owner_account_id: Option<i64>,
-    public_jwk_url: Option<String>,
+    redirect_uris: Option<RedirectUris>,
+}
+
+/// The `developer_key[redirect_uris]` of a request — Canvas accepts a list
+/// of URIs or a single string of whitespace separated URIs.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum RedirectUris {
+    List(Vec<String>),
+    Text(String),
+}
+
+impl RedirectUris {
+    /// Canvas `Lti::ToolConfigurationsApiController#tool_configuration_redirect_uris`.
+    fn values(&self) -> Vec<String> {
+        match self {
+            RedirectUris::List(values) => values.clone(),
+            RedirectUris::Text(text) => text
+                .split_whitespace()
+                .map(|value| value.to_string())
+                .collect(),
+        }
+    }
+}
+
+/// A row of the `developer_keys` table.
+#[derive(Debug, sqlx::FromRow)]
+struct DeveloperKeyRow {
+    id: i64,
+    name: Option<String>,
+    email: Option<String>,
+    user_id: Option<i64>,
 }
 
 /// Domain router for the Canvas tool-configuration routes.
@@ -150,22 +186,31 @@ async fn create_configuration(
     require_manage_developer_keys(&state.db, &auth, account_id).await?;
 
     // Canvas needs the settings of the configuration.
-    let Some(settings) = body.settings.clone().filter(|value| value.is_object()) else {
-        return Err(ApiError::BadRequest(
-            "Either settings or settings_url is required".to_string(),
-        ));
-    };
+    let mut settings = resolve_settings(&body).await?;
+    apply_custom_fields(&mut settings, body.custom_fields.as_deref());
+    apply_disabled_placements(&mut settings, body.disabled_placements.as_deref());
 
     // The developer key of the configuration.
     let key = body.developer_key.clone().unwrap_or_default();
+    // Canvas `Lti::ToolConfigurationsApiController#create` — the redirect URIs
+    // of the key fall back to the target link URI of the configuration.
+    let redirect_uris = match key.redirect_uris.as_ref().map(|uris| uris.values()) {
+        Some(uris) if !uris.is_empty() => uris,
+        _ => settings
+            .get("target_link_uri")
+            .and_then(|value| value.as_str())
+            .map(|value| vec![value.to_string()])
+            .unwrap_or_default(),
+    };
     let developer_key_id: i64 = sqlx::query_scalar(
-        "INSERT INTO developer_keys (name, email, workflow_state, api_key, user_id) \
-         VALUES ($1, $2, 'active', $3, $4) RETURNING id",
+        "INSERT INTO developer_keys (name, email, workflow_state, api_key, user_id, redirect_uris) \
+         VALUES ($1, $2, 'active', $3, $4, $5) RETURNING id",
     )
     .bind(key.name.clone().unwrap_or_else(|| "LTI Tool".to_string()))
     .bind(&key.email)
     .bind(format!("lti-{}-{}", account_id, uuid::Uuid::new_v4()))
     .bind(auth.id)
+    .bind(&redirect_uris)
     .fetch_one(&state.db)
     .await?;
 
@@ -191,11 +236,30 @@ async fn update_configuration(
     require_manage_developer_keys(&state.db, &auth, developer_key_id).await?;
 
     let existing = load_configuration(&state.db, developer_key_id).await?;
-    let settings = body
+    let mut settings = body
         .settings
         .clone()
         .filter(|value| value.is_object())
         .unwrap_or_else(|| existing.launch_settings.clone());
+    apply_custom_fields(&mut settings, body.custom_fields.as_deref());
+    apply_disabled_placements(&mut settings, body.disabled_placements.as_deref());
+
+    // Canvas `Lti::ToolConfigurationsApiController#update` — the redirect URIs
+    // of the key are only changed when the request carries them.
+    if let Some(uris) = body
+        .developer_key
+        .as_ref()
+        .and_then(|key| key.redirect_uris.as_ref())
+        .map(|uris| uris.values())
+    {
+        sqlx::query(
+            "UPDATE developer_keys SET redirect_uris = $1, updated_at = now() WHERE id = $2",
+        )
+        .bind(&uris)
+        .bind(developer_key_id)
+        .execute(&state.db)
+        .await?;
+    }
 
     sqlx::query(
         "UPDATE lti_tool_configurations SET launch_settings = $1, privacy_level = $2, \
@@ -308,6 +372,92 @@ async fn require_manage_lti(db: &PgPool, auth: &AuthUser, account_id: i64) -> Re
 // Storage
 // ---------------------------------------------------------------------------
 
+/// Canvas `Lti::ToolConfigurationsApiController#require_settings_or_url` — the
+/// settings of the configuration come from the request or, when the request
+/// only carries a settings URL, from that URL.
+async fn resolve_settings(body: &ConfigurationRequest) -> Result<Value, ApiError> {
+    if let Some(settings) = body.settings.clone().filter(|value| value.is_object()) {
+        return Ok(settings);
+    }
+    let Some(url) = body
+        .settings_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Err(ApiError::BadRequest(
+            "Configuration must be present".to_string(),
+        ));
+    };
+
+    // Canvas `Lti::ToolConfiguration.retrieve_and_extract_configuration`.
+    let response = reqwest::get(url)
+        .await
+        .map_err(|error| ApiError::BadRequest(format!("Could not retrieve settings, {error}")))?;
+    if !response.status().is_success() {
+        return Err(ApiError::BadRequest(format!(
+            "Could not retrieve settings, {}",
+            response.status()
+        )));
+    }
+    let settings: Value = response
+        .json()
+        .await
+        .map_err(|error| ApiError::BadRequest(format!("Could not retrieve settings, {error}")))?;
+    Ok(settings)
+}
+
+/// Canvas `Lti::ToolConfigurationsApiController#manual_custom_fields` — the
+/// custom fields of the configuration are merged into its settings.
+fn apply_custom_fields(settings: &mut Value, custom_fields: Option<&str>) {
+    let Some(raw) = custom_fields else {
+        return;
+    };
+    let fields = parse_custom_fields(raw);
+    if fields.is_empty() {
+        return;
+    }
+    if let Some(map) = settings.as_object_mut() {
+        map.insert("custom_fields".to_string(), Value::Object(fields));
+    }
+}
+
+/// Canvas `ContextExternalTool.find_custom_fields_from_string`.
+fn parse_custom_fields(raw: &str) -> serde_json::Map<String, Value> {
+    let mut fields = serde_json::Map::new();
+    for line in raw.split(['\r', '\n']) {
+        let mut parts = line.split('=');
+        let key = parts.next().unwrap_or_default();
+        let value = parts.next().unwrap_or_default();
+        if key.is_empty() || value.is_empty() {
+            continue;
+        }
+        fields.insert(key.to_string(), json!(value));
+    }
+    fields
+}
+
+/// Canvas `Lti::ToolConfigurationsApiController#create` — a disabled placement
+/// is stored with `enabled: false`.
+fn apply_disabled_placements(settings: &mut Value, disabled_placements: Option<&[String]>) {
+    let Some(disabled_placements) = disabled_placements else {
+        return;
+    };
+    let Some(placements) = settings
+        .get_mut("placements")
+        .and_then(|value| value.as_object_mut())
+    else {
+        return;
+    };
+    for (name, placement) in placements.iter_mut() {
+        if !disabled_placements.iter().any(|disabled| disabled == name) {
+            continue;
+        }
+        if let Some(map) = placement.as_object_mut() {
+            map.insert("enabled".to_string(), json!(false));
+        }
+    }
+}
+
 /// The tool configuration of a developer key — 404 when there is none.
 async fn load_configuration(
     db: &PgPool,
@@ -389,22 +539,22 @@ async fn developer_key_json(db: &PgPool, developer_key_id: Option<i64>) -> Resul
     let Some(developer_key_id) = developer_key_id else {
         return Ok(Value::Null);
     };
-    let row: Option<(i64, Option<String>, Option<String>, Option<i64>)> =
+    let row: Option<DeveloperKeyRow> =
         sqlx::query_as("SELECT id, name, email, user_id FROM developer_keys WHERE id = $1")
             .bind(developer_key_id)
             .fetch_optional(db)
             .await?;
-    let Some((id, name, email, user_id)) = row else {
+    let Some(row) = row else {
         return Ok(Value::Null);
     };
     Ok(json!({
-        "id": id,
-        "name": name,
-        "email": email,
-        "user_id": user_id,
+        "id": row.id,
+        "name": row.name,
+        "email": row.email,
+        "user_id": row.user_id,
         "workflow_state": "active",
-        "developer_key": id.to_string(),
-        "api_key": id.to_string(),
+        "developer_key": row.id.to_string(),
+        "api_key": row.id.to_string(),
         "created_at": Value::Null,
     }))
 }

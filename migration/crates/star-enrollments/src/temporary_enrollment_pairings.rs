@@ -157,7 +157,10 @@ async fn create(
         Some("inactive") => "inactive",
         _ => "deleted",
     };
-    let workflow_state = body.workflow_state.clone().unwrap_or_else(|| "active".to_string());
+    let workflow_state = body
+        .workflow_state
+        .clone()
+        .unwrap_or_else(|| "active".to_string());
 
     let sql = format!(
         "INSERT INTO temporary_enrollment_pairings \
@@ -173,11 +176,7 @@ async fn create(
         .fetch_one(&state.db)
         .await?;
 
-    Ok((
-        StatusCode::CREATED,
-        Json(pairing_json(&pairing)),
-    )
-        .into_response())
+    Ok((StatusCode::CREATED, Json(pairing_json(&pairing))).into_response())
 }
 
 /// `DELETE /accounts/:account_id/temporary_enrollment_pairings/:id` —

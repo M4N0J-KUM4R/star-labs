@@ -29,6 +29,12 @@
 //! `{"error": "Unauthorized subscription"}` when the tool proxy lacks the
 //! capability of an event type or is not installed in the requested context.
 
+// The internal helpers of this module answer with a pre-rendered
+// `axum::response::Response`, so the error variant is as large as a
+// response body. The lint is silenced for the whole module instead of
+// on every single helper.
+#![allow(clippy::result_large_err)]
+
 use axum::{
     extract::{Path, State},
     http::{header, HeaderMap, StatusCode},

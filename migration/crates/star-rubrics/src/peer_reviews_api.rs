@@ -248,13 +248,12 @@ async fn require_submission(
     assignment_id: i64,
     submission_id: i64,
 ) -> Result<(), ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT id FROM submissions WHERE id = $1 AND assignment_id = $2",
-    )
-    .bind(submission_id)
-    .bind(assignment_id)
-    .fetch_optional(db)
-    .await?;
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM submissions WHERE id = $1 AND assignment_id = $2")
+            .bind(submission_id)
+            .bind(assignment_id)
+            .fetch_optional(db)
+            .await?;
     if row.is_some() {
         Ok(())
     } else {
@@ -295,10 +294,7 @@ async fn requests_for_assignment(
 }
 
 /// The review requests of a list of ids.
-async fn requests_by_ids(
-    db: &PgPool,
-    ids: &[i64],
-) -> Result<Vec<AssessmentRequest>, ApiError> {
+async fn requests_by_ids(db: &PgPool, ids: &[i64]) -> Result<Vec<AssessmentRequest>, ApiError> {
     let rows: Vec<AssessmentRequest> = sqlx::query_as(
         "SELECT id, user_id, assessor_id, asset_id, asset_type, workflow_state \
          FROM assessment_requests WHERE id = ANY($1) ORDER BY id ASC",
@@ -323,10 +319,11 @@ async fn create_request(
     let student_id = match body.user_id {
         Some(user_id) => user_id,
         None => {
-            let row: Option<(i64,)> = sqlx::query_as("SELECT user_id FROM submissions WHERE id = $1")
-                .bind(submission_id)
-                .fetch_optional(&state.db)
-                .await?;
+            let row: Option<(i64,)> =
+                sqlx::query_as("SELECT user_id FROM submissions WHERE id = $1")
+                    .bind(submission_id)
+                    .fetch_optional(&state.db)
+                    .await?;
             row.map(|row| row.0).ok_or(ApiError::NotFound)?
         }
     };
@@ -378,7 +375,10 @@ async fn requests_json(
 
         if with_user {
             object.insert("user".to_string(), user_json(db, request.user_id).await?);
-            object.insert("assessor".to_string(), user_json(db, request.assessor_id).await?);
+            object.insert(
+                "assessor".to_string(),
+                user_json(db, request.assessor_id).await?,
+            );
         }
         items.push(Value::Object(object));
     }

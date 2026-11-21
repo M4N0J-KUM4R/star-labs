@@ -285,11 +285,11 @@ pub async fn batch_update(
     let count = match action {
         "force_delete" => {
             if let Some(ids) = job_ids {
-                sqlx::query_scalar::<_, i64>("DELETE FROM jobs WHERE id = ANY($1)")
+                let deleted = sqlx::query("DELETE FROM jobs WHERE id = ANY($1)")
                     .bind(&ids)
-                    .fetch_optional(&state.db)
+                    .execute(&state.db)
                     .await?;
-                ids.len() as i64
+                deleted.rows_affected() as i64
             } else {
                 return Err(ApiError::BadRequest(
                     "job_ids required for force_delete".into(),
@@ -297,12 +297,25 @@ pub async fn batch_update(
             }
         }
         "destroy" => {
+            // Canvas `Delayed::Job.bulk_update` — the destroy action deletes
+            // the jobs that no worker holds. The failed flavor is deleted
+            // as a whole.
             if let Some(ids) = job_ids {
-                sqlx::query("UPDATE jobs SET workflow_state = 'deleted' WHERE id = ANY($1)")
+                let deleted = if payload.flavor.as_deref() == Some("failed") {
+                    sqlx::query("DELETE FROM jobs WHERE id = ANY($1)")
+                        .bind(&ids)
+                        .execute(&state.db)
+                        .await?
+                } else {
+                    sqlx::query(
+                        "DELETE FROM jobs WHERE id = ANY($1) \
+                         AND (locked_by IS NULL OR locked_by = 'on hold')",
+                    )
                     .bind(&ids)
                     .execute(&state.db)
-                    .await?;
-                ids.len() as i64
+                    .await?
+                };
+                deleted.rows_affected() as i64
             } else {
                 return Err(ApiError::BadRequest("job_ids required for destroy".into()));
             }

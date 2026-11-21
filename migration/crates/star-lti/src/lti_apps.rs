@@ -149,8 +149,22 @@ async fn launch_definitions(
         require_read(&state.db, &auth, context).await?;
     }
 
-    let definitions =
-        launch_definition_list(&state.db, context, &placements, global_navigation).await?;
+    // Canvas `Lti::LtiAppsController#launch_definitions`: the global
+    // navigation pulls every launch definition unless the caller asks for the
+    // visible ones only; every other request only returns the visible ones.
+    let only_visible = !global_navigation || value_to_boolean(params.only_visible.as_deref());
+    let include_context_name = value_to_boolean(params.include_context_name.as_deref());
+
+    let definitions = launch_definition_list(
+        &state.db,
+        context,
+        &placements,
+        global_navigation,
+        only_visible,
+        include_context_name,
+        &auth,
+    )
+    .await?;
     Ok(Json(definitions).into_response())
 }
 
@@ -173,8 +187,8 @@ fn parse_placements(raw: Option<&str>) -> Vec<String> {
 /// Canvas `value_to_boolean`.
 fn value_to_boolean(raw: Option<&str>) -> bool {
     matches!(
-        raw.map(|value| value.trim().to_lowercase()),
-        Some(ref value) if value == "1" || value == "true" || value == "yes" || value == "on"
+        raw,
+        Some("true") | Some("TRUE") | Some("1") | Some("yes") | Some("on")
     )
 }
 
@@ -358,22 +372,31 @@ async fn app_definitions(db: &PgPool, context: AppContext) -> Result<Vec<Value>,
     Ok(definitions)
 }
 
+/// A row of the `external_tools` table.
+#[derive(Debug, sqlx::FromRow)]
+struct ExternalToolRow {
+    id: i64,
+    name: String,
+    description: Option<String>,
+    url: Option<String>,
+    domain: Option<String>,
+    tool_configuration: Value,
+    context_type: String,
+    context_id: i64,
+}
+
 /// Canvas `AppLaunchCollator#launch_definitions`.
 async fn launch_definition_list(
     db: &PgPool,
     context: AppContext,
     placements: &[String],
     global_navigation: bool,
+    only_visible: bool,
+    include_context_name: bool,
+    auth: &AuthUser,
 ) -> Result<Vec<Value>, ApiError> {
-    let rows: Vec<(
-        i64,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-        Value,
-    )> = sqlx::query_as(
-        "SELECT id, name, description, url, domain, tool_configuration \
+    let rows: Vec<ExternalToolRow> = sqlx::query_as(
+        "SELECT id, name, description, url, domain, tool_configuration, context_type, context_id \
              FROM external_tools \
              WHERE context_type = $1 AND context_id = $2 AND workflow_state = 'active' \
              ORDER BY name ASC",
@@ -384,17 +407,29 @@ async fn launch_definition_list(
     .await?;
 
     let mut definitions = Vec::with_capacity(rows.len());
-    for (id, name, description, url, domain, tool_configuration) in rows {
-        let placement_settings = placement_settings(&tool_configuration, placements);
-        definitions.push(json!({
+    for row in rows {
+        if only_visible
+            && !tool_visible_to_user(db, auth, context, placements, &row.tool_configuration).await?
+        {
+            continue;
+        }
+        let placement_settings = placement_settings(&row.tool_configuration, placements);
+        let mut definition = json!({
             "definition_type": "ContextExternalTool",
-            "definition_id": id.to_string(),
-            "url": url,
-            "name": name,
-            "description": description,
-            "domain": domain,
+            "definition_id": row.id.to_string(),
+            "url": row.url,
+            "name": row.name,
+            "description": row.description,
+            "domain": row.domain,
             "placements": placement_settings,
-        }));
+        });
+        // Canvas `AppLaunchCollator#batch_load_context_names` — the name of
+        // the account or the course the tool is deployed in.
+        if include_context_name {
+            definition["context_name"] =
+                json!(context_name(db, &row.context_type, row.context_id).await?);
+        }
+        definitions.push(definition);
     }
 
     // The tool proxies of the context become LTI 2.0 launch definitions.
@@ -444,6 +479,82 @@ async fn launch_definition_list(
     }
 
     Ok(definitions)
+}
+
+/// Canvas `ContextExternalTool.visible` — a user with the `read_as_admin`
+/// right sees every tool, every other user only the tools whose placement
+/// visibility allows it.
+async fn tool_visible_to_user(
+    db: &PgPool,
+    auth: &AuthUser,
+    context: AppContext,
+    placements: &[String],
+    tool_configuration: &Value,
+) -> Result<bool, ApiError> {
+    if is_context_admin(db, auth, context).await? {
+        return Ok(true);
+    }
+    let members_allowed = can_participate_as_student(db, auth, context).await?;
+    for placement in placements {
+        let Some(settings) = tool_configuration
+            .get("placements")
+            .and_then(|value| value.get(placement))
+        else {
+            continue;
+        };
+        match settings.get("visibility").and_then(|value| value.as_str()) {
+            None | Some("public") => return Ok(true),
+            Some("members") if members_allowed => return Ok(true),
+            _ => {}
+        }
+    }
+    Ok(false)
+}
+
+/// Whether the user manages the context — Canvas `read_as_admin`.
+async fn is_context_admin(
+    db: &PgPool,
+    auth: &AuthUser,
+    context: AppContext,
+) -> Result<bool, ApiError> {
+    if auth.role == "admin" {
+        return Ok(true);
+    }
+    match context {
+        AppContext::Course(course_id) => is_course_admin(db, auth.id, course_id).await,
+        AppContext::Account(account_id) => is_account_admin(db, auth.id, account_id).await,
+    }
+}
+
+/// Canvas `participate_as_student` — a member of a course may participate as
+/// a student, an account does not grant the right.
+async fn can_participate_as_student(
+    db: &PgPool,
+    auth: &AuthUser,
+    context: AppContext,
+) -> Result<bool, ApiError> {
+    match context {
+        AppContext::Course(course_id) => is_course_member(db, auth.id, course_id).await,
+        AppContext::Account(_) => Ok(false),
+    }
+}
+
+/// The name of the account or the course a tool is deployed in.
+async fn context_name(
+    db: &PgPool,
+    context_type: &str,
+    context_id: i64,
+) -> Result<Option<String>, ApiError> {
+    let sql = if context_type == "Course" {
+        "SELECT name FROM courses WHERE id = $1"
+    } else {
+        "SELECT name FROM accounts WHERE id = $1"
+    };
+    let row: Option<(String,)> = sqlx::query_as(sql)
+        .bind(context_id)
+        .fetch_optional(db)
+        .await?;
+    Ok(row.map(|row| row.0))
 }
 
 /// The placement-specific configuration of a tool for the requested

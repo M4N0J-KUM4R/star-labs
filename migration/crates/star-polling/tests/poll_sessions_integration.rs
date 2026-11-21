@@ -414,7 +414,7 @@ async fn create_binds_the_course_and_the_section() {
     let body: Value = resp.json();
     let items = sessions_of(&body);
     assert_eq!(items.len(), 1);
-    let session_id = items[0]["id"].as_str().unwrap().parse::<i64>().unwrap();
+    let _session_id = items[0]["id"].as_str().unwrap().parse::<i64>().unwrap();
     assert_eq!(items[0]["course_id"], course.to_string());
     assert_eq!(items[0]["course_section_id"], section.to_string());
     assert_eq!(items[0]["has_public_results"], true);

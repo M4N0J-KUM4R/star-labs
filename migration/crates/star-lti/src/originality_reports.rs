@@ -26,6 +26,12 @@
 //! `originality_report_url`, `workflow_state`, `error_report` (the error
 //! message), `submission_time` and `root_account_id`.
 
+// The internal helpers of this module answer with a pre-rendered
+// `axum::response::Response`, so the error variant is as large as a
+// response body. The lint is silenced for the whole module instead of
+// on every single helper.
+#![allow(clippy::result_large_err)]
+
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -54,6 +60,7 @@ struct OriginalityReport {
     error_message: Option<String>,
     submission_time: Option<chrono::DateTime<chrono::Utc>>,
     root_account_id: i64,
+    tool_setting: Option<Value>,
 }
 
 /// The columns of an `originality_reports` row.
@@ -61,7 +68,7 @@ const REPORT_COLUMNS: &str = "id, attachment_id, originality_score, \
      originality_report_attachment_id, originality_report_url, \
      created_at::timestamptz AS created_at, updated_at::timestamptz AS updated_at, \
      submission_id, workflow_state, error_message, \
-     submission_time::timestamptz AS submission_time, root_account_id";
+     submission_time::timestamptz AS submission_time, root_account_id, tool_setting";
 
 /// The body of a create or update request.
 #[derive(Debug, Default, Deserialize)]
@@ -78,7 +85,25 @@ struct ReportFields {
     originality_report_file_id: Option<i64>,
     workflow_state: Option<String>,
     error_report: Option<String>,
-    tool_setting: Option<Value>,
+    tool_setting: Option<ToolSetting>,
+}
+
+/// The Canvas `ToolSetting` of a report — the resource handler Canvas uses
+/// to launch the originality report.
+#[derive(Debug, Default, Clone, Deserialize)]
+struct ToolSetting {
+    resource_type_code: Option<String>,
+    resource_url: Option<String>,
+}
+
+impl ToolSetting {
+    /// The JSON Canvas reports as the `tool_setting` of a report.
+    fn to_json(&self) -> Value {
+        json!({
+            "resource_type_code": self.resource_type_code,
+            "resource_url": self.resource_url,
+        })
+    }
 }
 
 /// Domain router for the Canvas originality-report routes.
@@ -124,12 +149,20 @@ async fn create_report(
         .clone()
         .unwrap_or_else(|| "pending".to_string());
 
+    // Canvas `Lti::OriginalityReportsApiController#lti_link_params` — a tool
+    // setting without a resource type code is destroyed.
+    let tool_setting = fields
+        .tool_setting
+        .as_ref()
+        .filter(|setting| setting.resource_type_code.is_some())
+        .map(|setting| setting.to_json());
+
     let sql = format!(
         "INSERT INTO originality_reports \
              (attachment_id, originality_score, originality_report_attachment_id, \
               originality_report_url, created_at, updated_at, submission_id, workflow_state, \
-              error_message, submission_time, root_account_id) \
-         VALUES ($1, $2, $3, $4, now(), now(), $5, $6, $7, $8, $9) \
+              error_message, submission_time, root_account_id, tool_setting) \
+         VALUES ($1, $2, $3, $4, now(), now(), $5, $6, $7, $8, $9, $10) \
          RETURNING {REPORT_COLUMNS}"
     );
     let report: Option<OriginalityReport> = sqlx::query_as(&sql)
@@ -142,6 +175,7 @@ async fn create_report(
         .bind(&fields.error_report)
         .bind(submission_time_of(&state.db, submission_id).await?)
         .bind(root_account_id)
+        .bind(&tool_setting)
         .fetch_optional(&state.db)
         .await
         .map_err(server_error)?;
@@ -211,16 +245,28 @@ async fn update_report(
         .unwrap_or_else(|| report.workflow_state.clone());
     let error_message = fields.error_report.clone().or(report.error_message.clone());
 
+    // Canvas `Lti::OriginalityReportsApiController#lti_link_params` — a
+    // request without a tool setting keeps the link of the report, a tool
+    // setting without a resource type code destroys it.
+    let tool_setting = match fields.tool_setting.as_ref() {
+        None => report.tool_setting.clone(),
+        Some(setting) => setting
+            .resource_type_code
+            .as_ref()
+            .map(|_| setting.to_json()),
+    };
+
     sqlx::query(
         "UPDATE originality_reports SET originality_score = $1, originality_report_url = $2, \
              originality_report_attachment_id = $3, workflow_state = $4, error_message = $5, \
-             updated_at = now() WHERE id = $6",
+             tool_setting = $6, updated_at = now() WHERE id = $7",
     )
     .bind(score)
     .bind(url)
     .bind(report_file_id)
     .bind(workflow_state)
     .bind(error_message)
+    .bind(&tool_setting)
     .bind(report.id)
     .execute(&state.db)
     .await
@@ -395,7 +441,7 @@ async fn submission_time_of(
 
 /// The Canvas `OriginalityReport` JSON.
 fn report_json(report: &OriginalityReport) -> Value {
-    json!({
+    let mut body = json!({
         "id": report.id,
         "file_id": report.attachment_id,
         "originality_score": report.originality_score,
@@ -407,5 +453,13 @@ fn report_json(report: &OriginalityReport) -> Value {
         "root_account_id": report.root_account_id,
         "created_at": report.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "updated_at": report.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-    })
+    });
+    // Canvas `OriginalityReport#as_json` only reports the tool setting when
+    // the report has a link.
+    if let Some(tool_setting) = report.tool_setting.clone() {
+        if let Some(map) = body.as_object_mut() {
+            map.insert("tool_setting".to_string(), tool_setting);
+        }
+    }
+    body
 }

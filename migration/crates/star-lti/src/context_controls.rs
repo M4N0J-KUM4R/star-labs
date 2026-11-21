@@ -63,6 +63,12 @@
 //! time zone` (as created by `0224`), so they are read as `NaiveDateTime`
 //! and written with `timezone('UTC', now())`.
 
+// The internal helpers of this module answer with a pre-rendered
+// `axum::response::Response`, so the error variant is as large as a
+// response body. The lint is silenced for the whole module instead of
+// on every single helper.
+#![allow(clippy::result_large_err)]
+
 use std::collections::{HashMap, HashSet};
 
 use axum::{
@@ -390,14 +396,14 @@ async fn authorize(pool: &PgPool, auth: &AuthUser, account_id: i64) -> Result<Ct
     // `require_feature_flag`
     if !feature_enabled(pool, account_id, "lti_registrations_next")
         .await
-        .map_err(|error| ApiError::from(error).into_response())?
+        .map_err(|error| error.into_response())?
     {
         return Err(feature_flag_not_found());
     }
     // `require_manage_lti_registrations`
     if !can_manage_account(pool, auth, account_id)
         .await
-        .map_err(|error| ApiError::from(error).into_response())?
+        .map_err(|error| error.into_response())?
     {
         return Err(ApiError::Forbidden.into_response());
     }
@@ -1253,7 +1259,7 @@ async fn create(
     )
     .await?;
 
-    let old_controls = snapshot_controls(&state.db, &[draft.clone()]).await?;
+    let old_controls = snapshot_controls(&state.db, std::slice::from_ref(&draft)).await?;
 
     let control = match existing {
         // Canvas `Lti::ContextControlService.restore_deleted_control`.
@@ -1985,8 +1991,13 @@ async fn build_anchor_control(
         deployment_course_ids,
     };
     let deployment_ids = vec![draft.deployment_id];
-    let anchors =
-        build_anchor_controls(pool, &[draft.clone()], &anchor_context, &deployment_ids).await?;
+    let anchors = build_anchor_controls(
+        pool,
+        std::slice::from_ref(&draft),
+        &anchor_context,
+        &deployment_ids,
+    )
+    .await?;
     let Some(anchor) = anchors.into_iter().next() else {
         return Ok(None);
     };

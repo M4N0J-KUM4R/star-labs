@@ -1633,7 +1633,10 @@ fn parse_multipart_fields(content_type: &str, body: &[u8]) -> Vec<(String, Strin
     };
     let delimiter = format!("--{boundary}");
     let mut fields = Vec::new();
-    for chunk in body.split(delimiter.as_bytes()).skip(1) {
+    for chunk in split_on_sequence(body, delimiter.as_bytes())
+        .into_iter()
+        .skip(1)
+    {
         let chunk = chunk.strip_prefix(&b"\r\n"[..]).unwrap_or(chunk);
         if chunk.starts_with(b"--") {
             break;
@@ -1940,6 +1943,30 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
         .position(|window| window == needle)
+}
+
+/// Splits a byte slice on a byte sequence.
+///
+/// The separator is matched as a whole sequence, not as a set of single
+/// bytes, so a multipart body is cut at its boundary markers only.
+fn split_on_sequence<'a>(body: &'a [u8], separator: &[u8]) -> Vec<&'a [u8]> {
+    if separator.is_empty() {
+        return vec![body];
+    }
+    let mut parts = Vec::new();
+    let mut start = 0;
+    let mut index = 0;
+    while index + separator.len() <= body.len() {
+        if &body[index..index + separator.len()] == separator {
+            parts.push(&body[start..index]);
+            index += separator.len();
+            start = index;
+        } else {
+            index += 1;
+        }
+    }
+    parts.push(&body[start..]);
+    parts
 }
 
 // ---------------------------------------------------------------------------

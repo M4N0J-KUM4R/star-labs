@@ -1492,21 +1492,19 @@ async fn prepare_outcome_results(
     .fetch_all(pool)
     .await?;
 
-    let mut outcome_links: Vec<OutcomeLinkRow> = Vec::new();
-    let mut outcomes: Vec<OutcomeRow> = Vec::new();
-
     if params.get("outcome_ids").is_some() && params.get("outcome_group_id").is_some() {
         return Err(reject(
             "can't filter by both outcome_ids and outcome_group_id",
         ));
     }
 
-    if let Some(outcome_id) = outcome_id_param {
-        outcome_links = load_outcome_links(pool, course_id, Some(outcome_id)).await?;
-        outcomes = load_outcomes(pool, &outcome_links).await?;
+    let (outcome_links, outcomes) = if let Some(outcome_id) = outcome_id_param {
+        let links = load_outcome_links(pool, course_id, Some(outcome_id)).await?;
+        let outcomes = load_outcomes(pool, &links).await?;
         if outcomes.is_empty() {
             return Err(reject("outcome not found in this context"));
         }
+        (links, outcomes)
     } else if params.get("outcome_group_id").is_some() {
         let group_id = params
             .get("outcome_group_id")
@@ -1517,8 +1515,9 @@ async fn prepare_outcome_results(
                 "can only include an outcome group id in the outcome context",
             ));
         }
-        outcome_links = load_outcome_links_for_group(pool, group_id).await?;
-        outcomes = load_outcomes(pool, &outcome_links).await?;
+        let links = load_outcome_links_for_group(pool, group_id).await?;
+        let outcomes = load_outcomes(pool, &links).await?;
+        (links, outcomes)
     } else if params.get("outcome_ids").is_some() {
         let requested: Vec<i64> = params
             .array("outcome_ids")
@@ -1528,18 +1527,20 @@ async fn prepare_outcome_results(
         let mut unique = requested.clone();
         unique.sort_unstable();
         unique.dedup();
-        outcome_links = load_outcome_links(pool, course_id, None).await?;
-        outcome_links.retain(|link| unique.contains(&link.outcome_id));
-        outcomes = load_outcomes(pool, &outcome_links).await?;
+        let mut links = load_outcome_links(pool, course_id, None).await?;
+        links.retain(|link| unique.contains(&link.outcome_id));
+        let outcomes = load_outcomes(pool, &links).await?;
         if outcomes.len() != unique.len() {
             return Err(reject(
                 "can only include id's of outcomes in the outcome context",
             ));
         }
+        (links, outcomes)
     } else {
-        outcome_links = load_outcome_links(pool, course_id, None).await?;
-        outcomes = load_outcomes(pool, &outcome_links).await?;
-    }
+        let links = load_outcome_links(pool, course_id, None).await?;
+        let outcomes = load_outcomes(pool, &links).await?;
+        (links, outcomes)
+    };
 
     // `require_users`
     let mut users: Vec<UserRow>;
@@ -1872,7 +1873,7 @@ async fn outcome_rollups(
             let mut rows = Vec::new();
             for rollup in &rollups {
                 if page_users.iter().any(|user| user.id == rollup.user_id) {
-                    rows.push(serialize_user_rollup(pool, rollup, &ctx).await);
+                    rows.push(serialize_user_rollup(pool, rollup, &ctx).await?);
                 }
             }
             rows
@@ -2178,8 +2179,12 @@ async fn enqueue_outcome_rollup_calculation(
 }
 
 /// The root account of an account.
+///
+/// Canvas `Account#root_account_id` — the top of the account chain. The
+/// recursive walk stops at the account without a parent, which is the root
+/// account of the context.
 async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, OutcomeApiError> {
-    let root = sqlx::query_scalar::<_, Option<i64>>(
+    let root = sqlx::query_scalar::<_, i64>(
         r#"
         WITH RECURSIVE chain AS (
             SELECT id, parent_account_id FROM accounts WHERE id = $1
@@ -2559,7 +2564,10 @@ fn calculate_rollup_score(
             } else {
                 let mut sorted = results.to_vec();
                 sorted.sort_by_key(|result| result_time(result));
-                sorted.last().map(|result| vec![result]).unwrap_or_default()
+                sorted
+                    .last()
+                    .map(|result| vec![*result])
+                    .unwrap_or_default()
             }
         }
         _ => results.to_vec(),
@@ -2901,7 +2909,7 @@ async fn serialize_user_rollup(
     pool: &PgPool,
     rollup: &Rollup,
     ctx: &OutcomeResultsContext,
-) -> Value {
+) -> Result<Value, OutcomeApiError> {
     let mut body = serialize_rollup(rollup, "user", rollup.user_id);
     let sections = load_user_sections(pool, ctx.course_id, rollup.user_id, ctx.section_id).await?;
     let (section_id, status) = sections
@@ -2915,7 +2923,7 @@ async fn serialize_user_rollup(
         );
         links.insert("status".to_string(), json!(status));
     }
-    body
+    Ok(body)
 }
 
 /// The section enrollments of a user in a course.
