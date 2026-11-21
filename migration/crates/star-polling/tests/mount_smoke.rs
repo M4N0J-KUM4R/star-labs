@@ -71,14 +71,18 @@ async fn mounted_routes_require_auth_and_unknown_paths_stay_404() {
     // The submissions collection is POST-only: a GET there is a 405 from the
     // method router (the extractor never runs), while the POST is a 401
     // without a token.
-    let resp = server.get("/polls/1/poll_sessions/2/poll_submissions").await;
+    let resp = server
+        .get("/polls/1/poll_sessions/2/poll_submissions")
+        .await;
     assert_eq!(
         resp.status_code(),
         405,
         "GET on the POST-only submissions route must be 405; body: {}",
         resp.text()
     );
-    let resp = server.post("/polls/1/poll_sessions/2/poll_submissions").await;
+    let resp = server
+        .post("/polls/1/poll_sessions/2/poll_submissions")
+        .await;
     assert_eq!(
         resp.status_code(),
         401,
