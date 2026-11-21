@@ -635,13 +635,12 @@ struct ReportRow {
     start_at: Option<NaiveDateTime>,
     end_at: Option<NaiveDateTime>,
     created_at: Option<NaiveDateTime>,
-    updated_at: Option<NaiveDateTime>,
 }
 
 /// The columns of an `account_reports` row, in the order the queries use.
 const REPORT_COLUMNS: &str = "id, user_id, message, account_id, attachment_id, workflow_state, \
                               report_type, progress, current_line, parameters, start_at, end_at, \
-                              created_at, updated_at";
+                              created_at";
 
 /// One `attachments` row.
 #[derive(Debug, sqlx::FromRow)]
@@ -1705,7 +1704,10 @@ fn pagination_link(
     let mut base = format!("{base_url}?");
     let mut kept: Vec<&(String, String)> = query
         .iter()
-        .filter(|(key, _)| key != "page" && key != "per_page")
+        .filter(|(key, _)| {
+            // Canvas `Api::EXCLUDE_IN_PAGINATION_LINKS`.
+            key != "page" && key != "per_page" && key != "access_token" && key != "api_key"
+        })
         .collect();
     kept.sort_by(|left, right| left.0.cmp(&right.0));
     for (key, value) in kept {

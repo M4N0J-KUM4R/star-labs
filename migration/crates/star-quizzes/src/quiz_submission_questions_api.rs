@@ -259,6 +259,7 @@ struct SubmissionRow {
     submission_data: String,
     validation_token: Option<String>,
     end_at: Option<DateTime<Utc>>,
+    has_seen_results: bool,
 }
 
 impl SubmissionRow {
@@ -306,6 +307,7 @@ struct QuizView {
     hide_results: Option<String>,
     one_time_results: bool,
     require_lockdown_browser: bool,
+    cant_go_back: bool,
 }
 
 impl QuizView {
@@ -336,6 +338,7 @@ impl QuizView {
                 .get("require_lockdown_browser")
                 .and_then(json_bool)
                 .unwrap_or(false),
+            cant_go_back: row.get("cant_go_back").and_then(json_bool).unwrap_or(false),
         }
     }
 }
@@ -721,7 +724,9 @@ fn serialize_answer(
             }
         }
         AnswerKind::FileUpload => {
-            record.insert(key, answer.clone());
+            // Canvas `FileUpload#serialize(*args)` stores the arguments of the
+            // serializer, so the record holds the answer in an array.
+            record.insert(key, json!([answer.clone()]));
         }
         AnswerKind::None => {}
     }
@@ -1094,7 +1099,7 @@ async fn load_submission(
         sqlx::query_as(
             r#"
             SELECT id, quiz_id, user_id, attempt, workflow_state, submission_data,
-                   validation_token, end_at
+                   validation_token, end_at, has_seen_results
             FROM quiz_submissions
             WHERE user_id = $1
             ORDER BY id
@@ -1109,7 +1114,7 @@ async fn load_submission(
         sqlx::query_as(
             r#"
             SELECT id, quiz_id, user_id, attempt, workflow_state, submission_data,
-                   validation_token, end_at
+                   validation_token, end_at, has_seen_results
             FROM quiz_submissions
             WHERE id = $1
             "#,
@@ -1212,7 +1217,6 @@ async fn is_observer(
         r#"
         SELECT 1 FROM observer_enrollments
         WHERE observer_id = $1 AND user_id = $2 AND course_id = $3
-          AND workflow_state = 'active'
         LIMIT 1
         "#,
     )
@@ -1244,11 +1248,10 @@ fn results_visible(quiz: &QuizView, submission: &SubmissionRow, can_review_grade
     }
 }
 
-/// Canvas `QuizSubmission#has_seen_results?` — star-lms keeps the flag in the
-/// submission data.
+/// Canvas `QuizSubmission#has_seen_results?` — the flag is a column of
+/// `quiz_submissions`.
 fn submission_has_seen_results(submission: &SubmissionRow) -> bool {
-    value_to_boolean(submission_object(&submission.submission_data).get("has_seen_results"))
-        .unwrap_or(false)
+    submission.has_seen_results
 }
 
 // ---------------------------------------------------------------------------
@@ -1610,7 +1613,7 @@ async fn answer(
         }
     }
 
-    update_question(&state.db, &submission, &quiz, &params, record).await?;
+    update_question(&state.db, &submission, &quiz, &params, record, true).await?;
 
     let submission = load_submission(&state.db, &quiz_submission_id, &auth).await?;
     Ok(Json(quiz_submission_questions_json(
@@ -1629,6 +1632,7 @@ async fn update_question(
     quiz: &QuizView,
     params: &ActionParams,
     record: Map<String, Value>,
+    snapshot: bool,
 ) -> Result<(), QsqError> {
     if submission.completed() {
         return Err(QsqError::Reject(
@@ -1668,11 +1672,19 @@ async fn update_question(
         ));
     }
 
-    backup_submission_data(pool, submission, record).await
+    backup_submission_data(pool, submission, params, record, snapshot).await
 }
 
 /// `Quizzes::QuizSubmissionService#assert_takeability!`.
 fn assert_takeability(quiz: &QuizView, params: &ActionParams) -> Result<(), QsqError> {
+    // The "can't go back" quizzes are not supported by the API.
+    if quiz.cant_go_back {
+        return Err(QsqError::Reject(
+            StatusCode::NOT_IMPLEMENTED,
+            "that type of quizzes is not supported yet".to_string(),
+        ));
+    }
+
     // The access code of the quiz has to match.
     if let Some(access_code) = quiz.access_code.as_deref() {
         if !access_code.is_empty() && params.string("access_code").as_deref() != Some(access_code) {
@@ -1699,7 +1711,9 @@ fn assert_takeability(quiz: &QuizView, params: &ActionParams) -> Result<(), QsqE
 async fn backup_submission_data(
     pool: &PgPool,
     submission: &SubmissionRow,
+    params: &ActionParams,
     record: Map<String, Value>,
+    snapshot: bool,
 ) -> Result<(), QsqError> {
     let stored = parse_submission_data(&submission.submission_data);
     let same_attempt = submission_object(&submission.submission_data)
@@ -1712,7 +1726,28 @@ async fn backup_submission_data(
         _ => Map::new(),
     };
     deep_merge(&mut merged, record);
+
+    // `update_question` merges the validation token and the snapshot counter
+    // into the records before they are stored.
+    merged.insert(
+        "validation_token".to_string(),
+        match params.string("validation_token") {
+            Some(token) => json!(token),
+            None => Value::Null,
+        },
+    );
+    merged.insert("cnt".to_string(), json!(if snapshot { 5 } else { 1 }));
+
     merged.insert("attempt".to_string(), json!(submission.attempt));
+
+    // `new_params[:cnt] = (new_params[:cnt].to_i + 1) % 5`.
+    let counter = merged
+        .get("cnt")
+        .and_then(json_i64)
+        .unwrap_or(0)
+        .wrapping_add(1)
+        .rem_euclid(5);
+    merged.insert("cnt".to_string(), json!(counter));
 
     let payload = serde_json::to_string(&Value::Object(merged))
         .map_err(|error| ApiError::Db(error.to_string()))?;
@@ -1735,13 +1770,13 @@ async fn backup_submission_data(
 /// GET /quiz_submissions/{quiz_submission_id}/questions/{id}/formatted_answer
 async fn formatted_answer(
     State(state): State<AppState>,
-    Path((quiz_submission_id, question_id)): Path<(String, i64)>,
+    Path((quiz_submission_id, question_id)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
     auth: AuthUser,
 ) -> Result<Json<Value>, QsqError> {
     let submission = load_submission(&state.db, &quiz_submission_id, &auth).await?;
     let quiz = load_quiz(&state.db, submission.quiz_id).await?;
-    let question = require_question(&state.db, quiz.id, question_id).await?;
+    let question = require_question(&state.db, quiz.id, ruby_to_i(&question_id)).await?;
 
     let student_answer = query.get("answer").cloned().unwrap_or_default();
     if student_answer.trim().is_empty() {
@@ -1806,10 +1841,10 @@ fn strip_insignificant_zeros(value: &str) -> String {
 /// Canvas routes this path but the controller has no `show` action, so Rails
 /// answers `ActionNotFound` before any `before_action` runs: a 404 with
 /// `{"errors": [{"message": "An error occurred.", "error_code": "not_found"}]}`.
+/// The answer does not depend on the caller, so the route needs no
+/// authentication either — Rails raises before the login filter.
 async fn show(
-    State(_state): State<AppState>,
-    Path((_quiz_submission_id, _question_id)): Path<(String, i64)>,
-    _auth: AuthUser,
+    Path((_quiz_submission_id, _question_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, QsqError> {
     Err(QsqError::ActionNotFound)
 }
@@ -1817,7 +1852,7 @@ async fn show(
 /// PUT /quiz_submissions/{quiz_submission_id}/questions/{id}/flag
 async fn flag(
     State(state): State<AppState>,
-    Path((quiz_submission_id, question_id)): Path<(String, i64)>,
+    Path((quiz_submission_id, question_id)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
     auth: AuthUser,
     body: Option<Json<Value>>,
@@ -1827,7 +1862,7 @@ async fn flag(
         auth,
         FlagRequest {
             quiz_submission_id,
-            question_id,
+            question_id: ruby_to_i(&question_id),
             body,
             query,
             flagged: true,
@@ -1839,7 +1874,7 @@ async fn flag(
 /// PUT /quiz_submissions/{quiz_submission_id}/questions/{id}/unflag
 async fn unflag(
     State(state): State<AppState>,
-    Path((quiz_submission_id, question_id)): Path<(String, i64)>,
+    Path((quiz_submission_id, question_id)): Path<(String, String)>,
     Query(query): Query<HashMap<String, String>>,
     auth: AuthUser,
     body: Option<Json<Value>>,
@@ -1849,7 +1884,7 @@ async fn unflag(
         auth,
         FlagRequest {
             quiz_submission_id,
-            question_id,
+            question_id: ruby_to_i(&question_id),
             body,
             query,
             flagged: false,
@@ -1897,7 +1932,7 @@ async fn toggle_flag(
     let mut record = Map::new();
     record.insert(marked_key(question.id), json!(request.flagged));
 
-    update_question(&state.db, &submission, &quiz, &params, record).await?;
+    update_question(&state.db, &submission, &quiz, &params, record, false).await?;
 
     let submission = load_submission(&state.db, &request.quiz_submission_id, &auth).await?;
     let questions = vec![question];

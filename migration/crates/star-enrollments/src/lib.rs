@@ -16,6 +16,8 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod observer_alert_thresholds;
+
 // --------------------------------------------------------------------------
 // Domain types
 // --------------------------------------------------------------------------
@@ -428,6 +430,8 @@ async fn insert_enrollment(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // The alert thresholds of an observer.
+        .merge(observer_alert_thresholds::router())
         .route("/enrollments", post(create_enrollment))
         .route("/enrollments", get(list_enrollments))
         .route("/enrollments/{id}", delete(delete_enrollment))

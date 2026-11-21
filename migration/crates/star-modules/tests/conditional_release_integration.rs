@@ -144,6 +144,7 @@ async fn seed_assignment(pool: &PgPool, course_id: i64, title: &str) -> i64 {
 /// The fixture of the conditional release tests.
 struct Fixture {
     course_id: i64,
+    other_course_id: i64,
     teacher_id: i64,
     student_id: i64,
     outsider_id: i64,
@@ -171,6 +172,7 @@ async fn seed_fixture(pool: &PgPool, prefix: &str) -> Fixture {
 
     Fixture {
         course_id,
+        other_course_id,
         teacher_id,
         student_id,
         outsider_id,
@@ -863,8 +865,7 @@ async fn a_scoring_range_the_request_does_not_mention_is_destroyed() {
 }
 
 #[tokio::test]
-async fn a_rule_is_destroyed() {
-    let Some((server, pool, prefix)) = setup().await else {
+async fn a_rule_is_destroyed() {    let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
     };

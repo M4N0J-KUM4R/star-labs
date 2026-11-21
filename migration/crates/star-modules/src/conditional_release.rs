@@ -59,6 +59,10 @@
 //! - The request body is the flat parameter hash of the Canvas controller
 //!   (`trigger_assignment_id`, `scoring_ranges`, ...). The query string wins
 //!   over the body, like Rails' `request_parameters.merge(query_parameters)`.
+//! - An explicit `null` in the request clears the attribute it belongs to
+//!   (`trigger_assignment_id`, `lower_bound`, `upper_bound`,
+//!   `assignment_id`), exactly like the Rails attribute assignment; a key
+//!   the request does not carry leaves the attribute alone.
 //! - Canvas permits a `position` on the rule itself, but the rule has no
 //!   such column; the port ignores it instead of raising.
 
@@ -201,7 +205,8 @@ fn bad_request(errors: &ErrorBag) -> Response {
 #[derive(Debug, Default, Clone)]
 struct RuleParams {
     /// The raw `trigger_assignment_id`; `None` when the request did not
-    /// carry the key at all.
+    /// carry the key at all, `Some(Value::Null)` when the request carried an
+    /// explicit `null` (Rails assigns that `nil` to the attribute).
     trigger_assignment_id: Option<Value>,
     /// True when the request carried a `scoring_ranges` array.
     scoring_ranges_given: bool,
@@ -214,6 +219,12 @@ struct RangeParams {
     id: Option<i64>,
     lower_bound: Option<f64>,
     upper_bound: Option<f64>,
+    /// True when the request carried the `lower_bound` key, even when the
+    /// value was an explicit `null` (Rails clears the attribute then).
+    lower_bound_given: bool,
+    /// True when the request carried the `upper_bound` key, even when the
+    /// value was an explicit `null`.
+    upper_bound_given: bool,
     position: Option<i32>,
     /// True when the request carried an `assignment_sets` array.
     assignment_sets_given: bool,
@@ -235,6 +246,9 @@ struct SetParams {
 struct AssociationParams {
     id: Option<i64>,
     assignment_id: Option<i64>,
+    /// True when the request carried the `assignment_id` key, even when the
+    /// value was an explicit `null`.
+    assignment_id_given: bool,
     position: Option<i32>,
 }
 
@@ -297,9 +311,7 @@ fn json_decimal(value: Option<&Value>) -> Option<f64> {
 fn parse_rule_params(body: &Value) -> RuleParams {
     let mut params = RuleParams::default();
     if let Some(value) = body.get("trigger_assignment_id") {
-        if !value.is_null() {
-            params.trigger_assignment_id = Some(value.clone());
-        }
+        params.trigger_assignment_id = Some(value.clone());
     }
     if let Some(ranges) = body.get("scoring_ranges").and_then(Value::as_array) {
         params.scoring_ranges_given = true;
@@ -316,6 +328,8 @@ fn parse_range_params(range: &Map<String, Value>) -> RangeParams {
         id: json_integer(range.get("id")),
         lower_bound: json_decimal(range.get("lower_bound")),
         upper_bound: json_decimal(range.get("upper_bound")),
+        lower_bound_given: range.contains_key("lower_bound"),
+        upper_bound_given: range.contains_key("upper_bound"),
         position: json_integer(range.get("position")).map(|value| value as i32),
         ..RangeParams::default()
     };
@@ -354,6 +368,7 @@ fn parse_association_params(association: &Map<String, Value>) -> AssociationPara
     AssociationParams {
         id: json_integer(association.get("id")),
         assignment_id: json_integer(association.get("assignment_id")),
+        assignment_id_given: association.contains_key("assignment_id"),
         position: json_integer(association.get("position")).map(|value| value as i32),
     }
 }
@@ -583,9 +598,11 @@ async fn assignment_course(db: &PgPool, assignment_id: i64) -> Result<Option<i64
 /// The effective trigger assignment of the request.
 ///
 /// A create has no trigger until the request carries one; an update keeps
-/// the trigger of the rule when the request does not name one.
+/// the trigger of the rule when the request does not name one. An explicit
+/// `null` clears the trigger, exactly like the Rails attribute assignment.
 fn effective_trigger(params: &RuleParams, current: Option<i64>) -> Option<i64> {
     match &params.trigger_assignment_id {
+        Some(Value::Null) => None,
         Some(value) => Some(cast_integer(value)),
         None => current,
     }
@@ -598,6 +615,9 @@ fn effective_trigger(params: &RuleParams, current: Option<i64>) -> Option<i64> {
 /// - `validates :trigger_assignment_id, presence: true`
 /// - `validate :trigger_assignment_in_same_course`
 /// - `belongs_to :trigger_assignment` (the assignment must exist)
+///
+/// The order is the order of the validations in the model: the explicit
+/// validations run first, the `belongs_to` validation last.
 async fn validate_rule(
     db: &PgPool,
     course_id: i64,
@@ -612,12 +632,13 @@ async fn validate_rule(
     };
 
     let trigger_course = assignment_course(db, trigger_id).await?;
-    if trigger_course.is_none() {
-        errors.add("trigger_assignment", "must exist");
-    }
     // `trigger_assignment&.context_id != course_id`
     if trigger_changed && trigger_course != Some(course_id) {
         errors.add("trigger_assignment_id", "invalid trigger assignment");
+    }
+    // `belongs_to :trigger_assignment`
+    if trigger_course.is_none() {
+        errors.add("trigger_assignment", "must exist");
     }
     Ok(errors)
 }
@@ -661,6 +682,9 @@ fn validate_range(range: &RangePlan, errors: &mut ErrorBag) {
 /// - `validates :assignment_id, uniqueness: { scope: :assignment_set_id }`
 /// - `validate :not_trigger`
 /// - `validate :assignment_in_same_course`
+/// - `belongs_to :assignment` (the assignment must exist)
+///
+/// The order is the order of the validations in the model.
 async fn validate_association(
     db: &PgPool,
     association: &AssociationPlan,
@@ -671,27 +695,25 @@ async fn validate_association(
     let mut errors = ErrorBag::default();
     let prefix = "scoring_ranges.assignment_sets.assignment_set_associations";
     let Some(assignment_id) = association.assignment_id else {
+        // `validates :assignment_id, presence: true`
         errors.add(&format!("{prefix}.assignment_id"), "can't be blank");
+        // `validate :not_trigger`
+        if trigger_id.is_none() {
+            errors.add(
+                &format!("{prefix}.assignment_id"),
+                "can't match rule trigger_assignment_id",
+            );
+        }
+        // `validate :assignment_in_same_course`
+        if association.assignment_changed {
+            errors.add(&format!("{prefix}.assignment_id"), "invalid assignment");
+        }
+        // `belongs_to :assignment`
         errors.add(&format!("{prefix}.assignment"), "must exist");
         return Ok(errors);
     };
 
-    let assignment_course = assignment_course(db, assignment_id).await?;
-    if assignment_course.is_none() {
-        errors.add(&format!("{prefix}.assignment"), "must exist");
-    }
-    // `assignment_id_changed? && assignment&.context_id != course_id`
-    if association.assignment_changed && assignment_course != Some(course_id) {
-        errors.add(&format!("{prefix}.assignment_id"), "invalid assignment");
-    }
-    // `not_trigger`
-    if Some(assignment_id) == trigger_id {
-        errors.add(
-            &format!("{prefix}.assignment_id"),
-            "can't match rule trigger_assignment_id",
-        );
-    }
-    // The uniqueness of the assignment inside the set.
+    // `validates :assignment_id, uniqueness: { scope: :assignment_set_id }`
     if let Some(set_id) = set_id {
         let taken: Option<(i32,)> = sqlx::query_as(
             "SELECT 1 FROM conditional_release_assignment_set_associations \
@@ -706,6 +728,22 @@ async fn validate_association(
         if taken.is_some() {
             errors.add(&format!("{prefix}.assignment_id"), "has already been taken");
         }
+    }
+    // `validate :not_trigger`
+    if Some(assignment_id) == trigger_id {
+        errors.add(
+            &format!("{prefix}.assignment_id"),
+            "can't match rule trigger_assignment_id",
+        );
+    }
+    let assignment_course = assignment_course(db, assignment_id).await?;
+    // `assignment_id_changed? && assignment&.context_id != course_id`
+    if association.assignment_changed && assignment_course != Some(course_id) {
+        errors.add(&format!("{prefix}.assignment_id"), "invalid assignment");
+    }
+    // `belongs_to :assignment`
+    if assignment_course.is_none() {
+        errors.add(&format!("{prefix}.assignment"), "must exist");
     }
     Ok(errors)
 }
@@ -792,12 +830,16 @@ fn plan_update(params: &RuleParams, existing: &[RangeTree]) -> Result<RulePlan, 
             None => None,
         };
 
-        let lower_bound = param
-            .lower_bound
-            .or_else(|| existing_range.and_then(|tree| tree.row.lower_bound));
-        let upper_bound = param
-            .upper_bound
-            .or_else(|| existing_range.and_then(|tree| tree.row.upper_bound));
+        let lower_bound = if param.lower_bound_given {
+            param.lower_bound
+        } else {
+            existing_range.and_then(|tree| tree.row.lower_bound)
+        };
+        let upper_bound = if param.upper_bound_given {
+            param.upper_bound
+        } else {
+            existing_range.and_then(|tree| tree.row.upper_bound)
+        };
         let changed = match existing_range {
             Some(tree) => {
                 tree.row.lower_bound != lower_bound
@@ -846,20 +888,23 @@ fn plan_update(params: &RuleParams, existing: &[RangeTree]) -> Result<RulePlan, 
                             ),
                             None => None,
                         };
+                        // The request only carries the assignment when it
+                        // changes it, an existing association keeps its own.
+                        // An explicit `null` clears the assignment, like the
+                        // Rails attribute assignment.
+                        let assignment_id = if assoc_param.assignment_id_given {
+                            assoc_param.assignment_id
+                        } else {
+                            existing_association.map(|assoc| assoc.assignment_id)
+                        };
                         let assignment_changed = match (
-                            assoc_param.assignment_id,
+                            assignment_id,
                             existing_association.map(|assoc| assoc.assignment_id),
                         ) {
                             (Some(new_id), Some(old_id)) => new_id != old_id,
                             (Some(_), None) => true,
-                            (None, Some(_)) => false,
+                            (None, Some(_)) => true,
                             (None, None) => false,
-                        };
-                        // The request only carries the assignment when it
-                        // changes it, an existing association keeps its own.
-                        let assignment_id = match assoc_param.assignment_id {
-                            Some(new_id) => Some(new_id),
-                            None => existing_association.map(|assoc| assoc.assignment_id),
                         };
                         let assoc_changed = match existing_association {
                             Some(assoc) => {
@@ -1132,7 +1177,9 @@ async fn create(
 
     let params = parse_rule_params(&effective_params(&parse_body(&body), &query));
     let trigger = effective_trigger(&params, None);
-    let trigger_changed = params.trigger_assignment_id.is_some();
+    // A new record only counts the trigger as changed when it carries a
+    // value; assigning `nil` to a new record is not a change.
+    let trigger_changed = matches!(&params.trigger_assignment_id, Some(value) if !value.is_null());
 
     let mut errors = validate_rule(&state.db, course_id, trigger, trigger_changed).await?;
     let plan = RulePlan {
@@ -1191,8 +1238,11 @@ async fn update(
     let params = parse_rule_params(&effective_params(&parse_body(&body), &query));
     let trigger = effective_trigger(&params, Some(rule.trigger_assignment_id));
     let trigger_changed = match &params.trigger_assignment_id {
-        Some(value) => cast_integer(value) != rule.trigger_assignment_id,
+        // The request does not mention the trigger, it stays as it is.
         None => false,
+        // An explicit `null` clears the trigger.
+        Some(Value::Null) => true,
+        Some(value) => cast_integer(value) != rule.trigger_assignment_id,
     };
 
     let mut errors = validate_rule(&state.db, course_id, trigger, trigger_changed).await?;
