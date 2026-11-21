@@ -556,15 +556,16 @@ async fn generate_id_token(
     context_type: &str,
     context_id: i64,
 ) -> Result<Option<String>, ApiError> {
-    // Tool → developer key (client id) and LTI deployment.
-    let tool: Option<(Option<i64>, Option<String>, Option<i64>)> = sqlx::query_as(
-        "SELECT developer_key_id, deployment_id, lti_registration_id FROM external_tools \
+    // Tool → developer key (client id) and LTI deployment (the Canvas-parity
+    // `context_external_tools` table).
+    let tool: Option<(Option<i64>, Option<i64>)> = sqlx::query_as(
+        "SELECT developer_key_id, lti_registration_id FROM context_external_tools \
          WHERE id = $1 AND workflow_state <> 'deleted'",
     )
     .bind(launch.tool_id)
     .fetch_optional(&state.db)
     .await?;
-    let Some((tool_developer_key_id, tool_deployment_id, tool_registration_id)) = tool else {
+    let Some((tool_developer_key_id, tool_registration_id)) = tool else {
         return Ok(None);
     };
 
@@ -583,24 +584,21 @@ async fn generate_id_token(
         return Ok(None);
     };
 
-    // Deployment-id resolution: the tool's stored deployment id, else the
-    // active deployment of the tool's registration for this context
-    // (Canvas `ContextExternalTool#deployment_id`).
-    let deployment_id: Option<String> = match tool_deployment_id {
-        Some(id) => Some(id),
-        None => {
-            let row: Option<(String,)> = sqlx::query_as(
-                "SELECT deployment_id FROM lti_deployments \
-                 WHERE registration_id = $1 AND context_type = $2 AND context_id = $3 \
-                 AND workflow_state = 'active' LIMIT 1",
-            )
-            .bind(tool_registration_id)
-            .bind(context_type)
-            .bind(context_id)
-            .fetch_optional(&state.db)
-            .await?;
-            row.map(|(id,)| id)
-        }
+    // Deployment-id resolution: the active deployment of the tool's
+    // registration for this context (Canvas
+    // `ContextExternalTool#deployment_id` via `Lti::Deployment`).
+    let deployment_id: Option<String> = {
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT deployment_id FROM lti_deployments \
+             WHERE registration_id = $1 AND context_type = $2 AND context_id = $3 \
+             AND workflow_state = 'active' LIMIT 1",
+        )
+        .bind(tool_registration_id)
+        .bind(context_type)
+        .bind(context_id)
+        .fetch_optional(&state.db)
+        .await?;
+        row.map(|(id,)| id)
     };
 
     let now = chrono::Utc::now().timestamp();

@@ -551,8 +551,8 @@ async fn deep_linking_response(
         )
         .await?;
     } else if for_placement("collaboration") {
-        if let Some(tool) = tool_row {
-            extra.insert("tool_id".to_string(), json!(tool));
+        if let Some((tool_id, _)) = tool_row {
+            extra.insert("tool_id".to_string(), json!(tool_id));
         }
     } else if for_placement("ActivityAssetProcessor")
         || for_placement("ActivityAssetProcessorContribution")
@@ -563,8 +563,8 @@ async fn deep_linking_response(
             "ltiAssetProcessorContribution"
         };
         items.retain(|item| item.get("type").and_then(|v| v.as_str()) == Some(wanted));
-        if let Some(tool) = tool_row {
-            extra.insert("tool_id".to_string(), json!(tool));
+        if let Some((tool_id, _)) = tool_row {
+            extra.insert("tool_id".to_string(), json!(tool_id));
         }
     } else if for_placement("assignment_selection") || for_placement("submission_type_selection") {
         // Nothing is created on the new/edit assignment page.
@@ -743,13 +743,14 @@ async fn deep_linking_cancel(Query(query): Query<CancelQuery>) -> Response {
 // ---------------------------------------------------------------------------
 
 /// Canvas `tool` — `ToolFinder.from_context(@context, scope: active tools
-/// with developer_key_id == client_id)`. Returns the tool id.
+/// with developer_key_id == client_id)` — from the Canvas-parity
+/// `context_external_tools` table. Returns `(id, root_account_id)`.
 async fn find_tool_for_developer_key(
     pool: &PgPool,
     context_type: &str,
     context_id: i64,
     developer_key_id: i64,
-) -> Result<Option<i64>, ApiError> {
+) -> Result<Option<(i64, i64)>, ApiError> {
     let account_chain = context_account_chain(pool, context_type, context_id).await?;
     let context_clause = match context_type {
         "Account" => "(context_type = 'Account' AND context_id = ANY($2))".to_string(),
@@ -761,17 +762,17 @@ async fn find_tool_for_developer_key(
             .to_string(),
     };
     let sql = format!(
-        "SELECT id FROM external_tools \
+        "SELECT id, root_account_id FROM context_external_tools \
          WHERE workflow_state <> 'deleted' AND developer_key_id = $1 AND ({context_clause}) \
          ORDER BY (context_type = 'Course') DESC, id LIMIT 1"
     );
-    let row: Option<(i64,)> = sqlx::query_as(&sql)
+    let row: Option<(i64, i64)> = sqlx::query_as(&sql)
         .bind(developer_key_id)
         .bind(&account_chain)
         .bind(context_id)
         .fetch_optional(pool)
         .await?;
-    Ok(row.map(|(id,)| id))
+    Ok(row)
 }
 
 /// Canvas `Lti::ResourceLink.create_with(context, tool, custom, url, title)`
@@ -781,19 +782,13 @@ async fn create_resource_links_for_items(
     pool: &PgPool,
     context_type: &str,
     context_id: i64,
-    tool: Option<i64>,
+    tool: Option<(i64, i64)>,
     items: &mut [Value],
     resource_link_items: &[usize],
 ) -> Result<(), ApiError> {
-    let Some(tool_id) = tool else {
+    let Some((tool_id, root_account_id)) = tool else {
         // Canvas: create_with returns nil → lookup_uuid stays unset (null).
         return Ok(());
-    };
-    let root_account_id = match context_type {
-        "Account" => context_id,
-        "Course" => account_chain_root(pool, context_id).await?,
-        "Group" => group_root_account(pool, context_id).await?,
-        _ => 1,
     };
     for &index in resource_link_items {
         let item = &items[index];
@@ -802,7 +797,8 @@ async fn create_resource_links_for_items(
         let sql = "INSERT INTO lti_resource_links \
              (context_external_tool_id, workflow_state, root_account_id, context_id, context_type, \
               custom, lookup_uuid, resource_link_uuid, url, lti_1_1_id, title, created_at, updated_at) \
-             VALUES ($1, 'active', $2, $3, $4, $5, $6, $7, $8, NULL, $9, now(), now()) RETURNING id";
+             VALUES ($1, 'active', $2, $3, $4, $5, $6::uuid, $7::uuid, $8, NULL, $9, now(), now()) \
+             RETURNING id";
         let _: (i64,) = sqlx::query_as(sql)
             .bind(tool_id)
             .bind(root_account_id)
@@ -833,41 +829,6 @@ fn filter_custom_value(custom: Option<Value>) -> Value {
         ),
         _ => Value::Null,
     }
-}
-
-async fn account_chain_root(pool: &PgPool, course_id: i64) -> Result<i64, ApiError> {
-    let account: Option<(Option<i64>,)> =
-        sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
-            .bind(course_id)
-            .fetch_optional(pool)
-            .await?;
-    let mut current = account.and_then(|(a,)| a);
-    let mut last = current.unwrap_or(1);
-    let mut depth = 0;
-    while let Some(id) = current {
-        if depth >= 20 {
-            break;
-        }
-        depth += 1;
-        last = id;
-        let parent: Option<(Option<i64>,)> =
-            sqlx::query_as("SELECT parent_account_id FROM accounts WHERE id = $1")
-                .bind(id)
-                .fetch_optional(pool)
-                .await?;
-        current = parent.and_then(|(p,)| p);
-    }
-    Ok(last)
-}
-
-async fn group_root_account(pool: &PgPool, group_id: i64) -> Result<i64, ApiError> {
-    let account: Option<(Option<i64>,)> = sqlx::query_as(
-        "SELECT c.account_id FROM groups g JOIN courses c ON c.id = g.course_id WHERE g.id = $1",
-    )
-    .bind(group_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(account.and_then(|(a,)| a).unwrap_or(1))
 }
 
 /// Canvas: create a new module ("New Content From App" or the
@@ -923,12 +884,12 @@ async fn add_items_to_module(
     pool: &PgPool,
     course_id: i64,
     module_id: i64,
-    tool: Option<i64>,
+    tool: Option<(i64, i64)>,
     items: &[Value],
     resource_link_items: &[usize],
     line_item_items: &[usize],
 ) -> Result<(), ApiError> {
-    let Some(tool_id) = tool else {
+    let Some((tool_id, _)) = tool else {
         return Ok(());
     };
     let position: (Option<i32>,) =
@@ -953,7 +914,7 @@ async fn add_items_to_module(
         } else {
             sqlx::query_as(
                 "SELECT id FROM lti_resource_links \
-                 WHERE context_type = 'Course' AND context_id = $1 AND lookup_uuid = $2",
+                 WHERE context_type = 'Course' AND context_id = $1 AND lookup_uuid = $2::uuid",
             )
             .bind(course_id)
             .bind(lookup_uuid)

@@ -126,12 +126,16 @@ async fn setup() -> Option<(TestServer, PgPool, String, Fixtures)> {
     .await
     .expect("seed deployment");
 
-    // The LTI 1.3 tool in the course context.
+    // The LTI 1.3 tool in the course context (the Canvas-parity
+    // `context_external_tools` table, which `lti_resource_links` is
+    // foreign-keyed to).
     let tool_id: i64 = sqlx::query_scalar(
-        "INSERT INTO external_tools \
-         (name, url, domain, context_type, context_id, lti_version, developer_key_id, \
-          lti_registration_id, account_id) \
-         VALUES ($1, $2, $3, 'Course', $4, '1.3', $5, $6, $7) RETURNING id",
+        "INSERT INTO context_external_tools \
+         (name, url, domain, context_type, context_id, workflow_state, lti_version, \
+          developer_key_id, lti_registration_id, root_account_id, shared_secret, \
+          consumer_key, created_at, updated_at) \
+         VALUES ($1, $2, $3, 'Course', $4, 'active', '1.3', $5, $6, $7, 'secret', 'key', \
+          now(), now()) RETURNING id",
     )
     .bind(format!("{prefix}-tool"))
     .bind("https://tool.example.com/launch")
@@ -232,7 +236,10 @@ async fn cleanup(pool: &PgPool, prefix: &str, course: i64) {
     .bind(course)
     .execute(pool)
     .await;
-    // Star-specific tables.
+    let _ = sqlx::query("DELETE FROM context_external_tools WHERE name LIKE $1")
+        .bind(format!("{prefix}%"))
+        .execute(pool)
+        .await;
     let _ = sqlx::query("DELETE FROM external_tools WHERE name LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
@@ -358,7 +365,7 @@ async fn authorize_redirect_redirects_to_the_hint_domain() {
         .get("/api/lti/authorize_redirect?lti_message_hint=not-a-jwt")
         .await;
     assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.text(), "Invalid lti_message_hint");
+    assert_eq!(resp.text(), "bad request: Invalid lti_message_hint");
 
     cleanup(&pool, &prefix, f.course).await;
 }
@@ -404,9 +411,14 @@ async fn authorize_validates_oidc_params_in_canvas_order() {
     let teacher_auth = auth(f.teacher, "teacher");
 
     // Missing parameters (with a session, Canvas lists them in
-    // REQUIRED_PARAMS order).
+    // REQUIRED_PARAMS order). The hint is decoded inside
+    // validate_current_user! before the error renders, so a request without
+    // a hint at all is a plain 400 — checked below.
+    let mut params = oidc_params(&f, &hint, &star_lti::opaque_login_hint(f.teacher));
+    params.remove("nonce");
+    params.remove("response_type");
     let resp = server
-        .get(&format!("/api/lti/authorize?client_id={}", f.api_key))
+        .get(&format!("/api/lti/authorize?{}", query_string(&params)))
         .add_header(HOST, "canvas.test")
         .add_header(AUTHORIZATION, teacher_auth.clone())
         .await;
@@ -415,13 +427,23 @@ async fn authorize_validates_oidc_params_in_canvas_order() {
     assert_eq!(body["error"], "invalid_request_object", "body: {body}");
     assert_eq!(
         body["error_description"],
-        "The following parameters are missing: login_hint,lti_message_hint,nonce,prompt,\
-         redirect_uri,response_mode,response_type,scope"
+        "The following parameters are missing: nonce,response_type"
     );
-    assert!(body["state"].is_null());
+    assert_eq!(body["state"], "st-1");
 
-    // Wrong scope.
-    let mut params = oidc_params(&f, &hint, "some-login-hint");
+    // Without a hint the decode inside validate_current_user! short-circuits
+    // to Canvas' plain 400, even with a session.
+    let resp = server
+        .get(&format!("/api/lti/authorize?client_id={}", f.api_key))
+        .add_header(HOST, "canvas.test")
+        .add_header(AUTHORIZATION, teacher_auth.clone())
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(resp.text(), "bad request: Invalid lti_message_hint");
+
+    // Wrong scope (a matching login_hint — a mismatch would overwrite the
+    // error with login_required, like Canvas' set_oidc_error!).
+    let mut params = oidc_params(&f, &hint, &star_lti::opaque_login_hint(f.teacher));
     params.insert("scope".to_string(), "profile".to_string());
     let resp = server
         .get(&format!("/api/lti/authorize?{}", query_string(&params)))
@@ -456,7 +478,7 @@ async fn authorize_validates_oidc_params_in_canvas_order() {
         .add_header(HOST, "canvas.test")
         .await;
     assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.text(), "Invalid lti_message_hint");
+    assert_eq!(resp.text(), "bad request: Invalid lti_message_hint");
 
     // A login_hint that does not identify the user.
     let params = oidc_params(&f, &hint, "some-login-hint");
@@ -487,7 +509,7 @@ async fn authorize_validates_oidc_params_in_canvas_order() {
         .add_header(AUTHORIZATION, teacher_auth.clone())
         .await;
     assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.text(), "Invalid lti_message_hint");
+    assert_eq!(resp.text(), "bad request: Invalid lti_message_hint");
 
     // A hint pointing at an unknown context.
     let hint = hint_jwt(json!({"context_id": 987654321}), JWT_SECRET);
@@ -558,7 +580,7 @@ async fn authorize_rejects_unregistered_redirect_uri() {
         .add_header(AUTHORIZATION, auth(f.teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.text(), "Invalid redirect_uri");
+    assert_eq!(resp.text(), "bad request: Invalid redirect_uri");
 
     cleanup(&pool, &prefix, f.course).await;
 }
@@ -863,7 +885,7 @@ async fn seed_link_row(
 
 async fn lookup_uuid_of(pool: &PgPool, id: i64) -> String {
     let (uuid,): (String,) =
-        sqlx::query_as("SELECT lookup_uuid FROM lti_resource_links WHERE id = $1")
+        sqlx::query_as("SELECT lookup_uuid::text FROM lti_resource_links WHERE id = $1")
             .bind(id)
             .fetch_one(pool)
             .await
@@ -921,7 +943,7 @@ async fn seed_links(pool: &PgPool, f: &Fixtures, prefix: &str) -> LinkFixtures {
         r#"INSERT INTO collaborations
          (collaboration_type, user_id, context_id, context_type, title,
           resource_link_lookup_uuid, created_at, updated_at)
-         VALUES ('external_tool', $1, $2, 'Course', $3, $4, now(), now())"#,
+         VALUES ('external_tool', $1, $2, 'Course', $3, $4::uuid, now(), now())"#,
     )
     .bind(f.teacher)
     .bind(f.course)
@@ -1070,7 +1092,7 @@ async fn resource_links_show_supports_the_canvas_id_formats() {
     };
 
     let (resource_link_uuid,): (String,) =
-        sqlx::query_as("SELECT resource_link_uuid FROM lti_resource_links WHERE id = $1")
+        sqlx::query_as("SELECT resource_link_uuid::text FROM lti_resource_links WHERE id = $1")
             .bind(links.rich.0)
             .fetch_one(&pool)
             .await
@@ -1610,8 +1632,8 @@ async fn deep_linking_response_creates_resource_links_for_link_selection() {
 
     // The resource link exists with the item's data.
     let row: Option<(String, Option<String>)> = sqlx::query_as(
-        "SELECT resource_link_uuid, title FROM lti_resource_links \
-         WHERE context_type = 'Course' AND context_id = $1 AND lookup_uuid = $2",
+        "SELECT resource_link_uuid::text, title FROM lti_resource_links \
+         WHERE context_type = 'Course' AND context_id = $1 AND lookup_uuid = $2::uuid",
     )
     .bind(f.course)
     .bind(&lookup_uuid)
@@ -1650,8 +1672,10 @@ async fn deep_linking_response_module_flow_creates_module_and_items() {
     };
     let path = format!("/courses/{}/deep_linking_response", f.course);
 
-    // No session for a resource-creating placement → 401.
-    let data = data_jwt(json!({"placement": "module_index_menu_modal"}));
+    // No session for a resource-creating placement → 401. Each attempt uses
+    // a fresh data JWT: the nonce is consumed on every request, including
+    // the ones rejected by the permission checks (Canvas
+    // `check_and_store_nonce` fires inside validate_return_url_data).
     let jwt = deep_linking_jwt(
         &f,
         json!([{
@@ -1665,7 +1689,10 @@ async fn deep_linking_response_module_flow_creates_module_and_items() {
         .post(&path)
         .form(&HashMap::<String, String>::from([
             ("JWT".to_string(), jwt.clone()),
-            ("data".to_string(), data.clone()),
+            (
+                "data".to_string(),
+                data_jwt(json!({"placement": "module_index_menu_modal"})),
+            ),
         ]))
         .await;
     assert_eq!(resp.status_code(), 401, "no session");
@@ -1676,7 +1703,10 @@ async fn deep_linking_response_module_flow_creates_module_and_items() {
         .add_header(AUTHORIZATION, auth(f.student, "student"))
         .form(&HashMap::<String, String>::from([
             ("JWT".to_string(), jwt.clone()),
-            ("data".to_string(), data.clone()),
+            (
+                "data".to_string(),
+                data_jwt(json!({"placement": "module_index_menu_modal"})),
+            ),
         ]))
         .await;
     assert_eq!(resp.status_code(), 403, "student");
@@ -1688,7 +1718,10 @@ async fn deep_linking_response_module_flow_creates_module_and_items() {
         .add_header(AUTHORIZATION, auth(f.teacher, "teacher"))
         .form(&HashMap::<String, String>::from([
             ("JWT".to_string(), jwt),
-            ("data".to_string(), data),
+            (
+                "data".to_string(),
+                data_jwt(json!({"placement": "module_index_menu_modal"})),
+            ),
         ]))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());

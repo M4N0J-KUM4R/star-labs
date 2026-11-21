@@ -62,6 +62,7 @@ struct ResourceLinkRow {
     id: i64,
     context_external_tool_id: i64,
     workflow_state: String,
+    root_account_id: i64,
     context_id: i64,
     context_type: String,
     custom: Option<Value>,
@@ -75,16 +76,19 @@ struct ResourceLinkRow {
 }
 
 const LINK_COLUMNS: &str = "id, context_external_tool_id, workflow_state, \
-     context_id, context_type, custom, lookup_uuid, resource_link_uuid, url, lti_1_1_id, \
+     root_account_id, context_id, context_type, custom, lookup_uuid::text AS lookup_uuid, \
+     resource_link_uuid::text AS resource_link_uuid, url, lti_1_1_id, \
      title, created_at, updated_at";
 
-/// The slice of `external_tools` the tool finder needs.
+/// The slice of `context_external_tools` the tool finder needs (the
+/// Canvas-parity table `lti_resource_links.context_external_tool_id` is
+/// foreign-keyed to).
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct ToolRow {
     id: i64,
-    url: String,
+    url: Option<String>,
     domain: Option<String>,
-    account_id: Option<i64>,
+    root_account_id: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -174,13 +178,13 @@ async fn fetch_scope(
     // Canvas `resource_link`: the id, or a lookup by one of the uuid
     // formats (`find_by!` → 404 when missing, including malformed ids).
     let row: Option<ResourceLinkRow> = if let Some(uuid) = id_param.strip_prefix("lookup_uuid:") {
-        sqlx::query_as(&format!("{base} AND lookup_uuid = $2 LIMIT 1"))
+        sqlx::query_as(&format!("{base} AND lookup_uuid = $2::uuid LIMIT 1"))
             .bind(course_id)
             .bind(uuid)
             .fetch_optional(pool)
             .await?
     } else if let Some(uuid) = id_param.strip_prefix("resource_link_uuid:") {
-        sqlx::query_as(&format!("{base} AND resource_link_uuid = $2 LIMIT 1"))
+        sqlx::query_as(&format!("{base} AND resource_link_uuid = $2::uuid LIMIT 1"))
             .bind(course_id)
             .bind(uuid)
             .fetch_optional(pool)
@@ -478,7 +482,7 @@ async fn find_tool_by_url(
     };
     let account_chain = course_account_chain(pool, course_id).await?;
     let tools: Vec<ToolRow> = sqlx::query_as(
-        "SELECT id, url, domain, account_id FROM external_tools \
+        "SELECT id, url, domain, root_account_id FROM context_external_tools \
          WHERE workflow_state <> 'deleted' AND lti_version = '1.3' \
          AND ((context_type = 'Course' AND context_id = $1) \
            OR (context_type = 'Account' AND context_id = ANY($2))) \
@@ -496,7 +500,7 @@ async fn find_tool_by_url(
     let host = parsed.as_ref().map(|u| u.host_str().unwrap_or_default());
 
     // Exact URL match first (Canvas `matches_url?`).
-    if let Some(tool) = tools.iter().find(|t| t.url == url) {
+    if let Some(tool) = tools.iter().find(|t| t.url.as_deref() == Some(url)) {
         return Ok(Some(tool.clone()));
     }
     // Domain match (Canvas `matches_host?`): the tool's domain, or the host
@@ -505,8 +509,9 @@ async fn find_tool_by_url(
         if let Some(tool) = tools.iter().find(|t| {
             let domain = t.domain.as_deref().unwrap_or_default();
             (!domain.is_empty() && (host == domain || host.ends_with(&format!(".{domain}"))))
-                || url::Url::parse(&t.url)
-                    .ok()
+                || t.url
+                    .as_deref()
+                    .and_then(|tool_url| url::Url::parse(tool_url).ok())
                     .and_then(|u| u.host_str().map(|h| h == host))
                     .unwrap_or(false)
         }) {
@@ -550,17 +555,16 @@ async fn insert_link(
     url: Option<&str>,
     title: Option<&str>,
     custom: Value,
-    root_account_id: i64,
 ) -> Result<ResourceLinkRow, ApiError> {
     let row: ResourceLinkRow = sqlx::query_as(&format!(
         "INSERT INTO lti_resource_links \
          (context_external_tool_id, workflow_state, root_account_id, context_id, context_type, \
           custom, lookup_uuid, resource_link_uuid, url, lti_1_1_id, title, created_at, updated_at) \
-         VALUES ($1, 'active', $2, $3, 'Course', $4, $5, $6, $7, NULL, $8, now(), now()) \
+         VALUES ($1, 'active', $2, $3, 'Course', $4, $5::uuid, $6::uuid, $7, NULL, $8, now(), now()) \
          RETURNING {LINK_COLUMNS}"
     ))
     .bind(tool.id)
-    .bind(root_account_id)
+    .bind(tool.root_account_id)
     .bind(course_id)
     .bind(custom)
     .bind(uuid::Uuid::new_v4().to_string())
@@ -570,11 +574,6 @@ async fn insert_link(
     .fetch_one(pool)
     .await?;
     Ok(row)
-}
-
-async fn root_account_for_course(pool: &PgPool, course_id: i64) -> Result<i64, ApiError> {
-    let chain = course_account_chain(pool, course_id).await?;
-    Ok(chain.last().copied().unwrap_or(1))
 }
 
 async fn create(
@@ -609,11 +608,6 @@ async fn create(
             "No tool found for the provided URL",
         ));
     };
-    // Canvas `set_root_account`: the link's root account comes from the
-    // tool, falling back to the course's account chain.
-    let root_account = tool
-        .account_id
-        .unwrap_or(root_account_for_course(&state.db, course_id).await?);
     let link = insert_link(
         &state.db,
         course_id,
@@ -621,7 +615,6 @@ async fn create(
         body.url.as_deref(),
         body.title.as_deref(),
         filter_custom(body.custom.clone()),
-        root_account,
     )
     .await?;
     // Canvas renders rich-content JSON for API-created links.
@@ -701,11 +694,9 @@ async fn bulk_create(
             .into_response());
     }
 
-    let course_root = root_account_for_course(&state.db, course_id).await?;
     let mut created: Vec<Value> = Vec::new();
     for (item, tool) in items.iter().zip(tools.iter()) {
         let tool = tool.as_ref().expect("validated above");
-        let root_account = tool.account_id.unwrap_or(course_root);
         let link = insert_link(
             &state.db,
             course_id,
@@ -713,7 +704,6 @@ async fn bulk_create(
             item.url.as_deref(),
             item.title.as_deref(),
             filter_custom(item.custom.clone()),
-            root_account,
         )
         .await?;
         created.push(link_json(&link, "rich_content", None, &headers, course_id));
@@ -747,18 +737,21 @@ fn url_matches_tool(tool: &ToolRow, url: &str) -> bool {
     };
     let domain = tool.domain.as_deref().unwrap_or_default();
     (!domain.is_empty() && (host == domain || host.ends_with(&format!(".{domain}"))))
-        || url::Url::parse(&tool.url)
-            .ok()
+        || tool
+            .url
+            .as_deref()
+            .and_then(|tool_url| url::Url::parse(tool_url).ok())
             .and_then(|u| u.host_str().map(|h| h == host))
             .unwrap_or(false)
 }
 
 async fn fetch_tool_by_id(pool: &PgPool, tool_id: i64) -> Result<Option<ToolRow>, ApiError> {
-    let row: Option<ToolRow> =
-        sqlx::query_as("SELECT id, url, domain, account_id FROM external_tools WHERE id = $1")
-            .bind(tool_id)
-            .fetch_optional(pool)
-            .await?;
+    let row: Option<ToolRow> = sqlx::query_as(
+        "SELECT id, url, domain, root_account_id FROM context_external_tools WHERE id = $1",
+    )
+    .bind(tool_id)
+    .fetch_optional(pool)
+    .await?;
     Ok(row)
 }
 
@@ -795,13 +788,13 @@ async fn update(
         .await?
         .ok_or(ApiError::NotFound)?;
 
-    // validate_tool: a replacement tool must exist (Canvas also requires the
-    // same root account; `external_tools` has no root account column, so the
-    // port checks existence only).
+    // validate_tool: a replacement tool must exist and live on the same
+    // root account as the link (Canvas `new_tool.root_account_id ==
+    // resource_link.root_account_id`).
     let new_tool = match body.context_external_tool_id {
         Some(tool_id) => match fetch_tool_by_id(&state.db, tool_id).await? {
-            Some(tool) => Some(tool),
-            None => {
+            Some(tool) if tool.root_account_id == link.root_account_id => Some(tool),
+            _ => {
                 return Ok(validation_error(
                     "context_external_tool_id",
                     "'context_external_tool_id' param must be a valid ContextExternalTool ID",
