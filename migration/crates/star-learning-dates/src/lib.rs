@@ -27,6 +27,8 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod learning_object_dates_api;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -599,6 +601,7 @@ async fn put_page_dates(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(learning_object_dates_api::router())
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/date_details",
             get(get_assignment_dates),

@@ -16,6 +16,8 @@ use star_auth::{hash_password, AuthUser};
 use star_common::{ApiError, AppState};
 use std::collections::BTreeMap;
 
+pub mod users_api;
+
 // --------------------------------------------------------------------------
 // Domain types
 // --------------------------------------------------------------------------
@@ -839,6 +841,7 @@ fn parse_dashboard_position(value: &serde_json::Value) -> Option<i64> {
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(users_api::router())
         .route("/users", get(list_users))
         .route("/users/self", get(get_self))
         .route(

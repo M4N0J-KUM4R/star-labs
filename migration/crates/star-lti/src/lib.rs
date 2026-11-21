@@ -49,6 +49,9 @@ mod registrations;
 mod lti_apps;
 mod subscriptions;
 
+mod context_controls;
+mod deployments;
+
 mod data_services;
 mod dynamic_registration;
 mod external_tools;
@@ -62,7 +65,7 @@ mod tool_setting;
 // ---------------------------------------------------------------------------
 
 /// Maximum account-hierarchy walk, mirroring star-accounts' cycle guard.
-const MAX_ACCOUNT_TREE_DEPTH: i64 = 10;
+pub(crate) const MAX_ACCOUNT_TREE_DEPTH: i64 = 10;
 
 /// Canvas lists 15 registrations per page by default.
 const DEFAULT_PER_PAGE: i64 = 15;
@@ -79,9 +82,9 @@ const STATE_DELETED: &str = "deleted";
 /// A row of `lti_registrations`, in Canvas registration JSON shape (the
 /// `configuration` / `overlay` JSONB blobs are serialized separately).
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct RegistrationRow {
-    id: i64,
-    account_id: i64,
+pub(crate) struct RegistrationRow {
+    pub(crate) id: i64,
+    pub(crate) account_id: i64,
     root_account_id: Option<i64>,
     name: String,
     admin_nickname: Option<String>,
@@ -259,7 +262,7 @@ async fn is_account_admin(pool: &PgPool, user_id: i64, account_id: i64) -> Resul
 
 /// Global admin OR account admin for the account or any ancestor, matching
 /// `can_access_account` in star-accounts.
-async fn can_manage_account(
+pub(crate) async fn can_manage_account(
     pool: &PgPool,
     auth: &AuthUser,
     account_id: i64,
@@ -318,7 +321,7 @@ async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, ApiError
 }
 
 /// True when the account has no parent.
-async fn is_root_account(pool: &PgPool, account_id: i64) -> Result<bool, ApiError> {
+pub(crate) async fn is_root_account(pool: &PgPool, account_id: i64) -> Result<bool, ApiError> {
     let row: Option<(Option<i64>,)> =
         sqlx::query_as("SELECT parent_account_id FROM accounts WHERE id = $1")
             .bind(account_id)
@@ -345,7 +348,10 @@ async fn require_registration_permission(
 // ---------------------------------------------------------------------------
 
 /// Fetch a registration that has not been soft-deleted (Canvas `.active`).
-async fn find_active_registration(pool: &PgPool, id: i64) -> Result<RegistrationRow, ApiError> {
+pub(crate) async fn find_active_registration(
+    pool: &PgPool,
+    id: i64,
+) -> Result<RegistrationRow, ApiError> {
     let sql = format!(
         "SELECT {REGISTRATION_COLUMNS} FROM lti_registrations \
          WHERE id = $1 AND workflow_state <> '{STATE_DELETED}'"
@@ -549,6 +555,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(registrations::router())
         .merge(lti_apps::router())
+        .merge(context_controls::router())
+        .merge(deployments::router())
         .route(
             "/accounts/{account_id}/lti_registrations",
             get(list_registrations).post(create_registration),
