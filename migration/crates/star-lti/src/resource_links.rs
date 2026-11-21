@@ -177,14 +177,21 @@ async fn fetch_scope(
          {state_clause}"
     );
     // Canvas `resource_link`: the id, or a lookup by one of the uuid
-    // formats (`find_by!` → 404 when missing, including malformed ids).
+    // formats (`find_by!` → 404 when missing, including malformed uuids —
+    // they simply match no row).
     let row: Option<ResourceLinkRow> = if let Some(uuid) = id_param.strip_prefix("lookup_uuid:") {
+        if uuid::Uuid::parse_str(uuid).is_err() {
+            return Ok(None);
+        }
         sqlx::query_as(&format!("{base} AND lookup_uuid = $2::uuid LIMIT 1"))
             .bind(course_id)
             .bind(uuid)
             .fetch_optional(pool)
             .await?
     } else if let Some(uuid) = id_param.strip_prefix("resource_link_uuid:") {
+        if uuid::Uuid::parse_str(uuid).is_err() {
+            return Ok(None);
+        }
         sqlx::query_as(&format!("{base} AND resource_link_uuid = $2::uuid LIMIT 1"))
             .bind(course_id)
             .bind(uuid)
