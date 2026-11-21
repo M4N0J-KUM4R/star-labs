@@ -121,12 +121,11 @@ pub async fn search_jobs(
 
     let mut bind_idx = 2;
     if params.start_date.is_some() {
-        sql.push_str(&format!(" AND run_at >= ${}", bind_idx));
+        sql.push_str(&format!(" AND run_at >= ${bind_idx}"));
         bind_idx += 1;
     }
     if params.end_date.is_some() {
-        sql.push_str(&format!(" AND run_at <= ${}", bind_idx));
-        bind_idx += 1;
+        sql.push_str(&format!(" AND run_at <= ${bind_idx}"));
     }
 
     sql.push_str(&format!(" GROUP BY {col} ORDER BY count DESC LIMIT 100"));
@@ -200,11 +199,13 @@ pub async fn grouped_info(
         "#,
     );
 
+    let mut bind_idx = 1;
     if params.start_date.is_some() {
-        sql.push_str(" AND run_at >= $1");
+        sql.push_str(&format!(" AND run_at >= ${bind_idx}"));
+        bind_idx += 1;
     }
     if params.end_date.is_some() {
-        sql.push_str(" AND run_at <= $2");
+        sql.push_str(&format!(" AND run_at <= ${bind_idx}"));
     }
 
     sql.push_str(&format!(
@@ -216,11 +217,11 @@ pub async fn grouped_info(
 
     let mut qb = sqlx::query_as::<_, GroupedRowDb>(&sql);
 
-    if params.start_date.is_some() {
-        qb = qb.bind(params.start_date.unwrap());
+    if let Some(start) = params.start_date {
+        qb = qb.bind(start);
     }
-    if params.end_date.is_some() {
-        qb = qb.bind(params.end_date.unwrap());
+    if let Some(end) = params.end_date {
+        qb = qb.bind(end);
     }
 
     let rows: Vec<GroupedRowDb> = qb.fetch_all(&state.db).await?;
@@ -332,7 +333,7 @@ fn group_order_clause(order: &str, group: Group) -> &'static str {
         "tag" if group == Group::Tag => "count DESC",
         "strand" if group == Group::Strand => "count DESC",
         "singleton" if group == Group::Singleton => "count DESC",
-        "group" | "info" | _ => "count DESC",
+        _ => "count DESC",
     }
 }
 

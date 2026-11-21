@@ -83,9 +83,8 @@ pub async fn manage_strand(
     sets.push("updated_at = NOW()".to_string());
 
     let sql = format!(
-        "UPDATE jobs SET {} WHERE strand = ${}",
-        sets.join(", "),
-        sets.len()
+        "UPDATE jobs SET {} WHERE strand = $1",
+        sets.join(", ")
     );
 
     let updated = sqlx::query(&sql)

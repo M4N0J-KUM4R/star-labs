@@ -120,7 +120,7 @@ fn running_where_clause(flavor: &str) -> String {
         "future" => {
             format!("{base} AND run_at > now()")
         }
-        "current" | "id" | _ => base.to_string(),
+        _ => base.to_string(),
     }
     .to_string()
 }
@@ -207,7 +207,7 @@ fn flavor_where_clause(flavor: &str) -> String {
         "future" => {
             "workflow_state = 'queued' AND run_at > now() AND locked_at IS NULL".to_string()
         }
-        "current" | _ => {
+        _ => {
             "workflow_state NOT IN ('failed') AND (workflow_state != 'failed' OR failed_at IS NULL)"
                 .to_string()
         }
@@ -280,7 +280,6 @@ pub async fn batch_update(
 
     let action = payload.update_action.as_str();
     let job_ids = payload.job_ids;
-    let flavor = payload.flavor.as_deref();
     let q = payload.q.as_deref();
 
     let count = match action {

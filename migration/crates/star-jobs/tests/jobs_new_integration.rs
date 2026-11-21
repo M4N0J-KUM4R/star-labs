@@ -133,7 +133,7 @@ async fn v1_list_jobs_json_returns_jobs_and_total() {
     };
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
-    let _ = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
 
     let now = Utc::now();
     let j1 = seed_job(
@@ -223,7 +223,7 @@ async fn v1_list_jobs_json_returns_jobs_and_total() {
     );
 
     // Auth negative: teacher → 403.
-    let teacher_bearer = auth(admin, "teacher");
+    let teacher_bearer = auth(teacher, "teacher");
     let resp = server
         .get("/jobs?only=jobs")
         .add_header(AUTHORIZATION, teacher_bearer)
@@ -333,8 +333,9 @@ async fn batch_update_force_delete_and_unblock() {
     };
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
-    let now = Utc::now();
+    let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
 
+    let now = Utc::now();
     let j1 = seed_job(
         &pool,
         &format!("{prefix}-del1"),
@@ -402,7 +403,7 @@ async fn batch_update_force_delete_and_unblock() {
     assert_eq!(resp.status_code(), 200, "unblock; body: {}", resp.text());
 
     // Auth negative: teacher → 403.
-    let teacher_bearer = auth(admin, "teacher");
+    let teacher_bearer = auth(teacher, "teacher");
     let resp = server
         .post("/jobs/batch_update")
         .add_header(AUTHORIZATION, teacher_bearer)
@@ -500,6 +501,8 @@ async fn grouped_info_returns_count_and_info() {
     };
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
+
     let now = Utc::now();
 
     for _ in 0..3 {
@@ -559,7 +562,7 @@ async fn grouped_info_returns_count_and_info() {
     }
 
     // Auth negative: teacher → 403.
-    let teacher_bearer = auth(admin, "teacher");
+    let teacher_bearer = auth(teacher, "teacher");
     let resp = server
         .get("/jobs2/queued/by_strand")
         .add_header(AUTHORIZATION, teacher_bearer)
@@ -581,6 +584,7 @@ async fn v2_list_bucket_jobs_includes_info_field() {
     };
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let now = Utc::now();
 
     // Queued job.
@@ -682,7 +686,7 @@ async fn v2_list_bucket_jobs_includes_info_field() {
     );
 
     // Auth negative: teacher → 403.
-    let teacher_bearer = auth(admin, "teacher");
+    let teacher_bearer = auth(teacher, "teacher");
     let resp = server
         .get("/jobs2/queued")
         .add_header(AUTHORIZATION, teacher_bearer)
@@ -704,6 +708,7 @@ async fn manage_strand_updates_max_concurrent_and_priority() {
     };
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let now = Utc::now();
 
     let _ = seed_job(
@@ -747,7 +752,7 @@ async fn manage_strand_updates_max_concurrent_and_priority() {
     assert_eq!(resp.status_code(), 400, "missing strand must be 400");
 
     // Auth negative: teacher → 403.
-    let teacher_bearer = auth(admin, "teacher");
+    let teacher_bearer = auth(teacher, "teacher");
     let resp = server
         .put("/jobs2/manage")
         .add_header(AUTHORIZATION, teacher_bearer)
@@ -770,6 +775,7 @@ async fn unstuck_strand_mode_and_async_progress_mode() {
     };
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let now = Utc::now();
 
     let _ = seed_job(
@@ -803,7 +809,7 @@ async fn unstuck_strand_mode_and_async_progress_mode() {
     assert!(body["count"].as_i64().unwrap_or(0) >= 1);
 
     // Auth negative: teacher → 403.
-    let teacher_bearer = auth(admin, "teacher");
+    let teacher_bearer = auth(teacher, "teacher");
     let resp = server
         .put("/jobs2/unstuck")
         .add_header(AUTHORIZATION, teacher_bearer)
