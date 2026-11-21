@@ -609,10 +609,10 @@ async fn oauth2_authorization_code_grant_flow() {
         .as_str()
         .expect("access_token")
         .to_string();
-    let refresh_token = token["refresh_token"]
-        .as_str()
-        .expect("refresh_token")
-        .to_string();
+    assert!(
+        token["refresh_token"].is_string(),
+        "code exchange issues a refresh token: {token}"
+    );
     assert_eq!(access_token.len(), 64);
     assert!(access_token.chars().all(|c| c.is_ascii_hexdigit()));
     assert_eq!(token["token_type"], "Bearer");
@@ -798,6 +798,35 @@ async fn oauth2_pkce_s256_roundtrip() {
 // POST /login/oauth2/token — refresh_token grant + token lifecycle
 // ---------------------------------------------------------------------------
 
+/// Run the full auth -> code -> exchange sequence and return the token JSON
+/// (shared by the refresh/revocation tests).
+async fn issue_code_token(server: &TestServer, key: &SeedKey, bearer: &str) -> Value {
+    let (_, location) = auth_redirect(
+        server,
+        &[
+            ("client_id", &key.id.to_string()),
+            ("redirect_uri", "https://client.example.org/callback"),
+            ("response_type", "code"),
+        ],
+        Some(bearer),
+    )
+    .await;
+    let code = query_pairs(&location.expect("location"))
+        .get("code")
+        .cloned()
+        .expect("code");
+    let resp = server
+        .post("/login/oauth2/token")
+        .text(format!(
+            "grant_type=authorization_code&client_id={}&client_secret={}&code={code}",
+            key.id, key.api_key
+        ))
+        .content_type("application/x-www-form-urlencoded")
+        .await;
+    assert_eq!(resp.status_code(), 200, "exchange: {}", resp.text());
+    resp.json::<Value>()
+}
+
 #[tokio::test]
 async fn oauth2_refresh_grant_and_revocation() {
     let Some((server, pool, prefix)) = setup().await else {
@@ -827,35 +856,7 @@ async fn oauth2_refresh_grant_and_revocation() {
     );
 
     // Issue a token via the authorization_code grant.
-    let issue = |server: &TestServer, key: &SeedKey, bearer: &str| {
-        Box::pin(async move {
-            let (_, location) = auth_redirect(
-                server,
-                &[
-                    ("client_id", &key.id.to_string()),
-                    ("redirect_uri", "https://client.example.org/callback"),
-                    ("response_type", "code"),
-                ],
-                Some(bearer),
-            )
-            .await;
-            let code = query_pairs(&location.expect("location"))
-                .get("code")
-                .cloned()
-                .expect("code");
-            let resp = server
-                .post("/login/oauth2/token")
-                .text(format!(
-                    "grant_type=authorization_code&client_id={}&client_secret={}&code={code}",
-                    key.id, key.api_key
-                ))
-                .content_type("application/x-www-form-urlencoded")
-                .await;
-            assert_eq!(resp.status_code(), 200, "exchange: {}", resp.text());
-            resp.json::<Value>()
-        })
-    };
-    let token = issue(&server, &key, &bearer).await;
+    let token = issue_code_token(&server, &key, &bearer).await;
     let access_token = token["access_token"].as_str().expect("access").to_string();
     let refresh_token = token["refresh_token"]
         .as_str()

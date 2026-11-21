@@ -1946,29 +1946,45 @@ async fn oauth2_token(
 
 /// `GrantTypes::BaseType#validate_client_id_and_secret`: unknown client
 /// 401 "unknown client", wrong secret 401 "invalid client" (both with the
-/// WWW-Authenticate header, like Canvas's `oauth_error` rescue).
+/// WWW-Authenticate header, like Canvas's `oauth_error` rescue). Small error
+/// type — http::Response is too large for a Result variant
+/// (clippy::result_large_err).
+enum OAuthClientError {
+    UnknownClient,
+    InvalidSecret,
+    Lookup(sqlx::Error),
+}
+
+fn oauth_client_error_response(error: OAuthClientError) -> Response {
+    match error {
+        OAuthClientError::UnknownClient => oauth_unauthorized("invalid_client", "unknown client"),
+        OAuthClientError::InvalidSecret => oauth_unauthorized("invalid_client", "invalid client"),
+        OAuthClientError::Lookup(err) => internal_error("oauth token: lookup developer key", err),
+    }
+}
+
 async fn validate_oauth_client(
     app: &AppState,
     client_id: &Option<String>,
     client_secret: &str,
-) -> Result<DeveloperKey, Response> {
+) -> Result<DeveloperKey, OAuthClientError> {
     let Some(client_id) = client_id
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty())
     else {
-        return Err(oauth_unauthorized("invalid_client", "unknown client"));
+        return Err(OAuthClientError::UnknownClient);
     };
     match find_active_developer_key(&app.db, client_id).await {
         Ok(Some(key)) => {
             if secrets_match(client_secret, &key.api_key) {
                 Ok(key)
             } else {
-                Err(oauth_unauthorized("invalid_client", "invalid client"))
+                Err(OAuthClientError::InvalidSecret)
             }
         }
-        Ok(None) => Err(oauth_unauthorized("invalid_client", "unknown client")),
-        Err(err) => Err(internal_error("oauth token: lookup developer key", err)),
+        Ok(None) => Err(OAuthClientError::UnknownClient),
+        Err(err) => Err(OAuthClientError::Lookup(err)),
     }
 }
 
@@ -1984,7 +2000,7 @@ async fn grant_authorization_code(
 ) -> Response {
     let key = match validate_oauth_client(app, client_id, client_secret).await {
         Ok(key) => key,
-        Err(response) => return response,
+        Err(error) => return oauth_client_error_response(error),
     };
 
     let Some(code_value) = params
@@ -2075,7 +2091,7 @@ async fn grant_refresh_token(
 ) -> Response {
     let key = match validate_oauth_client(app, client_id, client_secret).await {
         Ok(key) => key,
-        Err(response) => return response,
+        Err(error) => return oauth_client_error_response(error),
     };
 
     let Some(refresh_token) = params
@@ -2168,7 +2184,7 @@ async fn grant_client_credentials(
 ) -> Response {
     let key = match validate_oauth_client(app, client_id, client_secret).await {
         Ok(key) => key,
-        Err(response) => return response,
+        Err(error) => return oauth_client_error_response(error),
     };
 
     // Canvas SymmetricClientCredentialsProvider#assertion_method_permitted?
@@ -2434,7 +2450,7 @@ async fn oauth2_auth(
             query.push(("pseudonym_session%5Bunique_id%5D", unique_id.to_string()));
         }
         // Rails `to_query` sorts the pairs alphabetically.
-        query.sort_by(|(left, _), (right, _)| left.cmp(right));
+        query.sort_by_key(|(name, _)| *name);
         let login = if query.is_empty() {
             "/login".to_string()
         } else {
@@ -2598,7 +2614,6 @@ async fn oauth2_jwks(Query(params): Query<JwksQuery>) -> Response {
 /// (JWE); star returns the RS256-signed JWT directly — the gateway is
 /// deployment infrastructure outside REST parity.
 async fn create_inst_access_token(
-    State(app): State<AppState>,
     auth: AuthUser,
     headers: HeaderMap,
 ) -> Result<Response, ApiError> {
