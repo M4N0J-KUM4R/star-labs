@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0235",
- "next_available": "0236",
+ "max_merged": "0236",
+ "next_available": "0237",
  "reservations": {
   "0001": {
    "issue": null,
@@ -765,6 +765,11 @@
   "0235": {
    "issue": null,
    "note": "star-polling: the poll description and the choice flags",
+   "status": "merged"
+  },
+  "0236": {
+   "issue": null,
+   "note": "star-calendar: the account calendar settings",
    "status": "merged"
   }
  }

@@ -1819,7 +1819,7 @@ async fn outcome_results_index(
         "outcome_results".to_string(),
         json!(sliced
             .iter()
-            .map(|result| outcome_result_json(result))
+            .map(outcome_result_json)
             .collect::<Vec<Value>>()),
     );
     if ctx.params.present("include") {
@@ -1940,7 +1940,7 @@ async fn outcome_mastery_distribution(
         "students".to_string(),
         json!(all_users
             .iter()
-            .map(|user| linked_user_json(user))
+            .map(linked_user_json)
             .collect::<Vec<Value>>()),
     );
 
@@ -2004,7 +2004,8 @@ async fn outcome_contributing_scores(
         "alignments".to_string(),
         json!(filtered
             .iter()
-            .map(|alignment| alignment_json(alignment))
+            .copied()
+            .map(alignment_json)
             .collect::<Vec<Value>>()),
     );
     body.insert(
