@@ -2852,6 +2852,7 @@ dependencies = [
  "jsonwebtoken",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "star-common",
  "star-db",
