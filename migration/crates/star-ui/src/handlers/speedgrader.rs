@@ -553,7 +553,7 @@ async fn build_rubric_view(
                 })
                 .collect();
             let points_label = picked_points
-                .map(|p| trim_f64(p))
+                .map(trim_f64)
                 .unwrap_or_else(|| "–".to_string());
             RubricCriterionView {
                 id: criterion.id,

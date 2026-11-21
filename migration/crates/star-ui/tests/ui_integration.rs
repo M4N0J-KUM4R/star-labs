@@ -2879,10 +2879,11 @@ async fn speedgrader_grade_round_trip() {
     .await
     .expect("rubric assessment row");
     assert_eq!(assessment.0, 5.0, "rubric total = picked rating points");
+    // jsonb::text serializes with a space after each colon.
     assert!(
         assessment
             .1
-            .contains(&format!("\"rating_id\":{}", rating_ids[0])),
+            .contains(&format!("\"rating_id\": {}", rating_ids[0])),
         "data carries the pick: {}",
         assessment.1
     );
@@ -2972,6 +2973,8 @@ async fn speedgrader_next_prev_navigation() {
         .await;
     assert_eq!(resp.status_code(), 200);
     let body = resp.text();
+    // Askama HTML-escapes the href's ampersands (& -> &#38;); a browser
+    // resolves them back to & when following the link, so compare escaped.
     let href = body
         .split("id=\"speedgrader_prev\"")
         .nth(1)
@@ -2981,13 +2984,14 @@ async fn speedgrader_next_prev_navigation() {
     assert_eq!(
         href,
         format!(
-            "/courses/{course}/gradebook/speedgrader?assignment_id={essay}&student_id={student}"
+            "/courses/{course}/gradebook/speedgrader?assignment_id={essay}&#38;student_id={student}"
         ),
         "prev link preserves assignment + points at the name-previous student"
     );
-    // Following it lands on that student.
+    // Following it (with the entity decoded, like a browser does) lands on
+    // that student.
     let resp = server
-        .get(&href)
+        .get(&href.replace("&#38;", "&"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 200);
