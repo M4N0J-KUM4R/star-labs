@@ -349,14 +349,16 @@ async fn create_score(
 
     // -- update_or_create_result: upsert the result row ------------------
     let existing: Option<(i64, Option<DateTime<Utc>>)> = sqlx::query_as(
-        "SELECT id, updated_at FROM lti_results \
+        // 0224 stores created_at/updated_at as naive `timestamp`; cast on
+        // read/write so chrono's Timestamptz mapping (DateTime<Utc>) works.
+        "SELECT id, updated_at::timestamptz FROM lti_results \
          WHERE lti_line_item_id = $1 AND user_id = $2 AND workflow_state = 'active'",
     )
     .bind(line_item_id)
     .bind(user_id)
     .fetch_optional(&state.db)
     .await
-    .unwrap_or(None);
+    .map_err(|_| advantage_error(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
 
     if let Some((existing_id, Some(existing_updated))) = existing {
         // verify_valid_timestamp second branch: timestamp before last update → 400.
@@ -377,7 +379,7 @@ async fn create_score(
             "UPDATE lti_results \
                  SET result_score = $1, result_maximum = $2, comment = $3, \
                      activity_progress = $4, grading_progress = $5, \
-                     updated_at = $6 \
+                     updated_at = $6::timestamptz \
                  WHERE id = $7 \
                  RETURNING id",
         )
@@ -398,7 +400,7 @@ async fn create_score(
                  (result_score, result_maximum, comment, activity_progress, \
                   grading_progress, lti_line_item_id, user_id, created_at, \
                   updated_at, workflow_state, root_account_id) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, 'active', 1) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8::timestamptz, $8::timestamptz, 'active', 1) \
                  RETURNING id",
         )
         .bind(body.score_given)
