@@ -24,7 +24,7 @@ use crate::require_admin;
 /// Request body for `PUT /jobs2/manage`.
 #[derive(Debug, Deserialize)]
 pub struct ManageRequest {
-    pub strand: String,
+    pub strand: Option<String>,
     pub max_concurrent: Option<i32>,
     pub priority: Option<i32>,
 }
@@ -62,9 +62,17 @@ pub async fn manage_strand(
 ) -> Result<Json<ManageResponse>, ApiError> {
     require_admin(&auth)?;
 
-    if payload.strand.trim().is_empty() {
-        return Err(ApiError::BadRequest("strand is required".into()));
-    }
+    // Canvas: `render json: { message: "missing strand" }, status: :bad_request`.
+    // The field is optional so a missing key is answered here (400) rather
+    // than by the JSON extractor (422).
+    let Some(strand) = payload
+        .strand
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        return Err(ApiError::BadRequest("missing strand".into()));
+    };
 
     // Canvas only includes the fields that were sent in update_all.
     let mut sets = Vec::new();
@@ -82,13 +90,10 @@ pub async fn manage_strand(
     }
     sets.push("updated_at = NOW()".to_string());
 
-    let sql = format!(
-        "UPDATE jobs SET {} WHERE strand = $1",
-        sets.join(", ")
-    );
+    let sql = format!("UPDATE jobs SET {} WHERE strand = $1", sets.join(", "));
 
     let updated = sqlx::query(&sql)
-        .bind(&payload.strand)
+        .bind(strand)
         .execute(&state.db)
         .await?;
 
