@@ -19,7 +19,7 @@
 
 use axum::http::header::{AUTHORIZATION, HOST};
 use axum_test::TestServer;
-use serde_json::{json, Map, Value};
+use serde_json::{json, Value};
 use sqlx::PgPool;
 use star_common::AppState;
 use std::collections::HashMap;
@@ -474,11 +474,21 @@ async fn authorize_validates_oidc_params_in_canvas_order() {
     // Without a session the hint is still decoded before the error screen:
     // an invalid hint is a plain 400 even when other params are missing.
     let resp = server
-        .get("/api/lti/authorize?client_id=1&lti_message_hint=garbage")
+        .get(&format!(
+            "/api/lti/authorize?client_id={}&lti_message_hint=garbage",
+            f.api_key
+        ))
         .add_header(HOST, "canvas.test")
         .await;
     assert_eq!(resp.status_code(), 400);
     assert_eq!(resp.text(), "bad request: Invalid lti_message_hint");
+
+    // An unknown client_id is Canvas' 404 — even before the hint decode.
+    let resp = server
+        .get("/api/lti/authorize?client_id=1&lti_message_hint=garbage")
+        .add_header(HOST, "canvas.test")
+        .await;
+    assert_eq!(resp.status_code(), 404, "unknown client precedes the hint");
 
     // A login_hint that does not identify the user.
     let params = oidc_params(&f, &hint, "some-login-hint");
@@ -1749,8 +1759,9 @@ async fn deep_linking_response_module_flow_creates_module_and_items() {
 
     // Items can also be added to an existing module via context_module_id.
     let existing_module: (i64,) = sqlx::query_as(
-        "INSERT INTO context_modules (context_id, context_type, name, workflow_state, root_account_id) \
-         VALUES ($1, 'Course', 'existing', 'active', $2) RETURNING id",
+        "INSERT INTO context_modules \
+         (context_id, context_type, name, workflow_state, root_account_id, created_at, updated_at) \
+         VALUES ($1, 'Course', 'existing', 'active', $2, now(), now()) RETURNING id",
     )
     .bind(f.course)
     .bind(f.account)

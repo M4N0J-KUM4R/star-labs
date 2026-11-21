@@ -71,8 +71,9 @@ struct ResourceLinkRow {
     url: Option<String>,
     lti_1_1_id: Option<String>,
     title: Option<String>,
-    created_at: chrono::DateTime<chrono::Utc>,
-    updated_at: chrono::DateTime<chrono::Utc>,
+    // Canvas-parity columns are naive `timestamp`s.
+    created_at: chrono::NaiveDateTime,
+    updated_at: chrono::NaiveDateTime,
 }
 
 const LINK_COLUMNS: &str = "id, context_external_tool_id, workflow_state, \
@@ -241,8 +242,8 @@ fn link_json(
         "title": link.title,
         "url": link.url,
         "lti_1_1_id": link.lti_1_1_id,
-        "created_at": link.created_at.to_rfc3339(),
-        "updated_at": link.updated_at.to_rfc3339(),
+        "created_at": link.created_at.and_utc().to_rfc3339(),
+        "updated_at": link.updated_at.and_utc().to_rfc3339(),
         "workflow_state": link.workflow_state,
         "resource_type": resource_type,
         "canvas_launch_url": canvas_launch_url,
