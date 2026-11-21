@@ -154,9 +154,7 @@ fn unwrap_params<'a>(body: &'a Value, key: &str) -> Result<&'a Map<String, Value
         }))
     };
     match body.get(key) {
-        Some(Value::Array(items)) => {
-            items.first().and_then(Value::as_object).ok_or_else(missing)
-        }
+        Some(Value::Array(items)) => items.first().and_then(Value::as_object).ok_or_else(missing),
         Some(Value::Object(map)) => Ok(map),
         Some(_) => Err(missing()),
         None => body.as_object().ok_or_else(missing),
@@ -217,10 +215,7 @@ fn optional_text(obj: &Map<String, Value>, key: &str) -> Result<Option<String>, 
 
 fn check_text_len(s: &str, key: &str) -> Result<(), PollError> {
     if s.chars().count() > MAX_TEXT_LEN {
-        Err(param_errors(
-            key,
-            "is too long (maximum is 255 characters)",
-        ))
+        Err(param_errors(key, "is too long (maximum is 255 characters)"))
     } else {
         Ok(())
     }
@@ -363,17 +358,19 @@ async fn own_poll(pool: &PgPool, poll_id: i64, auth: &AuthUser) -> Result<PollRo
 /// Unscoped poll lookup (existence only) — used by poll_submissions, where
 /// the submitting student is not the poll's owner.
 async fn require_poll(pool: &PgPool, poll_id: i64) -> Result<PollRow, PollError> {
-    sqlx::query_as::<_, PollRow>(&format!(
-        "SELECT {POLL_COLUMNS} FROM polls WHERE id = $1"
-    ))
-    .bind(poll_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or(PollError::NotFound)
+    sqlx::query_as::<_, PollRow>(&format!("SELECT {POLL_COLUMNS} FROM polls WHERE id = $1"))
+        .bind(poll_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(PollError::NotFound)
 }
 
 /// Session lookup scoped to the poll from the path (`require_poll_session`).
-async fn poll_session(pool: &PgPool, poll_id: i64, session_id: i64) -> Result<PollSessionRow, PollError> {
+async fn poll_session(
+    pool: &PgPool,
+    poll_id: i64,
+    session_id: i64,
+) -> Result<PollSessionRow, PollError> {
     sqlx::query_as::<_, PollSessionRow>(&format!(
         "SELECT {SESSION_COLUMNS} FROM poll_sessions WHERE id = $1 AND poll_id = $2"
     ))
@@ -385,7 +382,11 @@ async fn poll_session(pool: &PgPool, poll_id: i64, session_id: i64) -> Result<Po
 }
 
 /// Choice lookup scoped to the poll from the path (`@poll.poll_choices.find`).
-async fn poll_choice(pool: &PgPool, poll_id: i64, choice_id: i64) -> Result<PollChoiceRow, PollError> {
+async fn poll_choice(
+    pool: &PgPool,
+    poll_id: i64,
+    choice_id: i64,
+) -> Result<PollChoiceRow, PollError> {
     sqlx::query_as::<_, PollChoiceRow>(
         "SELECT id, poll_id, text, is_correct, position FROM poll_choices \
          WHERE id = $1 AND poll_id = $2",
@@ -798,9 +799,7 @@ async fn update_session(
     let course_section_id = match obj.get("course_section_id") {
         None => session.course_section_id,
         Some(Value::Null) => None,
-        Some(_) => {
-            Some(int_param(obj.get("course_section_id")).ok_or(PollError::NotFound)?)
-        }
+        Some(_) => Some(int_param(obj.get("course_section_id")).ok_or(PollError::NotFound)?),
     };
     if let (Some(course_id), Some(section_id)) = (course_id, course_section_id) {
         let in_course: bool = sqlx::query_scalar(
@@ -1027,7 +1026,10 @@ async fn create_submission(
     .await;
     let row = match inserted {
         Ok(row) => row,
-        Err(ref e) if e.as_database_error().is_some_and(|db| db.is_unique_violation()) => {
+        Err(ref e)
+            if e.as_database_error()
+                .is_some_and(|db| db.is_unique_violation()) =>
+        {
             return Err(PollError::Invalid(json!({
                 "user_id": ["can only submit one choice per poll session."]
             })));
@@ -1047,10 +1049,7 @@ async fn create_submission(
 /// panics at startup).
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/polls",
-            get(list_polls).post(create_poll),
-        )
+        .route("/polls", get(list_polls).post(create_poll))
         .route(
             "/polls/{id}",
             get(show_poll).put(update_poll).delete(destroy_poll),
@@ -1061,9 +1060,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/polls/{poll_id}/poll_choices/{id}",
-            get(show_choice)
-                .put(update_choice)
-                .delete(destroy_choice),
+            get(show_choice).put(update_choice).delete(destroy_choice),
         )
         .route(
             "/polls/{poll_id}/poll_sessions",

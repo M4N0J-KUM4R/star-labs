@@ -62,7 +62,8 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
         jwt_secret: JWT_SECRET.to_string(),
     };
 
-    let server = TestServer::new(star_polling::router().with_state(state)).expect("build TestServer");
+    let server =
+        TestServer::new(star_polling::router().with_state(state)).expect("build TestServer");
     Some((server, pool, run_prefix()))
 }
 
@@ -81,25 +82,21 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
 }
 
 async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
-    sqlx::query_scalar(
-        "INSERT INTO courses (name, course_code) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(format!("{prefix}-{name}"))
-    .bind(format!("{prefix}-{name}"))
-    .fetch_one(pool)
-    .await
-    .expect("seed course")
+    sqlx::query_scalar("INSERT INTO courses (name, course_code) VALUES ($1, $2) RETURNING id")
+        .bind(format!("{prefix}-{name}"))
+        .bind(format!("{prefix}-{name}"))
+        .fetch_one(pool)
+        .await
+        .expect("seed course")
 }
 
 async fn seed_section(pool: &PgPool, course_id: i64, name: &str) -> i64 {
-    sqlx::query_scalar(
-        "INSERT INTO course_sections (course_id, name) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(course_id)
-    .bind(name)
-    .fetch_one(pool)
-    .await
-    .expect("seed section")
+    sqlx::query_scalar("INSERT INTO course_sections (course_id, name) VALUES ($1, $2) RETURNING id")
+        .bind(course_id)
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .expect("seed section")
 }
 
 async fn seed_enrollment(
@@ -238,7 +235,10 @@ async fn poll_lifecycle_and_update_quirk() {
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
     let body: Value = resp.json();
-    assert_eq!(body["question"][0], "is too long (maximum is 255 characters)");
+    assert_eq!(
+        body["question"][0],
+        "is too long (maximum is 255 characters)"
+    );
 
     // Index: own polls only, newest first.
     let resp = server
@@ -404,7 +404,10 @@ async fn choices_crud_cascade_and_scoping() {
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(first(&resp.json::<Value>(), "poll_choices")["id"], choice_a_id);
+    assert_eq!(
+        first(&resp.json::<Value>(), "poll_choices")["id"],
+        choice_a_id
+    );
 
     // A choice id of another poll is out of scope: 404 on show/update/delete.
     let resp = server
@@ -477,13 +480,12 @@ async fn choices_crud_cascade_and_scoping() {
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 204);
-    let (remaining,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM poll_choices WHERE poll_id = $1",
-    )
-    .bind(poll1)
-    .fetch_one(&pool)
-    .await
-    .expect("count choices");
+    let (remaining,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM poll_choices WHERE poll_id = $1")
+            .bind(poll1)
+            .fetch_one(&pool)
+            .await
+            .expect("count choices");
     assert_eq!(remaining, 0, "choices must cascade with the poll");
     let resp = server
         .get(&format!("/polls/{poll1}/poll_choices"))
@@ -515,8 +517,13 @@ async fn sessions_state_transitions_and_global_lists() {
     let other_section = seed_section(&pool, other_course, "Section B").await;
 
     // A session bound to course + section starts unpublished ("closed").
-    let created =
-        create_session_ok(&server, &bearer, poll, json!({ "course_id": course, "course_section_id": section })).await;
+    let created = create_session_ok(
+        &server,
+        &bearer,
+        poll,
+        json!({ "course_id": course, "course_section_id": section }),
+    )
+    .await;
     let session = first(&created, "poll_sessions");
     assert_eq!(session["course_id"], course);
     assert_eq!(session["course_section_id"], section);
@@ -574,7 +581,10 @@ async fn sessions_state_transitions_and_global_lists() {
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(first(&resp.json::<Value>(), "poll_sessions")["id"], session_id);
+    assert_eq!(
+        first(&resp.json::<Value>(), "poll_sessions")["id"],
+        session_id
+    );
 
     // Update: has_public_results flips; a section of another course on update
     // hits the upstream section_belongs_to_course validation → 400.
@@ -607,7 +617,10 @@ async fn sessions_state_transitions_and_global_lists() {
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(first(&resp.json::<Value>(), "poll_sessions")["is_published"], true);
+    assert_eq!(
+        first(&resp.json::<Value>(), "poll_sessions")["is_published"],
+        true
+    );
 
     let resp = server
         .get("/poll_sessions/opened")
@@ -621,7 +634,10 @@ async fn sessions_state_transitions_and_global_lists() {
         .iter()
         .map(|s| s["id"].as_i64().unwrap())
         .collect();
-    assert!(opened_ids.contains(&session_id), "session must be listed as opened: {opened}");
+    assert!(
+        opened_ids.contains(&session_id),
+        "session must be listed as opened: {opened}"
+    );
     assert!(opened["meta"]["pagination"].is_object());
 
     let resp = server
@@ -635,14 +651,20 @@ async fn sessions_state_transitions_and_global_lists() {
         .iter()
         .map(|s| s["id"].as_i64().unwrap())
         .collect();
-    assert!(!closed_ids.contains(&session_id), "open session must not be closed: {closed}");
+    assert!(
+        !closed_ids.contains(&session_id),
+        "open session must not be closed: {closed}"
+    );
 
     let resp = server
         .get(&format!("/polls/{poll}/poll_sessions/{session_id}/close"))
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(first(&resp.json::<Value>(), "poll_sessions")["is_published"], false);
+    assert_eq!(
+        first(&resp.json::<Value>(), "poll_sessions")["is_published"],
+        false
+    );
 
     let resp = server
         .get("/poll_sessions/closed")
@@ -655,7 +677,10 @@ async fn sessions_state_transitions_and_global_lists() {
         .iter()
         .map(|s| s["id"].as_i64().unwrap())
         .collect();
-    assert!(closed_ids.contains(&session_id), "closed session listed: {closed}");
+    assert!(
+        closed_ids.contains(&session_id),
+        "closed session listed: {closed}"
+    );
     let resp = server
         .get("/poll_sessions/opened")
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
@@ -667,7 +692,10 @@ async fn sessions_state_transitions_and_global_lists() {
         .iter()
         .map(|s| s["id"].as_i64().unwrap())
         .collect();
-    assert!(!opened_ids.contains(&session_id), "closed session not opened: {opened}");
+    assert!(
+        !opened_ids.contains(&session_id),
+        "closed session not opened: {opened}"
+    );
 
     // The global lists only cover the caller's own polls: the student sees
     // nothing of the teacher's sessions.
@@ -677,7 +705,11 @@ async fn sessions_state_transitions_and_global_lists() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let opened: Value = resp.json();
-    assert_eq!(opened["poll_sessions"], json!([]), "no other-user sessions: {opened}");
+    assert_eq!(
+        opened["poll_sessions"],
+        json!([]),
+        "no other-user sessions: {opened}"
+    );
     let resp = server
         .get("/poll_sessions/closed")
         .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
@@ -689,24 +721,39 @@ async fn sessions_state_transitions_and_global_lists() {
         ("get", format!("/polls/{poll}/poll_sessions")),
         ("get", format!("/polls/{poll}/poll_sessions/{session_id}")),
         ("put", format!("/polls/{poll}/poll_sessions/{session_id}")),
-        ("delete", format!("/polls/{poll}/poll_sessions/{session_id}")),
-        ("get", format!("/polls/{poll}/poll_sessions/{session_id}/open")),
-        ("get", format!("/polls/{poll}/poll_sessions/{session_id}/close")),
+        (
+            "delete",
+            format!("/polls/{poll}/poll_sessions/{session_id}"),
+        ),
+        (
+            "get",
+            format!("/polls/{poll}/poll_sessions/{session_id}/open"),
+        ),
+        (
+            "get",
+            format!("/polls/{poll}/poll_sessions/{session_id}/close"),
+        ),
     ] {
         let resp = match method {
-            "get" => server
-                .get(&path)
-                .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
-                .await,
-            "put" => server
-                .put(&path)
-                .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
-                .json(&json!({ "poll_sessions": [{ "has_public_results": true }] }))
-                .await,
-            _ => server
-                .delete(&path)
-                .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
-                .await,
+            "get" => {
+                server
+                    .get(&path)
+                    .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+                    .await
+            }
+            "put" => {
+                server
+                    .put(&path)
+                    .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+                    .json(&json!({ "poll_sessions": [{ "has_public_results": true }] }))
+                    .await
+            }
+            _ => {
+                server
+                    .delete(&path)
+                    .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+                    .await
+            }
         };
         assert_eq!(resp.status_code(), 404, "{method} {path} as non-owner");
     }
@@ -775,7 +822,9 @@ async fn submissions_flow_and_permissions() {
     // Submitting to a closed session is a 403 (the :submit ability requires
     // an open session).
     let resp = server
-        .post(&format!("/polls/{poll}/poll_sessions/{session}/poll_submissions"))
+        .post(&format!(
+            "/polls/{poll}/poll_sessions/{session}/poll_submissions"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s1.clone())
         .json(&json!({ "poll_submissions": [{ "poll_choice_id": choice1 }] }))
         .await;
@@ -790,7 +839,9 @@ async fn submissions_flow_and_permissions() {
 
     // Enrolled course-wide student submits: 200 with the submission envelope.
     let resp = server
-        .post(&format!("/polls/{poll}/poll_sessions/{session}/poll_submissions"))
+        .post(&format!(
+            "/polls/{poll}/poll_sessions/{session}/poll_submissions"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s1.clone())
         .json(&json!({ "poll_submissions": [{ "poll_choice_id": choice1 }] }))
         .await;
@@ -807,7 +858,9 @@ async fn submissions_flow_and_permissions() {
     // A second submission by the same user is rejected (spec §8 Q2 → reject,
     // upstream uniqueness validation) with the Rails error body.
     let resp = server
-        .post(&format!("/polls/{poll}/poll_sessions/{session}/poll_submissions"))
+        .post(&format!(
+            "/polls/{poll}/poll_sessions/{session}/poll_submissions"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s1.clone())
         .json(&json!({ "poll_submissions": [{ "poll_choice_id": choice2 }] }))
         .await;
@@ -820,7 +873,9 @@ async fn submissions_flow_and_permissions() {
 
     // The section-enrolled student can submit to the course-wide session.
     let resp = server
-        .post(&format!("/polls/{poll}/poll_sessions/{session}/poll_submissions"))
+        .post(&format!(
+            "/polls/{poll}/poll_sessions/{session}/poll_submissions"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s2.clone())
         .json(&json!({ "poll_submissions": [{ "poll_choice_id": choice2 }] }))
         .await;
@@ -831,7 +886,9 @@ async fn submissions_flow_and_permissions() {
 
     // Non-enrolled students are 403.
     let resp = server
-        .post(&format!("/polls/{poll}/poll_sessions/{session}/poll_submissions"))
+        .post(&format!(
+            "/polls/{poll}/poll_sessions/{session}/poll_submissions"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s3.clone())
         .json(&json!({ "poll_submissions": [{ "poll_choice_id": choice1 }] }))
         .await;
@@ -841,25 +898,37 @@ async fn submissions_flow_and_permissions() {
     // unknown choice id and an unknown session are all 404s (guard chain
     // before authorization).
     let resp = server
-        .post(&format!("/polls/{poll}/poll_sessions/{session}/poll_submissions"))
+        .post(&format!(
+            "/polls/{poll}/poll_sessions/{session}/poll_submissions"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s1.clone())
         .json(&json!({ "poll_submissions": [{ "poll_choice_id": foreign_choice }] }))
         .await;
     assert_eq!(resp.status_code(), 404);
     let resp = server
-        .post(&format!("/polls/{poll}/poll_sessions/{session}/poll_submissions"))
+        .post(&format!(
+            "/polls/{poll}/poll_sessions/{session}/poll_submissions"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s1.clone())
         .json(&json!({ "poll_submissions": [{ "poll_choice_id": 999999999 }] }))
         .await;
     assert_eq!(resp.status_code(), 404);
     let resp = server
-        .post(&format!("/polls/{poll}/poll_sessions/{session}/poll_submissions"))
+        .post(&format!(
+            "/polls/{poll}/poll_sessions/{session}/poll_submissions"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s1.clone())
         .json(&json!({ "poll_submissions": [{}] }))
         .await;
-    assert_eq!(resp.status_code(), 404, "missing poll_choice_id → 404 (find(nil))");
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "missing poll_choice_id → 404 (find(nil))"
+    );
     let resp = server
-        .post(&format!("/polls/{poll}/poll_sessions/999999999/poll_submissions"))
+        .post(&format!(
+            "/polls/{poll}/poll_sessions/999999999/poll_submissions"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s1.clone())
         .json(&json!({ "poll_submissions": [{ "poll_choice_id": choice1 }] }))
         .await;
@@ -867,26 +936,37 @@ async fn submissions_flow_and_permissions() {
 
     // Show: the submitter and the poll owner read it; other students get 403.
     let resp = server
-        .get(&format!("/polls/{poll}/poll_sessions/{session}/poll_submissions/{submission_id}"))
+        .get(&format!(
+            "/polls/{poll}/poll_sessions/{session}/poll_submissions/{submission_id}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s1.clone())
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(first(&resp.json::<Value>(), "poll_submissions")["id"], submission_id);
+    assert_eq!(
+        first(&resp.json::<Value>(), "poll_submissions")["id"],
+        submission_id
+    );
 
     let resp = server
-        .get(&format!("/polls/{poll}/poll_sessions/{session}/poll_submissions/{submission_id}"))
+        .get(&format!(
+            "/polls/{poll}/poll_sessions/{session}/poll_submissions/{submission_id}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200, "poll owner reads any submission");
 
     let resp = server
-        .get(&format!("/polls/{poll}/poll_sessions/{session}/poll_submissions/{submission_id}"))
+        .get(&format!(
+            "/polls/{poll}/poll_sessions/{session}/poll_submissions/{submission_id}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s2.clone())
         .await;
     assert_eq!(resp.status_code(), 403, "another student is 403");
 
     let resp = server
-        .get(&format!("/polls/{poll}/poll_sessions/{session}/poll_submissions/999999999"))
+        .get(&format!(
+            "/polls/{poll}/poll_sessions/{session}/poll_submissions/999999999"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s1.clone())
         .await;
     assert_eq!(resp.status_code(), 404);
@@ -894,7 +974,9 @@ async fn submissions_flow_and_permissions() {
     // A submission of one session is not visible through another session's
     // path, and not through another poll's path.
     let resp = server
-        .get(&format!("/polls/{other_poll}/poll_sessions/{session}/poll_submissions/{submission_id}"))
+        .get(&format!(
+            "/polls/{other_poll}/poll_sessions/{session}/poll_submissions/{submission_id}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s1.clone())
         .await;
     assert_eq!(resp.status_code(), 404);
@@ -906,11 +988,17 @@ async fn submissions_flow_and_permissions() {
         .await;
     assert_eq!(resp.status_code(), 200);
     let resp = server
-        .post(&format!("/polls/{poll}/poll_sessions/{session}/poll_submissions"))
+        .post(&format!(
+            "/polls/{poll}/poll_sessions/{session}/poll_submissions"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s3.clone())
         .json(&json!({ "poll_submissions": [{ "poll_choice_id": choice1 }] }))
         .await;
-    assert_eq!(resp.status_code(), 403, "closed session is 403 for everyone");
+    assert_eq!(
+        resp.status_code(),
+        403,
+        "closed session is 403 for everyone"
+    );
 
     // The session JSON embeds results and submissions for the owner.
     let resp = server
@@ -925,26 +1013,45 @@ async fn submissions_flow_and_permissions() {
         json!({ choice1.to_string(): 1, choice2.to_string(): 1 }),
         "results aggregate per choice"
     );
-    assert_eq!(session_json["poll_submissions"].as_array().unwrap().len(), 2);
-    assert_eq!(session_json["has_submitted"], false, "owner has not submitted");
+    assert_eq!(
+        session_json["poll_submissions"].as_array().unwrap().len(),
+        2
+    );
+    assert_eq!(
+        session_json["has_submitted"], false,
+        "owner has not submitted"
+    );
 
     // A section-bound session accepts the section's students.
-    let section_session =
-        create_session_ok(&server, &bearer, poll, json!({ "course_id": course, "course_section_id": section }))
-            .await["poll_sessions"][0]["id"]
-            .as_i64()
-            .unwrap();
+    let section_session = create_session_ok(
+        &server,
+        &bearer,
+        poll,
+        json!({ "course_id": course, "course_section_id": section }),
+    )
+    .await["poll_sessions"][0]["id"]
+        .as_i64()
+        .unwrap();
     let resp = server
-        .get(&format!("/polls/{poll}/poll_sessions/{section_session}/open"))
+        .get(&format!(
+            "/polls/{poll}/poll_sessions/{section_session}/open"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200);
     let resp = server
-        .post(&format!("/polls/{poll}/poll_sessions/{section_session}/poll_submissions"))
+        .post(&format!(
+            "/polls/{poll}/poll_sessions/{section_session}/poll_submissions"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, s2.clone())
         .json(&json!({ "poll_submissions": [{ "poll_choice_id": choice1 }] }))
         .await;
-    assert_eq!(resp.status_code(), 200, "section student submits: {}", resp.text());
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "section student submits: {}",
+        resp.text()
+    );
 
     // The poll JSON aggregates total_results across sessions.
     let resp = server
@@ -964,13 +1071,12 @@ async fn submissions_flow_and_permissions() {
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 204);
-    let (remaining,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM poll_submissions WHERE poll_id = $1",
-    )
-    .bind(poll)
-    .fetch_one(&pool)
-    .await
-    .expect("count submissions");
+    let (remaining,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM poll_submissions WHERE poll_id = $1")
+            .bind(poll)
+            .fetch_one(&pool)
+            .await
+            .expect("count submissions");
     assert_eq!(remaining, 0, "submissions must cascade with the poll");
     let _ = s2_submission;
 
@@ -1075,36 +1181,38 @@ async fn cross_user_polls_are_invisible() {
         ("delete", format!("/polls/{poll}")),
         ("get", format!("/polls/{poll}/poll_choices")),
         ("post", format!("/polls/{poll}/poll_choices")),
-        (
-            "get",
-            format!("/polls/{poll}/poll_choices/{choice}"),
-        ),
+        ("get", format!("/polls/{poll}/poll_choices/{choice}")),
         ("get", format!("/polls/{poll}/poll_sessions")),
-        (
-            "get",
-            format!("/polls/{poll}/poll_sessions/{session}/open"),
-        ),
+        ("get", format!("/polls/{poll}/poll_sessions/{session}/open")),
     ];
     for (method, path) in cases {
         let resp = match method {
-            "get" => server
-                .get(&path)
-                .add_header(axum::http::header::AUTHORIZATION, intruder_bearer.clone())
-                .await,
-            "put" => server
-                .put(&path)
-                .add_header(axum::http::header::AUTHORIZATION, intruder_bearer.clone())
-                .json(&json!({ "polls": [{ "question": "hijack" }] }))
-                .await,
-            "post" => server
-                .post(&path)
-                .add_header(axum::http::header::AUTHORIZATION, intruder_bearer.clone())
-                .json(&json!({ "poll_choices": [{ "text": "hijack" }] }))
-                .await,
-            _ => server
-                .delete(&path)
-                .add_header(axum::http::header::AUTHORIZATION, intruder_bearer.clone())
-                .await,
+            "get" => {
+                server
+                    .get(&path)
+                    .add_header(axum::http::header::AUTHORIZATION, intruder_bearer.clone())
+                    .await
+            }
+            "put" => {
+                server
+                    .put(&path)
+                    .add_header(axum::http::header::AUTHORIZATION, intruder_bearer.clone())
+                    .json(&json!({ "polls": [{ "question": "hijack" }] }))
+                    .await
+            }
+            "post" => {
+                server
+                    .post(&path)
+                    .add_header(axum::http::header::AUTHORIZATION, intruder_bearer.clone())
+                    .json(&json!({ "poll_choices": [{ "text": "hijack" }] }))
+                    .await
+            }
+            _ => {
+                server
+                    .delete(&path)
+                    .add_header(axum::http::header::AUTHORIZATION, intruder_bearer.clone())
+                    .await
+            }
         };
         assert_eq!(resp.status_code(), 404, "{method} {path} by non-owner");
     }
