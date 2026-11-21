@@ -348,7 +348,7 @@ async fn create_score(
     }
 
     // -- update_or_create_result: upsert the result row ------------------
-    let existing: Option<(i64, Option<DateTime<Utc>>)> = sqlx::query_as(
+    let existing: Option<(i64, Option<DateTime<Utc>>)> = match sqlx::query_as(
         // 0224 stores created_at/updated_at as naive `timestamp`; cast on
         // read/write so chrono's Timestamptz mapping (DateTime<Utc>) works.
         "SELECT id, updated_at::timestamptz FROM lti_results \
@@ -358,7 +358,10 @@ async fn create_score(
     .bind(user_id)
     .fetch_optional(&state.db)
     .await
-    .map_err(|_| advantage_error(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    {
+        Ok(row) => row,
+        Err(_) => return advantage_error(StatusCode::INTERNAL_SERVER_ERROR, "database error"),
+    };
 
     if let Some((existing_id, Some(existing_updated))) = existing {
         // verify_valid_timestamp second branch: timestamp before last update → 400.
