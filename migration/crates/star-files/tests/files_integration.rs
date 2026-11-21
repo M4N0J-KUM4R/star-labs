@@ -542,8 +542,13 @@ async fn create_success_answers_canvas_open_cors_headers() {
     );
 
     // OPTIONS preflight (Canvas routes.rb:2238 api_create_success_cors).
+    // axum-test 17 has no .options() shortcut — the generic .method() takes
+    // the http::Method directly.
     let resp = server
-        .options(&format!("/files/{file}/create_success"))
+        .method(
+            axum::http::Method::OPTIONS,
+            &format!("/files/{file}/create_success"),
+        )
         .add_header(axum::http::header::ORIGIN, "https://files.example.com")
         .await;
     assert_eq!(resp.status_code(), 200);
