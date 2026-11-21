@@ -720,7 +720,7 @@ async fn can_read_course(db: &PgPool, user_id: i64, course_id: i64) -> Result<bo
             .fetch_optional(db)
             .await?;
     match account {
-        Some((Some(account_id,))) => is_account_admin(db, user_id, account_id).await,
+        Some((Some(account_id),)) => is_account_admin(db, user_id, account_id).await,
         _ => Ok(false),
     }
 }
@@ -748,7 +748,7 @@ async fn can_read_group(db: &PgPool, user_id: i64, group_id: i64) -> Result<bool
             .bind(group_id)
             .fetch_optional(db)
             .await?;
-    let Some((Some(course_id,))) = course else {
+    let Some((Some(course_id),)) = course else {
         return Ok(false);
     };
 
@@ -776,7 +776,7 @@ async fn can_read_group(db: &PgPool, user_id: i64, group_id: i64) -> Result<bool
             .fetch_optional(db)
             .await?;
     match account {
-        Some((Some(account_id,))) => is_account_admin(db, user_id, account_id).await,
+        Some((Some(account_id),)) => is_account_admin(db, user_id, account_id).await,
         _ => Ok(false),
     }
 }
@@ -832,7 +832,7 @@ async fn can_create_conferences(
                     .bind(group_id)
                     .fetch_optional(db)
                     .await?;
-            let Some((Some(course_id,))) = course else {
+            let Some((Some(course_id),)) = course else {
                 return Ok(false);
             };
             can_create_conferences(db, auth, Context::Course(course_id)).await
@@ -973,23 +973,23 @@ async fn fetch_context_conferences(
          LIMIT $5 OFFSET $6"
     );
     let rows: Vec<ConferenceRow> = sqlx::query_as(&list_sql)
-    .bind(context.context_type())
-    .bind(context.context_id())
-    .bind(types.to_vec())
-    .bind(participant)
-    .bind(pagination.per_page)
-    .bind(pagination.offset)
-    .fetch_all(db)
-    .await?;
+        .bind(context.context_type())
+        .bind(context.context_id())
+        .bind(types.to_vec())
+        .bind(participant)
+        .bind(pagination.per_page)
+        .bind(pagination.offset)
+        .fetch_all(db)
+        .await?;
 
     let count_sql = format!("SELECT COUNT(*) FROM web_conferences w WHERE {where_sql}");
     let total: (i64,) = sqlx::query_as(&count_sql)
-    .bind(context.context_type())
-    .bind(context.context_id())
-    .bind(types.to_vec())
-    .bind(participant)
-    .fetch_one(db)
-    .await?;
+        .bind(context.context_type())
+        .bind(context.context_id())
+        .bind(types.to_vec())
+        .bind(participant)
+        .fetch_one(db)
+        .await?;
 
     Ok((rows, total.0))
 }
@@ -1029,21 +1029,21 @@ async fn fetch_user_conferences(
          LIMIT $4 OFFSET $5"
     );
     let rows: Vec<ConferenceRow> = sqlx::query_as(&list_sql)
-    .bind(types.to_vec())
-    .bind(user_id)
-    .bind(live_only)
-    .bind(pagination.per_page)
-    .bind(pagination.offset)
-    .fetch_all(db)
-    .await?;
+        .bind(types.to_vec())
+        .bind(user_id)
+        .bind(live_only)
+        .bind(pagination.per_page)
+        .bind(pagination.offset)
+        .fetch_all(db)
+        .await?;
 
     let count_sql = format!("SELECT COUNT(*) FROM web_conferences w WHERE {where_sql}");
     let total: (i64,) = sqlx::query_as(&count_sql)
-    .bind(types.to_vec())
-    .bind(user_id)
-    .bind(live_only)
-    .fetch_one(db)
-    .await?;
+        .bind(types.to_vec())
+        .bind(user_id)
+        .bind(live_only)
+        .fetch_one(db)
+        .await?;
 
     Ok((rows, total.0))
 }
@@ -1085,14 +1085,12 @@ async fn context_user_ids(db: &PgPool, context: Context) -> Result<Vec<i64>, Api
             .fetch_all(db)
             .await?
         }
-        Context::Group(group_id) => {
-            sqlx::query_scalar(
-                "SELECT DISTINCT user_id FROM group_memberships WHERE group_id = $1 ORDER BY user_id",
-            )
-            .bind(group_id)
-            .fetch_all(db)
-            .await?
-        }
+        Context::Group(group_id) => sqlx::query_scalar(
+            "SELECT DISTINCT user_id FROM group_memberships WHERE group_id = $1 ORDER BY user_id",
+        )
+        .bind(group_id)
+        .fetch_all(db)
+        .await?,
     };
     Ok(ids)
 }
@@ -1147,7 +1145,7 @@ async fn participating_users(
             .await?;
             // `Group#participating_users_in_context` drops the members that
             // are not actively enrolled in the course the group belongs to.
-            if let Some((Some(course_id,))) = course_id {
+            if let Some((Some(course_id),)) = course_id {
                 let enrolled: Vec<i64> = sqlx::query_scalar(
                     "SELECT DISTINCT user_id FROM enrollments \
                      WHERE course_id = $1 AND user_id = ANY($2) AND workflow_state = 'active'",
@@ -1503,11 +1501,7 @@ struct ConferenceAttributes {
 
 impl ConferenceAttributes {
     /// Read the permitted parameters of `web_conference`.
-    fn from_params(
-        context: Context,
-        params: &Map<String, Value>,
-        providers: &[Provider],
-    ) -> Self {
+    fn from_params(context: Context, params: &Map<String, Value>, providers: &[Provider]) -> Self {
         // Canvas `WebConference#conference_type=`: an unknown type leaves the
         // attribute empty, so the presence validation fails.
         let conference_type = match params.get("conference_type").and_then(scalar_text) {
@@ -1552,8 +1546,14 @@ impl ConferenceAttributes {
                 .get("duration")
                 .and_then(scalar_text)
                 .and_then(|value| value.trim().parse::<f64>().ok()),
-            start_at: params.get("start_at").and_then(scalar_text).and_then(|v| parse_time(&v)),
-            end_at: params.get("end_at").and_then(scalar_text).and_then(|v| parse_time(&v)),
+            start_at: params
+                .get("start_at")
+                .and_then(scalar_text)
+                .and_then(|v| parse_time(&v)),
+            end_at: params
+                .get("end_at")
+                .and_then(scalar_text)
+                .and_then(|v| parse_time(&v)),
             user_settings,
             lti_settings,
         }
@@ -1686,8 +1686,8 @@ async fn insert_conference(
         .object("user")
         .and_then(|user| user.get("all"))
         .and_then(scalar_text);
-    let invite_all = params.value("user").is_none() || value_to_boolean(user_all.as_deref())
-        || remove_observers;
+    let invite_all =
+        params.value("user").is_none() || value_to_boolean(user_all.as_deref()) || remove_observers;
     settings.insert("invite_all".to_string(), Value::Bool(invite_all));
     if remove_observers {
         settings.insert("remove_observers".to_string(), Value::Bool(true));
@@ -1771,9 +1771,9 @@ async fn create_calendar_event(
 async fn load_conference(state: &AppState, conference_id: i64) -> Result<ConferenceRow, ApiError> {
     let select_sql = format!("SELECT {CONFERENCE_COLUMNS} FROM web_conferences w WHERE w.id = $1");
     let row: ConferenceRow = sqlx::query_as(&select_sql)
-    .bind(conference_id)
-    .fetch_one(&state.db)
-    .await?;
+        .bind(conference_id)
+        .fetch_one(&state.db)
+        .await?;
     Ok(row)
 }
 
@@ -1991,12 +1991,12 @@ async fn recording_ready(
          WHERE w.id = $1 AND w.context_type = $2 AND w.context_id = $3"
     );
     let row: ConferenceRow = sqlx::query_as(&select_sql)
-    .bind(conference_id)
-    .bind(resolved.context.context_type())
-    .bind(resolved.context.context_id())
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(ApiError::NotFound)?;
+        .bind(conference_id)
+        .bind(resolved.context.context_type())
+        .bind(resolved.context.context_id())
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
 
     let Some(secret) = provider_secret(&providers, &row.conference_type) else {
         return Ok(invalid_jwt_token_response());

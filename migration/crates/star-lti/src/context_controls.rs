@@ -1960,6 +1960,7 @@ async fn build_anchor_control(
 
     let mut chains: HashMap<i64, Vec<i64>> = HashMap::new();
     let mut course_account_ids: HashMap<i64, i64> = HashMap::new();
+    // A control has either an account or a course as its context, never both.
     if let Some(course_id) = draft.course_id {
         let row: Option<(Option<i64>,)> =
             sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
@@ -1970,7 +1971,8 @@ async fn build_anchor_control(
             course_account_ids.insert(course_id, account_id);
             chains.insert(account_id, account_chain_ids(pool, account_id).await?);
         }
-    } else if let Some(account_id) = draft.account_id {
+    }
+    if let Some(account_id) = draft.account_id {
         chains.insert(account_id, account_chain_ids(pool, account_id).await?);
     }
 

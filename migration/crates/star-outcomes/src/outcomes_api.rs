@@ -1034,9 +1034,15 @@ async fn outcome_import_json(
 ) -> Result<Value, OutcomeApiError> {
     let mut body = Map::new();
     body.insert("id".to_string(), json!(import.id));
-    body.insert("created_at".to_string(), json!(iso8601(import.created_at)));
+    body.insert(
+        "created_at".to_string(),
+        json!(iso8601(Some(import.created_at))),
+    );
     body.insert("ended_at".to_string(), json!(iso8601(import.ended_at)));
-    body.insert("updated_at".to_string(), json!(iso8601(import.updated_at)));
+    body.insert(
+        "updated_at".to_string(),
+        json!(iso8601(Some(import.updated_at))),
+    );
     body.insert(
         "progress".to_string(),
         json!(import.progress.unwrap_or_default()),
@@ -1806,7 +1812,6 @@ async fn outcome_results_index(
     let results = load_results(pool, &ctx, &ctx.users, include_hidden).await?;
 
     let (page, per_page) = pagination(&ctx.params);
-    let total = results.len();
     let sliced = slice_page(&results, page, per_page);
 
     let mut body = Map::new();
@@ -1824,26 +1829,7 @@ async fn outcome_results_index(
         );
     }
 
-    let mut response = Map::new();
-    response.insert(
-        "outcome_results".to_string(),
-        body["outcome_results"].clone(),
-    );
-    if let Some(linked) = body.get("linked") {
-        response.insert("linked".to_string(), linked.clone());
-    }
-    response.insert(
-        "meta".to_string(),
-        jsonapi_meta(
-            &format!("/api/v1/courses/{course_id}/outcome_results"),
-            raw.as_deref().unwrap_or(""),
-            per_page,
-            page,
-            total,
-        ),
-    );
-
-    Ok(Json(Value::Object(response)).into_response())
+    Ok(Json(Value::Object(body)).into_response())
 }
 
 /// `GET /courses/{course_id}/outcome_rollups`.
@@ -2387,6 +2373,7 @@ struct AlignmentRow {
     id: i64,
     content_type: Option<String>,
     content_id: Option<i64>,
+    content_title: Option<String>,
     unpublished: bool,
 }
 
@@ -2397,7 +2384,7 @@ async fn load_alignments(
     course_id: i64,
 ) -> Result<Vec<AlignmentRow>, OutcomeApiError> {
     let rows = sqlx::query_as::<_, AlignmentRow>(
-        "SELECT oa.id, oa.content_type, oa.content_id,
+        "SELECT oa.id, oa.content_type, oa.content_id, a.title AS content_title,
                 COALESCE(a.workflow_state = 'unpublished', FALSE) AS unpublished
          FROM outcome_alignments oa
          LEFT JOIN assignments a ON oa.content_type = 'Assignment' AND a.id = oa.content_id
@@ -2417,7 +2404,7 @@ fn alignment_json(alignment: &AlignmentRow) -> Value {
     json!({
         "alignment_id": format!("D_{}", alignment.id),
         "associated_asset_id": alignment.content_id.map(|id| id.to_string()).unwrap_or_default(),
-        "associated_asset_name": "",
+        "associated_asset_name": alignment.content_title.clone().unwrap_or_default(),
         "associated_asset_type": alignment.content_type.clone().unwrap_or_default(),
         "html_url": ""
     })
@@ -2884,13 +2871,15 @@ async fn aggregate_rollups(
 
 /// Canvas `serialize_rollup`.
 fn serialize_rollup(rollup: &Rollup, context_key: &str, context_id: i64) -> Value {
+    let mut links = Map::new();
+    links.insert(context_key.to_string(), json!(context_id.to_string()));
     json!({
         "scores": rollup
             .scores
             .iter()
             .map(serialize_rollup_score)
             .collect::<Vec<Value>>(),
-        "links": { context_key => context_id.to_string() }
+        "links": Value::Object(links)
     })
 }
 

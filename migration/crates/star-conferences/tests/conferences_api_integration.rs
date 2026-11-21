@@ -401,7 +401,9 @@ async fn index_requires_a_session() {
     };
     let course_id = seed_course(&pool, &prefix, "course").await;
 
-    let response = server.get(&format!("/courses/{course_id}/conferences")).await;
+    let response = server
+        .get(&format!("/courses/{course_id}/conferences"))
+        .await;
     assert_eq!(response.status_code(), 401);
 
     cleanup(&pool, &prefix).await;
@@ -881,7 +883,10 @@ async fn recording_ready_rejects_a_wrong_meeting_and_a_broken_token() {
     assert_eq!(wrong_meeting.status_code(), 422);
     let body: Value = wrong_meeting.json();
     assert_eq!(body["status"], json!("unprocessable entity"));
-    assert_eq!(body["errors"][0]["message"], json!("Signed meeting id invalid"));
+    assert_eq!(
+        body["errors"][0]["message"],
+        json!("Signed meeting id invalid")
+    );
 
     let broken_token = server
         .post(&format!(
