@@ -40,6 +40,8 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod jobs_v2;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -353,6 +355,9 @@ pub fn router() -> Router<AppState> {
         .route("/jobs2/clusters", get(list_job_clusters))
         .route("/jobs2/{id}", get(lookup_job_v2))
         .route("/jobs2/{id}/requeue", post(requeue_job_v2))
+        // The grouped listings, the strand management and the throttling of
+        // `JobsV2Controller`.
+        .merge(jobs_v2::router())
 }
 
 // ---------------------------------------------------------------------------

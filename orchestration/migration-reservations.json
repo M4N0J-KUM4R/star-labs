@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0231",
- "next_available": "0232",
+ "max_merged": "0232",
+ "next_available": "0233",
  "reservations": {
   "0001": {
    "issue": null,
@@ -745,6 +745,11 @@
   "0231": {
    "issue": null,
    "note": "star-lti and star-search: the LTI registration history and the page views",
+   "status": "merged"
+  },
+  "0232": {
+   "issue": null,
+   "note": "star-modules: the course paces and their module items",
    "status": "merged"
   }
  }

@@ -24,6 +24,10 @@ use star_common::{ApiError, AppState};
 /// Authenticated user — role must be looked up from DB in handlers.
 use star_auth::AuthUser;
 
+mod course_pacing;
+mod pace_apis;
+mod pace_contexts;
+
 // --------------------------------------------------------------------------
 // Data types
 // --------------------------------------------------------------------------
@@ -1259,6 +1263,12 @@ async fn delete_course_module_item(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // The course pacing plans of a course, a section or an enrollment.
+        .merge(course_pacing::router())
+        // The contexts of a course that can be paced.
+        .merge(pace_contexts::router())
+        // The pace of a section and the pace of a student enrollment.
+        .merge(pace_apis::router())
         .route("/courses/{courseId}/modules", get(list_modules))
         .route("/courses/{courseId}/modules", post(create_module))
         .route(
