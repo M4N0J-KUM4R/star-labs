@@ -25,6 +25,8 @@ use star_common::{ApiError, AppState};
 
 use star_auth::AuthUser;
 
+mod external_feeds;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -436,6 +438,8 @@ async fn unread_count(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // The RSS feeds of a course or a group.
+        .merge(external_feeds::router())
         .route("/courses/{courseId}/announcements", get(list_announcements))
         .route(
             "/courses/{courseId}/announcements",
