@@ -65,6 +65,9 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod ags_auth;
+mod ags_results;
+mod ags_scores;
 mod authentication;
 mod context_controls;
 mod data_services;
@@ -75,6 +78,7 @@ pub mod launch_cache;
 mod line_items;
 mod lti_apps;
 mod lti_authorization;
+mod nrps;
 mod resource_links;
 
 /// Issue #95 — the opaque per-user LTI login_hint (Canvas
@@ -757,6 +761,9 @@ pub fn router() -> Router<AppState> {
 /// Canvas serves these routes outside `/api/v1` (`ApiRouteSet.draw(self,
 /// "/api/lti")`), so the paths carry the `/api/lti` prefix and the router is
 /// mounted at the application root — see `star-http/src/main.rs`.
+/// Test/dev helper: mint an LTI Advantage service token (see `ags_auth`).
+pub use ags_auth::mint_service_token as mint_service_token_for_tests;
+
 pub fn lti_advantage_router() -> Router<AppState> {
     Router::new()
         .merge(dynamic_registration::advantage_router())
@@ -764,6 +771,10 @@ pub fn lti_advantage_router() -> Router<AppState> {
         .merge(tool_proxy::advantage_router())
         .merge(tool_setting::router())
         .merge(external_tools::advantage_router())
+        // Issue #94 — LTI AGS scores/results and NRPS memberships.
+        .merge(ags_scores::router())
+        .merge(ags_results::router())
+        .merge(nrps::router())
         // Issue #95 — LTI 1.3 launch flows: OIDC login initiation and
         // authentication request (authentication_controller.rb), the LTI 2
         // authorization server (authorization_controller.rb) and the deep
