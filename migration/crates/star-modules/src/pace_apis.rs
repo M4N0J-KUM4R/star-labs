@@ -533,7 +533,10 @@ async fn pace_in_context(
     };
     let key = match scope {
         PaceScope::Section(section_id) => section_id,
-        PaceScope::Enrollment(enrollment_id) => enrollment_user_id(db, enrollment_id).await?,
+        // The pace of a student enrollment is stored with the id of the user.
+        PaceScope::Enrollment(enrollment_id) => enrollment_user_id(db, enrollment_id)
+            .await?
+            .unwrap_or_default(),
     };
     let row: Option<PaceRow> = sqlx::query_as(&sql)
         .bind(course_id)
@@ -867,7 +870,7 @@ async fn modules_json(db: &PgPool, pace_id: i64, course_id: i64) -> Result<Vec<V
     // carries is the `item_id` of an assignment module item.
     let rows: Vec<(
         i64,
-        i64,
+        i32,
         String,
         i32,
         i64,

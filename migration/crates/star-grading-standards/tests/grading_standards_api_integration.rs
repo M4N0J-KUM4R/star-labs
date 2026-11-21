@@ -32,6 +32,7 @@
 //!   6. A teacher updates a course standard; a student gets 403.
 //!   7. An account admin deletes a standard (200) and the standard is gone
 //!      afterwards (404).
+//!   8. A scheme entry without a value is skipped, like Canvas does.
 
 use axum_test::TestServer;
 use serde_json::{json, Value};
@@ -394,6 +395,52 @@ async fn a_scheme_without_a_zero_floor_is_a_bad_request() {
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
     let errors: Value = resp.json();
     assert_eq!(errors["data"][0], "can't be blank");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn an_entry_without_a_value_is_skipped() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let admin = seed_user(&pool, &prefix, "Admin", "user").await;
+    let account = seed_account(&pool, &prefix, "Account").await;
+    seed_account_admin(&pool, account, admin).await;
+
+    // `GradingStandard#standard_data=` skips a row without a value, so the
+    // only entry of this scheme is dropped and the scheme stays empty.
+    let resp = server
+        .post(&format!("/accounts/{account}/grading_standards"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "user"))
+        .json(&json!({
+            "title": "Incomplete entry",
+            "grading_scheme_entry": [{ "name": "A" }]
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    let errors: Value = resp.json();
+    assert_eq!(errors["data"][0], "can't be blank");
+
+    // A complete row next to an incomplete one keeps the complete one.
+    let resp = server
+        .post(&format!("/accounts/{account}/grading_standards"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "user"))
+        .json(&json!({
+            "title": "One good entry",
+            "grading_scheme_entry": [
+                { "name": "A" },
+                { "name": "F", "value": 0 }
+            ]
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let entries = body["grading_scheme"].as_array().expect("scheme");
+    assert_eq!(entries.len(), 1, "body: {body:?}");
+    assert_eq!(entries[0]["name"], "F");
+    assert_eq!(entries[0]["value"], 0.0);
 
     cleanup(&pool, &prefix).await;
 }

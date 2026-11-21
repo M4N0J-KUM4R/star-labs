@@ -85,7 +85,7 @@ async fn create(
     State(state): State<AppState>,
     headers: HeaderMap,
     body: Option<Json<SubscriptionRequest>>,
-) -> Result<Response, Box<Response>> {
+) -> Result<Response, Response> {
     let proxy_id = authenticate(&state, &headers).await?;
     let body = body.map(|Json(body)| body).unwrap_or_default();
     let subscription = body.subscription.unwrap_or_default();
@@ -99,10 +99,7 @@ async fn create(
 }
 
 /// Canvas `Lti::SubscriptionsApiController#index`.
-async fn index(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> Result<Response, Box<Response>> {
+async fn index(State(state): State<AppState>, headers: HeaderMap) -> Result<Response, Response> {
     let proxy_id = authenticate(&state, &headers).await?;
     let rows = list_subscriptions(&state.db, proxy_id).await?;
     let subscriptions = rows.iter().map(subscription_json).collect::<Vec<Value>>();
@@ -114,7 +111,7 @@ async fn show(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Response, Box<Response>> {
+) -> Result<Response, Response> {
     let proxy_id = authenticate(&state, &headers).await?;
     let row = find_subscription(&state.db, proxy_id, &id).await?;
     let Some(row) = row else {
@@ -129,7 +126,7 @@ async fn update(
     headers: HeaderMap,
     Path(id): Path<String>,
     body: Option<Json<SubscriptionRequest>>,
-) -> Result<Response, Box<Response>> {
+) -> Result<Response, Response> {
     let proxy_id = authenticate(&state, &headers).await?;
     let body = body.map(|Json(body)| body).unwrap_or_default();
     let mut subscription = body.subscription.unwrap_or_default();
@@ -151,7 +148,7 @@ async fn destroy(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
-) -> Result<Response, Box<Response>> {
+) -> Result<Response, Response> {
     let proxy_id = authenticate(&state, &headers).await?;
     let row = find_subscription(&state.db, proxy_id, &id).await?;
     let Some(row) = row else {
@@ -169,48 +166,40 @@ async fn destroy(
 // Errors — Canvas renders the LTI errors with their own body
 // ---------------------------------------------------------------------------
 
-fn unauthorized() -> Box<Response> {
-    Box::new(
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "unauthorized" })),
-        )
-            .into_response(),
+fn unauthorized() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "unauthorized" })),
     )
+        .into_response()
 }
 
-fn invalid_subscription() -> Box<Response> {
-    Box::new(
-        (
-            StatusCode::BAD_REQUEST,
-            Json(json!({ "error": "Invalid subscription" })),
-        )
-            .into_response(),
+fn invalid_subscription() -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "error": "Invalid subscription" })),
     )
+        .into_response()
 }
 
-fn unauthorized_subscription() -> Box<Response> {
-    Box::new(
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(json!({ "error": "Unauthorized subscription" })),
-        )
-            .into_response(),
+fn unauthorized_subscription() -> Response {
+    (
+        StatusCode::UNAUTHORIZED,
+        Json(json!({ "error": "Unauthorized subscription" })),
     )
+        .into_response()
 }
 
-fn not_found() -> Box<Response> {
-    Box::new((StatusCode::NOT_FOUND, Json(json!({ "error": "not_found" }))).into_response())
+fn not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({ "error": "not_found" }))).into_response()
 }
 
-fn server_error(error: sqlx::Error) -> Box<Response> {
-    Box::new(
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": error.to_string() })),
-        )
-            .into_response(),
+fn server_error(error: sqlx::Error) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": error.to_string() })),
     )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +211,7 @@ fn server_error(error: sqlx::Error) -> Box<Response> {
 /// The token is a JWT signed with the platform secret; its `sub` claim names
 /// the guid of the tool proxy and its `scopes` claim carries the
 /// permissions.
-async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<i64, Box<Response>> {
+async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<i64, Response> {
     let Some(value) = headers.get(header::AUTHORIZATION) else {
         return Err(unauthorized());
     };
@@ -282,7 +271,7 @@ async fn validate_capabilities(
     db: &PgPool,
     proxy_id: i64,
     event_types: Option<&[String]>,
-) -> Result<(), Box<Response>> {
+) -> Result<(), Response> {
     let Some(event_types) = event_types else {
         return Ok(());
     };
@@ -332,7 +321,7 @@ async fn validate_tool_context(
     db: &PgPool,
     proxy_id: i64,
     subscription: &SubscriptionFields,
-) -> Result<(), Box<Response>> {
+) -> Result<(), Response> {
     let context_type = subscription.context_type.as_deref().unwrap_or_default();
     let context_id = subscription.context_id.as_deref().unwrap_or_default();
     if context_id.is_empty() {
@@ -386,7 +375,7 @@ async fn validate_tool_context(
 }
 
 /// Canvas `Lti::SubscriptionsValidator.validate_subscription_context!`.
-fn validate_context_type(context_type: Option<&str>) -> Result<(), Box<Response>> {
+fn validate_context_type(context_type: Option<&str>) -> Result<(), Response> {
     let Some(context_type) = context_type else {
         return Ok(());
     };
@@ -424,10 +413,7 @@ const SUBSCRIPTION_COLUMNS: &str = "id, context_type, context_id, event_types, f
      created_at, updated_at";
 
 /// The stored subscriptions of a tool proxy.
-async fn list_subscriptions(
-    db: &PgPool,
-    proxy_id: i64,
-) -> Result<Vec<SubscriptionRow>, Box<Response>> {
+async fn list_subscriptions(db: &PgPool, proxy_id: i64) -> Result<Vec<SubscriptionRow>, Response> {
     let sql = format!(
         "SELECT {SUBSCRIPTION_COLUMNS} FROM lti_data_service_subscriptions \
          WHERE owner_id = $1 AND owner_type = 'tool_proxy' AND workflow_state = 'active' \
@@ -445,7 +431,7 @@ async fn find_subscription(
     db: &PgPool,
     proxy_id: i64,
     id: &str,
-) -> Result<Option<SubscriptionRow>, Box<Response>> {
+) -> Result<Option<SubscriptionRow>, Response> {
     let sql = format!(
         "SELECT {SUBSCRIPTION_COLUMNS} FROM lti_data_service_subscriptions \
          WHERE id = $1 AND owner_id = $2 AND owner_type = 'tool_proxy' LIMIT 1"
@@ -463,7 +449,7 @@ async fn insert_subscription(
     db: &PgPool,
     proxy_id: i64,
     subscription: &SubscriptionFields,
-) -> Result<SubscriptionRow, Box<Response>> {
+) -> Result<SubscriptionRow, Response> {
     let context_id = subscription.context_id.clone().unwrap_or_default();
     let context_type = subscription.context_type.clone().unwrap_or_default();
     let event_types = json!(subscription.event_types.clone().unwrap_or_default());
@@ -503,7 +489,7 @@ async fn update_subscription(
     proxy_id: i64,
     id: &str,
     subscription: &SubscriptionFields,
-) -> Result<Option<SubscriptionRow>, Box<Response>> {
+) -> Result<Option<SubscriptionRow>, Response> {
     let event_types = subscription.event_types.clone();
     let format = subscription.format.clone();
     let transport_type = subscription.transport_type.clone();
@@ -532,7 +518,7 @@ async fn update_subscription(
 }
 
 /// The account a tool proxy is installed in.
-async fn tool_proxy_account(db: &PgPool, proxy_id: i64) -> Result<i64, Box<Response>> {
+async fn tool_proxy_account(db: &PgPool, proxy_id: i64) -> Result<i64, Response> {
     let row: Option<(i64,)> = sqlx::query_as(
         "SELECT context_id FROM lti_tool_proxies \
          WHERE id = $1 AND context_type = 'Account' LIMIT 1",

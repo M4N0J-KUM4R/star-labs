@@ -82,7 +82,7 @@ async fn grade_passback(
     Path(tool_id): Path<String>,
     headers: HeaderMap,
     uri: OriginalUri,
-    body: Bytes,
+    _body: Bytes,
 ) -> Response {
     let tool = match load_tool(&state, &tool_id).await {
         Ok(tool) => tool,
@@ -196,7 +196,7 @@ async fn turnitin_outcomes_placement(
     if let Err(response) = verify_oauth(&state, &headers, &uri, &tool).await {
         return response;
     }
-    Ok(Json(json!({})).into_response())
+    Json(json!({})).into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -222,7 +222,12 @@ async fn load_tool(state: &AppState, tool_id: &str) -> Result<Tool, Response> {
 
     match row {
         Some((consumer_key, shared_secret, consumer_id)) => {
-            let consumer_key = consumer_key.or(consumer_id).ok_or_else(|| not_found())?;
+            // The consumer key of the tool; the consumer id is the fallback.
+            let consumer_key = if consumer_key.is_empty() {
+                consumer_id.ok_or_else(not_found)?
+            } else {
+                consumer_key
+            };
             let shared_secret = shared_secret.unwrap_or_default();
             Ok(Tool {
                 consumer_key,
@@ -247,7 +252,12 @@ async fn load_tool_by_token(state: &AppState, token: &str) -> Result<Tool, Respo
 
     match row {
         Some((consumer_key, shared_secret, consumer_id)) => {
-            let consumer_key = consumer_key.or(consumer_id).ok_or_else(not_found)?;
+            // The consumer key of the tool; the consumer id is the fallback.
+            let consumer_key = if consumer_key.is_empty() {
+                consumer_id.ok_or_else(not_found)?
+            } else {
+                consumer_key
+            };
             let shared_secret = shared_secret.unwrap_or_default();
             Ok(Tool {
                 consumer_key,

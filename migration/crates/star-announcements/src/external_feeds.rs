@@ -39,8 +39,6 @@ use star_common::{ApiError, AppState};
 #[derive(Debug, sqlx::FromRow)]
 struct ExternalFeed {
     id: i64,
-    context_id: i64,
-    context_type: String,
     title: Option<String>,
     url: String,
     header_match: Option<String>,
@@ -49,7 +47,7 @@ struct ExternalFeed {
 }
 
 /// The columns of an `external_feeds` row.
-const FEED_COLUMNS: &str = "id, context_id, context_type, title, url, header_match, verbosity, \
+const FEED_COLUMNS: &str = "id, title, url, header_match, verbosity, \
      created_at::timestamptz AS created_at";
 
 /// The body of a create request.

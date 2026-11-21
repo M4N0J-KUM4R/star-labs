@@ -300,7 +300,7 @@ async fn context_json(
     let applied_pace = applied_pace_for(db, course_id, context).await?;
     let on_pace = match context.user_id {
         // Only a student-enrollment context carries the on-pace flag.
-        Some(user_id) => !overdue_user_ids(db, course_id).await?.contains(&user_id),
+        Some(user_id) => Value::Bool(!overdue_user_ids(db, course_id).await?.contains(&user_id)),
         None => Value::Null,
     };
 
@@ -488,5 +488,5 @@ pub(crate) async fn overdue_user_ids(db: &PgPool, course_id: i64) -> Result<Vec<
     .bind(course_id)
     .fetch_all(db)
     .await?;
-    Ok(rows.into_iter().flatten().flatten().collect())
+    Ok(rows.into_iter().flat_map(|row| row.0).collect())
 }

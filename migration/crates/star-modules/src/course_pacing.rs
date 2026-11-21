@@ -259,6 +259,11 @@ fn json_i64(value: Option<&Value>) -> Option<i64> {
     }
 }
 
+/// The integer of a JSON value that is not optional.
+fn json_i64_value(value: &Value) -> Option<i64> {
+    json_i64(Some(value))
+}
+
 /// Canvas casts a date column from a string; an unparsable value becomes
 /// nil (Rails' `Type::Date` cast returns nil for garbage).
 fn json_datetime(value: Option<&Value>) -> Option<DateTime<Utc>> {
@@ -350,7 +355,7 @@ fn parse_pace_params(body: &Value) -> PaceParams {
 fn parse_enrollment_ids(body: &Value) -> Vec<i64> {
     body.get("enrollment_ids")
         .and_then(|value| value.as_array())
-        .map(|items| items.iter().filter_map(json_i64).collect())
+        .map(|items| items.iter().filter_map(json_i64_value).collect())
         .unwrap_or_default()
 }
 
@@ -447,15 +452,17 @@ pub(crate) async fn load_course(db: &PgPool, course_id: i64) -> Result<CourseRow
 /// The merged course settings document (`courses.settings` plus the
 /// `course_settings` row).
 async fn course_settings_json(db: &PgPool, course_id: i64) -> Value {
-    let row: Option<(Option<String>, Option<String>)> = sqlx::query_as(
-        "SELECT c.settings::text, cs.settings \
+    let row: Option<(Option<String>, Option<String>)> =
+        sqlx::query_as::<_, (Option<String>, Option<String>)>(
+            "SELECT c.settings::text, cs.settings \
          FROM courses c LEFT JOIN course_settings cs ON cs.course_id = c.id \
          WHERE c.id = $1",
-    )
-    .bind(course_id)
-    .fetch_optional(db)
-    .await
-    .ok();
+        )
+        .bind(course_id)
+        .fetch_optional(db)
+        .await
+        .ok()
+        .flatten();
 
     let mut merged = Map::new();
     if let Some((course_settings, section_settings)) = row {
@@ -1772,11 +1779,12 @@ async fn course_or_term_end_date(db: &PgPool, course: &CourseRow) -> Option<Naiv
     }
     let term_id = course.enrollment_term_id?;
     let row: Option<(Option<DateTime<Utc>>,)> =
-        sqlx::query_as("SELECT end_at FROM terms WHERE id = $1")
+        sqlx::query_as::<_, (Option<DateTime<Utc>>,)>("SELECT end_at FROM terms WHERE id = $1")
             .bind(term_id)
             .fetch_optional(db)
             .await
-            .ok();
+            .ok()
+            .flatten();
     row.and_then(|(end_at,)| end_at.map(|date| date.date_naive()))
 }
 

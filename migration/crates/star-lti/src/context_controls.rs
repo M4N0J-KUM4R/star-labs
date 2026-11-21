@@ -69,7 +69,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -1883,7 +1883,7 @@ async fn resolve_context_account_id(
     }
     if let Some(course_id) = course_id {
         let row: Option<(Option<i64>,)> =
-            sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+            sqlx::query_as::<_, (Option<i64>,)>("SELECT account_id FROM courses WHERE id = $1")
                 .bind(course_id)
                 .fetch_optional(pool)
                 .await?;
@@ -1904,7 +1904,7 @@ async fn control_path(
     }
     if let Some(course_id) = course_id {
         let row: Option<(Option<i64>,)> =
-            sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+            sqlx::query_as::<_, (Option<i64>,)>("SELECT account_id FROM courses WHERE id = $1")
                 .bind(course_id)
                 .fetch_optional(pool)
                 .await?;
@@ -1963,7 +1963,7 @@ async fn build_anchor_control(
     // A control has either an account or a course as its context, never both.
     if let Some(course_id) = draft.course_id {
         let row: Option<(Option<i64>,)> =
-            sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+            sqlx::query_as::<_, (Option<i64>,)>("SELECT account_id FROM courses WHERE id = $1")
                 .bind(course_id)
                 .fetch_optional(pool)
                 .await?;

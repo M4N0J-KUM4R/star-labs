@@ -650,13 +650,13 @@ async fn validate_rule(
 /// - `lower_bound <= upper_bound`
 /// - at least one of the two bounds exists
 fn validate_range(range: &RangePlan, errors: &mut ErrorBag) {
-    if let Some(lower) = range.lower_bound.filter(|value| *value < 0.0) {
+    if range.lower_bound.is_some_and(|value| value < 0.0) {
         errors.add(
             "scoring_ranges.lower_bound",
             "must be greater than or equal to 0",
         );
     }
-    if let Some(upper) = range.upper_bound.filter(|value| *value < 0.0) {
+    if range.upper_bound.is_some_and(|value| value < 0.0) {
         errors.add(
             "scoring_ranges.upper_bound",
             "must be greater than or equal to 0",

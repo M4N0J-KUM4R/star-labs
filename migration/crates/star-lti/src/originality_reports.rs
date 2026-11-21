@@ -37,7 +37,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
-use star_common::{ApiError, AppState};
+use star_common::AppState;
 
 /// An `originality_reports` row.
 #[derive(Debug, sqlx::FromRow)]
@@ -103,7 +103,7 @@ async fn create_report(
     State(state): State<AppState>,
     Path((assignment_id, submission_id)): Path<(i64, i64)>,
     body: Option<Json<ReportRequest>>,
-) -> Result<Response, Box<Response>> {
+) -> Result<Response, Response> {
     require_assignment(&state.db, assignment_id).await?;
     require_submission(&state.db, assignment_id, submission_id).await?;
 
@@ -156,7 +156,7 @@ async fn create_report(
 async fn show_report(
     State(state): State<AppState>,
     Path((assignment_id, submission_id, id)): Path<(i64, i64, i64)>,
-) -> Result<Response, Box<Response>> {
+) -> Result<Response, Response> {
     require_assignment(&state.db, assignment_id).await?;
     require_submission(&state.db, assignment_id, submission_id).await?;
     let report = load_report(&state.db, id).await?;
@@ -174,7 +174,7 @@ async fn update_submission_report(
     State(state): State<AppState>,
     Path((assignment_id, submission_id, id)): Path<(i64, i64, i64)>,
     body: Option<Json<ReportRequest>>,
-) -> Result<Response, Box<Response>> {
+) -> Result<Response, Response> {
     require_assignment(&state.db, assignment_id).await?;
     require_submission(&state.db, assignment_id, submission_id).await?;
     let report = load_report(&state.db, id).await?;
@@ -196,7 +196,7 @@ async fn update_report(
     _assignment_id: i64,
     _submission_id: i64,
     fields: ReportFields,
-) -> Result<Response, Box<Response>> {
+) -> Result<Response, Response> {
     let score = fields.originality_score.or(report.originality_score);
     let url = fields
         .originality_report_url
@@ -237,7 +237,7 @@ async fn update_report(
 async fn show_file_report(
     State(state): State<AppState>,
     Path((assignment_id, file_id)): Path<(i64, i64)>,
-) -> Result<Response, Box<Response>> {
+) -> Result<Response, Response> {
     require_assignment(&state.db, assignment_id).await?;
     let report = report_of_attachment(&state.db, file_id).await?;
     let Some(report) = report else {
@@ -251,7 +251,7 @@ async fn update_file_report(
     State(state): State<AppState>,
     Path((assignment_id, file_id)): Path<(i64, i64)>,
     body: Option<Json<ReportRequest>>,
-) -> Result<Response, Box<Response>> {
+) -> Result<Response, Response> {
     require_assignment(&state.db, assignment_id).await?;
     let report = report_of_attachment(&state.db, file_id).await?;
     let Some(report) = report else {
@@ -266,22 +266,20 @@ async fn update_file_report(
 // Errors
 // ---------------------------------------------------------------------------
 
-fn not_found() -> Box<Response> {
-    Box::new((StatusCode::NOT_FOUND, Json(json!({ "error": "not_found" }))).into_response())
+fn not_found() -> Response {
+    (StatusCode::NOT_FOUND, Json(json!({ "error": "not_found" }))).into_response()
 }
 
-fn bad_request(message: &str) -> Box<Response> {
-    Box::new((StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response())
+fn bad_request(message: &str) -> Response {
+    (StatusCode::BAD_REQUEST, Json(json!({ "error": message }))).into_response()
 }
 
-fn server_error(error: sqlx::Error) -> Box<Response> {
-    Box::new(
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": error.to_string() })),
-        )
-            .into_response(),
+fn server_error(error: sqlx::Error) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": error.to_string() })),
     )
+        .into_response()
 }
 
 // ---------------------------------------------------------------------------
@@ -289,7 +287,7 @@ fn server_error(error: sqlx::Error) -> Box<Response> {
 // ---------------------------------------------------------------------------
 
 /// The assignment of a route has to exist — 404.
-async fn require_assignment(db: &PgPool, assignment_id: i64) -> Result<(), Box<Response>> {
+async fn require_assignment(db: &PgPool, assignment_id: i64) -> Result<(), Response> {
     let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM assignments WHERE id = $1")
         .bind(assignment_id)
         .fetch_optional(db)
@@ -307,7 +305,7 @@ async fn require_submission(
     db: &PgPool,
     assignment_id: i64,
     submission_id: i64,
-) -> Result<(), Box<Response>> {
+) -> Result<(), Response> {
     let row: Option<(i64,)> =
         sqlx::query_as("SELECT id FROM submissions WHERE id = $1 AND assignment_id = $2")
             .bind(submission_id)
@@ -323,7 +321,7 @@ async fn require_submission(
 }
 
 /// The report of an id.
-async fn load_report(db: &PgPool, id: i64) -> Result<Option<OriginalityReport>, Box<Response>> {
+async fn load_report(db: &PgPool, id: i64) -> Result<Option<OriginalityReport>, Response> {
     let sql = format!("SELECT {REPORT_COLUMNS} FROM originality_reports WHERE id = $1");
     sqlx::query_as(&sql)
         .bind(id)
@@ -336,7 +334,7 @@ async fn load_report(db: &PgPool, id: i64) -> Result<Option<OriginalityReport>, 
 async fn report_of_submission(
     db: &PgPool,
     submission_id: i64,
-) -> Result<Option<OriginalityReport>, Box<Response>> {
+) -> Result<Option<OriginalityReport>, Response> {
     let sql = format!(
         "SELECT {REPORT_COLUMNS} FROM originality_reports \
          WHERE submission_id = $1 ORDER BY id DESC LIMIT 1"
@@ -352,7 +350,7 @@ async fn report_of_submission(
 async fn report_of_attachment(
     db: &PgPool,
     file_id: i64,
-) -> Result<Option<OriginalityReport>, Box<Response>> {
+) -> Result<Option<OriginalityReport>, Response> {
     let sql = format!(
         "SELECT {REPORT_COLUMNS} FROM originality_reports \
          WHERE attachment_id = $1 ORDER BY id DESC LIMIT 1"
@@ -365,7 +363,7 @@ async fn report_of_attachment(
 }
 
 /// The root account of the course of an assignment.
-async fn root_account_of_course(db: &PgPool, assignment_id: i64) -> Result<i64, Box<Response>> {
+async fn root_account_of_course(db: &PgPool, assignment_id: i64) -> Result<i64, Response> {
     let row: Option<(i64,)> = sqlx::query_as(
         "SELECT c.account_id FROM assignments a JOIN courses c ON c.id = a.course_id \
          WHERE a.id = $1",
@@ -381,7 +379,7 @@ async fn root_account_of_course(db: &PgPool, assignment_id: i64) -> Result<i64, 
 async fn submission_time_of(
     db: &PgPool,
     submission_id: i64,
-) -> Result<Option<chrono::DateTime<chrono::Utc>>, Box<Response>> {
+) -> Result<Option<chrono::DateTime<chrono::Utc>>, Response> {
     let row: Option<(chrono::DateTime<chrono::Utc>,)> =
         sqlx::query_as("SELECT submitted_at FROM submissions WHERE id = $1")
             .bind(submission_id)

@@ -86,7 +86,7 @@ struct ConfigurationRequest {
 }
 
 /// The developer key of a create request.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 struct DeveloperKeyRequest {
     name: Option<String>,
     email: Option<String>,

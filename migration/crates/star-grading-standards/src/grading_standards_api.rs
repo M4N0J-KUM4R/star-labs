@@ -50,7 +50,9 @@
 //!   schemes.
 //! * `GradingStandard#standard_data=` divides the submitted values by the
 //!   scheme's scaling factor (100 for percentage schemes) and stores them as
-//!   lower bounds; the request values are therefore 0–100 integers.
+//!   lower bounds; the request values are therefore 0–100 integers. A row
+//!   without a name or without a value is skipped, and a repeated name keeps
+//!   the last value.
 //! * `GradingStandard#assessed_assignment?` cannot be answered by this schema
 //!   (`assignments` has no `grading_standard_id` column and `accounts` has no
 //!   `grading_standard_id` column), so the standard is never "used for
@@ -180,10 +182,13 @@ pub struct GradingStandardParams {
 }
 
 /// One `grading_scheme_entry[][name]` / `[][value]` pair.
+///
+/// Both keys are optional: `GradingStandard#standard_data=` skips a row
+/// without a name or without a value.
 #[derive(Debug, Deserialize)]
 pub struct SchemeEntryParam {
-    pub name: String,
-    pub value: f64,
+    pub name: Option<String>,
+    pub value: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -241,10 +246,7 @@ async fn can_manage_context(
 
 /// `@context.grading_standards` — the standards of the context, deleted ones
 /// excluded (`has_many :grading_standards, -> { where("workflow_state<>'deleted'") }`).
-async fn list_for_context(
-    pool: &PgPool,
-    ctx: Context,
-) -> Result<Vec<StandardRow>, ApiError> {
+async fn list_for_context(pool: &PgPool, ctx: Context) -> Result<Vec<StandardRow>, ApiError> {
     let rows = match ctx {
         Context::Account(account_id) => {
             sqlx::query_as::<_, StandardRow>(
@@ -369,17 +371,26 @@ fn build_scheme_data(
     let mut data: Vec<SchemeDatum> = Vec::new();
 
     for entry in entries.unwrap_or(&[]) {
-        let value = round_to(entry.value / divisor, DATA_DECIMALS);
-        match data.iter_mut().find(|datum| datum.name == entry.name) {
+        // `standard_data=` skips a row without a name or without a value.
+        let (name, raw_value) = match (entry.name.as_ref(), entry.value) {
+            (Some(name), Some(raw_value)) => (name, raw_value),
+            _ => continue,
+        };
+        let value = round_to(raw_value / divisor, DATA_DECIMALS);
+        match data.iter_mut().find(|datum| datum.name == name.as_str()) {
             Some(existing) => existing.value = value,
             None => data.push(SchemeDatum {
-                name: entry.name.clone(),
+                name: name.clone(),
                 value,
             }),
         }
     }
 
-    data.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(std::cmp::Ordering::Equal));
+    data.sort_by(|a, b| {
+        b.value
+            .partial_cmp(&a.value)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
     data
 }
 
