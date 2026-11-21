@@ -47,6 +47,7 @@ use star_common::{ApiError, AppState};
 mod registrations;
 
 mod lti_apps;
+mod subscriptions;
 
 mod data_services;
 mod dynamic_registration;
@@ -588,6 +589,8 @@ pub fn lti_advantage_router() -> Router<AppState> {
         .merge(tool_proxy::advantage_router())
         .merge(tool_setting::router())
         .merge(external_tools::advantage_router())
+        // The webhook subscriptions of a tool proxy.
+        .merge(subscriptions::router())
 }
 
 // ---------------------------------------------------------------------------
