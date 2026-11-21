@@ -177,7 +177,7 @@ async fn create_session_ok(server: &TestServer, bearer: &str, poll_id: i64, body
     resp.json()
 }
 
-fn first(body: &Value, root: &str) -> &Value {
+fn first<'a>(body: &'a Value, root: &str) -> &'a Value {
     let items = body[root]
         .as_array()
         .unwrap_or_else(|| panic!("missing {root} array: {body}"));
