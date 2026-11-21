@@ -8,21 +8,22 @@ use axum::{
     body::Bytes,
     extract::{FromRef, FromRequest, Path, Query, Request, State},
     http::{
-        header::{AUTHORIZATION, CONTENT_TYPE},
-        StatusCode,
+        header::{AUTHORIZATION, CACHE_CONTROL, CONTENT_TYPE, HOST, LOCATION, WWW_AUTHENTICATE},
+        HeaderMap, HeaderValue, StatusCode,
     },
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use axum_core::extract::FromRequestParts;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, Utc};
 use http::request::Parts;
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use star_common::{ApiError, AppState, Claims};
 
@@ -283,9 +284,8 @@ pub fn router() -> Router<AppState> {
         .route("/auth/login", post(login))
         .route("/auth/me", get(me))
         .route("/auth/logout", post(logout))
-        // Canvas Developer Keys API + OAuth2 token endpoint. star-http nests
-        // every domain router under /api/v1, so these resolve as
-        // /api/v1/developer_keys and /api/v1/login/oauth2/token.
+        // Canvas Developer Keys API. star-http nests every domain router
+        // under /api/v1, so these resolve as /api/v1/developer_keys.
         .route(
             "/developer_keys",
             get(list_developer_keys).post(create_developer_key),
@@ -296,16 +296,25 @@ pub fn router() -> Router<AppState> {
                 .put(update_developer_key)
                 .delete(destroy_developer_key),
         )
-        // Canvas personal access tokens (manual "User-Generated" tokens).
+        // Canvas personal access tokens (tokens_controller). Canvas has no
+        // flat /tokens route: the API lives under
+        // /api/v1/users/:user_id/tokens (config/routes.rb:1432-1437), where
+        // :user_id may be `self` or a numeric id, plus the separate
+        // user_generated_tokens listing (routes.rb:1433).
         .route(
-            "/tokens",
-            get(list_personal_tokens).post(create_personal_token),
+            "/users/{user_id}/user_generated_tokens",
+            get(list_user_generated_tokens),
         )
+        .route("/users/{user_id}/tokens", post(create_user_token))
         .route(
-            "/tokens/{id}",
-            get(show_personal_token).delete(destroy_personal_token),
+            "/users/{user_id}/tokens/{id}",
+            get(show_user_token)
+                .put(update_user_token)
+                .delete(destroy_user_token),
         )
-        .route("/login/oauth2/token", post(oauth2_token))
+        // Canvas inst_access_tokens#create (config/routes.rb:2777-2778,
+        // ApiRouteSet::V1 -> POST /api/v1/inst_access_tokens).
+        .route("/inst_access_tokens", post(create_inst_access_token))
         // Canvas account authentication providers + SSO settings.
         .route(
             "/accounts/{account_id}/authentication_providers",
@@ -321,6 +330,24 @@ pub fn router() -> Router<AppState> {
             "/accounts/{account_id}/sso_settings",
             get(show_sso_settings).put(update_sso_settings),
         )
+}
+
+/// Canvas login/oauth2 family. These routes live OUTSIDE /api/v1
+/// (config/routes.rb:3087-3094), so star-http merges this router at the top
+/// level next to star-ui and the LTI Advantage router — exactly like
+/// `star_lti::lti_advantage_router`.
+pub fn login_router() -> Router<AppState> {
+    Router::new()
+        // GET /login/oauth2/auth (oauth2_provider#auth, routes.rb:3087)
+        .route("/login/oauth2/auth", get(oauth2_auth))
+        // POST + DELETE /login/oauth2/token (oauth2_provider#token/#destroy,
+        // routes.rb:3088 + 3093)
+        .route(
+            "/login/oauth2/token",
+            post(oauth2_token).delete(oauth2_token_destroy),
+        )
+        // GET /login/oauth2/jwks (security#jwks, routes.rb:3094)
+        .route("/login/oauth2/jwks", get(oauth2_jwks))
 }
 
 // ---------------------------------------------------------------------------
@@ -929,8 +956,8 @@ impl TokenPagination {
     }
 }
 
-/// Body of POST /tokens. Canvas wraps the fields in `token`; the flat form is
-/// accepted too, like the developer key handlers.
+/// Body of POST/PUT .../tokens. Canvas wraps the fields in `token`; the
+/// flat form is accepted too, like the developer key handlers.
 #[derive(Debug, Default, Deserialize)]
 struct TokenParams {
     purpose: Option<String>,
@@ -939,6 +966,9 @@ struct TokenParams {
     /// Accepted as an alias for `expires_at`.
     permanent_expires_at: Option<String>,
     scopes: Option<StringList>,
+    /// PUT only: regenerate the actual token value (tokens#update).
+    #[serde(default)]
+    regenerate: Option<bool>,
 }
 
 /// A manually created personal access token (`access_tokens` row with a NULL
@@ -1088,12 +1118,46 @@ async fn fetch_personal_token(
     }
 }
 
-/// GET /tokens — list the current user's manually created access tokens.
-async fn list_personal_tokens(
+/// Resolve the `{user_id}` path segment the way Canvas resolves API user
+/// ids: `self` maps to the authenticated user, anything else must be a
+/// numeric id (non-numeric values 404). Nonexistent users 404 in the
+/// handlers that need the user row to exist.
+fn resolve_target_user(auth: &AuthUser, raw: &str) -> Result<i64, ApiError> {
+    if raw == "self" {
+        return Ok(auth.id);
+    }
+    raw.parse::<i64>().map_err(|_| ApiError::NotFound)
+}
+
+async fn ensure_user_exists(pool: &PgPool, user_id: i64) -> Result<(), ApiError> {
+    // SELECT 1 is INT4 in Postgres; cast to BIGINT for the i64 scalar.
+    let exists: Option<i64> = sqlx::query_scalar("SELECT 1::BIGINT FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+    if exists.is_some() {
+        Ok(())
+    } else {
+        Err(ApiError::NotFound)
+    }
+}
+
+/// GET /users/{user_id}/user_generated_tokens — Canvas
+/// `TokensController#user_generated_tokens` (routes.rb:1433). Lists only the
+/// manually created ("user generated") tokens; OAuth-issued tokens never
+/// appear. `view_user_generated_access_tokens` maps to owner-or-admin and
+/// fails with 401 otherwise, exactly like `render_unauthorized_action`.
+async fn list_user_generated_tokens(
     State(app): State<AppState>,
     auth: AuthUser,
+    Path(raw_user_id): Path<String>,
     Query(pag): Query<TokenPagination>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    let target = resolve_target_user(&auth, &raw_user_id)?;
+    if target != auth.id && require_admin(&auth).is_err() {
+        return Err(ApiError::Unauthorized);
+    }
+
     let (per_page, offset) = pag.resolve();
     let sql = format!(
         "{PERSONAL_TOKEN_SELECT}
@@ -1103,7 +1167,7 @@ async fn list_personal_tokens(
          LIMIT $2 OFFSET $3"
     );
     let tokens: Vec<PersonalAccessToken> = sqlx::query_as(&sql)
-        .bind(auth.id)
+        .bind(target)
         .bind(per_page)
         .bind(offset)
         .fetch_all(&app.db)
@@ -1117,14 +1181,22 @@ async fn list_personal_tokens(
     )))
 }
 
-/// POST /tokens — create a personal access token for the current user.
-///
-/// The full token value is returned exactly once, in `visible_token`.
-async fn create_personal_token(
+/// POST /users/{user_id}/tokens — Canvas `TokensController#create`
+/// (routes.rb:1435). `token[purpose]` is required; tokens created for another
+/// user (admin path) start `pending`; the full token value is returned
+/// exactly once, in `visible_token`.
+async fn create_user_token(
     State(app): State<AppState>,
     auth: AuthUser,
+    Path(raw_user_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Response, ApiError> {
+    let target = resolve_target_user(&auth, &raw_user_id)?;
+    ensure_user_exists(&app.db, target).await?;
+    if target != auth.id && require_admin(&auth).is_err() {
+        return Err(ApiError::Unauthorized);
+    }
+
     let raw = body.get("token").cloned().unwrap_or(body);
     let params: TokenParams = serde_json::from_value(raw)
         .map_err(|e| ApiError::BadRequest(format!("invalid token: {e}")))?;
@@ -1151,26 +1223,34 @@ async fn create_personal_token(
     let scopes = params.scopes.map(StringList::into_vec).unwrap_or_default();
     let token = generate_opaque_token(32);
     let hint = token_hint(&token);
+    // Canvas: creating a token for someone else marks it pending until the
+    // user activates it (tokens#create, `unless @context == logged_in_user`).
+    let workflow_state = if target != auth.id {
+        "pending"
+    } else {
+        "active"
+    };
 
     let id: i64 = sqlx::query_scalar(
         r#"
         INSERT INTO access_tokens
             (user_id, developer_key_id, token, token_hint, purpose, scopes,
              permanent_expires_at, remember_access, workflow_state)
-        VALUES ($1, NULL, $2, $3, $4, $5, $6, FALSE, 'active')
+        VALUES ($1, NULL, $2, $3, $4, $5, $6, FALSE, $7)
         RETURNING id
         "#,
     )
-    .bind(auth.id)
+    .bind(target)
     .bind(&token)
     .bind(&hint)
     .bind(purpose)
     .bind(scopes)
     .bind(expires_at)
+    .bind(workflow_state)
     .fetch_one(&app.db)
     .await?;
 
-    let row = fetch_personal_token_by_id(&app.db, auth.id, id).await?;
+    let row = fetch_personal_token_by_id(&app.db, target, id).await?;
     Ok((
         StatusCode::OK,
         Json(personal_token_json(&row, Some(token.as_str()))),
@@ -1178,23 +1258,129 @@ async fn create_personal_token(
         .into_response())
 }
 
-/// GET /tokens/{id} — show one of the current user's tokens (id or hint).
-async fn show_personal_token(
+/// GET /users/{user_id}/tokens/{id} — Canvas `TokensController#show`
+/// (routes.rb:1434). The id may be the database id or the 5-character
+/// `token_hint`.
+async fn show_user_token(
     State(app): State<AppState>,
     auth: AuthUser,
-    Path(id_or_hint): Path<String>,
+    Path((raw_user_id, id_or_hint)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let token = fetch_personal_token(&app.db, auth.id, &id_or_hint).await?;
+    let target = resolve_target_user(&auth, &raw_user_id)?;
+    let token = fetch_personal_token(&app.db, target, &id_or_hint).await?;
+    // Canvas read right: owner, or admin viewing a user-generated token
+    // (`view_user_generated_access_tokens`); everyone else gets 401.
+    if target != auth.id && require_admin(&auth).is_err() {
+        return Err(ApiError::Unauthorized);
+    }
     Ok(Json(personal_token_json(&token, None)))
 }
 
-/// DELETE /tokens/{id} — soft delete one of the current user's tokens.
-async fn destroy_personal_token(
+/// PUT /users/{user_id}/tokens/{id} — Canvas `TokensController#update`
+/// (routes.rb:1436). Updates purpose/expires_at/scopes and optionally
+/// regenerates the token value; regenerating an expired token requires a
+/// new expiration date.
+async fn update_user_token(
     State(app): State<AppState>,
     auth: AuthUser,
-    Path(id_or_hint): Path<String>,
+    Path((raw_user_id, id_or_hint)): Path<(String, String)>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Response, ApiError> {
+    let target = resolve_target_user(&auth, &raw_user_id)?;
+    let token = fetch_personal_token(&app.db, target, &id_or_hint).await?;
+    // Canvas update right: owner or admin (`create_access_tokens`); a
+    // non-owner without the right gets 404 (RecordNotFound), an owner that
+    // somehow lost the right would get 401 — in star owners always keep it,
+    // so the 401 branch is unreachable.
+    if target != auth.id && require_admin(&auth).is_err() {
+        return Err(ApiError::NotFound);
+    }
+
+    let raw = body.get("token").cloned().unwrap_or(body);
+    let params: TokenParams = serde_json::from_value(raw)
+        .map_err(|e| ApiError::BadRequest(format!("invalid token: {e}")))?;
+
+    let expires_at = match parse_token_expires_at(
+        params
+            .expires_at
+            .as_deref()
+            .or(params.permanent_expires_at.as_deref()),
+    ) {
+        Ok(expires_at) => expires_at,
+        Err(message) => return Ok(token_error(message)),
+    };
+
+    // Canvas: `regenerate` only applies to manually created tokens, and an
+    // expired token cannot be regenerated without a new expiration date.
+    let expired = token.permanent_expires_at.is_some_and(|at| at < Utc::now());
+    let regenerate = params.regenerate.unwrap_or(false);
+    if regenerate && expired && expires_at.is_none() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "errors": { "message": "cannot regenerate an expired token without a new expiration date" }
+            })),
+        )
+            .into_response());
+    }
+
+    let new_token = if regenerate {
+        Some(generate_opaque_token(32))
+    } else {
+        None
+    };
+
+    // Apply the provided fields; absent fields keep their current values
+    // (Canvas `update(token_params)` semantics).
+    let purpose = params.purpose;
+    let scopes = params.scopes.map(StringList::into_vec);
+    sqlx::query(
+        r#"
+        UPDATE access_tokens
+        SET purpose = COALESCE($2, purpose),
+            scopes = COALESCE($3, scopes),
+            permanent_expires_at = COALESCE($4, permanent_expires_at),
+            token = COALESCE($5, token),
+            token_hint = COALESCE($6, token_hint),
+            workflow_state = CASE WHEN $7 THEN 'pending' ELSE workflow_state END,
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(token.id)
+    .bind(purpose)
+    .bind(scopes)
+    .bind(expires_at)
+    .bind(new_token.as_deref())
+    .bind(new_token.as_deref().map(token_hint))
+    .bind(target != auth.id)
+    .execute(&app.db)
+    .await?;
+
+    let row = fetch_personal_token_by_id(&app.db, target, token.id).await?;
+    // The full token value is only revealed when it was just regenerated.
+    Ok((
+        StatusCode::OK,
+        Json(personal_token_json(&row, new_token.as_deref())),
+    )
+        .into_response())
+}
+
+/// DELETE /users/{user_id}/tokens/{id} — Canvas `TokensController#destroy`
+/// (routes.rb:1437). Soft-deletes (workflow_state -> "deleted") and renders
+/// the token JSON, like Canvas.
+async fn destroy_user_token(
+    State(app): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, id_or_hint)): Path<(String, String)>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let mut token = fetch_personal_token(&app.db, auth.id, &id_or_hint).await?;
+    let target = resolve_target_user(&auth, &raw_user_id)?;
+    let mut token = fetch_personal_token(&app.db, target, &id_or_hint).await?;
+    // Canvas destroy right: owner or admin (`delete_access_tokens`);
+    // non-owners without the right get 404.
+    if target != auth.id && require_admin(&auth).is_err() {
+        return Err(ApiError::NotFound);
+    }
 
     sqlx::query(
         "UPDATE access_tokens SET workflow_state = 'deleted', updated_at = now()
@@ -1210,12 +1396,19 @@ async fn destroy_personal_token(
 }
 
 // ---------------------------------------------------------------------------
-// OAuth2 token endpoint (POST /login/oauth2/token)
+// OAuth2 provider endpoints (/login/oauth2/*, canvas oauth2_provider_controller)
 // ---------------------------------------------------------------------------
 
 /// Access token lifetime, in seconds. Canvas client-credentials tokens also
 /// default to one hour.
 const OAUTH_TOKEN_TTL_SECS: i64 = 3600;
+
+/// Authorization code lifetime — Canvas stores codes in Redis with a
+/// 10 minute TTL (`Canvas::OAuth::Token.generate_code_for`).
+const OAUTH2_CODE_TTL_SECS: i64 = 600;
+
+/// Canvas's out-of-band redirect URI marker (`Canvas::OAuth::Provider::OAUTH2_OOB_URI`).
+const OAUTH2_OOB_URI: &str = "urn:ietf:wg:oauth:2.0:oob";
 
 /// OAuth2 token request fields (Canvas accepts form-encoded parameters; JSON
 /// bodies are accepted too for convenience).
@@ -1226,6 +1419,8 @@ struct OAuthTokenRequest {
     client_secret: Option<String>,
     refresh_token: Option<String>,
     scope: Option<String>,
+    code: Option<String>,
+    code_verifier: Option<String>,
 }
 
 impl OAuthTokenRequest {
@@ -1241,6 +1436,8 @@ impl OAuthTokenRequest {
                 "client_secret" => params.client_secret = Some(value),
                 "refresh_token" => params.refresh_token = Some(value),
                 "scope" => params.scope = Some(value),
+                "code" => params.code = Some(value),
+                "code_verifier" => params.code_verifier = Some(value),
                 _ => {}
             }
         }
@@ -1358,22 +1555,311 @@ fn internal_error(context: &str, err: impl std::fmt::Display) -> Response {
     )
 }
 
-/// Canvas-shaped token response (`Canvas::OAuth::Token#as_json` subset).
-fn oauth_token_json(
+/// Canvas `oauth2_provider#oauth_error` sets `WWW-Authenticate: Canvas OAuth
+/// 2.0` on 401 responses (oauth2_provider_controller.rb:244).
+fn oauth_unauthorized(error: &'static str, description: &'static str) -> Response {
+    let mut response = oauth_error(StatusCode::UNAUTHORIZED, error, description);
+    response.headers_mut().insert(
+        WWW_AUTHENTICATE,
+        HeaderValue::from_static("Canvas OAuth 2.0"),
+    );
+    response
+}
+
+/// Like `oauth_error` but with a dynamic description (invalid_scope lists the
+/// missing scopes, like Canvas `InvalidScopeError`).
+fn oauth_error_dynamic(status: StatusCode, error: &'static str, description: String) -> Response {
+    (
+        status,
+        Json(serde_json::json!({
+            "error": error,
+            "error_description": description,
+        })),
+    )
+        .into_response()
+}
+
+/// A pending authorization code — the analog of Canvas's Redis entry written
+/// by `Canvas::OAuth::Token.generate_code_for`: single-use, 10 minute TTL,
+/// bound to the user, client, scopes, and optional PKCE challenge.
+struct OAuth2Code {
+    user_id: i64,
+    client_id: i64,
+    scopes: Vec<String>,
+    purpose: Option<String>,
+    code_challenge: Option<String>,
+    expires_at: DateTime<Utc>,
+}
+
+/// In-process store for authorization codes. Canvas keeps codes in Redis
+/// (ephemeral, single-use); star-http is a single process, so a process-local
+/// map gives the same lifetime semantics without new infrastructure.
+fn oauth2_codes() -> &'static Mutex<HashMap<String, OAuth2Code>> {
+    static CODES: OnceLock<Mutex<HashMap<String, OAuth2Code>>> = OnceLock::new();
+    CODES.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Store a fresh code (128 hex characters, like `SecureRandom.hex(64)`) and
+/// prune expired entries while the lock is held.
+fn store_oauth2_code(code: OAuth2Code) -> String {
+    let value = generate_opaque_token(64);
+    let mut codes = oauth2_codes().lock().expect("oauth2 code store lock");
+    codes.retain(|_, stored| stored.expires_at > Utc::now());
+    codes.insert(value.clone(), code);
+    value
+}
+
+/// Consume a code: single-use, so it is removed whether or not it is still
+/// valid (`Canvas::OAuth::Token.expire_code` on success; TTL otherwise).
+fn take_oauth2_code(code: &str) -> Option<OAuth2Code> {
+    let mut codes = oauth2_codes().lock().expect("oauth2 code store lock");
+    match codes.remove(code) {
+        Some(stored) if stored.expires_at > Utc::now() => Some(stored),
+        _ => None,
+    }
+}
+
+const BASE64_ALPHABET: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Decode standard base64 (with or without padding). Only used for HTTP
+/// Basic client authentication; a compact implementation avoids a new
+/// dependency for two dozen lines of alphabet math.
+fn base64_decode(input: &str) -> Option<Vec<u8>> {
+    let mut table = [255u8; 256];
+    for (i, &byte) in BASE64_ALPHABET.iter().enumerate() {
+        table[byte as usize] = i as u8;
+    }
+    let mut out = Vec::with_capacity(input.len() / 4 * 3);
+    let mut buffer = 0u32;
+    let mut bits = 0u32;
+    for byte in input.bytes() {
+        if byte == b'=' || byte == b'\n' || byte == b'\r' {
+            continue;
+        }
+        let value = table[byte as usize];
+        if value == 255 {
+            return None;
+        }
+        buffer = (buffer << 6) | u32::from(value);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((buffer >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// Unpadded base64url encoding, as used by JWK `n`/`e` values and PKCE S256
+/// challenges (`Base64.urlsafe_encode64(..., padding: false)`).
+fn base64url_encode(bytes: &[u8]) -> String {
+    const URL_ALPHABET: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let mut buffer = [0u8; 3];
+        buffer[..chunk.len()].copy_from_slice(chunk);
+        let value = u32::from_be_bytes([0, buffer[0], buffer[1], buffer[2]]);
+        out.push(URL_ALPHABET[(value >> 18) as usize & 63] as char);
+        out.push(URL_ALPHABET[(value >> 12) as usize & 63] as char);
+        if chunk.len() > 1 {
+            out.push(URL_ALPHABET[(value >> 6) as usize & 63] as char);
+        }
+        if chunk.len() > 2 {
+            out.push(URL_ALPHABET[value as usize & 63] as char);
+        }
+    }
+    out
+}
+
+/// Percent-encode a query component (`URI.encode_www_form_component`).
+fn percent_encode_query(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    out
+}
+
+/// `Canvas::OAuth::Provider.final_redirect`: append the (compact) params to
+/// the client redirect_uri with `?` or `&` and answer 302. Out-of-band
+/// requests are redirected back to the authorization endpoint itself
+/// (`controller.oauth2_auth_url(opts)`), exactly like Canvas.
+fn oauth2_redirect(uri: &str, params: &[(&str, String)]) -> Response {
+    let target = if uri == OAUTH2_OOB_URI {
+        "/login/oauth2/auth"
+    } else {
+        uri
+    };
+    let query = params
+        .iter()
+        .map(|(key, value)| format!("{key}={}", percent_encode_query(value)))
+        .collect::<Vec<_>>()
+        .join("&");
+    let separator = if target.contains('?') { '&' } else { '?' };
+    (
+        StatusCode::FOUND,
+        [(LOCATION, format!("{target}{separator}{query}"))],
+    )
+        .into_response()
+}
+
+/// Redirect back to the client redirect_uri with `error`/`error_description`
+/// (and `state`, when the request carried one). Pairs are emitted in the
+/// alphabetical order Rails `Hash#to_query` produces (error <
+/// error_description < state).
+fn oauth2_redirect_error(
+    redirect_uri: &str,
+    state: Option<&str>,
+    error: &str,
+    description: &str,
+) -> Response {
+    let mut params = vec![
+        ("error", error.to_string()),
+        ("error_description", description.to_string()),
+    ];
+    if let Some(state) = state {
+        params.push(("state", state.to_string()));
+    }
+    oauth2_redirect(redirect_uri, &params)
+}
+
+/// Rails `to_sentence` (en locale) for the missing-scopes message.
+fn to_sentence(items: &[String]) -> String {
+    match items {
+        [] => String::new(),
+        [only] => only.clone(),
+        [first, last] => format!("{first} and {last}"),
+        many => {
+            // split_last returns (last, rest).
+            let (last, all_but_last) = many.split_last().expect("nonempty");
+            format!("{}, and {}", all_but_last.join(", "), last)
+        }
+    }
+}
+
+/// Resolve the optional "logged in" user from a Bearer session token — the
+/// star analog of Canvas's browser session (`logged_in_user`). Only the
+/// signature and expiry are verified.
+fn bearer_session_user(app: &AppState, headers: &HeaderMap) -> Option<i64> {
+    let header = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    let token = header.strip_prefix("Bearer ")?;
+    verify_token(token, &app.jwt_secret).map(|claims| claims.sub)
+}
+
+/// HTTP Basic credentials (client_id, client_secret), accepted by Canvas
+/// `oauth2_provider#token` alongside form parameters
+/// (oauth2_provider_controller.rb:179-181).
+fn basic_auth_credentials(headers: &HeaderMap) -> Option<(String, String)> {
+    let header = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    let encoded = header.strip_prefix("Basic ")?;
+    let decoded = base64_decode(encoded)?;
+    let text = String::from_utf8(decoded).ok()?;
+    let (user, pass) = text.split_once(':')?;
+    Some((user.to_string(), pass.to_string()))
+}
+
+/// Host part of an absolute URI (scheme://host[:port]/path...).
+fn uri_host(uri: &str) -> Option<String> {
+    uri.split_once("://")
+        .map(|(_, rest)| rest)
+        .and_then(|rest| rest.split(['/', '?', '#']).next())
+        .map(str::to_string)
+        .filter(|host| !host.is_empty())
+}
+
+/// `Canvas::OAuth::Provider#has_valid_redirect?`: the out-of-band URI, or a
+/// URI whose host matches one of the key's registered redirect URIs
+/// (`DeveloperKey#redirect_domain_matches?`).
+fn redirect_uri_allowed(key: &DeveloperKey, uri: &str) -> bool {
+    if uri == OAUTH2_OOB_URI {
+        return true;
+    }
+    let Some(host) = uri_host(uri) else {
+        return false;
+    };
+    key.redirect_uris
+        .iter()
+        .any(|allowed| uri_host(allowed).as_deref() == Some(host.as_str()))
+}
+
+/// `Canvas::OAuth::Token#as_json`: the issued token, its type, the user
+/// object, the region, the refresh token only when freshly generated, and
+/// `expires_in` only when the developer key auto-expires tokens.
+async fn oauth_user_token_json(
+    app: &AppState,
+    key: &DeveloperKey,
     access_token: &str,
-    refresh_token: &str,
-    scopes: &[String],
-) -> serde_json::Value {
+    refresh_token: Option<&str>,
+    user_id: i64,
+) -> Response {
+    let user: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&app.db)
+        .await
+        .ok()
+        .flatten();
+    let name = user.map(|(name,)| name).unwrap_or_default();
+    // star users have no shard-prefixed global ids; the numeric id is the
+    // stable public identifier.
+    let global_id = user_id.to_string();
     let mut body = serde_json::json!({
         "access_token": access_token,
         "token_type": "Bearer",
-        "expires_in": OAUTH_TOKEN_TTL_SECS,
-        "refresh_token": refresh_token,
+        "user": {
+            "id": user_id,
+            "name": name,
+            "global_id": global_id,
+            "effective_locale": "en",
+            "fake_student": false,
+        },
+        "canvas_region": "unknown",
     });
-    if !scopes.is_empty() {
-        body["scope"] = serde_json::Value::String(scopes.join(" "));
+    if let Some(refresh_token) = refresh_token {
+        body["refresh_token"] = serde_json::Value::String(refresh_token.to_string());
     }
-    body
+    if key.auto_expire_tokens {
+        body["expires_in"] = serde_json::Value::from(OAUTH_TOKEN_TTL_SECS);
+    }
+    (StatusCode::OK, Json(body)).into_response()
+}
+
+/// Query parameters of GET /login/oauth2/auth
+/// (`oauth2_provider_controller#auth`).
+#[derive(Debug, Default, Deserialize)]
+struct OAuthAuthParams {
+    client_id: Option<String>,
+    redirect_uri: Option<String>,
+    response_type: Option<String>,
+    scope: Option<String>,
+    scopes: Option<String>,
+    purpose: Option<String>,
+    state: Option<String>,
+    prompt: Option<String>,
+    force_login: Option<String>,
+    canvas_login: Option<String>,
+    authentication_provider: Option<String>,
+    unique_id: Option<String>,
+    code_challenge: Option<String>,
+    code_challenge_method: Option<String>,
+}
+
+/// The PKCE challenge to persist, mirroring
+/// `Canvas::OAuth::PKCE.use_pkce_in_authorization?`: both parameters present
+/// and the method must be S256 (the only method Canvas supports).
+fn pkce_challenge(params: &OAuthAuthParams) -> Option<String> {
+    let challenge = params.code_challenge.as_deref()?.trim();
+    let method = params.code_challenge_method.as_deref()?;
+    if challenge.is_empty() || method != "S256" {
+        return None;
+    }
+    Some(challenge.to_string())
 }
 
 async fn find_active_developer_key(
@@ -1391,34 +1877,6 @@ async fn find_active_developer_key(
         .map_err(ApiError::from)
 }
 
-async fn issue_access_token(
-    pool: &PgPool,
-    developer_key_id: i64,
-    user_id: Option<i64>,
-    scopes: &[String],
-) -> Result<(String, String), ApiError> {
-    let access_token = generate_opaque_token(32);
-    let refresh_token = generate_opaque_token(32);
-    let expires_at = Utc::now() + Duration::seconds(OAUTH_TOKEN_TTL_SECS);
-
-    sqlx::query(
-        "INSERT INTO access_tokens
-             (user_id, developer_key_id, token, refresh_token, scopes,
-              expires_at, workflow_state)
-         VALUES ($1, $2, $3, $4, $5, $6, 'active')",
-    )
-    .bind(user_id)
-    .bind(developer_key_id)
-    .bind(&access_token)
-    .bind(&refresh_token)
-    .bind(scopes.to_vec())
-    .bind(expires_at)
-    .execute(pool)
-    .await?;
-
-    Ok((access_token, refresh_token))
-}
-
 /// Requested scopes: the `scope` parameter (space separated) or the key's
 /// configured scopes.
 fn requested_scopes(params: &OAuthTokenRequest, key: &DeveloperKey) -> Vec<String> {
@@ -1433,110 +1891,50 @@ fn requested_scopes(params: &OAuthTokenRequest, key: &DeveloperKey) -> Vec<Strin
     }
 }
 
-/// POST /login/oauth2/token — client_credentials and refresh_token grants.
-///
-/// Mirrors Canvas `Oauth2ProviderController#token`: client_id is the
-/// developer key id, client_secret its api_key, errors are
-/// `{"error": ..., "error_description": ...}` bodies.
-async fn oauth2_token(State(app): State<AppState>, params: OAuthTokenRequest) -> Response {
-    let Some(client_id) = params
+/// POST /login/oauth2/token — Canvas `oauth2_provider#token`
+/// (oauth2_provider_controller.rb:178-214). Client credentials come from
+/// the form/JSON body or HTTP Basic auth; `grant_type` defaults to
+/// authorization_code when only a `code` is supplied
+/// (oauth2_provider_controller.rb:248-252).
+async fn oauth2_token(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    params: OAuthTokenRequest,
+) -> Response {
+    let (basic_user, basic_pass) = basic_auth_credentials(&headers)
+        .map(|(user, pass)| (Some(user), Some(pass)))
+        .unwrap_or((None, None));
+    let client_id = params
         .client_id
         .as_deref()
         .map(str::trim)
         .filter(|id| !id.is_empty())
-    else {
-        return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client", "unknown client");
-    };
+        .map(str::to_string)
+        .or(basic_user);
+    let client_secret = params
+        .client_secret
+        .as_deref()
+        .map(str::trim)
+        .filter(|secret| !secret.is_empty())
+        .map(str::to_string)
+        .or(basic_pass)
+        .unwrap_or_default();
+    let grant_type = params.grant_type.clone().or_else(|| {
+        params
+            .code
+            .as_deref()
+            .map(|_| "authorization_code".to_string())
+    });
 
-    let key = match find_active_developer_key(&app.db, client_id).await {
-        Ok(Some(key)) => key,
-        Ok(None) => {
-            return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client", "unknown client")
-        }
-        Err(err) => return internal_error("oauth token: lookup developer key", err),
-    };
-
-    let secret = params.client_secret.as_deref().unwrap_or("");
-    if !secrets_match(secret, &key.api_key) {
-        return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client", "invalid client");
-    }
-
-    match params.grant_type.as_deref() {
-        Some("client_credentials") => {
-            let scopes = requested_scopes(&params, &key);
-            match issue_access_token(&app.db, key.id, None, &scopes).await {
-                Ok((access_token, refresh_token)) => (
-                    StatusCode::OK,
-                    Json(oauth_token_json(&access_token, &refresh_token, &scopes)),
-                )
-                    .into_response(),
-                Err(err) => internal_error("oauth token: issue client_credentials", err),
-            }
+    match grant_type.as_deref() {
+        Some("authorization_code") => {
+            grant_authorization_code(&app, &client_id, &client_secret, &params).await
         }
         Some("refresh_token") => {
-            let Some(refresh_token) = params
-                .refresh_token
-                .as_deref()
-                .map(str::trim)
-                .filter(|token| !token.is_empty())
-            else {
-                return oauth_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_request",
-                    "You must provide the refresh_token parameter when using the refresh_token grant type",
-                );
-            };
-
-            let row: Option<(i64, Option<i64>, Vec<String>)> = match sqlx::query_as(
-                "SELECT id, developer_key_id, scopes
-                 FROM access_tokens
-                 WHERE refresh_token = $1 AND workflow_state = 'active'",
-            )
-            .bind(refresh_token)
-            .fetch_optional(&app.db)
-            .await
-            {
-                Ok(row) => row,
-                Err(err) => return internal_error("oauth token: lookup refresh token", err),
-            };
-
-            let Some((token_id, developer_key_id, scopes)) = row else {
-                return oauth_error(
-                    StatusCode::BAD_REQUEST,
-                    "invalid_grant",
-                    "refresh_token not found",
-                );
-            };
-            if developer_key_id != Some(key.id) {
-                return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant", "incorrect client");
-            }
-
-            // Rotate both tokens in place (Canvas rotates refresh tokens for
-            // public clients after each use).
-            let access_token = generate_opaque_token(32);
-            let new_refresh_token = generate_opaque_token(32);
-            let expires_at = Utc::now() + Duration::seconds(OAUTH_TOKEN_TTL_SECS);
-
-            if let Err(err) = sqlx::query(
-                "UPDATE access_tokens
-                 SET token = $2, refresh_token = $3, expires_at = $4, updated_at = now()
-                 WHERE id = $1",
-            )
-            .bind(token_id)
-            .bind(&access_token)
-            .bind(&new_refresh_token)
-            .bind(expires_at)
-            .execute(&app.db)
-            .await
-            {
-                return internal_error("oauth token: rotate refresh token", err);
-            }
-
-            (
-                StatusCode::OK,
-                Json(oauth_token_json(&access_token, &new_refresh_token, &scopes)),
-            )
-                .into_response()
+            grant_refresh_token(&app, &client_id, &client_secret, &params).await
+        }
+        Some("client_credentials") => {
+            grant_client_credentials(&app, &client_id, &client_secret, &params, &headers).await
         }
         _ => oauth_error(
             StatusCode::BAD_REQUEST,
@@ -1544,6 +1942,710 @@ async fn oauth2_token(State(app): State<AppState>, params: OAuthTokenRequest) ->
             "The grant_type you requested is not currently supported",
         ),
     }
+}
+
+/// `GrantTypes::BaseType#validate_client_id_and_secret`: unknown client
+/// 401 "unknown client", wrong secret 401 "invalid client" (both with the
+/// WWW-Authenticate header, like Canvas's `oauth_error` rescue). Small error
+/// type — http::Response is too large for a Result variant
+/// (clippy::result_large_err).
+enum OAuthClientError {
+    UnknownClient,
+    InvalidSecret,
+    Lookup(ApiError),
+}
+
+fn oauth_client_error_response(error: OAuthClientError) -> Response {
+    match error {
+        OAuthClientError::UnknownClient => oauth_unauthorized("invalid_client", "unknown client"),
+        OAuthClientError::InvalidSecret => oauth_unauthorized("invalid_client", "invalid client"),
+        OAuthClientError::Lookup(err) => internal_error("oauth token: lookup developer key", err),
+    }
+}
+
+async fn validate_oauth_client(
+    app: &AppState,
+    client_id: &Option<String>,
+    client_secret: &str,
+) -> Result<DeveloperKey, OAuthClientError> {
+    let Some(client_id) = client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    else {
+        return Err(OAuthClientError::UnknownClient);
+    };
+    match find_active_developer_key(&app.db, client_id).await {
+        Ok(Some(key)) => {
+            if secrets_match(client_secret, &key.api_key) {
+                Ok(key)
+            } else {
+                Err(OAuthClientError::InvalidSecret)
+            }
+        }
+        Ok(None) => Err(OAuthClientError::UnknownClient),
+        Err(err) => Err(OAuthClientError::Lookup(err)),
+    }
+}
+
+/// `grant_type=authorization_code` (GrantTypes::AuthorizationCode): the code
+/// must exist, belong to this client, and — when the exchange carries a
+/// `code_verifier` — match the stored PKCE S256 challenge. Codes are
+/// single-use and expire after 10 minutes.
+async fn grant_authorization_code(
+    app: &AppState,
+    client_id: &Option<String>,
+    client_secret: &str,
+    params: &OAuthTokenRequest,
+) -> Response {
+    let key = match validate_oauth_client(app, client_id, client_secret).await {
+        Ok(key) => key,
+        Err(error) => return oauth_client_error_response(error),
+    };
+
+    let Some(code_value) = params
+        .code
+        .as_deref()
+        .map(str::trim)
+        .filter(|code| !code.is_empty())
+    else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "You must provide the code parameter when using the authorization_code grant type",
+        );
+    };
+
+    let Some(code) = take_oauth2_code(code_value) else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "authorization_code not found",
+        );
+    };
+    if code.client_id != key.id {
+        return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant", "incorrect client");
+    }
+
+    // PKCE (GrantTypes::AuthorizationCodeWithPKCE): when a verifier is sent,
+    // base64url(SHA-256(verifier)) must equal the stored challenge.
+    if let Some(verifier) = params
+        .code_verifier
+        .as_deref()
+        .map(str::trim)
+        .filter(|verifier| !verifier.is_empty())
+    {
+        let matches = code.code_challenge.as_deref().is_some_and(|challenge| {
+            let digest = Sha256::digest(verifier.as_bytes());
+            base64url_encode(&digest) == challenge
+        });
+        if !matches {
+            return oauth_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_grant",
+                "The provided authorization grant is invalid, expired, revoked, does not match the redirection URI used in the authorization request, or was issued to another client.",
+            );
+        }
+    }
+
+    let access_token = generate_opaque_token(32);
+    let refresh_token = generate_opaque_token(32);
+    let expires_at = key
+        .auto_expire_tokens
+        .then(|| Utc::now() + Duration::seconds(OAUTH_TOKEN_TTL_SECS));
+    if let Err(err) = sqlx::query(
+        r#"
+        INSERT INTO access_tokens
+            (user_id, developer_key_id, token, token_hint, refresh_token,
+             scopes, purpose, expires_at, remember_access, workflow_state)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, FALSE, 'active')
+        "#,
+    )
+    .bind(code.user_id)
+    .bind(key.id)
+    .bind(&access_token)
+    .bind(token_hint(&access_token))
+    .bind(&refresh_token)
+    .bind(&code.scopes)
+    .bind(&code.purpose)
+    .bind(expires_at)
+    .execute(&app.db)
+    .await
+    {
+        return internal_error("oauth token: issue authorization_code token", err);
+    }
+
+    oauth_user_token_json(app, &key, &access_token, Some(&refresh_token), code.user_id).await
+}
+
+/// `grant_type=refresh_token` (GrantTypes::RefreshToken): the refresh token
+/// must be usable (active, not pending, not past `permanent_expires_at`) and
+/// belong to this client. Confidential clients keep their refresh token —
+/// only the access token is regenerated (Canvas rotates refresh tokens for
+/// public clients only, and star has no public clients).
+async fn grant_refresh_token(
+    app: &AppState,
+    client_id: &Option<String>,
+    client_secret: &str,
+    params: &OAuthTokenRequest,
+) -> Response {
+    let key = match validate_oauth_client(app, client_id, client_secret).await {
+        Ok(key) => key,
+        Err(error) => return oauth_client_error_response(error),
+    };
+
+    let Some(refresh_token) = params
+        .refresh_token
+        .as_deref()
+        .map(str::trim)
+        .filter(|token| !token.is_empty())
+    else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "You must provide the refresh_token parameter when using the refresh_token grant type",
+        );
+    };
+
+    // Canvas AccessToken.authenticate_refresh_token -> usable?
+    let row: Option<(i64, Option<i64>, Option<i64>)> = match sqlx::query_as(
+        "SELECT id, developer_key_id, user_id
+         FROM access_tokens
+         WHERE refresh_token = $1 AND workflow_state = 'active'
+           AND (permanent_expires_at IS NULL OR permanent_expires_at > now())",
+    )
+    .bind(refresh_token)
+    .fetch_optional(&app.db)
+    .await
+    {
+        Ok(row) => row,
+        Err(err) => return internal_error("oauth token: lookup refresh token", err),
+    };
+
+    let Some((token_id, developer_key_id, user_id)) = row else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "refresh_token not found",
+        );
+    };
+    if developer_key_id != Some(key.id) {
+        return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant", "incorrect client");
+    }
+    // Service (client-credentials) tokens carry no user in Canvas and are
+    // not refreshable; a user-less row is treated as unknown.
+    let Some(user_id) = user_id else {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_grant",
+            "refresh_token not found",
+        );
+    };
+
+    let access_token = generate_opaque_token(32);
+    if let Err(err) = sqlx::query(
+        r#"
+        UPDATE access_tokens
+        SET token = $2,
+            token_hint = $3,
+            expires_at = CASE WHEN $4 THEN now() + make_interval(secs => $5)
+                              ELSE expires_at END,
+            updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(token_id)
+    .bind(&access_token)
+    .bind(token_hint(&access_token))
+    .bind(key.auto_expire_tokens)
+    .bind(OAUTH_TOKEN_TTL_SECS)
+    .execute(&app.db)
+    .await
+    {
+        return internal_error("oauth token: regenerate access token", err);
+    }
+
+    // Canvas does not echo the refresh token back for confidential clients
+    // (`plaintext_refresh_token` is only populated on rotation).
+    oauth_user_token_json(app, &key, &access_token, None, user_id).await
+}
+
+/// `grant_type=client_credentials` (GrantTypes::ClientCredentials with the
+/// symmetric provider): only keys with an "external" audience may use it,
+/// the requested scopes must be a subset of the key's scopes, and the
+/// response carries a signed JWT rather than a stored opaque token
+/// (ClientCredentialsProvider#generate_token).
+async fn grant_client_credentials(
+    app: &AppState,
+    client_id: &Option<String>,
+    client_secret: &str,
+    params: &OAuthTokenRequest,
+    headers: &HeaderMap,
+) -> Response {
+    let key = match validate_oauth_client(app, client_id, client_secret).await {
+        Ok(key) => key,
+        Err(error) => return oauth_client_error_response(error),
+    };
+
+    // Canvas SymmetricClientCredentialsProvider#assertion_method_permitted?
+    if key.client_credentials_audience.as_deref() != Some("external") {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "assertion method not supported for this grant_type",
+        );
+    }
+
+    let scopes = requested_scopes(params, &key);
+    // Canvas Provider#valid_scopes? — the requested scopes must be present
+    // and each must be on the developer key.
+    let missing: Vec<String> = scopes
+        .iter()
+        .filter(|scope| !key.scopes.iter().any(|allowed| allowed == *scope))
+        .cloned()
+        .collect();
+    if scopes.is_empty() || !missing.is_empty() {
+        return oauth_error_dynamic(StatusCode::BAD_REQUEST, "invalid_scope", missing.join(" "));
+    }
+
+    let host = headers
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("localhost");
+    let now = Utc::now();
+    let claims = serde_json::json!({
+        // Canvas: Canvas::Security.config["lti_iss"]; star's fixed issuer.
+        "iss": "star-lms",
+        "sub": key.id.to_string(),
+        // Canvas: oauth2_token_url(host:, protocol:) — the token endpoint
+        // itself is the audience.
+        "aud": format!("http://{host}/login/oauth2/token"),
+        "iat": now.timestamp(),
+        "exp": now.timestamp() + OAUTH_TOKEN_TTL_SECS,
+        "jti": generate_opaque_token(16),
+        "scopes": scopes.join(" "),
+    });
+    let token = match encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(app.jwt_secret.as_bytes()),
+    ) {
+        Ok(token) => token,
+        Err(err) => return internal_error("oauth token: sign client_credentials token", err),
+    };
+
+    // Canvas ClientCredentialsProvider#generate_token: access_token,
+    // token_type, expires_in, scope.
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "access_token": token,
+            "token_type": "Bearer",
+            "expires_in": OAUTH_TOKEN_TTL_SECS,
+            "scope": scopes.join(" "),
+        })),
+    )
+        .into_response()
+}
+
+/// DELETE /login/oauth2/token — Canvas `oauth2_provider#destroy`
+/// (oauth2_provider_controller.rb:216-232). Revokes the OAuth access token
+/// the request is authenticated with; anything else (session JWTs, unknown
+/// strings) gets Canvas's 400 message.
+async fn oauth2_token_destroy(State(app): State<AppState>, headers: HeaderMap) -> Response {
+    let bearer = headers
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .map(str::to_string);
+
+    let revoked: Option<i64> = match bearer.as_deref() {
+        Some(token) => {
+            match sqlx::query_scalar::<_, i64>(
+                "SELECT id FROM access_tokens
+                 WHERE token = $1 AND workflow_state = 'active'
+                   AND (permanent_expires_at IS NULL OR permanent_expires_at > now())",
+            )
+            .bind(token)
+            .fetch_optional(&app.db)
+            .await
+            {
+                Ok(found) => found,
+                Err(err) => return internal_error("oauth destroy: lookup token", err),
+            }
+        }
+        None => None,
+    };
+
+    let Some(token_id) = revoked else {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "message": "can't delete OAuth access token when not using an OAuth access token"
+            })),
+        )
+            .into_response();
+    };
+
+    if let Err(err) = sqlx::query(
+        "UPDATE access_tokens SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(token_id)
+    .execute(&app.db)
+    .await
+    {
+        return internal_error("oauth destroy: revoke token", err);
+    }
+
+    (StatusCode::OK, Json(serde_json::json!({}))).into_response()
+}
+
+/// GET /login/oauth2/auth — Canvas `oauth2_provider#auth`
+/// (oauth2_provider_controller.rb:31-117). Validates the client, redirect,
+/// scopes, account authorization, and response_type in Canvas's order — the
+/// first two render JSON errors, the later ones redirect back with `error`
+/// params — then issues a single-use authorization code bound to the
+/// signed-in user.
+///
+/// Canvas continues into an HTML confirm/accept/deny consent flow for keys
+/// that are not pre-authorized; that UI is star-ui shell scope. star
+/// short-circuits the way Canvas does for trusted keys
+/// (`Provider.confirmation_redirect` -> `final_redirect`): a signed-in user
+/// receives the code immediately.
+async fn oauth2_auth(
+    State(app): State<AppState>,
+    headers: HeaderMap,
+    Query(params): Query<OAuthAuthParams>,
+) -> Response {
+    // Canvas reads `scope` or `scopes` (oauth2_provider_controller.rb:39).
+    let scopes: Vec<String> = params
+        .scope
+        .clone()
+        .or_else(|| params.scopes.clone())
+        .unwrap_or_default()
+        .split_whitespace()
+        .map(str::to_string)
+        .collect();
+
+    let key = match params
+        .client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+    {
+        None => return oauth_unauthorized("invalid_client", "unknown client"),
+        Some(client_id) => match find_active_developer_key(&app.db, client_id).await {
+            Ok(Some(key)) => key,
+            Ok(None) => return oauth_unauthorized("invalid_client", "unknown client"),
+            Err(err) => return internal_error("oauth auth: lookup developer key", err),
+        },
+    };
+
+    let redirect_uri = params.redirect_uri.clone().unwrap_or_default();
+    if !redirect_uri_allowed(&key, &redirect_uri) {
+        return oauth_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "redirect_uri does not match client settings",
+        );
+    }
+
+    // Canvas checks require_scopes before the account check, the
+    // response_type check, and the prompt handling.
+    if key.require_scopes {
+        let missing: Vec<String> = scopes
+            .iter()
+            .filter(|scope| !key.scopes.iter().any(|allowed| allowed == *scope))
+            .cloned()
+            .collect();
+        if scopes.is_empty() || !missing.is_empty() {
+            return oauth2_redirect_error(
+                &redirect_uri,
+                params.state.as_deref(),
+                "invalid_scope",
+                &format!(
+                    "A requested scope is invalid, unknown, malformed, or exceeds the scope granted by the resource owner. The following scopes were requested, but not granted: {}",
+                    to_sentence(&missing)
+                ),
+            );
+        }
+    }
+
+    // Canvas `authorized_for_account?`; star's developer keys carry the
+    // `visible` flag instead of account bindings.
+    if !key.visible {
+        return oauth2_redirect_error(
+            &redirect_uri,
+            params.state.as_deref(),
+            "unauthorized_client",
+            "Client does not have access to the specified Canvas account.",
+        );
+    }
+
+    if params.response_type.as_deref() != Some("code") {
+        return oauth2_redirect_error(
+            &redirect_uri,
+            params.state.as_deref(),
+            "unsupported_response_type",
+            "Only response_type=code is permitted",
+        );
+    }
+
+    let session_user = bearer_session_user(&app, &headers);
+    match params.prompt.as_deref() {
+        None => {}
+        Some("none") => {
+            return match session_user {
+                None => oauth2_redirect_error(
+                    &redirect_uri,
+                    params.state.as_deref(),
+                    "login_required",
+                    "prompt=none but there is no current session",
+                ),
+                // Canvas authorized_token? is only true for trusted keys or
+                // reusable (force_token_reuse / userinfo) tokens — star has
+                // neither, so interaction is always required.
+                Some(_) => oauth2_redirect_error(
+                    &redirect_uri,
+                    params.state.as_deref(),
+                    "interaction_required",
+                    "prompt=none but a token cannot be granted without user interaction",
+                ),
+            };
+        }
+        // prompt=login forces the login screen even with a session
+        // (oauth2_provider_controller.rb:99-100).
+        Some("login") => {}
+        Some(_) => {
+            return oauth2_redirect_error(
+                &redirect_uri,
+                params.state.as_deref(),
+                "unsupported_prompt_type",
+                "prompt must be \"none\" (or omitted)",
+            );
+        }
+    }
+
+    // Not signed in — or force-login requested: Canvas redirects to its
+    // login URL with the rememberable parameters
+    // (oauth2_provider_controller.rb:108-116); star-ui serves /login.
+    let force_login = params.prompt.as_deref() == Some("login")
+        || params
+            .force_login
+            .as_deref()
+            .is_some_and(|value| value == "1" || value == "true");
+    let effective_session = if force_login { None } else { session_user };
+    let Some(user_id) = effective_session else {
+        let mut query: Vec<(&str, String)> = Vec::new();
+        if let Some(canvas_login) = params.canvas_login.as_deref() {
+            query.push(("canvas_login", canvas_login.to_string()));
+        }
+        if force_login {
+            query.push(("force_login", "1".to_string()));
+        }
+        if let Some(provider) = params.authentication_provider.as_deref() {
+            query.push(("authentication_provider", provider.to_string()));
+        }
+        if let Some(unique_id) = params.unique_id.as_deref() {
+            query.push(("pseudonym_session%5Bunique_id%5D", unique_id.to_string()));
+        }
+        // Rails `to_query` sorts the pairs alphabetically.
+        query.sort_by_key(|(name, _)| *name);
+        let login = if query.is_empty() {
+            "/login".to_string()
+        } else {
+            format!(
+                "/login?{}",
+                query
+                    .iter()
+                    .map(|(key, value)| format!("{key}={}", percent_encode_query(value)))
+                    .collect::<Vec<_>>()
+                    .join("&")
+            )
+        };
+        return (StatusCode::FOUND, [(LOCATION, login)]).into_response();
+    };
+
+    let code = store_oauth2_code(OAuth2Code {
+        user_id,
+        client_id: key.id,
+        scopes,
+        purpose: params.purpose.clone(),
+        code_challenge: pkce_challenge(&params),
+        expires_at: Utc::now() + Duration::seconds(OAUTH2_CODE_TTL_SECS),
+    });
+    let mut redirect_params = vec![("code", code)];
+    if let Some(state) = params.state.as_deref() {
+        redirect_params.push(("state", state.to_string()));
+    }
+    oauth2_redirect(&redirect_uri, &redirect_params)
+}
+
+// ---------------------------------------------------------------------------
+// JWKS (security#jwks) + InstAccess tokens
+// ---------------------------------------------------------------------------
+
+/// Cache-Control max-age for the JWKS response (Canvas sets the key
+/// storage's `max_cache_age` header).
+const JWKS_MAX_CACHE_AGE_SECS: u32 = 3600;
+
+/// The instance's OAuth signing key: Canvas stores the "oauth2-asymmetric"
+/// keypair in its security key storage (`Canvas::OAuth::KeyStorage`) and
+/// publishes only the public half through /login/oauth2/jwks. star loads a
+/// PKCS#8 PEM from `STAR_OAUTH_SIGNING_KEY` when the deployment provides
+/// one, and otherwise generates a fresh 2048-bit keypair on first use —
+/// key material is NEVER committed to the repository (the secret scan
+/// would rightly flag it).
+struct OAuthSigningKey {
+    kid: String,
+    /// JWK `n` (base64url, unpadded).
+    n: String,
+    /// JWK `e` (base64url, unpadded).
+    e: String,
+    /// (year, month) encoded in the kid, for the rotation_check report.
+    created: (i32, u32),
+    encoding: jsonwebtoken::EncodingKey,
+}
+
+fn oauth_signing_key() -> Result<&'static OAuthSigningKey, String> {
+    static KEY: OnceLock<Result<OAuthSigningKey, String>> = OnceLock::new();
+    KEY.get_or_init(|| {
+        use rsa::pkcs8::{DecodePrivateKey, EncodePrivateKey};
+        use rsa::traits::PublicKeyParts;
+
+        let private = match std::env::var("STAR_OAUTH_SIGNING_KEY") {
+            Ok(pem) if !pem.trim().is_empty() => rsa::RsaPrivateKey::from_pkcs8_pem(pem.trim())
+                .map_err(|err| {
+                    format!("STAR_OAUTH_SIGNING_KEY is not a valid PKCS#8 PEM: {err}")
+                })?,
+            _ => {
+                // No deployment key: generate a per-process instance key.
+                // Only the public half is ever served; the private half
+                // lives in memory for the life of the process.
+                use argon2::password_hash::rand_core::OsRng;
+                rsa::RsaPrivateKey::new(&mut OsRng, 2048)
+                    .map_err(|err| format!("failed to generate OAuth signing key: {err}"))?
+            }
+        };
+
+        let now = Utc::now();
+        let kid = format!(
+            "star-oauth-{:04}{:02}{:02}",
+            now.year(),
+            now.month(),
+            now.day()
+        );
+        let created = (now.year(), now.month());
+        let public = rsa::RsaPublicKey::from(&private);
+        let pem = private
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .map_err(|err| format!("failed to serialize OAuth signing key: {err}"))?;
+        let encoding = jsonwebtoken::EncodingKey::from_rsa_pem(pem.as_bytes())
+            .map_err(|err| format!("failed to load OAuth signing key: {err}"))?;
+
+        Ok(OAuthSigningKey {
+            kid,
+            // Canvas JWKs use unpadded base64url for n and e
+            // (canvas_security gem -> JSON::JWK).
+            n: base64url_encode(&public.n().to_bytes_be()),
+            e: base64url_encode(&public.e().to_bytes_be()),
+            created,
+            encoding,
+        })
+    })
+    .as_ref()
+    .map_err(std::clone::Clone::clone)
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct JwksQuery {
+    rotation_check: Option<String>,
+}
+
+/// GET /login/oauth2/jwks — Canvas `SecurityController#jwks`
+/// (security_controller.rb:75-95, route routes.rb:3094): the public keyset
+/// in JWKS shape with a Cache-Control header, or — with `rotation_check` — a
+/// report of whether each key's kid-encoded date is from the current month.
+async fn oauth2_jwks(Query(params): Query<JwksQuery>) -> Response {
+    if params.rotation_check.is_some() {
+        let today = Utc::now();
+        let key = oauth_signing_key();
+        let this_month = match key {
+            Ok(key) => (today.year(), today.month()) == key.created,
+            Err(_) => false,
+        };
+        let report = format!(
+            "today is day {} and key 0 is {}from this month",
+            today.day(),
+            if this_month { "" } else { "not " }
+        );
+        return Json(serde_json::json!([report])).into_response();
+    }
+
+    let Ok(key) = oauth_signing_key() else {
+        return internal_error(
+            "oauth jwks: signing key unavailable",
+            "signing key generation failed",
+        );
+    };
+    let mut response = Json(serde_json::json!({
+        "keys": [{
+            "kty": "RSA",
+            "alg": "RS256",
+            "use": "sig",
+            "kid": key.kid,
+            "n": key.n,
+            "e": key.e,
+        }]
+    }))
+    .into_response();
+    response.headers_mut().insert(
+        CACHE_CONTROL,
+        HeaderValue::from_str(&format!("max-age={JWKS_MAX_CACHE_AGE_SECS}"))
+            .expect("static cache-control header"),
+    );
+    response
+}
+
+/// POST /api/v1/inst_access_tokens — Canvas
+/// `InstAccessTokensController#create` (inst_access_tokens_controller.rb:58-73):
+/// a short-lived (1 hour) signed JWT for the authenticated user, returned as
+/// `{"token": ...}` with 201. Canvas encrypts its tokens for the API gateway
+/// (JWE); star returns the RS256-signed JWT directly — the gateway is
+/// deployment infrastructure outside REST parity.
+async fn create_inst_access_token(
+    auth: AuthUser,
+    headers: HeaderMap,
+) -> Result<Response, ApiError> {
+    let host = headers
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("localhost");
+    let now = Utc::now();
+    // Claim mapping: Canvas user_uuid/user_global_id -> star's numeric user
+    // id (star users have no UUID column); region is unknown in star.
+    let claims = serde_json::json!({
+        "sub": auth.id.to_string(),
+        "user_id": auth.id,
+        "canvas_domain": host,
+        "region": "unknown",
+        "iat": now.timestamp(),
+        "exp": (now + Duration::seconds(OAUTH_TOKEN_TTL_SECS)).timestamp(),
+    });
+    let key = oauth_signing_key().map_err(|err| ApiError::Db(err.clone()))?;
+    let header = jsonwebtoken::Header {
+        alg: jsonwebtoken::Algorithm::RS256,
+        kid: Some(key.kid.clone()),
+        ..Default::default()
+    };
+    let token = encode(&header, &claims, &key.encoding)
+        .map_err(|err| ApiError::Db(format!("inst access token: {err}")))?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "token": token })),
+    )
+        .into_response())
 }
 
 // ---------------------------------------------------------------------------
