@@ -434,7 +434,8 @@ async fn choices_crud_cascade_and_scoping() {
         .json(&json!({ "poll_choices": [{ "text": "Choice A (edited)" }] }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let updated = first(&resp.json::<Value>(), "poll_choices");
+    let updated = resp.json::<Value>();
+    let updated = first(&updated, "poll_choices");
     assert_eq!(updated["text"], "Choice A (edited)");
     assert_eq!(updated["is_correct"], true, "absent is_correct preserved");
 
@@ -1058,7 +1059,8 @@ async fn submissions_flow_and_permissions() {
         .get(&format!("/polls/{poll}"))
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
-    let poll_json = first(&resp.json::<Value>(), "polls");
+    let body = resp.json::<Value>();
+    let poll_json = first(&body, "polls");
     assert_eq!(
         poll_json["total_results"],
         json!({ choice1.to_string(): 2, choice2.to_string(): 1 }),
