@@ -75,6 +75,7 @@ fn auth(user_id: i64, role: &str) -> String {
 }
 
 /// Insert one V2 job row.
+#[allow(clippy::too_many_arguments)]
 async fn seed_job(
     pool: &PgPool,
     tag: &str,
@@ -147,7 +148,7 @@ async fn v1_list_jobs_json_returns_jobs_and_total() {
         true,
     )
     .await;
-    let j2 = seed_job(
+    let _j2 = seed_job(
         &pool,
         &format!("{prefix}-import"),
         "queued",
@@ -462,7 +463,7 @@ async fn grouped_search_returns_tag_counts() {
 
     // Happy path: search by tag.
     let resp = server
-        .get(&format!("/jobs2/queued/by_tag/search?term=Export"))
+        .get("/jobs2/queued/by_tag/search?term=Export")
         .add_header(AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(
