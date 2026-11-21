@@ -714,17 +714,26 @@ async fn administrated_account_ids(
          SELECT id FROM admin_accounts UNION SELECT id FROM managed",
         admin_accounts = ADMIN_ACCOUNTS_CTE,
     );
-    let ids: Vec<i64> = sqlx::query_scalar(&sql).bind(user_id).fetch_all(pool).await?;
+    let ids: Vec<i64> = sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
     Ok(ids.into_iter().collect())
 }
 
 /// The accounts the caller is associated with (Canvas `user_account_associations`).
-async fn associated_account_ids(pool: &PgPool, user_id: i64) -> Result<HashSet<i64>, CalendarError> {
+async fn associated_account_ids(
+    pool: &PgPool,
+    user_id: i64,
+) -> Result<HashSet<i64>, CalendarError> {
     let sql = format!(
         "WITH RECURSIVE {assoc_start} SELECT id FROM assoc_chain",
         assoc_start = ASSOC_START_CTE,
     );
-    let ids: Vec<i64> = sqlx::query_scalar(&sql).bind(user_id).fetch_all(pool).await?;
+    let ids: Vec<i64> = sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
     Ok(ids.into_iter().collect())
 }
 

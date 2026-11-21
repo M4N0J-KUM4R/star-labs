@@ -2207,7 +2207,10 @@ async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, OutcomeA
 
 /// Canvas `value_to_boolean`.
 fn value_to_boolean(value: Option<&str>) -> bool {
-    matches!(value, Some("true") | Some("1") | Some("t") | Some("T") | Some("yes"))
+    matches!(
+        value,
+        Some("true") | Some("1") | Some("t") | Some("T") | Some("yes")
+    )
 }
 
 /// The `page` / `per_page` request parameters.
