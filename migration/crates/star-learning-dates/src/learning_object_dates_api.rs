@@ -77,6 +77,13 @@
 //! `attachments`, `learning_object_dates`, `learning_object_date_overrides`,
 //! `groups`, `group_categories`, `group_memberships`, `course_sections`,
 //! `feature_flags` and `accounts` all exist in `star-db`.
+//!
+//! The only schema note for the coordinator: the
+//! `learning_object_dates.learning_object_type` discriminator now also takes
+//! the values `ContextModule` and `Attachment`. The column is a plain `TEXT`
+//! with `UNIQUE (learning_object_type, learning_object_id)` and no `CHECK`
+//! constraint, so no migration is required — only the comment of
+//! `0090_learning_object_dates.sql` is out of date.
 
 use axum::{
     extract::{Path, State},

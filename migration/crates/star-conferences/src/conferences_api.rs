@@ -184,9 +184,8 @@ const BOOLEAN_SETTING_FIELDS: [&str; 6] = [
 
 /// The columns of a `web_conferences` row this module reads.
 const CONFERENCE_COLUMNS: &str = "w.id, w.title, w.conference_type, w.conference_key, \
-     w.context_id, w.context_type, w.user_id, w.start_at, w.description, w.duration, \
-     w.created_at, w.updated_at, w.ended_at, w.end_at, w.context_code, w.settings, \
-     w.recording_ready";
+     w.context_id, w.context_type, w.start_at, w.description, w.duration, \
+     w.ended_at, w.end_at, w.context_code";
 
 // ---------------------------------------------------------------------------
 // Router
@@ -227,17 +226,12 @@ struct ConferenceRow {
     conference_key: Option<String>,
     context_id: i64,
     context_type: String,
-    user_id: Option<i64>,
     start_at: Option<DateTime<Utc>>,
     description: Option<String>,
     duration: Option<f64>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
     ended_at: Option<DateTime<Utc>>,
     end_at: Option<DateTime<Utc>>,
     context_code: Option<String>,
-    settings: Option<String>,
-    recording_ready: Option<bool>,
 }
 
 /// A `web_conference_participants` row.
@@ -506,11 +500,6 @@ impl Params {
     /// The value of a parameter.
     fn value(&self, name: &str) -> Option<&Value> {
         self.root.get(name)
-    }
-
-    /// The value of a parameter as a string (`"1"`, `"true"`, …).
-    fn scalar(&self, name: &str) -> Option<String> {
-        self.value(name).and_then(scalar_text)
     }
 
     /// The value of a parameter as a hash.

@@ -181,7 +181,8 @@ struct ControlDraft {
 #[derive(Debug, Clone)]
 struct CourseInfo {
     name: String,
-    account_id: i64,
+    /// `courses.account_id` is nullable in this workspace.
+    account_id: Option<i64>,
 }
 
 /// The request context of a control: the root account from the path.
@@ -632,7 +633,7 @@ async fn find_accounts(pool: &PgPool, ids: &[i64]) -> Result<HashMap<i64, i64>, 
 async fn find_courses(pool: &PgPool, ids: &[i64]) -> Result<HashMap<i64, CourseInfo>, ApiError> {
     let mut courses = HashMap::new();
     for id in ids {
-        let row: Option<(i64, String, i64)> =
+        let row: Option<(i64, String, Option<i64>)> =
             sqlx::query_as("SELECT id, name, account_id FROM courses WHERE id = $1")
                 .bind(id)
                 .fetch_optional(pool)
@@ -650,7 +651,7 @@ async fn course_rows(pool: &PgPool, ids: &[i64]) -> Result<HashMap<i64, CourseIn
     if ids.is_empty() {
         return Ok(HashMap::new());
     }
-    let rows: Vec<(i64, String, i64)> =
+    let rows: Vec<(i64, String, Option<i64>)> =
         sqlx::query_as("SELECT id, name, account_id FROM courses WHERE id = ANY($1)")
             .bind(ids)
             .fetch_all(pool)
@@ -800,14 +801,16 @@ async fn preload_calculated_attrs(
     let course_counts: HashMap<i64, i64> = if all_account_ids.is_empty() {
         HashMap::new()
     } else {
-        let rows: Vec<(i64, i64)> = sqlx::query_as(
+        let rows: Vec<(Option<i64>, i64)> = sqlx::query_as(
             "SELECT account_id, COUNT(*) FROM courses \
              WHERE account_id = ANY($1) AND workflow_state <> 'deleted' GROUP BY account_id",
         )
         .bind(&all_account_ids)
         .fetch_all(pool)
         .await?;
-        rows.into_iter().collect()
+        rows.into_iter()
+            .filter_map(|(account_id, count)| account_id.map(|account_id| (account_id, count)))
+            .collect()
     };
 
     // --- the paths of every active control of the involved deployments ---
@@ -842,7 +845,9 @@ async fn preload_calculated_attrs(
     let courses = course_rows(pool, &course_ids).await?;
     let mut name_account_ids: Vec<i64> = account_ids.clone();
     for course in courses.values() {
-        name_account_ids.push(course.account_id);
+        if let Some(account_id) = course.account_id {
+            name_account_ids.push(account_id);
+        }
     }
     for control in controls {
         for segment in control.path.split('.') {
@@ -1113,11 +1118,11 @@ async fn index(
     // order in which the deployments first appear.
     let mut groups: Vec<(i64, Vec<&ContextControlRow>)> = Vec::new();
     for control in &controls {
-        match groups
-            .iter_mut()
-            .find(|(deployment_id, _)| *deployment_id == control.deployment_id)
-        {
-            Some((_, members)) => members.push(control),
+        let position = groups
+            .iter()
+            .position(|(deployment_id, _)| *deployment_id == control.deployment_id);
+        match position {
+            Some(position) => groups[position].1.push(control),
             None => groups.push((control.deployment_id, vec![control])),
         }
     }
@@ -1381,7 +1386,9 @@ async fn create_many(
     // The account chains of every context.
     let mut chain_account_ids: Vec<i64> = account_ids.clone();
     for course in courses.values() {
-        chain_account_ids.push(course.account_id);
+        if let Some(account_id) = course.account_id {
+            chain_account_ids.push(account_id);
+        }
     }
     chain_account_ids.sort_unstable();
     chain_account_ids.dedup();
@@ -1414,7 +1421,8 @@ async fn create_many(
                 let course_id = course_id.unwrap_or_default();
                 let chain = courses
                     .get(&course_id)
-                    .and_then(|course| chains.get(&course.account_id))
+                    .and_then(|course| course.account_id)
+                    .and_then(|account_id| chains.get(&account_id))
                     .map(Vec::as_slice)
                     .unwrap_or(&[]);
                 let root_account_id = chain.last().copied().unwrap_or(ctx.account_id);
@@ -1448,9 +1456,8 @@ async fn create_many(
     // Canvas reads the deployments with `ContextExternalTool.where(id: ...)`:
     // a deployment that does not exist is not an error here, it only makes
     // the controls that use it invalid.
-    let deployment_sql = format!(
-        "SELECT {DEPLOYMENT_COLUMNS} FROM lti_deployments WHERE id = ANY($1)"
-    );
+    let deployment_sql =
+        format!("SELECT {DEPLOYMENT_COLUMNS} FROM lti_deployments WHERE id = ANY($1)");
     let deployments: Vec<DeploymentRow> = sqlx::query_as(&deployment_sql)
         .bind(&deployment_ids)
         .fetch_all(&state.db)
@@ -1469,9 +1476,9 @@ async fn create_many(
             Some(*course_id) == draft.course_id
         } else {
             let account_id = draft.account_id.or_else(|| {
-                draft
-                    .course_id
-                    .and_then(|course_id| courses.get(&course_id).map(|course| course.account_id))
+                draft.course_id.and_then(|course_id| {
+                    courses.get(&course_id).and_then(|course| course.account_id)
+                })
             });
             match (
                 account_id,
@@ -1514,7 +1521,9 @@ async fn create_many(
         chains: chains.clone(),
         course_account_ids: courses
             .iter()
-            .map(|(course_id, course)| (*course_id, course.account_id))
+            .filter_map(|(course_id, course)| {
+                course.account_id.map(|account_id| (*course_id, account_id))
+            })
             .collect(),
         deployment_account_ids: deployment_account_ids.clone(),
         deployment_course_ids: deployment_course_ids.clone(),
@@ -1873,11 +1882,12 @@ async fn resolve_context_account_id(
         return Ok(row.map(|(id,)| id));
     }
     if let Some(course_id) = course_id {
-        let row: Option<(i64,)> = sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
-            .bind(course_id)
-            .fetch_optional(pool)
-            .await?;
-        return Ok(row.map(|(account_id,)| account_id));
+        let row: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+                .bind(course_id)
+                .fetch_optional(pool)
+                .await?;
+        return Ok(row.and_then(|(account_id,)| account_id));
     }
     Ok(None)
 }
@@ -1893,11 +1903,12 @@ async fn control_path(
         return Ok(calculate_path_for_account_ids(&chain));
     }
     if let Some(course_id) = course_id {
-        let row: Option<(i64,)> = sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
-            .bind(course_id)
-            .fetch_optional(pool)
-            .await?;
-        let Some((account_id,)) = row else {
+        let row: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+                .bind(course_id)
+                .fetch_optional(pool)
+                .await?;
+        let Some((Some(account_id))) = row else {
             return Ok(String::new());
         };
         let chain = account_chain_ids(pool, account_id).await?;
@@ -1950,11 +1961,12 @@ async fn build_anchor_control(
     let mut chains: HashMap<i64, Vec<i64>> = HashMap::new();
     let mut course_account_ids: HashMap<i64, i64> = HashMap::new();
     if let Some(course_id) = draft.course_id {
-        let row: Option<(i64,)> = sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
-            .bind(course_id)
-            .fetch_optional(pool)
-            .await?;
-        if let Some((account_id,)) = row {
+        let row: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+                .bind(course_id)
+                .fetch_optional(pool)
+                .await?;
+        if let Some((Some(account_id))) = row {
             course_account_ids.insert(course_id, account_id);
             chains.insert(account_id, account_chain_ids(pool, account_id).await?);
         }

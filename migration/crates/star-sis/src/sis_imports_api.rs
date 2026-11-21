@@ -705,7 +705,12 @@ async fn create(
                     "text/csv" => "csv",
                     _ => "zip",
                 };
-                (format!("sis_import.{extension}"), Some(media_type.clone()))
+                let request_content_type = if media_type.is_empty() {
+                    None
+                } else {
+                    Some(media_type.clone())
+                };
+                (format!("sis_import.{extension}"), request_content_type)
             }
         };
         file = Some(FileSpec {

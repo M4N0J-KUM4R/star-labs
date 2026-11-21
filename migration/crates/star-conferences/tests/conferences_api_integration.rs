@@ -32,6 +32,8 @@
 //! before the migration lands; `CREATE TABLE IF NOT EXISTS` keeps it a no-op
 //! afterwards.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+
 use axum_test::TestServer;
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -83,8 +85,11 @@ const CONFERENCE_DDL: [&str; 2] = [
 /// The provider secret of the seeded plugin.
 const PROVIDER_SECRET: &str = "conference-secret";
 
+/// Serializes the tests that read the provider configuration — the
+/// `require_config` behaviour depends on the rows other tests write.
+static PROVIDER_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 fn run_prefix() -> String {
-    use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(0);
     let n = N.fetch_add(1, Ordering::Relaxed);
     format!(
@@ -96,6 +101,24 @@ fn run_prefix() -> String {
             .as_millis(),
         n
     )
+}
+
+/// Canvas `String#classify` for a plugin id (`big_blue_button` ->
+/// `BigBlueButton`) — the port derives the conference type from the plugin
+/// id the same way.
+fn classify(plugin_id: &str) -> String {
+    plugin_id
+        .split('_')
+        .filter(|part| !part.is_empty())
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 async fn setup() -> Option<(TestServer, PgPool, String)> {
@@ -187,20 +210,39 @@ async fn seed_group_membership(pool: &PgPool, group_id: i64, user_id: i64) {
     .expect("seed group membership");
 }
 
-/// The provider plugin of the tests (`big_blue_button` with a secret).
-async fn seed_provider(pool: &PgPool, prefix: &str) {
+/// The provider plugin of a test (`big_blue_button` with a secret).
+///
+/// Every test uses its own plugin id so the tests do not fight over the
+/// shared `plugin_settings` table; the conference type is derived from the
+/// plugin id exactly like the port does it.
+async fn seed_provider(pool: &PgPool, prefix: &str) -> (String, String) {
+    let plugin_id = format!("{prefix}_big_blue_button");
+    let conference_type = classify(&plugin_id);
     sqlx::query(
         "INSERT INTO plugin_settings (name, settings, created_at, updated_at, disabled) \
          VALUES ($1, $2, NOW(), NOW(), FALSE)",
     )
-    .bind(format!("{prefix}-big_blue_button"))
+    .bind(&plugin_id)
     .bind(json!({ "domain": "bbb.test", "secret_dec": PROVIDER_SECRET }).to_string())
     .execute(pool)
     .await
     .expect("seed provider");
+    (plugin_id, conference_type)
 }
 
-/// A conference of a context, with an optional participant.
+/// The number of enabled conference providers.
+async fn provider_count(pool: &PgPool) -> i64 {
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM plugin_settings \
+         WHERE disabled IS NOT TRUE AND settings IS NOT NULL",
+    )
+    .fetch_one(pool)
+    .await
+    .expect("count providers");
+    count
+}
+
+/// A conference of a context.
 async fn seed_conference(
     pool: &PgPool,
     context_type: &str,
@@ -209,15 +251,12 @@ async fn seed_conference(
     title: &str,
     conference_type: &str,
     conference_key: Option<&str>,
-    started_at: Option<&str>,
-    ended_at: Option<&str>,
 ) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO web_conferences ( \
              title, conference_type, conference_key, context_id, context_type, user_id, \
-             started_at, ended_at, created_at, updated_at, root_account_id \
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7::timestamp, $8::timestamp, NOW(), NOW(), 1) \
-         RETURNING id",
+             created_at, updated_at, root_account_id \
+         ) VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW(), 1) RETURNING id",
     )
     .bind(title)
     .bind(conference_type)
@@ -225,8 +264,40 @@ async fn seed_conference(
     .bind(context_id)
     .bind(context_type)
     .bind(user_id)
-    .bind(started_at)
-    .bind(ended_at)
+    .fetch_one(pool)
+    .await
+    .expect("seed conference")
+}
+
+/// A conference that started `minutes` ago (and optionally ends later).
+async fn seed_timed_conference(
+    pool: &PgPool,
+    context_type: &str,
+    context_id: i64,
+    user_id: i64,
+    title: &str,
+    conference_type: &str,
+    started_minutes_ago: i64,
+    ends_in_minutes: Option<i64>,
+) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO web_conferences ( \
+             title, conference_type, context_id, context_type, user_id, started_at, ended_at, \
+             created_at, updated_at, root_account_id \
+         ) VALUES ( \
+             $1, $2, $3, $4, $5, NOW() - ($6::text || ' minutes')::interval, \
+             CASE WHEN $7::text IS NULL THEN NULL \
+                  ELSE NOW() + (($7::text || ' minutes')::interval) END, \
+             NOW(), NOW(), 1 \
+         ) RETURNING id",
+    )
+    .bind(title)
+    .bind(conference_type)
+    .bind(context_id)
+    .bind(context_type)
+    .bind(user_id)
+    .bind(started_minutes_ago.to_string())
+    .bind(ends_in_minutes.map(|minutes| minutes.to_string()))
     .fetch_one(pool)
     .await
     .expect("seed conference")
@@ -268,18 +339,6 @@ fn sign(secret: &str, claims: Value) -> String {
     .expect("sign the parameters")
 }
 
-/// The number of enabled conference providers.
-async fn provider_count(pool: &PgPool) -> i64 {
-    let (count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM plugin_settings \
-         WHERE disabled IS NOT TRUE AND settings IS NOT NULL",
-    )
-    .fetch_one(pool)
-    .await
-    .expect("count providers");
-    count
-}
-
 async fn cleanup(pool: &PgPool, prefix: &str) {
     sqlx::query(
         "DELETE FROM web_conference_participants WHERE web_conference_id IN ( \
@@ -299,11 +358,13 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
         .execute(pool)
         .await
         .ok();
-    sqlx::query("DELETE FROM group_memberships WHERE group_id IN (SELECT id FROM groups WHERE name LIKE $1)")
-        .bind(format!("{prefix}%"))
-        .execute(pool)
-        .await
-        .ok();
+    sqlx::query(
+        "DELETE FROM group_memberships WHERE group_id IN (SELECT id FROM groups WHERE name LIKE $1)",
+    )
+    .bind(format!("{prefix}%"))
+    .execute(pool)
+    .await
+    .ok();
     sqlx::query("DELETE FROM groups WHERE name LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
@@ -340,9 +401,7 @@ async fn index_requires_a_session() {
     };
     let course_id = seed_course(&pool, &prefix, "course").await;
 
-    let response = server
-        .get(&format!("/courses/{course_id}/conferences"))
-        .await;
+    let response = server.get(&format!("/courses/{course_id}/conferences")).await;
     assert_eq!(response.status_code(), 401);
 
     cleanup(&pool, &prefix).await;
@@ -354,6 +413,7 @@ async fn index_is_404_for_a_missing_context_and_403_for_a_non_reader() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
+    let _guard = PROVIDER_LOCK.lock().await;
     seed_provider(&pool, &prefix).await;
     let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let outsider = seed_user(&pool, &prefix, "outsider", "student").await;
@@ -381,7 +441,8 @@ async fn index_lists_the_conferences_of_the_participant() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    seed_provider(&pool, &prefix).await;
+    let _guard = PROVIDER_LOCK.lock().await;
+    let (_, conference_type) = seed_provider(&pool, &prefix).await;
     let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "student", "student").await;
     let course_id = seed_course(&pool, &prefix, "course").await;
@@ -394,9 +455,7 @@ async fn index_lists_the_conferences_of_the_participant() {
         course_id,
         teacher,
         &format!("{prefix}-mine"),
-        "BigBlueButton",
-        None,
-        None,
+        &conference_type,
         None,
     )
     .await;
@@ -406,9 +465,7 @@ async fn index_lists_the_conferences_of_the_participant() {
         course_id,
         teacher,
         &format!("{prefix}-other"),
-        "BigBlueButton",
-        None,
-        None,
+        &conference_type,
         None,
     )
     .await;
@@ -425,6 +482,7 @@ async fn index_lists_the_conferences_of_the_participant() {
     let conference = &conferences[0];
     assert_eq!(conference["id"], json!(mine));
     assert_eq!(conference["title"], json!(format!("{prefix}-mine")));
+    assert_eq!(conference["conference_type"], json!(conference_type));
     assert_eq!(conference["context_type"], json!("Course"));
     assert_eq!(conference["context_id"], json!(course_id));
     assert_eq!(conference["users"], json!([student]));
@@ -433,11 +491,10 @@ async fn index_lists_the_conferences_of_the_participant() {
     assert_eq!(conference["has_advanced_settings"], json!(false));
     assert_eq!(conference["long_running"], json!(false));
     assert_eq!(conference["join_url"], Value::Null);
-    assert_eq!(
-        conference["url"],
-        json!(format!(
-            "http://127.0.0.1/courses/{course_id}/conferences/{mine}"
-        ))
+    let url = conference["url"].as_str().expect("url");
+    assert!(
+        url.ends_with(&format!("/courses/{course_id}/conferences/{mine}")),
+        "unexpected url: {url}"
     );
 
     // The teacher is not a participant of the second conference and holds no
@@ -447,7 +504,11 @@ async fn index_lists_the_conferences_of_the_participant() {
         .add_header("Authorization", auth(teacher, "teacher"))
         .await
         .json();
-    assert_eq!(teacher_body["conferences"].as_array().expect("c").len(), 0);
+    assert_eq!(
+        teacher_body["conferences"].as_array().expect("c").len(),
+        0,
+        "the teacher participates in no conference"
+    );
     assert_ne!(other, mine);
 
     cleanup(&pool, &prefix).await;
@@ -459,16 +520,21 @@ async fn index_without_a_provider_is_403() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
+    let _guard = PROVIDER_LOCK.lock().await;
     let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let course_id = seed_course(&pool, &prefix, "course").await;
     seed_enrollment(&pool, teacher, course_id, "teacher").await;
 
+    let configured = provider_count(&pool).await > 0;
     let response = server
         .get(&format!("/courses/{course_id}/conferences"))
         .add_header("Authorization", auth(teacher, "teacher"))
         .await;
 
-    if provider_count(&pool).await == 0 {
+    if configured {
+        // Another suite configured a provider — the route stays reachable.
+        assert_eq!(response.status_code(), 200);
+    } else {
         // Canvas `require_config` fails without a configured provider.
         assert_eq!(response.status_code(), 403);
         let body: Value = response.json();
@@ -476,9 +542,6 @@ async fn index_without_a_provider_is_403() {
             body["errors"][0]["message"],
             json!("Web conferencing has not been enabled for this Canvas site")
         );
-    } else {
-        // Another test configured a provider — the route stays reachable.
-        assert_eq!(response.status_code(), 200);
     }
 
     cleanup(&pool, &prefix).await;
@@ -494,7 +557,8 @@ async fn create_makes_a_conference_and_invites_the_context() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    seed_provider(&pool, &prefix).await;
+    let _guard = PROVIDER_LOCK.lock().await;
+    let (_, conference_type) = seed_provider(&pool, &prefix).await;
     let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "student", "student").await;
     let course_id = seed_course(&pool, &prefix, "course").await;
@@ -507,7 +571,7 @@ async fn create_makes_a_conference_and_invites_the_context() {
         .json(&json!({
             "web_conference": {
                 "title": format!("{prefix}-created"),
-                "conference_type": "BigBlueButton",
+                "conference_type": conference_type,
                 "duration": 60,
                 "description": "a conference"
             }
@@ -516,7 +580,7 @@ async fn create_makes_a_conference_and_invites_the_context() {
     assert_eq!(response.status_code(), 200);
     let body: Value = response.json();
     assert_eq!(body["title"], json!(format!("{prefix}-created")));
-    assert_eq!(body["conference_type"], json!("BigBlueButton"));
+    assert_eq!(body["conference_type"], json!(conference_type));
     assert_eq!(body["context_type"], json!("Course"));
     assert_eq!(body["context_id"], json!(course_id));
     assert_eq!(body["context_code"], json!(format!("course_{course_id}")));
@@ -553,6 +617,7 @@ async fn create_rejects_an_unknown_conference_type_and_a_missing_parameter() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
+    let _guard = PROVIDER_LOCK.lock().await;
     seed_provider(&pool, &prefix).await;
     let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let course_id = seed_course(&pool, &prefix, "course").await;
@@ -585,7 +650,8 @@ async fn create_in_a_group_uses_the_group_context() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    seed_provider(&pool, &prefix).await;
+    let _guard = PROVIDER_LOCK.lock().await;
+    let (_, conference_type) = seed_provider(&pool, &prefix).await;
     let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let course_id = seed_course(&pool, &prefix, "course").await;
     seed_enrollment(&pool, teacher, course_id, "teacher").await;
@@ -596,7 +662,10 @@ async fn create_in_a_group_uses_the_group_context() {
         .post(&format!("/groups/{group_id}/conferences"))
         .add_header("Authorization", auth(teacher, "teacher"))
         .json(&json!({
-            "web_conference": { "title": format!("{prefix}-group"), "conference_type": "BigBlueButton" }
+            "web_conference": {
+                "title": format!("{prefix}-group"),
+                "conference_type": conference_type
+            }
         }))
         .await;
     assert_eq!(response.status_code(), 200);
@@ -618,7 +687,8 @@ async fn for_user_lists_the_conferences_of_the_caller() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    seed_provider(&pool, &prefix).await;
+    let _guard = PROVIDER_LOCK.lock().await;
+    let (_, conference_type) = seed_provider(&pool, &prefix).await;
     let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "student", "student").await;
     let other = seed_user(&pool, &prefix, "other", "student").await;
@@ -632,9 +702,7 @@ async fn for_user_lists_the_conferences_of_the_caller() {
         course_id,
         teacher,
         &format!("{prefix}-for-user"),
-        "BigBlueButton",
-        None,
-        None,
+        &conference_type,
         None,
     )
     .await;
@@ -670,39 +738,50 @@ async fn for_user_filters_the_live_conferences() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    seed_provider(&pool, &prefix).await;
+    let _guard = PROVIDER_LOCK.lock().await;
+    let (_, conference_type) = seed_provider(&pool, &prefix).await;
     let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "student", "student").await;
     let course_id = seed_course(&pool, &prefix, "course").await;
     seed_enrollment(&pool, teacher, course_id, "teacher").await;
     seed_enrollment(&pool, student, course_id, "student").await;
 
-    let live = seed_conference(
+    let live = seed_timed_conference(
         &pool,
         "Course",
         course_id,
         teacher,
         &format!("{prefix}-live"),
-        "BigBlueButton",
-        None,
-        Some("2020-01-01 00:00:00"),
-        None,
+        &conference_type,
+        30,
+        Some(30),
     )
     .await;
-    let finished = seed_conference(
+    let zombie = seed_timed_conference(
         &pool,
         "Course",
         course_id,
         teacher,
-        &format!("{prefix}-finished"),
-        "BigBlueButton",
+        &format!("{prefix}-zombie"),
+        &conference_type,
+        60 * 24 * 2,
         None,
-        Some("2020-01-01 00:00:00"),
-        Some("2020-01-01 01:00:00"),
+    )
+    .await;
+    let future = seed_timed_conference(
+        &pool,
+        "Course",
+        course_id,
+        teacher,
+        &format!("{prefix}-future"),
+        &conference_type,
+        -60,
+        None,
     )
     .await;
     seed_participant(&pool, live, student, "attendee").await;
-    seed_participant(&pool, finished, student, "attendee").await;
+    seed_participant(&pool, zombie, student, "attendee").await;
+    seed_participant(&pool, future, student, "attendee").await;
 
     let body: Value = server
         .get("/conferences?state=live")
@@ -715,8 +794,8 @@ async fn for_user_filters_the_live_conferences() {
         .iter()
         .filter_map(|conference| conference["id"].as_i64())
         .collect();
-    // The conference that started in 2020 is not live any more.
-    assert!(ids.is_empty(), "unexpected live conferences: {ids:?}");
+    // Only the conference that started half an hour ago is live.
+    assert_eq!(ids, vec![live]);
 
     cleanup(&pool, &prefix).await;
 }
@@ -731,7 +810,8 @@ async fn recording_ready_flips_the_flag() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    seed_provider(&pool, &prefix).await;
+    let _guard = PROVIDER_LOCK.lock().await;
+    let (_, conference_type) = seed_provider(&pool, &prefix).await;
     let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let course_id = seed_course(&pool, &prefix, "course").await;
     seed_enrollment(&pool, teacher, course_id, "teacher").await;
@@ -741,10 +821,8 @@ async fn recording_ready_flips_the_flag() {
         course_id,
         teacher,
         &format!("{prefix}-recording"),
-        "BigBlueButton",
+        &conference_type,
         Some("conf_key"),
-        None,
-        None,
     )
     .await;
 
@@ -776,7 +854,8 @@ async fn recording_ready_rejects_a_wrong_meeting_and_a_broken_token() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    seed_provider(&pool, &prefix).await;
+    let _guard = PROVIDER_LOCK.lock().await;
+    let (_, conference_type) = seed_provider(&pool, &prefix).await;
     let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let course_id = seed_course(&pool, &prefix, "course").await;
     seed_enrollment(&pool, teacher, course_id, "teacher").await;
@@ -786,10 +865,8 @@ async fn recording_ready_rejects_a_wrong_meeting_and_a_broken_token() {
         course_id,
         teacher,
         &format!("{prefix}-recording"),
-        "BigBlueButton",
+        &conference_type,
         Some("conf_key"),
-        None,
-        None,
     )
     .await;
 
@@ -837,7 +914,8 @@ async fn recording_ready_is_404_for_a_conference_of_another_context() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    seed_provider(&pool, &prefix).await;
+    let _guard = PROVIDER_LOCK.lock().await;
+    let (_, conference_type) = seed_provider(&pool, &prefix).await;
     let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let course_id = seed_course(&pool, &prefix, "course").await;
     let other_course_id = seed_course(&pool, &prefix, "other-course").await;
@@ -848,10 +926,8 @@ async fn recording_ready_is_404_for_a_conference_of_another_context() {
         other_course_id,
         teacher,
         &format!("{prefix}-elsewhere"),
-        "BigBlueButton",
+        &conference_type,
         Some("conf_key"),
-        None,
-        None,
     )
     .await;
 

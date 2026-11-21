@@ -57,8 +57,8 @@ const OUTCOMES_DDL: [&str; 11] = [
         ADD COLUMN IF NOT EXISTS mastery BOOLEAN,
         ADD COLUMN IF NOT EXISTS hide_points BOOLEAN NOT NULL DEFAULT FALSE,
         ADD COLUMN IF NOT EXISTS title TEXT,
-        ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ,
-        ADD COLUMN IF NOT EXISTS assessed_at TIMESTAMPTZ",
+        ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP,
+        ADD COLUMN IF NOT EXISTS assessed_at TIMESTAMP",
     "ALTER TABLE outcome_groups ADD COLUMN IF NOT EXISTS outcome_import_id BIGINT",
     "ALTER TABLE courses ADD COLUMN IF NOT EXISTS latest_outcome_import_id BIGINT",
     "ALTER TABLE accounts ADD COLUMN IF NOT EXISTS latest_outcome_import_id BIGINT",
@@ -122,7 +122,7 @@ async fn setup() -> Option<TestApp> {
         db: pool.clone(),
         jwt_secret: "test-jwt-secret".to_string(),
     };
-    let app = axum::Router::new()
+    let app: axum::Router = axum::Router::new()
         .nest("/api/v1", outcomes_api::router())
         .with_state(state);
 
@@ -253,7 +253,7 @@ async fn seed(pool: &PgPool, prefix: &str) -> Fixture {
         "INSERT INTO learning_outcome_results
             (outcome_id, user_id, score, context_code, content_tag_id, association_type,
              association_id, workflow_state, possible, percent, title, submitted_at)
-         VALUES ($1, $2, 9, $3, $4, 'Assignment', $5, 'active', 10, 0.9, 'Quiz 1, Student', now())",
+         VALUES ($1, $2, 9, $3, $4, 'Assignment', $5, 'active', 10, 0.9, 'Quiz 1, Student', LOCALTIMESTAMP)",
     )
     .bind(outcome_id)
     .bind(student_id)

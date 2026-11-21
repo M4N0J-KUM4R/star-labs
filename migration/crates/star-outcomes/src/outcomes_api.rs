@@ -50,8 +50,8 @@
 //!     ADD COLUMN IF NOT EXISTS mastery BOOLEAN,
 //!     ADD COLUMN IF NOT EXISTS hide_points BOOLEAN NOT NULL DEFAULT FALSE,
 //!     ADD COLUMN IF NOT EXISTS title TEXT,
-//!     ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ,
-//!     ADD COLUMN IF NOT EXISTS assessed_at TIMESTAMPTZ;
+//!     ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP,
+//!     ADD COLUMN IF NOT EXISTS assessed_at TIMESTAMP;
 //!
 //! -- Which import created the group (`created_group_ids`).
 //! ALTER TABLE outcome_groups
@@ -830,7 +830,7 @@ async fn create_outcome_import(
         "INSERT INTO outcome_imports
             (workflow_state, context_id, context_type, user_id, progress,
              created_at, updated_at, data, learning_outcome_group_id)
-         VALUES ('initializing', $1, $2, $3, 0, $4, $4, $5, $6)
+         VALUES ('initializing', $1, $2, $3, 0, $4, $4, $5::json, $6)
          RETURNING id",
     )
     .bind(context.id())
@@ -994,7 +994,7 @@ async fn enqueue_job(
     strand: Option<String>,
     singleton: Option<String>,
 ) -> Result<i64, OutcomeApiError> {
-    let now = Utc::now().naive_utc();
+    let now = Utc::now();
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO jobs
             (tag, workflow_state, progress, user_id, context_type, context_id,
@@ -1079,7 +1079,7 @@ fn iso8601(value: Option<NaiveDateTime>) -> Value {
 /// Canvas `Api::V1::User#user_json` (the fields `outcome_import_json` uses).
 async fn user_json(pool: &PgPool, user_id: i64, auth: &AuthUser) -> Result<Value, OutcomeApiError> {
     let row = sqlx::query_as::<_, (i64, String, NaiveDateTime)>(
-        "SELECT id, name, created_at FROM users WHERE id = $1",
+        "SELECT id, name, created_at AT TIME ZONE 'UTC' AS created_at FROM users WHERE id = $1",
     )
     .bind(user_id)
     .fetch_optional(pool)
@@ -1434,8 +1434,8 @@ async fn prepare_outcome_results(
                 "users not specified and no access to all grades",
             ));
         }
-        let requested = params.array("user_ids");
-        let requested: Vec<i64> = requested
+        let requested_values = params.array("user_ids");
+        let requested: Vec<i64> = requested_values
             .iter()
             .filter_map(|v| v.parse::<i64>().ok())
             .collect();
@@ -1541,8 +1541,8 @@ async fn prepare_outcome_results(
         return Err(reject("cannot specify both user_ids and section_id"));
     }
     if params.get("user_ids").is_some() {
-        let requested: Vec<String> = params.array("user_ids");
-        let requested_ids: Vec<i64> = requested
+        let requested_values = params.array("user_ids");
+        let requested_ids: Vec<i64> = requested_values
             .iter()
             .filter_map(|value| value.parse::<i64>().ok())
             .collect();
@@ -2056,7 +2056,7 @@ async fn assign_outcome_order(
         }
     }
 
-    let root_account_id = match ctx.account_id {
+    let root_id = match ctx.account_id {
         Some(account_id) => root_account_id(pool, account_id).await?,
         None => site_admin_account_id(pool).await?.unwrap_or_default(),
     };
@@ -2079,7 +2079,7 @@ async fn assign_outcome_order(
                 (root_account_id, user_id, course_id, learning_outcome_id, position, created_at, updated_at)
              VALUES ($1, $2, $3, $4, $5, $6, $6)",
         )
-        .bind(root_account_id)
+        .bind(root_id)
         .bind(auth.id)
         .bind(course_id)
         .bind(outcome_id)
