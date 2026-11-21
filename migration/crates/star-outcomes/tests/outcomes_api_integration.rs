@@ -307,13 +307,11 @@ async fn cleanup(pool: &PgPool, fixture: &Fixture) {
         .execute(pool)
         .await
         .expect("cleanup assignments");
-    sqlx::query(
-        "DELETE FROM outcome_imports WHERE context_id = $1 AND context_type = 'Course'",
-    )
-    .bind(fixture.course_id)
-    .execute(pool)
-    .await
-    .expect("cleanup imports");
+    sqlx::query("DELETE FROM outcome_imports WHERE context_id = $1 AND context_type = 'Course'")
+        .bind(fixture.course_id)
+        .execute(pool)
+        .await
+        .expect("cleanup imports");
     sqlx::query("DELETE FROM outcome_imports WHERE context_id = $1 AND context_type = 'Account'")
         .bind(fixture.account_id)
         .execute(pool)
@@ -384,14 +382,12 @@ async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str
 
 /// Seed an account admin.
 async fn seed_account_user(pool: &PgPool, account_id: i64, user_id: i64) {
-    sqlx::query(
-        "INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, 'admin')",
-    )
-    .bind(account_id)
-    .bind(user_id)
-    .execute(pool)
-    .await
-    .expect("seed account user");
+    sqlx::query("INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, 'admin')")
+        .bind(account_id)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .expect("seed account user");
 }
 
 /// A unique prefix for the seeded rows.
@@ -432,7 +428,10 @@ async fn outcome_import_create_stores_the_import_and_answers_the_canvas_json() {
             "{}/api/v1/accounts/{}/outcome_imports?import_type=instructure_csv",
             app.base_url, fixture.account_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .header("Content-Type", "text/csv")
         .body(IMPORT_CSV.to_string())
         .send()
@@ -477,7 +476,10 @@ async fn outcome_import_create_accepts_a_multipart_attachment() {
             "{}/api/v1/courses/{}/outcome_imports",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .header(
             "Content-Type",
             format!("multipart/form-data; boundary={boundary}"),
@@ -509,7 +511,10 @@ async fn outcome_import_create_refuses_a_user_without_the_import_permission() {
             "{}/api/v1/accounts/{}/outcome_imports",
             app.base_url, fixture.account_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.student_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.student_id)),
+        )
         .header("Content-Type", "text/csv")
         .body(IMPORT_CSV.to_string())
         .send()
@@ -541,7 +546,10 @@ async fn outcome_import_show_returns_the_import_and_404s_for_an_unknown_id() {
             "{}/api/v1/accounts/{}/outcome_imports",
             app.base_url, fixture.account_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .header("Content-Type", "text/csv")
         .body(IMPORT_CSV.to_string())
         .send()
@@ -556,7 +564,10 @@ async fn outcome_import_show_returns_the_import_and_404s_for_an_unknown_id() {
             "{}/api/v1/accounts/{}/outcome_imports/{}",
             app.base_url, fixture.account_id, import_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("show the import");
@@ -571,7 +582,10 @@ async fn outcome_import_show_returns_the_import_and_404s_for_an_unknown_id() {
             "{}/api/v1/accounts/{}/outcome_imports/999999",
             app.base_url, fixture.account_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("show the missing import");
@@ -599,7 +613,10 @@ async fn outcome_import_created_group_ids_404s_until_the_import_succeeded() {
             "{}/api/v1/courses/{}/outcome_imports",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .header("Content-Type", "text/csv")
         .body(IMPORT_CSV.to_string())
         .send()
@@ -614,7 +631,10 @@ async fn outcome_import_created_group_ids_404s_until_the_import_succeeded() {
             "{}/api/v1/courses/{}/outcome_imports/{}/created_group_ids",
             app.base_url, fixture.course_id, import_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("read the created group ids");
@@ -641,7 +661,10 @@ async fn outcome_import_created_group_ids_404s_until_the_import_succeeded() {
             "{}/api/v1/courses/{}/outcome_imports/{}/created_group_ids",
             app.base_url, fixture.course_id, import_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("read the created group ids");
@@ -670,14 +693,19 @@ async fn outcome_results_returns_the_seeded_results() {
             "{}/api/v1/courses/{}/outcome_results",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("read the outcome results");
 
     assert_eq!(response.status(), 200);
     let body: Value = response.json().await.expect("decode the body");
-    let results = body["outcome_results"].as_array().expect("the results array");
+    let results = body["outcome_results"]
+        .as_array()
+        .expect("the results array");
     assert_eq!(results.len(), 1);
     assert_eq!(results[0]["score"], 9.0);
     assert_eq!(results[0]["hidden"], false);
@@ -708,7 +736,10 @@ async fn outcome_results_refuses_a_student_that_did_not_name_the_users() {
             "{}/api/v1/courses/{}/outcome_results",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.student_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.student_id)),
+        )
         .send()
         .await
         .expect("read the outcome results");
@@ -738,7 +769,10 @@ async fn outcome_results_rejects_an_outcome_that_is_not_in_the_course() {
             "{}/api/v1/courses/{}/outcome_results?outcome_ids[]=999999",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("read the outcome results");
@@ -768,7 +802,10 @@ async fn outcome_rollups_returns_the_rollups_and_the_pagination_meta() {
             "{}/api/v1/courses/{}/outcome_rollups",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("read the rollups");
@@ -807,7 +844,10 @@ async fn outcome_rollups_rejects_an_unknown_aggregate_or_include() {
             "{}/api/v1/courses/{}/outcome_rollups?aggregate=bogus",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("read the rollups");
@@ -821,7 +861,10 @@ async fn outcome_rollups_rejects_an_unknown_aggregate_or_include() {
             "{}/api/v1/courses/{}/outcome_rollups?include[]=bogus",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("read the rollups");
@@ -846,7 +889,10 @@ async fn outcome_rollups_aggregates_the_course_when_asked() {
             "{}/api/v1/courses/{}/outcome_rollups?aggregate=course",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("read the rollups");
@@ -876,7 +922,10 @@ async fn mastery_distribution_buckets_the_students_into_the_ratings() {
             "{}/api/v1/courses/{}/outcome_mastery_distribution",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("read the mastery distribution");
@@ -887,12 +936,17 @@ async fn mastery_distribution_buckets_the_students_into_the_ratings() {
     let distribution = &body["outcome_distributions"][&key];
     assert_eq!(distribution["outcome_id"], key.as_str());
     assert_eq!(distribution["total_students"], 1);
-    let ratings = distribution["ratings"].as_array().expect("the ratings array");
+    let ratings = distribution["ratings"]
+        .as_array()
+        .expect("the ratings array");
     assert_eq!(ratings.len(), 3);
     assert_eq!(ratings[0]["description"], "Exceeds");
     assert_eq!(ratings[0]["points"], 9.0);
     assert_eq!(ratings[0]["count"], 1);
-    assert_eq!(ratings[0]["student_ids"], json!([fixture.student_id.to_string()]));
+    assert_eq!(
+        ratings[0]["student_ids"],
+        json!([fixture.student_id.to_string()])
+    );
     let students = body["students"].as_array().expect("the students array");
     assert_eq!(students.len(), 1);
     assert_eq!(students[0]["id"], fixture.student_id.to_string());
@@ -914,7 +968,10 @@ async fn contributing_scores_lists_the_alignments_and_the_scores() {
             "{}/api/v1/courses/{}/outcomes/{}/contributing_scores",
             app.base_url, fixture.course_id, fixture.outcome_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("read the contributing scores");
@@ -951,7 +1008,10 @@ async fn contributing_scores_rejects_an_outcome_that_is_not_in_the_course() {
             "{}/api/v1/courses/{}/outcomes/999999/contributing_scores",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("read the contributing scores");
@@ -977,7 +1037,10 @@ async fn assign_outcome_order_stores_the_ordering_and_answers_no_content() {
             "{}/api/v1/courses/{}/assign_outcome_order",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .header("Content-Type", "application/json")
         .body(json!([{ "outcome_id": fixture.outcome_id, "position": 3 }]).to_string())
         .send()
@@ -1021,7 +1084,10 @@ async fn assign_outcome_order_rejects_an_outcome_of_another_course() {
             "{}/api/v1/courses/{}/assign_outcome_order",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .header("Content-Type", "application/json")
         .body(json!([{ "outcome_id": 999999, "position": 1 }]).to_string())
         .send()
@@ -1047,9 +1113,14 @@ async fn enqueue_outcome_rollup_calculation_is_a_no_op_while_the_flag_is_off() {
         .client
         .post(format!(
             "{}/api/v1/enqueue_outcome_rollup_calculation?course_id={}&student_uuid={}",
-            app.base_url, fixture.course_id, format!("{prefix}-student-uuid")
+            app.base_url,
+            fixture.course_id,
+            format!("{prefix}-student-uuid")
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("enqueue the rollup calculation");
@@ -1086,8 +1157,14 @@ async fn enqueue_outcome_rollup_calculation_requires_the_course_and_the_student(
 
     let response = app
         .client
-        .post(format!("{}/api/v1/enqueue_outcome_rollup_calculation", app.base_url))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .post(format!(
+            "{}/api/v1/enqueue_outcome_rollup_calculation",
+            app.base_url
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("enqueue the rollup calculation");
@@ -1102,7 +1179,10 @@ async fn enqueue_outcome_rollup_calculation_requires_the_course_and_the_student(
             "{}/api/v1/enqueue_outcome_rollup_calculation?course_id={}&student_uuid=nope",
             app.base_url, fixture.course_id
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("enqueue the rollup calculation");
@@ -1114,9 +1194,14 @@ async fn enqueue_outcome_rollup_calculation_requires_the_course_and_the_student(
         .client
         .post(format!(
             "{}/api/v1/enqueue_outcome_rollup_calculation?course_id={}&student_uuid={}",
-            app.base_url, fixture.course_id, format!("{prefix}-student-uuid")
+            app.base_url,
+            fixture.course_id,
+            format!("{prefix}-student-uuid")
         ))
-        .header("Authorization", format!("Bearer {}", app.token(fixture.teacher_id)))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
         .send()
         .await
         .expect("enqueue the rollup calculation");

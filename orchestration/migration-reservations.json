@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0232",
- "next_available": "0233",
+ "max_merged": "0235",
+ "next_available": "0236",
  "reservations": {
   "0001": {
    "issue": null,
@@ -750,6 +750,21 @@
   "0232": {
    "issue": null,
    "note": "star-modules: the course paces and their module items",
+   "status": "merged"
+  },
+  "0233": {
+   "issue": null,
+   "note": "star-lti: the LTI context controls get nullable owner columns",
+   "status": "merged"
+  },
+  "0234": {
+   "issue": null,
+   "note": "star-users: the course nicknames",
+   "status": "merged"
+  },
+  "0235": {
+   "issue": null,
+   "note": "star-polling: the poll description and the choice flags",
    "status": "merged"
   }
  }

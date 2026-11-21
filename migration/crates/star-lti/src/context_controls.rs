@@ -31,23 +31,33 @@
 //! created with both `account_id` and `course_id` `NOT NULL` plus a check
 //! constraint that requires exactly one of them to be set — a combination
 //! that no row can satisfy. Canvas' own definition has both columns
-//! nullable and adds two partial unique indexes, which the bulk upsert relies
-//! on. The statements below repair the table:
+//! nullable. The table also carried a foreign key on `deployment_id` that
+//! pointed at Canvas' `context_external_tools`, while this workspace keeps
+//! its LTI deployments in `lti_deployments` (the table the rest of star-lti
+//! uses, and the only one with a `deployment_id` string and a
+//! `context_name`). Migration `0233` repairs both; the statements it runs
+//! are:
 //!
 //! ```sql
+//! ALTER TABLE lti_context_controls
+//!     DROP CONSTRAINT IF EXISTS chk_require_context_4;
+//!
 //! ALTER TABLE lti_context_controls
 //!     ALTER COLUMN account_id DROP NOT NULL,
 //!     ALTER COLUMN course_id DROP NOT NULL;
 //!
 //! ALTER TABLE lti_context_controls
-//!     DROP CONSTRAINT IF EXISTS chk_require_context_4;
+//!     DROP CONSTRAINT IF EXISTS fk_lti_context_controls_deployment_id;
 //!
-//! CREATE UNIQUE INDEX IF NOT EXISTS index_lti_context_controls_on_account_and_deployment
-//!     ON lti_context_controls (account_id, deployment_id) WHERE account_id IS NOT NULL;
-//!
-//! CREATE UNIQUE INDEX IF NOT EXISTS index_lti_context_controls_on_course_and_deployment
-//!     ON lti_context_controls (course_id, deployment_id) WHERE course_id IS NOT NULL;
+//! ALTER TABLE lti_context_controls
+//!     ADD CONSTRAINT fk_lti_context_controls_deployment_id
+//!     FOREIGN KEY (deployment_id) REFERENCES lti_deployments (id) ON DELETE CASCADE;
 //! ```
+//!
+//! The partial unique indexes the bulk upsert relies on
+//! (`index_lti_context_controls_on_account_and_deployment` and
+//! `index_lti_context_controls_on_course_and_deployment`) already exist in
+//! migration `0226`.
 //!
 //! `lti_context_controls.created_at` / `updated_at` are `timestamp without
 //! time zone` (as created by `0224`), so they are read as `NaiveDateTime`

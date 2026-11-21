@@ -142,7 +142,10 @@ pub fn router() -> Router<AppState> {
             get(created_group_ids_for_course),
         )
         .route("/courses/{course_id}/outcome_rollups", get(outcome_rollups))
-        .route("/courses/{course_id}/outcome_results", get(outcome_results_index))
+        .route(
+            "/courses/{course_id}/outcome_results",
+            get(outcome_results_index),
+        )
         .route(
             "/courses/{course_id}/outcome_mastery_distribution",
             get(outcome_mastery_distribution),
@@ -175,10 +178,7 @@ enum OutcomeApiError {
     /// Generic `star_common::ApiError`.
     Api(ApiError),
     /// Canvas `reject!` — renders `RequestError#error_json`.
-    Reject {
-        status: StatusCode,
-        message: String,
-    },
+    Reject { status: StatusCode, message: String },
     /// Canvas `render_json_unauthorized` — 401 for anonymous, 403 otherwise.
     Unauthorized { authenticated: bool },
     /// Canvas `ActiveRecord::RecordNotFound` — `api_error_json`.
@@ -223,7 +223,9 @@ impl IntoResponse for OutcomeApiError {
                 Json(json!({ "status": status_symbol(status), "message": message })),
             )
                 .into_response(),
-            OutcomeApiError::Unauthorized { authenticated: true } => (
+            OutcomeApiError::Unauthorized {
+                authenticated: true,
+            } => (
                 StatusCode::FORBIDDEN,
                 Json(json!({
                     "status": "unauthorized",
@@ -231,7 +233,9 @@ impl IntoResponse for OutcomeApiError {
                 })),
             )
                 .into_response(),
-            OutcomeApiError::Unauthorized { authenticated: false } => (
+            OutcomeApiError::Unauthorized {
+                authenticated: false,
+            } => (
                 StatusCode::UNAUTHORIZED,
                 Json(json!({
                     "status": "unauthenticated",
@@ -340,7 +344,10 @@ impl Params {
 
     /// Rails `params[:key]`.
     fn get(&self, key: &str) -> Option<&str> {
-        self.values.get(key).and_then(|v| v.last()).map(String::as_str)
+        self.values
+            .get(key)
+            .and_then(|v| v.last())
+            .map(String::as_str)
     }
 
     /// Rails `params[:key].present?`.
@@ -402,7 +409,10 @@ struct MultipartField {
 
 /// Extract the boundary from a `multipart/form-data` content type.
 fn multipart_boundary(content_type: &str) -> Option<String> {
-    if !content_type.to_ascii_lowercase().starts_with("multipart/form-data") {
+    if !content_type
+        .to_ascii_lowercase()
+        .starts_with("multipart/form-data")
+    {
         return None;
     }
     content_type.split(';').skip(1).find_map(|part| {
@@ -774,22 +784,18 @@ async fn create_outcome_import(
 
     // `before_action :get_context` — the context must exist.
     let context_exists = match context {
-        ImportContext::Account(id) => {
-            sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND workflow_state <> 'deleted')",
-            )
-            .bind(id)
-            .fetch_one(pool)
-            .await?
-        }
-        ImportContext::Course(id) => {
-            sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted')",
-            )
-            .bind(id)
-            .fetch_one(pool)
-            .await?
-        }
+        ImportContext::Account(id) => sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND workflow_state <> 'deleted')",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await?,
+        ImportContext::Course(id) => sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted')",
+        )
+        .bind(id)
+        .fetch_one(pool)
+        .await?,
     };
     if !context_exists {
         return Err(OutcomeApiError::NotFound);
@@ -820,7 +826,10 @@ async fn create_outcome_import(
     params.merge_multipart(&multipart);
 
     // `params[:import_type] ||= "instructure_csv"` then the validity check.
-    let import_type = params.get("import_type").unwrap_or("instructure_csv").to_string();
+    let import_type = params
+        .get("import_type")
+        .unwrap_or("instructure_csv")
+        .to_string();
     if import_type != "instructure_csv" {
         return Err(OutcomeApiError::Raised(
             "invalid import type parameter".to_string(),
@@ -1019,10 +1028,7 @@ async fn enqueue_job(
 }
 
 /// Load an outcome import by id.
-async fn fetch_outcome_import(
-    pool: &PgPool,
-    id: i64,
-) -> Result<OutcomeImportRow, OutcomeApiError> {
+async fn fetch_outcome_import(pool: &PgPool, id: i64) -> Result<OutcomeImportRow, OutcomeApiError> {
     let row = sqlx::query_as::<_, OutcomeImportRow>(
         "SELECT id, workflow_state, context_id, context_type, user_id, attachment_id,
                 progress, ended_at, created_at, updated_at, data
@@ -1049,10 +1055,7 @@ async fn outcome_import_json(
         "progress".to_string(),
         json!(import.progress.unwrap_or_default()),
     );
-    body.insert(
-        "workflow_state".to_string(),
-        json!(import.workflow_state),
-    );
+    body.insert("workflow_state".to_string(), json!(import.workflow_state));
     body.insert(
         "data".to_string(),
         import.data.clone().unwrap_or(Value::Null),
@@ -1073,10 +1076,7 @@ async fn outcome_import_json(
     body.insert("processing_errors".to_string(), json!(processing_errors));
 
     if let Some(user_id) = import.user_id {
-        body.insert(
-            "user".to_string(),
-            user_json(pool, user_id, auth).await?,
-        );
+        body.insert("user".to_string(), user_json(pool, user_id, auth).await?);
     }
 
     Ok(Value::Object(body))
@@ -1085,17 +1085,13 @@ async fn outcome_import_json(
 /// Format a timestamp the way Rails renders it in JSON.
 fn iso8601(value: Option<NaiveDateTime>) -> Value {
     match value {
-        Some(stamp) => json!(stamp.format("%Y-%m-%dT%H:%M:%S%.6f%:z").to_string()),
+        Some(stamp) => json!(stamp.format("%Y-%m-%dT%H:%M:%S%.6f").to_string()),
         None => Value::Null,
     }
 }
 
 /// Canvas `Api::V1::User#user_json` (the fields `outcome_import_json` uses).
-async fn user_json(
-    pool: &PgPool,
-    user_id: i64,
-    auth: &AuthUser,
-) -> Result<Value, OutcomeApiError> {
+async fn user_json(pool: &PgPool, user_id: i64, auth: &AuthUser) -> Result<Value, OutcomeApiError> {
     let row = sqlx::query_as::<_, (i64, String, NaiveDateTime)>(
         "SELECT id, name, created_at FROM users WHERE id = $1",
     )
@@ -1110,7 +1106,10 @@ async fn user_json(
     body.insert("id".to_string(), json!(id));
     body.insert("name".to_string(), json!(name));
     body.insert("created_at".to_string(), json!(iso8601(Some(created_at))));
-    body.insert("sortable_name".to_string(), json!(sortable_name(&first, &last)));
+    body.insert(
+        "sortable_name".to_string(),
+        json!(sortable_name(&first, &last)),
+    );
     body.insert("short_name".to_string(), json!(short_name(&first, &last)));
 
     // `sis_user_id` / `integration_id` are only readable by account admins.
@@ -1158,6 +1157,16 @@ fn short_name(first: &str, last: &str) -> String {
     }
 }
 
+/// The `RecordNotFound` message for a missing outcome import.
+fn outcome_import_not_found_message(id: &str) -> String {
+    if id == "latest" {
+        // `raise ActiveRecord::RecordNotFound` without a message.
+        "Couldn't find OutcomeImport without ID".to_string()
+    } else {
+        format!("Couldn't find OutcomeImport with 'id'={id}")
+    }
+}
+
 /// `GET /accounts/{account_id}/outcome_imports/{id}`.
 async fn show_account_outcome_import(
     State(state): State<AppState>,
@@ -1186,30 +1195,30 @@ async fn show_outcome_import(
     let pool = &state.db;
 
     let context_exists = match context {
-        ImportContext::Account(account_id) => {
-            sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND workflow_state <> 'deleted')",
-            )
-            .bind(account_id)
-            .fetch_one(pool)
-            .await?
-        }
-        ImportContext::Course(course_id) => {
-            sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted')",
-            )
-            .bind(course_id)
-            .fetch_one(pool)
-            .await?
-        }
+        ImportContext::Account(account_id) => sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND workflow_state <> 'deleted')",
+        )
+        .bind(account_id)
+        .fetch_one(pool)
+        .await?,
+        ImportContext::Course(course_id) => sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted')",
+        )
+        .bind(course_id)
+        .fetch_one(pool)
+        .await?,
     };
     if !context_exists {
         return Err(OutcomeApiError::NotFound);
     }
 
     let allowed = match context {
-        ImportContext::Account(account_id) => can_manage_outcomes_on_account(pool, auth, account_id).await?,
-        ImportContext::Course(course_id) => can_manage_outcomes_on_course(pool, auth, course_id).await?,
+        ImportContext::Account(account_id) => {
+            can_manage_outcomes_on_account(pool, auth, account_id).await?
+        }
+        ImportContext::Course(course_id) => {
+            can_manage_outcomes_on_course(pool, auth, course_id).await?
+        }
     };
     if !allowed {
         return Err(OutcomeApiError::Unauthorized {
@@ -1220,9 +1229,7 @@ async fn show_outcome_import(
     let import = match find_outcome_import(pool, context, id).await? {
         Some(import) => import,
         None => {
-            return Ok(not_found_with_message(format!(
-                "Couldn't find OutcomeImport with 'id'={id}"
-            )))
+            return Ok(not_found_with_message(outcome_import_not_found_message(id)));
         }
     };
 
@@ -1258,30 +1265,30 @@ async fn created_group_ids(
     let pool = &state.db;
 
     let context_exists = match context {
-        ImportContext::Account(account_id) => {
-            sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND workflow_state <> 'deleted')",
-            )
-            .bind(account_id)
-            .fetch_one(pool)
-            .await?
-        }
-        ImportContext::Course(course_id) => {
-            sqlx::query_scalar::<_, bool>(
-                "SELECT EXISTS (SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted')",
-            )
-            .bind(course_id)
-            .fetch_one(pool)
-            .await?
-        }
+        ImportContext::Account(account_id) => sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM accounts WHERE id = $1 AND workflow_state <> 'deleted')",
+        )
+        .bind(account_id)
+        .fetch_one(pool)
+        .await?,
+        ImportContext::Course(course_id) => sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted')",
+        )
+        .bind(course_id)
+        .fetch_one(pool)
+        .await?,
     };
     if !context_exists {
         return Err(OutcomeApiError::NotFound);
     }
 
     let allowed = match context {
-        ImportContext::Account(account_id) => can_manage_outcomes_on_account(pool, auth, account_id).await?,
-        ImportContext::Course(course_id) => can_manage_outcomes_on_course(pool, auth, course_id).await?,
+        ImportContext::Account(account_id) => {
+            can_manage_outcomes_on_account(pool, auth, account_id).await?
+        }
+        ImportContext::Course(course_id) => {
+            can_manage_outcomes_on_course(pool, auth, course_id).await?
+        }
     };
     if !allowed {
         return Err(OutcomeApiError::Unauthorized {
@@ -1290,9 +1297,7 @@ async fn created_group_ids(
     }
 
     let Some(import) = find_outcome_import(pool, context, id).await? else {
-        return Ok(not_found_with_message(format!(
-            "Couldn't find OutcomeImport with 'id'={id}"
-        )));
+        return Ok(not_found_with_message(outcome_import_not_found_message(id)));
     };
 
     if import.workflow_state == "failed" {
@@ -1308,7 +1313,10 @@ async fn created_group_ids(
     .bind(import.id)
     .fetch_all(pool)
     .await?;
-    let ids: Vec<Value> = group_ids.into_iter().map(|id| json!(id.to_string())).collect();
+    let ids: Vec<Value> = group_ids
+        .into_iter()
+        .map(|id| json!(id.to_string()))
+        .collect();
     Ok(Json(json!(ids)).into_response())
 }
 
@@ -1419,7 +1427,6 @@ async fn prepare_outcome_results(
     auth: &AuthUser,
     course_id: i64,
     params: Params,
-    raw_query: Option<&str>,
     rollup_action: bool,
     outcome_id_param: Option<i64>,
 ) -> Result<OutcomeResultsContext, OutcomeApiError> {
@@ -1438,13 +1445,16 @@ async fn prepare_outcome_results(
     // `require_outcome_context`
     let manages_grades = can_manage_grades(pool, auth, course_id).await?;
     if !manages_grades {
-        if !params.present("user_ids") {
+        if params.get("user_ids").is_none() {
             return Err(reject_forbidden(
                 "users not specified and no access to all grades",
             ));
         }
         let requested = params.array("user_ids");
-        let requested: Vec<i64> = requested.iter().filter_map(|v| v.parse::<i64>().ok()).collect();
+        let requested: Vec<i64> = requested
+            .iter()
+            .filter_map(|v| v.parse::<i64>().ok())
+            .collect();
         let enrolled = sqlx::query_scalar::<_, i64>(
             "SELECT COUNT(DISTINCT user_id) FROM enrollments
              WHERE course_id = $1 AND user_id = ANY($2) AND workflow_state = 'active'",
@@ -1495,8 +1505,10 @@ async fn prepare_outcome_results(
     let mut outcome_links: Vec<OutcomeLinkRow> = Vec::new();
     let mut outcomes: Vec<OutcomeRow> = Vec::new();
 
-    if params.present("outcome_ids") && params.present("outcome_group_id") {
-        return Err(reject("can't filter by both outcome_ids and outcome_group_id"));
+    if params.get("outcome_ids").is_some() && params.get("outcome_group_id").is_some() {
+        return Err(reject(
+            "can't filter by both outcome_ids and outcome_group_id",
+        ));
     }
 
     if let Some(outcome_id) = outcome_id_param {
@@ -1505,7 +1517,7 @@ async fn prepare_outcome_results(
         if outcomes.is_empty() {
             return Err(reject("outcome not found in this context"));
         }
-    } else if params.present("outcome_group_id") {
+    } else if params.get("outcome_group_id").is_some() {
         let group_id = params
             .get("outcome_group_id")
             .and_then(|value| value.parse::<i64>().ok())
@@ -1517,7 +1529,7 @@ async fn prepare_outcome_results(
         }
         outcome_links = load_outcome_links_for_group(pool, group_id).await?;
         outcomes = load_outcomes(pool, &outcome_links).await?;
-    } else if params.present("outcome_ids") {
+    } else if params.get("outcome_ids").is_some() {
         let requested: Vec<i64> = params
             .array("outcome_ids")
             .iter()
@@ -1541,10 +1553,10 @@ async fn prepare_outcome_results(
 
     // `require_users`
     let mut users: Vec<UserRow>;
-    if params.present("user_ids") && params.present("section_id") {
+    if params.get("user_ids").is_some() && params.get("section_id").is_some() {
         return Err(reject("cannot specify both user_ids and section_id"));
     }
-    if params.present("user_ids") {
+    if params.get("user_ids").is_some() {
         let requested: Vec<String> = params.array("user_ids");
         let requested_ids: Vec<i64> = requested
             .iter()
@@ -1556,9 +1568,11 @@ async fn prepare_outcome_results(
         users = load_course_students(pool, course_id).await?;
         users.retain(|user| unique.contains(&user.id));
         if users.len() != unique.len() {
-            return Err(reject("can only include id's of users in the outcome context"));
+            return Err(reject(
+                "can only include id's of users in the outcome context",
+            ));
         }
-    } else if params.present("section_id") {
+    } else if params.get("section_id").is_some() {
         let section_id = params
             .get("section_id")
             .and_then(|value| value.parse::<i64>().ok())
@@ -1577,7 +1591,7 @@ async fn prepare_outcome_results(
     } else {
         users = load_course_students(pool, course_id).await?;
     }
-    if !params.present("sort_by") {
+    if params.get("sort_by").is_none() {
         users.sort_by_key(|user| user.id);
     }
     let all_users = users.clone();
@@ -1753,7 +1767,10 @@ async fn load_outcomes(
 }
 
 /// The students of a course.
-async fn load_course_students(pool: &PgPool, course_id: i64) -> Result<Vec<UserRow>, OutcomeApiError> {
+async fn load_course_students(
+    pool: &PgPool,
+    course_id: i64,
+) -> Result<Vec<UserRow>, OutcomeApiError> {
     let rows = sqlx::query_as::<_, UserRow>(
         "SELECT DISTINCT u.id, u.name FROM users u
          JOIN enrollments e ON e.user_id = u.id
@@ -1799,8 +1816,7 @@ async fn outcome_results_index(
 ) -> Result<Response, OutcomeApiError> {
     let pool = &state.db;
     let params = Params::from_query(raw.as_deref());
-    let ctx = prepare_outcome_results(pool, &auth, course_id, params.clone(), raw.as_deref(), false, None)
-        .await?;
+    let ctx = prepare_outcome_results(pool, &auth, course_id, params.clone(), false, None).await?;
 
     let include_hidden = value_to_boolean(ctx.params.get("include_hidden"));
     let results = load_results(pool, &ctx, &ctx.users, include_hidden).await?;
@@ -1825,7 +1841,10 @@ async fn outcome_results_index(
     }
 
     let mut response = Map::new();
-    response.insert("outcome_results".to_string(), body["outcome_results"].clone());
+    response.insert(
+        "outcome_results".to_string(),
+        body["outcome_results"].clone(),
+    );
     if let Some(linked) = body.get("linked") {
         response.insert("linked".to_string(), linked.clone());
     }
@@ -1852,8 +1871,7 @@ async fn outcome_rollups(
 ) -> Result<Response, OutcomeApiError> {
     let pool = &state.db;
     let params = Params::from_query(raw.as_deref());
-    let ctx = prepare_outcome_results(pool, &auth, course_id, params.clone(), raw.as_deref(), true, None)
-        .await?;
+    let ctx = prepare_outcome_results(pool, &auth, course_id, params.clone(), true, None).await?;
 
     let mut response = Map::new();
 
@@ -1880,11 +1898,15 @@ async fn outcome_rollups(
             .skip((page - 1) * per_page)
             .take(per_page)
             .collect();
-        let serialized: Vec<Value> = rollups
-            .iter()
-            .filter(|rollup| page_users.iter().any(|user| user.id == rollup.user_id))
-            .map(|rollup| serialize_user_rollup(pool, rollup, &ctx).await)
-            .collect::<Vec<Value>>();
+        let serialized: Vec<Value> = {
+            let mut rows = Vec::new();
+            for rollup in &rollups {
+                if page_users.iter().any(|user| user.id == rollup.user_id) {
+                    rows.push(serialize_user_rollup(pool, rollup, &ctx).await);
+                }
+            }
+            rows
+        };
         response.insert("rollups".to_string(), json!(serialized));
         response.insert(
             "meta".to_string(),
@@ -1917,8 +1939,7 @@ async fn outcome_mastery_distribution(
 ) -> Result<Response, OutcomeApiError> {
     let pool = &state.db;
     let params = Params::from_query(raw.as_deref());
-    let ctx = prepare_outcome_results(pool, &auth, course_id, params.clone(), raw.as_deref(), false, None)
-        .await?;
+    let ctx = prepare_outcome_results(pool, &auth, course_id, params.clone(), false, None).await?;
 
     // The action itself re-checks the grade permissions.
     if !can_manage_grades(pool, &auth, course_id).await? {
@@ -1970,7 +1991,6 @@ async fn outcome_contributing_scores(
         &auth,
         course_id,
         params.clone(),
-        raw.as_deref(),
         false,
         Some(outcome_id),
     )
@@ -1985,8 +2005,7 @@ async fn outcome_contributing_scores(
     };
 
     let alignments = load_alignments(pool, outcome.id, course_id).await?;
-    let only_assignment_alignments =
-        value_to_boolean(ctx.params.get("only_assignment_alignments"));
+    let only_assignment_alignments = value_to_boolean(ctx.params.get("only_assignment_alignments"));
     let show_unpublished_assignments =
         value_to_boolean(ctx.params.get("show_unpublished_assignments"));
 
@@ -2036,8 +2055,7 @@ async fn assign_outcome_order(
 ) -> Result<Response, OutcomeApiError> {
     let pool = &state.db;
     let params = Params::from_query(raw.as_deref());
-    let ctx = prepare_outcome_results(pool, &auth, course_id, params.clone(), raw.as_deref(), false, None)
-        .await?;
+    let ctx = prepare_outcome_results(pool, &auth, course_id, params.clone(), false, None).await?;
 
     // `JSON.parse(request.body.read)`
     let parsed: Value = serde_json::from_slice(&body).map_err(|_| reject("invalid JSON body"))?;
@@ -2103,7 +2121,9 @@ async fn enqueue_outcome_rollup_calculation(
 
     let site_admin = site_admin_account_id(pool).await?;
     let enabled = match site_admin {
-        Some(account_id) => account_feature_enabled(pool, account_id, "outcomes_rollup_propagation").await?,
+        Some(account_id) => {
+            account_feature_enabled(pool, account_id, "outcomes_rollup_propagation").await?
+        }
         None => false,
     };
     if !enabled {
@@ -2121,12 +2141,11 @@ async fn enqueue_outcome_rollup_calculation(
             .into_response());
     }
 
-    let course_exists = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (SELECT 1 FROM courses WHERE id = $1)",
-    )
-    .bind(course_id.clone())
-    .fetch_one(pool)
-    .await?;
+    let course_exists =
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS (SELECT 1 FROM courses WHERE id = $1)")
+            .bind(course_id.clone())
+            .fetch_one(pool)
+            .await?;
     if !course_exists {
         return Ok((
             StatusCode::NOT_FOUND,
@@ -2235,20 +2254,14 @@ fn slice_page<T: Clone>(items: &[T], page: usize, per_page: usize) -> Vec<T> {
 }
 
 /// Canvas `Api.jsonapi_meta`.
-fn jsonapi_meta(
-    base_url: &str,
-    query: &str,
-    per_page: usize,
-    page: usize,
-    total: usize,
-) -> Value {
+fn jsonapi_meta(base_url: &str, query: &str, per_page: usize, page: usize, total: usize) -> Value {
     let mut pagination = Map::new();
     pagination.insert("per_page".to_string(), json!(per_page));
 
     let page_count = if per_page == 0 {
         0
     } else {
-        total.div_ceil(per_page)
+        (total + per_page - 1) / per_page
     };
     let link = |page: usize| format!("{base_url}?{query}&page={page}&per_page={per_page}");
 
@@ -2264,7 +2277,9 @@ fn jsonapi_meta(
     pagination.insert("page".to_string(), json!(page));
     pagination.insert(
         "template".to_string(),
-        json!(link(page).replace(&format!("page={page}"), "page={page}")),
+        json!(format!(
+            "{base_url}?{query}&page={{page}}&per_page={per_page}"
+        )),
     );
     pagination.insert("count".to_string(), json!(total));
     pagination.insert("page_count".to_string(), json!(page_count));
@@ -2290,6 +2305,8 @@ struct ResultRow {
     title: Option<String>,
     submitted_at: Option<NaiveDateTime>,
     assessed_at: Option<NaiveDateTime>,
+    alignment_content_type: Option<String>,
+    alignment_content_id: Option<i64>,
 }
 
 /// Load the outcome results for the given users and outcomes.
@@ -2307,15 +2324,19 @@ async fn load_results(
     let context_code = format!("course_{}", ctx.course_id);
 
     let rows = sqlx::query_as::<_, ResultRow>(
-        "SELECT id, outcome_id, user_id, score, content_tag_id, association_type, association_id,
-                hidden, possible, percent, mastery, hide_points, title, submitted_at, assessed_at
-         FROM learning_outcome_results
-         WHERE workflow_state = 'active'
-           AND (context_code IS NULL OR context_code = $1)
-           AND user_id = ANY($2)
-           AND outcome_id = ANY($3)
-           AND ($4 OR hidden = FALSE)
-         ORDER BY user_id ASC, outcome_id ASC, id ASC",
+        "SELECT r.id, r.outcome_id, r.user_id, r.score, r.content_tag_id, r.association_type,
+                r.association_id, r.hidden, r.possible, r.percent, r.mastery, r.hide_points,
+                r.title, r.submitted_at, r.assessed_at,
+                oa.content_type AS alignment_content_type,
+                oa.content_id AS alignment_content_id
+         FROM learning_outcome_results r
+         LEFT JOIN outcome_alignments oa ON oa.id = r.content_tag_id
+         WHERE r.workflow_state = 'active'
+           AND (r.context_code IS NULL OR r.context_code = $1)
+           AND r.user_id = ANY($2)
+           AND r.outcome_id = ANY($3)
+           AND ($4 OR r.hidden = FALSE)
+         ORDER BY r.user_id ASC, r.outcome_id ASC, r.id ASC",
     )
     .bind(&context_code)
     .bind(&user_ids)
@@ -2340,27 +2361,28 @@ fn outcome_result_json(result: &ResultRow) -> Value {
         "links": {
             "user": result.user_id.to_string(),
             "learning_outcome": result.outcome_id.to_string(),
-            "alignment": alignment_asset_string(result.content_tag_id),
+            "alignment": alignment_asset_string(result),
             "assignment": association_asset_string(result)
         }
     })
 }
 
 /// The `asset_string` of the alignment a result points at.
-fn alignment_asset_string(content_tag_id: Option<i64>) -> Value {
-    match content_tag_id {
-        // Canvas content tags are rendered as `assignment_<id>` / `quiz_<id>`.
-        Some(id) => json!(format!("assignment_{id}")),
-        None => Value::Null,
+fn alignment_asset_string(result: &ResultRow) -> Value {
+    match (
+        result.alignment_content_type.as_deref(),
+        result.alignment_content_id,
+    ) {
+        (Some(content_type), Some(content_id)) => {
+            json!(format!("{}_{}", content_type.to_lowercase(), content_id))
+        }
+        _ => Value::Null,
     }
 }
 
 /// The `asset_string` of the assignment a result is associated with.
 fn association_asset_string(result: &ResultRow) -> Value {
-    match (
-        result.association_type.as_deref(),
-        result.association_id,
-    ) {
+    match (result.association_type.as_deref(), result.association_id) {
         (Some("Assignment"), Some(id)) => json!(format!("assignment_{id}")),
         _ => Value::Null,
     }
@@ -2473,9 +2495,7 @@ fn rubric_criterion(outcome: &OutcomeRow) -> RubricCriterion {
         .cloned()
         .unwrap_or(Value::Null);
 
-    let points_possible = criterion
-        .get("points_possible")
-        .and_then(Value::as_f64);
+    let points_possible = criterion.get("points_possible").and_then(Value::as_f64);
     let mastery_points = criterion.get("mastery_points").and_then(Value::as_f64);
     let ratings = criterion
         .get("ratings")
@@ -2485,9 +2505,15 @@ fn rubric_criterion(outcome: &OutcomeRow) -> RubricCriterion {
                 .iter()
                 .filter_map(|rating| {
                     Some(RubricRating {
-                        description: rating.get("description").and_then(Value::as_str).map(str::to_string),
+                        description: rating
+                            .get("description")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                         points: rating.get("points").and_then(Value::as_f64)?,
-                        color: rating.get("color").and_then(Value::as_str).map(str::to_string),
+                        color: rating
+                            .get("color")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                     })
                 })
                 .collect()
@@ -2527,7 +2553,11 @@ fn calculate_rollup_score(
     // The scoring methods that scale a result by the outcome's points.
     let scaled = matches!(
         calculation_method.as_str(),
-        "decaying_average" | "latest" | "average" | "standard_decaying_average" | "weighted_average"
+        "decaying_average"
+            | "latest"
+            | "average"
+            | "standard_decaying_average"
+            | "weighted_average"
     );
 
     // `score_sets`
@@ -2556,12 +2586,7 @@ fn calculate_rollup_score(
 
     for result in selected {
         let score = if scaled {
-            scaled_score(
-                result,
-                results,
-                points_possible,
-                mastery_points,
-            )
+            scaled_score(result, results, points_possible, mastery_points)
         } else {
             result_score(result, points_possible, mastery_points)
         };
@@ -2645,7 +2670,10 @@ fn calculate_rollup_score(
             let remaining = 100.0 - decay_rate;
             let scores: Vec<f64> = sets.iter().filter_map(|(_, score)| *score).collect();
             if scores.len() == 1 {
-                (Some(round2(scores[0])), sets.iter().map(|(r, _)| *r).collect())
+                (
+                    Some(round2(scores[0])),
+                    sets.iter().map(|(r, _)| *r).collect(),
+                )
             } else {
                 let mut decay: Option<f64> = None;
                 for pair in scores.windows(2) {
@@ -2672,8 +2700,7 @@ fn calculate_rollup_score(
                 ),
                 (Some(latest), false) => {
                     let older: f64 = scores.iter().sum::<f64>() / scores.len() as f64;
-                    let value =
-                        latest * (0.01 * weight) + older * (0.01 * (100.0 - weight));
+                    let value = latest * (0.01 * weight) + older * (0.01 * (100.0 - weight));
                     (
                         Some(round2(value)),
                         sets.iter().map(|(result, _)| *result).collect(),
@@ -2788,7 +2815,12 @@ async fn user_rollups(
             if outcome_results.is_empty() {
                 continue;
             }
-            scores.push(calculate_rollup_score(outcome, &outcome_results, false, false));
+            scores.push(calculate_rollup_score(
+                outcome,
+                &outcome_results,
+                false,
+                false,
+            ));
         }
         rollups.push(Rollup {
             user_id: user.id,
@@ -2818,7 +2850,6 @@ async fn aggregate_rollups(
         if outcome_scores.is_empty() {
             continue;
         }
-        let references: Vec<&ResultRow> = Vec::new();
         let mut aggregated = RollupScore {
             outcome_id: outcome.id,
             score: None,
@@ -2846,7 +2877,6 @@ async fn aggregate_rollups(
         } else {
             Some(round2(values.iter().sum::<f64>() / values.len() as f64))
         };
-        let _ = references;
         scores.push(aggregated);
     }
 
@@ -2939,7 +2969,11 @@ async fn mastery_distributions(
         if ratings.is_empty() {
             continue;
         }
-        ratings.sort_by(|a, b| b.points.partial_cmp(&a.points).unwrap_or(std::cmp::Ordering::Equal));
+        ratings.sort_by(|a, b| {
+            b.points
+                .partial_cmp(&a.points)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
 
         let mut counts: Vec<(RubricRating, Vec<String>)> = ratings
             .into_iter()
@@ -2957,10 +2991,7 @@ async fn mastery_distributions(
                 continue;
             };
             total_students += 1;
-            if let Some(index) = counts
-                .iter()
-                .position(|(rating, _)| rating.points <= score)
-            {
+            if let Some(index) = counts.iter().position(|(rating, _)| rating.points <= score) {
                 counts[index].1.push(rollup.user_id.to_string());
             }
         }

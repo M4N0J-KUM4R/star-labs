@@ -1314,7 +1314,14 @@ async fn update_pseudonym_from_params(
                 "invalid workflow_state".to_string(),
             )]));
         }
-        if !rights.can_delete {
+        // The delete right depends on the SIS id of the login, which the
+        // request may have changed above.
+        let delete_allowed = if state.sis_user_id.is_some() {
+            manage_sis
+        } else {
+            rights.can_update
+        };
+        if !delete_allowed {
             return Err(ApiError::Forbidden.into());
         }
         if stickiness || !stuck_sis_field(state.stuck_sis_fields.as_deref(), "workflow_state") {

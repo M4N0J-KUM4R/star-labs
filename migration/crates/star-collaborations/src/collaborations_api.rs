@@ -1163,9 +1163,9 @@ async fn collaboration_members(
     .await?;
 
     let mut items: Vec<CollaboratorJson> = Vec::with_capacity(rows.len());
+    let wants_lti_id = includes.iter().any(|value| value == "collaborator_lti_id");
+    let wants_avatar = includes.iter().any(|value| value == "avatar_image_url");
     for collaborator in rows {
-        let wants_lti_id = includes.iter().any(|value| value == "collaborator_lti_id");
-        let wants_avatar = includes.iter().any(|value| value == "avatar_image_url");
         let lti_id = if wants_lti_id {
             let user_id = collaborator.user_id.filter(|_| collaborator.user_found);
             Some(match user_id {
@@ -1232,7 +1232,7 @@ async fn load_course_potential_collaborators(
         WHERE e.course_id = $1
           AND e.workflow_state NOT IN ('rejected', 'completed', 'deleted', 'inactive')
         GROUP BY u.id, u.name, u.created_at, u.sortable_name
-        ORDER BY sortable_name ASC
+        ORDER BY COALESCE(u.sortable_name, u.name) ASC
         LIMIT $2 OFFSET $3
     "#;
     let rows: Vec<PotentialUserRow> = sqlx::query_as(sql)
@@ -1282,7 +1282,7 @@ async fn load_group_potential_collaborators(
                   AND e.role = 'teacher'
                   AND e.workflow_state = 'active'
             )
-        ORDER BY sortable_name ASC
+        ORDER BY COALESCE(u.sortable_name, u.name) ASC
         LIMIT $3 OFFSET $4
     "#;
     let rows: Vec<PotentialUserRow> = sqlx::query_as(sql)

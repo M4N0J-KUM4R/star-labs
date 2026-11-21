@@ -759,7 +759,7 @@ async fn fetch_portfolios(
     let offset = (page - 1) * per_page;
     let sql = format!(
         "SELECT {PORTFOLIO_COLUMNS} FROM eportfolios \
-         WHERE user_id = $1 AND ($2::boolean OR workflow_state <> 'deleted') \
+         WHERE user_id = $1 AND (NOT $2::boolean OR workflow_state <> 'deleted') \
          ORDER BY updated_at ASC LIMIT $3 OFFSET $4"
     );
     let rows: Vec<PortfolioRow> = sqlx::query_as(&sql)
@@ -780,7 +780,7 @@ async fn count_portfolios(
 ) -> Result<i64, PortfolioError> {
     let (total,): (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM eportfolios \
-         WHERE user_id = $1 AND ($2::boolean OR workflow_state <> 'deleted')",
+         WHERE user_id = $1 AND (NOT $2::boolean OR workflow_state <> 'deleted')",
     )
     .bind(user_id)
     .bind(active_only)

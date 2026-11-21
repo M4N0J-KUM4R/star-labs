@@ -15,11 +15,15 @@ use star_common::AppState;
 
 mod poll_sessions;
 
+mod polls;
+
 /// Domain router for star-polling.
 ///
 /// Empty on purpose (scaffold train, issue #138). Routes from the spec
 /// (`specs/p5-rest-polling.md` §2) are merged here by the feature workers; the
 /// `Router::new()` base already gives unmounted paths the standard 404.
 pub fn router() -> Router<AppState> {
-    Router::new().merge(poll_sessions::router())
+    Router::new()
+        .merge(poll_sessions::router())
+        .merge(polls::router())
 }
