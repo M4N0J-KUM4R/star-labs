@@ -4,22 +4,26 @@
 //! Routes:
 //! - `GET /api/v1/jobs2/:bucket/by_:group`         → grouped_info
 //! - `GET /api/v1/jobs2/:bucket/by_:group/search` → search
-//! - `GET /api/v1/jobs2/:bucket`                  → list_bucket (extends existing)
+//!
+//! Canvas embeds the group in a `by_:group` path segment (Rails partial
+//! segments); axum cannot express that, so the routes are
+//! `/jobs2/{id}/{group}` with the `by_` prefix parsed in the handlers (the
+//! `{id}` name matches the other `/jobs2/*` routes for matchit
+//! compatibility).
 
 use axum::{
     extract::{Path, Query, State},
-    routing::{get, put},
+    routing::get,
     Json, Router,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::PgPool;
 
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
-use super::lib::{require_admin, Bucket, JobV2, JOB_V2_COLUMNS};
+use crate::{require_admin, Bucket};
 
 /// Group parameter — which column to group by.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,8 +34,10 @@ pub enum Group {
 }
 
 impl Group {
+    /// Parse the group name out of a `by_{group}` path segment.
     fn parse(raw: &str) -> Option<Self> {
-        match raw {
+        let name = raw.strip_prefix("by_")?;
+        match name {
             "tag" => Some(Self::Tag),
             "strand" => Some(Self::Strand),
             "singleton" => Some(Self::Singleton),
@@ -321,7 +327,6 @@ fn compute_group_info(
 
 /// ORDER BY clause for grouped queries.
 fn group_order_clause(order: &str, group: Group) -> &'static str {
-    let col = group.column();
     match order {
         "count" => "count DESC",
         "tag" if group == Group::Tag => "count DESC",
@@ -334,6 +339,6 @@ fn group_order_clause(order: &str, group: Group) -> &'static str {
 /// Build the grouped routes sub-router.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/jobs2/:bucket/by_:group/search", get(search_jobs))
-        .route("/jobs2/:bucket/by_:group", get(grouped_info))
+        .route("/jobs2/{id}/{group}/search", get(search_jobs))
+        .route("/jobs2/{id}/{group}", get(grouped_info))
 }

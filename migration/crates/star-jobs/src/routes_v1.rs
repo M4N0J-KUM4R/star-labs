@@ -5,8 +5,7 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
@@ -17,7 +16,7 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
-use super::lib::{require_admin, JobV2, JOB_V2_COLUMNS};
+use crate::{require_admin, JobV2, JOB_V2_COLUMNS};
 
 /// Query params for `GET /api/v1/jobs`.
 #[derive(Debug, Deserialize)]
@@ -80,7 +79,7 @@ pub async fn list_jobs_json(
     State(state): State<AppState>,
     auth: AuthUser,
     Query(params): Query<ListJobsJsonQuery>,
-) -> Result<impl IntoResponse, ApiError> {
+) -> Result<Response, ApiError> {
     require_admin(&auth)?;
 
     let only = params.only.as_deref().unwrap_or("jobs");
@@ -89,9 +88,15 @@ pub async fn list_jobs_json(
     let offset = params.offset.unwrap_or(0).max(0);
 
     match only {
-        "running" => list_running(&state.db, flavor).await,
-        "tags" => list_tags(&state.db, flavor, limit).await,
-        _ => list_jobs(&state.db, flavor, &params.q, limit, offset).await,
+        "running" => list_running(&state.db, flavor)
+            .await
+            .map(IntoResponse::into_response),
+        "tags" => list_tags(&state.db, flavor, limit)
+            .await
+            .map(IntoResponse::into_response),
+        _ => list_jobs(&state.db, flavor, &params.q, limit, offset)
+            .await
+            .map(IntoResponse::into_response),
     }
 }
 

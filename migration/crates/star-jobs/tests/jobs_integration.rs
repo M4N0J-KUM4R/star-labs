@@ -110,32 +110,36 @@ async fn admin_lists_and_shows_enqueued_job() {
     assert_eq!(job.workflow_state, "queued");
     assert_eq!(job.progress, 0);
 
-    // GET /jobs — newest first, Canvas job shape.
+    // GET /jobs?only=jobs — Canvas JSON-mode listing: {jobs: [...], total: n}.
     let resp = server
-        .get("/jobs")
+        .get("/jobs?only=jobs&limit=100")
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(
         resp.status_code(),
         200,
-        "GET /jobs as admin; body: {}",
+        "GET /jobs?only=jobs as admin; body: {}",
         resp.text()
     );
     let list: Value = resp.json();
-    let jobs = list.as_array().expect("job list is a JSON array");
+    let jobs = list["jobs"]
+        .as_array()
+        .expect("JSON-mode listing wraps rows in a 'jobs' array");
     let found = jobs
         .iter()
         .find(|j| j["id"].as_i64() == Some(job.id))
         .expect("enqueued job appears in the list");
 
     assert_eq!(found["tag"], tag.as_str());
-    assert_eq!(found["workflow_state"], "queued");
-    assert_eq!(found["progress"].as_i64(), Some(0));
-    assert_eq!(found["user_id"].as_i64(), Some(owner));
-    assert_eq!(found["context_type"], "Course");
-    assert_eq!(found["context_id"].as_i64(), Some(4242));
-    assert!(found["created_at"].is_string(), "created_at is serialized");
-    assert!(found["updated_at"].is_string(), "updated_at is serialized");
+    // Canvas listings drop handler/last_error (JobsController as_json except).
+    assert!(
+        found.get("handler").is_none(),
+        "listings must not expose handler"
+    );
+    assert!(
+        found.get("last_error").is_none(),
+        "listings must not expose last_error"
+    );
 
     // GET /jobs/{id} — same object.
     let resp = server
@@ -234,7 +238,7 @@ async fn cancel_is_idempotent_and_rejects_completed_jobs() {
 }
 
 #[tokio::test]
-async fn list_filters_by_workflow_state_and_paginates() {
+async fn list_filters_by_flavor_and_paginates() {
     let Some((server, pool, prefix)) = setup().await else {
         eprintln!("SKIP: DATABASE_URL not set");
         return;
@@ -244,18 +248,22 @@ async fn list_filters_by_workflow_state_and_paginates() {
     let queued = star_jobs::enqueue_job(&pool, None, &format!("{prefix}-queued"), None, None)
         .await
         .expect("enqueue queued job");
-    let done = star_jobs::enqueue_job(&pool, None, &format!("{prefix}-done"), None, None)
+    // A second queued job makes the unpaginated total deterministic (>= 2).
+    let _queued2 = star_jobs::enqueue_job(&pool, None, &format!("{prefix}-queued-2"), None, None)
         .await
-        .expect("enqueue done job");
-    sqlx::query("UPDATE jobs SET workflow_state = 'completed', progress = 100 WHERE id = $1")
-        .bind(done.id)
+        .expect("enqueue second queued job");
+    let failed = star_jobs::enqueue_job(&pool, None, &format!("{prefix}-failed"), None, None)
+        .await
+        .expect("enqueue failed job");
+    sqlx::query("UPDATE jobs SET workflow_state = 'failed', failed_at = now() WHERE id = $1")
+        .bind(failed.id)
         .execute(&pool)
         .await
-        .expect("mark job completed");
+        .expect("mark job failed");
 
-    // workflow_state filter narrows the listing to matching states only.
+    // flavor=failed narrows the listing to failed jobs only.
     let resp = server
-        .get("/jobs?workflow_state=queued&limit=100")
+        .get("/jobs?only=jobs&flavor=failed&limit=100")
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(
@@ -264,35 +272,34 @@ async fn list_filters_by_workflow_state_and_paginates() {
         "filtered list; body: {}",
         resp.text()
     );
-    let rows: Value = resp.json();
-    let rows = rows.as_array().expect("job list is a JSON array");
+    let body: Value = resp.json();
+    let rows = body["jobs"].as_array().expect("jobs is a JSON array");
     assert!(
-        rows.iter()
-            .all(|j| j["workflow_state"].as_str() == Some("queued")),
-        "only queued jobs may be returned: {rows:?}"
+        rows.iter().any(|j| j["id"].as_i64() == Some(failed.id)),
+        "failed job must be in the filtered list"
     );
     assert!(
-        rows.iter().any(|j| j["id"].as_i64() == Some(queued.id)),
-        "queued job must be in the filtered list"
-    );
-    assert!(
-        !rows.iter().any(|j| j["id"].as_i64() == Some(done.id)),
-        "completed job must not be in the queued list"
+        !rows.iter().any(|j| j["id"].as_i64() == Some(queued.id)),
+        "queued job must not be in the failed list"
     );
 
     // limit is honoured (and clamped server-side, never zero).
     let resp = server
-        .get("/jobs?limit=1")
+        .get("/jobs?only=jobs&limit=1")
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200);
-    let rows: Value = resp.json();
+    let body: Value = resp.json();
     assert_eq!(
-        rows.as_array().map(Vec::len),
+        body["jobs"].as_array().map(Vec::len),
         Some(1),
         "limit=1 returns exactly one row"
     );
-
+    assert!(
+        body["total"].as_i64().unwrap_or(0) >= 2,
+        "total must count past the limit: {}",
+        body["total"]
+    );
     cleanup(&pool, &prefix).await;
 }
 

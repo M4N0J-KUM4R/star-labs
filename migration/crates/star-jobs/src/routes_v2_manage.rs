@@ -8,17 +8,18 @@
 
 use axum::{
     extract::{Query, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
     routing::{get, put},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use sqlx::PgPool;
 
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
-use super::lib::require_admin;
+use crate::require_admin;
 
 /// Request body for `PUT /jobs2/manage`.
 #[derive(Debug, Deserialize)]
@@ -52,7 +53,8 @@ pub struct ManageResponse {
 
 /// `PUT /api/v1/jobs2/manage` — update strand concurrency/priority.
 ///
-/// Canvas: `JobsV2Controller#manage`.
+/// Canvas: `JobsV2Controller#manage` — updates every job in the strand;
+/// `max_concurrent` and `priority` are only written when present.
 pub async fn manage_strand(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -64,25 +66,32 @@ pub async fn manage_strand(
         return Err(ApiError::BadRequest("strand is required".into()));
     }
 
-    // Build UPDATE with optional max_concurrent and priority.
-    let new_max = payload.max_concurrent.unwrap_or(1).max(1);
-    let new_priority = payload.priority.unwrap_or(0);
+    // Canvas only includes the fields that were sent in update_all.
+    let mut sets = Vec::new();
+    if let Some(max_concurrent) = payload.max_concurrent {
+        sets.push(format!("max_concurrent = {}", max_concurrent.max(1)));
+    }
+    if let Some(priority) = payload.priority {
+        sets.push(format!("priority = {priority}"));
+    }
+    if sets.is_empty() {
+        return Ok(Json(ManageResponse {
+            status: "OK".to_string(),
+            count: 0,
+        }));
+    }
+    sets.push("updated_at = NOW()".to_string());
 
-    let updated = sqlx::query(
-        r#"
-        UPDATE jobs
-        SET max_concurrent = $1,
-            priority = $2,
-            updated_at = NOW()
-        WHERE strand = $3
-          AND workflow_state = 'queued'
-        "#,
-    )
-    .bind(new_max)
-    .bind(new_priority)
-    .bind(&payload.strand)
-    .execute(&state.db)
-    .await?;
+    let sql = format!(
+        "UPDATE jobs SET {} WHERE strand = ${}",
+        sets.join(", "),
+        sets.len()
+    );
+
+    let updated = sqlx::query(&sql)
+        .bind(&payload.strand)
+        .execute(&state.db)
+        .await?;
 
     Ok(Json(ManageResponse {
         status: "OK".to_string(),
@@ -101,7 +110,7 @@ pub async fn unstuck_strand(
     State(state): State<AppState>,
     auth: AuthUser,
     Json(payload): Json<UnstuckRequest>,
-) -> Result<Json<Value>, ApiError> {
+) -> Result<Response, ApiError> {
     require_admin(&auth)?;
 
     if let Some(ref strand) = payload.strand {
@@ -125,7 +134,8 @@ pub async fn unstuck_strand(
         return Ok(Json(json!({
             "status": if count > 0 { "OK" } else { "blocked" },
             "count": count
-        })));
+        }))
+        .into_response());
     }
 
     if let Some(ref singleton) = payload.singleton {
@@ -149,7 +159,8 @@ pub async fn unstuck_strand(
         return Ok(Json(json!({
             "status": if count > 0 { "OK" } else { "blocked" },
             "count": count
-        })));
+        }))
+        .into_response());
     }
 
     // Mode 3: neither strand nor singleton — create a progress record (no worker).
@@ -171,19 +182,23 @@ pub async fn unstuck_strand(
     .fetch_one(&state.db)
     .await?;
 
-    Ok(Json(json!({
-        "status": "pending",
-        "progress": {
-            "id": progress.id,
-            "context_id": progress.context_id,
-            "context_type": progress.context_type,
-            "tag": progress.tag,
-            "workflow_state": progress.workflow_state,
-            "completion": progress.completion,
-            "created_at": progress.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            "updated_at": progress.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-        }
-    })))
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({
+            "status": "pending",
+            "progress": {
+                "id": progress.id,
+                "context_id": progress.context_id,
+                "context_type": progress.context_type,
+                "tag": progress.tag,
+                "workflow_state": progress.workflow_state,
+                "completion": progress.completion,
+                "created_at": progress.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "updated_at": progress.updated_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            }
+        })),
+    )
+    .into_response())
 }
 
 #[derive(Debug, sqlx::FromRow)]
