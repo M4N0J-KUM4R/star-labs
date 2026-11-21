@@ -459,7 +459,7 @@ async fn course_settings_json(db: &PgPool, course_id: i64) -> Value {
     .flatten();
 
     let mut merged = Map::new();
-    for raw in row.into_iter().flatten() {
+    for raw in [row.0, row.1].into_iter().flatten() {
         if let Ok(Value::Object(object)) = serde_json::from_str::<Value>(&raw) {
             for (key, value) in object {
                 merged.insert(key, value);
@@ -1770,14 +1770,14 @@ async fn course_or_term_end_date(db: &PgPool, course: &CourseRow) -> Option<Naiv
         return Some(end_at.date_naive());
     }
     let term_id = course.enrollment_term_id?;
-    let row: Option<(Option<DateTime<Utc>>)> =
+    let row: Option<(Option<DateTime<Utc>>,)> =
         sqlx::query_as("SELECT end_at FROM terms WHERE id = $1")
             .bind(term_id)
             .fetch_optional(db)
             .await
             .ok()
             .flatten();
-    row.and_then(|(end_at,)| end_at.map(|date| date.date_naive()))
+    row.map(|(end_at,)| end_at.map(|date| date.date_naive()))
 }
 
 /// The publish work of the delayed job (Canvas `CoursePace#publish`): pace
@@ -2296,10 +2296,12 @@ async fn compress_dates(
         .iter()
         .map(|item| item.duration.unwrap_or(0))
         .collect();
-    let end_date = params
-        .end_date
-        .map(|date| date.date_naive())
-        .or_else(|| course_or_term_end_date(&state.db, &course).await);
+    // The end date of the plan: the one of the request, otherwise the one of
+    // the course or its enrollment term.
+    let end_date = match params.end_date.map(|date| date.date_naive()) {
+        Some(date) => Some(date),
+        None => course_or_term_end_date(&state.db, &course).await,
+    };
     let compressed = compress_durations(&durations, start, end_date, &week, &holidays);
 
     // The due dates of the compressed plan start on the first enabled day.

@@ -153,13 +153,7 @@ async fn seed_column(
 }
 
 /// Seed a gradebook filter of one user.
-async fn seed_filter(
-    pool: &PgPool,
-    prefix: &str,
-    course_id: i64,
-    user_id: i64,
-    name: &str,
-) -> i64 {
+async fn seed_filter(pool: &PgPool, prefix: &str, course_id: i64, user_id: i64, name: &str) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO gradebook_filters \
          (course_id, user_id, name, payload, created_at, updated_at) \
@@ -427,7 +421,9 @@ async fn the_columns_are_reordered() {
     let third = seed_column(&pool, &prefix, course, "C", 3, "active").await;
 
     let resp = server
-        .post(&format!("/courses/{course}/custom_gradebook_columns/reorder"))
+        .post(&format!(
+            "/courses/{course}/custom_gradebook_columns/reorder"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "order": [third, first, second] }))
         .await;
@@ -535,7 +531,9 @@ async fn a_teacher_manages_the_gradebook_filters() {
     // A filter of another user is not found either.
     let other_filter = seed_filter(&pool, &prefix, course, other, "Other filter").await;
     let resp = server
-        .get(&format!("/courses/{course}/gradebook_filters/{other_filter}"))
+        .get(&format!(
+            "/courses/{course}/gradebook_filters/{other_filter}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());

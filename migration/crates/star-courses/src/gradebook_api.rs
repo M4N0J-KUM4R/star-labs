@@ -247,10 +247,7 @@ async fn can_manage_grades(
 
 /// Canvas `CustomGradebookColumn#set_root_account_id` — the root account of
 /// the owning course.
-async fn course_root_account_id(
-    pool: &PgPool,
-    course_id: i64,
-) -> Result<Option<i64>, ApiError> {
+async fn course_root_account_id(pool: &PgPool, course_id: i64) -> Result<Option<i64>, ApiError> {
     let row: Option<(Option<i64>,)> =
         sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
             .bind(course_id)
@@ -485,7 +482,9 @@ fn read_string(source: &Value, key: &str) -> Option<String> {
 fn read_i64(source: &Value, key: &str) -> Option<i64> {
     let value = source.get(key)?;
     match value {
-        Value::Number(number) => number.as_i64().or_else(|| number.as_f64().map(|f| f as i64)),
+        Value::Number(number) => number
+            .as_i64()
+            .or_else(|| number.as_f64().map(|f| f as i64)),
         Value::String(text) => Some(ruby_to_i(text)),
         _ => None,
     }
@@ -546,16 +545,10 @@ fn value_to_boolean(value: &Value) -> bool {
 /// Canvas `Canvas::Plugin.value_to_boolean` for a string.
 fn value_to_boolean_str(text: &str) -> bool {
     let lower = text.trim().to_ascii_lowercase();
-    if matches!(
-        lower.as_str(),
-        "yes" | "y" | "true" | "t" | "on" | "1"
-    ) {
+    if matches!(lower.as_str(), "yes" | "y" | "true" | "t" | "on" | "1") {
         return true;
     }
-    if matches!(
-        lower.as_str(),
-        "no" | "n" | "false" | "f" | "off" | "0"
-    ) {
+    if matches!(lower.as_str(), "no" | "n" | "false" | "f" | "off" | "0") {
         return false;
     }
     ruby_to_i(text) != 0
@@ -733,14 +726,20 @@ async fn update_column(
     }
 
     let fields = read_column_fields(&body);
-    let title = fields.title.clone().unwrap_or_else(|| current.title.clone());
+    let title = fields
+        .title
+        .clone()
+        .unwrap_or_else(|| current.title.clone());
     let errors = validate_column(Some(&title), matches!(fields.teacher_notes, Some(None)));
     if !errors.is_empty() {
         return Ok(validation_errors(errors));
     }
 
     let position = fields.position.unwrap_or(i64::from(current.position)) as i32;
-    let teacher_notes = fields.teacher_notes.flatten().unwrap_or(current.teacher_notes);
+    let teacher_notes = fields
+        .teacher_notes
+        .flatten()
+        .unwrap_or(current.teacher_notes);
     let read_only = fields.read_only.unwrap_or(current.read_only);
     let workflow_state = match fields.hidden {
         Some(true) => "hidden",
@@ -848,11 +847,7 @@ fn dedup_ids(order: &[Value]) -> Vec<i64> {
 ///
 /// The listed columns get the position of their rank in the new order, the
 /// remaining columns of the course are pushed down.
-async fn apply_reorder(
-    pool: &PgPool,
-    course_id: i64,
-    ids: &[i64],
-) -> Result<(), ApiError> {
+async fn apply_reorder(pool: &PgPool, course_id: i64, ids: &[i64]) -> Result<(), ApiError> {
     let rows: Vec<(i64, i32)> = sqlx::query_as(
         "SELECT id, position FROM custom_gradebook_columns \
          WHERE course_id = $1 ORDER BY position, id",
@@ -883,13 +878,11 @@ async fn apply_reorder(
             }
         };
         if new_position != i64::from(position) {
-            sqlx::query(
-                "UPDATE custom_gradebook_columns SET position = $1 WHERE id = $2",
-            )
-            .bind(new_position as i32)
-            .bind(id)
-            .execute(pool)
-            .await?;
+            sqlx::query("UPDATE custom_gradebook_columns SET position = $1 WHERE id = $2")
+                .bind(new_position as i32)
+                .bind(id)
+                .execute(pool)
+                .await?;
         }
     }
     Ok(())
@@ -915,13 +908,13 @@ async fn load_column(
 /// Canvas `acts_as_list` `add_to_list_bottom` — the position of a new column
 /// at the bottom of the list of the course.
 async fn next_position(pool: &PgPool, course_id: i64) -> Result<i64, ApiError> {
-    let row: Option<(Option<i32>,)> = sqlx::query_as(
+    let max_position: Option<i32> = sqlx::query_scalar(
         "SELECT MAX(position) FROM custom_gradebook_columns WHERE course_id = $1",
     )
     .bind(course_id)
-    .fetch_optional(pool)
+    .fetch_one(pool)
     .await?;
-    Ok(row.and_then(|(position,)| position).unwrap_or(0) as i64 + 1)
+    Ok(i64::from(max_position.unwrap_or(0)) + 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -1160,7 +1153,8 @@ mod tests {
             "cannot use gradebook importer reserved names"
         );
 
-        let errors = validate_column(Some(&"x".repeat(256)), false);
+        let long_title = "x".repeat(256);
+        let errors = validate_column(Some(&long_title), false);
         assert_eq!(
             errors.get("title").unwrap()[0],
             "is too long (maximum is 255 characters)"
@@ -1192,7 +1186,14 @@ mod tests {
 
     #[test]
     fn the_reorder_ids_skip_the_invalid_and_the_repeated_ones() {
-        let order = vec![json!(3), json!("1"), json!(0), json!(-2), json!(3), json!("x")];
+        let order = vec![
+            json!(3),
+            json!("1"),
+            json!(0),
+            json!(-2),
+            json!(3),
+            json!("x"),
+        ];
         assert_eq!(dedup_ids(&order), vec![3, 1]);
     }
 

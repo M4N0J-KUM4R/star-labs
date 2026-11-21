@@ -472,8 +472,8 @@ fn page_bounds(
 ) -> (i64, i64) {
     let per_page = per_page
         .or(limit)
-        .unwrap_or(crate::DEFAULT_PER_PAGE)
-        .clamp(1, crate::MAX_PER_PAGE);
+        .unwrap_or(crate::DEFAULT_LIMIT)
+        .clamp(1, crate::MAX_LIMIT);
     let page = page.unwrap_or(1).max(1);
     let offset = offset
         .unwrap_or_else(|| (page - 1).saturating_mul(per_page))

@@ -474,7 +474,7 @@ fn pace_type(pace: &PaceRow) -> &'static str {
 /// A student is off pace when a published assignment of the course has an
 /// active individual override with a due date in the past and the student has
 /// no submission for it.
-async fn overdue_user_ids(db: &PgPool, course_id: i64) -> Result<Vec<i64>, ApiError> {
+pub(crate) async fn overdue_user_ids(db: &PgPool, course_id: i64) -> Result<Vec<i64>, ApiError> {
     let rows: Vec<(Vec<i64>,)> = sqlx::query_as(
         "SELECT ao.student_ids \
          FROM assignment_overrides ao \

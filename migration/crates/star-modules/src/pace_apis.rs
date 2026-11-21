@@ -46,10 +46,10 @@
 //! enrollment, with a `student` member).
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, patch, post},
+    routing::{get, post},
     Json, Router,
 };
 use serde::Deserialize;
@@ -63,6 +63,7 @@ use crate::course_pacing::{
     course_paces_enabled, load_course, require_content_right, require_feature_flag, ContentRight,
     CourseRow,
 };
+use crate::pace_contexts::overdue_user_ids;
 
 /// The context a pace belongs to.
 #[derive(Debug, Clone, Copy)]
