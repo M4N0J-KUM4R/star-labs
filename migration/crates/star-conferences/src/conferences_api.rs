@@ -835,7 +835,9 @@ async fn can_create_conferences(
             let Some((Some(course_id),)) = course else {
                 return Ok(false);
             };
-            can_create_conferences(db, auth, Context::Course(course_id)).await
+            // Box the recursive Group → Course delegation (E0733: async
+            // recursion requires boxing).
+            Box::pin(can_create_conferences(db, auth, Context::Course(course_id))).await
         }
     }
 }
@@ -1174,7 +1176,7 @@ fn api_conference_json(row: &ConferenceRow, participant_ids: &[i64], base: &str)
         "description": row.description,
         "conference_type": row.conference_type,
         "duration": row.duration.map(|duration| duration as i64),
-        "started_at": row.started_at,
+        "started_at": row.start_at,
         "ended_at": row.ended_at,
         "conference_key": row.conference_key,
         "context_type": row.context_type,
@@ -1199,7 +1201,7 @@ fn model_conference_json(row: &ConferenceRow, participant_ids: &[i64], base: &st
         "description": row.description,
         "conference_type": row.conference_type,
         "duration": row.duration,
-        "started_at": row.started_at,
+        "started_at": row.start_at,
         "ended_at": row.ended_at,
         "user_ids": participant_ids,
         "context_id": row.context_id,
@@ -1482,7 +1484,7 @@ async fn create_conference(
     }
 
     let row = load_conference(state, conference_id).await?;
-    let participants = fetch_participants(state, &[row.clone()]).await?;
+    let participants = fetch_participants(&state.db, &[row.clone()]).await?;
     let ids = participants.get(&row.id).map(Vec::as_slice).unwrap_or(&[]);
     Ok(Json(model_conference_json(&row, ids, &base)).into_response())
 }
@@ -1811,7 +1813,7 @@ async fn member_ids(
                         .iter()
                         .filter(|(_, value)| scalar_text(value).as_deref() == Some("1"))
                         .filter_map(|(key, _)| key.parse::<i64>().ok())
-                        .filter(|id| **id > 0)
+                        .filter(|id| *id > 0)
                         .collect());
                 }
             }
@@ -1943,7 +1945,7 @@ async fn recording_ready_course(
         &state,
         Context::Course(course_id),
         conference_id,
-        raw_query.as_deref(),
+        raw_query.0.as_deref(),
         &body,
     )
     .await
@@ -1960,7 +1962,7 @@ async fn recording_ready_group(
         &state,
         Context::Group(group_id),
         conference_id,
-        raw_query.as_deref(),
+        raw_query.0.as_deref(),
         &body,
     )
     .await

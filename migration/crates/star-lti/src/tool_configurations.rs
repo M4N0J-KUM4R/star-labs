@@ -335,7 +335,7 @@ async fn require_manage_developer_keys(
     if auth.role == "admin" {
         return Ok(());
     }
-    let row: Option<(i64,)> =
+    let row: Option<(i32,)> =
         sqlx::query_as("SELECT 1 FROM developer_keys WHERE id = $1 AND user_id = $2 LIMIT 1")
             .bind(developer_key_id)
             .bind(auth.id)
@@ -353,7 +353,7 @@ async fn require_manage_lti(db: &PgPool, auth: &AuthUser, account_id: i64) -> Re
     if auth.role == "admin" {
         return Ok(());
     }
-    let row: Option<(i64,)> = sqlx::query_as(
+    let row: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM account_users \
          WHERE account_id = $1 AND user_id = $2 AND role <> 'student' LIMIT 1",
     )

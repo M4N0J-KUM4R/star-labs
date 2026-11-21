@@ -412,7 +412,7 @@ fn percent_encode(value: &str) -> String {
 
 /// Whether the nonce was used before.
 async fn nonce_used(state: &AppState, consumer_key: &str, nonce: &str) -> Result<bool, Response> {
-    let row: Option<(i64,)> =
+    let row: Option<(i32,)> =
         sqlx::query_as("SELECT 1 FROM lti_nonces WHERE consumer_key = $1 AND nonce = $2 LIMIT 1")
             .bind(consumer_key)
             .bind(nonce)

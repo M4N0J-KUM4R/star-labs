@@ -99,7 +99,7 @@ async fn load_deployment(
     }
 
     // The registration has to belong to the account.
-    let registration: Option<(i64,)> =
+    let registration: Option<(i32,)> =
         sqlx::query_as("SELECT 1 FROM lti_registrations WHERE id = $1 AND account_id = $2 LIMIT 1")
             .bind(registration_id)
             .bind(account_id)
@@ -126,7 +126,7 @@ async fn authorize(db: &PgPool, auth: &AuthUser, account_id: i64) -> Result<(), 
     if auth.role == "admin" {
         return Ok(());
     }
-    let row: Option<(i64,)> = sqlx::query_as(
+    let row: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM account_users \
          WHERE account_id = $1 AND user_id = $2 AND role <> 'student' LIMIT 1",
     )

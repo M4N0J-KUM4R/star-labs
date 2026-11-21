@@ -165,7 +165,7 @@ async fn allocate(
     let assignment = load_assignment(&state.db, course_id, assignment_id).await?;
 
     // Canvas only allocates for an assignment that is visible to the caller.
-    let visible: Option<(i64,)> = sqlx::query_as(
+    let visible: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM assignments a \
          JOIN enrollments e ON e.course_id = a.course_id AND e.user_id = $2 \
          WHERE a.id = $1 AND e.workflow_state <> 'deleted' LIMIT 1",

@@ -39,7 +39,7 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
-use crate::media_objects::{can_add_captions, can_read_context, find_context, MediaObjectRow};
+use crate::media_objects::{can_add_captions, can_read_context, MediaObjectRow};
 
 /// A `media_tracks` row.
 #[derive(Debug, sqlx::FromRow)]

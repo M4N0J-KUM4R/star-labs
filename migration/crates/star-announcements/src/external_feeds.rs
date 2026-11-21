@@ -277,7 +277,7 @@ async fn require_announcement_right(
     if auth.role == "admin" {
         return Ok(());
     }
-    let row: Option<(i64,)> = match context {
+    let row: Option<(i32,)> = match context {
         FeedContext::Course(course_id) => {
             sqlx::query_as(
                 "SELECT 1 FROM enrollments \

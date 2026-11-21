@@ -328,7 +328,7 @@ async fn require_view(db: &PgPool, auth: &AuthUser, account: &AccountRow) -> Res
     if auth.role == "admin" {
         return Ok(());
     }
-    let row: Option<(i64,)> = sqlx::query_as(
+    let row: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM account_users WHERE account_id = $1 AND user_id = $2 LIMIT 1",
     )
     .bind(account.id)
@@ -351,7 +351,7 @@ async fn require_manage(
     if auth.role == "admin" {
         return Ok(());
     }
-    let row: Option<(i64,)> = sqlx::query_as(
+    let row: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM account_users \
          WHERE account_id = $1 AND user_id = $2 AND role <> 'student' LIMIT 1",
     )

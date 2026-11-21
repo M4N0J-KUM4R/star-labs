@@ -673,7 +673,7 @@ async fn abort_all_pending_only_touches_the_imports_that_have_not_started() {
             .await
             .expect("read the batch");
     assert_eq!(pending_state, "aborted");
-    let pending_progress: i64 =
+    let pending_progress: i32 =
         sqlx::query_scalar("SELECT progress FROM sis_batches WHERE id = $1")
             .bind(pending)
             .fetch_one(&pool)

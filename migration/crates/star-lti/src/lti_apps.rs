@@ -244,7 +244,7 @@ async fn require_read(db: &PgPool, auth: &AuthUser, context: AppContext) -> Resu
 
 /// Canvas `Lti::LtiAppsController#user_in_account?`.
 async fn user_in_account(db: &PgPool, auth: &AuthUser, account_id: i64) -> Result<bool, ApiError> {
-    let membership: Option<(i64,)> = sqlx::query_as(
+    let membership: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM account_users \
          WHERE account_id = $1 AND user_id = $2 LIMIT 1",
     )
@@ -257,7 +257,7 @@ async fn user_in_account(db: &PgPool, auth: &AuthUser, account_id: i64) -> Resul
 
 /// Whether the user manages the course.
 async fn is_course_admin(db: &PgPool, user_id: i64, course_id: i64) -> Result<bool, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(
+    let row: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM enrollments \
          WHERE course_id = $1 AND user_id = $2 AND role = 'teacher' LIMIT 1",
     )
@@ -270,7 +270,7 @@ async fn is_course_admin(db: &PgPool, user_id: i64, course_id: i64) -> Result<bo
 
 /// Whether the user is a member of the course.
 async fn is_course_member(db: &PgPool, user_id: i64, course_id: i64) -> Result<bool, ApiError> {
-    let row: Option<(i64,)> =
+    let row: Option<(i32,)> =
         sqlx::query_as("SELECT 1 FROM enrollments WHERE course_id = $1 AND user_id = $2 LIMIT 1")
             .bind(course_id)
             .bind(user_id)
@@ -281,7 +281,7 @@ async fn is_course_member(db: &PgPool, user_id: i64, course_id: i64) -> Result<b
 
 /// Whether the user manages the account.
 async fn is_account_admin(db: &PgPool, user_id: i64, account_id: i64) -> Result<bool, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(
+    let row: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM account_users \
          WHERE account_id = $1 AND user_id = $2 AND role <> 'student' LIMIT 1",
     )
