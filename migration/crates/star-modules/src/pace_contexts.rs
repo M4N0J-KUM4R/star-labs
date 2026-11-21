@@ -380,13 +380,12 @@ struct PaceRow {
     course_id: i64,
     course_section_id: Option<i64>,
     user_id: Option<i64>,
-    published_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// The primary pace of the course (`course_paces.primary.take`).
 async fn primary_pace(db: &PgPool, course_id: i64) -> Result<Option<PaceRow>, ApiError> {
     let row: Option<PaceRow> = sqlx::query_as(
-        "SELECT id, course_id, course_section_id, user_id, published_at FROM course_paces \
+        "SELECT id, course_id, course_section_id, user_id FROM course_paces \
          WHERE course_id = $1 AND course_section_id IS NULL AND user_id IS NULL \
            AND workflow_state <> 'deleted' \
          ORDER BY id ASC LIMIT 1",
@@ -404,7 +403,7 @@ async fn section_pace(
     section_id: i64,
 ) -> Result<Option<PaceRow>, ApiError> {
     let row: Option<PaceRow> = sqlx::query_as(
-        "SELECT id, course_id, course_section_id, user_id, published_at FROM course_paces \
+        "SELECT id, course_id, course_section_id, user_id FROM course_paces \
          WHERE course_id = $1 AND course_section_id = $2 AND workflow_state <> 'deleted' \
          ORDER BY id ASC LIMIT 1",
     )
@@ -425,7 +424,7 @@ async fn enrollment_pace(
         return Ok(None);
     };
     let row: Option<PaceRow> = sqlx::query_as(
-        "SELECT id, course_id, course_section_id, user_id, published_at FROM course_paces \
+        "SELECT id, course_id, course_section_id, user_id FROM course_paces \
          WHERE course_id = $1 AND user_id = $2 AND workflow_state <> 'deleted' \
          ORDER BY id ASC LIMIT 1",
     )

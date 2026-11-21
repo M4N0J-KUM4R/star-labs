@@ -185,11 +185,10 @@ async fn student_bulk_pace_edit_view(
     );
     sql.push_str(" ORDER BY e.user_id, e.created_at DESC");
 
-    let mut students: Vec<(i64, i64, Option<i64>, String, chrono::DateTime<chrono::Utc>)> =
-        sqlx::query_as(&sql)
-            .bind(course_id)
-            .fetch_all(&state.db)
-            .await?;
+    let mut students: Vec<PaceStudent> = sqlx::query_as(&sql)
+        .bind(course_id)
+        .fetch_all(&state.db)
+        .await?;
 
     // The students that are off pace.
     let overdue = overdue_user_ids(&state.db, course.id).await?;
@@ -199,15 +198,15 @@ async fn student_bulk_pace_edit_view(
         .filter(|value| !value.is_empty())
     {
         if status == "on-pace" {
-            students.retain(|row| !overdue.contains(&row.1));
+            students.retain(|row| !overdue.contains(&row.user_id));
         } else {
-            students.retain(|row| overdue.contains(&row.1));
+            students.retain(|row| overdue.contains(&row.user_id));
         }
     }
 
     // Canvas sorts by the name of the user when `sort` is present.
     if params.sort.is_some() {
-        students.sort_by(|left, right| left.3.cmp(&right.3));
+        students.sort_by(|left, right| left.name.cmp(&right.name));
         if params.order.as_deref() == Some("desc") {
             students.reverse();
         }
@@ -235,13 +234,13 @@ async fn student_bulk_pace_edit_view(
         .skip(offset as usize)
         .take(per_page as usize)
         .map(|row| {
-            let enrollment_id = row.0;
-            let user_id = row.1;
-            let name = row.3.clone();
-            let created_at = row.4;
+            let enrollment_id = row.enrollment_id;
+            let user_id = row.user_id;
+            let name = row.name.clone();
+            let created_at = row.created_at;
             let student_sections: Vec<Value> = sections
                 .iter()
-                .filter(|section| Some(section.0) == row.2)
+                .filter(|section| Some(section.0) == row.course_section_id)
                 .map(|section| {
                     json!({
                         "id": section.0.to_string(),
@@ -734,7 +733,7 @@ async fn update_pace(db: &PgPool, pace: &PaceRow, body: Option<&Value>) -> Resul
     let Some(row) = row else {
         return Err(ApiError::NotFound);
     };
-    Ok(pace_json(db, &row, scope_of(&row)).await?)
+    pace_json(db, &row, scope_of(&row)).await
 }
 
 /// Canvas `CoursePacing::PaceService#delete_in_context`.
@@ -861,6 +860,31 @@ async fn pace_json(db: &PgPool, pace: &PaceRow, scope: PaceScope) -> Result<Valu
     }))
 }
 
+/// One student of the bulk pace view.
+#[derive(Debug, sqlx::FromRow)]
+struct PaceStudent {
+    enrollment_id: i64,
+    user_id: i64,
+    course_section_id: Option<i64>,
+    name: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// One row of the module items of a pace.
+#[derive(Debug, sqlx::FromRow)]
+struct PaceItemRow {
+    module_id: i64,
+    module_position: i32,
+    module_name: String,
+    duration: i32,
+    item_id: i64,
+    position: i32,
+    item_type: String,
+    assignment_id: i64,
+    title: Option<String>,
+    points_possible: Option<f64>,
+}
+
 /// Canvas `CoursePacing::PacePresenter#modules_json`.
 async fn modules_json(db: &PgPool, pace_id: i64, course_id: i64) -> Result<Vec<Value>, ApiError> {
     if pace_id == 0 {
@@ -868,18 +892,7 @@ async fn modules_json(db: &PgPool, pace_id: i64, course_id: i64) -> Result<Vec<V
     }
     // The module item of a pace points at a module item; the assignment it
     // carries is the `item_id` of an assignment module item.
-    let rows: Vec<(
-        i64,
-        i32,
-        String,
-        i32,
-        i64,
-        i32,
-        String,
-        i64,
-        Option<String>,
-        Option<f64>,
-    )> = sqlx::query_as(
+    let rows: Vec<PaceItemRow> = sqlx::query_as(
         "SELECT m.id, m.position, m.name, cp.duration, mi.id, mi.position, mi.item_type, \
                     mi.item_id, a.title, a.points_possible::float8 AS points_possible \
              FROM course_pace_module_items cp \
@@ -894,36 +907,29 @@ async fn modules_json(db: &PgPool, pace_id: i64, course_id: i64) -> Result<Vec<V
     .await?;
 
     let mut modules: Vec<(i64, String, i32, Vec<Value>)> = Vec::new();
-    for (
-        module_id,
-        module_position,
-        module_name,
-        duration,
-        item_id,
-        position,
-        item_type,
-        assignment_id,
-        title,
-        points_possible,
-    ) in rows
-    {
+    for row in rows {
         let item = json!({
-            "id": item_id,
-            "duration": duration,
+            "id": row.item_id,
+            "duration": row.duration,
             "course_pace_id": pace_id,
             "root_account_id": Value::Null,
-            "module_item_id": item_id,
-            "assignment_title": title,
-            "assignment_id": assignment_id,
-            "points_possible": round_if_whole(points_possible),
-            "assignment_link": format!("/courses/{course_id}/modules/items/{item_id}"),
-            "position": position,
-            "module_item_type": canvas_content_type(&item_type),
+            "module_item_id": row.item_id,
+            "assignment_title": row.title,
+            "assignment_id": row.assignment_id,
+            "points_possible": round_if_whole(row.points_possible),
+            "assignment_link": format!("/courses/{course_id}/modules/items/{}", row.item_id),
+            "position": row.position,
+            "module_item_type": canvas_content_type(&row.item_type),
             "published": true,
         });
-        match modules.iter_mut().find(|entry| entry.0 == module_id) {
+        match modules.iter_mut().find(|entry| entry.0 == row.module_id) {
             Some(entry) => entry.3.push(item),
-            None => modules.push((module_id, module_name, module_position, vec![item])),
+            None => modules.push((
+                row.module_id,
+                row.module_name,
+                row.module_position,
+                vec![item],
+            )),
         }
     }
 

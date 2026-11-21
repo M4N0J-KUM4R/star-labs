@@ -360,6 +360,16 @@ fn parse_enrollment_ids(body: &Value) -> Vec<i64> {
 }
 
 // ---------------------------------------------------------------------------
+// Row shapes
+// ---------------------------------------------------------------------------
+
+/// The start and the end date of an enrollment term.
+type TermDates = (Option<DateTime<Utc>>, Option<DateTime<Utc>>);
+
+/// The start date, the creation date and the section of an enrollment.
+type EnrollmentDates = (Option<DateTime<Utc>>, DateTime<Utc>, Option<i64>);
+
+// ---------------------------------------------------------------------------
 // Context, settings and permissions
 // ---------------------------------------------------------------------------
 
@@ -1282,16 +1292,15 @@ async fn valid_date_range(
     Option<DateTime<Utc>>,
     Option<String>,
 ) {
-    let term_dates: Option<(Option<DateTime<Utc>>, Option<DateTime<Utc>>)> =
-        match course.enrollment_term_id {
-            Some(term_id) => sqlx::query_as("SELECT start_at, end_at FROM terms WHERE id = $1")
-                .bind(term_id)
-                .fetch_optional(db)
-                .await
-                .ok()
-                .flatten(),
-            None => None,
-        };
+    let term_dates: Option<TermDates> = match course.enrollment_term_id {
+        Some(term_id) => sqlx::query_as("SELECT start_at, end_at FROM terms WHERE id = $1")
+            .bind(term_id)
+            .fetch_optional(db)
+            .await
+            .ok()
+            .flatten(),
+        None => None,
+    };
 
     let mut start = None;
     let mut start_context = None;
@@ -1353,7 +1362,7 @@ async fn pace_dates(
 
     // The latest student enrollment of the pace's user. Canvas falls back to
     // the enrollment's `created_at` when `start_at` is nil.
-    let enrollment: Option<(Option<DateTime<Utc>>, DateTime<Utc>, Option<i64>)> = match user_id {
+    let enrollment: Option<EnrollmentDates> = match user_id {
         Some(user_id) => sqlx::query_as(
             "SELECT start_at, created_at, course_section_id FROM enrollments \
              WHERE user_id = $1 AND course_id = $2 AND workflow_state = 'active' \
@@ -2390,7 +2399,7 @@ async fn bulk_create_enrollment_paces(
         .bind(user_id)
         .bind(root_account)
         .bind(params.exclude_weekends.unwrap_or(false))
-        .bind(&params.selected_days_to_skip.clone().unwrap_or_default())
+        .bind(params.selected_days_to_skip.clone().unwrap_or_default())
         .bind(params.hard_end_dates.unwrap_or(false))
         .bind(params.end_date)
         .bind(

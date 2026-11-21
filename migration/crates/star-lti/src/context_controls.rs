@@ -1903,12 +1903,13 @@ async fn control_path(
         return Ok(calculate_path_for_account_ids(&chain));
     }
     if let Some(course_id) = course_id {
-        let row: Option<(Option<i64>,)> =
-            sqlx::query_as::<_, (Option<i64>,)>("SELECT account_id FROM courses WHERE id = $1")
+        let account_id: Option<i64> =
+            sqlx::query_scalar("SELECT account_id FROM courses WHERE id = $1")
                 .bind(course_id)
                 .fetch_optional(pool)
-                .await?;
-        let Some((Some(account_id))) = row else {
+                .await?
+                .flatten();
+        let Some(account_id) = account_id else {
             return Ok(String::new());
         };
         let chain = account_chain_ids(pool, account_id).await?;
@@ -1962,12 +1963,13 @@ async fn build_anchor_control(
     let mut course_account_ids: HashMap<i64, i64> = HashMap::new();
     // A control has either an account or a course as its context, never both.
     if let Some(course_id) = draft.course_id {
-        let row: Option<(Option<i64>,)> =
-            sqlx::query_as::<_, (Option<i64>,)>("SELECT account_id FROM courses WHERE id = $1")
+        let account_id: Option<i64> =
+            sqlx::query_scalar("SELECT account_id FROM courses WHERE id = $1")
                 .bind(course_id)
                 .fetch_optional(pool)
-                .await?;
-        if let Some((Some(account_id))) = row {
+                .await?
+                .flatten();
+        if let Some(account_id) = account_id {
             course_account_ids.insert(course_id, account_id);
             chains.insert(account_id, account_chain_ids(pool, account_id).await?);
         }
