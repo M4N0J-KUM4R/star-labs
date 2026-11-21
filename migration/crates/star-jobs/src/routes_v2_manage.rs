@@ -92,10 +92,7 @@ pub async fn manage_strand(
 
     let sql = format!("UPDATE jobs SET {} WHERE strand = $1", sets.join(", "));
 
-    let updated = sqlx::query(&sql)
-        .bind(strand)
-        .execute(&state.db)
-        .await?;
+    let updated = sqlx::query(&sql).bind(strand).execute(&state.db).await?;
 
     Ok(Json(ManageResponse {
         status: "OK".to_string(),
