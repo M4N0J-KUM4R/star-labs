@@ -1238,3 +1238,76 @@ async fn lti_apps_listings() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// Issue #40 — list pagination (registrations_controller.rb#index): the
+// answer is a `{ total, data }` envelope without page metadata; `page` and
+// `per_page` slice `data`, `total` always counts every non-deleted
+// registration of the account.
+#[tokio::test]
+async fn list_paginates_total_and_data() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "root", None).await;
+    seed_account_admin(&pool, account, admin).await;
+
+    // Seventeen registrations — one page and a bit at per_page=15.
+    let mut ids = Vec::new();
+    for i in 0..17 {
+        let created = create_registration(
+            &server,
+            account,
+            admin,
+            &format!("{prefix}-tool-{i}"),
+            sample_configuration(),
+        )
+        .await;
+        ids.push(created["id"].as_i64().expect("id"));
+    }
+
+    let base = format!("/accounts/{account}/lti_registrations");
+
+    // Default page: 15 of 17.
+    let response = server
+        .get(&base)
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 200, "body: {}", response.text());
+    let list: Value = response.json();
+    assert_eq!(list["total"].as_i64(), Some(17));
+    assert_eq!(list["data"].as_array().map(Vec::len), Some(15));
+
+    // Page 2 with per_page 10: the last seven rows, newest first.
+    let response = server
+        .get(&format!("{base}?page=2&per_page=10"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 200, "body: {}", response.text());
+    let list: Value = response.json();
+    assert_eq!(list["total"].as_i64(), Some(17));
+    let data = list["data"].as_array().expect("data");
+    assert_eq!(data.len(), 7);
+    // ORDER BY created_at DESC, id DESC — page 2 holds ids 7..0 backwards.
+    let page_ids: Vec<i64> = data
+        .iter()
+        .map(|row| row["id"].as_i64().expect("row id"))
+        .collect();
+    let mut expected: Vec<i64> = ids[..7].to_vec();
+    expected.reverse();
+    assert_eq!(page_ids, expected);
+
+    // A page past the end is an empty data array, total unchanged.
+    let response = server
+        .get(&format!("{base}?page=9&per_page=10"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(response.status_code(), 200, "body: {}", response.text());
+    let list: Value = response.json();
+    assert_eq!(list["total"].as_i64(), Some(17));
+    assert_eq!(list["data"].as_array().map(Vec::len), Some(0));
+
+    cleanup(&pool, &prefix).await;
+}

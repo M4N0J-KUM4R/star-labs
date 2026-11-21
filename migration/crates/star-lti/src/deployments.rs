@@ -1,9 +1,11 @@
 //! lti/deployments — Canvas `Lti::DeploymentsController` parity.
 //!
-//! Routes (the crate router mounts this module under `/api/v1`):
-//! - `GET    /accounts/{accountId}/lti_registrations/{registrationId}/deployments/{id}`
-//! - `DELETE /accounts/{accountId}/lti_registrations/{registrationId}/deployments/{id}`
+//! Route (the crate router mounts this module under `/api/v1`):
 //! - `GET    /accounts/{accountId}/lti_registrations/{registrationId}/deployments/{id}/controls`
+//!
+//! The `show` and `destroy` actions of the controller are served by the
+//! scoped deployment handlers of `lib.rs` (`show_deployment_scoped` /
+//! `delete_deployment_scoped`), so only `list_controls` lives here.
 //!
 //! Canvas routes (config/routes.rb, the account API block):
 //!   get    "accounts/:account_id/lti_registrations/:registration_id/deployments/:id", action: :show
@@ -34,73 +36,30 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
-/// The columns of an `lti_deployments` row.
-const DEPLOYMENT_COLUMNS: &str = "id, registration_id, deployment_id, context_type, context_id, \
-     context_name, workflow_state";
+/// The columns of an `lti_deployments` row that the controls routes read.
+const DEPLOYMENT_COLUMNS: &str = "id";
 
 /// A deployment row.
 #[derive(Debug, sqlx::FromRow)]
 struct DeploymentRow {
     id: i64,
-    registration_id: i64,
-    deployment_id: String,
-    context_type: String,
-    context_id: i64,
-    context_name: Option<String>,
-    workflow_state: String,
 }
 
 /// Domain router for the Canvas deployment routes.
 pub fn router() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/accounts/{account_id}/lti_registrations/{registration_id}/deployments/{id}",
-            get(show).delete(destroy),
-        )
-        .route(
-            "/accounts/{account_id}/lti_registrations/{registration_id}/deployments/{id}/controls",
-            get(list_controls),
-        )
-}
-
-/// Canvas `Lti::DeploymentsController#show`.
-async fn show(
-    State(state): State<AppState>,
-    Path((account_id, registration_id, id)): Path<(i64, i64, i64)>,
-    auth: AuthUser,
-) -> Result<Response, ApiError> {
-    let row = load_deployment(&state.db, account_id, registration_id, id).await?;
-    authorize(&state.db, &auth, account_id).await?;
-    Ok(Json(deployment_json(&state.db, &row).await?).into_response())
-}
-
-/// Canvas `Lti::DeploymentsController#destroy`.
-async fn destroy(
-    State(state): State<AppState>,
-    Path((account_id, registration_id, id)): Path<(i64, i64, i64)>,
-    auth: AuthUser,
-) -> Result<Response, ApiError> {
-    let row = load_deployment(&state.db, account_id, registration_id, id).await?;
-    authorize(&state.db, &auth, account_id).await?;
-
-    sqlx::query(
-        "UPDATE lti_deployments SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    Router::new().route(
+        "/accounts/{account_id}/lti_registrations/{registration_id}/deployments/{deployment_id}/controls",
+        get(list_controls),
     )
-    .bind(row.id)
-    .execute(&state.db)
-    .await?;
-
-    // Canvas answers the deployment it just deleted.
-    Ok(Json(deployment_json(&state.db, &row).await?).into_response())
 }
 
 /// Canvas `Lti::DeploymentsController#list_controls`.
 async fn list_controls(
     State(state): State<AppState>,
-    Path((account_id, registration_id, id)): Path<(i64, i64, i64)>,
+    Path((account_id, registration_id, deployment_id)): Path<(i64, i64, i64)>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
-    let row = load_deployment(&state.db, account_id, registration_id, id).await?;
+    let row = load_deployment(&state.db, account_id, registration_id, deployment_id).await?;
     authorize(&state.db, &auth, account_id).await?;
 
     // The context controls of the deployment.
@@ -180,51 +139,6 @@ async fn authorize(db: &PgPool, auth: &AuthUser, account_id: i64) -> Result<(), 
     } else {
         Err(ApiError::Forbidden)
     }
-}
-
-/// Canvas `Api::V1::Lti::Deployment#lti_deployment_json`.
-async fn deployment_json(db: &PgPool, row: &DeploymentRow) -> Result<Value, ApiError> {
-    // The deployment carries the name of its context; fall back to the
-    // account or the course when the deployment does not name one.
-    let context_name = match row.context_name.clone() {
-        Some(name) => Some(name),
-        None => match row.context_type.as_str() {
-            "Course" => {
-                let name: Option<(String,)> =
-                    sqlx::query_as("SELECT name FROM courses WHERE id = $1")
-                        .bind(row.context_id)
-                        .fetch_optional(db)
-                        .await?;
-                name.map(|row| row.0)
-            }
-            _ => {
-                let name: Option<(String,)> =
-                    sqlx::query_as("SELECT name FROM accounts WHERE id = $1")
-                        .bind(row.context_id)
-                        .fetch_optional(db)
-                        .await?;
-                name.map(|row| row.0)
-            }
-        },
-    };
-    // Canvas reports a disabled deployment as disabled, a deleted one as
-    // deleted and every other state as active.
-    let workflow_state = match row.workflow_state.as_str() {
-        "deleted" => "deleted",
-        "disabled" => "disabled",
-        _ => "active",
-    };
-
-    Ok(json!({
-        "id": row.id,
-        "context_id": row.context_id,
-        "context_type": row.context_type,
-        "registration_id": row.registration_id,
-        "deployment_id": row.deployment_id,
-        "context_name": context_name,
-        "workflow_state": workflow_state,
-        "root_account_deployment": row.context_type == "Account",
-    }))
 }
 
 /// A row of the `lti_context_controls` table.

@@ -84,7 +84,7 @@ struct AsrRequest {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
-            "/media_objects/{media_object_id}/media_tracks",
+            "/media_objects/{id}/media_tracks",
             axum::routing::put(update_object_tracks),
         )
         .route(

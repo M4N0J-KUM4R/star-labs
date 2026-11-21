@@ -21,7 +21,7 @@ const JWT_SECRET: &str = "test-jwt-secret";
 fn run_prefix() -> String {
     use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(0);
-    let n = N.fetch_add(1, AtomicU32::Ordering::Relaxed);
+    let n = N.fetch_add(1, Ordering::Relaxed);
     format!(
         "tep-{}-{}-{}",
         std::process::id(),
@@ -98,7 +98,7 @@ async fn seed_sub_account(pool: &PgPool, prefix: &str, root_account_id: i64) -> 
 }
 
 /// An account user with a role that may manage the temporary enrollments.
-async fn seed_account_user(pool: &PgPool, prefix: &str, account_id: i64, user_id: i64) {
+async fn seed_account_user(pool: &PgPool, account_id: i64, user_id: i64) {
     sqlx::query(
         "INSERT INTO account_users (account_id, user_id, role) \
          VALUES ($1, $2, 'AccountAdmin') ON CONFLICT DO NOTHING",
@@ -146,7 +146,7 @@ async fn pairings_are_listed_created_and_deleted() {
     let root_account_id = seed_root_account(&pool, &prefix).await;
     let sub_account_id = seed_sub_account(&pool, &prefix, root_account_id).await;
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
-    seed_account_user(&pool, &prefix, root_account_id, admin).await;
+    seed_account_user(&pool, root_account_id, admin).await;
 
     let bearer = auth(admin, "admin");
 

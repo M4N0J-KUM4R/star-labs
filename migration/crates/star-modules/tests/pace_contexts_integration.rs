@@ -43,7 +43,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
 
     // The course_paces tables arrive with their own migration. Until then
     // the slice has nothing to talk to.
-    let tables: Option<(i64,)> = sqlx::query_as(
+    let tables: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM information_schema.tables \
          WHERE table_name IN ('course_paces', 'course_pace_module_items')",
     )

@@ -93,7 +93,7 @@ async fn index_section(
 ) -> Result<Response, ApiError> {
     let course_id = course_of_section(&state.db, section_id).await?;
     let assignment = load_assignment(&state.db, course_id, assignment_id).await?;
-    let requests = requests_for_assignment(&state.db, assignment.id, None).await?;
+    let requests = requests_for_assignment(&state.db, assignment, None).await?;
     let items = requests_json(&state.db, &requests, &auth, &params).await?;
     Ok(Json(items).into_response())
 }
@@ -107,8 +107,8 @@ async fn index_section_submission(
 ) -> Result<Response, ApiError> {
     let course_id = course_of_section(&state.db, section_id).await?;
     let assignment = load_assignment(&state.db, course_id, assignment_id).await?;
-    require_submission(&state.db, assignment.id, submission_id).await?;
-    let requests = requests_for_assignment(&state.db, assignment.id, Some(submission_id)).await?;
+    require_submission(&state.db, assignment, submission_id).await?;
+    let requests = requests_for_assignment(&state.db, assignment, Some(submission_id)).await?;
     let items = requests_json(&state.db, &requests, &auth, &params).await?;
     Ok(Json(items).into_response())
 }
@@ -122,8 +122,8 @@ async fn create_section(
 ) -> Result<Response, ApiError> {
     let course_id = course_of_section(&state.db, section_id).await?;
     let assignment = load_assignment(&state.db, course_id, assignment_id).await?;
-    require_submission(&state.db, assignment.id, submission_id).await?;
-    create_request(&state, &assignment, submission_id, &auth, body).await
+    require_submission(&state.db, assignment, submission_id).await?;
+    create_request(&state, submission_id, &auth, body).await
 }
 
 /// `DELETE /sections/:section_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews`.
@@ -134,7 +134,7 @@ async fn destroy_section(
 ) -> Result<Response, ApiError> {
     let course_id = course_of_section(&state.db, section_id).await?;
     let assignment = load_assignment(&state.db, course_id, assignment_id).await?;
-    require_submission(&state.db, assignment.id, submission_id).await?;
+    require_submission(&state.db, assignment, submission_id).await?;
 
     // Canvas deletes the review of the caller for the submission.
     let request: Option<(i64,)> = sqlx::query_as(
@@ -170,7 +170,7 @@ async fn allocate(
          JOIN enrollments e ON e.course_id = a.course_id AND e.user_id = $2 \
          WHERE a.id = $1 AND e.workflow_state <> 'deleted' LIMIT 1",
     )
-    .bind(assignment.id)
+    .bind(assignment)
     .bind(auth.id)
     .fetch_optional(&state.db)
     .await?;
@@ -186,7 +186,7 @@ async fn allocate(
                            WHERE ar.asset_id = s.id AND ar.assessor_id = $2) \
          ORDER BY s.id ASC",
     )
-    .bind(assignment.id)
+    .bind(assignment)
     .bind(auth.id)
     .fetch_all(&state.db)
     .await?;
@@ -308,7 +308,6 @@ async fn requests_by_ids(db: &PgPool, ids: &[i64]) -> Result<Vec<AssessmentReque
 /// The creation of a review request.
 async fn create_request(
     state: &AppState,
-    assignment_id: &i64,
     submission_id: i64,
     auth: &AuthUser,
     body: Option<Json<CreateRequest>>,

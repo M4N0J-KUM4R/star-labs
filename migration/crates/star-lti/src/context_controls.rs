@@ -1993,7 +1993,7 @@ async fn build_anchor_control(
     let deployment_ids = vec![draft.deployment_id];
     let anchors = build_anchor_controls(
         pool,
-        std::slice::from_ref(&draft),
+        std::slice::from_ref(draft),
         &anchor_context,
         &deployment_ids,
     )

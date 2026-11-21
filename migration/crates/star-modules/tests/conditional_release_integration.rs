@@ -44,7 +44,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
 
     star_db::MIGRATOR.run(&pool).await.expect("run migrations");
 
-    let tables: Option<(i64,)> = sqlx::query_as(
+    let tables: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM information_schema.tables \
          WHERE table_name IN ('conditional_release_rules', \
            'conditional_release_scoring_ranges', \
@@ -831,7 +831,7 @@ async fn a_scoring_range_the_request_does_not_mention_is_destroyed() {
     let rule: Value = resp.json();
     let rule_id = rule["id"].as_i64().expect("the rule id");
     let ranges = rule["scoring_ranges"].as_array().expect("the ranges");
-    assert_eq!(ranges.len(), 2, "body: {body}");
+    assert_eq!(ranges.len(), 2, "rule: {rule}");
     let second_range_id = ranges[1]["id"].as_i64().expect("the range id");
 
     // Only the second range is sent, so the first one is destroyed.

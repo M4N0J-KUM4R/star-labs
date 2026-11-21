@@ -65,7 +65,10 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
-mod registrations;
+mod ags_auth;
+mod ags_results;
+mod ags_scores;
+mod authentication;
 
 mod context_controls;
 mod deployments;
@@ -77,9 +80,18 @@ mod subscriptions;
 mod tool_configurations;
 
 mod data_services;
+mod deep_linking;
 mod dynamic_registration;
 mod external_tools;
+pub mod launch_cache;
 mod line_items;
+mod lti_authorization;
+mod nrps;
+
+/// Issue #95 — the opaque per-user LTI login_hint (Canvas
+/// `Lti::V1p1::Asset.opaque_identifier_for`), exposed so launch-flow callers
+/// and tests can construct hints the platform will accept.
+pub use authentication::opaque_login_hint;
 mod support_helpers;
 mod tool_proxy;
 mod tool_setting;
@@ -652,15 +664,6 @@ fn resolve_workflow_state(value: Option<&str>) -> Result<(&'static str, &'static
 /// Build the LTI router (mounted under `/api/v1` by star-http).
 pub fn router() -> Router<AppState> {
     Router::new()
-        .merge(registrations::router())
-        .merge(lti_apps::router())
-        .merge(context_controls::router())
-        .merge(deployments::router())
-        .merge(originality_reports::router())
-        // The LTI 1.1 outcome and analytics services.
-        .merge(lti_api::router())
-        .merge(resource_links::router())
-        .merge(tool_configurations::router())
         .route(
             "/accounts/{account_id}/lti_registrations",
             get(list_registrations).post(create_registration),
@@ -755,6 +758,16 @@ pub fn router() -> Router<AppState> {
         .merge(data_services::router())
         .merge(tool_proxy::router())
         .merge(support_helpers::router())
+        // Issue #95 — LTI resource links API (resource_links_controller.rb),
+        // served under /api/v1 like the other course-scoped routes.
+        .merge(resource_links::router())
+        // The originality reports, the LTI 1.1 outcome and analytics
+        // services, the tool configurations and the deployment controls of
+        // the batch-3 lane.
+        .merge(originality_reports::router())
+        .merge(lti_api::router())
+        .merge(tool_configurations::router())
+        .merge(deployments::router())
 }
 
 /// Router for the Canvas `/api/lti` family (LTI Advantage services).
@@ -762,6 +775,9 @@ pub fn router() -> Router<AppState> {
 /// Canvas serves these routes outside `/api/v1` (`ApiRouteSet.draw(self,
 /// "/api/lti")`), so the paths carry the `/api/lti` prefix and the router is
 /// mounted at the application root — see `star-http/src/main.rs`.
+/// Test/dev helper: mint an LTI Advantage service token (see `ags_auth`).
+pub use ags_auth::mint_service_token as mint_service_token_for_tests;
+
 pub fn lti_advantage_router() -> Router<AppState> {
     Router::new()
         .merge(dynamic_registration::advantage_router())
@@ -769,6 +785,18 @@ pub fn lti_advantage_router() -> Router<AppState> {
         .merge(tool_proxy::advantage_router())
         .merge(tool_setting::router())
         .merge(external_tools::advantage_router())
+        // Issue #94 — LTI AGS scores/results and NRPS memberships.
+        .merge(ags_scores::router())
+        .merge(ags_results::router())
+        .merge(nrps::router())
+        // Issue #95 — LTI 1.3 launch flows: OIDC login initiation and
+        // authentication request (authentication_controller.rb), the LTI 2
+        // authorization server (authorization_controller.rb) and the deep
+        // linking content selection (deep_linking_controller.rb, served at
+        // the root like Canvas' default route set).
+        .merge(authentication::advantage_router())
+        .merge(lti_authorization::advantage_router())
+        .merge(deep_linking::advantage_router())
         // The webhook subscriptions of a tool proxy.
         .merge(subscriptions::router())
 }

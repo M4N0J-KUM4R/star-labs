@@ -18,7 +18,6 @@ use std::collections::BTreeMap;
 
 pub mod users_api;
 
-mod tokens;
 
 // --------------------------------------------------------------------------
 // Domain types
@@ -844,7 +843,6 @@ fn parse_dashboard_position(value: &serde_json::Value) -> Option<i64> {
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(users_api::router())
-        .merge(tokens::router())
         .route("/users", get(list_users))
         .route("/users/self", get(get_self))
         .route(
