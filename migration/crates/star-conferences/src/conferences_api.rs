@@ -1811,7 +1811,7 @@ async fn member_ids(
                         .iter()
                         .filter(|(_, value)| scalar_text(value).as_deref() == Some("1"))
                         .filter_map(|(key, _)| key.parse::<i64>().ok())
-                        .filter(|id| *id > 0)
+                        .filter(|id| **id > 0)
                         .collect());
                 }
             }

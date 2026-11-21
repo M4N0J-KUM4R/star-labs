@@ -323,6 +323,14 @@ async fn cleanup(pool: &PgPool, fixture: &Fixture) {
         .execute(pool)
         .await
         .expect("cleanup jobs");
+    sqlx::query(
+        "DELETE FROM attachments WHERE context_type = 'OutcomeImport' AND context_id IN ($1, $2)",
+    )
+    .bind(fixture.course_id)
+    .bind(fixture.account_id)
+    .execute(pool)
+    .await
+    .expect("cleanup attachments");
     sqlx::query("DELETE FROM enrollments WHERE course_id = $1")
         .bind(fixture.course_id)
         .execute(pool)
@@ -1101,13 +1109,35 @@ async fn assign_outcome_order_rejects_an_outcome_of_another_course() {
     cleanup(&app.pool, &fixture).await;
 }
 
+/// The `outcomes_rollup_propagation` feature flag drives the whole endpoint,
+/// so both halves live in one test to keep them from racing over the shared
+/// flag row.
 #[tokio::test]
-async fn enqueue_outcome_rollup_calculation_is_a_no_op_while_the_flag_is_off() {
+async fn enqueue_outcome_rollup_calculation_honours_the_feature_flag() {
     let Some(app) = setup().await else {
         return;
     };
     let prefix = run_prefix();
     let fixture = seed(&app.pool, &prefix).await;
+
+    let site_admin: i64 = sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id LIMIT 1",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .expect("the site admin account");
+
+    // The flag is off by default: the endpoint answers `204 No Content`.
+    sqlx::query(
+        "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state)
+         VALUES ('Account', $1, 'outcomes_rollup_propagation', 'Rollup propagation', 'disabled')
+         ON CONFLICT (context_type, context_id, feature)
+         DO UPDATE SET state = 'disabled'",
+    )
+    .bind(site_admin)
+    .execute(&app.pool)
+    .await
+    .expect("disable the feature flag");
 
     let response = app
         .client
@@ -1127,28 +1157,11 @@ async fn enqueue_outcome_rollup_calculation_is_a_no_op_while_the_flag_is_off() {
 
     assert_eq!(response.status(), 204);
 
-    cleanup(&app.pool, &fixture).await;
-}
-
-#[tokio::test]
-async fn enqueue_outcome_rollup_calculation_requires_the_course_and_the_student() {
-    let Some(app) = setup().await else {
-        return;
-    };
-    let prefix = run_prefix();
-    let fixture = seed(&app.pool, &prefix).await;
-
-    let site_admin: i64 = sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id LIMIT 1",
-    )
-    .fetch_one(&app.pool)
-    .await
-    .expect("the site admin account");
+    // With the flag on the endpoint validates its parameters.
     sqlx::query(
-        "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state)
-         VALUES ('Account', $1, 'outcomes_rollup_propagation', 'Rollup propagation', 'enabled')
-         ON CONFLICT (context_type, context_id, feature)
-         DO UPDATE SET state = 'enabled'",
+        "UPDATE feature_flags SET state = 'enabled'
+         WHERE context_type = 'Account' AND context_id = $1
+           AND feature = 'outcomes_rollup_propagation'",
     )
     .bind(site_admin)
     .execute(&app.pool)

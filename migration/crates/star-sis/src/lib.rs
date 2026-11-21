@@ -20,5 +20,7 @@ use star_common::AppState;
 /// (`specs/p5-rest-sis.md` §2) are merged here by the feature workers; the
 /// `Router::new()` base already gives unmounted paths the standard 404.
 pub fn router() -> Router<AppState> {
-    Router::new()
+    Router::new().merge(sis_imports_api::router())
 }
+
+mod sis_imports_api;
