@@ -999,19 +999,19 @@ async fn extract_auth_user(
         .strip_prefix("Bearer ")?;
     let mut validation = jsonwebtoken::Validation::default();
     validation.validate_aud = false;
-    let claims = jsonwebtoken::decode::<star_common::Claims>(
+    let data = jsonwebtoken::decode::<star_common::Claims>(
         token,
         &jsonwebtoken::DecodingKey::from_secret(state.jwt_secret.as_bytes()),
         &validation,
     )
     .ok()?;
     let (role,): (String,) = sqlx::query_as("SELECT role FROM users WHERE id = $1")
-        .bind(claims.sub)
+        .bind(data.claims.sub)
         .fetch_one(&state.db)
         .await
         .ok()?;
     Some(star_auth::AuthUser {
-        id: claims.sub,
+        id: data.claims.sub,
         role,
     })
 }
