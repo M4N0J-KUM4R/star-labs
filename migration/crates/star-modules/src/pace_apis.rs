@@ -52,6 +52,7 @@ use axum::{
     routing::{delete, get, patch, post},
     Json, Router,
 };
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
@@ -120,6 +121,158 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/student_enrollments/{studentEnrollmentId}/paces",
             post(create_enrollment_pace),
         )
+        .route(
+            "/courses/{courseId}/bulk_student_enrollments/student_bulk_pace_edit_view",
+            get(student_bulk_pace_edit_view),
+        )
+}
+
+/// The query parameters of the bulk pace edit view.
+#[derive(Debug, Default, Deserialize)]
+struct BulkViewQuery {
+    page: Option<i64>,
+    per_page: Option<i64>,
+    filter_section: Option<String>,
+    filter_pace_status: Option<String>,
+    search_term: Option<String>,
+    sort: Option<String>,
+    order: Option<String>,
+}
+
+/// Canvas `CoursePacing::BulkStudentEnrollmentPacesApiController#student_bulk_pace_edit_view`.
+async fn student_bulk_pace_edit_view(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Query(params): Query<BulkViewQuery>,
+) -> Result<Response, ApiError> {
+    let course = load_course(&state.db, course_id).await?;
+    require_feature_flag(&state.db, course.id).await?;
+    require_content_right(&state.db, &auth, course.id, ContentRight::Edit).await?;
+
+    let per_page = params.per_page.filter(|value| *value > 0).unwrap_or(10);
+    let page = params.page.filter(|value| *value > 0).unwrap_or(1);
+    let offset = (page - 1) * per_page;
+
+    // The active students of the course without an individual pace.
+    let mut sql = String::from(
+        "SELECT e.id, e.user_id, e.course_section_id, u.name, e.created_at \
+         FROM enrollments e JOIN users u ON u.id = e.user_id \
+         WHERE e.course_id = $1 AND e.workflow_state = 'active'",
+    );
+    if let Some(section) = params
+        .filter_section
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        sql.push_str(" AND e.course_section_id = $2");
+    }
+    if let Some(search_term) = params
+        .search_term
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        sql.push_str(" AND u.name ILIKE '");
+        sql.push_str(&search_term.replace('\'', "''"));
+        sql.push_str("%'");
+    }
+    // Canvas excludes the students that already have an individual pace.
+    sql.push_str(
+        " AND NOT EXISTS (SELECT 1 FROM course_paces cp \
+         WHERE cp.course_id = e.course_id AND cp.user_id = e.user_id \
+           AND cp.workflow_state = 'active')",
+    );
+    sql.push_str(" ORDER BY e.user_id, e.created_at DESC");
+
+    let mut students: Vec<(i64, i64, Option<i64>, String, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as(&sql)
+            .bind(course_id)
+            .fetch_all(&state.db)
+            .await?;
+
+    // The students that are off pace.
+    let overdue = overdue_user_ids(&state.db, course.id).await?;
+    if let Some(status) = params
+        .filter_pace_status
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        if status == "on-pace" {
+            students.retain(|row| !overdue.contains(&row.1));
+        } else {
+            students.retain(|row| overdue.contains(&row.1));
+        }
+    }
+
+    // Canvas sorts by the name of the user when `sort` is present.
+    if params.sort.is_some() {
+        students.sort_by(|left, right| left.3.cmp(&right.3));
+        if params.order.as_deref() == Some("desc") {
+            students.reverse();
+        }
+    }
+
+    let total_students = students.len() as i64;
+    let page_count = if per_page > 0 {
+        (total_students as f64 / per_page as f64).ceil() as i64
+    } else {
+        0
+    };
+
+    // The sections of the course.
+    let sections: Vec<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, course_id, name FROM course_sections \
+         WHERE course_id = $1 AND workflow_state = 'active' ORDER BY name ASC",
+    )
+    .bind(course_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    // The students of the page.
+    let paged = students
+        .iter()
+        .skip(offset as usize)
+        .take(per_page as usize)
+        .map(|row| {
+            let enrollment_id = row.0;
+            let user_id = row.1;
+            let name = row.3.clone();
+            let created_at = row.4;
+            let student_sections: Vec<Value> = sections
+                .iter()
+                .filter(|section| Some(section.0) == row.2)
+                .map(|section| {
+                    json!({
+                        "id": section.0.to_string(),
+                        "course_id": section.1.to_string(),
+                        "name": section.2,
+                    })
+                })
+                .collect();
+            json!({
+                "id": user_id.to_string(),
+                "name": name,
+                "paceStatus": if overdue.contains(&user_id) { "off-pace" } else { "on-pace" },
+                "enrollmentId": enrollment_id.to_string(),
+                "enrollmentDate": created_at.to_rfc3339(),
+                "sections": student_sections,
+            })
+        })
+        .collect::<Vec<Value>>();
+
+    Ok(Json(json!({
+        "students": paged,
+        "pages": page_count,
+        "sections": sections
+            .iter()
+            .map(|section| json!({
+                "id": section.0.to_string(),
+                "course_id": section.1.to_string(),
+                "name": section.2,
+            }))
+            .collect::<Vec<Value>>(),
+    }))
+    .into_response())
 }
 
 /// Canvas `CoursePacing::SectionPacesApiController#show`.
