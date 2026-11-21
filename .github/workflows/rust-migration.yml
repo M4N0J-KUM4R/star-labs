@@ -25,6 +25,7 @@ on:
       - 'migration/**'
       - 'orchestration/**'
       - 'tools/ci/**'
+      - 'browser-smoke/**'
       - '.github/workflows/rust-migration.yml'
   merge_group:
   workflow_dispatch:
@@ -118,6 +119,7 @@ jobs:
               -p star-assignments -p star-courses -p star-api -p star-common
               -p star-db -p star-http -p star-announcements -p star-media
               -p star-account-reports -p star-collaborations -p star-conferences
+              -p star-ui
           - shard: 2
             crates: >-
               -p star-notifications -p star-accounts -p star-enrollments

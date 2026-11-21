@@ -40,6 +40,7 @@ use std::collections::HashMap;
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::{IntoResponse, Response},
     routing::get,
     Json, Router,
 };
@@ -298,6 +299,10 @@ fn bad_request(message: &str) -> (StatusCode, Json<Value>) {
     (StatusCode::BAD_REQUEST, Json(json!({ "message": message })))
 }
 
+/// The outcome of a create: either the id of the new migration, or the
+/// Canvas-rendered error body that must be returned verbatim.
+type CreatedMigration = Result<i64, (StatusCode, Json<Value>)>;
+
 fn includes_audit_info(params: &HashMap<String, String>) -> bool {
     ["include", "include[]"].iter().any(|key| {
         params
@@ -540,7 +545,8 @@ async fn list_migrations(
         check_pre_processing_timeout(&state.db, row).await?;
     }
 
-    let include_audit = is_admin(&auth);
+    // Canvas includes audit_info for site admins or `?include=audit_info`.
+    let include_audit = is_admin(&auth) || includes_audit_info(&params);
     Ok(Json(Value::Array(
         rows.iter()
             .map(|row| migration_json(row, include_audit))
@@ -561,6 +567,34 @@ async fn create_migration(
     }
 
     let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
+    let id = match create_migration_for_context(
+        &state,
+        &auth,
+        MigrationContext::Course(course_id),
+        &payload,
+    )
+    .await?
+    {
+        Ok(id) => id,
+        Err(response) => return Ok(response),
+    };
+    let row = find_course_migration(&state.db, course_id, id).await?;
+    // Canvas renders the created migration as JSON with HTTP 200.
+    Ok((StatusCode::OK, Json(migration_json(&row, is_admin(&auth)))))
+}
+
+/// Create a content migration in any Canvas context.
+///
+/// Shared by the course, account, group and user variants of the create
+/// route: Canvas  only differs in the
+/// context it resolves.
+async fn create_migration_for_context(
+    state: &AppState,
+    auth: &AuthUser,
+    context: MigrationContext,
+    payload: &Value,
+) -> Result<CreatedMigration, ApiError> {
+    let course_id = context_course(&state.db, context).await?;
     let migration_type = payload
         .get("migration_type")
         .and_then(Value::as_str)
@@ -568,7 +602,7 @@ async fn create_migration(
         .unwrap_or("");
 
     let Some(plugin) = migrator(migration_type) else {
-        return Ok(bad_request("Invalid migration_type"));
+        return Ok(Err(bad_request("Invalid migration_type")));
     };
 
     let settings = payload.get("settings").and_then(Value::as_object);
@@ -588,28 +622,28 @@ async fn create_migration(
         && !object_present(settings, "file_url")
         && !object_present(settings, "content_export_id")
     {
-        return Ok(bad_request(
+        return Ok(Err(bad_request(
             "File upload, file_url, or content_export_id is required",
-        ));
+        )));
     }
 
     // Canvas::Migration::Validators::CourseCopyValidator.
     let mut source_course_id = None;
     if migration_type == "course_copy_importer" {
         let Some(source_id) = object_i64(settings, "source_course_id") else {
-            return Ok(bad_request("A course copy requires a source course."));
+            return Ok(Err(bad_request("A course copy requires a source course.")));
         };
         let source: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
             .bind(source_id)
             .fetch_optional(&state.db)
             .await?;
         if source.is_none() {
-            return Ok(bad_request("The source course was not found."));
+            return Ok(Err(bad_request("The source course was not found.")));
         }
-        if !manages_course(&state.db, &auth, source_id).await? {
-            return Ok(bad_request(
+        if !manages_course(&state.db, auth, source_id).await? {
+            return Ok(Err(bad_request(
                 "You are not allowed to copy the source course.",
-            ));
+            )));
         }
         source_course_id = Some(source_id);
     }
@@ -617,7 +651,9 @@ async fn create_migration(
     // Canvas::Migration::Validators::ZipImporterValidator.
     if migration_type == "zip_file_importer" {
         let Some(folder_id) = object_i64(settings, "folder_id") else {
-            return Ok(bad_request("A .zip upload requires a folder to upload to."));
+            return Ok(Err(bad_request(
+                "A .zip upload requires a folder to upload to.",
+            )));
         };
         let folder: Option<(i32,)> = sqlx::query_as(
             "SELECT 1 FROM folders \
@@ -629,9 +665,9 @@ async fn create_migration(
         .fetch_optional(&state.db)
         .await?;
         if folder.is_none() {
-            return Ok(bad_request(
+            return Ok(Err(bad_request(
                 "The specified folder couldn't be found in this course.",
-            ));
+            )));
         }
     }
 
@@ -651,13 +687,13 @@ async fn create_migration(
             None => None,
         };
         let Some((export_course_id, export_state)) = export else {
-            return Ok(bad_request("invalid content export"));
+            return Ok(Err(bad_request("invalid content export")));
         };
-        if export_course_id != Some(course_id) {
-            return Ok(bad_request("invalid content export"));
+        if export_course_id != course_id {
+            return Ok(Err(bad_request("invalid content export")));
         }
         if export_state != "exported" {
-            return Ok(bad_request("content export is incomplete"));
+            return Ok(Err(bad_request("content export is incomplete")));
         }
     }
 
@@ -671,8 +707,8 @@ async fn create_migration(
     }
 
     // Canvas `set_date_shift_options` (only persisted when enabled).
-    if let Some((status, json)) = merge_date_shift(&payload, &mut merged) {
-        return Ok((status, json));
+    if let Some((status, json)) = merge_date_shift(payload, &mut merged) {
+        return Ok(Err((status, json)));
     }
 
     let selective_import = truthy(payload.get("selective_import"));
@@ -713,12 +749,14 @@ async fn create_migration(
 
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO content_migrations \
-         (course_id, user_id, migration_type, workflow_state, migration_settings, \
-          source_course_id, attachment_name, attachment_size, started_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id",
+         (course_id, user_id, context_type, context_id, migration_type, workflow_state, \
+          migration_settings, source_course_id, attachment_name, attachment_size, started_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
     )
     .bind(course_id)
     .bind(auth.id)
+    .bind(context.type_name())
+    .bind(context.id())
     .bind(migration_type)
     .bind(workflow_state)
     .bind(migration_settings)
@@ -728,10 +766,7 @@ async fn create_migration(
     .bind(started_at)
     .fetch_one(&state.db)
     .await?;
-
-    let row = find_course_migration(&state.db, course_id, id).await?;
-    // Canvas renders the created migration as JSON with HTTP 200.
-    Ok((StatusCode::OK, Json(migration_json(&row, is_admin(&auth)))))
+    Ok(Ok(id))
 }
 
 /// GET /courses/{courseId}/content_migrations/{id} — Canvas `show`.
@@ -809,69 +844,7 @@ async fn update_course_migration(
     check_pre_processing_timeout(&state.db, &mut row).await?;
 
     let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
-
-    let mut merged = match parse_settings(&row.migration_settings) {
-        Value::Object(map) => map,
-        _ => Map::new(),
-    };
-    if let Some(settings) = payload.get("settings").and_then(Value::as_object) {
-        for (key, value) in settings {
-            merged.insert(key.clone(), value.clone());
-        }
-    }
-    if let Some((status, json)) = merge_date_shift(&payload, &mut merged) {
-        return Ok((status, json));
-    }
-
-    // Canvas `update_migration` selective-import / copy-options bookkeeping.
-    let select = payload
-        .get("select")
-        .filter(|value| value.is_object())
-        .filter(|_| row.migration_type == "course_copy_importer");
-    let copy = payload.get("copy").filter(|value| value.is_object());
-    if truthy(payload.get("selective_import")) {
-        merged.insert("import_immediately".to_string(), Value::Bool(false));
-    } else if let Some(select) = select {
-        merged.insert("copy_options".to_string(), select.clone());
-    } else if let Some(copy) = copy {
-        merged.insert("copy_options".to_string(), copy.clone());
-    } else {
-        merged.insert("import_immediately".to_string(), Value::Bool(true));
-    }
-
-    let pre_attachment = payload.get("pre_attachment").and_then(Value::as_object);
-    let attachment_name = pre_attachment
-        .and_then(|params| params.get("name"))
-        .and_then(json_string);
-    let attachment_size = pre_attachment
-        .and_then(|params| params.get("size"))
-        .and_then(json_i64);
-    let workflow_state = pre_attachment.map(|_| "pre_processing");
-
-    let migration_settings =
-        serde_json::to_string(&Value::Object(merged)).unwrap_or_else(|_| "{}".to_string());
-
-    sqlx::query(
-        "UPDATE content_migrations SET \
-            migration_settings = $1, \
-            attachment_name = COALESCE($2, attachment_name), \
-            attachment_size = COALESCE($3, attachment_size), \
-            workflow_state = COALESCE($4, workflow_state), \
-            started_at = CASE WHEN $4::text IS NULL THEN started_at ELSE now() END, \
-            updated_at = now() \
-         WHERE id = $5",
-    )
-    .bind(migration_settings)
-    .bind(attachment_name.as_deref())
-    .bind(attachment_size)
-    .bind(workflow_state)
-    .bind(row.id)
-    .execute(&state.db)
-    .await?;
-
-    let row = find_course_migration(&state.db, course_id, row.id).await?;
-    // Canvas renders the updated migration as JSON with HTTP 200.
-    Ok((StatusCode::OK, Json(migration_json(&row, is_admin(&auth)))))
+    apply_migration_update(&state, &auth, row, payload).await
 }
 
 // ---------------------------------------------------------------------------
@@ -967,9 +940,20 @@ async fn selective_data(
     }
 
     let row = find_course_migration(&state.db, course_id, id).await?;
-    // Course copies enumerate the source course; everything else the target.
-    let source_course_id = row.source_course_id.unwrap_or(course_id);
     let base_url = format!("/api/v1/courses/{course_id}/content_migrations/{id}/selective_data");
+    selective_data_for(&state, Some(course_id), base_url, row, &params).await
+}
+
+/// The shared body of the selective import listing.
+async fn selective_data_for(
+    state: &AppState,
+    course_id: Option<i64>,
+    base_url: String,
+    row: ContentMigrationRow,
+    params: &HashMap<String, String>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    // Course copies enumerate the source course; everything else the target.
+    let source_course_id = row.source_course_id.or(course_id);
     let requested = params
         .get("type")
         .map(|value| value.trim())
@@ -1033,6 +1017,697 @@ async fn selective_data(
 }
 
 // ---------------------------------------------------------------------------
+// Account, group and user contexts
+//
+// Canvas `ContentMigration` belongs to a polymorphic context
+// (`belongs_to :context, polymorphic: [:course, :account, :group, { context_user: "User" }]`)
+// and `ContentMigrationsController` serves the same actions for each of them.
+// The port stored the context in `course_id` alone, so the account, group and
+// user variants were missing; migration 0217 added `context_type` and
+// `context_id` for that.
+// ---------------------------------------------------------------------------
+
+/// The Canvas context a content migration belongs to.
+#[derive(Debug, Clone, Copy)]
+enum MigrationContext {
+    Course(i64),
+    Account(i64),
+    Group(i64),
+    User(i64),
+}
+
+impl MigrationContext {
+    /// The `context_type` Canvas stores.
+    fn type_name(self) -> &'static str {
+        match self {
+            MigrationContext::Course(_) => "Course",
+            MigrationContext::Account(_) => "Account",
+            MigrationContext::Group(_) => "Group",
+            MigrationContext::User(_) => "User",
+        }
+    }
+
+    fn id(self) -> i64 {
+        match self {
+            MigrationContext::Course(id)
+            | MigrationContext::Account(id)
+            | MigrationContext::Group(id)
+            | MigrationContext::User(id) => id,
+        }
+    }
+}
+
+/// Canvas `require_context`: the context has to exist.
+async fn context_exists(db: &PgPool, context: MigrationContext) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = match context {
+        MigrationContext::Course(id) => {
+            sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+                .bind(id)
+                .fetch_optional(db)
+                .await?
+        }
+        MigrationContext::Account(id) => {
+            sqlx::query_as("SELECT 1 FROM accounts WHERE id = $1")
+                .bind(id)
+                .fetch_optional(db)
+                .await?
+        }
+        MigrationContext::Group(id) => {
+            sqlx::query_as("SELECT 1 FROM groups WHERE id = $1")
+                .bind(id)
+                .fetch_optional(db)
+                .await?
+        }
+        MigrationContext::User(id) => {
+            sqlx::query_as("SELECT 1 FROM users WHERE id = $1")
+                .bind(id)
+                .fetch_optional(db)
+                .await?
+        }
+    };
+    Ok(row.is_some())
+}
+
+/// Canvas `authorized_action(@context, @current_user, :manage_course_content)`
+/// for each context type.
+async fn manages_context(
+    db: &PgPool,
+    auth: &AuthUser,
+    context: MigrationContext,
+) -> Result<bool, ApiError> {
+    if is_admin(auth) {
+        return Ok(true);
+    }
+    match context {
+        MigrationContext::Course(course_id) => manages_course(db, auth, course_id).await,
+        MigrationContext::Account(account_id) => {
+            let row: Option<(i32,)> = sqlx::query_as(
+                "SELECT 1 FROM account_users WHERE user_id = $1 AND account_id = $2 LIMIT 1",
+            )
+            .bind(auth.id)
+            .bind(account_id)
+            .fetch_optional(db)
+            .await?;
+            Ok(row.is_some())
+        }
+        MigrationContext::Group(group_id) => {
+            // A group member, or a teacher of the parent course.
+            let member: Option<(i32,)> = sqlx::query_as(
+                "SELECT 1 FROM group_memberships \
+                 WHERE group_id = $1 AND user_id = $2 AND workflow_state = 'accepted' LIMIT 1",
+            )
+            .bind(group_id)
+            .bind(auth.id)
+            .fetch_optional(db)
+            .await?;
+            if member.is_some() {
+                return Ok(true);
+            }
+            let group: Option<(Option<i64>,)> =
+                sqlx::query_as("SELECT course_id FROM groups WHERE id = $1")
+                    .bind(group_id)
+                    .fetch_optional(db)
+                    .await?;
+            match group {
+                Some((Some(course_id),)) => manages_course(db, auth, course_id).await,
+                _ => Ok(false),
+            }
+        }
+        MigrationContext::User(user_id) => Ok(auth.id == user_id),
+    }
+}
+
+/// Find a migration inside a context.
+async fn find_context_migration(
+    db: &PgPool,
+    context: MigrationContext,
+    id: i64,
+) -> Result<ContentMigrationRow, ApiError> {
+    let sql =
+        format!("{MIGRATION_SELECT} WHERE m.id = $1 AND m.context_type = $2 AND m.context_id = $3");
+    sqlx::query_as(&sql)
+        .bind(id)
+        .bind(context.type_name())
+        .bind(context.id())
+        .fetch_optional(db)
+        .await?
+        .ok_or(ApiError::NotFound)
+}
+
+/// The course whose content a context's selective import enumerates.
+async fn context_course(db: &PgPool, context: MigrationContext) -> Result<Option<i64>, ApiError> {
+    match context {
+        MigrationContext::Course(course_id) => Ok(Some(course_id)),
+        MigrationContext::Group(group_id) => {
+            let group: Option<(Option<i64>,)> =
+                sqlx::query_as("SELECT course_id FROM groups WHERE id = $1")
+                    .bind(group_id)
+                    .fetch_optional(db)
+                    .await?;
+            Ok(group.and_then(|(course_id,)| course_id))
+        }
+        MigrationContext::Account(account_id) => {
+            let course: Option<(i64,)> =
+                sqlx::query_as("SELECT id FROM courses WHERE account_id = $1 ORDER BY id LIMIT 1")
+                    .bind(account_id)
+                    .fetch_optional(db)
+                    .await?;
+            Ok(course.map(|(id,)| id))
+        }
+        MigrationContext::User(user_id) => {
+            let course: Option<(i64,)> = sqlx::query_as(
+                "SELECT course_id FROM enrollments WHERE user_id = $1 ORDER BY course_id LIMIT 1",
+            )
+            .bind(user_id)
+            .fetch_optional(db)
+            .await?;
+            Ok(course.map(|(id,)| id))
+        }
+    }
+}
+
+/// GET /{contexts}/{id}/content_migrations — Canvas `index`.
+async fn list_context_migrations(
+    state: &AppState,
+    auth: &AuthUser,
+    context: MigrationContext,
+    params: &HashMap<String, String>,
+) -> Result<Json<Value>, ApiError> {
+    if !context_exists(&state.db, context).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !manages_context(&state.db, auth, context).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let (per_page, offset) = pagination(params);
+    let sql = format!(
+        "{MIGRATION_SELECT} WHERE m.context_type = $1 AND m.context_id = $2 \
+         ORDER BY m.id DESC LIMIT $3 OFFSET $4"
+    );
+    let mut rows: Vec<ContentMigrationRow> = sqlx::query_as(&sql)
+        .bind(context.type_name())
+        .bind(context.id())
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await?;
+
+    for row in rows.iter_mut() {
+        check_pre_processing_timeout(&state.db, row).await?;
+    }
+
+    let include_audit = is_admin(auth) || includes_audit_info(params);
+    Ok(Json(Value::Array(
+        rows.iter()
+            .map(|row| migration_json(row, include_audit))
+            .collect(),
+    )))
+}
+
+/// GET /{contexts}/{id}/content_migrations/migrators — Canvas
+/// `available_migrators`.
+async fn list_context_migrators(
+    state: &AppState,
+    auth: &AuthUser,
+    context: MigrationContext,
+) -> Result<Json<Value>, ApiError> {
+    if !context_exists(&state.db, context).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !manages_context(&state.db, auth, context).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(migrators_json()))
+}
+
+/// GET /{contexts}/{id}/content_migrations/{id} — Canvas `show`.
+async fn show_context_migration(
+    state: &AppState,
+    auth: &AuthUser,
+    context: MigrationContext,
+    id: i64,
+    params: &HashMap<String, String>,
+) -> Result<Json<Value>, ApiError> {
+    if !context_exists(&state.db, context).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !manages_context(&state.db, auth, context).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let mut row = find_context_migration(&state.db, context, id).await?;
+    check_pre_processing_timeout(&state.db, &mut row).await?;
+    let include_audit = is_admin(auth) || includes_audit_info(params);
+    Ok(Json(migration_json(&row, include_audit)))
+}
+
+/// PUT /{contexts}/{id}/content_migrations/{id} — Canvas `update`.
+async fn update_context_migration(
+    state: &AppState,
+    auth: &AuthUser,
+    context: MigrationContext,
+    id: i64,
+    payload: &Value,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !context_exists(&state.db, context).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !manages_context(&state.db, auth, context).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let mut row = find_context_migration(&state.db, context, id).await?;
+    check_pre_processing_timeout(&state.db, &mut row).await?;
+    apply_migration_update(state, auth, row, payload.clone()).await
+}
+
+/// GET /{contexts}/{id}/content_migrations/{id}/selective_data — Canvas
+/// `content_list`.
+async fn selective_data_context(
+    state: &AppState,
+    auth: &AuthUser,
+    context: MigrationContext,
+    id: i64,
+    params: &HashMap<String, String>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    if !context_exists(&state.db, context).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !manages_context(&state.db, auth, context).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let row = find_context_migration(&state.db, context, id).await?;
+    let course_id = context_course(&state.db, context).await?;
+    let base_url = format!(
+        "/api/v1/{}/{}/content_migrations/{}/selective_data",
+        match context {
+            MigrationContext::Course(_) => "courses",
+            MigrationContext::Account(_) => "accounts",
+            MigrationContext::Group(_) => "groups",
+            MigrationContext::User(_) => "users",
+        },
+        context.id(),
+        id
+    );
+    selective_data_for(state, course_id, base_url, row, params).await
+}
+
+/// The shared body of the migration update, used by the course and the
+/// account, group and user contexts.
+async fn apply_migration_update(
+    state: &AppState,
+    auth: &AuthUser,
+    row: ContentMigrationRow,
+    payload: Value,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let mut merged = match parse_settings(&row.migration_settings) {
+        Value::Object(map) => map,
+        _ => Map::new(),
+    };
+    if let Some(settings) = payload.get("settings").and_then(Value::as_object) {
+        for (key, value) in settings {
+            merged.insert(key.clone(), value.clone());
+        }
+    }
+    if let Some((status, json)) = merge_date_shift(&payload, &mut merged) {
+        return Ok((status, json));
+    }
+
+    // Canvas `update_migration` selective-import / copy-options bookkeeping.
+    let select = payload
+        .get("select")
+        .filter(|value| value.is_object())
+        .filter(|_| row.migration_type == "course_copy_importer");
+    let copy = payload.get("copy").filter(|value| value.is_object());
+    if truthy(payload.get("selective_import")) {
+        merged.insert("import_immediately".to_string(), Value::Bool(false));
+    } else if let Some(select) = select {
+        merged.insert("copy_options".to_string(), select.clone());
+    } else if let Some(copy) = copy {
+        merged.insert("copy_options".to_string(), copy.clone());
+    } else {
+        merged.insert("import_immediately".to_string(), Value::Bool(true));
+    }
+
+    let pre_attachment = payload.get("pre_attachment").and_then(Value::as_object);
+    let attachment_name = pre_attachment
+        .and_then(|params| params.get("name"))
+        .and_then(json_string);
+    let attachment_size = pre_attachment
+        .and_then(|params| params.get("size"))
+        .and_then(json_i64);
+    let workflow_state = pre_attachment.map(|_| "pre_processing");
+
+    let migration_settings =
+        serde_json::to_string(&Value::Object(merged)).unwrap_or_else(|_| "{}".to_string());
+
+    sqlx::query(
+        "UPDATE content_migrations SET \
+            migration_settings = $1, \
+            attachment_name = COALESCE($2, attachment_name), \
+            attachment_size = COALESCE($3, attachment_size), \
+            workflow_state = COALESCE($4, workflow_state), \
+            started_at = CASE WHEN $4::text IS NULL THEN started_at ELSE now() END, \
+            updated_at = now() \
+         WHERE id = $5",
+    )
+    .bind(migration_settings)
+    .bind(attachment_name.as_deref())
+    .bind(attachment_size)
+    .bind(workflow_state)
+    .bind(row.id)
+    .execute(&state.db)
+    .await?;
+
+    let row = find_migration(&state.db, row.id).await?;
+    Ok((StatusCode::OK, Json(migration_json(&row, is_admin(auth)))))
+}
+
+/// GET /accounts/{id}/content_migrations — Canvas `index` for a account context.
+async fn list_account_migrations(
+    State(state): State<AppState>,
+    Path(context_id): Path<i64>,
+    Query(params): Query<HashMap<String, String>>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    list_context_migrations(
+        &state,
+        &auth,
+        MigrationContext::Account(context_id),
+        &params,
+    )
+    .await
+}
+
+/// POST /accounts/{id}/content_migrations — Canvas `create` for a account context.
+async fn create_account_migration(
+    State(state): State<AppState>,
+    Path(context_id): Path<i64>,
+    auth: AuthUser,
+    body: Option<Json<Value>>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let context = MigrationContext::Account(context_id);
+    if !context_exists(&state.db, context).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !manages_context(&state.db, &auth, context).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
+    let id = match create_migration_for_context(&state, &auth, context, &payload).await? {
+        Ok(id) => id,
+        Err(response) => return Ok(response),
+    };
+    let row = find_context_migration(&state.db, context, id).await?;
+    Ok((StatusCode::OK, Json(migration_json(&row, is_admin(&auth)))))
+}
+
+/// GET /accounts/{id}/content_migrations/migrators — Canvas `available_migrators`.
+async fn list_account_migrators(
+    State(state): State<AppState>,
+    Path(context_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    list_context_migrators(&state, &auth, MigrationContext::Account(context_id)).await
+}
+
+/// GET /accounts/{id}/content_migrations/{id} — Canvas `show` for a account context.
+async fn show_account_migration(
+    State(state): State<AppState>,
+    Path((context_id, id)): Path<(i64, i64)>,
+    Query(params): Query<HashMap<String, String>>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    show_context_migration(
+        &state,
+        &auth,
+        MigrationContext::Account(context_id),
+        id,
+        &params,
+    )
+    .await
+}
+
+/// PUT /accounts/{id}/content_migrations/{id} — Canvas `update` for a account context.
+async fn update_account_migration(
+    State(state): State<AppState>,
+    Path((context_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    body: Option<Json<Value>>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
+    update_context_migration(
+        &state,
+        &auth,
+        MigrationContext::Account(context_id),
+        id,
+        &payload,
+    )
+    .await
+}
+
+/// GET /accounts/{id}/content_migrations/{id}/selective_data — Canvas `content_list`.
+async fn selective_account_data(
+    State(state): State<AppState>,
+    Path((context_id, id)): Path<(i64, i64)>,
+    Query(params): Query<HashMap<String, String>>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    selective_data_context(
+        &state,
+        &auth,
+        MigrationContext::Account(context_id),
+        id,
+        &params,
+    )
+    .await
+}
+
+/// GET /groups/{id}/content_migrations — Canvas `index` for a group context.
+async fn list_group_migrations(
+    State(state): State<AppState>,
+    Path(context_id): Path<i64>,
+    Query(params): Query<HashMap<String, String>>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    list_context_migrations(&state, &auth, MigrationContext::Group(context_id), &params).await
+}
+
+/// POST /groups/{id}/content_migrations — Canvas `create` for a group context.
+async fn create_group_migration(
+    State(state): State<AppState>,
+    Path(context_id): Path<i64>,
+    auth: AuthUser,
+    body: Option<Json<Value>>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let context = MigrationContext::Group(context_id);
+    if !context_exists(&state.db, context).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !manages_context(&state.db, &auth, context).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
+    let id = match create_migration_for_context(&state, &auth, context, &payload).await? {
+        Ok(id) => id,
+        Err(response) => return Ok(response),
+    };
+    let row = find_context_migration(&state.db, context, id).await?;
+    Ok((StatusCode::OK, Json(migration_json(&row, is_admin(&auth)))))
+}
+
+/// GET /groups/{id}/content_migrations/migrators — Canvas `available_migrators`.
+async fn list_group_migrators(
+    State(state): State<AppState>,
+    Path(context_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    list_context_migrators(&state, &auth, MigrationContext::Group(context_id)).await
+}
+
+/// GET /groups/{id}/content_migrations/{id} — Canvas `show` for a group context.
+async fn show_group_migration(
+    State(state): State<AppState>,
+    Path((context_id, id)): Path<(i64, i64)>,
+    Query(params): Query<HashMap<String, String>>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    show_context_migration(
+        &state,
+        &auth,
+        MigrationContext::Group(context_id),
+        id,
+        &params,
+    )
+    .await
+}
+
+/// PUT /groups/{id}/content_migrations/{id} — Canvas `update` for a group context.
+async fn update_group_migration(
+    State(state): State<AppState>,
+    Path((context_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    body: Option<Json<Value>>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
+    update_context_migration(
+        &state,
+        &auth,
+        MigrationContext::Group(context_id),
+        id,
+        &payload,
+    )
+    .await
+}
+
+/// GET /groups/{id}/content_migrations/{id}/selective_data — Canvas `content_list`.
+async fn selective_group_data(
+    State(state): State<AppState>,
+    Path((context_id, id)): Path<(i64, i64)>,
+    Query(params): Query<HashMap<String, String>>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    selective_data_context(
+        &state,
+        &auth,
+        MigrationContext::Group(context_id),
+        id,
+        &params,
+    )
+    .await
+}
+
+/// GET /users/{id}/content_migrations — Canvas `index` for a user context.
+async fn list_user_migrations(
+    State(state): State<AppState>,
+    Path(context_id): Path<i64>,
+    Query(params): Query<HashMap<String, String>>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    list_context_migrations(&state, &auth, MigrationContext::User(context_id), &params).await
+}
+
+/// POST /users/{id}/content_migrations — Canvas `create` for a user context.
+async fn create_user_migration(
+    State(state): State<AppState>,
+    Path(context_id): Path<i64>,
+    auth: AuthUser,
+    body: Option<Json<Value>>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let context = MigrationContext::User(context_id);
+    if !context_exists(&state.db, context).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !manages_context(&state.db, &auth, context).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
+    let id = match create_migration_for_context(&state, &auth, context, &payload).await? {
+        Ok(id) => id,
+        Err(response) => return Ok(response),
+    };
+    let row = find_context_migration(&state.db, context, id).await?;
+    Ok((StatusCode::OK, Json(migration_json(&row, is_admin(&auth)))))
+}
+
+/// GET /users/{id}/content_migrations/migrators — Canvas `available_migrators`.
+async fn list_user_migrators(
+    State(state): State<AppState>,
+    Path(context_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    list_context_migrators(&state, &auth, MigrationContext::User(context_id)).await
+}
+
+/// GET /users/{id}/content_migrations/{id} — Canvas `show` for a user context.
+async fn show_user_migration(
+    State(state): State<AppState>,
+    Path((context_id, id)): Path<(i64, i64)>,
+    Query(params): Query<HashMap<String, String>>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    show_context_migration(
+        &state,
+        &auth,
+        MigrationContext::User(context_id),
+        id,
+        &params,
+    )
+    .await
+}
+
+/// PUT /users/{id}/content_migrations/{id} — Canvas `update` for a user context.
+async fn update_user_migration(
+    State(state): State<AppState>,
+    Path((context_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    body: Option<Json<Value>>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    let payload = body.map(|Json(value)| value).unwrap_or(Value::Null);
+    update_context_migration(
+        &state,
+        &auth,
+        MigrationContext::User(context_id),
+        id,
+        &payload,
+    )
+    .await
+}
+
+/// GET /users/{id}/content_migrations/{id}/selective_data — Canvas `content_list`.
+async fn selective_user_data(
+    State(state): State<AppState>,
+    Path((context_id, id)): Path<(i64, i64)>,
+    Query(params): Query<HashMap<String, String>>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
+    selective_data_context(
+        &state,
+        &auth,
+        MigrationContext::User(context_id),
+        id,
+        &params,
+    )
+    .await
+}
+
+/// GET /courses/{courseId}/content_migrations/{id}/asset_id_mapping — Canvas
+/// `asset_id_mapping`.
+///
+/// The mapping is only available once the migration has been imported and it
+/// copied another course, so the two guards answer 400 before that.  The
+/// port stores no asset id mapping, so the successful answer carries the
+/// empty mapping Canvas would return for a copy without any mapped item.
+async fn asset_id_mapping(
+    State(state): State<AppState>,
+    Path((course_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    ensure_course(&state.db, course_id).await?;
+    if !manages_course(&state.db, &auth, course_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let row = find_course_migration(&state.db, course_id, id).await?;
+    if row.workflow_state != "imported" {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "Migration is incomplete",
+        ));
+    }
+    if row.source_course_id.is_none() {
+        return Ok(json_error(
+            StatusCode::BAD_REQUEST,
+            "Migration is not course copy or blueprint",
+        ));
+    }
+    Ok(Json(Value::Object(Map::new())).into_response())
+}
+
+/// Canvas renders the guard errors as a JSON body with a `message` key.
+fn json_error(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({ "message": message }))).into_response()
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -1057,6 +1732,58 @@ pub fn router() -> Router<AppState> {
         )
         .route("/content_migrations/migrators", get(list_migrators))
         .route("/content_migrations/{id}", get(show_migration))
+        .route(
+            "/courses/{courseId}/content_migrations/{id}/asset_id_mapping",
+            get(asset_id_mapping),
+        )
+        .route(
+            "/accounts/{contextId}/content_migrations",
+            get(list_account_migrations).post(create_account_migration),
+        )
+        .route(
+            "/accounts/{contextId}/content_migrations/migrators",
+            get(list_account_migrators),
+        )
+        .route(
+            "/accounts/{contextId}/content_migrations/{id}",
+            get(show_account_migration).put(update_account_migration),
+        )
+        .route(
+            "/accounts/{contextId}/content_migrations/{id}/selective_data",
+            get(selective_account_data),
+        )
+        .route(
+            "/groups/{contextId}/content_migrations",
+            get(list_group_migrations).post(create_group_migration),
+        )
+        .route(
+            "/groups/{contextId}/content_migrations/migrators",
+            get(list_group_migrators),
+        )
+        .route(
+            "/groups/{contextId}/content_migrations/{id}",
+            get(show_group_migration).put(update_group_migration),
+        )
+        .route(
+            "/groups/{contextId}/content_migrations/{id}/selective_data",
+            get(selective_group_data),
+        )
+        .route(
+            "/users/{contextId}/content_migrations",
+            get(list_user_migrations).post(create_user_migration),
+        )
+        .route(
+            "/users/{contextId}/content_migrations/migrators",
+            get(list_user_migrators),
+        )
+        .route(
+            "/users/{contextId}/content_migrations/{id}",
+            get(show_user_migration).put(update_user_migration),
+        )
+        .route(
+            "/users/{contextId}/content_migrations/{id}/selective_data",
+            get(selective_user_data),
+        )
 }
 
 // ---------------------------------------------------------------------------

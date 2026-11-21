@@ -1,0 +1,44 @@
+{% extends "layouts/authenticated.html" %}
+{# Conversation thread — the right pane of Canvas conversations#index for a
+   selected conversation: participants, message list (author names!), and
+   the add_message reply form (POST /conversations/{id}/add_message, PRG). #}
+{% block content %}
+  <div id="conversation_show" class="conversation-show" data-conversation-id="{{ conversation_id }}">
+    <header class="conversation-show__header panel">
+      <div class="panel__primary">
+        <h1 class="conversation-show__subject">{% if starred %}<span class="conversation-item__star" aria-label="Starred">★</span> {% endif %}{{ subject }}</h1>
+        <p class="conversation-show__participants">
+          <span class="screenreader-only">Participants: </span>{{ participant_names }}
+        </p>
+      </div>
+      <div class="panel__secondary">
+        <a href="/conversations" class="Button">Back to Inbox</a>
+      </div>
+    </header>
+
+    <div class="conversation-show__messages" id="conversation_messages">
+      {% if messages.is_empty() %}
+      <p class="conversation-show__empty">This conversation has no visible messages.</p>
+      {% endif %}
+      {% for message in messages %}
+      <div class="conversation-message{% if message.mine %} mine{% endif %}" id="message_{{ message.id }}">
+        <div class="conversation-message__header">
+          <span class="user_name">{{ message.author_name }}</span>
+          <span class="post_date">{{ message.created_at }}</span>
+        </div>
+        <div class="conversation-message__body">{{ message.body }}</div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div class="conversation-show__reply">
+      <h2 class="conversation-show__reply-title">Reply</h2>
+      <form id="conversation_reply_form" method="post" action="/conversations/{{ conversation_id }}/add_message">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <label class="screenreader-only" for="conversation_body">Message</label>
+        <textarea class="ic-Input reply-textarea" id="conversation_body" name="body" rows="5" required placeholder="Write a message…"></textarea>
+        <button type="submit" class="Button Button--primary">Send</button>
+      </form>
+    </div>
+  </div>
+{% endblock content %}

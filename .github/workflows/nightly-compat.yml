@@ -100,7 +100,7 @@ jobs:
           - shard: 1
             crates: >-
               -p star-assignments -p star-auth -p star-calendar -p star-features
-              -p star-grading-standards -p star-lti -p star-rubrics
+              -p star-grading-standards -p star-lti -p star-rubrics -p star-ui
           - shard: 2
             crates: >-
               -p star-accounts -p star-api -p star-common -p star-dashboard

@@ -24,7 +24,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
@@ -388,34 +388,34 @@ async fn get_grading_standard(
     Path(standard_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<GradingStandardResponse>, ApiError> {
-    let std = GradingStandardResponse::from_id(&state.db, standard_id)
+    // Fetch course_id for authz check before expanding entries.
+    let raw: Option<GradingStandard> = sqlx::query_as(
+        r#"SELECT id, course_id, title, workflow_state, created_at, updated_at
+           FROM grading_standards WHERE id = $1"#,
+    )
+    .bind(standard_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let std = raw.ok_or(ApiError::NotFound)?;
+    if std.workflow_state == "deleted" {
+        return Err(ApiError::NotFound);
+    }
+
+    if let Some(course_id) = std.course_id {
+        if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+            return Err(ApiError::Forbidden);
+        }
+    } else if !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    let std_resp = GradingStandardResponse::from_id(&state.db, standard_id)
         .await
         .map_err(|e| ApiError::Db(e.to_string()))?
         .ok_or(ApiError::NotFound)?;
 
-    // Course-level check: verify user has access to the associated course
-    let course_id = std.id;
-    if course_id > 0 {
-        // We need to check the course_id from the standard...
-        // Actually re-fetch to get course_id
-        let raw: Option<GradingStandard> = sqlx::query_as(
-            r#"SELECT id, course_id, title, workflow_state, created_at, updated_at
-               FROM grading_standards WHERE id = $1"#,
-        )
-        .bind(standard_id)
-        .fetch_optional(&state.db)
-        .await?;
-
-        if let Some(s) = raw {
-            if let Some(cid) = s.course_id {
-                if !check_enrolled_or_admin(&state.db, auth.id, cid, &auth).await? {
-                    return Err(ApiError::Forbidden);
-                }
-            }
-        }
-    }
-
-    Ok(Json(std))
+    Ok(Json(std_resp))
 }
 
 /// DELETE /grading_standards/{id} — soft-delete a grading standard
@@ -2095,6 +2095,674 @@ async fn delete_course_blackout_date(
 }
 
 // ---------------------------------------------------------------------------
+// Blackout dates: the per-item routes Canvas exposes next to the collection
+// (config/routes.rb, `scope(controller: :blackout_dates)`)
+// ---------------------------------------------------------------------------
+
+/// Canvas renders a new, unsaved blackout date for the context, so every
+/// field but the context is null.
+#[derive(Debug, Clone, Serialize)]
+pub struct BlackoutDateNewResponse {
+    pub id: Option<i64>,
+    pub context_id: i64,
+    pub context_type: String,
+    pub start_date: Option<DateTime<Utc>>,
+    pub end_date: Option<DateTime<Utc>>,
+    pub event_title: Option<String>,
+    pub description: Option<String>,
+    pub parent_grading_period_id: Option<i64>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+fn new_blackout_date(context_type: &str, context_id: i64) -> BlackoutDateNewResponse {
+    BlackoutDateNewResponse {
+        id: None,
+        context_id,
+        context_type: context_type.to_string(),
+        start_date: None,
+        end_date: None,
+        event_title: None,
+        description: None,
+        parent_grading_period_id: None,
+        created_at: None,
+        updated_at: None,
+    }
+}
+
+/// GET /courses/{courseId}/blackout_dates/new — Canvas `blackout_dates#new`.
+async fn new_course_blackout_date(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<BlackoutDateNewResponse>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(new_blackout_date("Course", course_id)))
+}
+
+/// GET /accounts/{accountId}/blackout_dates/new — Canvas `blackout_dates#new`.
+async fn new_account_blackout_date(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<BlackoutDateNewResponse>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(Json(new_blackout_date("Account", account_id)))
+}
+
+/// GET /courses/{courseId}/blackout_dates/{id} — Canvas `blackout_dates#show`.
+async fn show_course_blackout_date(
+    State(state): State<AppState>,
+    Path((course_id, blackout_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<BlackoutDateResponse>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let row = fetch_blackout_date(&state.db, blackout_id, "Course", course_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(BlackoutDateResponse::from(row)))
+}
+
+/// GET /accounts/{accountId}/blackout_dates/{id} — Canvas `blackout_dates#show`.
+async fn show_account_blackout_date(
+    State(state): State<AppState>,
+    Path((account_id, blackout_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<BlackoutDateResponse>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let row = fetch_blackout_date(&state.db, blackout_id, "Account", account_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(BlackoutDateResponse::from(row)))
+}
+
+/// PUT /courses/{courseId}/blackout_dates/{id} — Canvas `blackout_dates#update`.
+async fn update_course_blackout_date(
+    State(state): State<AppState>,
+    Path((course_id, blackout_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<BlackoutDateParams>,
+) -> Result<Json<BlackoutDateResponse>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if fetch_blackout_date(&state.db, blackout_id, "Course", course_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound);
+    }
+    let window = validate_blackout_window(&payload)?;
+    if let Some(gp_id) = window.parent_grading_period_id {
+        require_grading_period_exists(&state.db, gp_id).await?;
+    }
+    let updated =
+        update_blackout_date(&state.db, blackout_id, "Course", course_id, &window).await?;
+    Ok(Json(BlackoutDateResponse::from(updated)))
+}
+
+/// PUT /accounts/{accountId}/blackout_dates/{id} — Canvas `blackout_dates#update`.
+async fn update_account_blackout_date(
+    State(state): State<AppState>,
+    Path((account_id, blackout_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<BlackoutDateParams>,
+) -> Result<Json<BlackoutDateResponse>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if fetch_blackout_date(&state.db, blackout_id, "Account", account_id)
+        .await?
+        .is_none()
+    {
+        return Err(ApiError::NotFound);
+    }
+    let window = validate_blackout_window(&payload)?;
+    if let Some(gp_id) = window.parent_grading_period_id {
+        require_grading_period_exists(&state.db, gp_id).await?;
+    }
+    let updated =
+        update_blackout_date(&state.db, blackout_id, "Account", account_id, &window).await?;
+    Ok(Json(BlackoutDateResponse::from(updated)))
+}
+
+/// DELETE /accounts/{accountId}/blackout_dates/{id} — Canvas
+/// `blackout_dates#destroy`.
+async fn delete_account_blackout_date(
+    State(state): State<AppState>,
+    Path((account_id, blackout_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let row = fetch_blackout_date(&state.db, blackout_id, "Account", account_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    sqlx::query("DELETE FROM blackout_dates WHERE id = $1")
+        .bind(row.id)
+        .execute(&state.db)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// The UPDATE behind the two per-item blackout date routes.
+async fn update_blackout_date(
+    pool: &PgPool,
+    id: i64,
+    context_type: &str,
+    context_id: i64,
+    window: &BlackoutDateWindow,
+) -> Result<BlackoutDate, ApiError> {
+    let row = sqlx::query_as(
+        r#"UPDATE blackout_dates
+               SET title = $4,
+                   description = $5,
+                   start_date = $6,
+                   end_date = $7,
+                   parent_grading_period_id = $8,
+                   updated_at = now()
+             WHERE id = $1 AND context_type = $2 AND context_id = $3
+           RETURNING id, context_id, context_type, title, description, start_date, end_date,
+                     parent_grading_period_id, created_at, updated_at"#,
+    )
+    .bind(id)
+    .bind(context_type)
+    .bind(context_id)
+    .bind(&window.title)
+    .bind(&window.description)
+    .bind(window.start_date)
+    .bind(window.end_date)
+    .bind(window.parent_grading_period_id)
+    .fetch_one(pool)
+    .await?;
+    Ok(row)
+}
+
+// ---------------------------------------------------------------------------
+// Course and set scoped grading periods.
+//
+// Canvas mounts `GradingPeriodsController` under a course, an account and a
+// grading period set; the account routes already exist in this crate, the
+// course and set routes are added here.
+//
+// Canvas behavior mirrored here:
+// - the index of a course lists `GradingPeriod.for(course)` — the periods of
+//   the grading period group of the course — ordered by the start date, and
+//   the periods are read only when they come from an account.
+// - the show, update and delete routes are scoped to the course: a period of
+//   another course is a 404.
+// - the update route reads `params.require(:grading_periods).first`, so the
+//   body is the `{"grading_periods": [...]}` envelope.
+// - the batch update routes create the periods that do not exist yet and
+//   update the ones that do, and answer the periods without a pagination
+//   envelope.
+// - the destroy routes answer 204.
+// ---------------------------------------------------------------------------
+
+/// The grading period group of a course (Canvas
+/// `Course#grading_period_groups`).
+async fn course_period_group_id(pool: &PgPool, course_id: i64) -> Result<Option<i64>, ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM grading_period_groups \
+         WHERE course_id = $1 AND workflow_state = 'active' ORDER BY id ASC LIMIT 1",
+    )
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(id,)| id))
+}
+
+/// The course a grading period group belongs to.
+async fn course_id_for_group(pool: &PgPool, group_id: i64) -> Result<Option<i64>, ApiError> {
+    let row: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT course_id FROM grading_period_groups WHERE id = $1")
+            .bind(group_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.and_then(|(course_id,)| course_id))
+}
+
+/// The account a grading period group belongs to.
+async fn account_id_for_period_group(
+    pool: &PgPool,
+    group_id: i64,
+) -> Result<Option<i64>, ApiError> {
+    let row: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT account_id FROM grading_period_groups WHERE id = $1")
+            .bind(group_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.and_then(|(account_id,)| account_id))
+}
+
+/// 404 unless the course exists.
+async fn course_exists(pool: &PgPool, course_id: i64) -> Result<(), ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_optional(pool)
+        .await?;
+    row.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+/// The grading periods of a group.
+async fn periods_of_group(pool: &PgPool, group_id: i64) -> Result<Vec<GradingPeriod>, ApiError> {
+    Ok(sqlx::query_as(
+        r#"SELECT gp.id, gp.grading_period_group_id, gp.title, gp.start_date, gp.end_date,
+                  gp.close_date, gp.weight, gp.workflow_state, gp.created_at, gp.updated_at
+           FROM grading_periods gp
+           WHERE gp.grading_period_group_id = $1 AND gp.workflow_state = 'active'
+           ORDER BY gp.start_date ASC, gp.id ASC"#,
+    )
+    .bind(group_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// GET /courses/{courseId}/grading_periods — Canvas `index` for a course.
+async fn list_course_grading_periods(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<GradingPeriodsIndexResponse>, ApiError> {
+    course_exists(&state.db, course_id).await?;
+
+    // Canvas: authorized_action(@context, @current_user, :read)
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let can_manage = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+
+    let Some(group_id) = course_period_group_id(&state.db, course_id).await? else {
+        return Ok(Json(GradingPeriodsIndexResponse {
+            grading_periods: Vec::new(),
+            can_create_grading_periods: can_manage,
+            grading_periods_read_only: false,
+        }));
+    };
+
+    let rows = periods_of_group(&state.db, group_id).await?;
+
+    // The periods of an account are read only.
+    let read_only = account_id_for_period_group(&state.db, group_id)
+        .await?
+        .is_some();
+
+    let now = Utc::now();
+    let grading_periods = rows
+        .into_iter()
+        .map(|row| GradingPeriodResponse::from_row(row, can_manage, now))
+        .collect();
+
+    Ok(Json(GradingPeriodsIndexResponse {
+        grading_periods,
+        can_create_grading_periods: can_manage,
+        grading_periods_read_only: read_only,
+    }))
+}
+
+/// GET /courses/{courseId}/grading_periods/{id} — Canvas `show` for a course.
+async fn get_course_grading_period(
+    State(state): State<AppState>,
+    Path((course_id, period_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<GradingPeriodsResponse>, ApiError> {
+    course_exists(&state.db, course_id).await?;
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let period = fetch_grading_period(&state.db, period_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if course_id_for_group(&state.db, period.grading_period_group_id).await? != Some(course_id) {
+        return Err(ApiError::NotFound);
+    }
+
+    let can_manage = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
+    Ok(Json(GradingPeriodsResponse {
+        grading_periods: vec![GradingPeriodResponse::from_row(
+            period,
+            can_manage,
+            Utc::now(),
+        )],
+    }))
+}
+
+/// PUT /courses/{courseId}/grading_periods/{id} — Canvas `update` for a course.
+async fn update_course_grading_period(
+    State(state): State<AppState>,
+    Path((course_id, period_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<GradingPeriodPayload>,
+) -> Result<Json<GradingPeriodsResponse>, ApiError> {
+    course_exists(&state.db, course_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let period = fetch_grading_period(&state.db, period_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if course_id_for_group(&state.db, period.grading_period_group_id).await? != Some(course_id) {
+        return Err(ApiError::NotFound);
+    }
+
+    let params = payload.into_single()?;
+    let title = match &params.title {
+        Some(title) => {
+            let title = title.trim().to_string();
+            if title.is_empty() {
+                return Err(ApiError::Validation("title cannot be empty".into()));
+            }
+            title
+        }
+        None => period.title.clone(),
+    };
+    let start_date = match &params.start_date {
+        Some(value) => parse_grading_period_date(value)?,
+        None => period.start_date,
+    };
+    let end_date = match &params.end_date {
+        Some(value) => parse_grading_period_date(value)?,
+        None => period.end_date,
+    };
+    let close_date = match &params.close_date {
+        Some(value) => parse_grading_period_date(value)?,
+        None => period.close_date,
+    };
+    let weight = params.weight.or(period.weight);
+
+    let updated = write_grading_period(
+        &state, period, title, start_date, end_date, close_date, weight,
+    )
+    .await?;
+
+    Ok(Json(GradingPeriodsResponse {
+        grading_periods: vec![GradingPeriodResponse::from_row(updated, true, Utc::now())],
+    }))
+}
+
+/// DELETE /courses/{courseId}/grading_periods/{id} — Canvas `destroy` for a
+/// course.
+async fn delete_course_grading_period(
+    State(state): State<AppState>,
+    Path((course_id, period_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    course_exists(&state.db, course_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let period = fetch_grading_period(&state.db, period_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if course_id_for_group(&state.db, period.grading_period_group_id).await? != Some(course_id) {
+        return Err(ApiError::NotFound);
+    }
+
+    sqlx::query(
+        r#"UPDATE grading_periods SET workflow_state = 'deleted', updated_at = now()
+           WHERE id = $1"#,
+    )
+    .bind(period_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// DELETE /accounts/{accountId}/grading_periods/{id} — Canvas `destroy` in the
+/// account scope.
+async fn delete_account_grading_period(
+    State(state): State<AppState>,
+    Path((account_id, period_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    let period = fetch_grading_period(&state.db, period_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let group_account_id =
+        account_id_for_period_group(&state.db, period.grading_period_group_id).await?;
+    if group_account_id != Some(account_id) {
+        return Err(ApiError::NotFound);
+    }
+
+    if !can_manage_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    sqlx::query(
+        r#"UPDATE grading_periods SET workflow_state = 'deleted', updated_at = now()
+           WHERE id = $1"#,
+    )
+    .bind(period_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// PATCH /courses/{courseId}/grading_periods/batch_update — Canvas
+/// `course_batch_update`.
+async fn course_batch_update_grading_periods(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<GradingPeriodPayload>,
+) -> Result<Json<GradingPeriodsResponse>, ApiError> {
+    course_exists(&state.db, course_id).await?;
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let params = payload.into_periods();
+    if params.is_empty() {
+        return Err(ApiError::Validation(
+            "grading_periods cannot be empty".into(),
+        ));
+    }
+
+    let group_id = match course_period_group_id(&state.db, course_id).await? {
+        Some(group_id) => group_id,
+        None => {
+            ensure_account_group(&state.db, course_account_id(&state.db, course_id).await?).await?
+        }
+    };
+
+    let periods = batch_update_periods(&state, group_id, &params).await?;
+    Ok(Json(GradingPeriodsResponse {
+        grading_periods: periods
+            .into_iter()
+            .map(|row| GradingPeriodResponse::from_row(row, true, Utc::now()))
+            .collect(),
+    }))
+}
+
+/// PATCH /grading_period_sets/{setId}/grading_periods/batch_update — Canvas
+/// `batch_update` for a grading period set.
+async fn set_batch_update_grading_periods(
+    State(state): State<AppState>,
+    Path(set_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<GradingPeriodPayload>,
+) -> Result<Json<GradingPeriodsResponse>, ApiError> {
+    let account_id = account_id_for_group(&state.db, set_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if !can_manage_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let params = payload.into_periods();
+    if params.is_empty() {
+        return Err(ApiError::Validation(
+            "grading_periods cannot be empty".into(),
+        ));
+    }
+
+    let periods = batch_update_periods(&state, set_id, &params).await?;
+    Ok(Json(GradingPeriodsResponse {
+        grading_periods: periods
+            .into_iter()
+            .map(|row| GradingPeriodResponse::from_row(row, true, Utc::now()))
+            .collect(),
+    }))
+}
+
+/// The account of a course.
+async fn course_account_id(pool: &PgPool, course_id: i64) -> Result<i64, ApiError> {
+    let row: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+            .bind(course_id)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.and_then(|(account_id,)| account_id).unwrap_or(1))
+}
+
+/// Write one grading period.
+async fn write_grading_period(
+    state: &AppState,
+    period: GradingPeriod,
+    title: String,
+    start_date: DateTime<Utc>,
+    end_date: DateTime<Utc>,
+    close_date: DateTime<Utc>,
+    weight: Option<f64>,
+) -> Result<GradingPeriod, ApiError> {
+    let window = GradingPeriodWindow {
+        start_date,
+        end_date,
+        close_date,
+    };
+    validate_period_window(&window)?;
+
+    let account_id = account_id_for_group(&state.db, period.grading_period_group_id).await?;
+    if let Some(account_id) = account_id {
+        if has_overlapping_period(&state.db, account_id, Some(period.id), &window).await? {
+            return Err(ApiError::Validation(OVERLAP_MESSAGE.into()));
+        }
+    }
+
+    Ok(sqlx::query_as(
+        r#"UPDATE grading_periods
+           SET title = $2, start_date = $3, end_date = $4, close_date = $5,
+               weight = $6, updated_at = now()
+           WHERE id = $1
+           RETURNING id, grading_period_group_id, title, start_date, end_date, close_date,
+                     weight, workflow_state, created_at, updated_at"#,
+    )
+    .bind(period.id)
+    .bind(&title)
+    .bind(start_date)
+    .bind(end_date)
+    .bind(close_date)
+    .bind(weight)
+    .fetch_one(&state.db)
+    .await?)
+}
+
+/// Create or update the periods of a batch update.
+async fn batch_update_periods(
+    state: &AppState,
+    group_id: i64,
+    params: &[GradingPeriodParams],
+) -> Result<Vec<GradingPeriod>, ApiError> {
+    let existing = periods_of_group(&state.db, group_id).await?;
+
+    let mut periods = Vec::with_capacity(params.len());
+    for param in params {
+        let title = param.title.as_deref().map(str::trim).unwrap_or_default();
+        if title.is_empty() {
+            return Err(ApiError::Validation("title is required".into()));
+        }
+        let start_date = required_date(&param.start_date, "start_date")?;
+        let end_date = required_date(&param.end_date, "end_date")?;
+        let close_date = match &param.close_date {
+            Some(value) => parse_grading_period_date(value)?,
+            None => end_date,
+        };
+        let window = GradingPeriodWindow {
+            start_date,
+            end_date,
+            close_date,
+        };
+        validate_period_window(&window)?;
+
+        // A period with the same title is updated, a new one is created.
+        match existing
+            .iter()
+            .find(|period| period.title == title)
+            .cloned()
+        {
+            Some(period) => {
+                // Canvas `find_or_build_periods`: the close date of a period
+                // without one is its end date.
+                let weight = param.weight.or(period.weight);
+                periods.push(
+                    write_grading_period(
+                        state,
+                        period,
+                        title.to_string(),
+                        start_date,
+                        end_date,
+                        close_date,
+                        weight,
+                    )
+                    .await?,
+                );
+            }
+            None => {
+                let row: GradingPeriod = sqlx::query_as(
+                    r#"INSERT INTO grading_periods
+                       (grading_period_group_id, title, start_date, end_date, close_date, weight)
+                       VALUES ($1, $2, $3, $4, $5, $6)
+                       RETURNING id, grading_period_group_id, title, start_date, end_date,
+                                 close_date, weight, workflow_state, created_at, updated_at"#,
+                )
+                .bind(group_id)
+                .bind(title)
+                .bind(start_date)
+                .bind(end_date)
+                .bind(close_date)
+                .bind(param.weight)
+                .fetch_one(&state.db)
+                .await?;
+                periods.push(row);
+            }
+        }
+    }
+    Ok(periods)
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -2127,6 +2795,29 @@ pub fn router() -> Router<AppState> {
             "/accounts/{accountId}/grading_periods",
             post(create_account_grading_period),
         )
+        // Canvas GradingPeriodsController — the course and set scopes.
+        .route(
+            "/courses/{courseId}/grading_periods",
+            get(list_course_grading_periods),
+        )
+        .route(
+            "/courses/{courseId}/grading_periods/{id}",
+            get(get_course_grading_period)
+                .put(update_course_grading_period)
+                .delete(delete_course_grading_period),
+        )
+        .route(
+            "/courses/{courseId}/grading_periods/batch_update",
+            patch(course_batch_update_grading_periods),
+        )
+        .route(
+            "/accounts/{accountId}/grading_periods/{id}",
+            delete(delete_account_grading_period),
+        )
+        .route(
+            "/grading_period_sets/{setId}/grading_periods/batch_update",
+            patch(set_batch_update_grading_periods),
+        )
         .route("/grading_periods/{id}", get(get_grading_period))
         .route("/grading_periods/{id}", put(update_grading_period))
         .route("/grading_periods/{id}", delete(delete_grading_period))
@@ -2156,6 +2847,24 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/blackout_dates/{id}",
             delete(delete_course_blackout_date),
+        )
+        .route(
+            "/courses/{courseId}/blackout_dates/new",
+            get(new_course_blackout_date),
+        )
+        .route(
+            "/courses/{courseId}/blackout_dates/{id}",
+            get(show_course_blackout_date).put(update_course_blackout_date),
+        )
+        .route(
+            "/accounts/{accountId}/blackout_dates/new",
+            get(new_account_blackout_date),
+        )
+        .route(
+            "/accounts/{accountId}/blackout_dates/{id}",
+            get(show_account_blackout_date)
+                .put(update_account_blackout_date)
+                .delete(delete_account_blackout_date),
         )
         .route(
             "/accounts/{accountId}/blackout_dates",

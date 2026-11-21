@@ -1,0 +1,42 @@
+{% extends "layouts/course.html" %}
+{# Quiz index — Canvas quizzes#index analogue. Students see published quizzes
+   only (UI-layer filter; the REST list returns everything — documented
+   deviation); teachers get the "+ Quiz" link. #}
+{% block content %}
+  <div id="quizzes" class="quizzes">
+    <div class="header-bar">
+      <h1 class="quizzes-title">Quizzes</h1>
+      {% if is_teacher %}
+      <a id="new_quiz_link" class="btn btn-primary add-quiz" href="/courses/{{ course_id }}/quizzes/new">+ Quiz</a>
+      {% endif %}
+    </div>
+    {% if quizzes.is_empty() %}
+    <p class="no-quizzes">There are no quizzes in this course yet.</p>
+    {% endif %}
+    <table class=" quizzes-list" id="quizzes_index">
+      <thead>
+        <tr>
+          <th class="quiz-title">Quiz</th>
+          <th class="quiz-questions">Questions</th>
+          <th class="quiz-points">Points</th>
+          <th class="quiz-availability">Available</th>
+          <th class="quiz-published">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for quiz in quizzes %}
+        <tr class="quiz-row{% if !quiz.published %} unpublished_quiz{% endif %}{% if quiz.locked %} locked_quiz{% endif %}" id="quiz_row_{{ quiz.id }}">
+          <td class="quiz-title">
+            <a class="quiz-title-link" href="/courses/{{ course_id }}/quizzes/{{ quiz.id }}">{{ quiz.title }}</a>
+            {% if quiz.locked %}<span class="locked-badge" title="This quiz is locked by its availability dates">Locked</span>{% endif %}
+          </td>
+          <td class="quiz-questions">{{ quiz.question_count }}</td>
+          <td class="quiz-points">{{ quiz.points }}</td>
+          <td class="quiz-availability">{{ quiz.availability }}</td>
+          <td class="quiz-published">{% if quiz.published %}Published{% else %}Unpublished{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock content %}

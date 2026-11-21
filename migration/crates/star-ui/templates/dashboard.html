@@ -1,0 +1,36 @@
+{% extends "layouts/authenticated.html" %}
+{# Dashboard — Canvas users/user_dashboard + shared/dashboard_card: one
+   .ic-DashboardCard per course the dashboard_cards API returns. #}
+{% block content %}
+  <div id="DashboardPage">
+  <div id="dashboard" class="ic-dashboard-app">
+    <h1 class="screenreader-only">Dashboard</h1>
+    <div id="DashboardCard_Container" class="ic-DashboardCard_Container">
+      <div class="ic-DashboardCard__box">
+        {% for card in cards %}
+        <div class="ic-DashboardCard{% if !card.published %} ic-DashboardCard__unpublished{% endif %}" data-course-id="{{ card.id }}" data-asset-string="{{ card.asset_string }}">
+          <a href="{{ card.href }}" class="ic-DashboardCard__link">
+            <div class="ic-DashboardCard__header">
+              <span class="ic-DashboardCard__header-title">{{ card.short_name }}</span>
+              {% if !card.published %}
+              <span class="ic-DashboardCard__unpublished-badge">Unpublished</span>
+              {% endif %}
+            </div>
+            <div class="ic-DashboardCard__subheader">
+              <span class="ic-DashboardCard__course-code">{{ card.course_code }}</span>
+              {% if let Some(term) = card.term %}
+              <span class="ic-DashboardCard__term">{{ term }}</span>
+              {% endif %}
+            </div>
+          </a>
+          <div class="ic-DashboardCard__footer">
+            <span class="ic-DashboardCard__subtitle">{{ card.subtitle }}</span>
+            <span class="ic-DashboardCard__enrollment-type">{{ card.enrollment_type }}</span>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  </div>
+{% endblock content %}

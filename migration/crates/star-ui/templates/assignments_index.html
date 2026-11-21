@@ -1,0 +1,64 @@
+{% extends "layouts/course.html" %}
+{# Assignments index (issue #71) — Canvas assignments#index, server-rendered:
+   one bucket per assignment group (group position order), rows per
+   assignment with due date, points, submission state pill (students) and the
+   muted unpublished style (teachers only; students never receive
+   unpublished rows). There is no assignments.submission_types column in
+   star-db, so no submission-type icon is rendered (documented deviation). #}
+{% block content %}
+  <div id="assignments_index" class="assignment_index content_underline_links">
+    <div class="assignment-index-header">
+      <h1 class="assignment-index-title">Assignments</h1>
+      {% if is_teacher %}
+      <div class="assignment-index-actions">
+        <a id="add_assignment" class="btn btn-primary" href="/courses/{{ course_id }}/assignments/new">Add Assignment</a>
+        <a id="open_gradebook" class="btn" href="/courses/{{ course_id }}/gradebook">Gradebook</a>
+      </div>
+      {% endif %}
+    </div>
+    <p class="assignment-index-total">Total Points: <span class="total_points">{{ total_points }}</span></p>
+
+    <div class="item-groups">
+      {% for group in groups %}
+      <div class="item-group-condensed"{% if let Some(gid) = group.group_id %} data-group-id="{{ gid }}"{% endif %}>
+        <div class="ig-header">
+          <h2 class="ig-header-title">{{ group.name }}</h2>
+          <span class="ig-header-summary">{{ group.count_label }}</span>
+        </div>
+        <ul class="ig-list">
+          {% for a in group.assignments %}
+          <li class="ig-row{% if !a.published %} ig-row-unpublished{% endif %} assignment-{{ a.id }}" data-assignment-id="{{ a.id }}">
+            <div class="ig-row-main">
+              <a class="ig-title" href="/courses/{{ course_id }}/assignments/{{ a.id }}">{{ a.title }}</a>
+              <span class="ig-details">
+                <span class="ig-due">{{ a.due_label }}</span>
+                <span class="ig-points">{{ a.points_label }}</span>
+              </span>
+            </div>
+            <div class="ig-row-right">
+              {% if !a.published %}
+              <span class="publish-state publish-state-unpublished">Unpublished</span>
+              {% else %}
+              <span class="publish-state publish-state-published">Published</span>
+              {% endif %}
+              <span class="submission-pill pill-{{ a.pill_class }}">{{ a.pill_label }}</span>
+              {% if is_teacher %}
+              <a class="ig-edit" href="/courses/{{ course_id }}/assignments/{{ a.id }}/edit">Edit</a>
+              {% endif %}
+            </div>
+          </li>
+          {% endfor %}
+          {% if group.assignments.is_empty() %}
+          <li class="ig-row ig-row-empty"><span class="ig-empty">No assignments in this group.</span></li>
+          {% endif %}
+        </ul>
+      </div>
+      {% endfor %}
+      {% if groups.is_empty() %}
+      <div class="ig-list">
+        <p class="no-assignments">There are no assignments in this course yet.</p>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+{% endblock content %}
