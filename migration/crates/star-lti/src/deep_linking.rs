@@ -180,7 +180,7 @@ async fn context_account_chain(
                 .flatten();
         }
         "Group" => {
-            let course_account: Option<Option<i64>> = sqlx::query_as(
+            let course_account: Option<(Option<i64>,)> = sqlx::query_as(
                 "SELECT c.account_id FROM groups g JOIN courses c ON c.id = g.course_id \
                  WHERE g.id = $1",
             )
@@ -200,7 +200,7 @@ async fn context_account_chain(
         }
         depth += 1;
         chain.push(id);
-        let parent: Option<Option<i64>> =
+        let parent: Option<(Option<i64>,)> =
             sqlx::query_as("SELECT parent_account_id FROM accounts WHERE id = $1")
                 .bind(id)
                 .fetch_optional(pool)
@@ -364,7 +364,7 @@ fn decode_unverified(token: &str) -> Option<Value> {
     validation.validate_exp = false;
     validation.validate_nbf = false;
     validation.required_spec_claims.clear();
-    validation.insecure_disable_signature_validation = true;
+    validation.insecure_disable_signature_validation();
     jsonwebtoken::decode::<Value>(
         token,
         &jsonwebtoken::DecodingKey::from_secret(b""),
@@ -542,8 +542,8 @@ async fn deep_linking_response(
         )
         .await?;
     } else if for_placement("collaboration") {
-        if let Some(tool) = &tool_row {
-            extra.insert("tool_id".to_string(), json!(tool.id));
+        if let Some(tool) = tool_row {
+            extra.insert("tool_id".to_string(), json!(tool));
         }
     } else if for_placement("ActivityAssetProcessor")
         || for_placement("ActivityAssetProcessorContribution")
@@ -827,7 +827,7 @@ fn filter_custom_value(custom: Option<Value>) -> Value {
 }
 
 async fn account_chain_root(pool: &PgPool, course_id: i64) -> Result<i64, ApiError> {
-    let account: Option<Option<i64>> =
+    let account: Option<(Option<i64>,)> =
         sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
             .bind(course_id)
             .fetch_optional(pool)
@@ -841,7 +841,7 @@ async fn account_chain_root(pool: &PgPool, course_id: i64) -> Result<i64, ApiErr
         }
         depth += 1;
         last = id;
-        let parent: Option<Option<i64>> =
+        let parent: Option<(Option<i64>,)> =
             sqlx::query_as("SELECT parent_account_id FROM accounts WHERE id = $1")
                 .bind(id)
                 .fetch_optional(pool)
@@ -852,7 +852,7 @@ async fn account_chain_root(pool: &PgPool, course_id: i64) -> Result<i64, ApiErr
 }
 
 async fn group_root_account(pool: &PgPool, group_id: i64) -> Result<i64, ApiError> {
-    let account: Option<Option<i64>> = sqlx::query_as(
+    let account: Option<(Option<i64>,)> = sqlx::query_as(
         "SELECT c.account_id FROM groups g JOIN courses c ON c.id = g.course_id WHERE g.id = $1",
     )
     .bind(group_id)
@@ -991,10 +991,27 @@ async fn extract_auth_user(
     state: &AppState,
     headers: &axum::http::HeaderMap,
 ) -> Option<star_auth::AuthUser> {
-    use axum::extract::FromRequestParts;
-    let mut parts = axum::http::request::Parts::default();
-    parts.headers = headers.clone();
-    star_auth::AuthUser::from_request_parts(&mut parts, state)
+    // The same semantics as the AuthUser extractor: a verified bearer
+    // token whose user still exists (with their current role).
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())?
+        .strip_prefix("Bearer ")?;
+    let mut validation = jsonwebtoken::Validation::default();
+    validation.validate_aud = false;
+    let claims = jsonwebtoken::decode::<star_common::Claims>(
+        token,
+        &jsonwebtoken::DecodingKey::from_secret(state.jwt_secret.as_bytes()),
+        &validation,
+    )
+    .ok()?;
+    let (role,): (String,) = sqlx::query_as("SELECT role FROM users WHERE id = $1")
+        .bind(claims.sub)
+        .fetch_one(&state.db)
         .await
-        .ok()
+        .ok()?;
+    Some(star_auth::AuthUser {
+        id: claims.sub,
+        role,
+    })
 }

@@ -213,7 +213,7 @@ fn decode_unverified(token: &str) -> Option<Value> {
     validation.validate_exp = false;
     validation.validate_nbf = false;
     validation.required_spec_claims.clear();
-    validation.insecure_disable_signature_validation = true;
+    validation.insecure_disable_signature_validation();
     jsonwebtoken::decode::<Value>(
         token,
         &jsonwebtoken::DecodingKey::from_secret(b""),

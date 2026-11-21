@@ -537,7 +537,7 @@ async fn course_account_chain(pool: &PgPool, course_id: i64) -> Result<Vec<i64>,
         }
         depth += 1;
         chain.push(id);
-        let parent: Option<Option<i64>> =
+        let parent: Option<(Option<i64>,)> =
             sqlx::query_as("SELECT parent_account_id FROM accounts WHERE id = $1")
                 .bind(id)
                 .fetch_optional(pool)
@@ -587,7 +587,6 @@ async fn create(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Query(query): Query<ScopeQuery>,
     headers: HeaderMap,
     Json(body): Json<CreateLinkBody>,
 ) -> Result<Response, ApiError> {

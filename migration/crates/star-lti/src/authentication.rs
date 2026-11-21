@@ -407,7 +407,7 @@ fn error_parameters(error: &str, error_description: &str, state: Option<&str>) -
 /// Percent-encode a query component (form style: space as `+`).
 fn urlencode(value: &str) -> String {
     let mut out = String::new();
-    for byte in value.as_bytes() {
+    for &byte in value.as_bytes() {
         match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(byte as char)
