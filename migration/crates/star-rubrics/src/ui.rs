@@ -107,7 +107,7 @@ pub async fn load_assignment_rubric_panel(
             ORDER BY position ASC
             "#,
         )
-        .bind(&criteria.iter().map(|c| c.id).collect::<Vec<_>>())
+        .bind(criteria.iter().map(|c| c.id).collect::<Vec<_>>())
         .fetch_all(db)
         .await?;
         for criterion in criteria.iter_mut() {
