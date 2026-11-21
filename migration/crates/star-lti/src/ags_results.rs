@@ -210,6 +210,7 @@ fn empty_page() -> Response {
 
 /// Whether the user exists and is a student somewhere (context membership
 /// for the early-return): Ok(Some(is_student)), Ok(None) = unknown user.
+#[allow(clippy::result_large_err)]
 async fn known_user(pool: &PgPool, user_id: i64) -> Result<Option<bool>, Response> {
     let row: Option<(i64,)> = sqlx::query_as("SELECT 1::bigint FROM users WHERE id = $1")
         .bind(user_id)

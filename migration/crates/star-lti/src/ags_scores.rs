@@ -98,18 +98,18 @@ pub struct ScoreRequest {
 /// The line item with its assignment link, active only.
 #[derive(Debug, sqlx::FromRow)]
 struct LineItemLookup {
-    id: i64,
     course_id: i64,
     score_maximum: f64,
     assignment_id: Option<i64>,
 }
 
+#[allow(clippy::result_large_err)]
 async fn find_line_item(
     pool: &PgPool,
     line_item_id: i64,
 ) -> Result<Option<LineItemLookup>, Response> {
     let row: Option<LineItemLookup> = sqlx::query_as(
-        "SELECT id, course_id, score_maximum, assignment_id FROM lti_line_items \
+        "SELECT course_id, score_maximum, assignment_id FROM lti_line_items \
          WHERE id = $1 AND workflow_state <> 'deleted'",
     )
     .bind(line_item_id)
@@ -124,6 +124,7 @@ async fn find_line_item(
 /// the Canvas user id; star-lms has no `users.lti_id` column, so the user id
 /// (numeric string or number) is the only handle. Returns None for a
 /// non-numeric or unknown id.
+#[allow(clippy::result_large_err)]
 async fn resolve_target_user(pool: &PgPool, user_id: &Value) -> Result<Option<i64>, Response> {
     let id = match user_id {
         Value::Number(n) => n.as_i64(),
@@ -143,6 +144,7 @@ async fn resolve_target_user(pool: &PgPool, user_id: &Value) -> Result<Option<i6
 
 /// Whether the user has a student enrollment in the course — Canvas
 /// `context.user_is_student?` (gradebook_services.rb:81-84).
+#[allow(clippy::result_large_err)]
 async fn user_is_student_in_course(
     pool: &PgPool,
     course_id: i64,
