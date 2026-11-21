@@ -1,13 +1,13 @@
 //! Integration tests for the Canvas /login/oauth2 flow family (issue #97):
 //!
-//! - GET  /login/oauth2/auth          (oauth2_provider#auth)
-//! - POST /login/oauth2/token         (oauth2_provider#token, authorization_code
-//!                                     + refresh_token grants, PKCE S256)
-//! - DELETE /login/oauth2/token       (oauth2_provider#destroy)
-//! - GET  /login/oauth2/jwks          (security#jwks)
-//! - POST /api/v1/inst_access_tokens  (inst_access_tokens#create; the api
-//!                                     router is mounted at the test root, so
-//!                                     the path here is /inst_access_tokens)
+//! - GET /login/oauth2/auth (oauth2_provider#auth)
+//! - POST /login/oauth2/token (oauth2_provider#token, authorization_code
+//!   + refresh_token grants, PKCE S256)
+//! - DELETE /login/oauth2/token (oauth2_provider#destroy)
+//! - GET /login/oauth2/jwks (security#jwks)
+//! - POST /api/v1/inst_access_tokens (inst_access_tokens#create; the api
+//!   router is mounted at the test root, so the path here is
+//!   /inst_access_tokens)
 //!
 //! Parity notes (canvas-lms master):
 //! - Auth validation order (oauth2_provider_controller.rb:31-117): unknown
