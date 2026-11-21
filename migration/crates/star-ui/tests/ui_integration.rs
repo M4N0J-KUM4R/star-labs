@@ -2586,3 +2586,414 @@ async fn gradebook_grid_and_csv() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// SpeedGrader grading workflow (issue #108)
+// ---------------------------------------------------------------------------
+
+/// Seed a rubric (2 criteria x 2 ratings) associated with an assignment —
+/// the grading fixture. Returns (rubric_id, criterion ids).
+async fn seed_rubric(pool: &PgPool, course_id: i64, assignment_id: i64) -> (i64, Vec<i64>) {
+    let rubric: i64 = sqlx::query_scalar(
+        "INSERT INTO rubrics (course_id, title, points_possible) \
+         VALUES ($1, 'Essay Rubric', 10) RETURNING id",
+    )
+    .bind(course_id)
+    .fetch_one(pool)
+    .await
+    .expect("seed rubric");
+
+    let mut criterion_ids = Vec::new();
+    for (position, (description, points)) in [
+        ("Thesis", 5.0),
+        ("Evidence", 5.0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let criterion: i64 = sqlx::query_scalar(
+            "INSERT INTO rubric_criteria (rubric_id, description, points, position) \
+             VALUES ($1, $2, $3, $4) RETURNING id",
+        )
+        .bind(rubric)
+        .bind(description)
+        .bind(points)
+        .bind(position as i32)
+        .fetch_one(pool)
+        .await
+        .expect("seed criterion");
+        criterion_ids.push(criterion);
+
+        for (rating_pos, (rating_desc, rating_points)) in
+            [("Full", points), ("Partial", points / 2.0)].into_iter().enumerate()
+        {
+            sqlx::query(
+                "INSERT INTO rubric_ratings (criterion_id, description, points, position) \
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(criterion)
+            .bind(rating_desc)
+            .bind(rating_points)
+            .bind(rating_pos as i32)
+            .execute(pool)
+            .await
+            .expect("seed rating");
+        }
+    }
+
+    // Associate the rubric with the assignment (Canvas association_type).
+    sqlx::query(
+        "INSERT INTO rubric_associations \
+         (rubric_id, association_id, association_type, context_id, context_type, purpose) \
+         VALUES ($1, $2, 'Assignment', $3, 'Course', 'grading')",
+    )
+    .bind(rubric)
+    .bind(assignment_id)
+    .bind(course_id)
+    .execute(pool)
+    .await
+    .expect("seed rubric association");
+
+    (rubric, criterion_ids)
+}
+
+/// The teacher opens the SpeedGrader queue: student list ordered by name,
+/// the selected student's submission + current score, the grading form, and
+/// the rubric panel when the assignment has one.
+#[tokio::test]
+async fn speedgrader_queue_and_rubric_panel() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "gteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "gstudent", "student", "not-a-real-hash").await;
+    let student2 = seed_user(&pool, &prefix, "gstudent2", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Grading Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    seed_enrollment(&pool, student2, course, "student").await;
+    let group = seed_assignment_group(&pool, course, "Essays", 1).await;
+    let essay = seed_assignment(
+        &pool,
+        course,
+        Some(group),
+        "Grading Essay",
+        None,
+        10.0,
+        "published",
+    )
+    .await;
+    seed_submission(&pool, essay, student, "my essay text", None, "submitted").await;
+    let (rubric_id, criterion_ids) = seed_rubric(&pool, course, essay).await;
+
+    // Teacher queue (default assignment = first, default student = first by
+    // name: gstudent sorts before gstudent2).
+    let resp = server
+        .get(&format!("/courses/{course}/gradebook/speedgrader"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(body.contains("id=\"speedgrader\""), "speedgrader page");
+    assert!(body.contains("id=\"speedgrader_grade_form\""), "grading form");
+    assert!(body.contains("my essay text"), "submission body shown");
+    assert!(
+        body.contains("Grading Essay"),
+        "assignment title shown: {body}"
+    );
+    // Student nav rows: one per enrollment (3 incl. teacher), ordered.
+    let row_count = body.matches("speedgrader-student-row").count();
+    assert_eq!(row_count, 3, "one row per enrollment, got {row_count}");
+    let pos1 = body
+        .find(">gstudent<")
+        .expect("first student in the nav");
+    let pos2 = body.find(">gstudent2<").expect("second student in the nav");
+    assert!(pos1 < pos2, "students ordered by name");
+    // Selected student pill + meta.
+    assert!(body.contains("pill-submitted\">Submitted<"), "state pill");
+    assert!(body.contains("Attempt"), "attempt info");
+    // Next/prev are plain links.
+    assert!(body.contains("id=\"speedgrader_next\""), "next link");
+    assert!(body.contains("id=\"speedgrader_prev\""), "prev link");
+    // Rubric panel renders: criteria + rating selects.
+    assert!(body.contains("id=\"speedgrader_rubric\""), "rubric panel");
+    assert!(body.contains("Thesis"), "criterion 1");
+    assert!(body.contains("Evidence"), "criterion 2");
+    assert!(body.contains(&format!("name=\"criterion_{}\"", criterion_ids[0])), "pick field");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Permission gates: students 403, unenrolled users the course gate 404/403,
+/// on both the queue and the POST.
+#[tokio::test]
+async fn speedgrader_permission_gates() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "sgateacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "sgatestudent", "student", "not-a-real-hash").await;
+    let outsider = seed_user(&pool, &prefix, "sgateoutsider", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Gate Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let essay = seed_assignment(&pool, course, None, "Gate Essay", None, 10.0, "published").await;
+
+    // Student -> 403 on the queue.
+    let resp = server
+        .get(&format!("/courses/{course}/gradebook/speedgrader"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student queue -> 403");
+
+    // Student -> 403 on the POST (course gate passes, teacher check fails).
+    let (csrf_cookie, csrf) = csrf_pair();
+    let resp = server
+        .post(&format!("/courses/{course}/gradebook/speedgrader/grade"))
+        .add_cookie(session_cookie(student, "student"))
+        .add_cookie(csrf_cookie)
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .bytes(
+            format!(
+                "_csrf={csrf}&assignment_id={essay}&student_id={student}&score=5"
+            )
+            .into(),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 403, "student POST -> 403");
+
+    // Unenrolled non-admin -> 404/403 on the queue (course gate).
+    let resp = server
+        .get(&format!("/courses/{course}/gradebook/speedgrader"))
+        .add_cookie(session_cookie(outsider, "student"))
+        .await;
+    assert!(
+        resp.status_code() == 403 || resp.status_code() == 404,
+        "unenrolled non-admin must not see the grading queue"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// The grading round-trip: POST score + comment -> DB assert + PRG target
+/// re-renders both; the rubric picks persist as a rubric assessment.
+#[tokio::test]
+async fn speedgrader_grade_round_trip() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "rteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "rstudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "RoundTrip Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let essay = seed_assignment(
+        &pool,
+        course,
+        None,
+        "RoundTrip Essay",
+        None,
+        10.0,
+        "published",
+    )
+    .await;
+    let submission = seed_submission(&pool, essay, student, "round trip text", None, "submitted")
+        .await;
+    let (rubric_id, criterion_ids) = seed_rubric(&pool, course, essay).await;
+    let rating_ids: Vec<i64> = sqlx::query_scalar(
+        "SELECT id FROM rubric_ratings WHERE criterion_id = $1 ORDER BY position ASC",
+    )
+    .bind(criterion_ids[0])
+    .fetch_all(&pool)
+    .await
+    .expect("rating ids");
+
+    // POST the ONE grading form: score + comment + the first criterion pick.
+    let (csrf_cookie, csrf) = csrf_pair();
+    let resp = server
+        .post(&format!("/courses/{course}/gradebook/speedgrader/grade"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie)
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .bytes(
+            format!(
+                "_csrf={csrf}&assignment_id={essay}&student_id={student}\
+                 &score=8.5&comment=Nice+work+on+the+thesis\
+                 &criterion_{}={}",
+                criterion_ids[0],
+                rating_ids[0]
+            )
+            .into(),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 303, "grade PRG: {}", resp.text());
+    let location = resp.headers().get("location").unwrap().to_str().unwrap();
+    assert_eq!(
+        location,
+        format!(
+            "/courses/{course}/gradebook/speedgrader?assignment_id={essay}&student_id={student}&graded=1"
+        )
+    );
+
+    // DB: score + graded state on the submission row.
+    let row: (Option<f64>, String, Option<i64>) = sqlx::query_as(
+        "SELECT score::float8, workflow_state, grader_id FROM submissions WHERE id = $1",
+    )
+    .bind(submission)
+    .fetch_one(&pool)
+    .await
+    .expect("submission row");
+    assert_eq!(row.0, Some(8.5), "score persisted");
+    assert_eq!(row.1, "graded", "workflow_state graded");
+    assert_eq!(row.2, Some(teacher), "grader stamped");
+
+    // DB: the comment row (author = teacher).
+    let comment: (i64, String) = sqlx::query_as(
+        "SELECT author_id, comment FROM submission_comments WHERE submission_id = $1",
+    )
+    .bind(submission)
+    .fetch_one(&pool)
+    .await
+    .expect("comment row");
+    assert_eq!(comment.0, teacher, "comment author");
+    assert_eq!(comment.1, "Nice work on the thesis");
+
+    // DB: the rubric assessment (grading type, linked to the submission,
+    // data carries the picked rating).
+    let assessment: (f64, String) = sqlx::query_as(
+        "SELECT score::float8, data::text FROM rubric_assessments \
+         WHERE rubric_id = $1 AND submission_id = $2 AND assessment_type = 'grading'",
+    )
+    .bind(rubric_id)
+    .bind(submission)
+    .fetch_one(&pool)
+    .await
+    .expect("rubric assessment row");
+    assert_eq!(assessment.0, 5.0, "rubric total = picked rating points");
+    assert!(
+        assessment.1.contains(&format!("\"rating_id\":{}", rating_ids[0])),
+        "data carries the pick: {}",
+        assessment.1
+    );
+
+    // The PRG target re-renders score + comment + rubric prefill + notice.
+    let resp = server
+        .get(location)
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body = resp.text();
+    assert!(body.contains("Grade saved."), "success notice");
+    assert!(body.contains("8.5 / 10"), "current score shown: {body}");
+    assert!(body.contains("Nice work on the thesis"), "comment visible");
+    assert!(body.contains("pill-graded\">Graded<"), "graded pill");
+    // The picked rating is preselected in the rubric select.
+    let needle = format!("value=\"{}\" selected", rating_ids[0]);
+    assert!(body.contains(&needle), "rubric pick preselected: {needle}");
+
+    // CSRF mismatch on the POST -> 403, nothing persisted.
+    let before: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM submission_comments WHERE submission_id = $1",
+    )
+    .bind(submission)
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    let (csrf_cookie2, _) = csrf_pair();
+    let resp = server
+        .post(&format!("/courses/{course}/gradebook/speedgrader/grade"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie2)
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .bytes(
+            format!("_csrf=deadbeef&assignment_id={essay}&student_id={student}&score=1").into(),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 403, "csrf mismatch -> 403");
+    let after: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM submission_comments WHERE submission_id = $1",
+    )
+    .bind(submission)
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(before, after, "no comment persisted on csrf failure");
+
+    // A blank score re-renders the form with the validation message (422),
+    // mirroring the REST "score is required" validation.
+    let (csrf_cookie3, csrf3) = csrf_pair();
+    let resp = server
+        .post(&format!("/courses/{course}/gradebook/speedgrader/grade"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie3)
+        .add_header("content-type", "application/x-www-form-urlencoded")
+        .bytes(
+            format!("_csrf={csrf3}&assignment_id={essay}&student_id={student}&score=").into(),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 422, "blank score -> 422");
+    assert!(
+        resp.text().contains("Score is required"),
+        "validation message"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Next/prev navigation round-trips the selection: the links preserve the
+/// assignment and move the student.
+#[tokio::test]
+async fn speedgrader_next_prev_navigation() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "nteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "nstudent", "student", "not-a-real-hash").await;
+    let student2 = seed_user(&pool, &prefix, "nstudent2", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Nav Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    seed_enrollment(&pool, student2, course, "student").await;
+    let essay = seed_assignment(&pool, course, None, "Nav Essay", None, 10.0, "published").await;
+
+    // Open student2 directly; "Previous" goes to student (name order).
+    let resp = server
+        .get(&format!(
+            "/courses/{course}/gradebook/speedgrader?assignment_id={essay}&student_id={student2}"
+        ))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body = resp.text();
+    let href = body
+        .split("id=\"speedgrader_prev\"")
+        .nth(1)
+        .and_then(|rest| rest.split('"').find(|s| s.starts_with("/courses/")))
+        .expect("prev href")
+        .to_string();
+    assert_eq!(
+        href,
+        format!(
+            "/courses/{course}/gradebook/speedgrader?assignment_id={essay}&student_id={student}"
+        ),
+        "prev link preserves assignment + points at the name-previous student"
+    );
+    // Following it lands on that student.
+    let resp = server
+        .get(&href)
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body = resp.text();
+    assert!(body.contains("speedgrader-student-row selected\" data-user-id=\"{student}\""));
+
+    cleanup(&pool, &prefix).await;
+}

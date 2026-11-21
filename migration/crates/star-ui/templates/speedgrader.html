@@ -1,0 +1,157 @@
+{% extends "layouts/course.html" %}
+{# SpeedGrader (issue #108) — Canvas gradebooks#speedgrader,
+   server-rendered (Canvas' SpeedGrader is a JS app; the shell renders the
+   same workflow as plain HTML). Left nav = the student queue for the
+   selected assignment; main panel = the selected student's submission +
+   ONE grading form (score + comment + rubric criterion picks). Next/prev
+   are plain links; assignment switch is a GET form (no JS). #}
+{% block content %}
+  <div id="speedgrader" class="speedgrader full-width">
+
+    <div id="speedgrader-toolbar" class="speedgrader-toolbar">
+      <h1 class="speedgrader-heading">SpeedGrader</h1>
+      <div class="speedgrader-toolbar-actions">
+        <a id="back_to_gradebook" class="btn" href="/courses/{{ course_id }}/gradebook">Gradebook</a>
+        <a id="speedgrader_assignments" class="btn" href="/courses/{{ course_id }}/assignments">Assignments</a>
+      </div>
+    </div>
+
+    {% if !error.is_empty() %}
+    <div class="ic-flash error" id="speedgrader_error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <div id="speedgrader_assignment_bar" class="speedgrader-assignment-bar">
+      <form id="speedgrader_assignment_select" class="speedgrader-assignment-select" method="get"
+            action="/courses/{{ course_id }}/gradebook/speedgrader">
+        <label class="ic-Label" for="speedgrader_assignment_id">Assignment</label>
+        <select class="ic-Input" id="speedgrader_assignment_id" name="assignment_id">
+          {% for a in assignments %}
+          <option value="{{ a.0 }}"{% if a.0 == assignment_id %} selected{% endif %}>{{ a.1 }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" class="btn" id="speedgrader_assignment_go">Go</button>
+      </form>
+    </div>
+
+    <div class="speedgrader-columns">
+      <div id="speedgrader_students" class="speedgrader-student-list" aria-label="Students">
+        <h2 class="screenreader-only">Students</h2>
+        <ul class="speedgrader-student-menu">
+          {% for s in students %}
+          <li class="speedgrader-student-row{% if s.selected %} selected{% endif %}" data-user-id="{{ s.user_id }}">
+            <a id="speedgrader_student_{{ s.user_id }}" class="speedgrader-student-link" href="{{ s.url }}">
+              <span class="speedgrader-student-name">{{ s.user_name }}</span>
+              <span class="speedgrader-student-state pill-{{ s.pill_class }}">{{ s.pill_label }}</span>
+            </a>
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+
+      <div id="speedgrader_main" class="speedgrader-main">
+        <div class="speedgrader-submission-header">
+          <h2 class="speedgrader-student-heading">{{ student_name }}</h2>
+          <span class="submission-pill pill-{{ pill_class }}">{{ pill_label }}</span>
+          <span class="speedgrader-position">{{ position_label }}</span>
+          <div class="speedgrader-nav">
+            {% if let Some(url) = prev_url.clone() %}
+            <a id="speedgrader_prev" class="btn" href="{{ url }}">&lsaquo; Previous</a>
+            {% endif %}
+            {% if let Some(url) = next_url.clone() %}
+            <a id="speedgrader_next" class="btn" href="{{ url }}">Next &rsaquo;</a>
+            {% endif %}
+          </div>
+        </div>
+
+        <table class="ic-Table speedgrader-meta">
+          <caption class="screenreader-only">Submission details</caption>
+          <tbody>
+            <tr><th scope="row">Assignment</th><td id="speedgrader_assignment_title">{{ assignment_title }}</td></tr>
+            <tr><th scope="row">Due</th><td>{{ due_label }}</td></tr>
+            <tr><th scope="row">Points</th><td>{{ points_label }}</td></tr>
+            <tr><th scope="row">Submitted</th><td>{{ submitted_label }}</td></tr>
+            <tr><th scope="row">Attempt</th><td>{{ attempt_label }}</td></tr>
+            <tr><th scope="row">Current score</th><td id="speedgrader_current_score">{{ score_label }}</td></tr>
+          </tbody>
+        </table>
+
+        <div id="speedgrader_submission_body" class="speedgrader-submission-body user_content">
+          {% if submission_body.is_empty() %}
+          <p class="no-submission">This student has not submitted yet.</p>
+          {% else %}
+          <pre class="submission-text">{{ submission_body }}</pre>
+          {% endif %}
+        </div>
+
+        {% if let Some(rubric) = rubric.clone() %}
+        <div id="speedgrader_rubric" class="speedgrader-rubric">
+          <h3 class="rubric-title">{{ rubric.title }} <span class="rubric-points">({{ rubric.points_label }} pts)</span></h3>
+          <div class="table-wrapper">
+            <table class="ic-Table rubric-table" id="rubric_table">
+              <thead>
+                <tr>
+                  <th scope="col">Criterion</th>
+                  <th scope="col">Rating</th>
+                  <th scope="col">Points</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for c in rubric.criteria %}
+                <tr class="rubric-criterion" data-criterion-id="{{ c.id }}">
+                  <th scope="row" class="rubric-description">{{ c.description }}</th>
+                  <td>
+                    <select class="ic-Input rubric-rating" name="criterion_{{ c.id }}"
+                            id="criterion_{{ c.id }}" form="speedgrader_grade_form">
+                      <option value="">No rating</option>
+                      {% for r in c.ratings %}
+                      <option value="{{ r.0 }}"{% if r.2 %} selected{% endif %}>{{ r.1 }}</option>
+                      {% endfor %}
+                    </select>
+                  </td>
+                  <td class="rubric-points-cell">{{ c.points_label }}</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {% endif %}
+
+        <form id="speedgrader_grade_form" class="speedgrader-grade-form" method="post"
+              action="{{ form_action }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <input type="hidden" name="assignment_id" value="{{ assignment_id }}">
+          <input type="hidden" name="student_id" value="{{ student_id }}">
+          <div class="ic-Form-control">
+            <label class="ic-Label" for="speedgrader_score">Score (out of {{ points_label }})</label>
+            <input class="ic-Input" id="speedgrader_score" name="score" type="text"
+                   inputmode="decimal" value="{{ score_value }}" required>
+          </div>
+          <div class="ic-Form-control">
+            <label class="ic-Label" for="speedgrader_comment">Comment</label>
+            <textarea class="ic-Input" id="speedgrader_comment" name="comment" rows="4"
+                      placeholder="Leave a comment for this student (optional)"></textarea>
+          </div>
+          <button type="submit" class="btn btn-primary" id="speedgrader_submit">Submit Grade</button>
+        </form>
+
+        <div id="speedgrader_comments" class="speedgrader-comments">
+          <h3>Comments</h3>
+          {% if comments.is_empty() %}
+          <p class="no-comments">No comments yet.</p>
+          {% else %}
+          <ul class="comment-list">
+            {% for c in comments %}
+            <li class="comment" id="comment_{{ c.id }}">
+              <span class="comment-author">{{ c.author_label }}</span>
+              <span class="comment-time">{{ c.created_label }}</span>
+              <p class="comment-body">{{ c.comment }}</p>
+            </li>
+            {% endfor %}
+          </ul>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock content %}
