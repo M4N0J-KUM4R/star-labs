@@ -164,15 +164,17 @@ async fn user_is_student_in_course(
 /// Whether the line item's assignment is published
 /// (`verify_assignment_published`, scores_controller.rb:391-394). Line items
 /// without an assignment pass (star-lms line items may be unattached).
+#[allow(clippy::result_large_err)]
 async fn assignment_published(pool: &PgPool, assignment_id: Option<i64>) -> Result<bool, Response> {
     let Some(assignment_id) = assignment_id else {
         return Ok(true);
     };
-    let row: Option<(bool,)> = sqlx::query_as("SELECT published FROM assignments WHERE id = $1")
-        .bind(assignment_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(|_| advantage_error(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+    let row: Option<(bool,)> =
+        sqlx::query_as("SELECT workflow_state = 'published' FROM assignments WHERE id = $1")
+            .bind(assignment_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|_| advantage_error(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
     Ok(row.map(|(p,)| p).unwrap_or(true))
 }
 
@@ -214,10 +216,10 @@ async fn create_score(
     };
 
     // AdvantageServices: context exists (404) + tool bound to the key (401).
-    if let Err(resp) = verify_advantage_course(&state.db, &auth, course_id).await {
+    if let Err(resp) = verify_advantage_course(&state.db, course_id).await {
         return resp;
     }
-    if let Err(resp) = verify_advantage_tool(&state.db, &auth).await {
+    if let Err(resp) = verify_advantage_tool(&state.db, auth.developer_key_id).await {
         return resp;
     }
 
@@ -411,7 +413,7 @@ async fn create_score(
         .flatten()
         .map(|(id,)| id),
     }
-    .unwrap_or_else(|| 0);
+    .unwrap_or(0);
 
     if result_id == 0 {
         return advantage_error(StatusCode::INTERNAL_SERVER_ERROR, "database error");

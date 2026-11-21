@@ -96,6 +96,7 @@ pub fn router() -> Router<AppState> {
 
 /// The AdvantageServices chain (token → key → scope → context → tool) for a
 /// course context. NRPS has no line-item gate.
+#[allow(clippy::result_large_err)]
 async fn verify_nrps_course(
     state: &AppState,
     course_id: i64,
@@ -103,8 +104,8 @@ async fn verify_nrps_course(
 ) -> Result<(), Response> {
     let auth =
         verify_advantage_access(state, authorization, SCOPE_NRPS_MEMBERSHIP_READ_ONLY).await?;
-    verify_advantage_course(&state.db, &auth, course_id).await?;
-    verify_advantage_tool(&state.db, &auth).await?;
+    verify_advantage_course(&state.db, course_id).await?;
+    verify_advantage_tool(&state.db, auth.developer_key_id).await?;
     Ok(())
 }
 

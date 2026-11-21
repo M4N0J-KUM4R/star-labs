@@ -110,6 +110,7 @@ pub fn router() -> Router<AppState> {
 
 /// Shared pre-handler: the AdvantageServices chain + line-item-in-course
 /// (404). Returns (line_item course check ok, response on failure).
+#[allow(clippy::result_large_err)]
 async fn verify_request(
     state: &AppState,
     course_id: i64,
@@ -117,8 +118,8 @@ async fn verify_request(
     authorization: Option<&str>,
 ) -> Result<(), Response> {
     let auth = verify_advantage_access(state, authorization, SCOPE_AGS_RESULT_READ_ONLY).await?;
-    verify_advantage_course(&state.db, &auth, course_id).await?;
-    verify_advantage_tool(&state.db, &auth).await?;
+    verify_advantage_course(&state.db, course_id).await?;
+    verify_advantage_tool(&state.db, auth.developer_key_id).await?;
 
     // verify_line_item_in_context — 404 when missing or another course's.
     let row: Option<(i64,)> = sqlx::query_as(

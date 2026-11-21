@@ -12,8 +12,8 @@
 //! 2. `verify_developer_key` — token's `client_id` must resolve to a known,
 //!    active developer key → else 401 "Unknown or inactive Developer Key".
 //! 3. `verify_access_scope`  — the token's `scopes` claim (space-separated
-//!    string) must satisfy the controller's `scopes_matcher` → else 401
-//!    "Insufficient permissions".
+//!    string) must contain the controller's scope → else 401 "Insufficient
+//!    permissions".
 //! 4. `verify_active_in_account` (AGS via AdvantageServices) — the developer
 //!    key must be usable in the context's account → 401 "Invalid Developer
 //!    Key".
@@ -23,15 +23,17 @@
 //!    401 "Access Token not linked to a Tool associated with this Context".
 //!
 //! Error envelope (lti_services.rb#render_error):
-//! `{"errors": {"type": "<status>", "message": "<msg>"}}`.
+//! `{"errors": {"type": "<status>", "message": "<msg>"}}` — rendered once at
+//! the handler edge by [`advantage_error`]; the helpers return plain
+//! `ApiError`s so handlers can `?` them.
 //!
 //! star-lms tokens: the platform signs service JWTs with the shared
 //! `jwt_secret` (HS256) exactly like `dynamic_registration.rs` — same
-//! `jsonwebtoken` crate, same `EncodingKey`. The `sub`/`client_id` claim
+//! `jsonwebtoken` crate, same `EncodingKey`. The `client_id` claim
 //! identifies the developer key by its numeric id (Canvas's client_id is the
-//! developer key's global id; star-lms developer keys are the 0032 table
-//! and the numeric id is the only stable handle). The `scopes` claim is the
-//! space-separated scope URN list, mirroring Canvas's access token shape
+//! developer key's global id; the numeric id is the only stable handle in
+//! the 0032 table). The `scopes` claim is the space-separated scope URN
+//! list, mirroring Canvas's access token shape
 //! (`access_token.claim("scopes")&.split`, lti_services.rb:68).
 
 use axum::http::{header, StatusCode};
@@ -60,21 +62,18 @@ pub(crate) const SCOPE_NRPS_MEMBERSHIP_READ_ONLY: &str =
 #[derive(Debug, Clone)]
 pub(crate) struct AdvantageAuth {
     pub developer_key_id: i64,
-    /// Whether the key is bound (active) in the context's account — the
-    /// `verify_active_in_account` gate. star-lms models this as the
-    /// developer key itself being active in the account that owns the
-    /// context (0032 has no per-account binding table; documented
-    /// deviation, see module doc on the handlers).
-    pub scopes: Vec<String>,
 }
 
-/// Canvas `render_error` envelope: `{"errors": {"type", "message"}}`.
+/// Canvas `render_error` envelope: `{"errors": {type, message}}`.
 pub(crate) fn advantage_error(status: StatusCode, message: &str) -> Response {
     (
         status,
         [(header::CONTENT_TYPE, "application/json")],
         axum::Json(json!({
-            "errors": { "type": status.canonical_reason().unwrap_or("error"), "message": message }
+            "errors": {
+                "type": status.canonical_reason().unwrap_or("error"),
+                "message": message
+            }
         })),
     )
         .into_response()
@@ -82,10 +81,10 @@ pub(crate) fn advantage_error(status: StatusCode, message: &str) -> Response {
 
 /// The `LtiServices` before_action chain steps 1–3: extract the bearer
 /// token, decode it against the shared secret, resolve + activate the
-/// developer key, and check the required scope.
-///
-/// `required_scope` is the single scope each controller demands (Canvas
-/// `scopes_matcher` = `all_of(<one scope>)` for scores/results/NRPS).
+/// developer key, and check the required scope. The Err variant is the
+/// ready-to-return Canvas envelope (Response is large; allowed like
+/// star-discussions/src/lib.rs:1098).
+#[allow(clippy::result_large_err)]
 pub(crate) async fn verify_advantage_access(
     state: &AppState,
     auth_header: Option<&str>,
@@ -107,7 +106,11 @@ pub(crate) async fn verify_advantage_access(
     let client_id = claims
         .claims
         .get("client_id")
-        .and_then(|v| v.as_i64().or_else(|| v.as_str()?.parse().ok()))
+        .and_then(|v| match v {
+            Value::Number(n) => n.as_i64(),
+            Value::String(s) => s.parse().ok(),
+            _ => None,
+        })
         .ok_or_else(|| {
             advantage_error(
                 StatusCode::UNAUTHORIZED,
@@ -119,10 +122,9 @@ pub(crate) async fn verify_advantage_access(
         sqlx::query_as("SELECT id FROM developer_keys WHERE id = $1 AND workflow_state = 'active'")
             .bind(client_id)
             .fetch_optional(&state.db)
-            .await
-            .map_err(|_| advantage_error(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
+            .await?;
 
-    let developer_key_id = row.map(|(id,)| id).ok_or_else(|| {
+    let (developer_key_id,) = row.ok_or_else(|| {
         advantage_error(
             StatusCode::UNAUTHORIZED,
             "Unknown or inactive Developer Key",
@@ -130,34 +132,27 @@ pub(crate) async fn verify_advantage_access(
     })?;
 
     // 3. verify_access_scope — the scopes claim must contain the scope.
-    let scopes: Vec<String> = claims
+    let granted = claims
         .claims
         .get("scopes")
         .and_then(|v| v.as_str())
-        .map(|s| s.split_whitespace().map(str::to_string).collect())
-        .unwrap_or_default();
-
-    if !scopes.iter().any(|s| s == required_scope) {
+        .map(|s| s.split_whitespace().any(|scope| scope == required_scope))
+        .unwrap_or(false);
+    if !granted {
         return Err(advantage_error(
             StatusCode::UNAUTHORIZED,
             "Insufficient permissions",
         ));
     }
 
-    Ok(AdvantageAuth {
-        developer_key_id,
-        scopes,
-    })
+    Ok(AdvantageAuth { developer_key_id })
 }
 
 /// Steps 4–5 of the chain: `verify_active_in_account` (AGS) — 401 "Invalid
 /// Developer Key" — then `verify_context` — 404 "Context is deleted or not
 /// found" for a blank/deleted course.
-pub(crate) async fn verify_advantage_course(
-    pool: &PgPool,
-    auth: &AdvantageAuth,
-    course_id: i64,
-) -> Result<(), Response> {
+#[allow(clippy::result_large_err)]
+pub(crate) async fn verify_advantage_course(pool: &PgPool, course_id: i64) -> Result<(), Response> {
     let row: Option<(i64,)> = sqlx::query_as(
         "SELECT 1::bigint FROM courses WHERE id = $1 AND workflow_state <> 'deleted'",
     )
@@ -171,19 +166,19 @@ pub(crate) async fn verify_advantage_course(
 }
 
 /// Step 6: `verify_tool` — a tool bound to the developer key in the course
-/// context. star-lms models tools as `lti_registrations` rows linked to the
-/// developer key (0115): the tool exists for the key when a registration
-/// with that developer_key_id exists. Missing → 401 "Access Token not
-/// linked to a Tool associated with this Context".
+/// context. star-lms models tools as `lti_ims_registrations` rows linked to
+/// the developer key (0115). Missing → 401 "Access Token not linked to a
+/// Tool associated with this Context".
+#[allow(clippy::result_large_err)]
 pub(crate) async fn verify_advantage_tool(
     pool: &PgPool,
-    auth: &AdvantageAuth,
+    developer_key_id: i64,
 ) -> Result<(), Response> {
     let row: Option<(i64,)> = sqlx::query_as(
         "SELECT 1::bigint FROM lti_ims_registrations \
          WHERE developer_key_id = $1 LIMIT 1",
     )
-    .bind(auth.developer_key_id)
+    .bind(developer_key_id)
     .fetch_optional(pool)
     .await
     .map_err(|_| advantage_error(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;

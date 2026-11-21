@@ -118,14 +118,21 @@ async fn seed_line_item(
     score_max: f64,
     published: bool,
 ) -> (i64, Option<i64>) {
+    // assignments have no `published` column — Canvas Assignment#published?
+    // maps to workflow_state ('published' | 'unpublished'), like PR #166's
+    // line_items.rs:230.
     let assignment_id: Option<i64> = sqlx::query_scalar(
-        "INSERT INTO assignments (course_id, title, points_possible, published, workflow_state) \
-         VALUES ($1, $2, $3, $4, 'published') RETURNING id",
+        "INSERT INTO assignments (course_id, title, points_possible, workflow_state) \
+         VALUES ($1, $2, $3, $4) RETURNING id",
     )
     .bind(course_id)
     .bind(label)
     .bind(score_max)
-    .bind(published)
+    .bind(if published {
+        "published"
+    } else {
+        "unpublished"
+    })
     .fetch_one(pool)
     .await
     .ok();
