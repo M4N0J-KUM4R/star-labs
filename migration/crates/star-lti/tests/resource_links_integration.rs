@@ -109,13 +109,7 @@ async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str
 /// An LTI 1.3 tool of the course — the Canvas-parity `context_external_tools`
 /// table that `lti_resource_links` is foreign-keyed to. The resource links
 /// point at its launch URL.
-async fn seed_tool(
-    pool: &PgPool,
-    prefix: &str,
-    course_id: i64,
-    account_id: i64,
-    url: &str,
-) -> i64 {
+async fn seed_tool(pool: &PgPool, prefix: &str, course_id: i64, account_id: i64, url: &str) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO context_external_tools \
          (name, url, domain, context_type, context_id, workflow_state, lti_version, \
