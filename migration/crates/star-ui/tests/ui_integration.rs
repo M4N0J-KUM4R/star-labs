@@ -2985,7 +2985,14 @@ async fn unenrolled_user_gets_no_settings_or_people_data() {
             .get(&path)
             .add_cookie(session_cookie(outsider, "student"))
             .await;
-        assert_eq!(resp.status_code(), 404, "unenrolled GET {path} -> 404");
+        // The course gate hides the course entirely (404); when the course
+        // is visible to the viewer, the teacher gate 403s — both prove no
+        // settings/people data leaks (same convention as the discussions test).
+        assert!(
+            resp.status_code() == 403 || resp.status_code() == 404,
+            "unenrolled GET {path} -> 403/404, got {}",
+            resp.status_code()
+        );
         assert!(!resp.text().contains("Gate Course"), "no course data leaks");
     }
 
