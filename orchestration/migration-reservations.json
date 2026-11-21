@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0236",
- "next_available": "0237",
+ "max_merged": "0237",
+ "next_available": "0238",
  "reservations": {
   "0001": {
    "issue": null,
@@ -770,6 +770,11 @@
   "0236": {
    "issue": null,
    "note": "star-calendar: the account calendar settings",
+   "status": "merged"
+  },
+  "0237": {
+   "issue": null,
+   "note": "star-lti: the nonces of the LTI 1.1 requests",
    "status": "merged"
   }
  }

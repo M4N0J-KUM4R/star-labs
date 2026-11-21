@@ -51,6 +51,7 @@ mod subscriptions;
 
 mod context_controls;
 mod deployments;
+mod lti_api;
 mod originality_reports;
 mod resource_links;
 mod tool_configurations;
@@ -561,6 +562,8 @@ pub fn router() -> Router<AppState> {
         .merge(context_controls::router())
         .merge(deployments::router())
         .merge(originality_reports::router())
+        // The LTI 1.1 outcome and analytics services.
+        .merge(lti_api::router())
         .merge(resource_links::router())
         .merge(tool_configurations::router())
         .route(
