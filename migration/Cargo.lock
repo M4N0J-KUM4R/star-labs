@@ -2921,6 +2921,7 @@ dependencies = [
  "axum",
  "axum-test",
  "chrono",
+ "jsonwebtoken",
  "serde",
  "serde_json",
  "sqlx",
