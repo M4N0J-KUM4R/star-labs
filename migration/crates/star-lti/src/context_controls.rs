@@ -2023,7 +2023,7 @@ async fn build_anchor_controls(
     };
 
     for draft in drafts {
-        if context.deployment_account_ids.get(&draft.deployment_id) == &draft.account_id {
+        if context.deployment_account_ids.get(&draft.deployment_id) == draft.account_id.as_ref() {
             deployment_availabilities.insert(draft.deployment_id, draft.available);
         }
     }

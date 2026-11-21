@@ -1188,6 +1188,8 @@ async fn sis_import_json(
 ) -> Result<Value, SisError> {
     let data = parse_json_object(batch.data.as_deref());
     let options = parse_json_object(batch.options.as_deref());
+    let downloadable_ids = id_list(data.get("downloadable_attachment_ids"));
+    let diffed_ids = id_list(data.get("diffed_attachment_ids"));
 
     let mut json = Map::new();
     json.insert("id".to_string(), json!(batch.id));
@@ -1206,7 +1208,7 @@ async fn sis_import_json(
         json!(batch.progress.map(|value| value as f64)),
     );
     json.insert("workflow_state".to_string(), json!(batch.workflow_state));
-    json.insert("data".to_string(), Value::Object(data.clone()));
+    json.insert("data".to_string(), Value::Object(data));
     json.insert("batch_mode".to_string(), json!(batch.batch_mode));
     json.insert(
         "batch_mode_term_id".to_string(),
@@ -1324,8 +1326,6 @@ async fn sis_import_json(
         }
     }
 
-    let downloadable_ids = id_list(data.get("downloadable_attachment_ids"));
-    let diffed_ids = id_list(data.get("diffed_attachment_ids"));
     let attachments = downloadable_attachments(pool, batch, &downloadable_ids).await?;
     let uploaded: Vec<&AttachmentRow> = attachments
         .iter()

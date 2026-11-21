@@ -642,10 +642,7 @@ async fn account_feature_enabled(
 struct OutcomeImportRow {
     id: i64,
     workflow_state: String,
-    context_id: i64,
-    context_type: String,
     user_id: Option<i64>,
-    attachment_id: Option<i64>,
     progress: Option<i64>,
     ended_at: Option<NaiveDateTime>,
     created_at: NaiveDateTime,
@@ -674,16 +671,6 @@ impl ImportContext {
             ImportContext::Course(_) => "Course",
         }
     }
-}
-
-/// Everything `OutcomeImportsApiController#create` needs.
-struct CreateImportInput {
-    context: ImportContext,
-    learning_outcome_group_id: Option<i64>,
-    params: Params,
-    multipart: Vec<MultipartField>,
-    body: Bytes,
-    content_type: String,
 }
 
 /// `POST /accounts/{account_id}/outcome_imports`.
@@ -1030,8 +1017,7 @@ async fn enqueue_job(
 /// Load an outcome import by id.
 async fn fetch_outcome_import(pool: &PgPool, id: i64) -> Result<OutcomeImportRow, OutcomeApiError> {
     let row = sqlx::query_as::<_, OutcomeImportRow>(
-        "SELECT id, workflow_state, context_id, context_type, user_id, attachment_id,
-                progress, ended_at, created_at, updated_at, data
+        "SELECT id, workflow_state, user_id, progress, ended_at, created_at, updated_at, data
          FROM outcome_imports WHERE id = $1",
     )
     .bind(id)
@@ -1349,8 +1335,7 @@ async fn find_outcome_import(
             return Ok(None);
         };
         let row = sqlx::query_as::<_, OutcomeImportRow>(
-            "SELECT id, workflow_state, context_id, context_type, user_id, attachment_id,
-                    progress, ended_at, created_at, updated_at, data
+            "SELECT id, workflow_state, user_id, progress, ended_at, created_at, updated_at, data
              FROM outcome_imports WHERE id = $1",
         )
         .bind(latest_id)
@@ -1360,8 +1345,7 @@ async fn find_outcome_import(
     }
 
     let row = sqlx::query_as::<_, OutcomeImportRow>(
-        "SELECT id, workflow_state, context_id, context_type, user_id, attachment_id,
-                progress, ended_at, created_at, updated_at, data
+        "SELECT id, workflow_state, user_id, progress, ended_at, created_at, updated_at, data
          FROM outcome_imports
          WHERE id = $1 AND context_id = $2 AND context_type = $3",
     )
@@ -1658,7 +1642,7 @@ fn verify_sort_parameters(params: &Params) -> Result<(), OutcomeApiError> {
 
 /// Canvas `verify_include_parameter`.
 fn verify_include_parameter(params: &Params) -> Result<(), OutcomeApiError> {
-    const VALID_INCLUDES: [&str; 8] = [
+    const VALID_INCLUDES: [&str; 9] = [
         "courses",
         "users",
         "alignments",

@@ -212,6 +212,15 @@ async fn seed_learning_object_dates(
     .expect("seed learning object dates")
 }
 
+/// One `learning_object_date_overrides` row, read back by the tests.
+#[derive(Debug, sqlx::FromRow)]
+struct OverrideProbe {
+    set_type: String,
+    set_id: Option<i64>,
+    student_ids: Vec<i64>,
+    due_at: Option<DateTime<Utc>>,
+}
+
 /// One `learning_object_date_overrides` row.
 async fn seed_override(
     pool: &PgPool,
