@@ -122,7 +122,8 @@ pub(crate) async fn verify_advantage_access(
         sqlx::query_as("SELECT id FROM developer_keys WHERE id = $1 AND workflow_state = 'active'")
             .bind(client_id)
             .fetch_optional(&state.db)
-            .await?;
+            .await
+            .map_err(|_| advantage_error(StatusCode::INTERNAL_SERVER_ERROR, "database error"))?;
 
     let (developer_key_id,) = row.ok_or_else(|| {
         advantage_error(

@@ -276,7 +276,7 @@ async fn group_index(
         return advantage_error(StatusCode::NOT_FOUND, "Context is deleted or not found");
     };
 
-    if let Err(resp) = verify_advantage_tool(&state.db, &auth).await {
+    if let Err(resp) = verify_advantage_tool(&state.db, auth.developer_key_id).await {
         return resp;
     }
 
