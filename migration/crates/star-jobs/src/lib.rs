@@ -120,7 +120,8 @@ pub struct JobV2 {
 }
 
 /// Column list shared by every Jobs V2 read (order-independent for `FromRow`).
-pub(crate) const JOB_V2_COLUMNS: &str = "id, tag, strand, singleton, shard_id, max_concurrent, priority, \
+pub(crate) const JOB_V2_COLUMNS: &str =
+    "id, tag, strand, singleton, shard_id, max_concurrent, priority, \
      attempts, max_attempts, locked_by, run_at, locked_at, handler, failed_at, \
      original_job_id, requeued_job_id, last_error, workflow_state";
 
