@@ -2684,7 +2684,7 @@ async fn speedgrader_queue_and_rubric_panel() {
     )
     .await;
     seed_submission(&pool, essay, student, "my essay text", None, "submitted").await;
-    let (rubric_id, criterion_ids) = seed_rubric(&pool, course, essay).await;
+    let (_, criterion_ids) = seed_rubric(&pool, course, essay).await;
 
     // Teacher queue (default assignment = first, default student = first by
     // name: gstudent sorts before gstudent2).
@@ -2996,7 +2996,9 @@ async fn speedgrader_next_prev_navigation() {
         .await;
     assert_eq!(resp.status_code(), 200);
     let body = resp.text();
-    assert!(body.contains("speedgrader-student-row selected\" data-user-id=\"{student}\""));
+    assert!(body.contains(&format!(
+        "speedgrader-student-row selected\" data-user-id=\"{student}\""
+    )));
 
     cleanup(&pool, &prefix).await;
 }
