@@ -1484,7 +1484,7 @@ async fn create_conference(
     }
 
     let row = load_conference(state, conference_id).await?;
-    let participants = fetch_participants(&state.db, &[row.clone()]).await?;
+    let participants = fetch_participants(&state.db, std::slice::from_ref(&row)).await?;
     let ids = participants.get(&row.id).map(Vec::as_slice).unwrap_or(&[]);
     Ok(Json(model_conference_json(&row, ids, &base)).into_response())
 }

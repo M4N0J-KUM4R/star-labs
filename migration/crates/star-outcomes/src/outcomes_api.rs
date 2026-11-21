@@ -2207,10 +2207,7 @@ async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, OutcomeA
 
 /// Canvas `value_to_boolean`.
 fn value_to_boolean(value: Option<&str>) -> bool {
-    match value {
-        Some("true") | Some("1") | Some("t") | Some("T") | Some("yes") => true,
-        _ => false,
-    }
+    matches!(value, Some("true") | Some("1") | Some("t") | Some("T") | Some("yes"))
 }
 
 /// The `page` / `per_page` request parameters.
@@ -2246,7 +2243,7 @@ fn jsonapi_meta(base_url: &str, query: &str, per_page: usize, page: usize, total
     let page_count = if per_page == 0 {
         0
     } else {
-        (total + per_page - 1) / per_page
+        total.div_ceil(per_page)
     };
     let link = |page: usize| format!("{base_url}?{query}&page={page}&per_page={per_page}");
 
@@ -2592,7 +2589,7 @@ fn calculate_rollup_score(
             let mut sorted = scores.clone();
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let mid = sorted.len() / 2;
-            if sorted.len() % 2 == 0 {
+            if sorted.len().is_multiple_of(2) {
                 Some((sorted[mid - 1] + sorted[mid]) / 2.0)
             } else {
                 Some(sorted[mid])
@@ -2709,7 +2706,7 @@ fn calculate_rollup_score(
         Some(result) => {
             let stamp = result.submitted_at.or(result.assessed_at);
             let title = stamp
-                .and_then(|_| result.title.as_ref())
+                .and(result.title.as_ref())
                 .and_then(|value| value.split(", ").nth(1).map(str::to_string));
             (stamp, title)
         }
@@ -2861,7 +2858,7 @@ async fn aggregate_rollups(
             let mut sorted = values.clone();
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let mid = sorted.len() / 2;
-            if sorted.len() % 2 == 0 {
+            if sorted.len().is_multiple_of(2) {
                 Some((sorted[mid - 1] + sorted[mid]) / 2.0)
             } else {
                 Some(sorted[mid])

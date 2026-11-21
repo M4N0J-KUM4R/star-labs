@@ -47,7 +47,7 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
-mod quiz_submission_questions_api;
+pub mod quiz_submission_questions_api;
 use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
