@@ -7,7 +7,8 @@
 //! `/courses/{id}/discussions[...]` (alias `/discussion_topics`) and
 //! `/conversations[...]`, plus the assignments + gradebook journey routes
 //! (issue #71): `/courses/{id}/assignments[...]`, `/courses/{id}/grades`,
-//! `/courses/{id}/gradebook[.csv]`.
+//! `/courses/{id}/gradebook[.csv]`, plus the SpeedGrader grading workflow
+//! (issue #108): `/courses/{id}/gradebook/speedgrader[.../grade]`.
 //!
 //! Specific journey routes are registered BEFORE the generic
 //! `/courses/{id}/{tab}` so the "assignments"/"grades"/"discussions" tab
@@ -157,6 +158,16 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{id}/gradebook.csv",
             get(handlers::grades::gradebook_csv),
+        )
+        // SpeedGrader grading workflow (issue #108) — BEFORE the generic tab
+        // route, sibling of the gradebook list view (#71).
+        .route(
+            "/courses/{id}/gradebook/speedgrader",
+            get(handlers::speedgrader::speedgrader),
+        )
+        .route(
+            "/courses/{id}/gradebook/speedgrader/grade",
+            post(handlers::speedgrader::speedgrader_grade),
         )
         .route("/courses/{id}/{tab}", get(handlers::course::course_tab))
         .route("/static/{hash}/{file}", get(assets::serve_static))
