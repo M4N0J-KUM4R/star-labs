@@ -48,7 +48,7 @@ async fn mounted_routes_require_auth_and_unknown_paths_stay_404() {
         return;
     };
 
-    // Real routes without a token: 401 from the auth extractor, never an
+    // Real GET routes without a token: 401 from the auth extractor, never an
     // open 200 (the scaffold-era expectation of a bare 404 no longer holds
     // once the routes exist).
     for path in [
@@ -58,7 +58,6 @@ async fn mounted_routes_require_auth_and_unknown_paths_stay_404() {
         "/polls/1/poll_sessions",
         "/polls/1/poll_sessions/2/open",
         "/poll_sessions/opened",
-        "/polls/1/poll_sessions/2/poll_submissions",
     ] {
         let resp = server.get(path).await;
         assert_eq!(
@@ -68,6 +67,24 @@ async fn mounted_routes_require_auth_and_unknown_paths_stay_404() {
             resp.text()
         );
     }
+
+    // The submissions collection is POST-only: a GET there is a 405 from the
+    // method router (the extractor never runs), while the POST is a 401
+    // without a token.
+    let resp = server.get("/polls/1/poll_sessions/2/poll_submissions").await;
+    assert_eq!(
+        resp.status_code(),
+        405,
+        "GET on the POST-only submissions route must be 405; body: {}",
+        resp.text()
+    );
+    let resp = server.post("/polls/1/poll_sessions/2/poll_submissions").await;
+    assert_eq!(
+        resp.status_code(),
+        401,
+        "POST /poll_submissions without auth must be 401; body: {}",
+        resp.text()
+    );
 
     // A genuinely unmounted sibling path stays 404.
     let resp = server.get("/polls/1/poll_fractions").await;
