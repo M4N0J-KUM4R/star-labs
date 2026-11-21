@@ -27,6 +27,9 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+pub mod gradebook_history;
+use gradebook_history::gradebook_history_router;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -196,7 +199,7 @@ fn is_admin(auth: &AuthUser) -> bool {
 /// Star snapshot those rights belong to teachers, TAs and (grade-capable)
 /// designers; Canvas grants `manage_grades` to `TeacherEnrollment` and
 /// `TaEnrollment` by default and `view_all_grades` to teachers/TAs as well.
-async fn check_teacher_or_admin(
+pub(crate) async fn check_teacher_or_admin(
     pool: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -234,7 +237,7 @@ async fn check_view_grade_changes(pool: &PgPool, auth: &AuthUser) -> Result<bool
     Ok(row.is_some())
 }
 
-async fn ensure_course(pool: &PgPool, course_id: i64) -> Result<(), ApiError> {
+pub(crate) async fn ensure_course(pool: &PgPool, course_id: i64) -> Result<(), ApiError> {
     let row: Option<(i64,)> =
         sqlx::query_as(r#"SELECT id FROM courses WHERE id = $1 AND workflow_state <> 'deleted'"#)
             .bind(course_id)
@@ -245,7 +248,7 @@ async fn ensure_course(pool: &PgPool, course_id: i64) -> Result<(), ApiError> {
 
 /// Canvas `api_find(User.active, ...)` — the Star `users` table has no
 /// soft-delete column, so this is an existence check.
-async fn ensure_active_user(pool: &PgPool, user_id: i64) -> Result<(), ApiError> {
+pub(crate) async fn ensure_active_user(pool: &PgPool, user_id: i64) -> Result<(), ApiError> {
     let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE id = $1")
         .bind(user_id)
         .fetch_optional(pool)
@@ -1283,6 +1286,7 @@ async fn for_course_assignment_grader_student(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(gradebook_history_router())
         .route("/audit/grade_change", get(advanced_query))
         .route("/audit/grade_change/assignments/{assignment_id}", get(for_assignment))
         .route("/audit/grade_change/students/{student_id}", get(for_student))
