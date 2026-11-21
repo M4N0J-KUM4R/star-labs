@@ -51,6 +51,7 @@ mod subscriptions;
 
 mod context_controls;
 mod deployments;
+mod originality_reports;
 mod resource_links;
 mod tool_configurations;
 
@@ -559,6 +560,7 @@ pub fn router() -> Router<AppState> {
         .merge(lti_apps::router())
         .merge(context_controls::router())
         .merge(deployments::router())
+        .merge(originality_reports::router())
         .merge(resource_links::router())
         .merge(tool_configurations::router())
         .route(
