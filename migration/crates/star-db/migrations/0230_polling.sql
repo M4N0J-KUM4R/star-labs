@@ -1,4 +1,4 @@
--- Migration 0229: the polling tables.
+-- Migration 0230: the polling tables.
 --
 -- Canvas `Polling::Poll` is a question with its choices, `Polling::PollSession`
 -- is one session of a poll in a course, and `Polling::PollSubmission` is the

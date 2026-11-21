@@ -16,6 +16,8 @@ use std::collections::HashMap;
 
 pub mod learn_platform;
 
+mod shared_brand_configs;
+
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
@@ -1873,6 +1875,8 @@ async fn close_user_account_notification(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // The shared brand configurations of an account.
+        .merge(shared_brand_configs::router())
         .route("/accounts", get(list_accounts))
         .route("/accounts/{id}", get(get_account).put(update_account))
         .route(

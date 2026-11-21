@@ -1,4 +1,4 @@
--- Migration 0234: the course nicknames.
+-- Migration 0235: the course nicknames.
 --
 -- Canvas keeps a course nickname in the `user_preference_values` rows, under
 -- the key `course_nicknames` and the course id as the sub key

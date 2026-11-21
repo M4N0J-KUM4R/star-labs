@@ -1,4 +1,4 @@
--- Migration 0233: make the LTI context controls usable.
+-- Migration 0234: make the LTI context controls usable.
 --
 -- The Canvas schema (`db/migrate/20101210192618_init_canvas_db.rb`) models
 -- the owner of a context control as a polymorphic reference:

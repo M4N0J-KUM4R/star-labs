@@ -1,4 +1,4 @@
--- Migration 0232: the course paces, their module items and the progress
+-- Migration 0233: the course paces, their module items and the progress
 -- rows the pacing routes publish.
 --
 -- Canvas keeps a course pace in `course_paces` (the plan of a course, one

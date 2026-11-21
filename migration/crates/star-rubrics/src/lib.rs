@@ -17,6 +17,12 @@ use star_common::{ApiError, AppState};
 
 mod rubrics_api;
 
+// Server-rendered UI loaders + the shared assessment write (star-ui, issue
+// #108): pub fns extracted the same way star-conversations did, so the
+// SpeedGrader rubric panel reuses this crate's INSERT shape instead of
+// forking it.
+pub mod ui;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -663,8 +669,10 @@ async fn delete_rubric(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Column list for single-table rubric assessment queries.
-const ASSESSMENT_COLUMNS: &str = "id, rubric_id, course_id, rubric_association_id, submission_id, \
+/// Column list for single-table rubric assessment queries. `pub(crate)`: the
+/// UI loader module (ui.rs) selects the same shape.
+pub(crate) const ASSESSMENT_COLUMNS: &str =
+    "id, rubric_id, course_id, rubric_association_id, submission_id, \
      artifact_id, artifact_type, assessment_type, user_id, assessor_id, score, data, comments, \
      workflow_state, created_at, updated_at";
 

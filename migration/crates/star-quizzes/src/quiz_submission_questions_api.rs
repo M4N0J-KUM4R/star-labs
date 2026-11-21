@@ -1372,42 +1372,42 @@ fn quiz_submission_questions_json(
     let answers = submission_object(&submission.submission_data);
 
     let mut payload = Map::new();
-    payload.insert(
-        "quiz_submission_questions".to_string(),
-        Value::Array(
-            questions
-                .iter()
-                .map(|question| {
-                    let mut item = match question_json(question, censored, shuffle) {
-                        Value::Object(item) => item,
-                        other => return other,
-                    };
-                    if graded {
-                        let entry = data.as_array().and_then(|entries| {
-                            entries.iter().find(|entry| {
-                                entry.get("question_id").and_then(json_i64) == Some(question.id)
-                            })
-                        });
-                        if let Some(entry) = entry {
-                            item.insert("flagged".to_string(), json!(false));
-                            item.insert(
-                                "correct".to_string(),
-                                entry.get("correct").cloned().unwrap_or(Value::Null),
-                            );
-                        }
-                    } else {
-                        item.insert(
-                            "flagged".to_string(),
-                            json!(value_to_boolean(answers.get(&marked_key(question.id)))
-                                .unwrap_or(false)),
-                        );
-                        item.insert("answer".to_string(), deserialize_answer(question, &answers));
-                    }
-                    Value::Object(item)
-                })
-                .collect(),
-        ),
-    );
+    let mut items: Vec<Value> = Vec::new();
+    for question in questions {
+        let mut item = match question_json(question, censored, shuffle) {
+            Value::Object(item) => item,
+            other => {
+                items.push(other);
+                continue;
+            }
+        };
+        if graded {
+            let entry = data.as_array().and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|entry| entry.get("question_id").and_then(json_i64) == Some(question.id))
+            });
+            // Canvas returns the question only when the submission holds a
+            // graded entry for it.
+            let Some(entry) = entry else {
+                continue;
+            };
+            item.insert("flagged".to_string(), json!(false));
+            item.insert(
+                "correct".to_string(),
+                entry.get("correct").cloned().unwrap_or(Value::Null),
+            );
+        } else {
+            item.insert(
+                "flagged".to_string(),
+                json!(value_to_boolean(answers.get(&marked_key(question.id))).unwrap_or(false)),
+            );
+            item.insert("answer".to_string(), deserialize_answer(question, &answers));
+        }
+        items.push(Value::Object(item));
+    }
+
+    payload.insert("quiz_submission_questions".to_string(), Value::Array(items));
 
     if includes.iter().any(|include| include == "quiz_question") {
         payload.insert(
@@ -1749,7 +1749,8 @@ async fn backup_submission_data(
             None => Value::Null,
         },
     );
-    merged.insert("cnt".to_string(), json!(if snapshot { 5 } else { 1 }));
+    let counter_seed: i64 = if snapshot { 5 } else { 1 };
+    merged.insert("cnt".to_string(), json!(counter_seed));
 
     merged.insert("attempt".to_string(), json!(submission.attempt));
 

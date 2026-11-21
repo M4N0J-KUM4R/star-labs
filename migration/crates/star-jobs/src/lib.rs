@@ -1,18 +1,28 @@
 //! star-jobs — Canvas-compatible background job/progress records.
 //!
 //! Canvas parity (`app/controllers/jobs_controller.rb`, Jobs V1 API):
-//! - `GET  /api/v1/jobs`             — list jobs (site admin only)
-//! - `GET  /api/v1/jobs/{id}`        — show one job (site admin only)
-//! - `POST /api/v1/jobs/{id}/cancel` — cancel a queued/running job
+//! - `GET  /api/v1/jobs`              — list jobs, JSON mode (`only`/`flavor`/`q`)
+//! - `GET  /api/v1/jobs/{id}`         — show one job (`?flavor=failed`)
+//! - `POST /api/v1/jobs/batch_update` — bulk update/delete/unblock jobs
+//! - `POST /api/v1/jobs/{id}/cancel`  — cancel a queued/running job
 //!
-//! Job JSON shape: `id, tag, workflow_state, progress, created_at,
-//! updated_at, user_id, context_type, context_id`.
+//! The V1 JSON-mode endpoints emit the Canvas `Delayed::Job` columns
+//! (`id, tag, strand, singleton, shard_id, max_concurrent, priority,
+//! attempts, max_attempts, locked_by, run_at, locked_at, handler`, with
+//! `failed_at, original_job_id, requeued_job_id, last_error` on failed rows);
+//! listings drop `handler`/`last_error` like Canvas' `as_json` except list.
 //!
 //! Canvas parity (`app/controllers/jobs_v2_controller.rb`, Jobs V2 API):
-//! - `GET  /api/v1/jobs2`              — list jobs, optional `bucket`
+//! - `GET  /api/v1/jobs2`              — list jobs, optional `bucket` query
 //! - `GET  /api/v1/jobs2/{id}`         — lookup by id or `original_job_id`
+//! - `GET  /api/v1/jobs2/{bucket}`     — bucket listing (queued/running/future/failed)
+//! - `GET  /api/v1/jobs2/{bucket}/by_{group}` — grouped counts (tag/strand/singleton)
+//! - `GET  /api/v1/jobs2/{bucket}/by_{group}/search` — group text search
 //! - `GET  /api/v1/jobs2/clusters`     — per-cluster job counts
 //! - `POST /api/v1/jobs2/{id}/requeue` — requeue a failed job
+//! - `PUT  /api/v1/jobs2/manage`       — update a strand's concurrency/priority
+//! - `PUT  /api/v1/jobs2/unstuck`      — unstick a strand/singleton (202 async mode)
+//! - `GET  /api/v1/jobs2/throttle/check` — throttle pre-check for a tag prefix
 //!
 //! Jobs V2 exposes the Delayed::Job columns added by migration 0057:
 //! `id, tag, strand, singleton, shard_id, max_concurrent, priority, attempts,
@@ -40,7 +50,10 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
-mod jobs_v2;
+// New route modules (V1 JSON and V2 grouped/management).
+pub mod routes_v1;
+pub mod routes_v2_grouped;
+pub mod routes_v2_manage;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -58,17 +71,6 @@ pub struct Job {
     pub user_id: Option<i64>,
     pub context_type: Option<String>,
     pub context_id: Option<i64>,
-}
-
-/// Query params for `GET /jobs`.
-///
-/// Canvas accepts `limit`/`offset` (`JobsController::LIMIT = 100`, offset 0)
-/// and filters by workflow state; the same names are kept here.
-#[derive(Debug, Deserialize)]
-pub struct ListJobsQuery {
-    pub workflow_state: Option<String>,
-    pub limit: Option<i64>,
-    pub offset: Option<i64>,
 }
 
 /// Canvas caps job listings at 100 rows per page.
@@ -118,13 +120,14 @@ pub struct JobV2 {
 }
 
 /// Column list shared by every Jobs V2 read (order-independent for `FromRow`).
-const JOB_V2_COLUMNS: &str = "id, tag, strand, singleton, shard_id, max_concurrent, priority, \
+pub(crate) const JOB_V2_COLUMNS: &str =
+    "id, tag, strand, singleton, shard_id, max_concurrent, priority, \
      attempts, max_attempts, locked_by, run_at, locked_at, handler, failed_at, \
      original_job_id, requeued_job_id, last_error, workflow_state";
 
 /// Canvas Jobs V2 buckets (`JobsV2Controller::BUCKETS`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Bucket {
+pub(crate) enum Bucket {
     Queued,
     Running,
     Future,
@@ -133,7 +136,7 @@ enum Bucket {
 
 impl Bucket {
     /// Parse the Canvas `bucket` parameter; anything else is a 400.
-    fn parse(raw: &str) -> Option<Self> {
+    pub(crate) fn parse(raw: &str) -> Option<Self> {
         match raw {
             "queued" => Some(Self::Queued),
             "running" => Some(Self::Running),
@@ -153,7 +156,7 @@ impl Bucket {
     }
 
     /// SQL predicate selecting this bucket from the jobs table.
-    fn where_clause(self) -> &'static str {
+    pub(crate) fn where_clause(self) -> &'static str {
         match self {
             // Canvas `queued_scope`: due jobs that no worker has locked.
             Self::Queued => {
@@ -332,7 +335,7 @@ fn is_admin(auth: &AuthUser) -> bool {
 
 /// Canvas restricts the Jobs API to site admins (`view_jobs` / `manage_jobs`);
 /// the workspace equivalent is the global `admin` role.
-fn require_admin(auth: &AuthUser) -> Result<(), ApiError> {
+pub(crate) fn require_admin(auth: &AuthUser) -> Result<(), ApiError> {
     if is_admin(auth) {
         Ok(())
     } else {
@@ -345,64 +348,27 @@ fn require_admin(auth: &AuthUser) -> Result<(), ApiError> {
 // ---------------------------------------------------------------------------
 
 /// Build the jobs router (mounted under `/api/v1` by star-http).
+///
+/// The V1 JSON-mode routes (`/jobs`, `/jobs/{id}`, `/jobs/batch_update`)
+/// live in [`routes_v1`]; the V2 grouped and management routes live in
+/// [`routes_v2_grouped`] and [`routes_v2_manage`].
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/jobs", get(list_jobs))
-        .route("/jobs/{id}", get(show_job))
+        // Canvas Jobs V1 (JSON mode) plus the cancel extension.
+        .merge(routes_v1::router())
         .route("/jobs/{id}/cancel", post(cancel_job))
         // Canvas Jobs V2 (`/api/v1/jobs2/...`).
         .route("/jobs2", get(list_jobs_v2))
         .route("/jobs2/clusters", get(list_job_clusters))
-        .route("/jobs2/{id}", get(lookup_job_v2))
+        .route("/jobs2/{id}", get(lookup_or_list_v2))
         .route("/jobs2/{id}/requeue", post(requeue_job_v2))
-        // The grouped listings, the strand management and the throttling of
-        // `JobsV2Controller`.
-        .merge(jobs_v2::router())
+        .merge(routes_v2_grouped::router())
+        .merge(routes_v2_manage::router())
 }
 
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
-
-/// `GET /jobs` — list jobs, newest first (site admin only).
-async fn list_jobs(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Query(params): Query<ListJobsQuery>,
-) -> Result<Json<Vec<Job>>, ApiError> {
-    require_admin(&auth)?;
-
-    let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    let offset = params.offset.unwrap_or(0).max(0);
-
-    let rows: Vec<Job> = sqlx::query_as(
-        r#"
-        SELECT id, tag, workflow_state, progress, created_at, updated_at,
-               user_id, context_type, context_id
-        FROM jobs
-        WHERE ($1::text IS NULL OR workflow_state = $1)
-        ORDER BY id DESC
-        LIMIT $2 OFFSET $3
-        "#,
-    )
-    .bind(params.workflow_state.as_deref())
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&state.db)
-    .await?;
-
-    Ok(Json(rows))
-}
-
-/// `GET /jobs/{id}` — show one job (site admin only).
-async fn show_job(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<Job>, ApiError> {
-    require_admin(&auth)?;
-    Ok(Json(fetch_job(&state.db, id).await?))
-}
 
 /// `POST /jobs/{id}/cancel` — move a queued/running job to `cancelled`.
 async fn cancel_job(
@@ -444,10 +410,11 @@ async fn cancel_job(
 
 /// `GET /jobs2` — list jobs, optionally narrowed to a Canvas bucket.
 ///
-/// Canvas serves the listing as `/jobs2/{bucket}`; the workspace keeps the
-/// bucket as a query parameter so `/api/v1/jobs2` is the single entry point.
-/// Rows carry `info` (seconds queued/running, timestamp for future/failed)
-/// when a bucket is given and an inferred `bucket` otherwise.
+/// Canvas serves the listing as `/jobs2/{bucket}` (see [`lookup_or_list_v2`]);
+/// this endpoint keeps the bucket as a query parameter so `/api/v1/jobs2`
+/// stays a single entry point. Rows carry `info` (seconds queued/running,
+/// timestamp for future/failed) when a bucket is given and an inferred
+/// `bucket` otherwise.
 async fn list_jobs_v2(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -464,6 +431,16 @@ async fn list_jobs_v2(
         None => None,
     };
 
+    let rows = list_jobs_v2_rows(&state.db, bucket, &params).await?;
+    Ok(Json(rows))
+}
+
+/// Shared listing core for `GET /jobs2?bucket=…` and `GET /jobs2/{bucket}`.
+async fn list_jobs_v2_rows(
+    db: &PgPool,
+    bucket: Option<Bucket>,
+    params: &ListJobs2Query,
+) -> Result<Vec<Value>, ApiError> {
     let limit = params.limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
     let offset = params.offset.unwrap_or(0).max(0);
 
@@ -489,22 +466,35 @@ async fn list_jobs_v2(
         .bind(params.shard_id)
         .bind(limit)
         .bind(offset)
-        .fetch_all(&state.db)
+        .fetch_all(db)
         .await?;
 
-    Ok(Json(rows.iter().map(|job| job_json(job, bucket)).collect()))
+    Ok(rows.iter().map(|job| job_json(job, bucket)).collect())
 }
 
-/// `GET /jobs2/{id}` — Canvas lookup by job id or `original_job_id`.
+/// `GET /jobs2/{id}` — Canvas lookup by job id or `original_job_id`, or a
+/// bucket listing when the path segment names a bucket.
 ///
-/// Canvas returns an array (a failed row and the job it superseded can both
+/// Canvas routes these as two constrained routes (`jobs2/:bucket` and
+/// `jobs2/:id`); axum cannot express Rails' segment constraints, so one
+/// handler dispatches. A segment that is neither a bucket name nor numeric
+/// is a 404, matching Canvas' unmatched-route behavior. Canvas returns an
+/// array for lookups (a failed row and the job it superseded can both
 /// match); an unknown id yields an empty array rather than a 404.
-async fn lookup_job_v2(
+async fn lookup_or_list_v2(
     State(state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(id_or_bucket): Path<String>,
     auth: AuthUser,
+    Query(params): Query<ListJobs2Query>,
 ) -> Result<Json<Vec<Value>>, ApiError> {
     require_admin(&auth)?;
+
+    if let Some(bucket) = Bucket::parse(&id_or_bucket) {
+        let rows = list_jobs_v2_rows(&state.db, Some(bucket), &params).await?;
+        return Ok(Json(rows));
+    }
+
+    let id: i64 = id_or_bucket.parse().map_err(|_| ApiError::NotFound)?;
 
     let sql = format!(
         "SELECT {JOB_V2_COLUMNS} FROM jobs WHERE id = $1 OR original_job_id = $1 ORDER BY id"

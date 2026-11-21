@@ -1,4 +1,4 @@
--- Migration 0235: the columns of the polls and their choices.
+-- Migration 0236: the columns of the polls and their choices.
 --
 -- The Canvas schema (`db/migrate/20101210192618_init_canvas_db.rb`) models
 -- a poll with a `question` and a `description`, and a poll choice with a

@@ -1,4 +1,4 @@
--- Migration 0231: the LTI registration history, overlays, bindings and
+-- Migration 0232: the LTI registration history, overlays, bindings and
 -- deployments, and the page views.
 --
 -- Canvas keeps the edit history of an LTI registration in

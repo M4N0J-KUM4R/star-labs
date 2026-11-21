@@ -1,4 +1,4 @@
--- Migration 0236: the account calendar settings.
+-- Migration 0237: the account calendar settings.
 --
 -- Canvas keeps the visibility of an account calendar and the way the users
 -- subscribe to it on the account itself

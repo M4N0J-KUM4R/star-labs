@@ -40,13 +40,21 @@ const EXTRA_DDL: [&str; 2] = [
      ADD COLUMN IF NOT EXISTS one_question_at_a_time BOOLEAN NOT NULL DEFAULT false, \
      ADD COLUMN IF NOT EXISTS hide_results TEXT, \
      ADD COLUMN IF NOT EXISTS one_time_results BOOLEAN NOT NULL DEFAULT false, \
-     ADD COLUMN IF NOT EXISTS require_lockdown_browser BOOLEAN NOT NULL DEFAULT false",
+     ADD COLUMN IF NOT EXISTS require_lockdown_browser BOOLEAN NOT NULL DEFAULT false, \
+     ADD COLUMN IF NOT EXISTS cant_go_back BOOLEAN NOT NULL DEFAULT false",
     "ALTER TABLE quiz_questions ADD COLUMN IF NOT EXISTS question_data JSONB",
 ];
 
 /// The seeded multiple choice question with its two answers.
 const MC_ANSWERS: &str =
     r#"[{"id":"1658","text":"A","weight":100},{"id":"1659","text":"B","weight":0}]"#;
+
+/// The seeded fill in the blanks question with its two blanks.
+const FIMB_ANSWERS: &str = r#"[{"id":"1","text":"","blank_id":"color","weight":100},{"id":"2","text":"","blank_id":"size","weight":100}]"#;
+
+/// Canvas `AssessmentQuestion.variable_id("color")` — the digest of the blank
+/// name, the key the answer of the blank is stored under.
+const COLOR_BLANK_ID: &str = "1813d2a7223184cf43e19db6622df40b";
 
 fn run_prefix() -> String {
     use std::sync::atomic::{AtomicU32, Ordering};
@@ -243,6 +251,7 @@ struct World {
     numerical: i64,
     precision_numerical: i64,
     essay: i64,
+    fill_in_the_blanks: i64,
 }
 
 async fn seed_world(pool: &PgPool, prefix: &str) -> World {
@@ -313,6 +322,19 @@ async fn seed_world(pool: &PgPool, prefix: &str) -> World {
         },
     )
     .await;
+    let fill_in_the_blanks = seed_question(
+        pool,
+        quiz,
+        QuestionSeed {
+            position: 5,
+            name: "Fill In The Blanks",
+            question_type: "fill_in_multiple_blanks_question",
+            points: 5.0,
+            answers: FIMB_ANSWERS,
+            question_data: None,
+        },
+    )
+    .await;
 
     let submission = seed_submission(pool, quiz, student, 1, "untaken", "{}").await;
 
@@ -326,6 +348,7 @@ async fn seed_world(pool: &PgPool, prefix: &str) -> World {
         numerical,
         precision_numerical,
         essay,
+        fill_in_the_blanks,
     }
 }
 
@@ -349,7 +372,7 @@ async fn the_student_reads_the_questions_of_their_own_submission() {
     let questions = body["quiz_submission_questions"]
         .as_array()
         .expect("questions");
-    assert_eq!(questions.len(), 4, "body: {body}");
+    assert_eq!(questions.len(), 5, "body: {body}");
 
     // The multiple choice question is censored for a student: no points and
     // no answer weights.
@@ -520,6 +543,79 @@ async fn answering_a_question_stores_the_answer() {
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
     assert_eq!(body["quiz_submission_questions"][0]["answer"], "Foobar");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn answering_a_blank_is_stored_under_the_canvas_digest_key() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let world = seed_world(&pool, &prefix).await;
+
+    let resp = server
+        .post(&format!("/quiz_submissions/{}/questions", world.submission))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(world.student, "student"),
+        )
+        .json(&json!({
+            "attempt": 1,
+            "validation_token": "quiz-token",
+            "quiz_questions": [{
+                "id": world.fill_in_the_blanks,
+                "answer": { "color": "Red" },
+            }],
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    // The answer of the blank is read back by the name of the blank.
+    assert_eq!(
+        body["quiz_submission_questions"][0]["answer"]["color"],
+        "red"
+    );
+    assert_eq!(
+        body["quiz_submission_questions"][0]["answer"]["size"],
+        Value::Null
+    );
+
+    // Canvas stores it under the digest of the blank name.
+    let stored: String =
+        sqlx::query_scalar("SELECT submission_data FROM quiz_submissions WHERE id = $1")
+            .bind(world.submission)
+            .fetch_one(&pool)
+            .await
+            .expect("submission data");
+    assert!(
+        stored.contains(&format!(
+            "\"question_{}_{}\":\"red\"",
+            world.fill_in_the_blanks, COLOR_BLANK_ID
+        )),
+        "submission data: {stored}"
+    );
+
+    // An unknown blank is a 400.
+    let resp = server
+        .post(&format!("/quiz_submissions/{}/questions", world.submission))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(world.student, "student"),
+        )
+        .json(&json!({
+            "attempt": 1,
+            "validation_token": "quiz-token",
+            "quiz_questions": [{
+                "id": world.fill_in_the_blanks,
+                "answer": { "material": "wood" },
+            }],
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["message"], "Unknown blank 'material'");
 
     cleanup(&pool, &prefix).await;
 }
@@ -814,6 +910,16 @@ async fn the_show_route_is_not_implemented() {
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
     let body: Value = resp.json();
     assert_eq!(body["errors"][0]["error_code"], "not_found");
+
+    // Rails raises the `ActionNotFound` before the login filter, so the
+    // answer does not depend on the caller.
+    let resp = server
+        .get(&format!(
+            "/quiz_submissions/{}/questions/{}",
+            world.submission, world.multiple_choice
+        ))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }

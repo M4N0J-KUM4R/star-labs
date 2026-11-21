@@ -1,4 +1,4 @@
--- Migration 0237: the nonces of the LTI 1.1 requests.
+-- Migration 0238: the nonces of the LTI 1.1 requests.
 --
 -- The LTI 1.1 spec asks the tool provider to reject a request whose nonce
 -- was used before; Canvas keeps the nonces of the last 90 minutes
