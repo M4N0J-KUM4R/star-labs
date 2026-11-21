@@ -5,11 +5,9 @@
 //! - `GET /api/v1/jobs2/:bucket/by_:group`         → grouped_info
 //! - `GET /api/v1/jobs2/:bucket/by_:group/search` → search
 //!
-//! Canvas embeds the group in a `by_:group` path segment (Rails partial
-//! segments); axum cannot express that, so the routes are
-//! `/jobs2/{id}/{group}` with the `by_` prefix parsed in the handlers (the
-//! `{id}` name matches the other `/jobs2/*` routes for matchit
-//! compatibility).
+//! Canvas embeds the group in a `by_:group` path segment (a Rails partial
+//! segment); axum supports a static prefix before a parameter, so the
+//! routes keep Canvas' exact shape: `/jobs2/{bucket}/by_{group}`.
 
 use axum::{
     extract::{Path, Query, State},
@@ -34,10 +32,12 @@ pub enum Group {
 }
 
 impl Group {
-    /// Parse the group name out of a `by_{group}` path segment.
+    /// Parse the group name out of the path segment.
+    ///
+    /// The route is `/jobs2/{bucket}/by_{group}`, so the segment carries the
+    /// bare group name.
     fn parse(raw: &str) -> Option<Self> {
-        let name = raw.strip_prefix("by_")?;
-        match name {
+        match raw {
             "tag" => Some(Self::Tag),
             "strand" => Some(Self::Strand),
             "singleton" => Some(Self::Singleton),
@@ -340,6 +340,6 @@ fn group_order_clause(order: &str, group: Group) -> &'static str {
 /// Build the grouped routes sub-router.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/jobs2/{id}/{group}/search", get(search_jobs))
-        .route("/jobs2/{id}/{group}", get(grouped_info))
+        .route("/jobs2/{bucket}/by_{group}/search", get(search_jobs))
+        .route("/jobs2/{bucket}/by_{group}", get(grouped_info))
 }

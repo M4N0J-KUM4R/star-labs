@@ -172,4 +172,9 @@ fn build_api_router() -> Router<AppState> {
         .merge(star_polling::router())
         .merge(star_search::router())
         .merge(star_sis::router())
+        // These three carry their routes but were never mounted, so their
+        // Canvas endpoints answered the 404 fallback.
+        .merge(star_pages::router())
+        .merge(star_modules::router())
+        .merge(star_announcements::router())
 }

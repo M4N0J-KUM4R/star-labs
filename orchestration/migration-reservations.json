@@ -4,8 +4,8 @@
   "0100",
   "0111"
  ],
- "max_merged": "0228",
- "next_available": "0229",
+ "max_merged": "0239",
+ "next_available": "0240",
  "reservations": {
   "0001": {
    "issue": null,
@@ -704,32 +704,87 @@
   },
   "0223": {
    "issue": null,
-   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "note": "star-db: the Canvas schema tables (part a)",
    "status": "merged"
   },
   "0224": {
    "issue": null,
-   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "note": "star-db: the Canvas schema tables (part b)",
    "status": "merged"
   },
   "0225": {
    "issue": null,
-   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "note": "star-db: the Canvas schema tables (part c)",
    "status": "merged"
   },
   "0226": {
    "issue": null,
-   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "note": "star-db: the Canvas schema indexes",
    "status": "merged"
   },
   "0227": {
    "issue": null,
-   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "note": "star-db: the Canvas schema foreign keys",
    "status": "merged"
   },
   "0228": {
-   "issue": 69,
-   "note": "LTI registrations deep: context controls, overlay versions, registration history",
+   "issue": null,
+   "note": "star-lti: the LTI registration history",
+   "status": "merged"
+  },
+  "0229": {
+   "issue": null,
+   "note": "star-courses: the AI experiences and their conversations",
+   "status": "merged"
+  },
+  "0230": {
+   "issue": null,
+   "note": "star-polling: the poll sessions",
+   "status": "merged"
+  },
+  "0231": {
+   "issue": null,
+   "note": "star-media: the media object columns, the tracks and the media files",
+   "status": "merged"
+  },
+  "0232": {
+   "issue": null,
+   "note": "star-lti and star-search: the LTI registration history and the page views",
+   "status": "merged"
+  },
+  "0233": {
+   "issue": null,
+   "note": "star-modules: the course paces and their module items",
+   "status": "merged"
+  },
+  "0234": {
+   "issue": null,
+   "note": "star-lti: the LTI context controls get nullable owner columns",
+   "status": "merged"
+  },
+  "0235": {
+   "issue": null,
+   "note": "star-users: the course nicknames",
+   "status": "merged"
+  },
+  "0236": {
+   "issue": null,
+   "note": "star-polling: the poll description and the choice flags",
+   "status": "merged"
+  },
+  "0237": {
+   "issue": null,
+   "note": "star-calendar: the account calendar settings",
+   "status": "merged"
+  },
+  "0238": {
+   "issue": null,
+   "note": "star-lti: the nonces of the LTI 1.1 requests",
+   "status": "merged"
+  },
+  "0239": {
+   "issue": null,
+   "note": "star-lti: the tool setting of an originality report",
    "status": "merged"
   }
  }

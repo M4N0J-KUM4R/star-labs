@@ -13,10 +13,8 @@ use axum::Router;
 use star_common::AppState;
 
 /// Domain router for star-account-reports.
-///
-/// Empty on purpose (scaffold train, issue #138). Routes from the spec
-/// (`specs/p5-rest-account-reports.md` §2) are merged here by the feature workers; the
-/// `Router::new()` base already gives unmounted paths the standard 404.
 pub fn router() -> Router<AppState> {
-    Router::new()
+    Router::new().merge(account_reports_api::router())
 }
+
+mod account_reports_api;

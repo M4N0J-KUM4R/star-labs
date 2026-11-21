@@ -45,7 +45,7 @@ async fn unknown_path_is_404() {
 
     // A path this crate will own once routes land. With the scaffold's empty
     // router it must 404 (axum default fallback), never 500 or open.
-    let resp = server.get("/courses/1/conferences").await;
+    let resp = server.get("/courses/1/conferences_extra").await;
     assert_eq!(
         resp.status_code(),
         404,

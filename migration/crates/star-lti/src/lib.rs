@@ -65,12 +65,21 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod registrations;
+
 mod context_controls;
+mod deployments;
+mod lti_api;
+mod lti_apps;
+mod originality_reports;
+mod resource_links;
+mod subscriptions;
+mod tool_configurations;
+
 mod data_services;
 mod dynamic_registration;
 mod external_tools;
 mod line_items;
-mod lti_apps;
 mod support_helpers;
 mod tool_proxy;
 mod tool_setting;
@@ -80,7 +89,7 @@ mod tool_setting;
 // ---------------------------------------------------------------------------
 
 /// Maximum account-hierarchy walk, mirroring star-accounts' cycle guard.
-const MAX_ACCOUNT_TREE_DEPTH: i64 = 10;
+pub(crate) const MAX_ACCOUNT_TREE_DEPTH: i64 = 10;
 
 /// Canvas lists 15 registrations per page by default.
 const DEFAULT_PER_PAGE: i64 = 15;
@@ -643,6 +652,15 @@ fn resolve_workflow_state(value: Option<&str>) -> Result<(&'static str, &'static
 /// Build the LTI router (mounted under `/api/v1` by star-http).
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(registrations::router())
+        .merge(lti_apps::router())
+        .merge(context_controls::router())
+        .merge(deployments::router())
+        .merge(originality_reports::router())
+        // The LTI 1.1 outcome and analytics services.
+        .merge(lti_api::router())
+        .merge(resource_links::router())
+        .merge(tool_configurations::router())
         .route(
             "/accounts/{account_id}/lti_registrations",
             get(list_registrations).post(create_registration),
@@ -751,6 +769,8 @@ pub fn lti_advantage_router() -> Router<AppState> {
         .merge(tool_proxy::advantage_router())
         .merge(tool_setting::router())
         .merge(external_tools::advantage_router())
+        // The webhook subscriptions of a tool proxy.
+        .merge(subscriptions::router())
 }
 
 // ---------------------------------------------------------------------------

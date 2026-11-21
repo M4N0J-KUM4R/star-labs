@@ -95,6 +95,9 @@ def normalize_path(path):
     p = re.sub(r"^/api/v1(?=/|$)", "", p)
     p = re.sub(r"[#$]\{[^}]*\}", ":__param__", p)
     p = re.sub(r"#.*$", "", p)  # URI fragment, after #{} interpolation is gone
+    # A Rails glob segment (`*full_path`) is one path segment, like the
+    # axum catch-all (`{*full_path}`) the port registers.
+    p = re.sub(r"\*[A-Za-z_][A-Za-z0-9_]*", ":__param__", p)
     p = re.sub(r"\{[^/{}]*\}", ":__param__", p)
     p = re.sub(r":[A-Za-z_][A-Za-z0-9_]*", "{}", p)
     p = p.replace(":{}", "{}")  # :#{...} became ::__param__

@@ -2734,7 +2734,11 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-test",
+ "chrono",
+ "serde",
+ "serde_json",
  "sqlx",
+ "star-auth",
  "star-common",
  "star-db",
  "tokio",
@@ -2882,7 +2886,11 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-test",
+ "chrono",
+ "serde",
+ "serde_json",
  "sqlx",
+ "star-auth",
  "star-common",
  "star-db",
  "tokio",
@@ -2910,10 +2918,15 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-test",
+ "chrono",
+ "serde",
+ "serde_json",
  "sqlx",
+ "star-auth",
  "star-common",
  "star-db",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -3037,7 +3050,11 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-test",
+ "chrono",
+ "serde",
+ "serde_json",
  "sqlx",
+ "star-auth",
  "star-common",
  "star-db",
  "tokio",
@@ -3231,12 +3248,15 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-test",
+ "base64 0.22.1",
  "chrono",
+ "hmac",
  "jsonwebtoken",
  "rand 0.8.8",
  "reqwest",
  "serde",
  "serde_json",
+ "sha1",
  "sqlx",
  "star-auth",
  "star-common",
@@ -3352,7 +3372,11 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-test",
+ "chrono",
+ "serde",
+ "serde_json",
  "sqlx",
+ "star-auth",
  "star-common",
  "star-db",
  "tokio",
@@ -3365,6 +3389,7 @@ dependencies = [
  "axum",
  "axum-test",
  "chrono",
+ "md-5",
  "reqwest",
  "serde",
  "serde_json",
@@ -3398,10 +3423,15 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-test",
+ "chrono",
+ "serde",
+ "serde_json",
  "sqlx",
+ "star-auth",
  "star-common",
  "star-db",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -3410,10 +3440,15 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "axum-test",
+ "chrono",
+ "serde",
+ "serde_json",
  "sqlx",
+ "star-auth",
  "star-common",
  "star-db",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -3484,6 +3519,7 @@ dependencies = [
  "star-common",
  "star-db",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

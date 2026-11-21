@@ -617,7 +617,7 @@
     {
       "action": "resolve_path",
       "controller": "folders",
-      "normalized_path": "courses/{}/folders/by_path/*full_path",
+      "normalized_path": "courses/{}/folders/by_path/{}",
       "path": "/api/v1/courses/:course_id/folders/by_path/*full_path",
       "ui_referenced": false,
       "verb": "GET"
@@ -4129,7 +4129,7 @@
     {
       "action": "resolve_path",
       "controller": "folders",
-      "normalized_path": "users/{}/folders/by_path/*full_path",
+      "normalized_path": "users/{}/folders/by_path/{}",
       "path": "/api/v1/users/:user_id/folders/by_path/*full_path",
       "ui_referenced": false,
       "verb": "GET"
@@ -5985,7 +5985,7 @@
     {
       "action": "resolve_path",
       "controller": "folders",
-      "normalized_path": "groups/{}/folders/by_path/*full_path",
+      "normalized_path": "groups/{}/folders/by_path/{}",
       "path": "/api/v1/groups/:group_id/folders/by_path/*full_path",
       "ui_referenced": false,
       "verb": "GET"

@@ -13,6 +13,10 @@
 use axum::Router;
 use star_common::AppState;
 
+mod poll_sessions;
+
+mod polls;
+
 /// Domain router for star-polling.
 ///
 /// Empty on purpose (scaffold train, issue #138). Routes from the spec
@@ -20,4 +24,6 @@ use star_common::AppState;
 /// `Router::new()` base already gives unmounted paths the standard 404.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(poll_sessions::router())
+        .merge(polls::router())
 }

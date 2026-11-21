@@ -1,10 +1,13 @@
-//! Routes V2 — strand management, unstuck, and throttle-check.
+//! Routes V2 — strand management, unstuck, and throttling.
 //!
 //! Canvas: `app/controllers/jobs_v2_controller.rb`.
 //! Routes:
 //! - `PUT /api/v1/jobs2/manage`         → manage_strand
 //! - `PUT /api/v1/jobs2/unstuck`         → unstuck_strand
 //! - `GET /api/v1/jobs2/throttle/check`  → throttle_check
+//! - `PUT /api/v1/jobs2/throttle`        → throttle
+//! - `GET /api/v1/jobs2/stuck/strands`   → stuck_strands
+//! - `GET /api/v1/jobs2/stuck/singletons` → stuck_singletons
 
 use axum::{
     extract::{Query, State},
@@ -286,4 +289,252 @@ pub fn router() -> Router<AppState> {
         .route("/jobs2/manage", put(manage_strand))
         .route("/jobs2/unstuck", put(unstuck_strand))
         .route("/jobs2/throttle/check", get(throttle_check))
+        .route("/jobs2/throttle", put(throttle))
+        .route("/jobs2/stuck/strands", get(stuck_strands))
+        .route("/jobs2/stuck/singletons", get(stuck_singletons))
+}
+
+/// Request body for `PUT /jobs2/throttle`.
+#[derive(Debug, Default, Deserialize)]
+pub struct ThrottleRequest {
+    pub term: Option<String>,
+    pub max_concurrent: Option<i32>,
+    pub shard_id: Option<i64>,
+}
+
+/// Query params for `GET /jobs2/stuck/{strands,singletons}`.
+#[derive(Debug, Default, Deserialize)]
+pub struct StuckQuery {
+    /// Canvas `job_shard` argument (a job cluster id in this port).
+    pub job_shard: Option<i64>,
+    /// Canvas `Api.paginate` page size.
+    pub per_page: Option<i64>,
+    /// Canvas `Api.paginate` page number (1-based).
+    pub page: Option<i64>,
+    /// Workspace alias for `per_page`.
+    pub limit: Option<i64>,
+    /// Workspace alias for the computed offset.
+    pub offset: Option<i64>,
+}
+
+/// One stuck strand or singleton.
+#[derive(Debug, sqlx::FromRow)]
+struct StuckRow {
+    name: Option<String>,
+    stuck_count: i64,
+}
+
+/// `PUT /api/v1/jobs2/throttle` — Canvas `JobsV2Controller#throttle`.
+///
+/// The matching jobs move to a fresh temporary strand, so they run one at a
+/// time.
+pub async fn throttle(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<ThrottleRequest>,
+) -> Result<Json<Value>, ApiError> {
+    require_admin(&auth)?;
+
+    let term = params
+        .term
+        .as_deref()
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("missing term".into()))?;
+
+    // Canvas: `params[:max_concurrent]&.to_i || 1`.
+    let max_concurrent = params.max_concurrent.unwrap_or(1).max(0);
+    let new_strand = format!("tmp_strand_{}", random_alphanumeric(16));
+    let pattern = wildcard_right(term);
+
+    let mut tx = state.db.begin().await?;
+
+    // Canvas `Delayed::Job.apply_temp_strand!`.
+    let updated = sqlx::query(
+        "UPDATE jobs \
+         SET strand = $3, max_concurrent = $4, next_in_strand = FALSE \
+         WHERE strand IS NULL AND singleton IS NULL AND locked_by IS NULL \
+           AND tag LIKE $1 ESCAPE '\\' \
+           AND ($2::bigint IS NULL OR shard_id = $2)",
+    )
+    .bind(&pattern)
+    .bind(params.shard_id)
+    .bind(&new_strand)
+    .bind(max_concurrent)
+    .execute(&mut *tx)
+    .await?;
+
+    let job_count = updated.rows_affected() as i64;
+
+    sqlx::query("UPDATE jobs SET next_in_strand = TRUE WHERE strand = $1 ORDER BY id LIMIT $2")
+        .bind(&new_strand)
+        .bind(i64::from(max_concurrent))
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+
+    Ok(Json(json!({
+        "job_count": job_count,
+        "new_strand": new_strand,
+    })))
+}
+
+/// `GET /api/v1/jobs2/stuck/strands` — Canvas `JobsV2Controller#stuck_strands`.
+pub async fn stuck_strands(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<StuckQuery>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    require_admin(&auth)?;
+    stuck(&state, &params, true).await
+}
+
+/// `GET /api/v1/jobs2/stuck/singletons` — Canvas
+/// `JobsV2Controller#stuck_singletons`.
+pub async fn stuck_singletons(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(params): Query<StuckQuery>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    require_admin(&auth)?;
+    stuck(&state, &params, false).await
+}
+
+/// Canvas `stuck_strands` / `stuck_singletons` — the strands and the
+/// singletons that hold a job that is not ready to run.
+async fn stuck(
+    state: &AppState,
+    params: &StuckQuery,
+    strands: bool,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    let (per_page, offset) = page_bounds(params.per_page, params.page, params.limit, params.offset);
+
+    // Canvas activates the requested job shard; the port stores the shard id
+    // on the job row and knows the clusters through `job_clusters`.
+    let shard_id = match params.job_shard {
+        Some(shard_id) => {
+            let exists: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM job_clusters WHERE id = $1)")
+                    .bind(shard_id)
+                    .fetch_one(&state.db)
+                    .await?;
+            if !exists {
+                // Canvas raises `ActiveRecord::RecordNotFound` for an unknown
+                // shard.
+                return Err(ApiError::NotFound);
+            }
+            Some(shard_id)
+        }
+        None => None,
+    };
+
+    let sql = if strands {
+        "SELECT strand AS name, COUNT(*) AS stuck_count \
+         FROM jobs \
+         WHERE strand IS NOT NULL AND ($1::bigint IS NULL OR shard_id = $1) \
+         GROUP BY strand \
+         HAVING NOT BOOL_OR(next_in_strand) \
+         ORDER BY strand \
+         LIMIT $2 OFFSET $3"
+    } else {
+        "SELECT singleton AS name, COUNT(*) AS stuck_count \
+         FROM jobs \
+         WHERE strand IS NULL AND singleton IS NOT NULL \
+           AND ($1::bigint IS NULL OR shard_id = $1) \
+         GROUP BY singleton \
+         HAVING NOT BOOL_OR(next_in_strand) \
+         ORDER BY singleton \
+         LIMIT $2 OFFSET $3"
+    };
+
+    let rows: Vec<StuckRow> = sqlx::query_as(sql)
+        .bind(shard_id)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await?;
+
+    let body: Vec<Value> = rows
+        .into_iter()
+        .map(|row| json!({ "name": row.name, "count": row.stuck_count }))
+        .collect();
+
+    Ok(Json(body))
+}
+
+/// Canvas `Api.paginate`: `per_page` (default 10, max 100) and `page`.
+fn page_bounds(
+    per_page: Option<i64>,
+    page: Option<i64>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+) -> (i64, i64) {
+    let per_page = per_page
+        .or(limit)
+        .unwrap_or(crate::DEFAULT_LIMIT)
+        .clamp(1, crate::MAX_LIMIT);
+    let page = page.unwrap_or(1).max(1);
+    let offset = offset
+        .unwrap_or_else(|| (page - 1).saturating_mul(per_page))
+        .max(0);
+    (per_page, offset)
+}
+
+/// Canvas `ActiveRecord::Base.wildcard_pattern(value, type: :right)`:
+/// a case-sensitive prefix pattern.
+fn wildcard_right(value: &str) -> String {
+    format!("{}%", escape_like(value))
+}
+
+/// Escape the LIKE wildcards (`%`, `_`) and the escape character itself.
+fn escape_like(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => out.push_str("\\\\"),
+            '%' => out.push_str("\\%"),
+            '_' => out.push_str("\\_"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Random suffix for the temporary strand Canvas creates when throttling.
+fn random_alphanumeric(length: usize) -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+
+    let mut state = random_seed();
+    let mut out = String::with_capacity(length);
+    for _ in 0..length {
+        state = xorshift64(state);
+        let index = (state % ALPHABET.len() as u64) as usize;
+        out.push(ALPHABET[index] as char);
+    }
+    out
+}
+
+/// Seed for the strand suffix generator.
+fn random_seed() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_nanos() as u64)
+        .unwrap_or(0x9e37_79b9_7f4a_7c15);
+    let seed = nanos ^ (u64::from(std::process::id()) << 32) ^ 0x9e37_79b9_7f4a_7c15;
+    if seed == 0 {
+        0x9e37_79b9_7f4a_7c15
+    } else {
+        seed
+    }
+}
+
+/// The xorshift64 generator the suffix uses.
+fn xorshift64(mut state: u64) -> u64 {
+    state ^= state << 13;
+    state ^= state >> 7;
+    state ^= state << 17;
+    state
 }

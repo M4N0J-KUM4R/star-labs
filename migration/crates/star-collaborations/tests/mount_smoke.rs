@@ -1,9 +1,9 @@
-//! Mount-smoke test for star-collaborations (scaffold, issue #138).
+//! Mount-smoke test for star-collaborations.
 //!
-//! Verifies the crate's router mounts and answers unknown paths with 404
-//! (not 500, not open) exactly the way star-http assembles it. No domain
-//! routes exist yet — the smoke request targets a path owned by this crate's
-//! future route set.
+//! Verifies the crate's router mounts exactly the way star-http assembles
+//! it: unknown paths answer 404 (not 500, not open) and the collaborations
+//! routes are mounted — an anonymous call is rejected with 401 by the
+//! `AuthUser` extractor, never 404, 500 or open.
 //!
 //! Conventions (mirrors star-enrollments):
 //! - Skipped cleanly when DATABASE_URL is not set (prints SKIP and returns).
@@ -43,13 +43,32 @@ async fn unknown_path_is_404() {
         return;
     };
 
-    // A path this crate will own once routes land. With the scaffold's empty
-    // router it must 404 (axum default fallback), never 500 or open.
-    let resp = server.get("/courses/1/collaborations").await;
+    // A path this crate does not own. It must 404 (axum default fallback),
+    // never 500 or open.
+    let resp = server.get("/courses/1/unknown_route").await;
     assert_eq!(
         resp.status_code(),
         404,
-        "scaffold must 404 on unimplemented paths; body: {}",
+        "unknown paths must 404; body: {}",
+        resp.text()
+    );
+}
+
+#[tokio::test]
+async fn collaborations_routes_are_mounted() {
+    let Some(server) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    // The collaborations routes exist: the `AuthUser` extractor rejects the
+    // anonymous call with 401 before the handler runs. A 404 would mean the
+    // route is not mounted.
+    let resp = server.get("/courses/1/collaborations").await;
+    assert_eq!(
+        resp.status_code(),
+        401,
+        "the collaborations route must be mounted; body: {}",
         resp.text()
     );
 }

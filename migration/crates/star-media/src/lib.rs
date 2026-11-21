@@ -25,6 +25,10 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod media_objects;
+
+mod media_tracks;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -427,6 +431,8 @@ async fn list_media_tracks(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(media_objects::router())
+        .merge(media_tracks::router())
         .route("/media_attachments", get(list_media_attachments))
         .route("/media_attachments", post(create_media_attachment))
         .route("/media_attachments/{id}", put(update_media_attachment))

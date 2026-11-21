@@ -63,6 +63,8 @@ use star_common::{ApiError, AppState};
 
 use star_auth::AuthUser;
 
+mod folders_api;
+
 // ─── folder constants ──────────────────────────────────────────────────────
 
 /// Canvas Folder::ROOT_FOLDER_NAME.
@@ -850,6 +852,7 @@ pub fn canvas_licenses() -> Vec<LicenseEntry> {
 /// Build the files router.
 pub fn router() -> axum::Router<AppState> {
     Router::new()
+        .merge(folders_api::router())
         .route("/courses/{courseId}/files", get(list_course_files))
         .route("/courses/{courseId}/files", post(create_file))
         .route(
