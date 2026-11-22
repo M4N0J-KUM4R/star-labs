@@ -4,8 +4,13 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+star-auth = { path = "../star-auth" }
 star-common = { path = "../star-common" }
 axum = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 star-db = { path = "../star-db" }
