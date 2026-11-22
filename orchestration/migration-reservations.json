@@ -3,8 +3,8 @@
   "free": [
     "0111"
   ],
-  "max_merged": "0229",
-  "next_available": "0230",
+  "max_merged": "0230",
+  "next_available": "0231",
   "reservations": {
     "0001": {
       "issue": null,
@@ -749,6 +749,11 @@
     "0229": {
       "issue": 91,
       "note": "web_conferences tails (recordings JSONB, calendar_events FK); 0129 reserved number unusable (snapshot ordering) so the post-snapshot hole 0229 was used per PR #212 precedent",
+      "status": "merged"
+    },
+    "0230": {
+      "issue": null,
+      "note": "GraphQL parity completion backing tables (peer_reviews, sub_assignments, audit_events, internal_settings, speed_grader_settings, checkpoints, gradebook_user_filters, widget_dashboards, user_inbox_labels, learner_dashboard_tab_selections, account_user_dismissals, submission_histories, discussion_entry_reports) \u2014 PR #228",
       "status": "merged"
     }
   }
