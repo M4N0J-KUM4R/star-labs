@@ -49,6 +49,7 @@ mod discussion_entries;
 mod discussion_topic;
 mod files;
 mod grading_periods;
+mod grading_standards_account_notifications;
 mod groups;
 mod modules;
 mod mutations;
@@ -368,6 +369,25 @@ impl Course {
         let gctx = ctx.data::<GraphQLContext>()?;
         Ok(
             grading_periods::fetch_course_grading_period_group(&gctx.pool, self.id).await?,
+        )
+    }
+
+    /// The course's own grading standards with their scheme rows
+    /// (position-ordered; deleted filtered). Canvas course_type.rb
+    /// gradingStandards — account-level fallbacks are not included.
+    /// Visibility inherited from course(id), parity with the
+    /// star-grading-standards REST list.
+    async fn grading_standards(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Vec<grading_standards_account_notifications::GradingStandard>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(
+            grading_standards_account_notifications::fetch_course_grading_standards(
+                &gctx.pool,
+                self.id,
+            )
+            .await?,
         )
     }
 
@@ -834,6 +854,33 @@ impl Query {
             avatar_url: row.avatar_url,
             created_at: row.created_at,
         }))
+    }
+
+    /// `accountNotifications(accountId)` — an account's window-valid
+    /// announcements (start_at <= now < end_at), like Canvas's
+    /// account notification resolver. Global admins only: star-lms has
+    /// no account-role model, so the REST admin gate collapses to
+    /// global admin (documented deviation).
+    async fn account_notifications(
+        &self,
+        ctx: &Context<'_>,
+        account_id: ID,
+    ) -> Result<Option<Vec<grading_standards_account_notifications::AccountNotification>>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        if !gctx.is_admin() {
+            return Ok(None);
+        }
+        let raw: i64 = account_id
+            .0
+            .parse()
+            .map_err(|_| async_graphql::Error::new(format!("invalid account: {account_id}")))?;
+        Ok(Some(
+            grading_standards_account_notifications::fetch_account_notifications(
+                &gctx.pool,
+                raw,
+            )
+            .await?,
+        ))
     }
 
     /// `enrollmentTerm(id: ID!)` — any authenticated caller may read the
