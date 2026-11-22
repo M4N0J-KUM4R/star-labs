@@ -2113,6 +2113,20 @@ async fn course_chain_root(pool: &PgPool, course_id: &str) -> Result<Option<i64>
     .await
 }
 
+/// Is the feature enabled on ANY root account (the site-admin tier)?
+async fn any_root_feature_enabled(pool: &PgPool, feature: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS ( \
+            SELECT 1 FROM feature_flags f \
+            JOIN accounts a ON a.id = f.context_id \
+            WHERE f.context_type = 'Account' AND a.parent_account_id IS NULL \
+              AND f.feature = $1 AND f.state = 'enabled')",
+    )
+    .bind(feature)
+    .fetch_one(pool)
+    .await
+}
+
 /// `POST /enqueue_outcome_rollup_calculation`.
 async fn enqueue_outcome_rollup_calculation(
     State(state): State<AppState>,

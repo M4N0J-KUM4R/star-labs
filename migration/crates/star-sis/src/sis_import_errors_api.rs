@@ -17,10 +17,10 @@
 //! batch id), `file`, `message`, `row_info`, `row`.
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, RawQuery, State},
     response::Response,
     routing::get,
-    RawQuery, Router,
+    Router,
 };
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -28,8 +28,8 @@ use star_auth::AuthUser;
 use star_common::AppState;
 
 use crate::sis_imports_api::{
-    check_account, json_response, load_account, pagination_link, authorize_sis, parse_id,
-    ruby_to_i, value_to_boolean, Params, SisError, PER_PAGE, MAX_PER_PAGE,
+    authorize_sis, check_account, json_response, load_account, pagination_link, parse_id,
+    ruby_to_i, value_to_boolean, Params, SisError, MAX_PER_PAGE, PER_PAGE,
 };
 
 /// A `sis_import_errors` row.
@@ -46,10 +46,7 @@ struct SisImportErrorRow {
 /// Domain router for the Canvas sis-import-error routes.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route(
-            "/accounts/{account_id}/sis_import_errors",
-            get(index),
-        )
+        .route("/accounts/{account_id}/sis_import_errors", get(index))
         .route(
             "/accounts/{account_id}/sis_imports/{id}/errors",
             get(index_for_batch),
@@ -75,7 +72,14 @@ async fn index_for_batch(
     RawQuery(raw_query): RawQuery,
     auth: AuthUser,
 ) -> Result<Response, SisError> {
-    errors_response(&state, &account_id, Some(&import_id), raw_query.as_deref(), &auth).await
+    errors_response(
+        &state,
+        &account_id,
+        Some(&import_id),
+        raw_query.as_deref(),
+        &auth,
+    )
+    .await
 }
 
 /// The shared implementation of both index routes.
@@ -96,13 +100,12 @@ async fn errors_response(
     let batch_id = match raw_import_id {
         Some(raw) => {
             let id = parse_id(raw)?;
-            let found: Option<(i64,)> = sqlx::query_as(
-                "SELECT id FROM sis_batches WHERE id = $1 AND account_id = $2",
-            )
-            .bind(id)
-            .bind(account_id)
-            .fetch_optional(&state.db)
-            .await?;
+            let found: Option<(i64,)> =
+                sqlx::query_as("SELECT id FROM sis_batches WHERE id = $1 AND account_id = $2")
+                    .bind(id)
+                    .bind(account_id)
+                    .fetch_optional(&state.db)
+                    .await?;
             Some(found.ok_or_else(SisError::not_found)?.0)
         }
         None => None,

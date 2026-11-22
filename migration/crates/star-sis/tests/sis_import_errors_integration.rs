@@ -54,8 +54,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
         jwt_secret: JWT_SECRET.to_string(),
     };
     // The crate root router mounts both the imports and the errors routes.
-    let server = TestServer::new(star_sis::router().with_state(state))
-        .expect("build TestServer");
+    let server = TestServer::new(star_sis::router().with_state(state)).expect("build TestServer");
     Some((server, pool, run_prefix()))
 }
 
@@ -148,11 +147,13 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     .bind(&pattern)
     .execute(pool)
     .await;
-    let _ = sqlx::query("DELETE FROM account_users WHERE user_id IN \
-         (SELECT id FROM users WHERE email LIKE $1)")
-        .bind(format!("{prefix}%@test.local"))
-        .execute(pool)
-        .await;
+    let _ = sqlx::query(
+        "DELETE FROM account_users WHERE user_id IN \
+         (SELECT id FROM users WHERE email LIKE $1)",
+    )
+    .bind(format!("{prefix}%@test.local"))
+    .execute(pool)
+    .await;
     let _ = sqlx::query("DELETE FROM accounts WHERE name LIKE $1")
         .bind(&pattern)
         .execute(pool)
@@ -228,11 +229,22 @@ async fn the_failure_filter_guards_and_account_rules_hold() {
     seed_account_admin(&pool, account, admin).await;
     let batch = seed_batch(&pool, account).await;
     seed_error(&pool, account, batch, "courses.csv", "failed row", 1, true).await;
-    seed_error(&pool, account, batch, "courses.csv", "soft warning", 2, false).await;
+    seed_error(
+        &pool,
+        account,
+        batch,
+        "courses.csv",
+        "soft warning",
+        2,
+        false,
+    )
+    .await;
 
     // `failure=true` keeps only the failed rows.
     let resp = server
-        .get(&format!("/accounts/{account}/sis_import_errors?failure=true"))
+        .get(&format!(
+            "/accounts/{account}/sis_import_errors?failure=true"
+        ))
         .add_header("Authorization", auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());

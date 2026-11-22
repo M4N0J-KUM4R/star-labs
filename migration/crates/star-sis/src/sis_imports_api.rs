@@ -94,10 +94,10 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 /// Canvas `Api::PER_PAGE`.
-const PER_PAGE: i64 = 10;
+pub(crate) const PER_PAGE: i64 = 10;
 
 /// Canvas `Api::MAX_PER_PAGE`.
-const MAX_PER_PAGE: i64 = 100;
+pub(crate) const MAX_PER_PAGE: i64 = 100;
 
 /// The `workflow_state` values `index` accepts as a filter (the list of the
 /// Canvas controller).
@@ -975,7 +975,11 @@ pub(crate) fn check_account(account: &AccountRow) -> Result<(), SisError> {
 ///
 /// `:import_sis` and `:manage_sis` are account rights that only account admins
 /// (and site admins) hold, so one check covers every route of this controller.
-pub(crate) async fn authorize_sis(pool: &PgPool, auth: &AuthUser, account_id: i64) -> Result<(), SisError> {
+pub(crate) async fn authorize_sis(
+    pool: &PgPool,
+    auth: &AuthUser,
+    account_id: i64,
+) -> Result<(), SisError> {
     if auth.role == "admin" {
         return Ok(());
     }
