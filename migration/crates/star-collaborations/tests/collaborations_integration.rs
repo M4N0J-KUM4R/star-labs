@@ -24,7 +24,7 @@
 //! full teardown keeps shared-DB runs safe.
 
 use axum_test::TestServer;
-use serde_json::{json, Value};
+use serde_json::Value;
 use sqlx::PgPool;
 use star_common::AppState;
 

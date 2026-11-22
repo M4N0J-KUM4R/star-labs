@@ -413,7 +413,10 @@ async fn course_index_create_and_permissions() {
     assert_eq!(resp.status_code(), 200);
     let listed: Value = resp.json();
     let items = listed["conferences"].as_array().unwrap();
-    assert_eq!(items.len(), 2, "student sees only participated ones");
+    // member_ids: conf1 explicitly invites the student, and creates WITHOUT
+    // a `user` param (conf2, conf3 user[all]) invite the whole context — so
+    // the student participates in all three.
+    assert_eq!(items.len(), 3, "student participates in all three");
     assert!(items.iter().all(|c| c["recordings"] == json!([])));
 
     cleanup(&pool, &prefix).await;
@@ -556,13 +559,17 @@ async fn for_user_lists_and_live_filter() {
         .add_header(axum::http::header::AUTHORIZATION, s.clone())
         .await;
     let listed: Value = resp.json();
-    let ids: Vec<i64> = listed["conferences"]
+    let mut ids: Vec<i64> = listed["conferences"]
         .as_array()
         .unwrap()
         .iter()
         .map(|c| c["id"].as_i64().unwrap())
         .collect();
-    assert_eq!(ids, vec![invited_id]);
+    ids.sort_unstable();
+    // The solo conference (no `user` param) also invites the whole context.
+    let mut expected = vec![invited_id, solo_id];
+    expected.sort_unstable();
+    assert_eq!(ids, expected);
 
     let resp = server
         .get("/conferences")
