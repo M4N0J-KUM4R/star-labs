@@ -6,7 +6,7 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 971 | 1403 | 69.2% |
+| REST API routes | 985 | 1403 | 70.2% |
 | REST routes referenced from `ui/` | 360 | 503 | 71.6% |
 | GraphQL files | 1 | 390 | 0.3% |
 | GraphQL object types | 28 | 170 | 16.5% |
@@ -17,13 +17,13 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | js_env files | 0 | 124 | 0.0% |
 | Schema tables (vs 688 Canvas models) | 370 | 688 | n/a |
 
-Implemented REST route count: **971 / 1403** (69.2%).
+Implemented REST route count: **985 / 1403** (70.2%).
 
-Star registrations: 1191 route/method pairs from 982 `.route(...)` calls (0 unparsed); 218 have no Canvas match and are listed as extras below.
+Star registrations: 1195 route/method pairs from 986 `.route(...)` calls (0 unparsed); 208 have no Canvas match and are listed as extras below.
 
 Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 
-## Controllers with coverage (113)
+## Controllers with coverage (115)
 
 | Controller | Implemented | Total | Coverage |
 |---|---:|---:|---:|
@@ -44,6 +44,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `conversations` | 16 | 16 | 100.0% |
 | `group_categories` | 16 | 16 | 100.0% |
 | `migration_issues` | 16 | 16 | 100.0% |
+| `rubrics_api` | 15 | 15 | 100.0% |
 | `content_exports_api` | 14 | 14 | 100.0% |
 | `enrollments_api` | 14 | 14 | 100.0% |
 | `blackout_dates` | 13 | 13 | 100.0% |
@@ -71,7 +72,6 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `notification_preferences` | 7 | 10 | 70.0% |
 | `quizzes/quiz_submissions_api` | 7 | 7 | 100.0% |
 | `quizzes/quizzes_api` | 7 | 7 | 100.0% |
-| `rubrics_api` | 7 | 15 | 46.7% |
 | `support_helpers/turnitin` | 7 | 7 | 100.0% |
 | `user_observees` | 7 | 7 | 100.0% |
 | `appointment_groups` | 6 | 8 | 75.0% |
@@ -112,6 +112,8 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `jobs` | 3 | 3 | 100.0% |
 | `lti/ims/authentication` | 3 | 3 | 100.0% |
 | `media_objects` | 3 | 10 | 30.0% |
+| `rubric_assessments` | 3 | 3 | 100.0% |
+| `rubric_associations` | 3 | 3 | 100.0% |
 | `rubrics` | 3 | 3 | 100.0% |
 | `shared_brand_configs` | 3 | 3 | 100.0% |
 | `terms` | 3 | 3 | 100.0% |
@@ -165,7 +167,7 @@ Renames mapped to Canvas names: `CourseSection` -> `Section`, `DiscussionTopic` 
 
 Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `AssignmentEdge`, `ConversationMessageConnection`, `ConversationMessageEdge`, `ConversationParticipantConnection`, `ConversationParticipantEdge`, `CreateAssignmentPayload`, `DiscussionTopicConnection`, `DiscussionTopicEdge`, `EnrollmentConnection`, `EnrollmentEdge`, `FolderConnection`, `FolderEdge`, `GroupConnection`, `GroupEdge`, `GroupMembershipConnection`, `GroupMembershipEdge`, `GroupSetConnection`, `GroupSetEdge`, `ModuleConnection`, `ModuleEdge`, `ModuleItemConnection`, `ModuleItemEdge`, `PageConnection`, `PageEdge`, `PageInfo`, `QuizConnection`, `QuizEdge`, `QuizQuestionConnection`, `QuizQuestionEdge`, `QuizSubmissionConnection`, `QuizSubmissionEdge`, `SubmissionConnection`, `SubmissionEdge`, `UpdateAssignmentPayload`, `UserConnection`, `UserEdge`.
 
-## Star routes with no Canvas match (218)
+## Star routes with no Canvas match (208)
 
 | Verb | Path | Crate |
 |---|---|---|
@@ -258,11 +260,6 @@ Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `As
 | PUT | `/courses/{courseId}/role_overrides` | `star-permissions` |
 | DELETE | `/courses/{courseId}/rubric_assessments/{id}/read` | `star-assignments` |
 | PUT | `/courses/{courseId}/rubric_assessments/{id}/read` | `star-assignments` |
-| GET | `/courses/{courseId}/rubrics/rubrics_by_import_id/{id}` | `star-rubrics` |
-| GET | `/courses/{courseId}/rubrics/upload_status` | `star-rubrics` |
-| GET | `/courses/{courseId}/rubrics/{rubricId}/assessments` | `star-rubrics` |
-| POST | `/courses/{courseId}/rubrics/{rubricId}/assessments` | `star-rubrics` |
-| POST | `/courses/{courseId}/rubrics/{rubricId}/associations` | `star-rubrics` |
 | POST | `/courses/{id}/settings` | `star-ui` |
 | PUT | `/courses/{courseId}/submissions/{submissionId}/read/{item}` | `star-assignments` |
 | GET | `/courses/{id}/users/add` | `star-ui` |
@@ -342,15 +339,10 @@ Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `As
 | POST | `/register` | `star-ui` |
 | GET | `/reset_password/{token}` | `star-ui` |
 | POST | `/reset_password/{token}` | `star-ui` |
-| DELETE | `/rubric_assessments/{id}` | `star-rubrics` |
 | GET | `/rubric_assessments/{id}` | `star-rubrics` |
-| PUT | `/rubric_assessments/{id}` | `star-rubrics` |
-| DELETE | `/rubric_associations/{id}` | `star-rubrics` |
 | DELETE | `/rubrics/{id}` | `star-rubrics` |
 | GET | `/rubrics/{id}` | `star-rubrics` |
 | PUT | `/rubrics/{id}` | `star-rubrics` |
-| GET | `/rubrics/{rubricId}/assessments` | `star-rubrics` |
-| POST | `/rubrics/{rubricId}/assessments` | `star-rubrics` |
 | DELETE | `/sections/{sectionId}/assignment_annotations/{id}/read` | `star-assignments` |
 | PUT | `/sections/{sectionId}/assignment_annotations/{id}/read` | `star-assignments` |
 | DELETE | `/sections/{sectionId}/rubric_assessments/{id}/read` | `star-assignments` |

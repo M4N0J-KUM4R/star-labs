@@ -470,14 +470,24 @@
       "pct": 100.0,
       "total": 8
     },
+    "rubric_assessments": {
+      "implemented": 3,
+      "pct": 100.0,
+      "total": 3
+    },
+    "rubric_associations": {
+      "implemented": 3,
+      "pct": 100.0,
+      "total": 3
+    },
     "rubrics": {
       "implemented": 3,
       "pct": 100.0,
       "total": 3
     },
     "rubrics_api": {
-      "implemented": 7,
-      "pct": 46.7,
+      "implemented": 15,
+      "pct": 100.0,
       "total": 15
     },
     "search": {
@@ -7628,6 +7638,22 @@
     {
       "action": "index",
       "controller": "rubrics_api",
+      "normalized_path": "accounts/{}/rubrics",
+      "path": "/api/v1/accounts/:account_id/rubrics",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "rubrics_api",
+      "normalized_path": "accounts/{}/rubrics/{}",
+      "path": "/api/v1/accounts/:account_id/rubrics/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "rubrics_api",
       "normalized_path": "courses/{}/rubrics",
       "path": "/api/v1/courses/:course_id/rubrics",
       "ui_referenced": false,
@@ -7650,12 +7676,60 @@
       "verb": "GET"
     },
     {
+      "action": "used_locations",
+      "controller": "rubrics_api",
+      "normalized_path": "accounts/{}/rubrics/{}/used_locations",
+      "path": "/api/v1/accounts/:account_id/rubrics/:id/used_locations",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
       "action": "upload",
       "controller": "rubrics_api",
       "normalized_path": "courses/{}/rubrics/upload",
       "path": "/api/v1/courses/:course_id/rubrics/upload",
       "ui_referenced": false,
       "verb": "POST"
+    },
+    {
+      "action": "upload",
+      "controller": "rubrics_api",
+      "normalized_path": "accounts/{}/rubrics/upload",
+      "path": "/api/v1/accounts/:account_id/rubrics/upload",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "upload_status",
+      "controller": "rubrics_api",
+      "normalized_path": "courses/{}/rubrics/upload/{}",
+      "path": "/api/v1/courses/:course_id/rubrics/upload/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "upload_status",
+      "controller": "rubrics_api",
+      "normalized_path": "accounts/{}/rubrics/upload/{}",
+      "path": "/api/v1/accounts/:account_id/rubrics/upload/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "rubrics_by_import_id",
+      "controller": "rubrics_api",
+      "normalized_path": "courses/{}/rubrics/upload/{}/rubrics",
+      "path": "/api/v1/courses/:course_id/rubrics/upload/:id/rubrics",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "rubrics_by_import_id",
+      "controller": "rubrics_api",
+      "normalized_path": "accounts/{}/rubrics/upload/{}/rubrics",
+      "path": "/api/v1/accounts/:account_id/rubrics/upload/:id/rubrics",
+      "ui_referenced": false,
+      "verb": "GET"
     },
     {
       "action": "create",
@@ -7678,6 +7752,54 @@
       "controller": "rubrics",
       "normalized_path": "courses/{}/rubrics/{}",
       "path": "/api/v1/courses/:course_id/rubrics/:id",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "create",
+      "controller": "rubric_associations",
+      "normalized_path": "courses/{}/rubric_associations",
+      "path": "/api/v1/courses/:course_id/rubric_associations",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "rubric_associations",
+      "normalized_path": "courses/{}/rubric_associations/{}",
+      "path": "/api/v1/courses/:course_id/rubric_associations/:id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "rubric_associations",
+      "normalized_path": "courses/{}/rubric_associations/{}",
+      "path": "/api/v1/courses/:course_id/rubric_associations/:id",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "create",
+      "controller": "rubric_assessments",
+      "normalized_path": "courses/{}/rubric_associations/{}/rubric_assessments",
+      "path": "/api/v1/courses/:course_id/rubric_associations/:rubric_association_id/rubric_assessments",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "rubric_assessments",
+      "normalized_path": "courses/{}/rubric_associations/{}/rubric_assessments/{}",
+      "path": "/api/v1/courses/:course_id/rubric_associations/:rubric_association_id/rubric_assessments/:id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "rubric_assessments",
+      "normalized_path": "courses/{}/rubric_associations/{}/rubric_assessments/{}",
+      "path": "/api/v1/courses/:course_id/rubric_associations/:rubric_association_id/rubric_assessments/:id",
       "ui_referenced": false,
       "verb": "DELETE"
     },
@@ -8750,16 +8872,16 @@
     "graphql_mutations_implemented": 2,
     "graphql_types": 170,
     "graphql_types_implemented": 28,
-    "implemented_rest_pct": 69.2,
-    "implemented_rest_routes": 971,
+    "implemented_rest_pct": 70.2,
+    "implemented_rest_routes": 985,
     "js_env_call_sites": 490,
     "js_env_files": 124,
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
-    "star_extras": 218,
-    "star_route_calls": 982,
-    "star_route_registrations": 1191,
+    "star_extras": 208,
+    "star_route_calls": 986,
+    "star_route_registrations": 1195,
     "star_tables": 370,
     "star_unparsed_calls": 0,
     "ui_feature_dirs": 232,
@@ -9393,41 +9515,6 @@
       "verb": "PUT"
     },
     {
-      "crate": "star-rubrics",
-      "normalized_path": "courses/{}/rubrics/rubrics_by_import_id/{}",
-      "path": "/courses/{courseId}/rubrics/rubrics_by_import_id/{id}",
-      "source": "crates/star-rubrics/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-rubrics",
-      "normalized_path": "courses/{}/rubrics/upload_status",
-      "path": "/courses/{courseId}/rubrics/upload_status",
-      "source": "crates/star-rubrics/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-rubrics",
-      "normalized_path": "courses/{}/rubrics/{}/assessments",
-      "path": "/courses/{courseId}/rubrics/{rubricId}/assessments",
-      "source": "crates/star-rubrics/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-rubrics",
-      "normalized_path": "courses/{}/rubrics/{}/assessments",
-      "path": "/courses/{courseId}/rubrics/{rubricId}/assessments",
-      "source": "crates/star-rubrics/src/lib.rs",
-      "verb": "POST"
-    },
-    {
-      "crate": "star-rubrics",
-      "normalized_path": "courses/{}/rubrics/{}/associations",
-      "path": "/courses/{courseId}/rubrics/{rubricId}/associations",
-      "source": "crates/star-rubrics/src/lib.rs",
-      "verb": "POST"
-    },
-    {
       "crate": "star-ui",
       "normalized_path": "courses/{}/settings",
       "path": "/courses/{id}/settings",
@@ -9985,28 +10072,7 @@
       "normalized_path": "rubric_assessments/{}",
       "path": "/rubric_assessments/{id}",
       "source": "crates/star-rubrics/src/lib.rs",
-      "verb": "DELETE"
-    },
-    {
-      "crate": "star-rubrics",
-      "normalized_path": "rubric_assessments/{}",
-      "path": "/rubric_assessments/{id}",
-      "source": "crates/star-rubrics/src/lib.rs",
       "verb": "GET"
-    },
-    {
-      "crate": "star-rubrics",
-      "normalized_path": "rubric_assessments/{}",
-      "path": "/rubric_assessments/{id}",
-      "source": "crates/star-rubrics/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
-      "crate": "star-rubrics",
-      "normalized_path": "rubric_associations/{}",
-      "path": "/rubric_associations/{id}",
-      "source": "crates/star-rubrics/src/lib.rs",
-      "verb": "DELETE"
     },
     {
       "crate": "star-rubrics",
@@ -10028,20 +10094,6 @@
       "path": "/rubrics/{id}",
       "source": "crates/star-rubrics/src/lib.rs",
       "verb": "PUT"
-    },
-    {
-      "crate": "star-rubrics",
-      "normalized_path": "rubrics/{}/assessments",
-      "path": "/rubrics/{rubricId}/assessments",
-      "source": "crates/star-rubrics/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-rubrics",
-      "normalized_path": "rubrics/{}/assessments",
-      "path": "/rubrics/{rubricId}/assessments",
-      "source": "crates/star-rubrics/src/lib.rs",
-      "verb": "POST"
     },
     {
       "crate": "star-assignments",
