@@ -398,9 +398,13 @@ fn param_key(params: &Value, key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Canvas `params[:user][:id]` — the user a login write is about.
+/// Canvas `params[:user_id] || params[:user][:id]` — the user a login
+/// call is about (pseudonyms_controller.rb:375-379).
 fn user_id_param(query: &Value, body: &Value) -> Option<String> {
     for source in [query, body] {
+        if let Some(id) = source.get("user_id").and_then(value_to_string) {
+            return Some(id);
+        }
         if let Some(Value::Object(user)) = source.get("user") {
             if let Some(id) = user.get("id").and_then(value_to_string) {
                 return Some(id);

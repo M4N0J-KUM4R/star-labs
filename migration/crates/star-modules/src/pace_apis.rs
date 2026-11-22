@@ -365,7 +365,7 @@ async fn show_enrollment_pace(
         return Err(ApiError::NotFound);
     };
     Ok(Json(json!({
-        "pace": enrollment_pace_json(&state.db, &pace).await?,
+        "pace": enrollment_pace_json(&state.db, &pace, enrollment_id).await?,
         "progress": Value::Null,
     }))
     .into_response())
@@ -386,7 +386,7 @@ async fn create_enrollment_pace(
     Ok((
         StatusCode::CREATED,
         Json(json!({
-            "pace": enrollment_pace_json(&state.db, &pace).await?,
+            "pace": enrollment_pace_json(&state.db, &pace, enrollment_id).await?,
             "progress": Value::Null,
         })),
     )
@@ -813,13 +813,12 @@ async fn section_pace_json(db: &PgPool, pace: &PaceRow) -> Result<Value, ApiErro
 }
 
 /// Canvas `CoursePacing::StudentEnrollmentPacePresenter#as_json`.
-async fn enrollment_pace_json(db: &PgPool, pace: &PaceRow) -> Result<Value, ApiError> {
-    let mut json = pace_json(
-        db,
-        pace,
-        PaceScope::Enrollment(pace.user_id.unwrap_or_default()),
-    )
-    .await?;
+async fn enrollment_pace_json(
+    db: &PgPool,
+    pace: &PaceRow,
+    enrollment_id: i64,
+) -> Result<Value, ApiError> {
+    let mut json = pace_json(db, pace, PaceScope::Enrollment(enrollment_id)).await?;
     let name = match pace.user_id {
         Some(user_id) => {
             let row: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")

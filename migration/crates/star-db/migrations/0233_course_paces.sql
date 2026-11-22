@@ -28,7 +28,8 @@ ALTER TABLE course_paces
 -- the baseline created the audit columns as `timestamp without time zone`.
 ALTER TABLE course_paces
     ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at::timestamptz,
-    ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at::timestamptz;
+    ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at::timestamptz,
+    ALTER COLUMN published_at TYPE TIMESTAMPTZ USING published_at::timestamptz;
 
 ALTER TABLE course_pace_module_items
     ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at::timestamptz,
