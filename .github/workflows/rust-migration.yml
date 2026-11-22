@@ -196,6 +196,13 @@ jobs:
     needs: [changes, test-shard, shard-coverage]
     if: always()
     steps:
+      - name: Checkout for the ledger check
+        uses: actions/checkout@v4
+      - name: Migration reservation ledger consistency
+        run: |
+          set -euo pipefail
+          echo "validating orchestration/migration-reservations.json ..."
+          python3 orchestration/check-migration-ledger.py .
       - name: Require every shard to have passed
         run: |
           set -euo pipefail
