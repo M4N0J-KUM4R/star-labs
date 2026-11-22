@@ -17,7 +17,10 @@ this guard enforces the rest mechanically at review time:
                  filename — catches renumbering, renaming and deletion. CI
                  passes the merge-base with origin/main as the base, so a
                  base branch that moved ahead (new migrations landing on main
-                 after the PR branched) never yields false failures.
+                 after the PR branched) never yields false failures. The
+                 workflow checks out the pull_request merge ref, so the
+                 guard's code and the tree it validates always come from the
+                 same commit.
   [destructive]  no DROP or TRUNCATE statement in any migration at head
                  (additive-only). Allowed: the `DROP NOT NULL` / `DROP DEFAULT`
                  relaxations (main's 0048/0228 use the former), SQL comments,

@@ -6,14 +6,18 @@ name: Migration guard
 # filter so the check is always reported and can be made required later;
 # push runs are main-only (wave-4 push policy).
 #
-# Renumber detection compares head against the merge-base with origin/main —
-# NOT against the base branch tip. Two reasons, both about false positives:
-#   * the pull_request merge ref merges onto the base TIP, so merge-base of
-#     the merge ref would be the tip itself; migrations that landed on main
-#     after this PR branched would look "missing at head". Checking out the
-#     PR head SHA keeps the baseline at the true fork point.
-#   * main-only additions beyond the fork point are absent from the baseline,
-#     so they never trigger the missing rule.
+# Checkout uses the event's default ref — the pull_request MERGE REF (PR head
+# merged onto main), not the bare PR head. Two reasons:
+#   * GitHub selects this workflow from the merge ref, so the checkout and
+#     the workflow must come from the same tree. A PR branch that has not
+#     synced main still gets tools/ci/migration_guard.py from main's side of
+#     the merge; checking out the bare head made the step fail with
+#     "No such file or directory" (seen on PR #213 before this fix-up).
+#   * The merge ref already contains the current base tip, so
+#     merge-base(HEAD, origin/main) is exactly the main state incorporated
+#     into the merge: migrations main gained after the PR branched are both
+#     in the baseline AND in the checked-out tree, and only PR-side changes
+#     to existing migrations can trip the renumber rule.
 
 on:
   push:
@@ -37,10 +41,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # The PR head SHA (not the merge ref): the renumber baseline is the
-          # merge-base with origin/main and needs the true fork point.
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          # Full history so merge-base can resolve the fork point.
+          # Full history so merge-base can resolve the baseline.
           fetch-depth: 0
       - name: Extract merge-base migration snapshot
         run: |
@@ -61,6 +62,10 @@ jobs:
       - name: Run migration guard
         run: |
           set -euo pipefail
+          if [ ! -f tools/ci/migration_guard.py ]; then
+            echo "::error::tools/ci/migration_guard.py is missing from this checkout — the guard itself must not be deleted."
+            exit 1
+          fi
           if [ -d /tmp/mig-base/migration/crates/star-db/migrations ]; then
             python3 tools/ci/migration_guard.py --base /tmp/mig-base/migration/crates/star-db/migrations
           else
