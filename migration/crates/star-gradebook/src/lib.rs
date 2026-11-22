@@ -456,7 +456,7 @@ async fn update_column(
     });
 
     let title = match params.title.as_deref() {
-        Some("") | None => existing.title,
+        None => existing.title,
         Some(t) if t.trim().is_empty() => {
             return Err(ApiError::BadRequest(
                 "column[title] can't be blank".to_string(),

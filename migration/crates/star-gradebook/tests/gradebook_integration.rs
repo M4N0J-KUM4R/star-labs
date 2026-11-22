@@ -745,12 +745,16 @@ async fn late_policy_show_create_and_duplicate() {
     let lp = &body["late_policy"];
     assert!(lp["id"].as_i64().is_some());
     assert_eq!(lp["missing_submission_deduction_enabled"], true);
-    assert_eq!(lp["missing_submission_deduction"], 100, "table default");
+    assert_eq!(
+        lp["missing_submission_deduction"].as_f64(),
+        Some(100.0),
+        "table default"
+    );
     assert_eq!(lp["late_submission_deduction_enabled"], false);
-    assert_eq!(lp["late_submission_deduction"], 0);
+    assert_eq!(lp["late_submission_deduction"].as_f64(), Some(0.0));
     assert_eq!(lp["late_submission_interval"], "day", "table default");
     assert_eq!(lp["late_submission_minimum_percent_enabled"], false);
-    assert_eq!(lp["late_submission_minimum_percent"], 0);
+    assert_eq!(lp["late_submission_minimum_percent"].as_f64(), Some(0.0));
     assert!(
         lp.get("created_at").is_none(),
         "serializer has no timestamps"
@@ -866,11 +870,12 @@ async fn late_policy_update_partial_merge_and_204() {
         "untouched field preserved"
     );
     assert_eq!(
-        lp["missing_submission_deduction"], 100,
+        lp["missing_submission_deduction"].as_f64(),
+        Some(100.0),
         "untouched field preserved"
     );
     assert_eq!(lp["late_submission_deduction_enabled"], true);
-    assert_eq!(lp["late_submission_deduction"], 10);
+    assert_eq!(lp["late_submission_deduction"].as_f64(), Some(10.0));
     assert_eq!(lp["late_submission_interval"], "hour");
 
     // Invalid merged values → 422 (enabled flag from the store, bad value now).
