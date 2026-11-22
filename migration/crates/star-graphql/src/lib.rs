@@ -66,6 +66,7 @@ mod modules;
 mod mutations;
 mod mutations_batch_b;
 mod mutations_batch_c;
+mod mutations_batch_g1;
 mod outcomes_media;
 mod pages;
 mod quiz;
@@ -1057,6 +1058,7 @@ pub struct Mutation(
     mutations::AssignmentMutations,
     mutations_batch_b::BatchBMutations,
     mutations_batch_c::BatchCMutations,
+    mutations_batch_g1::BatchG1Mutations,
 );
 
 impl Mutation {
@@ -1067,6 +1069,7 @@ impl Mutation {
             mutations::AssignmentMutations,
             mutations_batch_b::BatchBMutations,
             mutations_batch_c::BatchCMutations,
+            mutations_batch_g1::BatchG1Mutations,
         )
     }
 }
