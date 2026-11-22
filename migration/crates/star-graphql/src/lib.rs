@@ -47,15 +47,28 @@ mod conversations;
 mod course_user_fields;
 mod discussion_entries;
 mod discussion_topic;
+// Entity types registered for parity; resolvers wire the Canvas-nested
+// fields, the rest are schema-orphans (allowed dead code).
+#[allow(dead_code)]
+mod entities_batch_f;
+#[allow(dead_code)]
+mod entities_modules_discussions_submissions;
 mod external_tools;
 mod files;
+// Leaf enums/inputs registered for parity; entity batches wire the
+// ones Canvas nests, the rest stay schema-orphans (allowed dead code).
 mod grading_periods;
 mod grading_standards_account_notifications;
+#[allow(dead_code)]
+mod graphql_enums_inputs;
 mod groups;
 mod modules;
 mod mutations;
 mod mutations_batch_b;
 mod mutations_batch_c;
+mod mutations_batch_g1;
+mod mutations_batch_g2;
+mod mutations_batch_g3;
 mod outcomes_media;
 mod pages;
 mod quiz;
@@ -1047,6 +1060,9 @@ pub struct Mutation(
     mutations::AssignmentMutations,
     mutations_batch_b::BatchBMutations,
     mutations_batch_c::BatchCMutations,
+    mutations_batch_g1::BatchG1Mutations,
+    mutations_batch_g2::BatchG2Mutations,
+    mutations_batch_g3::BatchG3Mutations,
 );
 
 impl Mutation {
@@ -1057,6 +1073,9 @@ impl Mutation {
             mutations::AssignmentMutations,
             mutations_batch_b::BatchBMutations,
             mutations_batch_c::BatchCMutations,
+            mutations_batch_g1::BatchG1Mutations,
+            mutations_batch_g2::BatchG2Mutations,
+            mutations_batch_g3::BatchG3Mutations,
         )
     }
 }
