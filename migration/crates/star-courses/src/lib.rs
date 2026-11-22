@@ -4662,11 +4662,13 @@ async fn update_course_tab(
 // ---------------------------------------------------------------------------
 
 /// Build the courses router.
+mod misc_gaps;
 mod syllabus_api;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(syllabus_api::syllabus_api_routes())
+        .merge(misc_gaps::misc_gaps_routes())
         .route("/courses", get(list_courses))
         .route("/courses", post(create_course))
         .route("/accounts/{id}/courses", post(create_course_in_account))
