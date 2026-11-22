@@ -814,7 +814,7 @@ pub async fn upload_account_rubric(
     .await?;
 
     let import = import_response(&state.db, import).await?;
-    Ok((StatusCode::OK, Json(import)).into_response())
+    Ok((StatusCode::CREATED, Json(import)).into_response())
 }
 
 /// GET /accounts/{accountId}/rubrics/upload/{id}  → 200
@@ -834,7 +834,7 @@ pub async fn account_upload_status(
     };
 
     let import = import_response(&state.db, RubricImportResponse::from_row(row)).await?;
-    Ok((StatusCode::OK, Json(import)).into_response())
+    Ok((StatusCode::CREATED, Json(import)).into_response())
 }
 
 /// GET /courses/{courseId}/rubrics/upload/{id}  → 200
@@ -854,7 +854,7 @@ pub async fn course_upload_status(
     };
 
     let import = import_response(&state.db, RubricImportResponse::from_row(row)).await?;
-    Ok((StatusCode::OK, Json(import)).into_response())
+    Ok((StatusCode::CREATED, Json(import)).into_response())
 }
 
 /// GET /accounts/{accountId}/rubrics/upload/{id}/rubrics  → 200

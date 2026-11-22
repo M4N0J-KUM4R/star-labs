@@ -3433,6 +3433,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "star-assignments",
  "star-auth",
  "star-common",
  "star-db",

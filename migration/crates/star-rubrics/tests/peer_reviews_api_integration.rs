@@ -46,8 +46,15 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
         db: pool.clone(),
         jwt_secret: JWT_SECRET.to_string(),
     };
-    let server =
-        TestServer::new(star_rubrics::router().with_state(state)).expect("build TestServer");
+    let server = TestServer::new(
+        axum::Router::new()
+            .merge(star_rubrics::router())
+            // The section peer_reviews twins live in star-assignments (the
+            // assessments lane) — the same router star-http mounts.
+            .merge(star_assignments::router())
+            .with_state(state),
+    )
+    .expect("build TestServer");
     Some((server, pool, run_prefix()))
 }
 
