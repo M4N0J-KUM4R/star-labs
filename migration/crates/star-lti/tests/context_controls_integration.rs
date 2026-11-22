@@ -68,20 +68,49 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
 
     star_db::MIGRATOR.run(&pool).await.expect("run migrations");
 
-    // Serialize the repair pass across the parallel tests of this binary:
-    // concurrent DROP CONSTRAINT IF EXISTS + ADD CONSTRAINT sequences race on
-    // the catalog and fail with "constraint ... already exists" (42710).
+    // Serialize the repair pass across every test binary of the shard:
+    // concurrent DROP CONSTRAINT IF EXISTS + ADD CONSTRAINT sequences race
+    // on the catalog ("constraint ... already exists", 42710) and on the
+    // table locks (40P01 deadlock, one binary seeding rows while another
+    // repairs). A Postgres advisory lock serializes the DDL across
+    // PROCESSES; a lock timeout + retry keeps a straggler from wedging.
     static REPAIR_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
     {
         let _repair_guard = REPAIR_MUTEX
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        sqlx::query("SELECT pg_advisory_lock(4231177)")
+            .execute(&pool)
+            .await
+            .expect("take the repair advisory lock");
         for statement in REPAIR_DDL {
-            sqlx::query(statement)
-                .execute(&pool)
-                .await
-                .expect("repair lti_context_controls");
+            let mut attempt = 0;
+            loop {
+                attempt += 1;
+                match sqlx::query(&format!("SET lock_timeout = '5s'; {statement}"))
+                    .execute(&pool)
+                    .await
+                {
+                    Ok(_) => break,
+                    Err(error) if attempt < 6 => {
+                        let message = error.to_string();
+                        if message.contains("deadlock")
+                            || message.contains("lock timeout")
+                            || message.contains("still waiting")
+                        {
+                            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                            continue;
+                        }
+                        panic!("repair lti_context_controls: {error}");
+                    }
+                    Err(error) => panic!("repair lti_context_controls: {error}"),
+                }
+            }
         }
+        sqlx::query("SELECT pg_advisory_unlock(4231177)")
+            .execute(&pool)
+            .await
+            .expect("release the repair advisory lock");
     }
 
     let state = AppState {
