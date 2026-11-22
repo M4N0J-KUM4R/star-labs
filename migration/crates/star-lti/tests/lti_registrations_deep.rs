@@ -1176,7 +1176,9 @@ async fn lti_apps_listings() {
         .iter()
         .find(|app| app["name"] == format!("{prefix}-account-app"))
         .expect("account app listed");
-    assert_eq!(account_app["app_type"], "lti_tool");
+    // Canvas `Lti::AppCollator#external_tool_definition`:
+    // `app_type: "ContextExternalTool"` (lib/lti/app_collator.rb:58).
+    assert_eq!(account_app["app_type"], "ContextExternalTool");
     assert_eq!(account_app["installed"], true);
 
     let response = server

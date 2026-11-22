@@ -255,7 +255,7 @@ async fn the_environment_route_answers_the_root_account_settings() {
     let (root_account_id, original): (i64, Value) = sqlx::query_as(
         "SELECT id, settings FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
     )
-    .fetch_one(pool)
+    .fetch_one(&pool)
     .await
     .expect("read the root account settings");
     sqlx::query(

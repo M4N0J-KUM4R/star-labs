@@ -200,7 +200,9 @@ async fn a_calendar_is_read_and_updated() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
-    assert_eq!(body["visible_calendars_count"].as_i64(), Some(1));
+    // Canvas renders `{ count: N }`
+    // (account_calendars_api_controller.rb:306 `render json: { count: }`).
+    assert_eq!(body["count"].as_i64(), Some(1));
 
     cleanup(&pool, &prefix).await;
 }

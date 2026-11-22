@@ -68,11 +68,20 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
 
     star_db::MIGRATOR.run(&pool).await.expect("run migrations");
 
-    for statement in REPAIR_DDL {
-        sqlx::query(statement)
-            .execute(&pool)
-            .await
-            .expect("repair lti_context_controls");
+    // Serialize the repair pass across the parallel tests of this binary:
+    // concurrent DROP CONSTRAINT IF EXISTS + ADD CONSTRAINT sequences race on
+    // the catalog and fail with "constraint ... already exists" (42710).
+    static REPAIR_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    {
+        let _repair_guard = REPAIR_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for statement in REPAIR_DDL {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("repair lti_context_controls");
+        }
     }
 
     let state = AppState {
