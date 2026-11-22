@@ -45,7 +45,7 @@ use axum::{
     extract::{Path, Query, RawQuery, State},
     http::{header, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{get, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -1435,8 +1435,10 @@ async fn create_media_object_route(
 /// The Canvas API v1 media object routes, relative to the `/api/v1` nest.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/media_objects", get(list_media_objects_route))
-        .route("/media_objects", post(create_media_object_route))
+        .route(
+            "/media_objects",
+            get(list_media_objects_route).post(create_media_object_route),
+        )
         .route(
             "/media_objects/{media_object_id}",
             put(update_media_object_route),

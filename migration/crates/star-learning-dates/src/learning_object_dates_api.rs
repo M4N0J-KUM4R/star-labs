@@ -318,12 +318,32 @@ async fn require_manage_assign_to(
     }
 }
 
-/// Canvas `Account.site_admin.feature_enabled?(feature)`.
-async fn site_admin_feature_enabled(db: &PgPool, feature: &str) -> Result<bool, ApiError> {
+/// Canvas feature-flag lookup: `@course.root_account.feature_enabled?(feature)`
+/// (the root of the course's account chain — `differentiated_files` and
+/// `discussion_checkpoints` are root-account features in Canvas, evaluated
+/// against the requesting course's chain, not against some global account).
+async fn root_account_feature_enabled(
+    db: &PgPool,
+    course_id: i64,
+    feature: &str,
+) -> Result<bool, ApiError> {
+    // Walk the course's account chain up to its root account.
     let root: Option<(i64,)> = sqlx::query_as(
-        "SELECT id FROM accounts WHERE parent_account_id IS NULL AND workflow_state <> 'deleted' \
-         ORDER BY id ASC LIMIT 1",
+        r#"
+        WITH RECURSIVE chain AS (
+            SELECT a.id, a.parent_account_id
+            FROM accounts a
+            JOIN courses c ON c.account_id = a.id
+            WHERE c.id = $1
+            UNION ALL
+            SELECT a.id, a.parent_account_id
+            FROM accounts a
+            JOIN chain ON a.id = chain.parent_account_id
+        )
+        SELECT id FROM chain WHERE parent_account_id IS NULL LIMIT 1
+        "#,
     )
+    .bind(course_id)
     .fetch_optional(db)
     .await?;
     let Some((root_id,)) = root else {
@@ -347,8 +367,11 @@ async fn site_admin_feature_enabled(db: &PgPool, feature: &str) -> Result<bool, 
 
 /// Canvas `Course#discussion_checkpoints_enabled?` (an account feature flag)
 /// — it decides whether the overrides carry `sub_assignment_due_dates`.
-async fn include_child_override_due_dates(db: &PgPool) -> Result<bool, ApiError> {
-    site_admin_feature_enabled(db, "discussion_checkpoints").await
+async fn include_child_override_due_dates(
+    db: &PgPool,
+    course_id: i64,
+) -> Result<bool, ApiError> {
+    root_account_feature_enabled(db, course_id, "discussion_checkpoints").await
 }
 
 // ---------------------------------------------------------------------------
@@ -560,7 +583,7 @@ async fn get_module_date_details(
     let module = load_context_module(&state.db, course_id, context_module_id).await?;
     require_manage_assign_to(&state.db, &auth, course_id).await?;
 
-    let with_sub_dates = include_child_override_due_dates(&state.db).await?;
+    let with_sub_dates = include_child_override_due_dates(&state.db, course_id).await?;
     let overrides = load_overrides(
         &state.db,
         "ContextModule",
@@ -589,13 +612,13 @@ async fn get_file_date_details(
 ) -> Result<Response, ApiError> {
     let attachment = load_attachment(&state.db, course_id, attachment_id).await?;
 
-    if !site_admin_feature_enabled(&state.db, "differentiated_files").await? {
+    if !root_account_feature_enabled(&state.db, course_id, "differentiated_files").await? {
         return Ok(files_not_supported());
     }
 
     require_manage_assign_to(&state.db, &auth, course_id).await?;
 
-    let with_sub_dates = include_child_override_due_dates(&state.db).await?;
+    let with_sub_dates = include_child_override_due_dates(&state.db, course_id).await?;
     let overrides = load_overrides(
         &state.db,
         "Attachment",
@@ -639,7 +662,7 @@ async fn put_file_date_details(
 ) -> Result<Response, ApiError> {
     let attachment = load_attachment(&state.db, course_id, attachment_id).await?;
 
-    if !site_admin_feature_enabled(&state.db, "differentiated_files").await? {
+    if !root_account_feature_enabled(&state.db, course_id, "differentiated_files").await? {
         return Ok(files_not_supported());
     }
 

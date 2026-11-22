@@ -83,6 +83,8 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::AppState;
 
+mod page_views;
+
 // ---------------------------------------------------------------------------
 // Error type (PollError style: plain-text statuses, JSON where Canvas sends
 // JSON)
@@ -1234,6 +1236,7 @@ async fn smart_search_log(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(page_views::router())
         .route("/search/recipients", get(recipients))
         .route("/conversations/find_recipients", get(recipients))
         .route("/search/all_courses", get(all_courses))

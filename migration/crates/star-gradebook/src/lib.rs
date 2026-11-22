@@ -28,14 +28,101 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::{IntoResponse, Response},
     routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
+
+// ---------------------------------------------------------------------------
+// Canvas error envelopes (application_controller.rb)
+// ---------------------------------------------------------------------------
+
+/// Canvas renders a failed `authorized_action` for JSON requests as this
+/// envelope with 403.
+fn canvas_unauthorized() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({
+            "status": "unauthorized",
+            "errors": [{ "message": "user not authorized to perform that action" }]
+        })),
+    )
+        .into_response()
+}
+
+/// Canvas's default API not-found body.
+fn canvas_not_found() -> Response {
+    (
+        StatusCode::NOT_FOUND,
+        Json(json!({
+            "errors": [{ "message": "The specified resource does not exist." }]
+        })),
+    )
+        .into_response()
+}
+
+/// Rails `render json: record.errors, status: :bad_request` — one field,
+/// one message (the first failure of that field).
+fn canvas_validation(field: &str, message: &str) -> Response {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ field: [message] })),
+    )
+        .into_response()
+}
+
+/// `GradebookImporter::GRADEBOOK_IMPORTER_RESERVED_NAMES` (Canvas
+/// `custom_gradebook_column.rb` excludes these titles).
+const RESERVED_COLUMN_TITLES: [&str; 9] = [
+    "Student",
+    "LastName",
+    "FirstName",
+    "ID",
+    "SIS User ID",
+    "SIS Login ID",
+    "Section",
+    "Integration ID",
+    "Root Account",
+];
+
+/// The first title error of Canvas's model validations, in Rails order:
+/// presence, length, exclusion.
+fn title_validation_error(title: &str) -> Option<&'static str> {
+    if title.trim().is_empty() {
+        Some("can't be blank")
+    } else if title.chars().count() > 255 {
+        Some("is too long (maximum is 255 characters)")
+    } else if RESERVED_COLUMN_TITLES.contains(&title) {
+        Some("cannot use gradebook importer reserved names")
+    } else {
+        None
+    }
+}
+
+/// Rails/Canvas boolean coercion (`Canvas::Plugin.value_to_boolean`):
+/// `"1" | "t" | "true" | "y" | "yes" | "on"` (case-insensitive) and
+/// non-zero numbers are true; everything else is false.
+fn deserialize_rails_bool<'de, D>(deserializer: D) -> Result<Option<bool>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value: Option<serde_json::Value> = Option::deserialize(deserializer)?;
+    Ok(value.map(|v| match v {
+        serde_json::Value::Bool(b) => b,
+        serde_json::Value::Number(n) => n.as_f64().is_some_and(|f| f != 0.0),
+        serde_json::Value::String(s) => matches!(
+            s.to_ascii_lowercase().as_str(),
+            "1" | "t" | "true" | "y" | "yes" | "on"
+        ),
+        _ => false,
+    }))
+}
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -79,17 +166,20 @@ impl From<ColumnRow> for ColumnJson {
 
 /// `column[...]` params for create and update (all fields optional on
 /// update; `title` is required on create and validated to 400).
+///
+/// The booleans accept the Rails string forms ("yes"/"on"/"1"/"true" …)
+/// because `column[hidden]=yes` is a legal Rails form submission.
 #[derive(Debug, Deserialize)]
 struct ColumnParams {
     #[serde(default)]
     title: Option<String>,
     #[serde(default)]
     position: Option<i32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_rails_bool")]
     teacher_notes: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_rails_bool")]
     hidden: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "deserialize_rails_bool")]
     read_only: Option<bool>,
 }
 
@@ -338,10 +428,14 @@ async fn index_columns(
     Path(course_id): Path<i64>,
     auth: AuthUser,
     Query(params): Query<IndexParams>,
-) -> Result<Json<Vec<ColumnJson>>, ApiError> {
-    require_course(&state.db, course_id).await?;
+) -> Result<Response, ApiError> {
+    match require_course(&state.db, course_id).await {
+        Ok(()) => {}
+        Err(ApiError::NotFound) => return Ok(canvas_not_found()),
+        Err(e) => return Err(e),
+    }
     if !check_view_or_manage_grades(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
+        return Ok(canvas_unauthorized());
     }
 
     let workflow_filter = if params.include_hidden() {
@@ -358,7 +452,11 @@ async fn index_columns(
         .fetch_all(&state.db)
         .await?;
 
-    Ok(Json(rows.into_iter().map(ColumnJson::from).collect()))
+    Ok(Json(rows
+        .into_iter()
+        .map(ColumnJson::from)
+        .collect::<Vec<_>>())
+    .into_response())
 }
 
 /// POST /courses/{courseId}/custom_gradebook_columns — create
@@ -372,25 +470,22 @@ async fn create_column(
     Path(course_id): Path<i64>,
     auth: AuthUser,
     Json(payload): Json<ColumnPayload>,
-) -> Result<(StatusCode, Json<ColumnJson>), ApiError> {
-    require_course(&state.db, course_id).await?;
+) -> Result<Response, ApiError> {
+    match require_course(&state.db, course_id).await {
+        Ok(()) => {}
+        Err(ApiError::NotFound) => return Ok(canvas_not_found()),
+        Err(e) => return Err(e),
+    }
     if !check_manage_grades(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
+        return Ok(canvas_unauthorized());
     }
 
     let params = payload
         .column
         .ok_or_else(|| ApiError::BadRequest("column[title] is required".to_string()))?;
     let title = params.title.unwrap_or_default();
-    if title.trim().is_empty() {
-        return Err(ApiError::BadRequest(
-            "column[title] is required".to_string(),
-        ));
-    }
-    if title.len() > 255 {
-        return Err(ApiError::BadRequest(
-            "column[title] is too long (maximum is 255 characters)".to_string(),
-        ));
+    if let Some(message) = title_validation_error(&title) {
+        return Ok(canvas_validation("title", message));
     }
 
     let workflow_state = if params.hidden.unwrap_or(false) {
@@ -420,7 +515,8 @@ async fn create_column(
     .fetch_one(&state.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(ColumnJson::from(row))))
+    // Canvas `update_column` renders the saved column with a plain 200.
+    Ok((StatusCode::OK, Json(ColumnJson::from(row))).into_response())
 }
 
 /// PUT /courses/{courseId}/custom_gradebook_columns/{id} — update
@@ -432,10 +528,14 @@ async fn update_column(
     Path((course_id, column_id)): Path<(i64, i64)>,
     auth: AuthUser,
     Json(payload): Json<ColumnPayload>,
-) -> Result<Json<ColumnJson>, ApiError> {
-    require_course(&state.db, course_id).await?;
+) -> Result<Response, ApiError> {
+    match require_course(&state.db, course_id).await {
+        Ok(()) => {}
+        Err(ApiError::NotFound) => return Ok(canvas_not_found()),
+        Err(e) => return Err(e),
+    }
     if !check_manage_grades(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
+        return Ok(canvas_unauthorized());
     }
 
     let existing: Option<ColumnRow> = sqlx::query_as(&format!(
@@ -457,17 +557,12 @@ async fn update_column(
 
     let title = match params.title.as_deref() {
         None => existing.title,
-        Some(t) if t.trim().is_empty() => {
-            return Err(ApiError::BadRequest(
-                "column[title] can't be blank".to_string(),
-            ))
+        Some(t) => {
+            if let Some(message) = title_validation_error(t) {
+                return Ok(canvas_validation("title", message));
+            }
+            t.to_string()
         }
-        Some(t) if t.len() > 255 => {
-            return Err(ApiError::BadRequest(
-                "column[title] is too long (maximum is 255 characters)".to_string(),
-            ))
-        }
-        Some(t) => t.to_string(),
     };
 
     // `hidden` only moves between active/hidden; a deleted column stays
@@ -504,7 +599,7 @@ async fn update_column(
     .fetch_one(&state.db)
     .await?;
 
-    Ok(Json(ColumnJson::from(row)))
+    Ok(Json(ColumnJson::from(row)).into_response())
 }
 
 /// DELETE /courses/{courseId}/custom_gradebook_columns/{id} — destroy
@@ -515,10 +610,14 @@ async fn destroy_column(
     State(state): State<AppState>,
     Path((course_id, column_id)): Path<(i64, i64)>,
     auth: AuthUser,
-) -> Result<Json<ColumnJson>, ApiError> {
-    require_course(&state.db, course_id).await?;
+) -> Result<Response, ApiError> {
+    match require_course(&state.db, course_id).await {
+        Ok(()) => {}
+        Err(ApiError::NotFound) => return Ok(canvas_not_found()),
+        Err(e) => return Err(e),
+    }
     if !check_manage_grades(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
+        return Ok(canvas_unauthorized());
     }
 
     let row: Option<ColumnRow> = sqlx::query_as(
@@ -534,9 +633,10 @@ async fn destroy_column(
     .fetch_optional(&state.db)
     .await?;
 
-    row.map(ColumnJson::from)
-        .map(Json)
-        .ok_or(ApiError::NotFound)
+    match row {
+        Some(row) => Ok(Json(ColumnJson::from(row)).into_response()),
+        None => Ok(canvas_not_found()),
+    }
 }
 
 /// POST /courses/{courseId}/custom_gradebook_columns/reorder — reorder

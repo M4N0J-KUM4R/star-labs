@@ -9,6 +9,8 @@
 //! coordinator; this file exercises them through that router.
 
 use axum::http::header::AUTHORIZATION;
+mod support;
+
 use axum_test::TestServer;
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -735,12 +737,9 @@ async fn bind_unbind_and_install_from_template_manage_the_bindings() {
     enable_feature(&pool, account, "lti_registrations_templates").await;
 
     // A template registration owned by the site admin (the root account).
-    let site_admin_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("site admin account");
+    // The read-only lookup lives in `tests/support` — see that module's
+    // docs for why it is not inlined here.
+    let site_admin_id = support::site_admin_id(&pool).await;
     let template =
         create_registration(&server, site_admin_id, admin, &prefix, tool_configuration()).await;
     let template_id = template["id"].as_i64().expect("template id");

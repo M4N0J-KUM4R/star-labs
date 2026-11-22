@@ -101,13 +101,27 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
     .expect("seed user")
 }
 
+/// Every course gets its own DEDICATED account (test isolation, issue
+/// #75): the `differentiated_files` / `discussion_checkpoints` root-account
+/// feature flags are toggled on the course's own account, never on the
+/// shared root, so parallel tests cannot see each other's flag state.
 async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
-    sqlx::query_scalar("INSERT INTO courses (name, course_code) VALUES ($1, $2) RETURNING id")
-        .bind(name)
-        .bind(format!("{prefix}-{name}"))
-        .fetch_one(pool)
-        .await
-        .expect("seed course")
+    let account_id: i64 = sqlx::query_scalar(
+        "INSERT INTO accounts (name) VALUES ($1) RETURNING id",
+    )
+    .bind(format!("{prefix}-{name}-account"))
+    .fetch_one(pool)
+    .await
+    .expect("seed account");
+    sqlx::query_scalar(
+        "INSERT INTO courses (name, course_code, account_id) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(name)
+    .bind(format!("{prefix}-{name}"))
+    .bind(account_id)
+    .fetch_one(pool)
+    .await
+    .expect("seed course")
 }
 
 async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str) {
@@ -255,24 +269,16 @@ async fn seed_override(
     .expect("seed override");
 }
 
-/// Canvas `Account.site_admin.feature_enabled?` — the site admin is the first
-/// root account.
-async fn set_site_admin_feature(pool: &PgPool, prefix: &str, feature: &str, state: &str) {
-    let account_id: i64 = match sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE parent_account_id IS NULL AND workflow_state <> 'deleted' \
-         ORDER BY id ASC LIMIT 1",
+/// Canvas `@course.root_account.feature_enabled?(feature)` — the test
+/// toggles the flag on the course's OWN dedicated root account.
+async fn set_course_feature(pool: &PgPool, course_id: i64, feature: &str, state: &str) {
+    let account_id: i64 = sqlx::query_scalar(
+        "SELECT account_id FROM courses WHERE id = $1",
     )
-    .fetch_optional(pool)
+    .bind(course_id)
+    .fetch_one(pool)
     .await
-    .expect("query root account")
-    {
-        Some(id) => id,
-        None => sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
-            .bind(format!("{prefix}-root-account"))
-            .fetch_one(pool)
-            .await
-            .expect("seed root account"),
-    };
+    .expect("query course account");
 
     sqlx::query(
         "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
@@ -284,7 +290,7 @@ async fn set_site_admin_feature(pool: &PgPool, prefix: &str, feature: &str, stat
     .bind(state)
     .execute(pool)
     .await
-    .expect("set site admin feature");
+    .expect("set course account feature");
 }
 
 fn auth(user_id: i64, role: &str) -> String {
@@ -292,17 +298,15 @@ fn auth(user_id: i64, role: &str) -> String {
     format!("Bearer {token}")
 }
 
-/// Reset the site-admin feature flags the file tests toggle. Only the file
-/// tests may touch them, and only while holding `FILE_FLAG_MUTEX` — the
-/// shared `cleanup` used to wipe them for every test of the binary, which
-/// raced with a file test running in parallel.
-async fn cleanup_file_flags(pool: &PgPool) {
+/// Delete the feature-flag rows of the run's dedicated accounts. There is
+/// no FK from feature_flags, so the cleanup removes them explicitly before
+/// the accounts go (the shared `cleanup` deletes those).
+async fn cleanup_file_flags(pool: &PgPool, prefix: &str) {
     let _ = sqlx::query(
         "DELETE FROM feature_flags WHERE context_type = 'Account' \
-           AND context_id = (SELECT id FROM accounts WHERE parent_account_id IS NULL \
-                              AND workflow_state <> 'deleted' ORDER BY id ASC LIMIT 1) \
-           AND feature IN ('differentiated_files', 'discussion_checkpoints')",
+           AND context_id IN (SELECT id FROM accounts WHERE name LIKE $1)",
     )
+    .bind(format!("{prefix}-%"))
     .execute(pool)
     .await;
 }
@@ -773,7 +777,7 @@ async fn file_date_details_needs_the_differentiated_files_feature() {
     let bearer = auth(teacher, "teacher");
 
     // The site admin feature is off: Canvas answers 400.
-    set_site_admin_feature(&pool, &prefix, "differentiated_files", "disabled").await;
+    set_course_feature(&pool, course, "differentiated_files", "disabled").await;
     let unsupported = server
         .get(&format!(
             "/courses/{course}/files/{attachment}/date_details"
@@ -792,7 +796,7 @@ async fn file_date_details_needs_the_differentiated_files_feature() {
     );
 
     // With the feature on a student still has no `manage_files_edit`.
-    set_site_admin_feature(&pool, &prefix, "differentiated_files", "enabled").await;
+    set_course_feature(&pool, course, "differentiated_files", "enabled").await;
     let forbidden = server
         .get(&format!(
             "/courses/{course}/files/{attachment}/date_details"
@@ -823,7 +827,7 @@ async fn file_date_details_needs_the_differentiated_files_feature() {
         .await;
     assert_eq!(missing.status_code(), 404, "body: {}", missing.text());
 
-    cleanup_file_flags(&pool).await;
+    cleanup_file_flags(&pool, &prefix).await;
     cleanup(&pool, &prefix).await;
 }
 
@@ -840,7 +844,7 @@ async fn file_date_details_put_updates_the_attachment() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     let attachment = seed_attachment(&pool, course, &format!("{prefix}-coolpdf.pdf")).await;
     let bearer = auth(teacher, "teacher");
-    set_site_admin_feature(&pool, &prefix, "differentiated_files", "enabled").await;
+    set_course_feature(&pool, course, "differentiated_files", "enabled").await;
 
     let put = server
         .put(&format!(
@@ -875,7 +879,7 @@ async fn file_date_details_put_updates_the_attachment() {
     );
     assert_eq!(details["overrides"][0]["course_section_id"], json!(42));
 
-    cleanup_file_flags(&pool).await;
+    cleanup_file_flags(&pool, &prefix).await;
     cleanup(&pool, &prefix).await;
 }
 

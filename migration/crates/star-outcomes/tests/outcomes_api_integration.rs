@@ -165,18 +165,13 @@ struct Fixture {
 /// Seed an account, a course, a teacher, a student, one outcome with a rubric
 /// criterion, a group, a link, an alignment and one outcome result.
 async fn seed(pool: &PgPool, prefix: &str) -> Fixture {
-    let root_account_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id LIMIT 1",
-    )
-    .fetch_one(pool)
-    .await
-    .expect("find the root account");
-
+    // A DEDICATED root account per fixture (test isolation, issue #75): the
+    // course's account chain root is the fixture's own account, so the
+    // `outcomes_rollup_propagation` flag toggles only ever touch it.
     let account_id: i64 = sqlx::query_scalar(
-        "INSERT INTO accounts (name, parent_account_id) VALUES ($1, $2) RETURNING id",
+        "INSERT INTO accounts (name) VALUES ($1) RETURNING id",
     )
     .bind(format!("{prefix}-account"))
-    .bind(root_account_id)
     .fetch_one(pool)
     .await
     .expect("seed account");
@@ -1130,12 +1125,9 @@ async fn enqueue_outcome_rollup_calculation_honours_the_feature_flag() {
     let prefix = run_prefix();
     let fixture = seed(&app.pool, &prefix).await;
 
-    let site_admin: i64 = sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id LIMIT 1",
-    )
-    .fetch_one(&app.pool)
-    .await
-    .expect("the site admin account");
+    // The flag lives on the fixture's own dedicated root account (the
+    // course's account chain root) — never on the shared root account.
+    let site_admin = fixture.account_id;
 
     // The flag is off by default: the endpoint answers `204 No Content`.
     sqlx::query(

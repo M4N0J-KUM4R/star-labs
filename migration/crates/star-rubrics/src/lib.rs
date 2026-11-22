@@ -15,7 +15,6 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
-mod peer_reviews_api;
 mod rubrics_api;
 
 // Server-rendered UI loaders + the shared assessment write (star-ui, issue
@@ -1709,7 +1708,9 @@ async fn upload_rubric(
         "id": attachment_id,
     }));
 
-    Ok((StatusCode::CREATED, Json(import)))
+    // Canvas `rubrics_api#upload` renders the import JSON with the default
+    // status — 200, not 201.
+    Ok((StatusCode::OK, Json(import)))
 }
 
 // -----------------------------------------------------------------------------
@@ -2057,8 +2058,6 @@ async fn download_account_rubrics(
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(rubrics_api::router())
-        // The peer reviews of an assignment.
-        .merge(peer_reviews_api::router())
         .route("/courses/{courseId}/rubrics", post(create_rubric))
         .route("/courses/{courseId}/rubrics", get(list_course_rubrics))
         .route("/courses/{courseId}/rubrics/{id}", get(get_course_rubric))

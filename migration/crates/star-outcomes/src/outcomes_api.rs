@@ -2087,6 +2087,35 @@ async fn assign_outcome_order(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+/// The root account of a course's account chain (`@course.root_account`);
+/// `None` when the course id is absent, unparseable, or unknown.
+async fn course_chain_root(
+    pool: &PgPool,
+    course_id: &str,
+) -> Result<Option<i64>, sqlx::Error> {
+    let Ok(course_id) = course_id.parse::<i64>() else {
+        return Ok(None);
+    };
+    sqlx::query_scalar(
+        r#"
+        WITH RECURSIVE chain AS (
+            SELECT a.id, a.parent_account_id
+            FROM accounts a
+            JOIN courses c ON c.account_id = a.id
+            WHERE c.id = $1
+            UNION ALL
+            SELECT a.id, a.parent_account_id
+            FROM accounts a
+            JOIN chain ON a.id = chain.parent_account_id
+        )
+        SELECT id FROM chain WHERE parent_account_id IS NULL LIMIT 1
+        "#,
+    )
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await
+}
+
 /// `POST /enqueue_outcome_rollup_calculation`.
 async fn enqueue_outcome_rollup_calculation(
     State(state): State<AppState>,
@@ -2096,10 +2125,14 @@ async fn enqueue_outcome_rollup_calculation(
     let pool = &state.db;
     let params = Params::from_query(raw.as_deref());
 
-    let site_admin = site_admin_account_id(pool).await?;
-    let enabled = match site_admin {
-        Some(account_id) => {
-            account_feature_enabled(pool, account_id, "outcomes_rollup_propagation").await?
+    // Canvas: the rollup-propagation feature is a root-account feature of
+    // the requesting course's account chain — resolved through the context
+    // (`@course.root_account.feature_enabled?`), not a globally-first
+    // account (test isolation, issue #75).
+    let course_id_param = params.get("course_id").unwrap_or("").to_string();
+    let enabled = match course_chain_root(pool, &course_id_param).await? {
+        Some(root) => {
+            account_feature_enabled(pool, root, "outcomes_rollup_propagation").await?
         }
         None => false,
     };
@@ -2107,7 +2140,6 @@ async fn enqueue_outcome_rollup_calculation(
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
 
-    let course_id_param = params.get("course_id").unwrap_or("").to_string();
     let student_uuid = params.get("student_uuid").unwrap_or("").to_string();
 
     if course_id_param.is_empty() || student_uuid.is_empty() {

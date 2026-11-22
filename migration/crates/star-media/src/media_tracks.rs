@@ -79,13 +79,15 @@ struct AsrRequest {
 
 /// Domain router for the Canvas media-track routes.
 ///
-/// The listing of the tracks of a media object is registered by the crate
-/// root; this router adds the writes and the attachment routes.
+/// The listing of the tracks of a media object reuses the crate-root
+/// `list_media_tracks` handler (one registration per path — axum panics on
+/// overlapping routes); this router adds the writes and the attachment
+/// routes.
 pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/media_objects/{id}/media_tracks",
-            axum::routing::put(update_object_tracks),
+            get(crate::list_media_tracks).put(update_object_tracks),
         )
         .route(
             "/media_objects/{media_object_id}/asr",
