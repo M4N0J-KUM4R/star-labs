@@ -161,14 +161,14 @@ pub fn router() -> Router<AppState> {
 // ---------------------------------------------------------------------------
 
 /// A Canvas shaped error response.
-struct SisError {
+pub(crate) struct SisError {
     status: StatusCode,
     body: Value,
 }
 
 impl SisError {
     /// Canvas `api_error_json` for `ActiveRecord::RecordNotFound`.
-    fn not_found() -> Self {
+    pub(crate) fn not_found() -> Self {
         SisError {
             status: StatusCode::NOT_FOUND,
             body: json!({ "errors": [{ "message": "The specified resource does not exist." }] }),
@@ -945,7 +945,7 @@ async fn create(
 ///
 /// Canvas casts the parameter to an integer, so an id that does not exist (or
 /// is not a number at all) is a 404.
-async fn load_account(pool: &PgPool, account_id: i64) -> Result<AccountRow, SisError> {
+pub(crate) async fn load_account(pool: &PgPool, account_id: i64) -> Result<AccountRow, SisError> {
     sqlx::query_as::<_, AccountRow>(
         "SELECT id, parent_account_id, allow_sis_import FROM accounts \
          WHERE id = $1 AND workflow_state <> 'deleted'",
@@ -957,7 +957,7 @@ async fn load_account(pool: &PgPool, account_id: i64) -> Result<AccountRow, SisE
 }
 
 /// Canvas `SisImportsApiController#check_account`.
-fn check_account(account: &AccountRow) -> Result<(), SisError> {
+pub(crate) fn check_account(account: &AccountRow) -> Result<(), SisError> {
     if account.parent_account_id.is_some() {
         return Err(SisError::bad_request(
             json!({ "errors": ["SIS imports can only be executed on root accounts"] }),
@@ -975,7 +975,7 @@ fn check_account(account: &AccountRow) -> Result<(), SisError> {
 ///
 /// `:import_sis` and `:manage_sis` are account rights that only account admins
 /// (and site admins) hold, so one check covers every route of this controller.
-async fn authorize_sis(pool: &PgPool, auth: &AuthUser, account_id: i64) -> Result<(), SisError> {
+pub(crate) async fn authorize_sis(pool: &PgPool, auth: &AuthUser, account_id: i64) -> Result<(), SisError> {
     if auth.role == "admin" {
         return Ok(());
     }
@@ -1473,7 +1473,7 @@ fn progress_json(progress: &ProgressRow) -> Value {
 // ---------------------------------------------------------------------------
 
 /// A JSON response with an optional `Link` header.
-fn json_response(body: Value, link: Option<String>) -> Response {
+pub(crate) fn json_response(body: Value, link: Option<String>) -> Response {
     let mut response = (StatusCode::OK, Json(body)).into_response();
     if let Some(link) = link {
         if let Ok(value) = HeaderValue::from_str(&link) {
@@ -1484,7 +1484,7 @@ fn json_response(body: Value, link: Option<String>) -> Response {
 }
 
 /// The `Link` header Canvas builds in `Api.build_links_from_hash`.
-fn pagination_link(
+pub(crate) fn pagination_link(
     base_url: &str,
     params: &Params,
     page: i64,
@@ -1534,13 +1534,13 @@ fn pagination_link(
 /// Canvas reads them from the query string and, for a multipart post, from the
 /// form fields as well.
 #[derive(Debug, Default)]
-struct Params {
+pub(crate) struct Params {
     pairs: Vec<(String, String)>,
 }
 
 impl Params {
     /// Parses a query string.
-    fn parse(raw: Option<&str>) -> Self {
+    pub(crate) fn parse(raw: Option<&str>) -> Self {
         let mut params = Params::default();
         let Some(raw) = raw else { return params };
         for pair in raw.split('&') {
@@ -1562,7 +1562,7 @@ impl Params {
     }
 
     /// The last value of a parameter.
-    fn get(&self, key: &str) -> Option<&str> {
+    pub(crate) fn get(&self, key: &str) -> Option<&str> {
         self.pairs
             .iter()
             .rev()
@@ -1724,7 +1724,7 @@ fn find_bytes(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 
 /// Canvas casts an id parameter to an integer; a value that is not a positive
 /// number does not exist and is a 404.
-fn parse_id(raw: &str) -> Result<i64, SisError> {
+pub(crate) fn parse_id(raw: &str) -> Result<i64, SisError> {
     raw.parse::<i64>()
         .ok()
         .filter(|id| *id > 0)
@@ -1733,7 +1733,7 @@ fn parse_id(raw: &str) -> Result<i64, SisError> {
 
 /// Ruby's `String#to_i`: the leading integer of the string, 0 when there is
 /// none.
-fn ruby_to_i(value: &str) -> i64 {
+pub(crate) fn ruby_to_i(value: &str) -> i64 {
     let trimmed = value.trim_start();
     let mut end = 0;
     for (index, character) in trimmed.char_indices() {
@@ -1747,7 +1747,7 @@ fn ruby_to_i(value: &str) -> i64 {
 }
 
 /// Canvas `Canvas::Plugin.value_to_boolean`.
-fn value_to_boolean(value: Option<&str>) -> bool {
+pub(crate) fn value_to_boolean(value: Option<&str>) -> bool {
     let Some(value) = value else {
         return false;
     };
