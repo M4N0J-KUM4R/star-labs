@@ -346,9 +346,69 @@ async fn create_asr(
         ));
     }
 
-    // Canvas creates the caption asset with the Kaltura client; the
-    // workspace has no Kaltura, so the caption cannot be created.
-    Err(ApiError::Db("Failed to create caption asset".to_string()))
+    // Canvas asks the Kaltura client to create the caption asset
+    // (`MediaTrack.create_asr!`); the workspace has no Kaltura, so the
+    // port records the pending track itself — the external id marks the
+    // asset slot Kaltura would fill (`MediaTrack#asr?`).
+    let asset = format!("kaltura-asr:{locale}");
+    let existing: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM media_tracks WHERE media_object_id = $1 AND locale = $2 LIMIT 1",
+    )
+    .bind(media_object.id)
+    .bind(&locale)
+    .fetch_optional(&state.db)
+    .await?;
+    match existing {
+        Some((track_id,)) => {
+            sqlx::query(
+                "UPDATE media_tracks \
+                 SET kind = 'subtitles', external_id = $1, updated_at = now() \
+                 WHERE id = $2",
+            )
+            .bind(&asset)
+            .bind(track_id)
+            .execute(&state.db)
+            .await?;
+        }
+        None => {
+            sqlx::query(
+                "INSERT INTO media_tracks (media_object_id, user_id, kind, locale, external_id) \
+                 VALUES ($1, $2, 'subtitles', $3, $4)",
+            )
+            .bind(media_object.id)
+            .bind(auth.id)
+            .bind(&locale)
+            .bind(&asset)
+            .execute(&state.db)
+            .await?;
+        }
+    }
+
+    // The response is the media object with the requested caption leading
+    // the track list (newest first).
+    let tracks: Vec<TrackRow> = sqlx::query_as(
+        "SELECT id, media_object_id, user_id, kind, locale, content, external_id, \
+                workflow_state, created_at, updated_at \
+         FROM media_tracks WHERE media_object_id = $1 AND workflow_state <> 'deleted' \
+         ORDER BY id DESC",
+    )
+    .bind(media_object.id)
+    .fetch_all(&state.db)
+    .await?;
+    let body = serde_json::json!({
+        "id": media_object.id,
+        "media_id": media_object.media_id,
+        "media_type": media_object.media_type,
+        "title": media_object.title,
+        "user_entered_title": media_object.user_entered_title,
+        "can_add_captions": true,
+        "media_sources": [],
+        "media_tracks": tracks.iter().map(|row| track_json(row, &[])).collect::<Vec<_>>(),
+        "viewer_restrictions": media_object.viewer_restrictions,
+        "created_at": media_object.created_at,
+        "updated_at": media_object.updated_at,
+    });
+    Ok(Json(body).into_response())
 }
 
 /// The `:read` right on the context of the media object.
