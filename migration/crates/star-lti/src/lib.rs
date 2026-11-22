@@ -1696,7 +1696,10 @@ fn apply_overlay(config: &Value, overlay: &Value) -> Value {
         }
     }
     if !launch_settings.is_empty() {
-        result_map.insert("launch_settings".to_string(), Value::Object(launch_settings));
+        result_map.insert(
+            "launch_settings".to_string(),
+            Value::Object(launch_settings),
+        );
     }
 
     // `disabled_scopes` takes precedence over `scopes`.
@@ -1946,7 +1949,13 @@ async fn update_registration_scoped(
             if previous_overlay.is_some() {
                 let root_id = root_account_id(&state.db, account_id).await?;
                 record_overlay_version(
-                    &state.db, id, account_id, root_id, &json!({}), false, auth.id,
+                    &state.db,
+                    id,
+                    account_id,
+                    root_id,
+                    &json!({}),
+                    false,
+                    auth.id,
                 )
                 .await?;
             }
@@ -2219,17 +2228,14 @@ async fn overlay_history(
             ));
         }
         Some(limit) if limit > MAX_PER_PAGE => {
-            return Ok(render_error(
-                "invalid_limit",
-                "limit cannot exceed 100",
-            ));
+            return Ok(render_error("invalid_limit", "limit cannot exceed 100"));
         }
         Some(limit) => limit,
     };
-    Ok(Json(
-        overlay_versions_json(&state.db, registration_id, account_id, limit).await?,
+    Ok(
+        Json(overlay_versions_json(&state.db, registration_id, account_id, limit).await?)
+            .into_response(),
     )
-    .into_response())
 }
 
 /// `PUT /accounts/{account_id}/lti_registrations/{id}/reset` — reset the
@@ -3091,8 +3097,8 @@ async fn check_domain_duplicates(
          AND r.template_registration_id IS NULL"
             .to_string()
     };
-    let mut duplicates = registrations_with_domain(&state.db, &scope, account_id, None, &trimmed)
-        .await?;
+    let mut duplicates =
+        registrations_with_domain(&state.db, &scope, account_id, None, &trimmed).await?;
     if !templates_enabled {
         if let Some(site_admin) = site_admin {
             // The Site Admin registrations that are forced on...
@@ -3101,9 +3107,14 @@ async fn check_domain_duplicates(
                              WHERE b.registration_id = r.id AND b.account_id = $2 \
                                AND b.workflow_state = 'on')"
                 .to_string();
-            let forced_on =
-                registrations_with_domain(&state.db, &scope, account_id, Some(site_admin), &trimmed)
-                    .await?;
+            let forced_on = registrations_with_domain(
+                &state.db,
+                &scope,
+                account_id,
+                Some(site_admin),
+                &trimmed,
+            )
+            .await?;
             let forced_on_ids: Vec<i64> = forced_on
                 .iter()
                 .filter_map(|entry| entry.get("id").and_then(Value::as_i64))
@@ -3116,9 +3127,14 @@ async fn check_domain_duplicates(
                              WHERE b.registration_id = r.id AND b.account_id = $1 \
                                AND b.workflow_state = 'on')"
                 .to_string();
-            let inherited =
-                registrations_with_domain(&state.db, &scope, account_id, Some(site_admin), &trimmed)
-                    .await?;
+            let inherited = registrations_with_domain(
+                &state.db,
+                &scope,
+                account_id,
+                Some(site_admin),
+                &trimmed,
+            )
+            .await?;
             duplicates.extend(inherited.into_iter().filter(|entry| {
                 !forced_on_ids.contains(&entry.get("id").and_then(Value::as_i64).unwrap_or(-1))
             }));
@@ -3346,7 +3362,10 @@ fn from_lti_configuration(config: &Value) -> Value {
     for (key, value) in canvas_map {
         map.insert(key, value);
     }
-    map.insert("launch_settings".to_string(), Value::Object(launch_settings));
+    map.insert(
+        "launch_settings".to_string(),
+        Value::Object(launch_settings),
+    );
     map.insert("placements".to_string(), placements);
 
     result

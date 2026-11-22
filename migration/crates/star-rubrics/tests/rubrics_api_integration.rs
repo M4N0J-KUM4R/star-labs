@@ -388,7 +388,10 @@ async fn account_rubric_is_shown_with_its_used_locations() {
     // param (rubrics_api_controller.rb:
     // `errs["style"] = "invalid style requested. Must be one of ..."`).
     let style_error = body["style"].as_str().expect("style error");
-    assert!(style_error.contains("invalid style requested"), "body: {body}");
+    assert!(
+        style_error.contains("invalid style requested"),
+        "body: {body}"
+    );
 
     // A style without an assessment include is a 400 as well.
     let resp = server

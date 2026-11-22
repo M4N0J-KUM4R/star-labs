@@ -330,9 +330,7 @@ async fn create_asr(
     let media_object = load_media_object(&state.db, media_object_id, attachment_id).await?;
     require_update(&state.db, auth, &media_object).await?;
 
-    let locale = body
-        .and_then(|Json(body)| body.locale)
-        .unwrap_or_default();
+    let locale = body.and_then(|Json(body)| body.locale).unwrap_or_default();
     if locale.is_empty() || !locale.chars().all(|c| c.is_ascii_alphabetic() || c == '-') {
         return Err(ApiError::BadRequest(
             "Invalid or missing locale parameter".to_string(),
