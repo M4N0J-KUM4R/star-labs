@@ -42,7 +42,8 @@ const JWT_SECRET: &str = "test-jwt-secret";
 /// harness runs them in parallel threads, so serialize them to keep the
 /// flag state deterministic (Canvas `check_authorized_action` reads the
 /// flag on every request).
-static FILE_FLAG_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::new(());
+static FILE_FLAG_MUTEX: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 // ---------------------------------------------------------------------------
 // Harness
