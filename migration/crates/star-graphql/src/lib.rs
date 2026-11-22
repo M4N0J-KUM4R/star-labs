@@ -47,6 +47,7 @@ mod conversations;
 mod course_user_fields;
 mod discussion_entries;
 mod discussion_topic;
+mod external_tools;
 mod files;
 mod grading_periods;
 mod grading_standards_account_notifications;
@@ -66,6 +67,7 @@ use assignment_group::AssignmentGroupConnection;
 use conversations::ConversationParticipantConnection;
 use course_user_fields::{CoursePermissions, UserConnection};
 use discussion_topic::DiscussionTopicConnection;
+use external_tools::ExternalToolConnection;
 use files::FolderConnection;
 use grading_periods::GradingPeriodGroup;
 use groups::{GroupConnection, GroupSetConnection};
@@ -441,6 +443,29 @@ impl Course {
         let gctx = ctx.data::<GraphQLContext>()?;
         Ok(Some(
             discussion_topic::fetch_discussion_topic_page(
+                &gctx.pool,
+                self.id,
+                first,
+                after.as_deref(),
+            )
+            .await?,
+        ))
+    }
+
+    /// Paginated enabled external tools in this course (LIMIT first+1,
+    /// ORDER BY id) with their configured placements (from the 0085
+    /// `tool_configuration` JSONB). Deleted/disabled filtered. Visibility
+    /// inherited from course(id) — parity with the star-lti REST tool
+    /// listing.
+    async fn external_tools_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<ExternalToolConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            external_tools::fetch_external_tool_page(
                 &gctx.pool,
                 self.id,
                 first,
