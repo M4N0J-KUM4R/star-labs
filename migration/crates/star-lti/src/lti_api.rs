@@ -317,6 +317,18 @@ async fn verify_oauth(
     // The signature has to match the one of the request.
     let expected = signature_of(headers, uri, &params, &tool.shared_secret);
     if !constant_time_eq(expected.as_bytes(), params.signature.as_bytes()) {
+        eprintln!(
+            "OAUTH-DEBUG expected_sig={expected} got_sig={} base_url={:?} host={:?} scheme={:?} path={:?} consumer_key={:?} nonce={:?} ts={:?} tool_key={:?}",
+            params.signature,
+            format!("{scheme}://{host}{path}", scheme = headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()).unwrap_or("http"), host = headers.get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("localhost"), path = uri.path()),
+            headers.get(header::HOST).and_then(|v| v.to_str().ok()),
+            headers.get("x-forwarded-proto").and_then(|v| v.to_str().ok()),
+            uri.path(),
+            params.consumer_key,
+            params.nonce,
+            params.timestamp,
+            tool.consumer_key
+        );
         return Err(unauthorized("Invalid authorization header"));
     }
 
