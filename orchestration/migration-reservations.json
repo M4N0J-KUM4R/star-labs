@@ -3,8 +3,8 @@
  "free": [
   "0111"
  ],
- "max_merged": "0232",
- "next_available": "0233",
+ "max_merged": "0233",
+ "next_available": "0234",
  "reservations": {
   "0001": {
    "issue": null,
@@ -764,6 +764,11 @@
   "0232": {
    "issue": null,
    "note": "star-audit: authentication_events (parity gap)",
+   "status": "merged"
+  },
+  "0233": {
+   "issue": null,
+   "note": "star-assignments: module assignment overrides (parity gap)",
    "status": "merged"
   }
  }
