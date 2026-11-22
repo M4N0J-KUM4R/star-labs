@@ -907,7 +907,7 @@ async fn update_association_rubric_assessment(
         return Err(ApiError::NotFound);
     }
 
-    let is_teacher = caller_manages_course(&state.db, &auth, course_id).await?;
+    let is_teacher = caller_manages_course(&state.db, &auth, Some(course_id)).await?;
     if !can_modify_assessment(
         is_admin(&auth),
         is_teacher,
@@ -939,7 +939,7 @@ async fn delete_association_rubric_assessment(
         return Err(ApiError::NotFound);
     }
 
-    let is_teacher = caller_manages_course(&state.db, &auth, course_id).await?;
+    let is_teacher = caller_manages_course(&state.db, &auth, Some(course_id)).await?;
     if !can_modify_assessment(
         is_admin(&auth),
         is_teacher,
