@@ -60,8 +60,8 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 use crate::course_pacing::{
-    course_paces_enabled, load_course, require_content_right, require_feature_flag, root_account_id,
-    ContentRight, CourseRow,
+    course_paces_enabled, load_course, require_content_right, require_feature_flag,
+    root_account_id, ContentRight, CourseRow,
 };
 use crate::pace_contexts::overdue_user_ids;
 
