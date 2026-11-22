@@ -21,6 +21,7 @@ use star_common::{ApiError, AppState};
 
 pub mod brand_configs_api;
 pub mod career;
+pub mod discovery_pages_api;
 pub mod error_reports;
 
 // --------------------------------------------------------------------------
@@ -1875,6 +1876,7 @@ async fn close_user_account_notification(
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(brand_configs_api::brand_configs_routes())
+        .merge(discovery_pages_api::discovery_pages_routes())
         .route("/accounts", get(list_accounts))
         .route("/accounts/{id}", get(get_account).put(update_account))
         .route(
