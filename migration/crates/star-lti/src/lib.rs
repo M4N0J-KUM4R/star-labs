@@ -2205,7 +2205,7 @@ async fn overlay_history(
     // limit is only validated for a registration that carries an overlay
     // (registrations_controller.rb:1968-1985).
     if registration.overlay.is_none() {
-        return Ok(Json(vec![]).into_response());
+        return Ok(Json(Vec::<Value>::new()).into_response());
     }
 
     // Canvas `validate_limit_param` (:2372-2388) — the limit must be a
@@ -2941,7 +2941,7 @@ async fn find_registration_by_client_id(
         .fetch_optional(pool)
         .await?;
         if let Some((Some(registration_id),)) = linked {
-            if let Ok(Some(row)) = find_active_registration(pool, registration_id).await {
+            if let Ok(row) = find_active_registration(pool, registration_id).await {
                 return Ok(Some(row));
             }
         }
