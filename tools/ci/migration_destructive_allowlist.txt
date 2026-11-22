@@ -1,0 +1,13 @@
+# Destructive-statement exceptions for tools/ci/migration_guard.py (issue #102).
+# One entry per line: NNNN_name.sql:LINE KEYWORD  (keyword = DROP or TRUNCATE).
+# Every entry needs a justification; additions are diff-visible PR decisions.
+# Entries pin the exact line, so a rewritten file no longer matches and the
+# guard fails again.
+#
+# 0228 line 35: the canvas-schema dump gave lti_context_controls.deployment_id
+# a foreign key pointing at context_external_tools (Canvas models deployments
+# as ContextExternalTool), while this workspace's deployments live in
+# lti_deployments (migration 0078) — the dumped constraint was unsatisfiable.
+# The migration drops it and immediately re-adds the correct FK pointing at
+# lti_deployments, in the same file.
+0228_lti_registrations_deep.sql:35 DROP
