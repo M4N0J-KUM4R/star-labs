@@ -278,18 +278,19 @@ Star names with no Canvas counterpart (not counted): `AcceptEnrollmentInvitation
 
 ## Star routes with no Canvas API match (207)
 
-Classified, because the fix differs by class: only `api_verb_mismatch` and `api_nested` are Canvas gaps (star misses a verb or the nested form entirely); `api_extra_*` means Canvas' own verbs at that path are all implemented and the registration is additive; `web_*` means Canvas answers that path as a **web** (HTML/JS) route rather than an API route -- a port, not a REST parity item; and `absent` means no Canvas path or path-tail matches, which covers deliberate aliases (`/assignment_overrides/{id}` for Canvas' `/courses/{course_id}/assignments/{assignment_id}/overrides/{id}`, whose nested form IS implemented) as well as genuinely new endpoints.
+Classified, because the fix differs by class: only `api_verb_mismatch` and `api_nested` are Canvas gaps (star misses a verb or the nested form entirely); `api_extra_*` means Canvas' own verbs at that path are all implemented and the registration is additive; `web_*` means Canvas answers that path as a **web** (HTML/JS) route rather than an API route -- a port, not a REST parity item; `api_alias` is Canvas' own `self` id spelling (canvas-src/lib/api.rb:51 maps the literal `self` to the current user), which is parity-exact and must not be deleted; and `absent` means no Canvas path or path-tail matches, which covers deliberate aliases (`/assignment_overrides/{id}` for Canvas' `/courses/{course_id}/assignments/{assignment_id}/overrides/{id}`, whose nested form IS implemented) as well as genuinely new endpoints.
 
 | Class | Count | Action |
 |---|---:|---|
 | `api_verb_mismatch` | 0 | Canvas verb at this path is unimplemented: add it |
-| `api_extra_verb` | 18 | Canvas' verbs here are all served: keep, no change |
+| `api_extra_verb` | 19 | Canvas' verbs here are all served: keep, no change |
+| `api_alias` | 6 | Canvas' `self` id alias (lib/api.rb): keep, parity-exact |
 | `web_exact` | 43 | port of a Canvas web route: keep, label as web/UI |
 | `web_verb_mismatch` | 16 | web port with the wrong verb |
 | `web_nested` | 26 | web route flattened to top level: re-nest or label |
 | `api_nested` | 0 | Canvas serves the nested form and star does not: re-nest |
 | `api_extra_nested` | 19 | nested form already served: keep, no change |
-| `absent` | 85 | no Canvas path or tail: a renamed alias, a custom endpoint, or unused -- check before deleting |
+| `absent` | 78 | no Canvas path or tail: a renamed alias, a custom endpoint, or unused -- check before deleting |
 
 | Verb | Path | Crate | Class | Canvas closest |
 |---|---|---|---|---|
@@ -320,7 +321,6 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | POST | `/courses/{id}/assignments/new` | `star-ui` | absent | - |
 | GET | `/courses/{id}/assignments/{aid}/edit` | `star-ui` | absent | - |
 | POST | `/courses/{id}/assignments/{aid}/edit` | `star-ui` | absent | - |
-| GET | `/courses/{courseId}/assignments/{id}/submissions/self` | `star-assignments` | absent | - |
 | GET | `/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments` | `star-submission-comments` | absent | - |
 | POST | `/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments` | `star-submission-comments` | absent | - |
 | POST | `/courses/{id}/assignments/{aid}/submit` | `star-ui` | absent | - |
@@ -364,20 +364,20 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | PUT | `/submissions/{submissionId}/comments/read` | `star-submission-comments` | absent | - |
 | GET | `/submissions/{submissionId}/comments/unread_count` | `star-submission-comments` | absent | - |
 | PUT | `/submissions/{id}/grade` | `star-assignments` | absent | - |
-| GET | `/users/self` | `star-users` | absent | - |
-| GET | `/users/self/communication_channels` | `star-notifications` | absent | - |
-| POST | `/users/self/communication_channels` | `star-notifications` | absent | - |
-| DELETE | `/users/self/communication_channels/{id}` | `star-notifications` | absent | - |
 | GET | `/users/self/notification_preferences` | `star-notifications` | absent | - |
 | PUT | `/users/self/notification_preferences` | `star-notifications` | absent | - |
 | GET | `/users/self/notifications` | `star-notifications` | absent | - |
-| GET | `/users/self/profile` | `star-users` | absent | - |
-| PUT | `/users/self/profile` | `star-users` | absent | - |
 | GET | `/users/{userId}/folders/media` | `star-files` | absent | - |
 | GET | `/users/{user_id}/notification_preference_categories` | `star-notifications` | absent | - |
 | PUT | `/users/{user_id}/notification_preference_categories/{category}` | `star-notifications` | absent | - |
 | GET | `/users/{user_id}/notification_preferences` | `star-notifications` | absent | - |
 | PUT | `/users/{user_id}/notification_preferences` | `star-notifications` | absent | - |
+| GET | `/courses/{courseId}/assignments/{id}/submissions/self` | `star-assignments` | api_alias | `GET courses/{}/assignments/{}/submissions/{}`, `PUT courses/{}/assignments/{}/submissions/{}` |
+| GET | `/users/self` | `star-users` | api_alias | `DELETE users/{}`, `GET users/{}`, `PUT users/{}` |
+| GET | `/users/self/communication_channels` | `star-notifications` | api_alias | `GET users/{}/communication_channels`, `POST users/{}/communication_channels` |
+| POST | `/users/self/communication_channels` | `star-notifications` | api_alias | `GET users/{}/communication_channels`, `POST users/{}/communication_channels` |
+| DELETE | `/users/self/communication_channels/{id}` | `star-notifications` | api_alias | `DELETE users/{}/communication_channels/{}`, `POST users/{}/communication_channels/{}` |
+| GET | `/users/self/profile` | `star-users` | api_alias | `GET users/{}/profile` |
 | GET | `/content_migrations/migrators` | `star-content` | api_extra_nested | `GET accounts/{}/content_migrations/migrators`, `GET courses/{}/content_migrations/migrators`, `GET groups/{}/content_migrations/migrators` |
 | GET | `/content_migrations/{id}` | `star-content` | api_extra_nested | `GET accounts/{}/content_migrations/{}`, `PUT accounts/{}/content_migrations/{}`, `GET courses/{}/content_migrations/{}` |
 | GET | `/enrollments` | `star-enrollments` | api_extra_nested | `GET sections/{}/enrollments`, `POST sections/{}/enrollments`, `GET courses/{}/enrollments` |
@@ -413,6 +413,7 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | POST | `/groups/{groupId}/users` | `star-groups` | api_extra_verb | `DELETE`, `GET` |
 | GET | `/users/self/communication_channels/{communication_channel_id}/notification_preferences` | `star-notifications` | api_extra_verb | `PUT` |
 | GET | `/users/self/communication_channels/{communication_channel_id}/notification_preferences/{notification}` | `star-notifications` | api_extra_verb | `PUT` |
+| PUT | `/users/self/profile` | `star-users` | api_extra_verb | `GET users/{}/profile` |
 | PUT | `/users/{user_id}/communication_channels/{type}/{address}/notification_preferences` | `star-notifications` | api_extra_verb | `GET` |
 | PUT | `/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}` | `star-notifications` | api_extra_verb | `GET` |
 | GET | `/` | `star-graphql` | web_exact | `WEB GET` |

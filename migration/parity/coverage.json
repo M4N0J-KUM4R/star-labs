@@ -12945,9 +12945,10 @@
     "js_tsx_files_implemented": 0,
     "star_extras": 207,
     "star_extras_by_class": {
-      "absent": 85,
+      "absent": 78,
+      "api_alias": 6,
       "api_extra_nested": 19,
-      "api_extra_verb": 18,
+      "api_extra_verb": 19,
       "api_nested": 0,
       "api_verb_mismatch": 0,
       "web_exact": 43,
@@ -13502,8 +13503,11 @@
       "verb": "POST"
     },
     {
-      "canvas_closest": [],
-      "classification": "absent",
+      "canvas_closest": [
+        "GET courses/{}/assignments/{}/submissions/{}",
+        "PUT courses/{}/assignments/{}/submissions/{}"
+      ],
+      "classification": "api_alias",
       "crate": "star-assignments",
       "normalized_path": "courses/{}/assignments/{}/submissions/self",
       "path": "/courses/{courseId}/assignments/{id}/submissions/self",
@@ -14947,8 +14951,12 @@
       "verb": "GET"
     },
     {
-      "canvas_closest": [],
-      "classification": "absent",
+      "canvas_closest": [
+        "DELETE users/{}",
+        "GET users/{}",
+        "PUT users/{}"
+      ],
+      "classification": "api_alias",
       "crate": "star-users",
       "normalized_path": "users/self",
       "path": "/users/self",
@@ -14956,8 +14964,11 @@
       "verb": "GET"
     },
     {
-      "canvas_closest": [],
-      "classification": "absent",
+      "canvas_closest": [
+        "GET users/{}/communication_channels",
+        "POST users/{}/communication_channels"
+      ],
+      "classification": "api_alias",
       "crate": "star-notifications",
       "normalized_path": "users/self/communication_channels",
       "path": "/users/self/communication_channels",
@@ -14965,8 +14976,11 @@
       "verb": "GET"
     },
     {
-      "canvas_closest": [],
-      "classification": "absent",
+      "canvas_closest": [
+        "GET users/{}/communication_channels",
+        "POST users/{}/communication_channels"
+      ],
+      "classification": "api_alias",
       "crate": "star-notifications",
       "normalized_path": "users/self/communication_channels",
       "path": "/users/self/communication_channels",
@@ -14974,8 +14988,11 @@
       "verb": "POST"
     },
     {
-      "canvas_closest": [],
-      "classification": "absent",
+      "canvas_closest": [
+        "DELETE users/{}/communication_channels/{}",
+        "POST users/{}/communication_channels/{}"
+      ],
+      "classification": "api_alias",
       "crate": "star-notifications",
       "normalized_path": "users/self/communication_channels/{}",
       "path": "/users/self/communication_channels/{id}",
@@ -15032,8 +15049,10 @@
       "verb": "GET"
     },
     {
-      "canvas_closest": [],
-      "classification": "absent",
+      "canvas_closest": [
+        "GET users/{}/profile"
+      ],
+      "classification": "api_alias",
       "crate": "star-users",
       "normalized_path": "users/self/profile",
       "path": "/users/self/profile",
@@ -15041,8 +15060,10 @@
       "verb": "GET"
     },
     {
-      "canvas_closest": [],
-      "classification": "absent",
+      "canvas_closest": [
+        "GET users/{}/profile"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-users",
       "normalized_path": "users/self/profile",
       "path": "/users/self/profile",

@@ -1283,6 +1283,7 @@ def cmd_manifest(args):
 EXTRA_CLASSES = (
     "api_verb_mismatch",   # Canvas' API has this path and star misses that verb
     "api_extra_verb",      # Canvas' verbs here are all implemented; this is additive
+    "api_alias",           # `self`/`me` literal for Canvas' `:user_id`-style param
     "web_exact",           # Canvas has this path+verb, but as a WEB route
     "web_verb_mismatch",   # Canvas has the path as a web route, other verb
     "web_nested",          # Canvas has it nested under a parent (web)
@@ -1290,6 +1291,23 @@ EXTRA_CLASSES = (
     "api_extra_nested",    # manifest nests it, and that nested route IS implemented
     "absent",              # no Canvas path or path-tail match: alias, rename, or new
 )
+
+
+def _self_alias_paths(path):
+    """Canvas' literal-`self` spelling of a star path, or () when there is none.
+
+    `canvas-src/lib/api.rb:51` maps the id token `self` to
+    `@current_user.id` for collections over the users table (the comment at
+    `lib/api.rb:31` states the same), so `/api/v1/users/self/profile` and
+    `/api/v1/users/:user_id/profile` are one Canvas route. star writes the
+    alias out as its own registration, which a path matcher reports as absent —
+    exactly the rows a "delete what Canvas does not have" pass would wrongly
+    delete. Only `self` is proven in Canvas source; `me` is not, so it is not
+    substituted here.
+    """
+    segments = path.split("/")
+    return ["/".join("{}" if s == "self" else s for s in segments)] \
+        if "self" in segments else []
 
 
 def classify_extras(extras, canvas_routes, web_routes, star_keys):
@@ -1329,6 +1347,18 @@ def classify_extras(extras, canvas_routes, web_routes, star_keys):
             kind = "api_verb_mismatch" if missing else "api_extra_verb"
             if missing:
                 closest = missing
+        elif any(ap in api_verbs for ap in _self_alias_paths(path)):
+            ap = next(a for a in _self_alias_paths(path) if a in api_verbs)
+            verbs = sorted(api_verbs[ap])
+            # The alias only proves parity for the verb Canvas really answers
+            # there: star's PUT /users/self/profile sits on a path Canvas
+            # exposes as GET only, so it is an additive verb on an aliased
+            # path, not a parity-exact route.
+            kind = "api_alias" if verb in verbs else "api_extra_verb"
+            counts[kind] += 1
+            extra["classification"] = kind
+            extra["canvas_closest"] = ["%s %s" % (v, ap) for v in verbs]
+            continue
         elif (verb, path) in web_keys:
             kind = "web_exact"
             closest = ["WEB " + verb]
@@ -1584,8 +1614,11 @@ def render_report(coverage):
         "entirely); `api_extra_*` means Canvas' own verbs at that path are all "
         "implemented and the registration is additive; `web_*` means Canvas "
         "answers that path as a **web** (HTML/JS) route rather than an API "
-        "route -- a port, not a REST parity item; and `absent` means no Canvas "
-        "path or path-tail matches, which covers deliberate aliases (`"
+        "route -- a port, not a REST parity item; `api_alias` is Canvas' own "
+        "`self` id spelling (canvas-src/lib/api.rb:51 maps the literal `self` "
+        "to the current user), which is parity-exact and must not be deleted; "
+        "and `absent` means no Canvas path or path-tail matches, which covers "
+        "deliberate aliases (`"
         "/assignment_overrides/{id}` for Canvas' "
         "`/courses/{course_id}/assignments/{assignment_id}/overrides/{id}`, "
         "whose nested form IS implemented) as well as genuinely new endpoints.")
@@ -1597,6 +1630,7 @@ def render_report(coverage):
         action = {
             "api_verb_mismatch": "Canvas verb at this path is unimplemented: add it",
             "api_extra_verb": "Canvas' verbs here are all served: keep, no change",
+            "api_alias": "Canvas' `self` id alias (lib/api.rb): keep, parity-exact",
             "web_exact": "port of a Canvas web route: keep, label as web/UI",
             "web_verb_mismatch": "web port with the wrong verb",
             "web_nested": "web route flattened to top level: re-nest or label",
