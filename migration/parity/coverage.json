@@ -205,6 +205,11 @@
       "pct": 100.0,
       "total": 12
     },
+    "gradebook_history_api": {
+      "implemented": 4,
+      "pct": 100.0,
+      "total": 4
+    },
     "grading_periods": {
       "implemented": 8,
       "pct": 100.0,
@@ -280,6 +285,16 @@
       "pct": 100.0,
       "total": 5
     },
+    "lti/ims/authentication": {
+      "implemented": 3,
+      "pct": 100.0,
+      "total": 3
+    },
+    "lti/ims/authorization": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
     "lti/ims/dynamic_registration": {
       "implemented": 11,
       "pct": 100.0,
@@ -289,6 +304,21 @@
       "implemented": 5,
       "pct": 100.0,
       "total": 5
+    },
+    "lti/ims/names_and_roles": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "lti/ims/results": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "lti/ims/scores": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
     },
     "lti/ims/tool_proxy": {
       "implemented": 5,
@@ -309,6 +339,11 @@
       "implemented": 20,
       "pct": 100.0,
       "total": 20
+    },
+    "lti/resource_links": {
+      "implemented": 6,
+      "pct": 100.0,
+      "total": 6
     },
     "lti/tool_proxy": {
       "implemented": 8,
@@ -361,6 +396,26 @@
       "total": 5
     },
     "planner_overrides": {
+      "implemented": 5,
+      "pct": 100.0,
+      "total": 5
+    },
+    "polling/poll_choices": {
+      "implemented": 5,
+      "pct": 100.0,
+      "total": 5
+    },
+    "polling/poll_sessions": {
+      "implemented": 9,
+      "pct": 100.0,
+      "total": 9
+    },
+    "polling/poll_submissions": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "polling/polls": {
       "implemented": 5,
       "pct": 100.0,
       "total": 5
@@ -2425,6 +2480,38 @@
       "path": "/courses/:course_id/assignments/:assignment_id/submissions/:user_id/annotation_notification",
       "ui_referenced": false,
       "verb": "POST"
+    },
+    {
+      "action": "days",
+      "controller": "gradebook_history_api",
+      "normalized_path": "courses/{}/gradebook_history/days",
+      "path": "/api/v1/courses/:course_id/gradebook_history/days",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "feed",
+      "controller": "gradebook_history_api",
+      "normalized_path": "courses/{}/gradebook_history/feed",
+      "path": "/api/v1/courses/:course_id/gradebook_history/feed",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "day_details",
+      "controller": "gradebook_history_api",
+      "normalized_path": "courses/{}/gradebook_history/{}",
+      "path": "/api/v1/courses/:course_id/gradebook_history/:date",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "submissions",
+      "controller": "gradebook_history_api",
+      "normalized_path": "courses/{}/gradebook_history/{}/graders/{}/assignments/{}/submissions",
+      "path": "/api/v1/courses/:course_id/gradebook_history/:date/graders/:grader_id/assignments/:assignment_id/submissions",
+      "ui_referenced": false,
+      "verb": "GET"
     },
     {
       "action": "index",
@@ -5435,6 +5522,54 @@
       "verb": "DELETE"
     },
     {
+      "action": "index",
+      "controller": "lti/resource_links",
+      "normalized_path": "courses/{}/lti_resource_links",
+      "path": "/api/v1/courses/:course_id/lti_resource_links",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "lti/resource_links",
+      "normalized_path": "courses/{}/lti_resource_links",
+      "path": "/api/v1/courses/:course_id/lti_resource_links",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "bulk_create",
+      "controller": "lti/resource_links",
+      "normalized_path": "courses/{}/lti_resource_links/bulk",
+      "path": "/api/v1/courses/:course_id/lti_resource_links/bulk",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "show",
+      "controller": "lti/resource_links",
+      "normalized_path": "courses/{}/lti_resource_links/{}",
+      "path": "/api/v1/courses/:course_id/lti_resource_links/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "update",
+      "controller": "lti/resource_links",
+      "normalized_path": "courses/{}/lti_resource_links/{}",
+      "path": "/api/v1/courses/:course_id/lti_resource_links/:id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "lti/resource_links",
+      "normalized_path": "courses/{}/lti_resource_links/{}",
+      "path": "/api/v1/courses/:course_id/lti_resource_links/:id",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
       "action": "api_create_success",
       "controller": "files",
       "normalized_path": "files/{}/create_success",
@@ -6248,6 +6383,174 @@
       "normalized_path": "courses/{}/quizzes/{}/statistics",
       "path": "/api/v1/courses/:course_id/quizzes/:quiz_id/statistics",
       "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "polling/polls",
+      "normalized_path": "polls",
+      "path": "/api/v1/polls",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "polling/polls",
+      "normalized_path": "polls",
+      "path": "/api/v1/polls",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "show",
+      "controller": "polling/polls",
+      "normalized_path": "polls/{}",
+      "path": "/api/v1/polls/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "update",
+      "controller": "polling/polls",
+      "normalized_path": "polls/{}",
+      "path": "/api/v1/polls/:id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "polling/polls",
+      "normalized_path": "polls/{}",
+      "path": "/api/v1/polls/:id",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "index",
+      "controller": "polling/poll_choices",
+      "normalized_path": "polls/{}/poll_choices",
+      "path": "/api/v1/polls/:poll_id/poll_choices",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "polling/poll_choices",
+      "normalized_path": "polls/{}/poll_choices",
+      "path": "/api/v1/polls/:poll_id/poll_choices",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "show",
+      "controller": "polling/poll_choices",
+      "normalized_path": "polls/{}/poll_choices/{}",
+      "path": "/api/v1/polls/:poll_id/poll_choices/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "update",
+      "controller": "polling/poll_choices",
+      "normalized_path": "polls/{}/poll_choices/{}",
+      "path": "/api/v1/polls/:poll_id/poll_choices/:id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "polling/poll_choices",
+      "normalized_path": "polls/{}/poll_choices/{}",
+      "path": "/api/v1/polls/:poll_id/poll_choices/:id",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "index",
+      "controller": "polling/poll_sessions",
+      "normalized_path": "polls/{}/poll_sessions",
+      "path": "/api/v1/polls/:poll_id/poll_sessions",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "polling/poll_sessions",
+      "normalized_path": "polls/{}/poll_sessions",
+      "path": "/api/v1/polls/:poll_id/poll_sessions",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "show",
+      "controller": "polling/poll_sessions",
+      "normalized_path": "polls/{}/poll_sessions/{}",
+      "path": "/api/v1/polls/:poll_id/poll_sessions/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "update",
+      "controller": "polling/poll_sessions",
+      "normalized_path": "polls/{}/poll_sessions/{}",
+      "path": "/api/v1/polls/:poll_id/poll_sessions/:id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "polling/poll_sessions",
+      "normalized_path": "polls/{}/poll_sessions/{}",
+      "path": "/api/v1/polls/:poll_id/poll_sessions/:id",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "open",
+      "controller": "polling/poll_sessions",
+      "normalized_path": "polls/{}/poll_sessions/{}/open",
+      "path": "/api/v1/polls/:poll_id/poll_sessions/:id/open",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "close",
+      "controller": "polling/poll_sessions",
+      "normalized_path": "polls/{}/poll_sessions/{}/close",
+      "path": "/api/v1/polls/:poll_id/poll_sessions/:id/close",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "opened",
+      "controller": "polling/poll_sessions",
+      "normalized_path": "poll_sessions/opened",
+      "path": "/api/v1/poll_sessions/opened",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "closed",
+      "controller": "polling/poll_sessions",
+      "normalized_path": "poll_sessions/closed",
+      "path": "/api/v1/poll_sessions/closed",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "polling/poll_submissions",
+      "normalized_path": "polls/{}/poll_sessions/{}/poll_submissions",
+      "path": "/api/v1/polls/:poll_id/poll_sessions/:poll_session_id/poll_submissions",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "show",
+      "controller": "polling/poll_submissions",
+      "normalized_path": "polls/{}/poll_sessions/{}/poll_submissions/{}",
+      "path": "/api/v1/polls/:poll_id/poll_sessions/:poll_session_id/poll_submissions/:id",
+      "ui_referenced": false,
       "verb": "GET"
     },
     {
@@ -7995,6 +8298,46 @@
       "verb": "GET"
     },
     {
+      "action": "authorize_redirect",
+      "controller": "lti/ims/authentication",
+      "normalized_path": "api/lti/authorize_redirect",
+      "path": "/api/lti/authorize_redirect",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "authorize_redirect",
+      "controller": "lti/ims/authentication",
+      "normalized_path": "api/lti/authorize_redirect",
+      "path": "/api/lti/authorize_redirect",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "authorize",
+      "controller": "lti/ims/authentication",
+      "normalized_path": "api/lti/authorize",
+      "path": "/api/lti/authorize",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "authorize",
+      "controller": "lti/ims/authorization",
+      "normalized_path": "api/lti/courses/{}/authorize",
+      "path": "/api/lti/courses/:course_id/authorize",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "authorize",
+      "controller": "lti/ims/authorization",
+      "normalized_path": "api/lti/accounts/{}/authorize",
+      "path": "/api/lti/accounts/:account_id/authorize",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
       "action": "re_reg",
       "controller": "lti/ims/tool_proxy",
       "normalized_path": "api/lti/courses/{}/tool_proxy",
@@ -8187,6 +8530,30 @@
       "verb": "DELETE"
     },
     {
+      "action": "create",
+      "controller": "lti/ims/scores",
+      "normalized_path": "api/lti/courses/{}/line_items/{}/scores",
+      "path": "/api/lti/courses/:course_id/line_items/:line_item_id/scores",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "show",
+      "controller": "lti/ims/results",
+      "normalized_path": "api/lti/courses/{}/line_items/{}/results/{}",
+      "path": "/api/lti/courses/:course_id/line_items/:line_item_id/results/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "lti/ims/results",
+      "normalized_path": "api/lti/courses/{}/line_items/{}/results",
+      "path": "/api/lti/courses/:course_id/line_items/:line_item_id/results",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
       "action": "registration_token",
       "controller": "lti/ims/dynamic_registration",
       "normalized_path": "api/lti/accounts/{}/registration_token",
@@ -8353,6 +8720,22 @@
       "path": "/accounts/:account_id",
       "ui_referenced": true,
       "verb": "GET"
+    },
+    {
+      "action": "course_index",
+      "controller": "lti/ims/names_and_roles",
+      "normalized_path": "api/lti/courses/{}/names_and_roles",
+      "path": "/api/lti/courses/:course_id/names_and_roles",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "group_index",
+      "controller": "lti/ims/names_and_roles",
+      "normalized_path": "api/lti/groups/{}/names_and_roles",
+      "path": "/api/lti/groups/:group_id/names_and_roles",
+      "ui_referenced": false,
+      "verb": "GET"
     }
   ],
   "summary": {
@@ -8367,17 +8750,17 @@
     "graphql_mutations_implemented": 2,
     "graphql_types": 170,
     "graphql_types_implemented": 28,
-    "implemented_rest_pct": 66.3,
-    "implemented_rest_routes": 930,
+    "implemented_rest_pct": 69.2,
+    "implemented_rest_routes": 971,
     "js_env_call_sites": 490,
     "js_env_files": 124,
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
-    "star_extras": 209,
-    "star_route_calls": 945,
-    "star_route_registrations": 1139,
-    "star_tables": 366,
+    "star_extras": 213,
+    "star_route_calls": 977,
+    "star_route_registrations": 1184,
+    "star_tables": 370,
     "star_unparsed_calls": 0,
     "ui_feature_dirs": 232,
     "ui_feature_dirs_implemented": 0,
@@ -8413,6 +8796,13 @@
       "path": "/account_notifications/{id}",
       "source": "crates/star-accounts/src/lib.rs",
       "verb": "DELETE"
+    },
+    {
+      "crate": "star-lti",
+      "normalized_path": "accounts/{}/deep_linking_response",
+      "path": "/accounts/{account_id}/deep_linking_response",
+      "source": "crates/star-lti/src/deep_linking.rs",
+      "verb": "POST"
     },
     {
       "crate": "star-grading-standards",
@@ -8772,6 +9162,13 @@
       "verb": "POST"
     },
     {
+      "crate": "star-lti",
+      "normalized_path": "courses/{}/deep_linking_response",
+      "path": "/courses/{id}/deep_linking_response",
+      "source": "crates/star-lti/src/deep_linking.rs",
+      "verb": "POST"
+    },
+    {
       "crate": "star-discussions",
       "normalized_path": "courses/{}/discussion_topics/{}/entries/{}",
       "path": "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}",
@@ -9059,6 +9456,13 @@
       "verb": "GET"
     },
     {
+      "crate": "star-lti",
+      "normalized_path": "deep_linking_cancel",
+      "path": "/deep_linking_cancel",
+      "source": "crates/star-lti/src/deep_linking.rs",
+      "verb": "GET"
+    },
+    {
       "crate": "star-auth",
       "normalized_path": "developer_keys",
       "path": "/developer_keys",
@@ -9190,6 +9594,13 @@
       "path": "/grading_standards/{id}",
       "source": "crates/star-grading-standards/src/lib.rs",
       "verb": "GET"
+    },
+    {
+      "crate": "star-lti",
+      "normalized_path": "groups/{}/deep_linking_response",
+      "path": "/groups/{group_id}/deep_linking_response",
+      "source": "crates/star-lti/src/deep_linking.rs",
+      "verb": "POST"
     },
     {
       "crate": "star-discussions",

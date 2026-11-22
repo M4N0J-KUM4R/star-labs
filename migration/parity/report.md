@@ -6,7 +6,7 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 930 | 1403 | 66.3% |
+| REST API routes | 971 | 1403 | 69.2% |
 | REST routes referenced from `ui/` | 360 | 503 | 71.6% |
 | GraphQL files | 1 | 390 | 0.3% |
 | GraphQL object types | 28 | 170 | 16.5% |
@@ -15,15 +15,15 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | JS/JSX/TS/TSX files | 0 | 5459 | 0.0% |
 | ERB views | 0 | 475 | 0.0% |
 | js_env files | 0 | 124 | 0.0% |
-| Schema tables (vs 688 Canvas models) | 366 | 688 | n/a |
+| Schema tables (vs 688 Canvas models) | 370 | 688 | n/a |
 
-Implemented REST route count: **930 / 1403** (66.3%).
+Implemented REST route count: **971 / 1403** (69.2%).
 
-Star registrations: 1139 route/method pairs from 945 `.route(...)` calls (0 unparsed); 209 have no Canvas match and are listed as extras below.
+Star registrations: 1184 route/method pairs from 977 `.route(...)` calls (0 unparsed); 213 have no Canvas match and are listed as extras below.
 
 Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 
-## Controllers with coverage (102)
+## Controllers with coverage (113)
 
 | Controller | Implemented | Total | Coverage |
 |---|---:|---:|---:|
@@ -57,6 +57,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `assignment_overrides` | 10 | 10 | 100.0% |
 | `calendar_events_api` | 10 | 15 | 66.7% |
 | `discussion_topics` | 10 | 10 | 100.0% |
+| `polling/poll_sessions` | 9 | 9 | 100.0% |
 | `account_notifications` | 8 | 8 | 100.0% |
 | `content_shares` | 8 | 8 | 100.0% |
 | `context_module_items_api` | 8 | 12 | 66.7% |
@@ -77,6 +78,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `block_editor_templates_api` | 6 | 6 | 100.0% |
 | `learn_platform` | 6 | 6 | 100.0% |
 | `lti/context_controls` | 6 | 6 | 100.0% |
+| `lti/resource_links` | 6 | 6 | 100.0% |
 | `quizzes/quiz_groups` | 6 | 6 | 100.0% |
 | `release_notes` | 6 | 8 | 75.0% |
 | `sections` | 6 | 9 | 66.7% |
@@ -87,6 +89,8 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `lti/ims/tool_proxy` | 5 | 5 | 100.0% |
 | `planner_notes` | 5 | 5 | 100.0% |
 | `planner_overrides` | 5 | 5 | 100.0% |
+| `polling/poll_choices` | 5 | 5 | 100.0% |
+| `polling/polls` | 5 | 5 | 100.0% |
 | `quizzes/quiz_questions` | 5 | 5 | 100.0% |
 | `tabs` | 5 | 5 | 100.0% |
 | `tokens` | 5 | 5 | 100.0% |
@@ -96,6 +100,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `career_experience` | 4 | 4 | 100.0% |
 | `discussion_entries` | 4 | 4 | 100.0% |
 | `favorites` | 4 | 8 | 50.0% |
+| `gradebook_history_api` | 4 | 4 | 100.0% |
 | `grading_standards_api` | 4 | 10 | 40.0% |
 | `lti/account_external_tools` | 4 | 4 | 100.0% |
 | `lti/lti_apps` | 4 | 4 | 100.0% |
@@ -105,6 +110,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `submission_comments_api` | 4 | 4 | 100.0% |
 | `epub_exports` | 3 | 3 | 100.0% |
 | `jobs` | 3 | 3 | 100.0% |
+| `lti/ims/authentication` | 3 | 3 | 100.0% |
 | `media_objects` | 3 | 10 | 30.0% |
 | `rubrics` | 3 | 3 | 100.0% |
 | `shared_brand_configs` | 3 | 3 | 100.0% |
@@ -113,7 +119,11 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `content_imports` | 2 | 2 | 100.0% |
 | `developer_keys` | 2 | 5 | 40.0% |
 | `discussion_topic_users` | 2 | 2 | 100.0% |
+| `lti/ims/authorization` | 2 | 2 | 100.0% |
+| `lti/ims/names_and_roles` | 2 | 2 | 100.0% |
+| `lti/ims/results` | 2 | 2 | 100.0% |
 | `moderation_set` | 2 | 2 | 100.0% |
+| `polling/poll_submissions` | 2 | 2 | 100.0% |
 | `sub_accounts` | 2 | 2 | 100.0% |
 | `submissions` | 2 | 2 | 100.0% |
 | `terms_api` | 2 | 2 | 100.0% |
@@ -125,6 +135,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `errors` | 1 | 1 | 100.0% |
 | `inst_access_tokens` | 1 | 1 | 100.0% |
 | `lti/account_lookup` | 1 | 1 | 100.0% |
+| `lti/ims/scores` | 1 | 1 | 100.0% |
 | `media_tracks` | 1 | 6 | 16.7% |
 | `profile` | 1 | 2 | 50.0% |
 | `quizzes/quiz_statistics` | 1 | 1 | 100.0% |
@@ -154,7 +165,7 @@ Renames mapped to Canvas names: `CourseSection` -> `Section`, `DiscussionTopic` 
 
 Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `AssignmentEdge`, `ConversationMessageConnection`, `ConversationMessageEdge`, `ConversationParticipantConnection`, `ConversationParticipantEdge`, `CreateAssignmentPayload`, `DiscussionTopicConnection`, `DiscussionTopicEdge`, `EnrollmentConnection`, `EnrollmentEdge`, `FolderConnection`, `FolderEdge`, `GroupConnection`, `GroupEdge`, `GroupMembershipConnection`, `GroupMembershipEdge`, `GroupSetConnection`, `GroupSetEdge`, `ModuleConnection`, `ModuleEdge`, `ModuleItemConnection`, `ModuleItemEdge`, `PageConnection`, `PageEdge`, `PageInfo`, `QuizConnection`, `QuizEdge`, `QuizQuestionConnection`, `QuizQuestionEdge`, `QuizSubmissionConnection`, `QuizSubmissionEdge`, `SubmissionConnection`, `SubmissionEdge`, `UpdateAssignmentPayload`, `UserConnection`, `UserEdge`.
 
-## Star routes with no Canvas match (209)
+## Star routes with no Canvas match (213)
 
 | Verb | Path | Crate |
 |---|---|---|
@@ -162,6 +173,7 @@ Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `As
 | GET | `/` | `star-ui` |
 | POST | `/` | `star-graphql` |
 | DELETE | `/account_notifications/{id}` | `star-accounts` |
+| POST | `/accounts/{account_id}/deep_linking_response` | `star-lti` |
 | POST | `/accounts/{accountId}/grading_periods` | `star-grading-standards` |
 | GET | `/accounts/{accountId}/grading_schemes` | `star-grading-standards` |
 | POST | `/accounts/{accountId}/grading_schemes` | `star-grading-standards` |
@@ -213,6 +225,7 @@ Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `As
 | POST | `/courses/{id}/assignments/{aid}/submit` | `star-ui` |
 | GET | `/courses/{courseId}/calendar_events` | `star-calendar` |
 | POST | `/courses/{courseId}/calendar_events` | `star-calendar` |
+| POST | `/courses/{id}/deep_linking_response` | `star-lti` |
 | GET | `/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}` | `star-discussions` |
 | GET | `/courses/{id}/discussions` | `star-ui` |
 | POST | `/courses/{id}/discussions` | `star-ui` |
@@ -254,6 +267,7 @@ Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `As
 | GET | `/courses/{id}/{tab}` | `star-ui` |
 | GET | `/dashboard` | `star-dashboard` |
 | GET | `/dashboard` | `star-ui` |
+| GET | `/deep_linking_cancel` | `star-lti` |
 | GET | `/developer_keys` | `star-auth` |
 | POST | `/developer_keys` | `star-auth` |
 | GET | `/developer_keys/{id}` | `star-auth` |
@@ -273,6 +287,7 @@ Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `As
 | PUT | `/grading_schemes/{id}` | `star-grading-standards` |
 | DELETE | `/grading_standards/{id}` | `star-grading-standards` |
 | GET | `/grading_standards/{id}` | `star-grading-standards` |
+| POST | `/groups/{group_id}/deep_linking_response` | `star-lti` |
 | GET | `/groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}` | `star-discussions` |
 | GET | `/groups/{group_id}/external_tools/{id}` | `star-lti` |
 | DELETE | `/groups/{groupId}/files/{id}` | `star-files` |
