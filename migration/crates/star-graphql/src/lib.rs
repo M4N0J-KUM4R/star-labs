@@ -55,6 +55,7 @@ mod pages;
 mod quiz;
 mod submission;
 mod terms_sections;
+mod user_channels;
 
 use assignment::AssignmentConnection;
 use assignment_group::AssignmentGroupConnection;
@@ -587,7 +588,51 @@ impl User {
                 first,
                 after.as_deref(),
             )
-            .await?,
+    /// The user's non-retired communication channels (Canvas
+    /// `user_type.rb` communicationChannels). Self-or-admin: anyone else
+    /// gets null (Canvas gates private channel data on self).
+    async fn communication_channels(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<Vec<user_channels::CommunicationChannel>>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        if !user_channels::is_self_or_admin(gctx, self.id) {
+            return Ok(None);
+        }
+        Ok(Some(
+            user_channels::fetch_communication_channels(&gctx.pool, self.id).await?,
+        ))
+    }
+
+    /// The user's non-deleted notifications, newest first (Canvas
+    /// `user_type.rb` notifications). Self-or-admin: anyone else gets
+    /// null.
+    async fn notifications(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<Vec<user_channels::Notification>>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        if !user_channels::is_self_or_admin(gctx, self.id) {
+            return Ok(None);
+        }
+        Ok(Some(
+            user_channels::fetch_notifications(&gctx.pool, self.id).await?,
+        ))
+    }
+
+    /// The user's notification policies on non-retired channels (Canvas
+    /// `user_type.rb` notificationPreferences). Self-or-admin: anyone
+    /// else gets null.
+    async fn notification_preferences(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<Vec<user_channels::NotificationPolicy>>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        if !user_channels::is_self_or_admin(gctx, self.id) {
+            return Ok(None);
+        }
+        Ok(Some(
+            user_channels::fetch_notification_policies(&gctx.pool, self.id).await?,
         ))
     }
 }
