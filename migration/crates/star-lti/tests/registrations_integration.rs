@@ -516,6 +516,24 @@ async fn overlay_history_and_history_return_collections() {
     let body: Value = response.json();
     assert_eq!(body, json!([]));
 
+    // Canvas validates the limit only for a registration that carries an
+    // overlay (registrations_controller.rb:1968-1985); without one the
+    // answer stays [] whatever the limit says.
+    let response = server
+        .post(&format!("/accounts/{account}/lti_registrations"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "name": format!("{prefix}-overlay-tool"),
+            "vendor": "Example Vendor",
+            "configuration": tool_configuration(),
+            "overlay": { "privacy_level": "public" },
+        }))
+        .await;
+    assert_eq!(response.status_code(), 201, "body: {}", response.text());
+    let id = response.json::<Value>()["id"]
+        .as_i64()
+        .expect("registration id");
+
     // An invalid limit is a 422.
     let response = server
         .get(&format!(

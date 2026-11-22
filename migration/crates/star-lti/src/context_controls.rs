@@ -928,12 +928,23 @@ async fn preload_calculated_attrs(
 /// control's own context.
 fn display_path_for(path: &str, account_names: &HashMap<i64, String>) -> Vec<String> {
     let segments: Vec<&str> = path.split('.').collect();
-    let inner: &[&str] = if segments.len() > 2 {
-        &segments[1..segments.len() - 1]
-    } else {
-        &[]
+    // The context segment is the one before the trailing empty string: an
+    // `aN` account context or a `cN` course context.
+    let Some((last, inner)) = segments.split_last().filter(|(last, _)| last.is_empty()) else {
+        return Vec::new();
     };
-    inner
+    let _ = last;
+    let Some((context, accounts)) = inner.split_last() else {
+        return Vec::new();
+    };
+    // Canvas: "Excludes the root, and the current account if context is an
+    // account" (context_controls_controller.rb display_path docs).
+    let visible = if context.starts_with('a') {
+        &accounts[1..]
+    } else {
+        accounts
+    };
+    visible
         .iter()
         .filter_map(|segment| segment.strip_prefix('a'))
         .filter_map(|id| id.parse::<i64>().ok())
@@ -1802,57 +1813,50 @@ async fn soft_delete_child_controls(
 async fn upsert_controls(pool: &PgPool, drafts: &[ControlDraft]) -> Result<Vec<i64>, ApiError> {
     let mut ids = Vec::with_capacity(drafts.len());
 
-    for draft in drafts.iter().filter(|draft| draft.course_id.is_some()) {
-        let sql = format!(
-            "INSERT INTO lti_context_controls \
-             (account_id, course_id, registration_id, app_id, deployment_id, available, path, \
-              workflow_state, created_by_id, updated_by_id, root_account_id, created_at, updated_at) \
-             VALUES (NULL, $1, $2, $3, $4, $5, $6, '{STATE_ACTIVE}', $7, $8, $9, \
-                     timezone('UTC', now()), timezone('UTC', now())) \
-             ON CONFLICT (course_id, deployment_id) WHERE course_id IS NOT NULL \
-             DO UPDATE SET account_id = EXCLUDED.account_id, \
-                 registration_id = EXCLUDED.registration_id, app_id = EXCLUDED.app_id, \
-                 available = EXCLUDED.available, path = EXCLUDED.path, \
-                 workflow_state = EXCLUDED.workflow_state, \
-                 created_by_id = EXCLUDED.created_by_id, updated_by_id = EXCLUDED.updated_by_id, \
-                 root_account_id = EXCLUDED.root_account_id, \
-                 updated_at = timezone('UTC', now()) \
-             RETURNING id"
-        );
-        let id: i64 = sqlx::query_scalar(&sql)
-            .bind(draft.course_id)
-            .bind(draft.registration_id)
-            .bind(draft.app_id)
-            .bind(draft.deployment_id)
-            .bind(draft.available)
-            .bind(&draft.path)
-            .bind(draft.created_by_id)
-            .bind(draft.updated_by_id)
-            .bind(draft.root_account_id)
-            .fetch_one(pool)
-            .await?;
-        ids.push(id);
-    }
+    // One statement per context shape (they carry different ON CONFLICT
+    // clauses); the drafts keep their input order so the ids — and the
+    // id-ordered bulk response — follow the params order like Canvas'.
+    let course_sql = format!(
+        "INSERT INTO lti_context_controls \
+         (account_id, course_id, registration_id, app_id, deployment_id, available, path, \
+          workflow_state, created_by_id, updated_by_id, root_account_id, created_at, updated_at) \
+         VALUES (NULL, $1, $2, $3, $4, $5, $6, '{STATE_ACTIVE}', $7, $8, $9, \
+                 timezone('UTC', now()), timezone('UTC', now())) \
+         ON CONFLICT (course_id, deployment_id) WHERE course_id IS NOT NULL \
+         DO UPDATE SET account_id = EXCLUDED.account_id, \
+             registration_id = EXCLUDED.registration_id, app_id = EXCLUDED.app_id, \
+             available = EXCLUDED.available, path = EXCLUDED.path, \
+             workflow_state = EXCLUDED.workflow_state, \
+             created_by_id = EXCLUDED.created_by_id, updated_by_id = EXCLUDED.updated_by_id, \
+             root_account_id = EXCLUDED.root_account_id, \
+             updated_at = timezone('UTC', now()) \
+         RETURNING id"
+    );
+    let account_sql = format!(
+        "INSERT INTO lti_context_controls \
+         (account_id, course_id, registration_id, app_id, deployment_id, available, path, \
+          workflow_state, created_by_id, updated_by_id, root_account_id, created_at, updated_at) \
+         VALUES ($1, NULL, $2, $3, $4, $5, $6, '{STATE_ACTIVE}', $7, $8, $9, \
+                 timezone('UTC', now()), timezone('UTC', now())) \
+         ON CONFLICT (account_id, deployment_id) WHERE account_id IS NOT NULL \
+         DO UPDATE SET course_id = EXCLUDED.course_id, \
+             registration_id = EXCLUDED.registration_id, app_id = EXCLUDED.app_id, \
+             available = EXCLUDED.available, path = EXCLUDED.path, \
+             workflow_state = EXCLUDED.workflow_state, \
+             created_by_id = EXCLUDED.created_by_id, updated_by_id = EXCLUDED.updated_by_id, \
+             root_account_id = EXCLUDED.root_account_id, \
+             updated_at = timezone('UTC', now()) \
+         RETURNING id"
+    );
 
-    for draft in drafts.iter().filter(|draft| draft.account_id.is_some()) {
-        let sql = format!(
-            "INSERT INTO lti_context_controls \
-             (account_id, course_id, registration_id, app_id, deployment_id, available, path, \
-              workflow_state, created_by_id, updated_by_id, root_account_id, created_at, updated_at) \
-             VALUES ($1, NULL, $2, $3, $4, $5, $6, '{STATE_ACTIVE}', $7, $8, $9, \
-                     timezone('UTC', now()), timezone('UTC', now())) \
-             ON CONFLICT (account_id, deployment_id) WHERE account_id IS NOT NULL \
-             DO UPDATE SET course_id = EXCLUDED.course_id, \
-                 registration_id = EXCLUDED.registration_id, app_id = EXCLUDED.app_id, \
-                 available = EXCLUDED.available, path = EXCLUDED.path, \
-                 workflow_state = EXCLUDED.workflow_state, \
-                 created_by_id = EXCLUDED.created_by_id, updated_by_id = EXCLUDED.updated_by_id, \
-                 root_account_id = EXCLUDED.root_account_id, \
-                 updated_at = timezone('UTC', now()) \
-             RETURNING id"
-        );
-        let id: i64 = sqlx::query_scalar(&sql)
-            .bind(draft.account_id)
+    for draft in drafts {
+        let (sql, first): (&str, Option<i64>) = if draft.course_id.is_some() {
+            (&course_sql, draft.course_id)
+        } else {
+            (&account_sql, draft.account_id)
+        };
+        let id: i64 = sqlx::query_scalar(sql)
+            .bind(first)
             .bind(draft.registration_id)
             .bind(draft.app_id)
             .bind(draft.deployment_id)

@@ -629,10 +629,21 @@ pub(crate) async fn find_registration_in_account(
     account_id: i64,
 ) -> Result<RegistrationRow, ApiError> {
     let row = find_active_registration(pool, id).await?;
+    // Canvas `require_in_account_or_site_admin`
+    // (registrations_controller.rb:2299-2303): a registration of the Site
+    // Admin account is visible from every account. The workspace's Site
+    // Admin is the first parent-less account.
     if row.account_id != account_id {
-        return Err(ApiError::BadRequest(
-            "registration does not belong to account".to_string(),
-        ));
+        let site_admin: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
+        )
+        .fetch_optional(pool)
+        .await?;
+        if site_admin != Some(row.account_id) {
+            return Err(ApiError::BadRequest(
+                "registration does not belong to account".to_string(),
+            ));
+        }
     }
     Ok(row)
 }
@@ -2458,8 +2469,19 @@ async fn latest_update_request(
     State(state): State<AppState>,
     Path((account_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
-) -> Result<Json<Value>, ApiError> {
-    let registration = find_registration_in_account(&state.db, id, account_id).await?;
+) -> Result<Response, ApiError> {
+    // Canvas `require_in_account_or_site_admin` renders this one as a JSON
+    // body (registrations_controller.rb:2299-2303); the plain-text
+    // ApiError::BadRequest shape would not match the API.
+    let registration = match find_registration_in_account(&state.db, id, account_id).await {
+        Ok(registration) => registration,
+        Err(ApiError::BadRequest(message)) => {
+            return Ok(
+                (StatusCode::BAD_REQUEST, Json(json!({ "errors": message }))).into_response(),
+            )
+        }
+        Err(error) => return Err(error),
+    };
     require_registration_permission(&state.db, &auth, &registration).await?;
 
     let latest: Option<(i64,)> = sqlx::query_as(
@@ -2475,7 +2497,7 @@ async fn latest_update_request(
     let json = update_request_json(&state.db, rur_id)
         .await?
         .ok_or(ApiError::NotFound)?;
-    Ok(Json(json))
+    Ok(Json(json).into_response())
 }
 
 /// `GET .../lti_registrations/{id}/update_requests/{update_request_id}`

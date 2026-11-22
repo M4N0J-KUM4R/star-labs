@@ -197,9 +197,12 @@ async fn update_reset_and_histories() {
     assert_eq!(updated["admin_nickname"], "Renicknamed");
     // Manual registrations merge the overlay into the configuration and
     // CLEAR the stored overlay (update_registration_service.rb:100-121);
-    // the merged value shows up in overlaid_configuration below.
+    // the merged value shows up in overlaid_configuration below. No
+    // overlay row ever existed, so `update_overlay!` is a no-op and the
+    // overlay history stays empty (Lti::Overlay before_update
+    // create_version only fires on an overlay save).
     assert_eq!(updated["overlay"], json!({}));
-    assert!(!updated["overlay_versions"].as_array().unwrap().is_empty());
+    assert_eq!(updated["overlay_versions"], json!([]));
     assert_eq!(updated["overlaid_configuration"]["privacy_level"], "public");
 
     // Invalid workflow_state and dynamic-registration configuration updates
@@ -926,6 +929,18 @@ async fn context_controls_crud_and_bulk() {
     };
     let root_account = seed_account(&pool, &prefix, "root", None).await;
     let sub_account = seed_account(&pool, &prefix, "sub", Some(root_account)).await;
+
+    // The controls routes are gated on `lti_registrations_next`
+    // (context_controls_controller before_actions).
+    sqlx::query(
+        "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
+         VALUES ('Account', $1, 'lti_registrations_next', 'lti_registrations_next', 'enabled') \
+         ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
+    )
+    .bind(root_account)
+    .execute(&pool)
+    .await
+    .expect("enable the registrations flag");
     let admin_id = seed_user(&pool, &prefix, "admin", "admin").await;
     seed_account_admin(&pool, root_account, admin_id).await;
     let course_id = seed_course(&pool, &prefix, "course", sub_account).await;
@@ -1235,7 +1250,7 @@ async fn lti_apps_listings() {
     // launch_definitions for a placement (app_launch_collator.rb:102-153).
     let response = server
         .get(&format!(
-            "/courses/{course_id}/lti_apps/launch_definitions?placements[]=course_navigation"
+            "/courses/{course_id}/lti_apps/launch_definitions?placements=course_navigation"
         ))
         .add_header(AUTHORIZATION, auth(student_id, "student"))
         .await;
@@ -1251,7 +1266,7 @@ async fn lti_apps_listings() {
     // outsider does not.
     let response = server
         .get(&format!(
-            "/accounts/{account_id}/lti_apps/launch_definitions?placements[]=global_navigation&include_context_name=true"
+            "/accounts/{account_id}/lti_apps/launch_definitions?placements=global_navigation&include_context_name=true"
         ))
         .add_header(AUTHORIZATION, auth(student_id, "student"))
         .await;
@@ -1266,7 +1281,7 @@ async fn lti_apps_listings() {
 
     let response = server
         .get(&format!(
-            "/accounts/{account_id}/lti_apps/launch_definitions?placements[]=global_navigation"
+            "/accounts/{account_id}/lti_apps/launch_definitions?placements=global_navigation"
         ))
         .add_header(AUTHORIZATION, auth(outsider_id, "student"))
         .await;

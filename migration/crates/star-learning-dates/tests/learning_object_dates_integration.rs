@@ -292,6 +292,21 @@ fn auth(user_id: i64, role: &str) -> String {
     format!("Bearer {token}")
 }
 
+/// Reset the site-admin feature flags the file tests toggle. Only the file
+/// tests may touch them, and only while holding `FILE_FLAG_MUTEX` — the
+/// shared `cleanup` used to wipe them for every test of the binary, which
+/// raced with a file test running in parallel.
+async fn cleanup_file_flags(pool: &PgPool) {
+    let _ = sqlx::query(
+        "DELETE FROM feature_flags WHERE context_type = 'Account' \
+           AND context_id = (SELECT id FROM accounts WHERE parent_account_id IS NULL \
+                              AND workflow_state <> 'deleted' ORDER BY id ASC LIMIT 1) \
+           AND feature IN ('differentiated_files', 'discussion_checkpoints')",
+    )
+    .execute(pool)
+    .await;
+}
+
 async fn cleanup(pool: &PgPool, prefix: &str) {
     let pattern = format!("{prefix}-%");
     let _ = sqlx::query(
@@ -335,14 +350,6 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
          (SELECT id FROM courses WHERE course_code LIKE $1)",
     )
     .bind(&pattern)
-    .execute(pool)
-    .await;
-    let _ = sqlx::query(
-        "DELETE FROM feature_flags WHERE context_type = 'Account' \
-           AND context_id = (SELECT id FROM accounts WHERE parent_account_id IS NULL \
-                              AND workflow_state <> 'deleted' ORDER BY id ASC LIMIT 1) \
-           AND feature IN ('differentiated_files', 'discussion_checkpoints')",
-    )
     .execute(pool)
     .await;
     let _ = sqlx::query("DELETE FROM accounts WHERE name LIKE $1")
@@ -816,6 +823,7 @@ async fn file_date_details_needs_the_differentiated_files_feature() {
         .await;
     assert_eq!(missing.status_code(), 404, "body: {}", missing.text());
 
+    cleanup_file_flags(&pool).await;
     cleanup(&pool, &prefix).await;
 }
 
@@ -867,6 +875,7 @@ async fn file_date_details_put_updates_the_attachment() {
     );
     assert_eq!(details["overrides"][0]["course_section_id"], json!(42));
 
+    cleanup_file_flags(&pool).await;
     cleanup(&pool, &prefix).await;
 }
 

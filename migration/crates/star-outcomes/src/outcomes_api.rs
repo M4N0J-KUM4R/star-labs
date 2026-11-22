@@ -643,7 +643,7 @@ struct OutcomeImportRow {
     id: i64,
     workflow_state: String,
     user_id: Option<i64>,
-    progress: Option<i64>,
+    progress: Option<i32>,
     ended_at: Option<NaiveDateTime>,
     created_at: NaiveDateTime,
     updated_at: NaiveDateTime,

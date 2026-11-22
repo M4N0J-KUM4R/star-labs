@@ -184,8 +184,8 @@ async fn seed_collaboration(pool: &PgPool, prefix: &str, seed: SeedCollaboration
     .bind(seed.context_type)
     .bind(seed.context_id)
     .bind(seed.user_id)
-    .bind(format!("{prefix}-{title}"))
-    .bind(format!("https://tool.example/{title}"))
+    .bind(format!("{prefix}-{}", seed.title))
+    .bind(format!("https://tool.example/{}", seed.title))
     .bind(seed.kind)
     .bind(seed.workflow_state)
     .bind(seed.data)
@@ -292,6 +292,7 @@ async fn course_index_lists_the_external_tool_collaborations() {
 
     let active = seed_collaboration(
         &pool,
+        &prefix,
         SeedCollaboration {
             context_type: "Course",
             context_id: course,
@@ -305,6 +306,7 @@ async fn course_index_lists_the_external_tool_collaborations() {
     .await;
     seed_collaboration(
         &pool,
+        &prefix,
         SeedCollaboration {
             context_type: "Course",
             context_id: course,
@@ -318,6 +320,7 @@ async fn course_index_lists_the_external_tool_collaborations() {
     .await;
     seed_collaboration(
         &pool,
+        &prefix,
         SeedCollaboration {
             context_type: "Course",
             context_id: course,
@@ -375,6 +378,7 @@ async fn course_index_hides_the_collaborations_of_other_users_from_students() {
 
     let own = seed_collaboration(
         &pool,
+        &prefix,
         SeedCollaboration {
             context_type: "Course",
             context_id: course,
@@ -388,6 +392,7 @@ async fn course_index_hides_the_collaborations_of_other_users_from_students() {
     .await;
     let invited = seed_collaboration(
         &pool,
+        &prefix,
         SeedCollaboration {
             context_type: "Course",
             context_id: course,
@@ -401,6 +406,7 @@ async fn course_index_hides_the_collaborations_of_other_users_from_students() {
     .await;
     let foreign = seed_collaboration(
         &pool,
+        &prefix,
         SeedCollaboration {
             context_type: "Course",
             context_id: course,
@@ -450,6 +456,7 @@ async fn group_index_lists_the_groups_collaborations() {
 
     let collaboration = seed_collaboration(
         &pool,
+        &prefix,
         SeedCollaboration {
             context_type: "Group",
             context_id: group,
@@ -493,6 +500,7 @@ async fn members_lists_user_and_group_collaborators() {
 
     let collaboration = seed_collaboration(
         &pool,
+        &prefix,
         SeedCollaboration {
             context_type: "Course",
             context_id: course,
@@ -641,6 +649,7 @@ async fn destroy_soft_deletes_the_collaboration() {
 
     let collaboration = seed_collaboration(
         &pool,
+        &prefix,
         SeedCollaboration {
             context_type: "Course",
             context_id: course,
@@ -695,6 +704,7 @@ async fn destroy_of_a_collaboration_of_another_course_is_404() {
 
     let collaboration = seed_collaboration(
         &pool,
+        &prefix,
         SeedCollaboration {
             context_type: "Course",
             context_id: other_course,
