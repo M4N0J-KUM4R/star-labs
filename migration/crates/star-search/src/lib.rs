@@ -474,7 +474,7 @@ async fn user_recipients(
     if !exclude_users.is_empty() {
         query.push_str(&format!(" AND u.id <> ALL(${})", terms.len() + 2));
     }
-    query.push_str(" ORDER BY LOWER(COALESCE(u.sortable_name, u.name)) ASC, u.id ASC");
+    query.push_str(" ORDER BY u.id ASC");
     query.push_str(&format!(" LIMIT {per_page}"));
     let mut q = sqlx::query_as::<_, (i64, String)>(&query).bind(caller);
     for term in &terms {

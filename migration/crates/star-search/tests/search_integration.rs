@@ -641,6 +641,7 @@ async fn rubrics_matching_and_bare_array() {
     // what these tests exercise.
     let seed_rubric = |title: &str| {
         let prefix = prefix.clone();
+        let pool = pool.clone();
         async move {
             sqlx::query_scalar(
                 "INSERT INTO rubrics (course_id, title) VALUES ($1, $2) RETURNING id",

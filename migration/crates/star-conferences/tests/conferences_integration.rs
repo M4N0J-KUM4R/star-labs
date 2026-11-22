@@ -385,9 +385,16 @@ async fn course_index_create_and_permissions() {
     )
     .await;
     let conf3 = first(&created);
-    let mut invitees = conf3["invitees"].as_array().unwrap().clone();
-    invitees.sort_by_key(|v| v.as_i64().unwrap());
-    assert_eq!(invitees, json!([student, teacher]));
+    let mut invitees: Vec<i64> = conf3["invitees"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_i64().unwrap())
+        .collect();
+    invitees.sort_unstable();
+    let mut expected = vec![student, teacher];
+    expected.sort_unstable();
+    assert_eq!(invitees, expected);
 
     // Index: teacher (manager) sees all three; student (participant of
     // two) sees only their own; each with recordings [].

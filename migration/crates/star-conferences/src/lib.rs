@@ -119,6 +119,7 @@ const CONFIGURED_TYPES: [&str; 2] = ["BigBlueButton", "LtiConference"];
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, sqlx::FromRow)]
+#[allow(dead_code)] // user_id/created_at/recording_ready: SELECT * row shape kept whole
 struct ConferenceRow {
     id: i64,
     title: String,
