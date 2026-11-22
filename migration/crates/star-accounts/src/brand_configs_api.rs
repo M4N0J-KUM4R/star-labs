@@ -16,7 +16,6 @@
 //!     with no configured active brand → Canvas' public default path.
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
 use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Router;
@@ -117,7 +116,9 @@ async fn show_course_brand_variables(
     Ok(brand_redirect_response(path))
 }
 
-/// 405 helper keeps the router shape obvious (only GETs are defined).
+/// Only GETs are defined; axum's default method routing answers the
+/// wrong-verb cases (405 + Allow) and every unknown path stays the global
+/// 404 — a router-local fallback would hijack the merged app's fallback.
 pub fn brand_configs_routes() -> Router<AppState> {
     Router::new()
         .route("/brand_variables", get(show_brand_variables))
@@ -129,9 +130,4 @@ pub fn brand_configs_routes() -> Router<AppState> {
             "/courses/{courseId}/brand_variables",
             get(show_course_brand_variables),
         )
-        .fallback(method_not_allowed)
-}
-
-async fn method_not_allowed() -> StatusCode {
-    StatusCode::METHOD_NOT_ALLOWED
 }
