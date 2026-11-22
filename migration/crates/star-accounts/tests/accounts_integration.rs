@@ -1238,10 +1238,10 @@ async fn all_routes_without_token_are_401() {
     // POST there is a 405 method mismatch, out of scope here.)
     let post_cases: Vec<(&str, Option<Value>)> = vec![
         (
-            "/accounts/1/sub_accounts",
+            "/accounts/999999999/sub_accounts",
             Some(json!({ "name": "unauthenticated" })),
         ),
-        ("/accounts/1/users/2", Some(json!({}))),
+        ("/accounts/999999999/users/2", Some(json!({}))),
     ];
 
     for (path, body) in post_cases {
@@ -1260,9 +1260,9 @@ async fn all_routes_without_token_are_401() {
 
     for path in [
         "/accounts",
-        "/accounts/1",
-        "/accounts/1/courses",
-        "/accounts/1/users",
+        "/accounts/999999999",
+        "/accounts/999999999/courses",
+        "/accounts/999999999/users",
     ] {
         let resp = server.get(path).await;
         assert_eq!(
@@ -1288,7 +1288,7 @@ async fn garbage_bearer_token_is_401() {
     assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
 
     let resp = server
-        .get("/accounts/1")
+        .get("/accounts/999999999")
         .add_header(axum::http::header::AUTHORIZATION, "Bearer not-a-jwt")
         .await;
     assert_eq!(resp.status_code(), 401, "body: {}", resp.text());

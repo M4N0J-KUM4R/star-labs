@@ -340,7 +340,9 @@ async fn delete_user_on_subaccount_always_404() {
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let token = auth(admin, "admin");
-    let root = root_account(&pool).await;
+    // Dedicated root account (issue #75): the shared account 1 is never
+    // mutated — grants and sub-accounts stay private to this test.
+    let root = seed_account(&pool, &format!("{prefix}-Root"), None).await;
     let child = seed_account(&pool, &format!("{prefix}-Child"), Some(root)).await;
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
 
@@ -372,7 +374,8 @@ async fn delete_user_unassociated_user_not_found() {
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let token = auth(admin, "admin");
-    let root = root_account(&pool).await;
+    // Dedicated root account (issue #75): never the shared account 1.
+    let root = seed_account(&pool, &format!("{prefix}-Root"), None).await;
     // A user that exists in the DB but has no account_users grant and no
     // enrollments in any course of this account's subtree.
     let ghost = seed_user(&pool, &prefix, "Ghost", "student").await;
