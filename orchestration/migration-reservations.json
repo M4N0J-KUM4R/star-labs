@@ -3,8 +3,8 @@
  "free": [
   "0111"
  ],
- "max_merged": "0230",
- "next_available": "0231",
+ "max_merged": "0231",
+ "next_available": "0232",
  "reservations": {
   "0001": {
    "issue": null,
@@ -754,6 +754,11 @@
   "0230": {
    "issue": null,
    "note": "star-grading-standards: grading_period_sets API (parity gap)",
+   "status": "merged"
+  },
+  "0231": {
+   "issue": null,
+   "note": "star-outcomes: outcomes_api columns (parity gap)",
    "status": "merged"
   }
  }
