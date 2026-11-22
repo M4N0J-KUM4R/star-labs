@@ -262,6 +262,17 @@ pub fn create_token(user_id: i64, role: &str, secret: &str) -> Result<String, St
     .map_err(|e| format!("failed to create token: {e}"))
 }
 
+/// Create an HS256 JWT with arbitrary claims (service tokens, scoped
+/// preview tokens). The payload's `exp` (if present) is respected.
+pub fn create_custom_token(claims: &serde_json::Value, secret: &str) -> Result<String, String> {
+    encode(
+        &Header::default(),
+        claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|e| format!("failed to create token: {e}"))
+}
+
 /// Verify a JWT and return the claims if valid.
 pub fn verify_token(token: &str, secret: &str) -> Option<Claims> {
     let validation = Validation::default();
