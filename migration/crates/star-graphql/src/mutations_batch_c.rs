@@ -76,8 +76,9 @@ async fn is_teacher_or_admin(
 }
 
 fn parse_id(raw: &ID, what: &str) -> Result<i64, async_graphql::Error> {
-    raw.0.parse::<i64>()
-        .map_err(|_| async_graphql::Error::new(format!("invalid {what}: {raw}")))
+    raw.0
+        .parse::<i64>()
+        .map_err(|_| async_graphql::Error::new(format!("invalid {what}: {}", raw.0)))
 }
 
 // ---------------------------------------------------------------------------
@@ -226,12 +227,12 @@ pub struct DeleteLearningOutcomeGroupInput {
 
 #[derive(Debug, Clone, SimpleObject)]
 pub struct RubricAssessmentPayload {
-    pub rubric_assessment: Option<BatchCRubricAssessment>,
+    pub rubric_assessment: Option<RubricAssessment>,
     pub errors: Vec<BatchCError>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
-pub struct BatchCRubricAssessment {
+pub struct RubricAssessment {
     pub id: ID,
     pub rubric_id: ID,
     pub submission_id: ID,
@@ -435,6 +436,64 @@ impl BatchCMutations {
 }
 
 // ---------------------------------------------------------------------------
+// Update/insert result rows (named instead of anonymous tuples — clippy
+// type_complexity)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct TopicUpdateRow {
+    title: String,
+    message: Option<String>,
+    workflow_state: String,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct EntryUpdateRow {
+    message: Option<String>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct OutcomeUpdateRow {
+    title: String,
+    description: Option<String>,
+    display_name: Option<String>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct OutcomeGroupInsertRow {
+    id: i64,
+    title: String,
+    description: Option<String>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct OutcomeGroupUpdateRow {
+    title: String,
+    description: Option<String>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct RubricAssessmentInsertRow {
+    id: i64,
+    rubric_id: i64,
+    submission_id: i64,
+    score: Option<f64>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct PreferenceUpsertRow {
+    id: i64,
+    notification: String,
+    frequency: String,
+}
+
+// ---------------------------------------------------------------------------
 // Implementations
 // ---------------------------------------------------------------------------
 
@@ -454,7 +513,7 @@ async fn update_discussion_topic(
     let Some((course_id,)) = topic else {
         return Err(async_graphql::Error::new(format!(
             "discussion topic not found: {}",
-            input.discussion_topic_id
+            input.discussion_topic_id.0
         )));
     };
     if !is_teacher_or_admin(gctx, course_id).await? {
@@ -468,7 +527,7 @@ async fn update_discussion_topic(
             });
         }
     }
-    let row: Option<(String, Option<String>, String, DateTime<Utc>)> = sqlx::query_as(
+    let row: Option<TopicUpdateRow> = sqlx::query_as(
         r#"
         UPDATE discussion_topics SET
             title = COALESCE($2, title),
@@ -487,16 +546,16 @@ async fn update_discussion_topic(
     .fetch_optional(&gctx.pool)
     .await
     .map_err(crate::db_err)?;
-    let Some((title, message, state, updated_at)) = row else {
+    let Some(row) = row else {
         return Err(async_graphql::Error::new("discussion topic not found"));
     };
     Ok(DiscussionTopicPayload {
         discussion_topic: Some(BatchCDiscussionTopic {
             id: input.discussion_topic_id.clone(),
-            title,
-            message,
-            published: state == "active",
-            updated_at,
+            title: row.title,
+            message: row.message,
+            published: row.workflow_state == "active",
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -517,7 +576,7 @@ async fn delete_discussion_topic(
     let Some((course_id,)) = topic else {
         return Err(async_graphql::Error::new(format!(
             "discussion topic not found: {}",
-            input.discussion_topic_id
+            input.discussion_topic_id.0
         )));
     };
     if !is_teacher_or_admin(gctx, course_id).await? {
@@ -552,7 +611,7 @@ async fn update_discussion_entry(
     let Some((topic_id, author_id)) = entry else {
         return Err(async_graphql::Error::new(format!(
             "discussion entry not found: {}",
-            input.discussion_entry_id
+            input.discussion_entry_id.0
         )));
     };
     // Canvas allows the author to edit their own entry.
@@ -565,7 +624,7 @@ async fn update_discussion_entry(
             errors: validation_errors(Some("message"), "message cannot be blank"),
         });
     }
-    let row: Option<(Option<String>, DateTime<Utc>)> = sqlx::query_as(
+    let row: Option<EntryUpdateRow> = sqlx::query_as(
         "UPDATE discussion_entries SET message = $2, updated_at = now() \
          WHERE id = $1 RETURNING message, updated_at",
     )
@@ -574,15 +633,15 @@ async fn update_discussion_entry(
     .fetch_optional(&gctx.pool)
     .await
     .map_err(crate::db_err)?;
-    let Some((message, updated_at)) = row else {
+    let Some(row) = row else {
         return Err(async_graphql::Error::new("discussion entry not found"));
     };
     Ok(DiscussionEntryPayload {
         discussion_entry: Some(BatchCDiscussionEntry {
             id: input.discussion_entry_id.clone(),
             discussion_topic_id: ID(topic_id.to_string()),
-            message,
-            updated_at,
+            message: row.message,
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -604,18 +663,17 @@ async fn delete_discussion_entry(
     let Some((topic_id, author_id)) = entry else {
         return Err(async_graphql::Error::new(format!(
             "discussion entry not found: {}",
-            input.discussion_entry_id
+            input.discussion_entry_id.0
         )));
     };
     // Author or teacher/admin (Canvas moderation).
     let allowed = author_id == Some(gctx.auth_user.id) || {
-        let course: Option<(i64,)> = sqlx::query_as(
-            "SELECT course_id FROM discussion_topics WHERE id = $1",
-        )
-        .bind(topic_id)
-        .fetch_optional(&gctx.pool)
-        .await
-        .map_err(crate::db_err)?;
+        let course: Option<(i64,)> =
+            sqlx::query_as("SELECT course_id FROM discussion_topics WHERE id = $1")
+                .bind(topic_id)
+                .fetch_optional(&gctx.pool)
+                .await
+                .map_err(crate::db_err)?;
         match course {
             Some((cid,)) => is_teacher_or_admin(gctx, cid).await?,
             None => false,
@@ -653,7 +711,7 @@ async fn create_learning_outcome(
     let Some((Some(course_id),)) = group else {
         return Err(async_graphql::Error::new(format!(
             "outcome group not found: {}",
-            input.outcome_group_id
+            input.outcome_group_id.0
         )));
     };
     if !is_teacher_or_admin(gctx, course_id).await? {
@@ -723,7 +781,7 @@ async fn update_learning_outcome(
     let Some((course_id,)) = linked else {
         return Err(async_graphql::Error::new(format!(
             "outcome not found: {}",
-            input.outcome_id
+            input.outcome_id.0
         )));
     };
     if !is_teacher_or_admin(gctx, course_id).await? {
@@ -737,7 +795,7 @@ async fn update_learning_outcome(
             });
         }
     }
-    let row: Option<(String, Option<String>, Option<String>, DateTime<Utc>)> = sqlx::query_as(
+    let row: Option<OutcomeUpdateRow> = sqlx::query_as(
         r#"
         UPDATE learning_outcomes SET
             title = COALESCE($2, title),
@@ -755,16 +813,16 @@ async fn update_learning_outcome(
     .fetch_optional(&gctx.pool)
     .await
     .map_err(crate::db_err)?;
-    let Some((title, description, display_name, updated_at)) = row else {
+    let Some(row) = row else {
         return Err(async_graphql::Error::new("outcome not found"));
     };
     Ok(LearningOutcomePayload {
         learning_outcome: Some(BatchCLearningOutcome {
             id: input.outcome_id.clone(),
-            title,
-            description,
-            display_name,
-            updated_at,
+            title: row.title,
+            description: row.description,
+            display_name: row.display_name,
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -789,7 +847,7 @@ async fn delete_learning_outcome(
     let Some((course_id,)) = linked else {
         return Err(async_graphql::Error::new(format!(
             "outcome not found: {}",
-            input.outcome_id
+            input.outcome_id.0
         )));
     };
     if !is_teacher_or_admin(gctx, course_id).await? {
@@ -813,17 +871,16 @@ async fn create_learning_outcome_group(
     input: CreateLearningOutcomeGroupInput,
 ) -> Result<LearningOutcomeGroupPayload, async_graphql::Error> {
     let course_id = parse_id(&input.course_id, "course")?;
-    let exists: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'",
-    )
-    .bind(course_id)
-    .fetch_optional(&gctx.pool)
-    .await
-    .map_err(crate::db_err)?;
+    let exists: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(course_id)
+            .fetch_optional(&gctx.pool)
+            .await
+            .map_err(crate::db_err)?;
     if exists.is_none() {
         return Err(async_graphql::Error::new(format!(
             "invalid course: {}",
-            input.course_id
+            input.course_id.0
         )));
     }
     if !is_teacher_or_admin(gctx, course_id).await? {
@@ -835,7 +892,7 @@ async fn create_learning_outcome_group(
             errors: validation_errors(Some("title"), "title cannot be blank"),
         });
     }
-    let row: Option<(i64, String, Option<String>, DateTime<Utc>)> = sqlx::query_as(
+    let row: Option<OutcomeGroupInsertRow> = sqlx::query_as(
         r#"
         INSERT INTO learning_outcome_groups (course_id, title, description)
         VALUES ($1, $2, $3)
@@ -848,15 +905,15 @@ async fn create_learning_outcome_group(
     .fetch_optional(&gctx.pool)
     .await
     .map_err(crate::db_err)?;
-    let Some((id, title, description, updated_at)) = row else {
+    let Some(row) = row else {
         return Err(async_graphql::Error::new("outcome group create failed"));
     };
     Ok(LearningOutcomeGroupPayload {
         learning_outcome_group: Some(BatchCLearningOutcomeGroup {
-            id: ID(id.to_string()),
-            title,
-            description,
-            updated_at,
+            id: ID(row.id.to_string()),
+            title: row.title,
+            description: row.description,
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -878,7 +935,7 @@ async fn update_learning_outcome_group(
     let Some((Some(course_id),)) = group else {
         return Err(async_graphql::Error::new(format!(
             "outcome group not found: {}",
-            input.outcome_group_id
+            input.outcome_group_id.0
         )));
     };
     if !is_teacher_or_admin(gctx, course_id).await? {
@@ -892,7 +949,7 @@ async fn update_learning_outcome_group(
             });
         }
     }
-    let row: Option<(String, Option<String>, DateTime<Utc>)> = sqlx::query_as(
+    let row: Option<OutcomeGroupUpdateRow> = sqlx::query_as(
         r#"
         UPDATE learning_outcome_groups SET
             title = COALESCE($2, title),
@@ -908,15 +965,15 @@ async fn update_learning_outcome_group(
     .fetch_optional(&gctx.pool)
     .await
     .map_err(crate::db_err)?;
-    let Some((title, description, updated_at)) = row else {
+    let Some(row) = row else {
         return Err(async_graphql::Error::new("outcome group not found"));
     };
     Ok(LearningOutcomeGroupPayload {
         learning_outcome_group: Some(BatchCLearningOutcomeGroup {
             id: input.outcome_group_id.clone(),
-            title,
-            description,
-            updated_at,
+            title: row.title,
+            description: row.description,
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -938,7 +995,7 @@ async fn delete_learning_outcome_group(
     let Some((Some(course_id),)) = group else {
         return Err(async_graphql::Error::new(format!(
             "outcome group not found: {}",
-            input.outcome_group_id
+            input.outcome_group_id.0
         )));
     };
     if !is_teacher_or_admin(gctx, course_id).await? {
@@ -976,7 +1033,7 @@ async fn save_rubric_assessment(
     let Some((course_id,)) = sub_course else {
         return Err(async_graphql::Error::new(format!(
             "submission not found: {}",
-            input.submission_id
+            input.submission_id.0
         )));
     };
     // The rubric must belong to the same course (Canvas validates the
@@ -992,13 +1049,13 @@ async fn save_rubric_assessment(
     if rubric_ok.is_none() {
         return Err(async_graphql::Error::new(format!(
             "rubric not found: {}",
-            input.rubric_id
+            input.rubric_id.0
         )));
     }
     if !is_teacher_or_admin(gctx, course_id).await? {
         return Err(async_graphql::Error::new("insufficient permission"));
     }
-    let row: Option<(i64, i64, i64, Option<f64>, DateTime<Utc>)> = sqlx::query_as(
+    let row: Option<RubricAssessmentInsertRow> = sqlx::query_as(
         r#"
         INSERT INTO rubric_assessments
             (rubric_id, submission_id, assessor_id, score, data, workflow_state)
@@ -1019,17 +1076,17 @@ async fn save_rubric_assessment(
     // assessments per pair are allowed by the 0023 schema, mirroring
     // Canvas's provisional/parallel assessments. A NULL row means the
     // insert failed outright.
-    let Some((id, rubric_id, submission_id, score, updated_at)) = row else {
+    let Some(row) = row else {
         return Err(async_graphql::Error::new("rubric assessment save failed"));
     };
     Ok(RubricAssessmentPayload {
-        rubric_assessment: Some(BatchCRubricAssessment {
-            id: ID(id.to_string()),
-            rubric_id: ID(rubric_id.to_string()),
-            submission_id: ID(submission_id.to_string()),
+        rubric_assessment: Some(RubricAssessment {
+            id: ID(row.id.to_string()),
+            rubric_id: ID(row.rubric_id.to_string()),
+            submission_id: ID(row.submission_id.to_string()),
             assessor_id: ID(gctx.auth_user.id.to_string()),
-            score,
-            updated_at,
+            score: row.score,
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -1051,7 +1108,7 @@ async fn delete_submission_comment(
     let Some((author_id,)) = comment else {
         return Err(async_graphql::Error::new(format!(
             "submission comment not found: {}",
-            input.submission_comment_id
+            input.submission_comment_id.0
         )));
     };
     // Canvas: the author removes their own comment.
@@ -1088,7 +1145,7 @@ async fn update_notification_preferences(
     let Some((owner,)) = channel else {
         return Err(async_graphql::Error::new(format!(
             "communication channel not found: {}",
-            input.communication_channel_id
+            input.communication_channel_id.0
         )));
     };
     // Only the owner tunes their own preferences.
@@ -1114,7 +1171,7 @@ async fn update_notification_preferences(
         });
     }
     // Upsert on the 0045 UNIQUE (communication_channel_id, notification).
-    let row: Option<(i64, String, String)> = sqlx::query_as(
+    let row: Option<PreferenceUpsertRow> = sqlx::query_as(
         r#"
         INSERT INTO notification_preferences
             (user_id, communication_channel_id, notification, frequency)
@@ -1131,15 +1188,17 @@ async fn update_notification_preferences(
     .fetch_optional(&gctx.pool)
     .await
     .map_err(crate::db_err)?;
-    let Some((id, notification, frequency)) = row else {
-        return Err(async_graphql::Error::new("notification preference save failed"));
+    let Some(row) = row else {
+        return Err(async_graphql::Error::new(
+            "notification preference save failed",
+        ));
     };
     Ok(NotificationPreferencePayload {
         notification_policy: Some(BatchCNotificationPolicy {
-            id: ID(id.to_string()),
+            id: ID(row.id.to_string()),
             communication_channel_id: input.communication_channel_id.clone(),
-            notification,
-            frequency,
+            notification: row.notification,
+            frequency: row.frequency,
         }),
         errors: Vec::new(),
     })
@@ -1162,7 +1221,7 @@ async fn dismiss_account_notification(
     if exists.is_none() {
         return Err(async_graphql::Error::new(format!(
             "account notification not found: {}",
-            input.account_notification_id
+            input.account_notification_id.0
         )));
     }
     // No per-user dismissal rows in star-db (Canvas

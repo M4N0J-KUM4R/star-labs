@@ -112,11 +112,11 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     let _ = sqlx::query("DELETE FROM users WHERE email LIKE $1")
         .bind(format!("{prefix}%@test.local"))
         .execute(pool)
-    .await;
+        .await;
     let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
-    .await;
+        .await;
 }
 
 async fn gql_post(server: &TestServer, token: &str, query: &str, variables: Value) -> Value {
@@ -162,7 +162,10 @@ async fn create_module_group_set_group_and_permission_split() {
     .await;
     let payload = &body["data"]["createModule"];
     assert!(payload["errors"].as_array().unwrap().is_empty(), "{body}");
-    let module_id = payload["module"]["id"].as_str().expect("module id").to_string();
+    let module_id = payload["module"]["id"]
+        .as_str()
+        .expect("module id")
+        .to_string();
     assert_eq!(payload["module"]["name"], "Unit 1", "{body}");
     assert_eq!(payload["module"]["state"], "active", "{body}");
     assert_eq!(payload["module"]["courseId"], course.to_string(), "{body}");
@@ -192,7 +195,10 @@ async fn create_module_group_set_group_and_permission_split() {
         .as_str()
         .expect("set id")
         .to_string();
-    assert_eq!(body["data"]["createGroupSet"]["groupSet"]["name"], "Labs", "{body}");
+    assert_eq!(
+        body["data"]["createGroupSet"]["groupSet"]["name"], "Labs",
+        "{body}"
+    );
 
     // createGroupInSet as teacher.
     let body = gql_post(
@@ -236,7 +242,10 @@ async fn create_module_group_set_group_and_permission_split() {
     let payload = &body["data"]["createModule"];
     assert!(payload["module"].is_null(), "{body}");
     assert_eq!(payload["errors"][0]["attribute"], "name", "{body}");
-    assert_eq!(payload["errors"][0]["message"], "name cannot be blank", "{body}");
+    assert_eq!(
+        payload["errors"][0]["message"], "name cannot be blank",
+        "{body}"
+    );
 
     let _ = module_id;
     cleanup(&pool, &prefix).await;
@@ -293,8 +302,7 @@ async fn create_discussion_topic_and_entry() {
     )
     .await;
     assert_eq!(
-        body["data"]["createDiscussionTopic"]["discussionTopic"]["published"],
-        false,
+        body["data"]["createDiscussionTopic"]["discussionTopic"]["published"], false,
         "{body}"
     );
 
@@ -435,7 +443,10 @@ async fn conversation_mutations_round_trip() {
         json!({ "input": { "conversationId": conv_id } }),
     )
     .await;
-    assert_eq!(body["data"]["deleteConversation"]["success"], true, "{body}");
+    assert_eq!(
+        body["data"]["deleteConversation"]["success"], true,
+        "{body}"
+    );
 
     // Alice's participant row is deleted; Bob still active.
     let (alice_state,): (String,) = sqlx::query_as(
@@ -515,13 +526,11 @@ async fn submission_mutations_round_trip() {
     )
     .await;
     assert_eq!(
-        body["data"]["createSubmission"]["submission"]["id"],
-        sub_id,
+        body["data"]["createSubmission"]["submission"]["id"], sub_id,
         "upsert keeps the row: {body}"
     );
     assert_eq!(
-        body["data"]["createSubmission"]["submission"]["body"],
-        "Revised essay",
+        body["data"]["createSubmission"]["submission"]["body"], "Revised essay",
         "{body}"
     );
 
@@ -558,7 +567,10 @@ async fn submission_mutations_round_trip() {
         json!({ "input": { "submissionId": sub_id } }),
     )
     .await;
-    assert_eq!(body["data"]["markSubmissionCommentsRead"]["success"], true, "{body}");
+    assert_eq!(
+        body["data"]["markSubmissionCommentsRead"]["success"], true,
+        "{body}"
+    );
 
     // Teacher grades with a numeric grade string (Canvas parity: string).
     let body = gql_post(
@@ -611,8 +623,7 @@ async fn submission_mutations_round_trip() {
     )
     .await;
     assert_eq!(
-        body["data"]["createSubmission"]["submission"]["body"],
-        "On-behalf submission",
+        body["data"]["createSubmission"]["submission"]["body"], "On-behalf submission",
         "{body}"
     );
     assert_eq!(

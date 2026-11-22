@@ -92,12 +92,7 @@ async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str
     .expect("seed enrollment")
 }
 
-async fn seed_group(
-    pool: &PgPool,
-    course_id: i64,
-    title: &str,
-    weighted: bool,
-) -> i64 {
+async fn seed_group(pool: &PgPool, course_id: i64, title: &str, weighted: bool) -> i64 {
     sqlx::query_scalar(
         r#"
         INSERT INTO grading_period_groups (course_id, title, weighted)
@@ -193,8 +188,26 @@ async fn grading_periods_returns_canvas_field_names() {
     let group = seed_group(&pool, course, "Semester Set", true).await;
     // Inserted out of order: Q2 first, then Q1 — the connection must sort
     // by start_date (Canvas GradingPeriodGroup.grading_periods ordering).
-    let q2 = seed_period(&pool, group, "Q2", "2026-01-01", "2026-03-31", "2026-04-05", Some(50.0)).await;
-    let q1 = seed_period(&pool, group, "Q1", "2025-09-01", "2025-12-15", "2025-12-20", Some(50.0)).await;
+    let q2 = seed_period(
+        &pool,
+        group,
+        "Q2",
+        "2026-01-01",
+        "2026-03-31",
+        "2026-04-05",
+        Some(50.0),
+    )
+    .await;
+    let q1 = seed_period(
+        &pool,
+        group,
+        "Q1",
+        "2025-09-01",
+        "2025-12-15",
+        "2025-12-20",
+        Some(50.0),
+    )
+    .await;
 
     let body = gql_post(
         &server,
@@ -221,7 +234,10 @@ async fn grading_periods_returns_canvas_field_names() {
     assert_eq!(first["title"], "Q1", "{body}");
     assert_eq!(first["weight"], 50.0, "{body}");
     assert!(
-        first["startDate"].as_str().unwrap().starts_with("2025-09-01"),
+        first["startDate"]
+            .as_str()
+            .unwrap()
+            .starts_with("2025-09-01"),
         "{body}"
     );
     assert!(
@@ -229,7 +245,10 @@ async fn grading_periods_returns_canvas_field_names() {
         "{body}"
     );
     assert!(
-        first["closeDate"].as_str().unwrap().starts_with("2025-12-20"),
+        first["closeDate"]
+            .as_str()
+            .unwrap()
+            .starts_with("2025-12-20"),
         "{body}"
     );
     assert!(first["createdAt"].is_string(), "{body}");
@@ -262,8 +281,26 @@ async fn grading_periods_null_without_group_and_deleted_filtered() {
 
     // Deleted period filtered out of its group's list.
     let group = seed_group(&pool, with_group, "Set", false).await;
-    let live = seed_period(&pool, group, "Live", "2026-01-01", "2026-02-01", "2026-02-05", None).await;
-    let dead = seed_period(&pool, group, "Dead", "2026-03-01", "2026-04-01", "2026-04-05", None).await;
+    let live = seed_period(
+        &pool,
+        group,
+        "Live",
+        "2026-01-01",
+        "2026-02-01",
+        "2026-02-05",
+        None,
+    )
+    .await;
+    let dead = seed_period(
+        &pool,
+        group,
+        "Dead",
+        "2026-03-01",
+        "2026-04-01",
+        "2026-04-05",
+        None,
+    )
+    .await;
     sqlx::query("UPDATE grading_periods SET workflow_state = 'deleted' WHERE id = $1")
         .bind(dead)
         .execute(&pool)

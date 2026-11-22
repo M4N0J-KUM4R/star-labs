@@ -113,11 +113,10 @@ impl AssignmentGroup {
         Some(AssignmentGroupRules {
             drop_lowest: self.drop_lowest,
             drop_highest: self.drop_highest,
-            never_drop: self.never_drop.as_ref().map(|ids| {
-                ids.iter()
-                    .map(|id| ID(id.to_string()))
-                    .collect::<Vec<ID>>()
-            }),
+            never_drop: self
+                .never_drop
+                .as_ref()
+                .map(|ids| ids.iter().map(|id| ID(id.to_string())).collect::<Vec<ID>>()),
         })
     }
 

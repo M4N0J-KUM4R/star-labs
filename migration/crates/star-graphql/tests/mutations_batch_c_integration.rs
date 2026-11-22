@@ -88,11 +88,11 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     let _ = sqlx::query("DELETE FROM users WHERE email LIKE $1")
         .bind(format!("{prefix}%@test.local"))
         .execute(pool)
-    .await;
+        .await;
     let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
-    .await;
+        .await;
 }
 
 async fn gql_post(server: &TestServer, token: &str, query: &str, variables: Value) -> Value {
@@ -222,7 +222,10 @@ async fn discussion_update_delete_round_trip() {
         json!({ "input": { "discussionEntryId": entry.to_string() } }),
     )
     .await;
-    assert_eq!(body["data"]["deleteDiscussionEntry"]["success"], true, "{body}");
+    assert_eq!(
+        body["data"]["deleteDiscussionEntry"]["success"], true,
+        "{body}"
+    );
 
     let body = gql_post(
         &server,
@@ -232,7 +235,10 @@ async fn discussion_update_delete_round_trip() {
         json!({ "input": { "discussionTopicId": topic.to_string() } }),
     )
     .await;
-    assert_eq!(body["data"]["deleteDiscussionTopic"]["success"], true, "{body}");
+    assert_eq!(
+        body["data"]["deleteDiscussionTopic"]["success"], true,
+        "{body}"
+    );
 
     // Deleted topic: further updates report not found.
     let body = gql_post(
@@ -284,8 +290,7 @@ async fn outcome_group_and_outcome_crud() {
         .expect("group id")
         .to_string();
     assert_eq!(
-        body["data"]["createLearningOutcomeGroup"]["learningOutcomeGroup"]["title"],
-        "Skills",
+        body["data"]["createLearningOutcomeGroup"]["learningOutcomeGroup"]["title"], "Skills",
         "{body}"
     );
 
@@ -298,7 +303,10 @@ async fn outcome_group_and_outcome_crud() {
         json!({ "input": { "courseId": course.to_string(), "title": "Nope" } }),
     )
     .await;
-    assert!(body["data"]["createLearningOutcomeGroup"].is_null(), "{body}");
+    assert!(
+        body["data"]["createLearningOutcomeGroup"].is_null(),
+        "{body}"
+    );
 
     // createLearningOutcome into the group.
     let body = gql_post(
@@ -318,8 +326,7 @@ async fn outcome_group_and_outcome_crud() {
         .expect("outcome id")
         .to_string();
     assert_eq!(
-        body["data"]["createLearningOutcome"]["learningOutcome"]["displayName"],
-        "Analytical",
+        body["data"]["createLearningOutcome"]["learningOutcome"]["displayName"], "Analytical",
         "{body}"
     );
 
@@ -333,8 +340,7 @@ async fn outcome_group_and_outcome_crud() {
     )
     .await;
     assert_eq!(
-        body["data"]["updateLearningOutcome"]["learningOutcome"]["title"],
-        "Deep Analysis",
+        body["data"]["updateLearningOutcome"]["learningOutcome"]["title"], "Deep Analysis",
         "{body}"
     );
 
@@ -349,8 +355,7 @@ async fn outcome_group_and_outcome_crud() {
     )
     .await;
     assert_eq!(
-        body["data"]["updateLearningOutcomeGroup"]["learningOutcomeGroup"]["title"],
-        "Core Skills",
+        body["data"]["updateLearningOutcomeGroup"]["learningOutcomeGroup"]["title"], "Core Skills",
         "{body}"
     );
 
@@ -376,7 +381,10 @@ async fn outcome_group_and_outcome_crud() {
         json!({ "input": { "outcomeId": outcome_id } }),
     )
     .await;
-    assert_eq!(body["data"]["deleteLearningOutcome"]["success"], true, "{body}");
+    assert_eq!(
+        body["data"]["deleteLearningOutcome"]["success"], true,
+        "{body}"
+    );
 
     let body = gql_post(
         &server,
@@ -386,7 +394,10 @@ async fn outcome_group_and_outcome_crud() {
         json!({ "input": { "outcomeGroupId": group_id } }),
     )
     .await;
-    assert_eq!(body["data"]["deleteLearningOutcomeGroup"]["success"], true, "{body}");
+    assert_eq!(
+        body["data"]["deleteLearningOutcomeGroup"]["success"], true,
+        "{body}"
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -524,7 +535,10 @@ async fn rubric_comment_preference_dismiss_round_trip() {
         json!({ "input": { "submissionCommentId": comment.to_string() } }),
     )
     .await;
-    assert_eq!(body["data"]["deleteSubmissionComment"]["success"], true, "{body}");
+    assert_eq!(
+        body["data"]["deleteSubmissionComment"]["success"], true,
+        "{body}"
+    );
 
     // updateNotificationPreferences: upsert then re-upsert.
     let channel: i64 = sqlx::query_scalar(
@@ -532,8 +546,7 @@ async fn rubric_comment_preference_dismiss_round_trip() {
          VALUES ($1, $2, 'email') RETURNING id",
     )
     .bind(teacher)
-    .bind(format!("{prefix}-teacher@test.local")),
-    )
+    .bind(format!("{prefix}-teacher@test.local"))
     .fetch_one(&pool)
     .await
     .expect("seed channel");
@@ -548,12 +561,24 @@ async fn rubric_comment_preference_dismiss_round_trip() {
                  { updateNotificationPreferences(input: $input) \
                  { notificationPolicy { id communicationChannelId notification frequency } \
                  errors { attribute message } } }";
-    let body = gql_post(&server, &auth(teacher, "teacher"), query, mut_input("daily")).await;
+    let body = gql_post(
+        &server,
+        &auth(teacher, "teacher"),
+        query,
+        mut_input("daily"),
+    )
+    .await;
     let policy = &body["data"]["updateNotificationPreferences"]["notificationPolicy"];
     assert_eq!(policy["frequency"], "daily", "{body}");
     let policy_id = policy["id"].as_str().expect("policy id").to_string();
 
-    let body = gql_post(&server, &auth(teacher, "teacher"), query, mut_input("never")).await;
+    let body = gql_post(
+        &server,
+        &auth(teacher, "teacher"),
+        query,
+        mut_input("never"),
+    )
+    .await;
     let policy = &body["data"]["updateNotificationPreferences"]["notificationPolicy"];
     assert_eq!(policy["frequency"], "never", "{body}");
     assert_eq!(policy["id"], policy_id, "upsert keeps the row: {body}");
@@ -586,7 +611,10 @@ async fn rubric_comment_preference_dismiss_round_trip() {
         } }),
     )
     .await;
-    assert!(body["data"]["updateNotificationPreferences"].is_null(), "{body}");
+    assert!(
+        body["data"]["updateNotificationPreferences"].is_null(),
+        "{body}"
+    );
 
     // dismissAccountNotification: valid window succeeds.
     let body = gql_post(
@@ -597,7 +625,10 @@ async fn rubric_comment_preference_dismiss_round_trip() {
         json!({ "input": { "accountNotificationId": notification.to_string() } }),
     )
     .await;
-    assert_eq!(body["data"]["dismissAccountNotification"]["success"], true, "{body}");
+    assert_eq!(
+        body["data"]["dismissAccountNotification"]["success"], true,
+        "{body}"
+    );
 
     // Unknown id → top-level error.
     let body = gql_post(
@@ -608,7 +639,10 @@ async fn rubric_comment_preference_dismiss_round_trip() {
         json!({ "input": { "accountNotificationId": "999999999" } }),
     )
     .await;
-    assert!(body["data"]["dismissAccountNotification"].is_null(), "{body}");
+    assert!(
+        body["data"]["dismissAccountNotification"].is_null(),
+        "{body}"
+    );
 
     // Account cleanup.
     let _ = sqlx::query("DELETE FROM accounts WHERE id = $1")

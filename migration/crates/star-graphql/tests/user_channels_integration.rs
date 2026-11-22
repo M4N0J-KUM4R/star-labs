@@ -169,7 +169,11 @@ async fn communication_channels_and_policies_canvas_shape() {
         .as_array()
         .expect("channels");
     assert_eq!(channels.len(), 2, "retired hidden: {body}");
-    assert_eq!(channels[0]["id"], chan1.to_string(), "position order: {body}");
+    assert_eq!(
+        channels[0]["id"],
+        chan1.to_string(),
+        "position order: {body}"
+    );
     assert_eq!(channels[0]["pathType"], "email", "{body}");
     assert_eq!(channels[0]["workflowState"], "active", "{body}");
     assert!(channels[0]["createdAt"].is_string(), "{body}");
@@ -181,7 +185,11 @@ async fn communication_channels_and_policies_canvas_shape() {
         .as_array()
         .expect("prefs");
     assert_eq!(prefs.len(), 1, "retired-channel policy hidden: {body}");
-    assert_eq!(prefs[0]["communicationChannelId"], chan1.to_string(), "{body}");
+    assert_eq!(
+        prefs[0]["communicationChannelId"],
+        chan1.to_string(),
+        "{body}"
+    );
     assert_eq!(prefs[0]["notification"], "new_announcement", "{body}");
     assert_eq!(prefs[0]["frequency"], "daily", "{body}");
 
@@ -228,8 +236,16 @@ async fn notifications_canvas_shape_and_privacy() {
                  category workflowState createdAt } } }";
 
     // Self sees the non-deleted notifications.
-    let body = gql_post(&server, &auth(owner, "student"), query, json!({ "id": owner.to_string() })).await;
-    let notes = body["data"]["user"]["notifications"].as_array().expect("notes");
+    let body = gql_post(
+        &server,
+        &auth(owner, "student"),
+        query,
+        json!({ "id": owner.to_string() }),
+    )
+    .await;
+    let notes = body["data"]["user"]["notifications"]
+        .as_array()
+        .expect("notes");
     assert_eq!(notes.len(), 2, "deleted hidden: {body}");
     // Newest first: 'Second' (inserted later) before 'First'.
     assert_eq!(notes[0]["subject"], "Second", "{body}");
@@ -240,7 +256,13 @@ async fn notifications_canvas_shape_and_privacy() {
     assert!(notes[1]["createdAt"].is_string(), "{body}");
 
     // A stranger gets null for every private field.
-    let body = gql_post(&server, &auth(stranger, "student"), query, json!({ "id": owner.to_string() })).await;
+    let body = gql_post(
+        &server,
+        &auth(stranger, "student"),
+        query,
+        json!({ "id": owner.to_string() }),
+    )
+    .await;
     assert!(body["data"]["user"]["notifications"].is_null(), "{body}");
     assert!(
         body["data"]["user"]["communicationChannels"].is_null(),
@@ -248,9 +270,18 @@ async fn notifications_canvas_shape_and_privacy() {
     );
 
     // Admin sees them (self-or-admin).
-    let body = gql_post(&server, &auth(admin, "admin"), query, json!({ "id": owner.to_string() })).await;
+    let body = gql_post(
+        &server,
+        &auth(admin, "admin"),
+        query,
+        json!({ "id": owner.to_string() }),
+    )
+    .await;
     assert_eq!(
-        body["data"]["user"]["notifications"].as_array().unwrap().len(),
+        body["data"]["user"]["notifications"]
+            .as_array()
+            .unwrap()
+            .len(),
         2,
         "{body}"
     );

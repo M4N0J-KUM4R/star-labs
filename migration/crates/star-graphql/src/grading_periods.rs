@@ -42,7 +42,6 @@ struct GradingPeriodGroupRow {
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct GradingPeriodRow {
     id: i64,
-    grading_period_group_id: i64,
     title: String,
     start_date: DateTime<Utc>,
     end_date: DateTime<Utc>,
@@ -131,7 +130,7 @@ async fn fetch_periods_for_group(
 ) -> Result<Vec<GradingPeriod>, async_graphql::Error> {
     let rows: Vec<GradingPeriodRow> = sqlx::query_as(
         r#"
-        SELECT id, grading_period_group_id, title, start_date, end_date,
+        SELECT id, title, start_date, end_date,
                close_date, weight, created_at, updated_at
         FROM grading_periods
         WHERE grading_period_group_id = $1 AND workflow_state <> 'deleted'

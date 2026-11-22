@@ -26,7 +26,7 @@
 //! enforce it) and notification data is private by definition. Anyone
 //! else resolves null / empty lists, never an error.
 
-use async_graphql::{Context, Object, SimpleObject, ID};
+use async_graphql::{SimpleObject, ID};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
@@ -63,7 +63,6 @@ struct NotificationPolicyRow {
     communication_channel_id: i64,
     notification: String,
     frequency: String,
-    workflow_state: String,
 }
 
 // ---------------------------------------------------------------------------

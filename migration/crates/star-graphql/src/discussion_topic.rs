@@ -27,7 +27,7 @@
 //! section/availability scoping (`ScopedToUser`) and the published/unpublished
 //! split for students are documented deviations in the spec.
 
-use async_graphql::{SimpleObject, ID};
+use async_graphql::{Object, SimpleObject, ID};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
@@ -154,9 +154,14 @@ impl DiscussionTopic {
         ctx: &async_graphql::Context<'_>,
         first: Option<i32>,
         after: Option<String>,
-    ) -> Result<Option<crate::discussion_entries::DiscussionEntryConnection>, async_graphql::Error> {
+    ) -> Result<Option<crate::discussion_entries::DiscussionEntryConnection>, async_graphql::Error>
+    {
         let gctx = ctx.data::<crate::GraphQLContext>()?;
-        let raw = self.id.0.parse::<i64>().map_err(|_| async_graphql::Error::new("invalid topic id"))?;
+        let raw = self
+            .id
+            .0
+            .parse::<i64>()
+            .map_err(|_| async_graphql::Error::new("invalid topic id"))?;
         Ok(Some(
             crate::discussion_entries::fetch_topic_entries_page(
                 &gctx.pool,
@@ -168,7 +173,6 @@ impl DiscussionTopic {
         ))
     }
 }
-
 
 /// Relay connection edge: `edges { cursor node }`.
 #[derive(Debug, Clone, SimpleObject)]

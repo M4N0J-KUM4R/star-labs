@@ -88,11 +88,11 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     let _ = sqlx::query("DELETE FROM users WHERE email LIKE $1")
         .bind(format!("{prefix}%@test.local"))
         .execute(pool)
-    .await;
+        .await;
     let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
-    .await;
+        .await;
 }
 
 async fn gql_post(server: &TestServer, token: &str, query: &str, variables: Value) -> Value {
@@ -153,12 +153,11 @@ async fn outcomes_and_groups_nested_shape() {
         .expect("seed link");
     }
     // A deleted link: the outcome must not appear.
-    let o3: i64 = sqlx::query_scalar(
-        "INSERT INTO learning_outcomes (title) VALUES ('Ghost') RETURNING id",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("seed outcome 3");
+    let o3: i64 =
+        sqlx::query_scalar("INSERT INTO learning_outcomes (title) VALUES ('Ghost') RETURNING id")
+            .fetch_one(&pool)
+            .await
+            .expect("seed outcome 3");
     sqlx::query(
         "INSERT INTO learning_outcome_links (outcome_id, outcome_group_id, workflow_state) \
          VALUES ($1, $2, 'deleted')",
@@ -180,7 +179,9 @@ async fn outcomes_and_groups_nested_shape() {
     )
     .await;
 
-    let groups = body["data"]["course"]["outcomeGroups"].as_array().expect("groups");
+    let groups = body["data"]["course"]["outcomeGroups"]
+        .as_array()
+        .expect("groups");
     assert_eq!(groups.len(), 1, "{body}");
     let g = &groups[0];
     assert_eq!(g["id"], group.to_string(), "{body}");
@@ -246,7 +247,13 @@ async fn media_object_owner_scoped_with_tracks() {
                  userEnteredTitle createdAt mediaTracks { id kind locale content workflowState } } }";
 
     // Owner sees it with only active tracks.
-    let body = gql_post(&server, &auth(owner, "student"), query, json!({ "id": media })).await;
+    let body = gql_post(
+        &server,
+        &auth(owner, "student"),
+        query,
+        json!({ "id": media }),
+    )
+    .await;
     let mo = &body["data"]["mediaObject"];
     assert_eq!(mo["mediaId"], media, "{body}");
     assert_eq!(mo["mediaType"], "video", "{body}");
@@ -261,11 +268,23 @@ async fn media_object_owner_scoped_with_tracks() {
     assert_eq!(tracks[0]["workflowState"], "active", "{body}");
 
     // Stranger gets null (owner-scoped).
-    let body = gql_post(&server, &auth(stranger, "student"), query, json!({ "id": media })).await;
+    let body = gql_post(
+        &server,
+        &auth(stranger, "student"),
+        query,
+        json!({ "id": media }),
+    )
+    .await;
     assert!(body["data"]["mediaObject"].is_null(), "{body}");
 
     // Admin sees it (self-or-admin).
-    let body = gql_post(&server, &auth(admin, "admin"), query, json!({ "id": media })).await;
+    let body = gql_post(
+        &server,
+        &auth(admin, "admin"),
+        query,
+        json!({ "id": media }),
+    )
+    .await;
     assert!(body["data"]["mediaObject"].is_object(), "{body}");
 
     // Unknown media id → null.

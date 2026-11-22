@@ -46,7 +46,6 @@ struct RubricRow {
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct CriterionRow {
     id: i64,
-    rubric_id: i64,
     description: String,
     points: f64,
     position: i32,
@@ -55,21 +54,9 @@ struct CriterionRow {
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct RatingRow {
     id: i64,
-    criterion_id: i64,
     description: String,
     points: f64,
     position: i32,
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-struct AssessmentRow {
-    id: i64,
-    rubric_id: i64,
-    submission_id: i64,
-    assessor_id: i64,
-    score: Option<f64>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
 }
 
 // ---------------------------------------------------------------------------
@@ -167,21 +154,6 @@ impl Rubric {
     }
 }
 
-/// Canvas GraphQL `RubricAssessment`
-/// (`app/graphql/types/rubric_assessment_type.rb`, subset over the
-/// `rubric_assessments` table: score + assessor, not the JSONB data
-/// breakdown).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct RubricAssessment {
-    pub id: ID,
-    pub rubric_id: ID,
-    pub submission_id: ID,
-    pub assessor_id: ID,
-    pub score: Option<f64>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
 /// Relay connection edge: `edges { cursor node }`.
 #[derive(Debug, Clone, SimpleObject)]
 pub struct RubricEdge {
@@ -201,10 +173,13 @@ pub struct RubricConnection {
 // ---------------------------------------------------------------------------
 
 /// Hydrate one rubric's criteria + ratings (two queries, position order).
-async fn hydrate_criteria(pool: &PgPool, rubric_id: i64) -> Result<Vec<RubricCriterion>, async_graphql::Error> {
+async fn hydrate_criteria(
+    pool: &PgPool,
+    rubric_id: i64,
+) -> Result<Vec<RubricCriterion>, async_graphql::Error> {
     let criteria: Vec<CriterionRow> = sqlx::query_as(
         r#"
-        SELECT id, rubric_id, description, points::float8 AS points, position
+        SELECT id, description, points::float8 AS points, position
         FROM rubric_criteria
         WHERE rubric_id = $1
         ORDER BY position, id
@@ -219,7 +194,7 @@ async fn hydrate_criteria(pool: &PgPool, rubric_id: i64) -> Result<Vec<RubricCri
     for c in criteria {
         let ratings: Vec<RatingRow> = sqlx::query_as(
             r#"
-            SELECT id, criterion_id, description, points::float8 AS points, position
+            SELECT id, description, points::float8 AS points, position
             FROM rubric_ratings
             WHERE criterion_id = $1
             ORDER BY position, id

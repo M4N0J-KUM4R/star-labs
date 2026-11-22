@@ -114,11 +114,11 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     let _ = sqlx::query("DELETE FROM users WHERE email LIKE $1")
         .bind(format!("{prefix}%@test.local"))
         .execute(pool)
-    .await;
+        .await;
     let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
-    .await;
+        .await;
 }
 
 async fn gql_post(server: &TestServer, token: &str, query: &str, variables: Value) -> Value {
@@ -200,8 +200,7 @@ async fn external_tools_connection_shape_and_filters() {
         "sorted by key: {body}"
     );
     assert_eq!(
-        placements[0]["url"],
-        "https://tool.example.com/menu",
+        placements[0]["url"], "https://tool.example.com/menu",
         "{body}"
     );
     assert_eq!(placements[0]["message"], "Open helper", "{body}");
@@ -236,7 +235,9 @@ async fn external_tools_empty_config_resolves_empty_placements() {
 
     let node = &body["data"]["course"]["externalToolsConnection"]["edges"][0]["node"];
     assert_eq!(node["name"], "Bare", "{body}");
-    let placements = node["placements"]["placements"].as_array().expect("not null");
+    let placements = node["placements"]["placements"]
+        .as_array()
+        .expect("not null");
     assert!(placements.is_empty(), "empty config → empty list: {body}");
 
     cleanup(&pool, &prefix).await;

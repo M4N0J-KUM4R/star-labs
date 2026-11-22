@@ -56,7 +56,6 @@ struct OutcomeRow {
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct OutcomeGroupRow {
     id: i64,
-    course_id: Option<i64>,
     title: String,
     description: Option<String>,
     vendor_guid: Option<String>,
@@ -108,7 +107,6 @@ pub struct LearningOutcome {
 #[derive(Debug, Clone)]
 pub struct LearningOutcomeGroup {
     pub id: i64,
-    pub course_id: Option<i64>,
     pub title: String,
     pub description: Option<String>,
     pub vendor_guid: Option<String>,
@@ -247,7 +245,7 @@ pub(crate) async fn fetch_course_outcome_groups(
 ) -> Result<Vec<LearningOutcomeGroup>, async_graphql::Error> {
     let rows: Vec<OutcomeGroupRow> = sqlx::query_as(
         r#"
-        SELECT id, course_id, title, description, vendor_guid, created_at, updated_at
+        SELECT id, title, description, vendor_guid, created_at, updated_at
         FROM learning_outcome_groups
         WHERE course_id = $1 AND workflow_state <> 'deleted'
         ORDER BY id
@@ -262,7 +260,6 @@ pub(crate) async fn fetch_course_outcome_groups(
         .into_iter()
         .map(|r| LearningOutcomeGroup {
             id: r.id,
-            course_id: r.course_id,
             title: r.title,
             description: r.description,
             vendor_guid: r.vendor_guid,

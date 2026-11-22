@@ -88,11 +88,11 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     let _ = sqlx::query("DELETE FROM users WHERE email LIKE $1")
         .bind(format!("{prefix}%@test.local"))
         .execute(pool)
-    .await;
+        .await;
     let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
-    .await;
+        .await;
 }
 
 async fn gql_post(server: &TestServer, token: &str, query: &str, variables: Value) -> Value {
@@ -229,8 +229,16 @@ async fn account_notifications_window_and_admin_gate() {
                  message icon workflowState startAt endAt } }";
 
     // Admin sees only the window-valid one.
-    let body = gql_post(&server, &auth(admin, "admin"), query, json!({ "id": account_id.to_string() })).await;
-    let notes = body["data"]["accountNotifications"].as_array().expect("notes");
+    let body = gql_post(
+        &server,
+        &auth(admin, "admin"),
+        query,
+        json!({ "id": account_id.to_string() }),
+    )
+    .await;
+    let notes = body["data"]["accountNotifications"]
+        .as_array()
+        .expect("notes");
     assert_eq!(notes.len(), 1, "window filter: {body}");
     assert_eq!(notes[0]["id"], live.to_string(), "{body}");
     assert_eq!(notes[0]["accountId"], account_id.to_string(), "{body}");
@@ -240,7 +248,13 @@ async fn account_notifications_window_and_admin_gate() {
     assert!(notes[0]["startAt"].is_string(), "{body}");
 
     // Non-admin gets null (admin-only gate).
-    let body = gql_post(&server, &auth(student, "student"), query, json!({ "id": account_id.to_string() })).await;
+    let body = gql_post(
+        &server,
+        &auth(student, "student"),
+        query,
+        json!({ "id": account_id.to_string() }),
+    )
+    .await;
     assert!(body["data"]["accountNotifications"].is_null(), "{body}");
 
     // Cleanup the account.

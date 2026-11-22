@@ -97,8 +97,9 @@ async fn is_enrolled_or_admin(
 }
 
 fn parse_id(raw: &ID, what: &str) -> Result<i64, async_graphql::Error> {
-    raw.0.parse::<i64>()
-        .map_err(|_| async_graphql::Error::new(format!("invalid {what}: {raw}")))
+    raw.0
+        .parse::<i64>()
+        .map_err(|_| async_graphql::Error::new(format!("invalid {what}: {}", raw.0)))
 }
 
 // ---------------------------------------------------------------------------
@@ -479,6 +480,91 @@ impl BatchBMutations {
 }
 
 // ---------------------------------------------------------------------------
+// Insert/update result rows (named instead of anonymous tuples — clippy
+// type_complexity)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct ModuleInsertRow {
+    id: i64,
+    course_id: i64,
+    name: String,
+    position: i32,
+    workflow_state: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct GroupSetInsertRow {
+    id: i64,
+    name: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct GroupInsertRow {
+    id: i64,
+    group_category_id: Option<i64>,
+    name: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct TopicInsertRow {
+    id: i64,
+    course_id: i64,
+    title: String,
+    message: Option<String>,
+    workflow_state: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct EntryInsertRow {
+    id: i64,
+    topic_id: i64,
+    parent_id: Option<i64>,
+    user_id: Option<i64>,
+    message: Option<String>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct MessageInsertRow {
+    id: i64,
+    author_id: i64,
+    body: String,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct SubmissionInsertRow {
+    id: i64,
+    assignment_id: i64,
+    user_id: i64,
+    body: Option<String>,
+    score: Option<f64>,
+    submitted_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct CommentInsertRow {
+    id: i64,
+    submission_id: i64,
+    author_id: i64,
+    comment: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+// ---------------------------------------------------------------------------
 // Implementations
 // ---------------------------------------------------------------------------
 
@@ -494,17 +580,16 @@ async fn create_module(
     input: CreateModuleInput,
 ) -> Result<ModulePayload, async_graphql::Error> {
     let course_id = parse_id(&input.course_id, "course")?;
-    let exists: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'",
-    )
-    .bind(course_id)
-    .fetch_optional(&gctx.pool)
-    .await
-    .map_err(db_err)?;
+    let exists: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(course_id)
+            .fetch_optional(&gctx.pool)
+            .await
+            .map_err(db_err)?;
     if exists.is_none() {
         return Err(async_graphql::Error::new(format!(
             "invalid course: {}",
-            input.course_id
+            input.course_id.0
         )));
     }
     if !is_teacher_or_admin(&gctx.pool, gctx, course_id).await? {
@@ -516,32 +601,31 @@ async fn create_module(
             errors: validation_errors(Some("name"), "name cannot be blank"),
         });
     }
-    let row: Option<(i64, i64, String, i32, String, DateTime<Utc>, DateTime<Utc>)> =
-        sqlx::query_as(
-            r#"
-            INSERT INTO modules (course_id, name, position, workflow_state)
-            VALUES ($1, $2, $3, 'active')
-            RETURNING id, course_id, name, position, workflow_state, created_at, updated_at
-            "#,
-        )
-        .bind(course_id)
-        .bind(input.name.trim())
-        .bind(input.position.unwrap_or(0))
-        .fetch_optional(&gctx.pool)
-        .await
-        .map_err(db_err)?;
-    let Some((id, course_id, name, position, state, created_at, updated_at)) = row else {
+    let row: Option<ModuleInsertRow> = sqlx::query_as(
+        r#"
+        INSERT INTO modules (course_id, name, position, workflow_state)
+        VALUES ($1, $2, $3, 'active')
+        RETURNING id, course_id, name, position, workflow_state, created_at, updated_at
+        "#,
+    )
+    .bind(course_id)
+    .bind(input.name.trim())
+    .bind(input.position.unwrap_or(0))
+    .fetch_optional(&gctx.pool)
+    .await
+    .map_err(db_err)?;
+    let Some(row) = row else {
         return Err(async_graphql::Error::new("module create failed"));
     };
     Ok(ModulePayload {
         module: Some(BatchBModule {
-            id: ID(id.to_string()),
-            course_id: ID(course_id.to_string()),
-            name,
-            position,
-            state,
-            created_at,
-            updated_at,
+            id: ID(row.id.to_string()),
+            course_id: ID(row.course_id.to_string()),
+            name: row.name,
+            position: row.position,
+            state: row.workflow_state,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -552,17 +636,16 @@ async fn create_group_set(
     input: CreateGroupSetInput,
 ) -> Result<GroupSetPayload, async_graphql::Error> {
     let course_id = parse_id(&input.course_id, "course")?;
-    let exists: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'",
-    )
-    .bind(course_id)
-    .fetch_optional(&gctx.pool)
-    .await
-    .map_err(db_err)?;
+    let exists: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(course_id)
+            .fetch_optional(&gctx.pool)
+            .await
+            .map_err(db_err)?;
     if exists.is_none() {
         return Err(async_graphql::Error::new(format!(
             "invalid course: {}",
-            input.course_id
+            input.course_id.0
         )));
     }
     if !is_teacher_or_admin(&gctx.pool, gctx, course_id).await? {
@@ -574,7 +657,7 @@ async fn create_group_set(
             errors: validation_errors(Some("name"), "name cannot be blank"),
         });
     }
-    let row: Option<(i64, String, DateTime<Utc>, DateTime<Utc>)> = sqlx::query_as(
+    let row: Option<GroupSetInsertRow> = sqlx::query_as(
         r#"
         INSERT INTO group_categories (course_id, name)
         VALUES ($1, $2)
@@ -586,15 +669,15 @@ async fn create_group_set(
     .fetch_optional(&gctx.pool)
     .await
     .map_err(db_err)?;
-    let Some((id, name, created_at, updated_at)) = row else {
+    let Some(row) = row else {
         return Err(async_graphql::Error::new("group set create failed"));
     };
     Ok(GroupSetPayload {
         group_set: Some(BatchBGroupSet {
-            id: ID(id.to_string()),
-            name,
-            created_at,
-            updated_at,
+            id: ID(row.id.to_string()),
+            name: row.name,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -616,7 +699,7 @@ async fn create_group_in_set(
     let Some((Some(course_id),)) = course else {
         return Err(async_graphql::Error::new(format!(
             "group set not found: {}",
-            input.group_set_id
+            input.group_set_id.0
         )));
     };
     if !is_teacher_or_admin(&gctx.pool, gctx, course_id).await? {
@@ -628,7 +711,7 @@ async fn create_group_in_set(
             errors: validation_errors(Some("name"), "name cannot be blank"),
         });
     }
-    let row: Option<(i64, Option<i64>, String, DateTime<Utc>, DateTime<Utc>)> = sqlx::query_as(
+    let row: Option<GroupInsertRow> = sqlx::query_as(
         r#"
         INSERT INTO groups (course_id, group_category_id, name)
         VALUES ($1, $2, $3)
@@ -641,16 +724,16 @@ async fn create_group_in_set(
     .fetch_optional(&gctx.pool)
     .await
     .map_err(db_err)?;
-    let Some((id, group_set_id, name, created_at, updated_at)) = row else {
+    let Some(row) = row else {
         return Err(async_graphql::Error::new("group create failed"));
     };
     Ok(GroupPayload {
         group: Some(BatchBGroup {
-            id: ID(id.to_string()),
-            group_set_id: group_set_id.map(|g| ID(g.to_string())),
-            name,
-            created_at,
-            updated_at,
+            id: ID(row.id.to_string()),
+            group_set_id: row.group_category_id.map(|g| ID(g.to_string())),
+            name: row.name,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -661,17 +744,16 @@ async fn create_discussion_topic(
     input: CreateDiscussionTopicInput,
 ) -> Result<DiscussionTopicPayload, async_graphql::Error> {
     let course_id = parse_id(&input.course_id, "course")?;
-    let exists: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'",
-    )
-    .bind(course_id)
-    .fetch_optional(&gctx.pool)
-    .await
-    .map_err(db_err)?;
+    let exists: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(course_id)
+            .fetch_optional(&gctx.pool)
+            .await
+            .map_err(db_err)?;
     if exists.is_none() {
         return Err(async_graphql::Error::new(format!(
             "invalid course: {}",
-            input.course_id
+            input.course_id.0
         )));
     }
     // Canvas: any participant may create a topic; publishing requires
@@ -689,15 +771,7 @@ async fn create_discussion_topic(
         });
     }
     let published = teacher && input.published.unwrap_or(false);
-    let row: Option<(
-        i64,
-        i64,
-        String,
-        Option<String>,
-        String,
-        DateTime<Utc>,
-        DateTime<Utc>,
-    )> = sqlx::query_as(
+    let row: Option<TopicInsertRow> = sqlx::query_as(
         r#"
         INSERT INTO discussion_topics (course_id, title, message, workflow_state)
         VALUES ($1, $2, $3, $4)
@@ -711,18 +785,18 @@ async fn create_discussion_topic(
     .fetch_optional(&gctx.pool)
     .await
     .map_err(db_err)?;
-    let Some((id, course_id, title, message, state, created_at, updated_at)) = row else {
+    let Some(row) = row else {
         return Err(async_graphql::Error::new("discussion topic create failed"));
     };
     Ok(DiscussionTopicPayload {
         discussion_topic: Some(BatchBDiscussionTopic {
-            id: ID(id.to_string()),
-            course_id: ID(course_id.to_string()),
-            title,
-            message,
-            published: state == "active",
-            created_at,
-            updated_at,
+            id: ID(row.id.to_string()),
+            course_id: ID(row.course_id.to_string()),
+            title: row.title,
+            message: row.message,
+            published: row.workflow_state == "active",
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -744,7 +818,7 @@ async fn create_discussion_entry(
     let Some((course_id, state)) = topic else {
         return Err(async_graphql::Error::new(format!(
             "discussion topic not found: {}",
-            input.discussion_topic_id
+            input.discussion_topic_id.0
         )));
     };
     if !is_enrolled_or_admin(&gctx.pool, gctx, course_id).await? {
@@ -761,31 +835,23 @@ async fn create_discussion_entry(
         None => None,
         Some(raw) => {
             let pid = parse_id(raw, "parent entry")?;
-            let ok: Option<(i32,)> = sqlx::query_as(
-                "SELECT 1 FROM discussion_entries WHERE id = $1 AND topic_id = $2",
-            )
-            .bind(pid)
-            .bind(topic_id)
-            .fetch_optional(&gctx.pool)
-            .await
-            .map_err(db_err)?;
+            let ok: Option<(i32,)> =
+                sqlx::query_as("SELECT 1 FROM discussion_entries WHERE id = $1 AND topic_id = $2")
+                    .bind(pid)
+                    .bind(topic_id)
+                    .fetch_optional(&gctx.pool)
+                    .await
+                    .map_err(db_err)?;
             if ok.is_none() {
                 return Err(async_graphql::Error::new(format!(
-                    "parent entry not found: {raw}"
+                    "parent entry not found: {}",
+                    raw.0
                 )));
             }
             Some(pid)
         }
     };
-    let row: Option<(
-        i64,
-        i64,
-        Option<i64>,
-        Option<i64>,
-        Option<String>,
-        DateTime<Utc>,
-        DateTime<Utc>,
-    )> = sqlx::query_as(
+    let row: Option<EntryInsertRow> = sqlx::query_as(
         r#"
         INSERT INTO discussion_entries (topic_id, parent_id, user_id, message)
         VALUES ($1, $2, $3, $4)
@@ -799,19 +865,19 @@ async fn create_discussion_entry(
     .fetch_optional(&gctx.pool)
     .await
     .map_err(db_err)?;
-    let Some((id, topic_id, parent_id, user_id, message, created_at, updated_at)) = row else {
+    let Some(row) = row else {
         return Err(async_graphql::Error::new("discussion entry create failed"));
     };
     let _ = state;
     Ok(DiscussionEntryPayload {
         discussion_entry: Some(BatchBDiscussionEntry {
-            id: ID(id.to_string()),
-            discussion_topic_id: ID(topic_id.to_string()),
-            parent_id: parent_id.map(|p| ID(p.to_string())),
-            user_id: user_id.map(|u| ID(u.to_string())),
-            message,
-            created_at,
-            updated_at,
+            id: ID(row.id.to_string()),
+            discussion_topic_id: ID(row.topic_id.to_string()),
+            parent_id: row.parent_id.map(|p| ID(p.to_string())),
+            user_id: row.user_id.map(|u| ID(u.to_string())),
+            message: row.message,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -842,7 +908,10 @@ async fn create_conversation(
             .await
             .map_err(db_err)?;
         if exists.is_none() {
-            return Err(async_graphql::Error::new(format!("recipient not found: {raw}")));
+            return Err(async_graphql::Error::new(format!(
+                "recipient not found: {}",
+                raw.0
+            )));
         }
         if uid != gctx.auth_user.id && !recipient_ids.contains(&uid) {
             recipient_ids.push(uid);
@@ -856,19 +925,22 @@ async fn create_conversation(
     }
 
     let mut tx = gctx.pool.begin().await.map_err(db_err)?;
-    let (conv_id, subject): (i64, String) = sqlx::query_as(
-        "INSERT INTO conversations (subject) VALUES ($1) RETURNING id, subject",
-    )
-    .bind(input.subject.trim())
-    .fetch_one(&mut *tx)
-    .await
-    .map_err(db_err)?;
+    let (conv_id, subject): (i64, String) =
+        sqlx::query_as("INSERT INTO conversations (subject) VALUES ($1) RETURNING id, subject")
+            .bind(input.subject.trim())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_err)?;
 
     let mut participant_ids = vec![gctx.auth_user.id];
     participant_ids.extend(&recipient_ids);
     let now = Utc::now();
     for &uid in &participant_ids {
-        let read_at = if uid == gctx.auth_user.id { Some(now) } else { None };
+        let read_at = if uid == gctx.auth_user.id {
+            Some(now)
+        } else {
+            None
+        };
         sqlx::query(
             r#"INSERT INTO conversation_participants
                (conversation_id, user_id, workflow_state, last_message_at, read_at)
@@ -881,7 +953,7 @@ async fn create_conversation(
         .await
         .map_err(db_err)?;
     }
-    let (msg_id, author_id, body, created_at): (i64, i64, String, DateTime<Utc>) = sqlx::query_as(
+    let msg: MessageInsertRow = sqlx::query_as(
         r#"INSERT INTO conversation_messages (conversation_id, author_id, body)
            VALUES ($1, $2, $3) RETURNING id, author_id, body, created_at"#,
     )
@@ -898,11 +970,11 @@ async fn create_conversation(
             id: ID(conv_id.to_string()),
             subject,
             messages: vec![BatchBConversationMessage {
-                id: ID(msg_id.to_string()),
+                id: ID(msg.id.to_string()),
                 conversation_id: ID(conv_id.to_string()),
-                author_id: ID(author_id.to_string()),
-                body,
-                created_at,
+                author_id: ID(msg.author_id.to_string()),
+                body: msg.body,
+                created_at: msg.created_at,
             }],
         }),
         errors: Vec::new(),
@@ -926,7 +998,7 @@ async fn add_conversation_message(
     if participates.is_none() {
         return Err(async_graphql::Error::new(format!(
             "conversation not found: {}",
-            input.conversation_id
+            input.conversation_id.0
         )));
     }
     if input.body.trim().is_empty() {
@@ -936,7 +1008,7 @@ async fn add_conversation_message(
         });
     }
     let mut tx = gctx.pool.begin().await.map_err(db_err)?;
-    let (msg_id, author_id, body, created_at): (i64, i64, String, DateTime<Utc>) = sqlx::query_as(
+    let msg: MessageInsertRow = sqlx::query_as(
         r#"INSERT INTO conversation_messages (conversation_id, author_id, body)
            VALUES ($1, $2, $3) RETURNING id, author_id, body, created_at"#,
     )
@@ -967,11 +1039,11 @@ async fn add_conversation_message(
             id: ID(conv_id.to_string()),
             subject,
             messages: vec![BatchBConversationMessage {
-                id: ID(msg_id.to_string()),
+                id: ID(msg.id.to_string()),
                 conversation_id: ID(conv_id.to_string()),
-                author_id: ID(author_id.to_string()),
-                body,
-                created_at,
+                author_id: ID(msg.author_id.to_string()),
+                body: msg.body,
+                created_at: msg.created_at,
             }],
         }),
         errors: Vec::new(),
@@ -995,7 +1067,7 @@ async fn delete_conversation(
     if result.rows_affected() == 0 {
         return Err(async_graphql::Error::new(format!(
             "conversation not found: {}",
-            input.conversation_id
+            input.conversation_id.0
         )));
     }
     Ok(SuccessPayload { success: true })
@@ -1024,14 +1096,14 @@ async fn create_submission(
     input: CreateSubmissionInput,
 ) -> Result<SubmissionPayload, async_graphql::Error> {
     let assignment_id = parse_id(&input.assignment_id, "assignment")?;
-    let (course_id,): (i64,) = sqlx::query_as(
-        "SELECT course_id FROM assignments WHERE id = $1",
-    )
-    .bind(assignment_id)
-    .fetch_optional(&gctx.pool)
-    .await
-    .map_err(db_err)?
-    .ok_or_else(|| async_graphql::Error::new(format!("assignment not found: {assignment_id}")))?;
+    let (course_id,): (i64,) = sqlx::query_as("SELECT course_id FROM assignments WHERE id = $1")
+        .bind(assignment_id)
+        .fetch_optional(&gctx.pool)
+        .await
+        .map_err(db_err)?
+        .ok_or_else(|| {
+            async_graphql::Error::new(format!("assignment not found: {assignment_id}"))
+        })?;
 
     let target = match &input.user_id {
         Some(raw) => parse_id(raw, "user")?,
@@ -1046,7 +1118,13 @@ async fn create_submission(
     } else if !is_teacher_or_admin(&gctx.pool, gctx, course_id).await? {
         return Err(async_graphql::Error::new("insufficient permission"));
     }
-    if input.body.as_deref().map(str::trim).unwrap_or("").is_empty() {
+    if input
+        .body
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
         return Ok(SubmissionPayload {
             submission: None,
             errors: validation_errors(Some("body"), "body cannot be blank"),
@@ -1055,16 +1133,7 @@ async fn create_submission(
 
     // Upsert on (assignment_id, user_id) — Canvas resubmits replace the
     // body (star-assignments REST parity on the UNIQUE constraint).
-    let row: Option<(
-        i64,
-        i64,
-        i64,
-        Option<String>,
-        Option<f64>,
-        DateTime<Utc>,
-        DateTime<Utc>,
-        DateTime<Utc>,
-    )> = sqlx::query_as(
+    let row: Option<SubmissionInsertRow> = sqlx::query_as(
         r#"
         INSERT INTO submissions (assignment_id, user_id, body, submitted_at)
         VALUES ($1, $2, $3, now())
@@ -1079,22 +1148,20 @@ async fn create_submission(
     .fetch_optional(&gctx.pool)
     .await
     .map_err(db_err)?;
-    let Some((id, assignment_id, user_id, body, score, submitted_at, created_at, updated_at)) =
-        row
-    else {
+    let Some(row) = row else {
         return Err(async_graphql::Error::new("submission create failed"));
     };
     Ok(SubmissionPayload {
         submission: Some(BatchBSubmission {
-            id: ID(id.to_string()),
-            assignment_id: ID(assignment_id.to_string()),
-            user_id: ID(user_id.to_string()),
-            body,
-            score,
-            grade: score.map(|s| format!("{}", s as i64)),
-            submitted_at,
-            created_at,
-            updated_at,
+            id: ID(row.id.to_string()),
+            assignment_id: ID(row.assignment_id.to_string()),
+            user_id: ID(row.user_id.to_string()),
+            body: row.body,
+            score: row.score,
+            grade: row.score.map(|s| format!("{}", s as i64)),
+            submitted_at: row.submitted_at,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -1110,13 +1177,13 @@ async fn create_submission_comment(
     else {
         return Err(async_graphql::Error::new(format!(
             "submission not found: {}",
-            input.submission_id
+            input.submission_id.0
         )));
     };
     // The submission's student or a teacher/admin of the course (REST
     // star-submission-comments visibility gate).
-    let allowed = student_id == gctx.auth_user.id
-        || is_teacher_or_admin(&gctx.pool, gctx, course_id).await?;
+    let allowed =
+        student_id == gctx.auth_user.id || is_teacher_or_admin(&gctx.pool, gctx, course_id).await?;
     if !allowed {
         return Err(async_graphql::Error::new("insufficient permission"));
     }
@@ -1126,7 +1193,7 @@ async fn create_submission_comment(
             errors: validation_errors(Some("comment"), "comment cannot be blank"),
         });
     }
-    let row: Option<(i64, i64, i64, String, DateTime<Utc>, DateTime<Utc>)> = sqlx::query_as(
+    let row: Option<CommentInsertRow> = sqlx::query_as(
         r#"
         INSERT INTO submission_comments (submission_id, author_id, comment)
         VALUES ($1, $2, $3)
@@ -1139,17 +1206,19 @@ async fn create_submission_comment(
     .fetch_optional(&gctx.pool)
     .await
     .map_err(db_err)?;
-    let Some((id, submission_id, author_id, comment, created_at, updated_at)) = row else {
-        return Err(async_graphql::Error::new("submission comment create failed"));
+    let Some(row) = row else {
+        return Err(async_graphql::Error::new(
+            "submission comment create failed",
+        ));
     };
     Ok(SubmissionCommentPayload {
         submission_comment: Some(BatchBSubmissionComment {
-            id: ID(id.to_string()),
-            submission_id: ID(submission_id.to_string()),
-            author_id: ID(author_id.to_string()),
-            comment,
-            created_at,
-            updated_at,
+            id: ID(row.id.to_string()),
+            submission_id: ID(row.submission_id.to_string()),
+            author_id: ID(row.author_id.to_string()),
+            comment: row.comment,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -1165,7 +1234,7 @@ async fn update_submission_grade(
     else {
         return Err(async_graphql::Error::new(format!(
             "submission not found: {}",
-            input.submission_id
+            input.submission_id.0
         )));
     };
     if !is_teacher_or_admin(&gctx.pool, gctx, course_id).await? {
@@ -1189,16 +1258,7 @@ async fn update_submission_grade(
             errors: validation_errors(Some("grade"), "grade or score is required"),
         });
     }
-    let row: Option<(
-        i64,
-        i64,
-        i64,
-        Option<String>,
-        Option<f64>,
-        DateTime<Utc>,
-        DateTime<Utc>,
-        DateTime<Utc>,
-    )> = sqlx::query_as(
+    let row: Option<SubmissionInsertRow> = sqlx::query_as(
         r#"
         UPDATE submissions
         SET score = $2::numeric, updated_at = now()
@@ -1211,22 +1271,20 @@ async fn update_submission_grade(
     .fetch_optional(&gctx.pool)
     .await
     .map_err(db_err)?;
-    let Some((id, assignment_id, user_id, body, score, submitted_at, created_at, updated_at)) =
-        row
-    else {
+    let Some(row) = row else {
         return Err(async_graphql::Error::new("submission not found"));
     };
     Ok(SubmissionPayload {
         submission: Some(BatchBSubmission {
-            id: ID(id.to_string()),
-            assignment_id: ID(assignment_id.to_string()),
-            user_id: ID(user_id.to_string()),
-            body,
-            score,
-            grade: score.map(|s| format!("{}", s as i64)),
-            submitted_at,
-            created_at,
-            updated_at,
+            id: ID(row.id.to_string()),
+            assignment_id: ID(row.assignment_id.to_string()),
+            user_id: ID(row.user_id.to_string()),
+            body: row.body,
+            score: row.score,
+            grade: row.score.map(|s| format!("{}", s as i64)),
+            submitted_at: row.submitted_at,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
         }),
         errors: Vec::new(),
     })
@@ -1242,14 +1300,14 @@ async fn mark_submission_comments_read(
     else {
         return Err(async_graphql::Error::new(format!(
             "submission not found: {}",
-            input.submission_id
+            input.submission_id.0
         )));
     };
     // Canvas marks the current user's comment read state; the natural
     // subject is the submission's student (or a teacher reading the
     // thread — allow both, REST parity).
-    let allowed = student_id == gctx.auth_user.id
-        || is_teacher_or_admin(&gctx.pool, gctx, course_id).await?;
+    let allowed =
+        student_id == gctx.auth_user.id || is_teacher_or_admin(&gctx.pool, gctx, course_id).await?;
     if !allowed {
         return Err(async_graphql::Error::new("insufficient permission"));
     }
@@ -1260,4 +1318,3 @@ async fn mark_submission_comments_read(
     let _ = sid;
     Ok(SuccessPayload { success: true })
 }
-

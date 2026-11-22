@@ -32,11 +32,11 @@
 //! returns the window-valid announcements (start_at <= now < end_at)
 //! like Canvas's user-facing resolver.
 
-use async_graphql::{Context, Object, SimpleObject, ID};
+use async_graphql::{Object, SimpleObject, ID};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
-use crate::{db_err, GraphQLContext};
+use crate::db_err;
 
 // ---------------------------------------------------------------------------
 // Database rows

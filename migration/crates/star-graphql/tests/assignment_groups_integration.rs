@@ -96,13 +96,7 @@ async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str
 }
 
 /// Create an assignment group directly; returns its id.
-async fn seed_group(
-    pool: &PgPool,
-    course_id: i64,
-    name: &str,
-    position: i32,
-    weight: f64,
-) -> i64 {
+async fn seed_group(pool: &PgPool, course_id: i64, name: &str, position: i32, weight: f64) -> i64 {
     sqlx::query_scalar(
         r#"
         INSERT INTO assignment_groups (course_id, name, position, group_weight)
@@ -313,7 +307,7 @@ async fn assignment_groups_connection_paginates() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     let mut ids = Vec::new();
     for i in 0..3 {
-        ids.push(seed_group(&pool, course, &format!("G{i}"), (i + 1) as i32, 0.0).await);
+        ids.push(seed_group(&pool, course, &format!("G{i}"), i + 1, 0.0).await);
     }
 
     let token = auth(teacher, "teacher");
@@ -333,8 +327,7 @@ async fn assignment_groups_connection_paginates() {
     assert_eq!(e1.len(), 2, "{page1}");
     assert_eq!(conn["pageInfo"]["hasNextPage"], true, "{page1}");
     assert_eq!(
-        conn["pageInfo"]["endCursor"],
-        e1[1]["cursor"],
+        conn["pageInfo"]["endCursor"], e1[1]["cursor"],
         "endCursor is the last edge's cursor: {page1}"
     );
     assert_eq!(e1[0]["node"]["id"], ids[0].to_string(), "{page1}");

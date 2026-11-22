@@ -54,9 +54,9 @@ mod grading_standards_account_notifications;
 mod groups;
 mod modules;
 mod mutations;
-mod outcomes_media;
 mod mutations_batch_b;
 mod mutations_batch_c;
+mod outcomes_media;
 mod pages;
 mod quiz;
 mod rubrics;
@@ -371,9 +371,7 @@ impl Course {
         ctx: &Context<'_>,
     ) -> Result<Option<GradingPeriodGroup>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
-        Ok(
-            grading_periods::fetch_course_grading_period_group(&gctx.pool, self.id).await?,
-        )
+        grading_periods::fetch_course_grading_period_group(&gctx.pool, self.id).await
     }
 
     /// The course's own grading standards with their scheme rows
@@ -384,15 +382,11 @@ impl Course {
     async fn grading_standards(
         &self,
         ctx: &Context<'_>,
-    ) -> Result<Vec<grading_standards_account_notifications::GradingStandard>, async_graphql::Error> {
+    ) -> Result<Vec<grading_standards_account_notifications::GradingStandard>, async_graphql::Error>
+    {
         let gctx = ctx.data::<GraphQLContext>()?;
-        Ok(
-            grading_standards_account_notifications::fetch_course_grading_standards(
-                &gctx.pool,
-                self.id,
-            )
-            .await?,
-        )
+        grading_standards_account_notifications::fetch_course_grading_standards(&gctx.pool, self.id)
+            .await
     }
 
     /// Paginated rubrics in this course (LIMIT first+1, ORDER BY id), each
@@ -468,13 +462,8 @@ impl Course {
     ) -> Result<Option<outcomes_media::LearningOutcomeConnection>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         Ok(Some(
-            outcomes_media::fetch_course_outcome_page(
-                &gctx.pool,
-                self.id,
-                first,
-                after.as_deref(),
-            )
-            .await?,
+            outcomes_media::fetch_course_outcome_page(&gctx.pool, self.id, first, after.as_deref())
+                .await?,
         ))
     }
 
@@ -486,7 +475,7 @@ impl Course {
         ctx: &Context<'_>,
     ) -> Result<Vec<outcomes_media::LearningOutcomeGroup>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
-        Ok(outcomes_media::fetch_course_outcome_groups(&gctx.pool, self.id).await?)
+        outcomes_media::fetch_course_outcome_groups(&gctx.pool, self.id).await
     }
 
     /// Paginated enabled external tools in this course (LIMIT first+1,
@@ -502,13 +491,8 @@ impl Course {
     ) -> Result<Option<ExternalToolConnection>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         Ok(Some(
-            external_tools::fetch_external_tool_page(
-                &gctx.pool,
-                self.id,
-                first,
-                after.as_deref(),
-            )
-            .await?,
+            external_tools::fetch_external_tool_page(&gctx.pool, self.id, first, after.as_deref())
+                .await?,
         ))
     }
 
@@ -691,6 +675,10 @@ impl User {
                 first,
                 after.as_deref(),
             )
+            .await?,
+        ))
+    }
+
     /// The user's non-retired communication channels (Canvas
     /// `user_type.rb` communicationChannels). Self-or-admin: anyone else
     /// gets null (Canvas gates private channel data on self).
@@ -927,7 +915,10 @@ impl Query {
         &self,
         ctx: &Context<'_>,
         account_id: ID,
-    ) -> Result<Option<Vec<grading_standards_account_notifications::AccountNotification>>, async_graphql::Error> {
+    ) -> Result<
+        Option<Vec<grading_standards_account_notifications::AccountNotification>>,
+        async_graphql::Error,
+    > {
         let gctx = ctx.data::<GraphQLContext>()?;
         if !gctx.is_admin() {
             return Ok(None);
@@ -935,13 +926,10 @@ impl Query {
         let raw: i64 = account_id
             .0
             .parse()
-            .map_err(|_| async_graphql::Error::new(format!("invalid account: {account_id}")))?;
+            .map_err(|_| async_graphql::Error::new(format!("invalid account: {}", account_id.0)))?;
         Ok(Some(
-            grading_standards_account_notifications::fetch_account_notifications(
-                &gctx.pool,
-                raw,
-            )
-            .await?,
+            grading_standards_account_notifications::fetch_account_notifications(&gctx.pool, raw)
+                .await?,
         ))
     }
 
@@ -955,10 +943,7 @@ impl Query {
         media_id: String,
     ) -> Result<Option<outcomes_media::MediaObject>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
-        Ok(
-            outcomes_media::fetch_media_object_for_caller(&gctx.pool, gctx, &media_id)
-                .await?,
-        )
+        outcomes_media::fetch_media_object_for_caller(&gctx.pool, gctx, &media_id).await
     }
 
     /// `enrollmentTerm(id: ID!)` — any authenticated caller may read the

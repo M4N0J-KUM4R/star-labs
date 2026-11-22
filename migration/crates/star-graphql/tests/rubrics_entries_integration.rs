@@ -107,7 +107,7 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     let _ = sqlx::query("DELETE FROM users WHERE email LIKE $1")
         .bind(format!("{prefix}%@test.local"))
         .execute(pool)
-    .await;
+        .await;
     let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
@@ -217,7 +217,11 @@ async fn rubrics_connection_returns_nested_canvas_shape() {
 
     let criteria = node["criteria"].as_array().expect("criteria");
     assert_eq!(criteria.len(), 2, "{body}");
-    assert_eq!(criteria[0]["id"], crit1.to_string(), "position order: {body}");
+    assert_eq!(
+        criteria[0]["id"],
+        crit1.to_string(),
+        "position order: {body}"
+    );
     assert_eq!(criteria[1]["id"], crit2.to_string(), "{body}");
     assert_eq!(criteria[0]["description"], "Thesis", "{body}");
     assert_eq!(criteria[0]["points"], 5.0, "{body}");
@@ -323,8 +327,7 @@ async fn discussion_topic_entries_connection_shape() {
     assert_eq!(second["userId"], student.to_string(), "{body}");
     assert_eq!(conn["pageInfo"]["hasNextPage"], false, "{body}");
     assert_eq!(
-        conn["pageInfo"]["endCursor"],
-        entry_edges[1]["cursor"],
+        conn["pageInfo"]["endCursor"], entry_edges[1]["cursor"],
         "{body}"
     );
 
