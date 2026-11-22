@@ -54,6 +54,7 @@ mod grading_standards_account_notifications;
 mod groups;
 mod modules;
 mod mutations;
+mod outcomes_media;
 mod mutations_batch_b;
 mod pages;
 mod quiz;
@@ -450,6 +451,41 @@ impl Course {
             )
             .await?,
         ))
+    }
+
+    /// Paginated learning outcomes linked to this course's groups
+    /// (LIMIT first+1, ORDER BY id). Canvas scopes outcomesConnection
+    /// through the account tree; star-lms has no account tree, so the
+    /// course's linked outcomes are the set (documented deviation).
+    /// Visibility inherited from course(id) — parity with the
+    /// star-outcomes REST handlers.
+    async fn outcomes_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<outcomes_media::LearningOutcomeConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            outcomes_media::fetch_course_outcome_page(
+                &gctx.pool,
+                self.id,
+                first,
+                after.as_deref(),
+            )
+            .await?,
+        ))
+    }
+
+    /// The course's outcome groups (0022 learning_outcome_groups, id
+    /// order), each carrying its linked outcomes. Visibility inherited
+    /// from course(id).
+    async fn outcome_groups(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Vec<outcomes_media::LearningOutcomeGroup>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(outcomes_media::fetch_course_outcome_groups(&gctx.pool, self.id).await?)
     }
 
     /// Paginated enabled external tools in this course (LIMIT first+1,
@@ -906,6 +942,22 @@ impl Query {
             )
             .await?,
         ))
+    }
+
+    /// `mediaObject(mediaId)` — a media object by its string id with
+    /// nested tracks (0098). Owner-scoped: null for missing/deleted
+    /// objects and for other users' media (self-or-admin, like the
+    /// user-scoped REST listing).
+    async fn media_object(
+        &self,
+        ctx: &Context<'_>,
+        media_id: String,
+    ) -> Result<Option<outcomes_media::MediaObject>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(
+            outcomes_media::fetch_media_object_for_caller(&gctx.pool, gctx, &media_id)
+                .await?,
+        )
     }
 
     /// `enrollmentTerm(id: ID!)` — any authenticated caller may read the
