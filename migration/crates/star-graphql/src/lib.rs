@@ -45,6 +45,7 @@ mod assignment;
 mod assignment_group;
 mod conversations;
 mod course_user_fields;
+mod discussion_entries;
 mod discussion_topic;
 mod files;
 mod grading_periods;
@@ -53,6 +54,7 @@ mod modules;
 mod mutations;
 mod pages;
 mod quiz;
+mod rubrics;
 mod submission;
 mod terms_sections;
 mod user_channels;
@@ -68,6 +70,7 @@ use groups::{GroupConnection, GroupSetConnection};
 use modules::ModuleConnection;
 use pages::PageConnection;
 use quiz::QuizConnection;
+use rubrics::RubricConnection;
 use terms_sections::{CourseSection, EnrollmentTerm};
 
 // ---------------------------------------------------------------------------
@@ -365,6 +368,23 @@ impl Course {
         Ok(
             grading_periods::fetch_course_grading_period_group(&gctx.pool, self.id).await?,
         )
+    }
+
+    /// Paginated rubrics in this course (LIMIT first+1, ORDER BY id), each
+    /// hydrated with its criteria and nested ratings (position-ordered —
+    /// Canvas `Rubric#rubric_criteria`). Deleted rubrics are filtered
+    /// (Canvas `Rubric.active`). Visibility inherited from `course(id)` —
+    /// parity with the star-search rubrics REST handler.
+    async fn rubrics_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<RubricConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            rubrics::fetch_rubric_page(&gctx.pool, self.id, first, after.as_deref()).await?,
+        ))
     }
 
     /// Paginated quizzes in this course (LIMIT first+1, ORDER BY id).

@@ -2,7 +2,7 @@
 //!
 //! Mirrors the conventions of the merged foundation slice in `lib.rs` and the
 //! assignment slice in `assignment.rs`: camelCase field names via the
-//! SimpleObject derive (`contextId`, `contextType`, `published`,
+//! Object impl (`contextId`, `contextType`, `published`,
 //! `discussionType`, `createdAt`), relay-style connection with
 //! `edges { cursor node }` + `pageInfo { hasNextPage endCursor }`, opaque
 //! cursors, `LIMIT first+1` ordered by id.
@@ -57,10 +57,13 @@ struct TopicRow {
 // ---------------------------------------------------------------------------
 
 /// Canvas GraphQL `Discussion` (subset of `discussion_type.rb`), exposed as
-/// `DiscussionTopic`. Field names are camelCased by the SimpleObject derive:
+/// `DiscussionTopic`. Field names are camelCased by the Object impl below:
 /// `id`, `contextId`, `contextType`, `title`, `message`, `published`,
-/// `locked`, `discussionType`, `createdAt`, `updatedAt`.
-#[derive(Debug, Clone, SimpleObject)]
+/// `locked`, `discussionType`, `createdAt`, `updatedAt`,
+/// `entriesConnection` (Canvas `discussionEntriesConnection` — the
+/// entry list nested under the topic, `DiscussionEntry` in the type
+/// inventory).
+#[derive(Debug, Clone)]
 pub struct DiscussionTopic {
     pub id: ID,
     /// Canvas `contextId` — the discussion's context. star-lms topics are
@@ -98,6 +101,74 @@ impl From<TopicRow> for DiscussionTopic {
         }
     }
 }
+
+/// Manual Object impl (the type used to be a SimpleObject; the nested
+/// `entriesConnection` field needs Context, so the derive became an impl).
+/// Field names camelCase exactly like the derive did.
+#[Object]
+impl DiscussionTopic {
+    async fn id(&self) -> &ID {
+        &self.id
+    }
+
+    async fn context_id(&self) -> &ID {
+        &self.context_id
+    }
+
+    async fn context_type(&self) -> &str {
+        &self.context_type
+    }
+
+    async fn title(&self) -> &str {
+        &self.title
+    }
+
+    async fn message(&self) -> Option<&str> {
+        self.message.as_deref()
+    }
+
+    async fn published(&self) -> bool {
+        self.published
+    }
+
+    async fn locked(&self) -> bool {
+        self.locked
+    }
+
+    async fn discussion_type(&self) -> &str {
+        &self.discussion_type
+    }
+
+    async fn created_at(&self) -> DateTime<Utc> {
+        self.created_at
+    }
+
+    async fn updated_at(&self) -> DateTime<Utc> {
+        self.updated_at
+    }
+
+    /// The topic's non-deleted entries, paginated (LIMIT first+1, ORDER BY
+    /// id). Visibility is inherited from whoever resolved the topic.
+    async fn entries_connection(
+        &self,
+        ctx: &async_graphql::Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<crate::discussion_entries::DiscussionEntryConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<crate::GraphQLContext>()?;
+        let raw = self.id.0.parse::<i64>().map_err(|_| async_graphql::Error::new("invalid topic id"))?;
+        Ok(Some(
+            crate::discussion_entries::fetch_topic_entries_page(
+                &gctx.pool,
+                raw,
+                first,
+                after.as_deref(),
+            )
+            .await?,
+        ))
+    }
+}
+
 
 /// Relay connection edge: `edges { cursor node }`.
 #[derive(Debug, Clone, SimpleObject)]
