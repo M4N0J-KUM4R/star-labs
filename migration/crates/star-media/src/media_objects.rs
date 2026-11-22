@@ -143,7 +143,8 @@ pub struct CreateBody {
     /// attachment twin sends `media_id` — accept both spellings.
     #[serde(alias = "media_id")]
     pub id: Option<String>,
-    #[serde(rename = "type")]
+    /// The Kaltura media type; same dual spelling as the id.
+    #[serde(rename = "type", alias = "media_type")]
     pub media_type: Option<String>,
     pub title: Option<String>,
     pub user_entered_title: Option<String>,
@@ -750,25 +751,22 @@ fn scope_parts(scope: MediaScope, base: &str) -> (String, String) {
             // attachments of the context (media_objects_api#index ->
             // media_objects_for_context), not the object's own context
             // columns: an object belongs to a course when one of its
-            // video attachments does.
-            "id IN (SELECT a.media_entry_id FROM ( \
-                 SELECT media_entry_id FROM attachments \
-                 WHERE context_type = 'Course' AND context_id = $1 \
-                   AND content_type LIKE 'video/%' \
-                   AND media_entry_id IS NOT NULL) a \
+            // video attachments does. The attachment carries the Kaltura
+            // entry id (media_id), the IN-list wants the numeric id.
+            "id IN (SELECT m.id FROM attachments a \
                  JOIN media_objects m ON m.media_id = a.media_entry_id \
-                 WHERE a.media_entry_id IS NOT NULL)"
+                 WHERE a.context_type = 'Course' AND a.context_id = $1 \
+                   AND a.content_type LIKE 'video/%' \
+                   AND a.media_entry_id IS NOT NULL)"
                 .to_string(),
             format!("{base}/api/v1/courses/{id}/media_attachments"),
         ),
         MediaScope::Group(id) => (
-            "id IN (SELECT a.media_entry_id FROM ( \
-                 SELECT media_entry_id FROM attachments \
-                 WHERE context_type = 'Group' AND context_id = $1 \
-                   AND content_type LIKE 'video/%' \
-                   AND media_entry_id IS NOT NULL) a \
+            "id IN (SELECT m.id FROM attachments a \
                  JOIN media_objects m ON m.media_id = a.media_entry_id \
-                 WHERE a.media_entry_id IS NOT NULL)"
+                 WHERE a.context_type = 'Group' AND a.context_id = $1 \
+                   AND a.content_type LIKE 'video/%' \
+                   AND a.media_entry_id IS NOT NULL)"
                 .to_string(),
             format!("{base}/api/v1/groups/{id}/media_attachments"),
         ),
