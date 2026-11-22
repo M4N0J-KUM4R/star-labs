@@ -5975,6 +5975,237 @@ async fn destroy_peer_review(
     })))
 }
 
+/// Render peer review rows with the shared `index` shape (include[]=user).
+async fn render_peer_reviews(
+    pool: &PgPool,
+    query: &PeerReviewQuery,
+    reviews: Vec<PeerReview>,
+) -> Result<Vec<serde_json::Value>, ApiError> {
+    let mut entries = Vec::with_capacity(reviews.len());
+    for review in reviews {
+        let mut entry = serde_json::json!({
+            "id": review.id,
+            "user_id": review.user_id,
+            "assessor_id": review.assessor_id,
+            "asset_id": review.asset_id,
+            "asset_type": review.asset_type,
+            "workflow_state": review.workflow_state,
+        });
+        if query.include_user {
+            entry["user"] = user_display(pool, review.user_id).await?;
+            entry["assessor"] = user_display(pool, review.assessor_id).await?;
+        }
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
+/// GET /sections/{sectionId}/assignments/{assignmentId}/peer_reviews and
+/// GET .../submissions/{submissionId}/peer_reviews — Canvas `index` twins.
+/// `get_course_from_section` resolves the course before the shared index.
+async fn list_section_peer_reviews(
+    State(state): State<AppState>,
+    Path(path): Path<Vec<i64>>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let Some((&section_id, rest)) = path.split_first() else {
+        return Err(ApiError::NotFound);
+    };
+    let course_id = load_section_course(&state.db, section_id).await?;
+    let mut resolved = vec![course_id];
+    resolved.extend_from_slice(rest);
+    list_peer_reviews(State(state), Path(resolved), RawQuery(raw_query), auth).await
+}
+
+/// POST /sections/{sectionId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
+/// — Canvas `create` twin for a section context.
+async fn create_section_peer_review(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, submission_id)): Path<(i64, i64, i64)>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    create_peer_review(
+        State(state),
+        Path((course_id, assignment_id, submission_id)),
+        RawQuery(raw_query),
+        auth,
+        body,
+    )
+    .await
+}
+
+/// DELETE /sections/{sectionId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
+/// — Canvas `destroy` twin for a section context.
+async fn destroy_section_peer_review(
+    State(state): State<AppState>,
+    Path((section_id, assignment_id, submission_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let course_id = load_section_course(&state.db, section_id).await?;
+    destroy_peer_review(
+        State(state),
+        Path((course_id, assignment_id, submission_id)),
+        auth,
+        body,
+    )
+    .await
+}
+
+/// POST /courses/{courseId}/assignments/{assignmentId}/allocate
+///
+/// Canvas `PeerReviewsApiController#allocate` backed by
+/// `PeerReview::AllocationService`: the calling student is allocated other
+/// students' submissions to review until the assignment's
+/// `peer_review_count` is reached. The response contains the caller's
+/// ongoing (incomplete) reviews plus the newly allocated ones.
+async fn allocate_peer_review(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id)): Path<(i64, i64)>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
+
+    // Canvas validates the assignment settings first: peer reviews must be
+    // enabled with a positive per-student count.
+    let (peer_reviews, peer_review_count): (bool, i32) =
+        sqlx::query_as("SELECT peer_reviews, peer_review_count FROM assignments WHERE id = $1")
+            .bind(assignment_id)
+            .fetch_one(&state.db)
+            .await?;
+    if !peer_reviews || peer_review_count <= 0 {
+        return Err(ApiError::Forbidden);
+    }
+
+    // The assessor must be an active student of the course (Canvas checks
+    // the StudentEnrollment state; teachers and admins never allocate).
+    let is_student: bool = sqlx::query_scalar(
+        r#"
+        SELECT EXISTS (
+            SELECT 1 FROM enrollments
+            WHERE course_id = $1 AND user_id = $2 AND role = 'student'
+        )
+        "#,
+    )
+    .bind(course_id)
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await?;
+    if !is_student {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Reviews the caller already holds for this assignment.
+    let assigned: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(*) FROM assessment_requests ar
+        JOIN submissions s ON s.id = ar.asset_id
+        WHERE s.assignment_id = $1 AND ar.assessor_id = $2
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await?;
+    if assigned >= i64::from(peer_review_count) {
+        // Canvas: "You have been assigned all required peer reviews".
+        return Err(ApiError::Forbidden);
+    }
+
+    // Ongoing (incomplete) reviews are returned together with new ones.
+    let ongoing: Vec<PeerReview> = sqlx::query_as(
+        r#"
+        SELECT ar.id, ar.user_id, ar.assessor_id, ar.asset_id, ar.asset_type, ar.workflow_state
+        FROM assessment_requests ar
+        JOIN submissions s ON s.id = ar.asset_id
+        WHERE s.assignment_id = $1 AND ar.assessor_id = $2 AND ar.workflow_state = 'assigned'
+        ORDER BY ar.id ASC
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    // Available submissions: another student's submitted work the caller has
+    // not been assigned yet, least-reviewed first (Canvas
+    // `select_submissions_to_allocate` sorts by review count, then date).
+    // star-lms marks "having a submission" by a non-null body.
+    let available: Vec<(i64, i64)> = sqlx::query_as(
+        r#"
+        SELECT s.id, s.user_id FROM submissions s
+        WHERE s.assignment_id = $1
+          AND s.user_id <> $2
+          AND s.body IS NOT NULL
+          AND NOT EXISTS (
+              SELECT 1 FROM assessment_requests ar
+              WHERE ar.asset_id = s.id AND ar.assessor_id = $2
+          )
+        ORDER BY (
+            SELECT COUNT(*) FROM assessment_requests ar2 WHERE ar2.asset_id = s.id
+        ) ASC, s.submitted_at ASC, s.id ASC
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await?;
+
+    if assigned == 0 && available.is_empty() {
+        // Canvas: "There are no peer reviews available to allocate to you."
+        return Err(ApiError::BadRequest(
+            "There are no peer reviews available to allocate to you.".into(),
+        ));
+    }
+
+    let remaining = (i64::from(peer_review_count) - assigned).max(0) as usize;
+    let mut requests = ongoing;
+    for (submission_id, reviewee_id) in available.into_iter().take(remaining) {
+        let review: PeerReview = sqlx::query_as(
+            r#"
+            INSERT INTO assessment_requests
+                (user_id, assessor_id, asset_id, asset_type, workflow_state)
+            VALUES ($1, $2, $3, 'Submission', 'assigned')
+            ON CONFLICT (asset_id, assessor_id) DO UPDATE
+            SET updated_at = now()
+            RETURNING id, user_id, assessor_id, asset_id, asset_type, workflow_state
+            "#,
+        )
+        .bind(reviewee_id)
+        .bind(auth.id)
+        .bind(submission_id)
+        .fetch_one(&state.db)
+        .await?;
+        requests.push(review);
+    }
+
+    // Keep the assignment's review counter in step (same mirror the manual
+    // create/destroy routes maintain).
+    sqlx::query(
+        r#"
+        UPDATE assignments
+        SET peer_review_count = (
+            SELECT COUNT(*) FROM assessment_requests ar
+            JOIN submissions s ON s.id = ar.asset_id
+            WHERE s.assignment_id = $1
+        ), updated_at = now()
+        WHERE id = $1
+        "#,
+    )
+    .bind(assignment_id)
+    .execute(&state.db)
+    .await?;
+
+    let query = parse_peer_review_query(raw_query.as_deref());
+    let entries = render_peer_reviews(&state.db, &query, requests).await?;
+    Ok(Json(entries))
+}
+
 // ---------------------------------------------------------------------------
 // Assignment overrides (Canvas AssignmentOverridesController)
 // ---------------------------------------------------------------------------
@@ -9054,6 +9285,27 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
             delete(destroy_peer_review),
+        )
+        // Canvas peer_reviews_api section twins (`get_course_from_section`).
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/peer_reviews",
+            get(list_section_peer_reviews),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
+            get(list_section_peer_reviews),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
+            post(create_section_peer_review),
+        )
+        .route(
+            "/sections/{sectionId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
+            delete(destroy_section_peer_review),
+        )
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/allocate",
+            post(allocate_peer_review),
         )
         // Canvas v1 nested aliases (same handlers, course-scoped paths)
         .route(
