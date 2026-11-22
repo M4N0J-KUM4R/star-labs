@@ -860,9 +860,6 @@ fn err_to_api(resp: Response) -> ApiError {
 
 pub fn lti_gaps_routes() -> Router<AppState> {
     Router::new()
-        // Lti::TokenController (already /api/lti prefixed in star-http).
-        .route("/api/lti/lti_2_token", get(lti_2_token))
-        .route("/api/lti/advantage_token", get(advantage_access_token))
         // Lti::FeatureFlagsController.
         .route(
             "/courses/{courseId}/feature_flags/{feature}",
@@ -872,11 +869,22 @@ pub fn lti_gaps_routes() -> Router<AppState> {
             "/accounts/{accountId}/feature_flags/{feature}",
             get(lti_account_feature_flag),
         )
+        // Lti::PublicJwkController.
+        .route("/developer_key/update_public_jwk", put(update_public_jwk))
+}
+
+/// The /api/lti-served half of the gap family — Canvas mounts these
+/// through the "/api/lti" route set (config/routes.rb:3109), outside
+/// /api/v1, so this router is merged into `lti_advantage_router()`
+/// (root-mounted in star-http), NOT into the /api/v1-nested crate router.
+pub fn lti_gaps_advantage_routes() -> Router<AppState> {
+    Router::new()
+        // Lti::TokenController.
+        .route("/api/lti/lti_2_token", get(lti_2_token))
+        .route("/api/lti/advantage_token", get(advantage_access_token))
         // Lti::UsersApiController (LTI-2, closed).
         .route("/api/lti/users/{id}", get(lti_users_show))
         .route("/api/lti/groups/{groupId}/users", get(lti_users_group_index))
-        // Lti::PublicJwkController.
-        .route("/developer_key/update_public_jwk", put(update_public_jwk))
         // Lti::MembershipServiceController.
         .route(
             "/api/lti/courses/{courseId}/membership_service",
@@ -889,10 +897,6 @@ pub fn lti_gaps_routes() -> Router<AppState> {
         // Lti::Ims::ToolConsumerProfileController.
         .route(
             "/api/lti/{context}/{contextId}/tool_consumer_profile",
-            get(tool_consumer_profile),
-        )
-        .route(
-            "/api/lti/{context}/{contextId}/tool_consumer_profile/{profileId}",
             get(tool_consumer_profile),
         )
         // Lti::Ims::NoticeHandlersController.

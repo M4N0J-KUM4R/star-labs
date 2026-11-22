@@ -109,6 +109,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Canvas serves the login/oauth2 family (auth, token, revoke, jwks)
         // at the top level, outside /api/v1 (config/routes.rb:3087-3094).
         .merge(star_auth::login_router())
+        // The sis/lti-security gap routes Canvas serves outside /api/v1
+        // (the "/api/sis" and "/api/lti" route sets) — root-mounted like
+        // the LTI Advantage family above.
+        .merge(star_auth::small_controllers_root_routes())
         .nest("/api/v1", api_router)
         // Canvas serves its GraphQL API at /api/graphql (outside /api/v1).
         .nest("/api/graphql", star_graphql::router())

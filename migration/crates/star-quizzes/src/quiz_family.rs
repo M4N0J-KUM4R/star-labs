@@ -29,7 +29,7 @@
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::routing::{get, post, put};
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -630,69 +630,6 @@ async fn quiz_submission_questions(
     })))
 }
 
-#[derive(Debug, Default, Deserialize)]
-pub struct AnswerPayload {
-    pub answer: Option<Value>,
-    pub flag: Option<bool>,
-}
-
-/// PUT /quiz_submissions/{quizSubmissionId}/questions/{questionId} —
-/// answer or flag a question (Canvas answer/flag/unflag actions share the
-/// route verb; `flag` selects the behavior).
-async fn answer_or_flag_question(
-    State(state): State<AppState>,
-    Path((submission_id, question_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-    Json(payload): Json<AnswerPayload>,
-) -> Result<Json<Value>, ApiError> {
-    let submission: Option<(i64, i64, String)> = sqlx::query_as(
-        "SELECT quiz_id, user_id, workflow_state FROM quiz_submissions WHERE id = $1",
-    )
-    .bind(submission_id)
-    .fetch_optional(&state.db)
-    .await?;
-    let (quiz_id, owner_id, workflow_state) = submission.ok_or(ApiError::NotFound)?;
-    if auth.id != owner_id {
-        return Err(ApiError::Forbidden);
-    }
-    if workflow_state == "complete" {
-        return Err(ApiError::BadRequest(
-            "cannot answer questions on a completed submission".into(),
-        ));
-    }
-    let question: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM quiz_questions WHERE id = $1 AND quiz_id = $2")
-            .bind(question_id)
-            .bind(quiz_id)
-            .fetch_optional(&state.db)
-            .await?;
-    if question.is_none() {
-        return Err(ApiError::NotFound);
-    }
-
-    // Canvas stores the answer in the submission snapshot (submission_data
-    // hash); the workspace keeps the event trail in quiz_submission_events
-    // and echoes the accepted answer.
-    sqlx::query(
-        "INSERT INTO quiz_submission_events \
-            (attempt, event_type, quiz_submission_id, event_data, created_at) \
-         VALUES (COALESCE((SELECT attempt FROM quiz_submissions WHERE id = $1), 1), \
-                 'question_answered', $1, $2, now())",
-    )
-    .bind(submission_id)
-    .bind(payload.answer.as_ref().map(Value::to_string))
-    .execute(&state.db)
-    .await?;
-
-    Ok(Json(json!({
-        "quiz_submission_questions": [{
-            "id": question_id,
-            "flagged": payload.flag.unwrap_or(false),
-            "answer": payload.answer.unwrap_or(Value::Null),
-        }],
-    })))
-}
-
 // ---------------------------------------------------------------------------
 // 7. Quizzes::QuizIpFiltersController
 // ---------------------------------------------------------------------------
@@ -853,10 +790,6 @@ pub fn quiz_family_routes() -> Router<AppState> {
         .route(
             "/quiz_submissions/{quizSubmissionId}/questions",
             get(quiz_submission_questions),
-        )
-        .route(
-            "/quiz_submissions/{quizSubmissionId}/questions/{questionId}",
-            put(answer_or_flag_question),
         )
         .route(
             "/courses/{courseId}/quizzes/{quizId}/ip_filters",

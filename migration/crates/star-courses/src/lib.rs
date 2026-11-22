@@ -4665,13 +4665,11 @@ async fn update_course_tab(
 // ---------------------------------------------------------------------------
 
 /// Build the courses router.
-mod misc_gaps;
 mod syllabus_api;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(syllabus_api::syllabus_api_routes())
-        .merge(misc_gaps::misc_gaps_routes())
         // Canvas AiExperiencesController / AiConversationsController.
         .merge(ai_experiences::router())
         // Canvas CustomGradebookColumnsController + gradebook filters.

@@ -292,6 +292,8 @@ pub fn verify_token(token: &str, secret: &str) -> Option<Claims> {
 mod progress_jwts;
 mod small_controllers;
 
+pub use small_controllers::small_controllers_root_routes;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(progress_jwts::progress_jwt_routes())

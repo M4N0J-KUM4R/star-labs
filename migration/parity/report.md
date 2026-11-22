@@ -6,8 +6,8 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 1340 | 1403 | 95.5% |
-| REST routes referenced from `ui/` | 484 | 503 | 96.2% |
+| REST API routes | 1311 | 1403 | 93.4% |
+| REST routes referenced from `ui/` | 469 | 503 | 93.2% |
 | GraphQL files | 1 | 390 | 0.3% |
 | GraphQL object types | 50 | 170 | 29.4% |
 | GraphQL mutations | 25 | 110 | 22.7% |
@@ -17,13 +17,13 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | js_env files | 0 | 124 | 0.0% |
 | Schema tables (vs 688 Canvas models) | 383 | 688 | n/a |
 
-Implemented REST route count: **1340 / 1403** (95.5%).
+Implemented REST route count: **1311 / 1403** (93.4%).
 
-Star registrations: 1565 route/method pairs from 1279 `.route(...)` calls (0 unparsed); 216 have no Canvas match and are listed as extras below.
+Star registrations: 1524 route/method pairs from 1248 `.route(...)` calls (0 unparsed); 205 have no Canvas match and are listed as extras below.
 
 Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 
-## Controllers with coverage (215)
+## Controllers with coverage (195)
 
 | Controller | Implemented | Total | Coverage |
 |---|---:|---:|---:|
@@ -167,18 +167,13 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `smart_search` | 3 | 3 | 100.0% |
 | `support_helpers/asset_processor` | 3 | 3 | 100.0% |
 | `terms` | 3 | 3 | 100.0% |
-| `app_center` | 2 | 2 | 100.0% |
-| `canvadoc_sessions` | 2 | 2 | 100.0% |
 | `canvas_career/user_experiences` | 2 | 2 | 100.0% |
 | `content_imports` | 2 | 2 | 100.0% |
-| `course_tag_conversion` | 2 | 2 | 100.0% |
+| `course_audit_api` | 2 | 2 | 100.0% |
 | `developer_keys` | 2 | 5 | 40.0% |
 | `discussion_topic_users` | 2 | 2 | 100.0% |
 | `gradebooks` | 2 | 2 | 100.0% |
 | `jwts` | 2 | 2 | 100.0% |
-| `learning_mastery_gradebook_settings_api` | 2 | 2 | 100.0% |
-| `live_assessments/assessments` | 2 | 2 | 100.0% |
-| `live_assessments/results` | 2 | 2 | 100.0% |
 | `lti/asset_processor` | 2 | 2 | 100.0% |
 | `lti/feature_flags` | 2 | 2 | 100.0% |
 | `lti/ims/asset_processor` | 2 | 2 | 100.0% |
@@ -189,11 +184,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `lti/membership_service` | 2 | 2 | 100.0% |
 | `lti/token` | 2 | 2 | 100.0% |
 | `lti/users_api` | 2 | 2 | 100.0% |
-| `microfrontends_release_tag_override` | 2 | 2 | 100.0% |
 | `moderation_set` | 2 | 2 | 100.0% |
-| `permissions_help` | 2 | 2 | 100.0% |
-| `planner` | 2 | 2 | 100.0% |
-| `plugins` | 2 | 2 | 100.0% |
 | `polling/poll_submissions` | 2 | 2 | 100.0% |
 | `progress` | 2 | 2 | 100.0% |
 | `quizzes/outstanding_quiz_submissions` | 2 | 2 | 100.0% |
@@ -209,24 +200,15 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `terms_api` | 2 | 2 | 100.0% |
 | `web_zip_exports` | 2 | 2 | 100.0% |
 | `what_if_grades_api` | 2 | 2 | 100.0% |
-| `accessibility_course_scans` | 1 | 1 | 100.0% |
-| `accessibility_course_statistics` | 1 | 1 | 100.0% |
 | `anonymous_provisional_grades` | 1 | 1 | 100.0% |
 | `assignment_extensions` | 1 | 1 | 100.0% |
 | `assignment_groups` | 1 | 1 | 100.0% |
 | `assignments` | 1 | 1 | 100.0% |
-| `comm_messages_api` | 1 | 1 | 100.0% |
 | `course_pacing/bulk_student_enrollment_paces_api` | 1 | 1 | 100.0% |
 | `course_pacing/pace_contexts_api` | 1 | 1 | 100.0% |
-| `developer_key_account_bindings` | 1 | 1 | 100.0% |
-| `disable_post_to_sis_api` | 1 | 1 | 100.0% |
 | `errors` | 1 | 1 | 100.0% |
 | `gradebook_settings` | 1 | 1 | 100.0% |
-| `history` | 1 | 1 | 100.0% |
-| `immersive_reader` | 1 | 1 | 100.0% |
 | `inst_access_tokens` | 1 | 1 | 100.0% |
-| `lmgb_user_details` | 1 | 1 | 100.0% |
-| `login` | 1 | 1 | 100.0% |
 | `lti/account_lookup` | 1 | 1 | 100.0% |
 | `lti/ims/progress` | 1 | 1 | 100.0% |
 | `lti/ims/scores` | 1 | 1 | 100.0% |
@@ -239,8 +221,6 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `quizzes/quiz_statistics` | 1 | 1 | 100.0% |
 | `quizzes/quiz_submission_files` | 1 | 1 | 100.0% |
 | `quizzes_next/quizzes_api` | 1 | 1 | 100.0% |
-| `scopes_api` | 1 | 1 | 100.0% |
-| `study_assist` | 1 | 1 | 100.0% |
 | `support_helpers/submission_lifecycle_manage` | 1 | 1 | 100.0% |
 
 ## GraphQL operation coverage
@@ -267,7 +247,7 @@ Renames mapped to Canvas names: `CourseSection` -> `Section`, `DiscussionTopic` 
 
 Star names with no Canvas counterpart (not counted): `AddConversationMessageInput`, `AssignmentConnection`, `AssignmentEdge`, `AssignmentGroupConnection`, `AssignmentGroupEdge`, `BatchBConversation`, `BatchBConversationMessage`, `BatchBDiscussionEntry`, `BatchBDiscussionTopic`, `BatchBError`, `BatchBGroup`, `BatchBGroupSet`, `BatchBModule`, `BatchBSubmission`, `BatchBSubmissionComment`, `BatchCError`, `BatchCLearningOutcome`, `BatchCLearningOutcomeGroup`, `BatchCNotificationPolicy`, `ConversationMessageConnection`, `ConversationMessageEdge`, `ConversationParticipantConnection`, `ConversationParticipantEdge`, `ConversationPayload`, `CreateAssignmentPayload`, `CreateConversationInput`, `CreateDiscussionEntryInput`, `CreateDiscussionTopicInput`, `CreateGroupInSetInput`, `CreateGroupSetInput`, `CreateLearningOutcomeGroupInput`, `CreateLearningOutcomeInput`, `CreateModuleInput`, `CreateSubmissionCommentInput`, `CreateSubmissionInput`, `DeleteConversationInput`, `DeleteDiscussionEntryInput`, `DeleteDiscussionTopicInput`, `DeleteLearningOutcomeGroupInput`, `DeleteLearningOutcomeInput`, `DeleteSubmissionCommentInput`, `DiscussionEntryConnection`, `DiscussionEntryEdge`, `DiscussionEntryPayload`, `DiscussionTopicConnection`, `DiscussionTopicEdge`, `DiscussionTopicPayload`, `DismissAccountNotificationInput`, `EnrollmentConnection`, `EnrollmentEdge`, `ExternalToolConnection`, `ExternalToolEdge`, `FolderConnection`, `FolderEdge`, `GroupConnection`, `GroupEdge`, `GroupMembershipConnection`, `GroupMembershipEdge`, `GroupPayload`, `GroupSetConnection`, `GroupSetEdge`, `GroupSetPayload`, `LearningOutcomeConnection`, `LearningOutcomeEdge`, `LearningOutcomeGroupPayload`, `LearningOutcomePayload`, `MarkSubmissionCommentsReadInput`, `ModuleConnection`, `ModuleEdge`, `ModuleItemConnection`, `ModuleItemEdge`, `ModulePayload`, `NotificationPreferencePayload`, `PageConnection`, `PageEdge`, `PageInfo`, `QuizConnection`, `QuizEdge`, `QuizQuestionConnection`, `QuizQuestionEdge`, `QuizSubmissionConnection`, `QuizSubmissionEdge`, `RubricAssessmentPayload`, `RubricConnection`, `RubricEdge`, `SaveRubricAssessmentInput`, `SubmissionCommentPayload`, `SubmissionConnection`, `SubmissionEdge`, `SubmissionPayload`, `SuccessPayload`, `UpdateAssignmentPayload`, `UpdateDiscussionEntryInput`, `UpdateDiscussionEntryPayload`, `UpdateDiscussionTopicInput`, `UpdateDiscussionTopicPayload`, `UpdateLearningOutcomeGroupInput`, `UpdateLearningOutcomeInput`, `UpdateNotificationPreferencesInput`, `UpdateSubmissionGradeInput`, `UpdatedDiscussionEntry`, `UpdatedDiscussionTopic`, `UserConnection`, `UserEdge`, `deleteConversation`, `deleteLearningOutcome`, `deleteLearningOutcomeGroup`.
 
-## Star routes with no Canvas match (216)
+## Star routes with no Canvas match (205)
 
 | Verb | Path | Crate |
 |---|---|---|
@@ -279,7 +259,6 @@ Star names with no Canvas counterpart (not counted): `AddConversationMessageInpu
 | POST | `/accounts/{accountId}/grading_periods` | `star-grading-standards` |
 | GET | `/accounts/{accountId}/grading_schemes` | `star-grading-standards` |
 | POST | `/accounts/{accountId}/grading_schemes` | `star-grading-standards` |
-| POST | `/accounts/{account_id}/outcome_imports/group/{learning_outcome_group_id}` | `star-outcomes` |
 | GET | `/accounts/{accountId}/role_overrides` | `star-permissions` |
 | PUT | `/accounts/{accountId}/role_overrides` | `star-permissions` |
 | PUT | `/accounts/{id}/settings` | `star-accounts` |
@@ -287,10 +266,7 @@ Star names with no Canvas counterpart (not counted): `AddConversationMessageInpu
 | DELETE | `/announcements/{id}` | `star-announcements` |
 | GET | `/announcements/{id}` | `star-announcements` |
 | PUT | `/announcements/{id}` | `star-announcements` |
-| GET | `/api/audit/course/accounts/{accountId}` | `star-auth` |
-| GET | `/api/audit/course/courses/{courseId}` | `star-auth` |
 | GET | `/api/lti/{context}/{contextId}/tool_consumer_profile` | `star-lti` |
-| GET | `/api/lti/{context}/{contextId}/tool_consumer_profile/{profileId}` | `star-lti` |
 | GET | `/api/sis/{context}/{contextId}/assignments` | `star-auth` |
 | DELETE | `/assignment_overrides/{id}` | `star-assignments` |
 | GET | `/assignment_overrides/{id}` | `star-assignments` |
@@ -350,12 +326,10 @@ Star names with no Canvas counterpart (not counted): `AddConversationMessageInpu
 | POST | `/courses/{id}/gradebook/speedgrader/grade` | `star-ui` |
 | GET | `/courses/{id}/grades` | `star-ui` |
 | POST | `/courses/{courseId}/groups` | `star-groups` |
-| GET | `/courses/{courseId}/mastery_paths/stats/{stat}` | `star-courses` |
 | DELETE | `/courses/{courseId}/modules/items/{itemId}` | `star-modules` |
 | GET | `/courses/{courseId}/modules/items/{itemId}` | `star-modules` |
 | PUT | `/courses/{courseId}/modules/items/{itemId}` | `star-modules` |
 | POST | `/courses/{courseId}/outcome_groups` | `star-outcomes` |
-| POST | `/courses/{course_id}/outcome_imports/group/{learning_outcome_group_id}` | `star-outcomes` |
 | GET | `/courses/{courseId}/outcomes` | `star-outcomes` |
 | POST | `/courses/{courseId}/outcomes` | `star-outcomes` |
 | GET | `/courses/{id}/quizzes/new` | `star-ui` |
@@ -434,8 +408,6 @@ Star names with no Canvas counterpart (not counted): `AddConversationMessageInpu
 | DELETE | `/pages/{id}` | `star-pages` |
 | GET | `/pages/{id}` | `star-pages` |
 | PUT | `/pages/{id}` | `star-pages` |
-| POST | `/planner/items` | `star-courses` |
-| PUT | `/quiz_submissions/{quizSubmissionId}/questions/{questionId}` | `star-quizzes` |
 | DELETE | `/quizzes/{id}` | `star-quizzes` |
 | GET | `/quizzes/{id}` | `star-quizzes` |
 | PUT | `/quizzes/{id}` | `star-quizzes` |
@@ -479,9 +451,6 @@ Star names with no Canvas counterpart (not counted): `AddConversationMessageInpu
 | PUT | `/users/self/profile` | `star-users` |
 | PUT | `/users/{user_id}/communication_channels/{type}/{address}/notification_preferences` | `star-notifications` |
 | PUT | `/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}` | `star-notifications` |
-| DELETE | `/users/{userId}/custom_data/{*scope}` | `star-users` |
-| GET | `/users/{userId}/custom_data/{*scope}` | `star-users` |
-| PUT | `/users/{userId}/custom_data/{*scope}` | `star-users` |
 | GET | `/users/{userId}/folders/media` | `star-files` |
 | GET | `/users/{user_id}/notification_preference_categories` | `star-notifications` |
 | PUT | `/users/{user_id}/notification_preference_categories/{category}` | `star-notifications` |

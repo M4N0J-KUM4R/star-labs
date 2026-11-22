@@ -845,6 +845,7 @@ fn resolve_workflow_state(value: Option<&str>) -> Result<(&'static str, &'static
 /// Build the LTI router (mounted under `/api/v1` by star-http).
 pub fn router() -> Router<AppState> {
     Router::new()
+        // The /api/v1-served gap routes (feature flags, public JWK).
         .merge(lti_gaps::lti_gaps_routes())
         .route(
             "/accounts/{account_id}/lti_registrations",
@@ -985,6 +986,10 @@ pub fn lti_advantage_router() -> Router<AppState> {
         .merge(originality_reports::router())
         .merge(lti_api::router())
         .merge(tool_configurations::router())
+        // The /api/lti-served gap routes (Token, UsersApi,
+        // MembershipService, ToolConsumerProfile, NoticeHandlers,
+        // Progress, asset processors) — same route set, same root mount.
+        .merge(lti_gaps::lti_gaps_advantage_routes())
 }
 
 // ---------------------------------------------------------------------------

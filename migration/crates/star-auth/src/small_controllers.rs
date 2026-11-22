@@ -315,7 +315,19 @@ async fn audit_for_account(
 }
 
 /// Mount the batched routes.
+/// The /api/v1-served routes — merged into the crate router that star-http
+/// nests under /api/v1. The audit paths are v1-relative (the manifest
+/// normalizes them as `audit/course/...` after stripping /api/v1).
 pub fn small_controllers_routes() -> Router<AppState> {
+    Router::new()
+        .route("/audit/course/courses/{courseId}", get(audit_for_course))
+        .route("/audit/course/accounts/{accountId}", get(audit_for_account))
+}
+
+/// The routes Canvas serves OUTSIDE /api/v1 (the "/api/lti" and "/api/sis"
+/// route sets) — root-mounted by star-http, next to `login_router()`; the
+/// route strings carry their full paths.
+pub fn small_controllers_root_routes() -> Router<AppState> {
     Router::new()
         .route("/api/lti/security/jwks", get(lti_jwks))
         .route(
@@ -325,13 +337,5 @@ pub fn small_controllers_routes() -> Router<AppState> {
         .route(
             "/api/sis/{context}/{contextId}/assignments",
             get(sis_assignments),
-        )
-        .route(
-            "/api/audit/course/courses/{courseId}",
-            get(audit_for_course),
-        )
-        .route(
-            "/api/audit/course/accounts/{accountId}",
-            get(audit_for_account),
         )
 }

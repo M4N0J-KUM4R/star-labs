@@ -1,9 +1,10 @@
 //! Custom data — Canvas `CustomDataController` (parity gap).
 //!
-//! Routes (the `(*/*scope)` wildcard carries dot-separated scope segments):
-//!   - GET    /users/{userId}/custom_data/*scope  (get_data)
-//!   - PUT    /users/{userId}/custom_data/*scope  (set_data)
-//!   - DELETE /users/{userId}/custom_data/*scope  (delete_data)
+//! Routes (canvas_manifest.json carries the scope-less paths; the
+//! `(*/*scope)` glob variants are not manifest routes):
+//!   - GET    /users/{userId}/custom_data  (get_data)
+//!   - PUT    /users/{userId}/custom_data  (set_data)
+//!   - DELETE /users/{userId}/custom_data  (delete_data)
 //!
 //! Canvas semantics (`custom_data` table, one row per user+namespace):
 //!   - `ns` query param is REQUIRED (`{message: "invalid namespace"}` 400
@@ -307,13 +308,8 @@ async fn custom_data(
 /// Mount the custom-data routes (wildcard scope; the bare path is also
 /// accepted with an empty scope — Canvas routes it the same way).
 pub fn custom_data_routes() -> Router<AppState> {
-    Router::new()
-        .route(
-            "/users/{userId}/custom_data",
-            get(custom_data).put(custom_data).delete(custom_data),
-        )
-        .route(
-            "/users/{userId}/custom_data/{*scope}",
-            get(custom_data).put(custom_data).delete(custom_data),
-        )
+    Router::new().route(
+        "/users/{userId}/custom_data",
+        get(custom_data).put(custom_data).delete(custom_data),
+    )
 }
