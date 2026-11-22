@@ -114,8 +114,9 @@ async fn seed_portfolio(
     spam_status: Option<&str>,
 ) -> i64 {
     sqlx::query_scalar(
-        "INSERT INTO eportfolios (user_id, name, public, workflow_state, spam_status, uuid) \
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+        "INSERT INTO eportfolios \
+         (user_id, name, public, workflow_state, spam_status, uuid, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, now(), now()) RETURNING id",
     )
     .bind(user_id)
     .bind(name)
@@ -132,8 +133,9 @@ async fn seed_portfolio(
 /// the snapshot schema).
 async fn seed_category(pool: &PgPool, eportfolio_id: i64, name: &str, position: i32) -> i64 {
     sqlx::query_scalar(
-        "INSERT INTO eportfolio_categories (eportfolio_id, name, position, slug) \
-         VALUES ($1, $2, $3, $4) RETURNING id",
+        "INSERT INTO eportfolio_categories \
+         (eportfolio_id, name, position, slug, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, now(), now()) RETURNING id",
     )
     .bind(eportfolio_id)
     .bind(name)
@@ -155,8 +157,9 @@ async fn seed_entry(
 ) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO eportfolio_entries \
-         (eportfolio_id, eportfolio_category_id, name, position, content, slug) \
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+         (eportfolio_id, eportfolio_category_id, name, position, content, slug, \
+          created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, now(), now()) RETURNING id",
     )
     .bind(eportfolio_id)
     .bind(category_id)
