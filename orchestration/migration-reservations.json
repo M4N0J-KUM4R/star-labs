@@ -3,8 +3,8 @@
  "free": [
   "0111"
  ],
- "max_merged": "0233",
- "next_available": "0234",
+ "max_merged": "0234",
+ "next_available": "0235",
  "reservations": {
   "0001": {
    "issue": null,
@@ -769,6 +769,11 @@
   "0233": {
    "issue": null,
    "note": "star-assignments: module assignment overrides (parity gap)",
+   "status": "merged"
+  },
+  "0234": {
+   "issue": null,
+   "note": "star-gradebook: user_preferences + what-if scores (parity gap)",
    "status": "merged"
   }
  }
