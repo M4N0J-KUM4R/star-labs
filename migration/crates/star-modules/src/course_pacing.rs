@@ -500,7 +500,7 @@ fn restrict_enrollments_to_course_dates(settings: &Value) -> bool {
 }
 
 /// The root account of the course (Canvas `course.root_account`).
-async fn root_account_id(db: &PgPool, course: &CourseRow) -> Option<i64> {
+pub(crate) async fn root_account_id(db: &PgPool, course: &CourseRow) -> Option<i64> {
     let mut account_id = course.account_id;
     for _ in 0..16 {
         let Some(id) = account_id else { break };

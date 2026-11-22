@@ -195,7 +195,10 @@ async fn update_reset_and_histories() {
     let updated: Value = response.json();
     assert_eq!(updated["name"], "Renamed Tool");
     assert_eq!(updated["admin_nickname"], "Renicknamed");
-    assert_eq!(updated["overlay"]["privacy_level"], "public");
+    // Manual registrations merge the overlay into the configuration and
+    // CLEAR the stored overlay (update_registration_service.rb:100-121);
+    // the merged value shows up in overlaid_configuration below.
+    assert_eq!(updated["overlay"], json!({}));
     assert!(!updated["overlay_versions"].as_array().unwrap().is_empty());
     assert_eq!(updated["overlaid_configuration"]["privacy_level"], "public");
 
@@ -276,6 +279,22 @@ async fn bind_and_unbind_registration() {
     let admin_id = seed_user(&pool, &prefix, "admin", "admin").await;
     seed_account_admin(&pool, owner_account, admin_id).await;
     seed_account_admin(&pool, other_account, admin_id).await;
+
+    // Canvas `require_lti_deactivate_registrations_flag` — the unbind
+    // half of the journey is hidden (404) without the flag
+    // (registrations_controller.rb:2284-2292), so both roots carry it.
+    for account in [owner_account, other_account] {
+        sqlx::query(
+            "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
+             VALUES ('Account', $1, 'lti_deactivate_registrations', \
+                     'lti_deactivate_registrations', 'enabled') \
+             ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
+        )
+        .bind(account)
+        .execute(&pool)
+        .await
+        .expect("enable the deactivate flag");
+    }
 
     // A registration owned by the first account, bound into the second.
     let registration = create_registration(
@@ -742,7 +761,7 @@ async fn client_id_utid_domain_and_install_status() {
     let body: Value = response.json();
     let duplicates = body["duplicates"].as_array().unwrap();
     assert_eq!(duplicates.len(), 1);
-    assert_eq!(duplicates[0]["id"], id.to_string());
+    assert_eq!(duplicates[0]["id"], json!(id));
 
     // install_status: installed directly in this account (:1543-1635).
     let response = server

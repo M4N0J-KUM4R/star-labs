@@ -60,8 +60,8 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 use crate::course_pacing::{
-    course_paces_enabled, load_course, require_content_right, require_feature_flag, ContentRight,
-    CourseRow,
+    course_paces_enabled, load_course, require_content_right, require_feature_flag, root_account_id,
+    ContentRight, CourseRow,
 };
 use crate::pace_contexts::overdue_user_ids;
 
@@ -608,7 +608,13 @@ async fn create_in_context(
             (None, enrollment_user_id(db, enrollment_id).await?)
         }
     };
-    let root_account_id = template.as_ref().and_then(|pace| pace.root_account_id);
+    // Canvas falls back to the course's root account when no template
+    // pace exists yet (an enrollment scope can run before any pace of the
+    // course exists).
+    let root_account_id = match template.as_ref().and_then(|pace| pace.root_account_id) {
+        Some(root_account_id) => Some(root_account_id),
+        None => root_account_id(db, course).await,
+    };
     let workflow_state = "unpublished";
     let exclude_weekends = template
         .as_ref()

@@ -235,9 +235,11 @@ async fn the_launch_definitions_of_a_course_are_listed() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_tool(&pool, &prefix, "Tool", "Course", course).await;
 
+    // The placements array is percent-encoded: a raw `[` / `"` is an
+    // invalid URI character for the test server's request builder.
     let resp = server
         .get(&format!(
-            "/courses/{course}/lti_apps/launch_definitions?placements=[\"course_navigation\"]"
+            "/courses/{course}/lti_apps/launch_definitions?placements=%5B%22course_navigation%22%5D"
         ))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;

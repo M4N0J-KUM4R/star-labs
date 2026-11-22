@@ -59,8 +59,8 @@
 //! `index_lti_context_controls_on_course_and_deployment`) already exist in
 //! migration `0226`.
 //!
-//! `lti_context_controls.created_at` / `updated_at` are `timestamp without
-//! time zone` (as created by `0224`), so they are read as `NaiveDateTime`
+//! `lti_context_controls.created_at` / `updated_at` were made
+//! `timestamptz` by migration `0228`, so they are read as `DateTime<Utc>`
 //! and written with `timezone('UTC', now())`.
 
 // The internal helpers of this module answer with a pre-rendered
@@ -78,7 +78,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer};
 use serde_json::{json, Map, Value};
 use sqlx::PgPool;
@@ -139,8 +139,8 @@ struct ContextControlRow {
     workflow_state: String,
     created_by_id: Option<i64>,
     updated_by_id: Option<i64>,
-    created_at: NaiveDateTime,
-    updated_at: NaiveDateTime,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
 }
 
 /// A row of `lti_deployments` — the workspace's stand-in for Canvas'
@@ -1004,8 +1004,8 @@ fn context_control_json(
         "registration_id": if templates { control.app_id } else { Some(control.registration_id) },
         "deployment_id": control.deployment_id,
         "workflow_state": control.workflow_state,
-        "created_at": DateTime::<Utc>::from_naive_utc_and_offset(control.created_at, Utc),
-        "updated_at": DateTime::<Utc>::from_naive_utc_and_offset(control.updated_at, Utc),
+        "created_at": control.created_at,
+        "updated_at": control.updated_at,
         "available": control.available,
         "path": control.path,
         "context_name": attrs.context_name,
