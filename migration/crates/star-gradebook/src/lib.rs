@@ -537,7 +537,11 @@ async fn update_column(
     .bind(course_id)
     .fetch_optional(&state.db)
     .await?;
-    let existing = existing.ok_or(ApiError::NotFound)?;
+    // Canvas `not_deleted.find(params[:id])` — a missing/deleted column is
+    // the Canvas JSON 404 (ApiError's own IntoResponse is plain text).
+    let Some(existing) = existing else {
+        return Ok(canvas_not_found());
+    };
 
     let params = payload.column.unwrap_or(ColumnParams {
         title: None,

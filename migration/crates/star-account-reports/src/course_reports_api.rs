@@ -176,8 +176,9 @@ async fn create_report(
 
     let row: CourseReportRow = sqlx::query_as(
         "INSERT INTO course_reports \
-             (course_id, user_id, report_type, workflow_state, parameters, progress) \
-         VALUES ($1, $2, $3, 'created', $4, 0) \
+             (course_id, user_id, report_type, workflow_state, parameters, progress, \
+              created_at, updated_at) \
+         VALUES ($1, $2, $3, 'created', $4, 0, now(), now()) \
          RETURNING id, course_id, user_id, report_type, workflow_state, parameters, \
                    start_at, end_at, created_at",
     )

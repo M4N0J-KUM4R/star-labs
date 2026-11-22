@@ -127,8 +127,9 @@ async fn seed_report(
 ) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO course_reports \
-             (course_id, user_id, report_type, workflow_state, progress) \
-         VALUES ($1, $2, $3, $4, 0) RETURNING id",
+             (course_id, user_id, report_type, workflow_state, progress, \
+              created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, 0, now(), now()) RETURNING id",
     )
     .bind(course_id)
     .bind(user_id)

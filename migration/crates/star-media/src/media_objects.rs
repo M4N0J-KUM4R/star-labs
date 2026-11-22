@@ -139,6 +139,9 @@ pub struct CreateQuery {
 #[derive(Debug, Deserialize, Default)]
 pub struct CreateBody {
     pub context_code: Option<String>,
+    /// The Kaltura entry id; `/media_objects` clients send `id`, the
+    /// attachment twin sends `media_id` — accept both spellings.
+    #[serde(alias = "media_id")]
     pub id: Option<String>,
     #[serde(rename = "type")]
     pub media_type: Option<String>,
@@ -743,11 +746,30 @@ fn scope_parts(scope: MediaScope, base: &str) -> (String, String) {
             format!("{base}/api/v1/media_attachments"),
         ),
         MediaScope::Course(id) => (
-            "context_type = 'Course' AND context_id = $1".to_string(),
+            // Canvas scopes the course listing through the video
+            // attachments of the context (media_objects_api#index ->
+            // media_objects_for_context), not the object's own context
+            // columns: an object belongs to a course when one of its
+            // video attachments does.
+            "id IN (SELECT a.media_entry_id FROM ( \
+                 SELECT media_entry_id FROM attachments \
+                 WHERE context_type = 'Course' AND context_id = $1 \
+                   AND content_type LIKE 'video/%' \
+                   AND media_entry_id IS NOT NULL) a \
+                 JOIN media_objects m ON m.media_id = a.media_entry_id \
+                 WHERE a.media_entry_id IS NOT NULL)"
+                .to_string(),
             format!("{base}/api/v1/courses/{id}/media_attachments"),
         ),
         MediaScope::Group(id) => (
-            "context_type = 'Group' AND context_id = $1".to_string(),
+            "id IN (SELECT a.media_entry_id FROM ( \
+                 SELECT media_entry_id FROM attachments \
+                 WHERE context_type = 'Group' AND context_id = $1 \
+                   AND content_type LIKE 'video/%' \
+                   AND media_entry_id IS NOT NULL) a \
+                 JOIN media_objects m ON m.media_id = a.media_entry_id \
+                 WHERE a.media_entry_id IS NOT NULL)"
+                .to_string(),
             format!("{base}/api/v1/groups/{id}/media_attachments"),
         ),
     }

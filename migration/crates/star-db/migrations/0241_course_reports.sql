@@ -36,3 +36,10 @@ CREATE INDEX IF NOT EXISTS idx_course_reports_course_type_user
 -- created purely from the course context (no account hierarchy on the
 -- row); the column relaxes to nullable so the API inserts pass.
 ALTER TABLE course_reports ALTER COLUMN root_account_id DROP NOT NULL;
+
+-- The 0223 dump declares created_at/updated_at NOT NULL without a
+-- default; API-created rows supply them explicitly, and a table default
+-- keeps every future writer safe.
+ALTER TABLE course_reports
+    ALTER COLUMN created_at SET DEFAULT now(),
+    ALTER COLUMN updated_at SET DEFAULT now();
