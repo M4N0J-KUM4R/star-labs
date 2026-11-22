@@ -122,10 +122,17 @@ async fn load_media_object(
         return Err(ApiError::NotFound);
     };
     // An attachment route addresses the media object the attachment belongs
-    // to.
+    // to. Metadata-created objects carry no attachment row, so the route
+    // key doubles as the media-object id (Canvas resolves the attachment to
+    // its media object; without an attachment the id is the object's).
     if let Some(attachment_id) = attachment_id {
-        if row.attachment_id != Some(attachment_id) {
+        if row.attachment_id.is_none() && row.id != attachment_id {
             return Err(ApiError::NotFound);
+        }
+        if let Some(row_attachment) = row.attachment_id {
+            if row_attachment != attachment_id {
+                return Err(ApiError::NotFound);
+            }
         }
     }
     Ok(row)

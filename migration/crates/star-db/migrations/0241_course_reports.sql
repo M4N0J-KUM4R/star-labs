@@ -31,3 +31,8 @@ ALTER TABLE course_reports
 
 CREATE INDEX IF NOT EXISTS idx_course_reports_course_type_user
     ON course_reports (course_id, report_type, user_id);
+
+-- 0223 declares root_account_id NOT NULL, but star course reports are
+-- created purely from the course context (no account hierarchy on the
+-- row); the column relaxes to nullable so the API inserts pass.
+ALTER TABLE course_reports ALTER COLUMN root_account_id DROP NOT NULL;

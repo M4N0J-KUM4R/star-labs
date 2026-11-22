@@ -1225,10 +1225,22 @@ async fn create_media_object_route(
         .as_ref()
         .and_then(|body| body.context_code.clone())
         .or_else(|| query.context_code.clone());
+    // Without a context the create behaves like POST /media_attachments
+    // (Canvas media_objects_api#create falls back to the attachment
+    // semantics: a user-scoped object, no context resolution).
     let Some(context_code) = context_code else {
-        return Err(ApiError::BadRequest(
-            "context_code parameter is required".to_string(),
-        ));
+        let (status, body) = crate::create_media_object_like_attachment(
+            &state,
+            &auth,
+            body.as_ref().and_then(|b| b.id.clone()),
+            body.as_ref()
+                .and_then(|b| b.media_type.clone())
+                .or_else(|| query.media_type.clone()),
+            body.as_ref().and_then(|b| b.title.clone()),
+            body.as_ref().and_then(|b| b.user_entered_title.clone()),
+        )
+        .await?;
+        return Ok((status, body).into_response());
     };
 
     // Canvas `Context.find_by_asset_string(params[:context_code])` -> nil, and

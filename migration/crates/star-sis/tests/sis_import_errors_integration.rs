@@ -72,11 +72,16 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
 }
 
 async fn seed_account(pool: &PgPool, prefix: &str) -> i64 {
-    sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
-        .bind(format!("{prefix}-account"))
-        .fetch_one(pool)
-        .await
-        .expect("seed account")
+    // A root account with SIS imports enabled (Canvas enables them on
+    // every root account — Account#enable_sis_imports).
+    sqlx::query_scalar(
+        "INSERT INTO accounts (name, allow_sis_import) \
+         VALUES ($1, true) RETURNING id",
+    )
+    .bind(format!("{prefix}-account"))
+    .fetch_one(pool)
+    .await
+    .expect("seed account")
 }
 
 async fn seed_account_admin(pool: &PgPool, account_id: i64, user_id: i64) {
