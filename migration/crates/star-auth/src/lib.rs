@@ -289,8 +289,11 @@ pub fn verify_token(token: &str, secret: &str) -> Option<Claims> {
 // Router + handlers
 // ---------------------------------------------------------------------------
 
+mod progress_jwts;
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(progress_jwts::progress_jwt_routes())
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
         .route("/auth/me", get(me))
