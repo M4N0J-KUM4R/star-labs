@@ -6,8 +6,8 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 985 | 1403 | 70.2% |
-| REST routes referenced from `ui/` | 360 | 503 | 71.6% |
+| REST API routes | 990 | 1403 | 70.6% |
+| REST routes referenced from `ui/` | 361 | 503 | 71.8% |
 | GraphQL files | 1 | 390 | 0.3% |
 | GraphQL object types | 28 | 170 | 16.5% |
 | GraphQL mutations | 2 | 110 | 1.8% |
@@ -17,9 +17,9 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | js_env files | 0 | 124 | 0.0% |
 | Schema tables (vs 688 Canvas models) | 370 | 688 | n/a |
 
-Implemented REST route count: **985 / 1403** (70.2%).
+Implemented REST route count: **990 / 1403** (70.6%).
 
-Star registrations: 1195 route/method pairs from 986 `.route(...)` calls (0 unparsed); 208 have no Canvas match and are listed as extras below.
+Star registrations: 1200 route/method pairs from 991 `.route(...)` calls (0 unparsed); 208 have no Canvas match and are listed as extras below.
 
 Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 
@@ -58,6 +58,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `assignment_overrides` | 10 | 10 | 100.0% |
 | `calendar_events_api` | 10 | 15 | 66.7% |
 | `discussion_topics` | 10 | 10 | 100.0% |
+| `peer_reviews_api` | 9 | 9 | 100.0% |
 | `polling/poll_sessions` | 9 | 9 | 100.0% |
 | `account_notifications` | 8 | 8 | 100.0% |
 | `content_shares` | 8 | 8 | 100.0% |
@@ -104,7 +105,6 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `grading_standards_api` | 4 | 10 | 40.0% |
 | `lti/account_external_tools` | 4 | 4 | 100.0% |
 | `lti/lti_apps` | 4 | 4 | 100.0% |
-| `peer_reviews_api` | 4 | 9 | 44.4% |
 | `provisional_grades` | 4 | 4 | 100.0% |
 | `quizzes/quiz_reports` | 4 | 4 | 100.0% |
 | `submission_comments_api` | 4 | 4 | 100.0% |

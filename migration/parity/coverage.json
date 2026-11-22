@@ -386,8 +386,8 @@
       "total": 40
     },
     "peer_reviews_api": {
-      "implemented": 4,
-      "pct": 44.4,
+      "implemented": 9,
+      "pct": 100.0,
       "total": 9
     },
     "planner_notes": {
@@ -2022,8 +2022,24 @@
     {
       "action": "index",
       "controller": "peer_reviews_api",
+      "normalized_path": "sections/{}/assignments/{}/peer_reviews",
+      "path": "/api/v1/sections/:section_id/assignments/:assignment_id/peer_reviews",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "peer_reviews_api",
       "normalized_path": "courses/{}/assignments/{}/submissions/{}/peer_reviews",
       "path": "/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "peer_reviews_api",
+      "normalized_path": "sections/{}/assignments/{}/submissions/{}/peer_reviews",
+      "path": "/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews",
       "ui_referenced": false,
       "verb": "GET"
     },
@@ -2036,12 +2052,36 @@
       "verb": "POST"
     },
     {
+      "action": "create",
+      "controller": "peer_reviews_api",
+      "normalized_path": "sections/{}/assignments/{}/submissions/{}/peer_reviews",
+      "path": "/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
       "action": "destroy",
       "controller": "peer_reviews_api",
       "normalized_path": "courses/{}/assignments/{}/submissions/{}/peer_reviews",
       "path": "/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews",
       "ui_referenced": false,
       "verb": "DELETE"
+    },
+    {
+      "action": "destroy",
+      "controller": "peer_reviews_api",
+      "normalized_path": "sections/{}/assignments/{}/submissions/{}/peer_reviews",
+      "path": "/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "allocate",
+      "controller": "peer_reviews_api",
+      "normalized_path": "courses/{}/assignments/{}/allocate",
+      "path": "/api/v1/courses/:course_id/assignments/:assignment_id/allocate",
+      "ui_referenced": true,
+      "verb": "POST"
     },
     {
       "action": "index",
@@ -8872,22 +8912,22 @@
     "graphql_mutations_implemented": 2,
     "graphql_types": 170,
     "graphql_types_implemented": 28,
-    "implemented_rest_pct": 70.2,
-    "implemented_rest_routes": 985,
+    "implemented_rest_pct": 70.6,
+    "implemented_rest_routes": 990,
     "js_env_call_sites": 490,
     "js_env_files": 124,
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
     "star_extras": 208,
-    "star_route_calls": 986,
-    "star_route_registrations": 1195,
+    "star_route_calls": 991,
+    "star_route_registrations": 1200,
     "star_tables": 370,
     "star_unparsed_calls": 0,
     "ui_feature_dirs": 232,
     "ui_feature_dirs_implemented": 0,
-    "ui_referenced_implemented": 360,
-    "ui_referenced_pct": 71.6,
+    "ui_referenced_implemented": 361,
+    "ui_referenced_pct": 71.8,
     "ui_referenced_routes": 503
   },
   "unmatched_star_routes": [
