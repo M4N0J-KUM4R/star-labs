@@ -85,21 +85,37 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
 }
 
 async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
+    // Dedicated account per course (issue #75): courses.account_id defaults
+    // to the shared root account 1, which leaks account-scoped state (feature
+    // flags) between parallel tests.
+    let account: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO accounts (name)
+        VALUES ($1)
+        RETURNING id
+        "#,
+    )
+    .bind(format!("{prefix}-{name}Account"))
+    .fetch_one(pool)
+    .await
+    .expect("seed account");
     sqlx::query_scalar(
         r#"
-        INSERT INTO courses (name, course_code)
-        VALUES ($1, $2)
+        INSERT INTO courses (name, course_code, account_id)
+        VALUES ($1, $2, $3)
         RETURNING id
         "#,
     )
     .bind(name)
     .bind(format!("{prefix}-{name}"))
+    .bind(account)
     .fetch_one(pool)
     .await
     .expect("seed course")
 }
 
-/// Creates a course with the temporary-enrollments feature explicitly enabled.
+/// Creates a course with the temporary-enrollments feature explicitly enabled
+/// on its dedicated account.
 async fn seed_course_with_feature(pool: &PgPool, prefix: &str, name: &str) -> i64 {
     let course_id = seed_course(pool, prefix, name).await;
     // Ensure the account has the feature flag enabled; insert if absent.
@@ -164,6 +180,19 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
         .await;
     let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1")
         .bind(format!("{prefix}%"))
+        .execute(pool)
+        .await;
+    // feature_flags rows for the dedicated accounts (no FK; delete
+    // explicitly), then the accounts themselves (issue #75).
+    let _ = sqlx::query(
+        "DELETE FROM feature_flags WHERE context_type = 'Account' \
+           AND context_id IN (SELECT id FROM accounts WHERE name LIKE $1)",
+    )
+    .bind(format!("{prefix}-%"))
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE name LIKE $1")
+        .bind(format!("{prefix}-%"))
         .execute(pool)
         .await;
 }
@@ -696,10 +725,9 @@ async fn contract_bulk_temporary_status_limit_caps_at_100() {
 /// standard three-field status object (empty, 404, or structured differently).
 ///
 /// The disabled account is a dedicated one (passed via Canvas's optional
-/// `account_id` argument) rather than the shared root account: sibling tests
-/// in this binary enable `temporary_enrollments` on the root account and the
-/// shared `cleanup()` never removes feature_flags rows, so a root-account
-/// "absent flag" scenario cannot be isolated from parallel siblings.
+/// `account_id` argument): every account this binary seeds is dedicated and
+/// its feature_flags rows are removed by `cleanup()` (issue #75), so the
+/// disabled scenario is isolated from parallel siblings by construction.
 #[tokio::test]
 async fn contract_temporary_status_feature_disabled_returns_empty_or_not_found() {
     let Some((server, pool, prefix)) = setup().await else {
