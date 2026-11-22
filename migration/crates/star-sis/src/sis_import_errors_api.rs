@@ -34,7 +34,6 @@ use crate::sis_imports_api::{
 /// A `sis_import_errors` row.
 #[derive(Debug, sqlx::FromRow)]
 struct SisImportErrorRow {
-    id: i64,
     sis_batch_id: i64,
     file: Option<String>,
     message: Option<String>,
@@ -120,7 +119,7 @@ async fn errors_response(
     let offset = (page - 1) * per_page;
 
     let rows: Vec<SisImportErrorRow> = sqlx::query_as(
-        "SELECT id, sis_batch_id, file, message, row_info, row \
+        "SELECT sis_batch_id, file, message, row_info, row \
          FROM sis_import_errors \
          WHERE account_id = $1 AND ($2::bigint IS NULL OR sis_batch_id = $2) \
            AND (NOT $3 OR failure) \
