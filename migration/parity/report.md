@@ -6,8 +6,8 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 982 | 1403 | 70.0% |
-| REST routes referenced from `ui/` | 368 | 503 | 73.2% |
+| REST API routes | 1095 | 1403 | 78.0% |
+| REST routes referenced from `ui/` | 397 | 503 | 78.9% |
 | GraphQL files | 1 | 390 | 0.3% |
 | GraphQL object types | 28 | 170 | 16.5% |
 | GraphQL mutations | 2 | 110 | 1.8% |
@@ -15,15 +15,15 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | JS/JSX/TS/TSX files | 0 | 5459 | 0.0% |
 | ERB views | 0 | 475 | 0.0% |
 | js_env files | 0 | 124 | 0.0% |
-| Schema tables (vs 688 Canvas models) | 370 | 688 | n/a |
+| Schema tables (vs 688 Canvas models) | 375 | 688 | n/a |
 
-Implemented REST route count: **982 / 1403** (70.0%).
+Implemented REST route count: **1095 / 1403** (78.0%).
 
-Star registrations: 1202 route/method pairs from 989 `.route(...)` calls (0 unparsed); 218 have no Canvas match and are listed as extras below.
+Star registrations: 1313 route/method pairs from 1081 `.route(...)` calls (0 unparsed); 214 have no Canvas match and are listed as extras below.
 
 Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 
-## Controllers with coverage (116)
+## Controllers with coverage (142)
 
 | Controller | Implemented | Total | Coverage |
 |---|---:|---:|---:|
@@ -44,6 +44,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `conversations` | 16 | 16 | 100.0% |
 | `group_categories` | 16 | 16 | 100.0% |
 | `migration_issues` | 16 | 16 | 100.0% |
+| `rubrics_api` | 15 | 15 | 100.0% |
 | `content_exports_api` | 14 | 14 | 100.0% |
 | `enrollments_api` | 14 | 14 | 100.0% |
 | `blackout_dates` | 13 | 13 | 100.0% |
@@ -57,6 +58,8 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `assignment_overrides` | 10 | 10 | 100.0% |
 | `calendar_events_api` | 10 | 15 | 66.7% |
 | `discussion_topics` | 10 | 10 | 100.0% |
+| `media_objects` | 10 | 10 | 100.0% |
+| `peer_reviews_api` | 9 | 9 | 100.0% |
 | `polling/poll_sessions` | 9 | 9 | 100.0% |
 | `account_notifications` | 8 | 8 | 100.0% |
 | `content_shares` | 8 | 8 | 100.0% |
@@ -67,11 +70,13 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `lti/tool_proxy` | 8 | 8 | 100.0% |
 | `role_overrides` | 8 | 8 | 100.0% |
 | `authentication_providers` | 7 | 8 | 87.5% |
+| `collaborations` | 7 | 7 | 100.0% |
+| `conferences` | 7 | 7 | 100.0% |
+| `eportfolios_api` | 7 | 7 | 100.0% |
 | `jobs_v2` | 7 | 12 | 58.3% |
 | `notification_preferences` | 7 | 10 | 70.0% |
 | `quizzes/quiz_submissions_api` | 7 | 7 | 100.0% |
 | `quizzes/quizzes_api` | 7 | 7 | 100.0% |
-| `rubrics_api` | 7 | 15 | 46.7% |
 | `support_helpers/turnitin` | 7 | 7 | 100.0% |
 | `user_observees` | 7 | 7 | 100.0% |
 | `appointment_groups` | 6 | 8 | 75.0% |
@@ -79,6 +84,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `learn_platform` | 6 | 6 | 100.0% |
 | `lti/context_controls` | 6 | 6 | 100.0% |
 | `lti/resource_links` | 6 | 6 | 100.0% |
+| `media_tracks` | 6 | 6 | 100.0% |
 | `quizzes/quiz_groups` | 6 | 6 | 100.0% |
 | `release_notes` | 6 | 8 | 75.0% |
 | `sections` | 6 | 9 | 66.7% |
@@ -102,47 +108,67 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `discussion_entries` | 4 | 4 | 100.0% |
 | `favorites` | 4 | 8 | 50.0% |
 | `gradebook_history_api` | 4 | 4 | 100.0% |
+| `grading_period_sets` | 4 | 4 | 100.0% |
 | `grading_standards_api` | 4 | 10 | 40.0% |
 | `lti/account_external_tools` | 4 | 4 | 100.0% |
 | `lti/lti_apps` | 4 | 4 | 100.0% |
-| `peer_reviews_api` | 4 | 9 | 44.4% |
+| `outcome_proficiency_api` | 4 | 4 | 100.0% |
+| `outcomes_api` | 4 | 4 | 100.0% |
 | `provisional_grades` | 4 | 4 | 100.0% |
 | `quizzes/quiz_reports` | 4 | 4 | 100.0% |
+| `search` | 4 | 4 | 100.0% |
 | `submission_comments_api` | 4 | 4 | 100.0% |
+| `announcements_api` | 3 | 3 | 100.0% |
+| `assessment_question_banks` | 3 | 3 | 100.0% |
+| `authentication_audit_api` | 3 | 3 | 100.0% |
+| `brand_configs_api` | 3 | 3 | 100.0% |
+| `course_reports` | 3 | 3 | 100.0% |
+| `custom_data` | 3 | 3 | 100.0% |
 | `custom_gradebook_column_data_api` | 3 | 3 | 100.0% |
+| `discovery_pages_api` | 3 | 3 | 100.0% |
 | `epub_exports` | 3 | 3 | 100.0% |
 | `jobs` | 3 | 3 | 100.0% |
 | `late_policy` | 3 | 3 | 100.0% |
 | `lti/ims/authentication` | 3 | 3 | 100.0% |
-| `media_objects` | 3 | 10 | 30.0% |
+| `module_assignment_overrides` | 3 | 3 | 100.0% |
+| `observer_alerts_api` | 3 | 3 | 100.0% |
+| `rubric_assessments` | 3 | 3 | 100.0% |
+| `rubric_associations` | 3 | 3 | 100.0% |
 | `rubrics` | 3 | 3 | 100.0% |
+| `services_api` | 3 | 3 | 100.0% |
 | `shared_brand_configs` | 3 | 3 | 100.0% |
+| `smart_search` | 3 | 3 | 100.0% |
 | `terms` | 3 | 3 | 100.0% |
 | `canvas_career/user_experiences` | 2 | 2 | 100.0% |
 | `content_imports` | 2 | 2 | 100.0% |
 | `developer_keys` | 2 | 5 | 40.0% |
 | `discussion_topic_users` | 2 | 2 | 100.0% |
+| `gradebooks` | 2 | 2 | 100.0% |
+| `jwts` | 2 | 2 | 100.0% |
 | `lti/ims/authorization` | 2 | 2 | 100.0% |
 | `lti/ims/names_and_roles` | 2 | 2 | 100.0% |
 | `lti/ims/results` | 2 | 2 | 100.0% |
 | `moderation_set` | 2 | 2 | 100.0% |
 | `polling/poll_submissions` | 2 | 2 | 100.0% |
+| `progress` | 2 | 2 | 100.0% |
+| `security` | 2 | 2 | 100.0% |
 | `sub_accounts` | 2 | 2 | 100.0% |
 | `submissions` | 2 | 2 | 100.0% |
+| `syllabus_api` | 2 | 2 | 100.0% |
 | `terms_api` | 2 | 2 | 100.0% |
 | `web_zip_exports` | 2 | 2 | 100.0% |
+| `what_if_grades_api` | 2 | 2 | 100.0% |
 | `anonymous_provisional_grades` | 1 | 1 | 100.0% |
 | `assignment_extensions` | 1 | 1 | 100.0% |
 | `assignment_groups` | 1 | 1 | 100.0% |
 | `assignments` | 1 | 1 | 100.0% |
 | `errors` | 1 | 1 | 100.0% |
+| `gradebook_settings` | 1 | 1 | 100.0% |
 | `inst_access_tokens` | 1 | 1 | 100.0% |
 | `lti/account_lookup` | 1 | 1 | 100.0% |
 | `lti/ims/scores` | 1 | 1 | 100.0% |
-| `media_tracks` | 1 | 6 | 16.7% |
 | `profile` | 1 | 2 | 50.0% |
 | `quizzes/quiz_statistics` | 1 | 1 | 100.0% |
-| `search` | 1 | 4 | 25.0% |
 
 ## GraphQL operation coverage
 
@@ -168,7 +194,7 @@ Renames mapped to Canvas names: `CourseSection` -> `Section`, `DiscussionTopic` 
 
 Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `AssignmentEdge`, `ConversationMessageConnection`, `ConversationMessageEdge`, `ConversationParticipantConnection`, `ConversationParticipantEdge`, `CreateAssignmentPayload`, `DiscussionTopicConnection`, `DiscussionTopicEdge`, `EnrollmentConnection`, `EnrollmentEdge`, `FolderConnection`, `FolderEdge`, `GroupConnection`, `GroupEdge`, `GroupMembershipConnection`, `GroupMembershipEdge`, `GroupSetConnection`, `GroupSetEdge`, `ModuleConnection`, `ModuleEdge`, `ModuleItemConnection`, `ModuleItemEdge`, `PageConnection`, `PageEdge`, `PageInfo`, `QuizConnection`, `QuizEdge`, `QuizQuestionConnection`, `QuizQuestionEdge`, `QuizSubmissionConnection`, `QuizSubmissionEdge`, `SubmissionConnection`, `SubmissionEdge`, `UpdateAssignmentPayload`, `UserConnection`, `UserEdge`.
 
-## Star routes with no Canvas match (218)
+## Star routes with no Canvas match (214)
 
 | Verb | Path | Crate |
 |---|---|---|
@@ -187,6 +213,9 @@ Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `As
 | DELETE | `/announcements/{id}` | `star-announcements` |
 | GET | `/announcements/{id}` | `star-announcements` |
 | PUT | `/announcements/{id}` | `star-announcements` |
+| GET | `/api/audit/course/accounts/{accountId}` | `star-auth` |
+| GET | `/api/audit/course/courses/{courseId}` | `star-auth` |
+| GET | `/api/sis/{context}/{contextId}/assignments` | `star-auth` |
 | DELETE | `/assignment_overrides/{id}` | `star-assignments` |
 | GET | `/assignment_overrides/{id}` | `star-assignments` |
 | PUT | `/assignment_overrides/{id}` | `star-assignments` |
@@ -261,11 +290,6 @@ Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `As
 | PUT | `/courses/{courseId}/role_overrides` | `star-permissions` |
 | DELETE | `/courses/{courseId}/rubric_assessments/{id}/read` | `star-assignments` |
 | PUT | `/courses/{courseId}/rubric_assessments/{id}/read` | `star-assignments` |
-| GET | `/courses/{courseId}/rubrics/rubrics_by_import_id/{id}` | `star-rubrics` |
-| GET | `/courses/{courseId}/rubrics/upload_status` | `star-rubrics` |
-| GET | `/courses/{courseId}/rubrics/{rubricId}/assessments` | `star-rubrics` |
-| POST | `/courses/{courseId}/rubrics/{rubricId}/assessments` | `star-rubrics` |
-| POST | `/courses/{courseId}/rubrics/{rubricId}/associations` | `star-rubrics` |
 | POST | `/courses/{id}/settings` | `star-ui` |
 | PUT | `/courses/{courseId}/submissions/{submissionId}/read/{item}` | `star-assignments` |
 | GET | `/courses/{id}/users/add` | `star-ui` |
@@ -345,15 +369,10 @@ Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `As
 | POST | `/register` | `star-ui` |
 | GET | `/reset_password/{token}` | `star-ui` |
 | POST | `/reset_password/{token}` | `star-ui` |
-| DELETE | `/rubric_assessments/{id}` | `star-rubrics` |
 | GET | `/rubric_assessments/{id}` | `star-rubrics` |
-| PUT | `/rubric_assessments/{id}` | `star-rubrics` |
-| DELETE | `/rubric_associations/{id}` | `star-rubrics` |
 | DELETE | `/rubrics/{id}` | `star-rubrics` |
 | GET | `/rubrics/{id}` | `star-rubrics` |
 | PUT | `/rubrics/{id}` | `star-rubrics` |
-| GET | `/rubrics/{rubricId}/assessments` | `star-rubrics` |
-| POST | `/rubrics/{rubricId}/assessments` | `star-rubrics` |
 | DELETE | `/sections/{sectionId}/assignment_annotations/{id}/read` | `star-assignments` |
 | PUT | `/sections/{sectionId}/assignment_annotations/{id}/read` | `star-assignments` |
 | DELETE | `/sections/{sectionId}/rubric_assessments/{id}/read` | `star-assignments` |
@@ -384,6 +403,9 @@ Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `As
 | PUT | `/users/self/profile` | `star-users` |
 | PUT | `/users/{user_id}/communication_channels/{type}/{address}/notification_preferences` | `star-notifications` |
 | PUT | `/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}` | `star-notifications` |
+| DELETE | `/users/{userId}/custom_data/{*scope}` | `star-users` |
+| GET | `/users/{userId}/custom_data/{*scope}` | `star-users` |
+| PUT | `/users/{userId}/custom_data/{*scope}` | `star-users` |
 | GET | `/users/{userId}/folders/by_path/{*full_path}` | `star-files` |
 | GET | `/users/{userId}/folders/media` | `star-files` |
 | GET | `/users/{user_id}/notification_preference_categories` | `star-notifications` |
