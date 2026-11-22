@@ -17,6 +17,12 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 use std::collections::{HashMap, HashSet};
 
+// Server-rendered UI loaders + the shared grading write (star-ui, issue
+// #108): pub fns extracted the same way star-courses extracted
+// load_course_for_viewer, so the SpeedGrader page cannot fork the REST
+// grading validation.
+pub mod ui;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------

@@ -1,0 +1,31 @@
+# Gitleaks configuration (issue #106 security pass).
+#
+# The default gitleaks ruleset fires on high-entropy strings and known
+# token prefixes. This repository deliberately contains test fixtures that
+# LOOK like secrets but are not:
+#   - "github-actions-test-secret" / "test-jwt-secret" / "nightly-supabase-test-secret"
+#     hardcoded STAR_JWT_SECRET values in CI workflows and integration tests
+#     (plain-HTTP CI fixtures, never a production credential);
+#   - fake Bearer tokens minted by tests (JWT_SECRET const in each suite);
+#   - the example PAT pattern in worker documentation is NOT allowed —
+#     real tokens must never be committed.
+#
+# Only files that exist solely to construct fixtures are allowlisted; the
+# scan still covers everything else, including all Rust sources.
+
+title = "star-lms gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+  description = "CI/test fixtures with obviously fake secrets"
+  paths = [
+    # Dummy JWT secrets hardcoded into CI workflows and integration test
+    # suites (STAR_JWT_SECRET / JWT_SECRET fixtures, never real).
+    '''(^|/)migration/crates/.*/tests/.*\.rs$''',
+    '''^\.github/workflows/.*\.yml$''',
+    '''^browser-smoke/.*''',
+    # Scripts in orchestration/ that reference the CI fixture secret.
+    '''^orchestration/.*''',
+  ]

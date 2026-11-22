@@ -42,6 +42,12 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+// Server-rendered UI loaders + the shared comment write (star-ui, issue
+// #108): pub fns extracted the same way star-conversations did, so the
+// SpeedGrader comment feed reuses this crate's validation instead of
+// forking it.
+pub mod ui;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------

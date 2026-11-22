@@ -10,6 +10,27 @@
 //! - `GET    /api/v1/lti_registrations/{id}/deployments` — list deployments
 //! - `POST   /api/v1/lti_registrations/{id}/deployments` — create deployment
 //!
+//! Issue #69 deep slices (`lti/registrations_controller.rb`,
+//! `lti/deployments_controller.rb`):
+//! - `PUT    /accounts/{accountId}/lti_registrations/{id}` — update
+//! - `POST   /accounts/{accountId}/lti_registrations/{id}/bind` — bind
+//! - `DELETE /accounts/{accountId}/lti_registrations/{id}/bind` — unbind
+//! - `GET    /accounts/{accountId}/lti_registrations/{id}/history`
+//! - `GET    /accounts/{accountId}/lti_registrations/{id}/overlay_history`
+//! - `PUT    /accounts/{accountId}/lti_registrations/{id}/reset`
+//! - `POST   /accounts/{accountId}/lti_registrations/{id}/install_from_template`
+//! - `GET    /accounts/{accountId}/lti_registrations/{id}/latest_update_request`
+//! - `GET    /accounts/{accountId}/lti_registrations/{id}/update_requests/{updateRequestId}`
+//! - `PUT    /accounts/{accountId}/lti_registrations/{id}/update_requests/{updateRequestId}/apply`
+//! - `GET    /accounts/{accountId}/lti_registrations/{registrationId}/deployments/{deploymentId}`
+//! - `DELETE /accounts/{accountId}/lti_registrations/{registrationId}/deployments/{deploymentId}`
+//! - `GET    /accounts/{accountId}/lti_registrations/{registrationId}/deployments/{deploymentId}/context_search`
+//! - `GET    /accounts/{accountId}/lti_registration_by_client_id/{clientId}`
+//! - `GET    /accounts/{accountId}/lti_registrations/by_utid/{utid}`
+//! - `GET    /accounts/{accountId}/lti_registrations/check_domain_duplicates`
+//! - `POST   /accounts/{accountId}/lti_registrations/configuration/validate`
+//! - `GET    /accounts/{accountId}/lti_registrations/install_status/{clientId}`
+//!
 //! The Canvas-nested aliases
 //! `/accounts/{accountId}/lti_registrations/{id}` and
 //! `/accounts/{accountId}/lti_registrations/{registrationId}/deployments`
@@ -33,7 +54,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -44,10 +65,26 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod ags_auth;
+mod ags_results;
+mod ags_scores;
+mod authentication;
+mod context_controls;
 mod data_services;
+mod deep_linking;
 mod dynamic_registration;
 mod external_tools;
+pub mod launch_cache;
 mod line_items;
+mod lti_apps;
+mod lti_authorization;
+mod nrps;
+mod resource_links;
+
+/// Issue #95 — the opaque per-user LTI login_hint (Canvas
+/// `Lti::V1p1::Asset.opaque_identifier_for`), exposed so launch-flow callers
+/// and tests can construct hints the platform will accept.
+pub use authentication::opaque_login_hint;
 mod support_helpers;
 mod tool_proxy;
 mod tool_setting;
@@ -61,11 +98,11 @@ const MAX_ACCOUNT_TREE_DEPTH: i64 = 10;
 
 /// Canvas lists 15 registrations per page by default.
 const DEFAULT_PER_PAGE: i64 = 15;
-const MAX_PER_PAGE: i64 = 100;
+pub(crate) const MAX_PER_PAGE: i64 = 100;
 
 /// Canvas registration workflow states (`active | inactive | deleted`).
 const STATE_ACTIVE: &str = "active";
-const STATE_DELETED: &str = "deleted";
+pub(crate) const STATE_DELETED: &str = "deleted";
 
 // ---------------------------------------------------------------------------
 // Domain rows
@@ -74,9 +111,9 @@ const STATE_DELETED: &str = "deleted";
 /// A row of `lti_registrations`, in Canvas registration JSON shape (the
 /// `configuration` / `overlay` JSONB blobs are serialized separately).
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct RegistrationRow {
-    id: i64,
-    account_id: i64,
+pub(crate) struct RegistrationRow {
+    pub(crate) id: i64,
+    pub(crate) account_id: i64,
     root_account_id: Option<i64>,
     name: String,
     admin_nickname: Option<String>,
@@ -114,24 +151,25 @@ struct BindingRow {
 
 /// A row of `lti_deployments`, in Canvas deployment JSON shape.
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct DeploymentRow {
-    id: i64,
-    registration_id: i64,
-    deployment_id: String,
-    context_type: String,
-    context_id: i64,
-    context_name: Option<String>,
-    workflow_state: String,
+pub(crate) struct DeploymentRow {
+    pub(crate) id: i64,
+    pub(crate) registration_id: i64,
+    pub(crate) deployment_id: String,
+    pub(crate) context_type: String,
+    pub(crate) context_id: i64,
+    pub(crate) context_name: Option<String>,
+    pub(crate) workflow_state: String,
 }
 
 /// Columns selected for a [`RegistrationRow`], shared by the lookups.
-const REGISTRATION_COLUMNS: &str = "id, account_id, root_account_id, name, admin_nickname, \
+pub(crate) const REGISTRATION_COLUMNS: &str =
+    "id, account_id, root_account_id, name, admin_nickname, \
      vendor, description, icon_url, lti_version, dynamic_registration, internal_service, \
      lock_deploying, template_registration_id, workflow_state, configuration, overlay, \
      created_by_id, updated_by_id, created_at, updated_at";
 
 /// Columns selected for a [`DeploymentRow`].
-const DEPLOYMENT_COLUMNS: &str =
+pub(crate) const DEPLOYMENT_COLUMNS: &str =
     "id, registration_id, deployment_id, context_type, context_id, context_name, workflow_state";
 
 // ---------------------------------------------------------------------------
@@ -232,11 +270,82 @@ pub struct CreateDeploymentRequest {
     pub available: Option<bool>,
 }
 
+/// Body for `PUT /accounts/{accountId}/lti_registrations/{id}` — Canvas
+/// `update` permits `admin_nickname vendor name description workflow_state`
+/// (registrations_controller.rb:1637-1641) plus the configuration and
+/// overlay params and a change-log comment.
+#[derive(Debug, Deserialize, Default)]
+pub struct UpdateRegistrationRequest {
+    pub admin_nickname: Option<String>,
+    pub vendor: Option<String>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub workflow_state: Option<String>,
+    pub lock_deploying: Option<bool>,
+    pub configuration: Option<Value>,
+    pub overlay: Option<Value>,
+    pub comment: Option<String>,
+}
+
+/// Body for `POST .../lti_registrations/{id}/bind` — Canvas requires
+/// `workflow_state` to be exactly `on` or `off` (:1747-1780).
+#[derive(Debug, Deserialize)]
+pub struct BindRequest {
+    pub workflow_state: Option<String>,
+}
+
+/// Body for `PUT .../lti_registrations/{id}/update_requests/{id}/apply`
+/// (registrations_controller.rb:2096-2148).
+#[derive(Debug, Deserialize, Default)]
+pub struct ApplyUpdateRequest {
+    pub accepted: Option<bool>,
+    pub overlay: Option<Value>,
+    pub comment: Option<String>,
+}
+
+/// Query params for `GET .../lti_registrations/{id}/history` (Canvas
+/// paginates with `page` / `per_page`, default page size 10).
+#[derive(Debug, Deserialize, Default)]
+pub struct HistoryQuery {
+    pub page: Option<i64>,
+    pub per_page: Option<i64>,
+}
+
+/// Query params for `GET .../lti_registrations/{id}/overlay_history` —
+/// Canvas `limit` defaults to 10, max 100 (:1968-1983).
+#[derive(Debug, Deserialize, Default)]
+pub struct OverlayHistoryQuery {
+    pub limit: Option<i64>,
+}
+
+/// Query params for the deployment `context_search` endpoint
+/// (registrations_controller.rb:1864-1933).
+#[derive(Debug, Deserialize, Default)]
+pub struct ContextSearchQuery {
+    pub only_children_of: Option<i64>,
+    pub search_term: Option<String>,
+}
+
+/// Query params for `GET .../lti_registrations/check_domain_duplicates`
+/// — Canvas requires `domain` (:1312-1338).
+#[derive(Debug, Deserialize, Default)]
+pub struct DomainQuery {
+    pub domain: Option<String>,
+}
+
+/// Body for `POST .../lti_registrations/configuration/validate` — exactly one
+/// of `lti_configuration` or `url` (registrations_controller.rb:1244-1260).
+#[derive(Debug, Deserialize, Default)]
+pub struct ValidateConfigurationRequest {
+    pub lti_configuration: Option<Value>,
+    pub url: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Permission helpers (mirror star-accounts)
 // ---------------------------------------------------------------------------
 
-fn is_admin(auth: &AuthUser) -> bool {
+pub(crate) fn is_admin(auth: &AuthUser) -> bool {
     auth.role == "admin"
 }
 
@@ -254,7 +363,7 @@ async fn is_account_admin(pool: &PgPool, user_id: i64, account_id: i64) -> Resul
 
 /// Global admin OR account admin for the account or any ancestor, matching
 /// `can_access_account` in star-accounts.
-async fn can_manage_account(
+pub(crate) async fn can_manage_account(
     pool: &PgPool,
     auth: &AuthUser,
     account_id: i64,
@@ -287,7 +396,7 @@ async fn can_manage_account(
 }
 
 /// 404 when the account does not exist (Canvas `require_account_context`).
-async fn require_account(pool: &PgPool, account_id: i64) -> Result<(), ApiError> {
+pub(crate) async fn require_account(pool: &PgPool, account_id: i64) -> Result<(), ApiError> {
     let row: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = $1")
         .bind(account_id)
         .fetch_optional(pool)
@@ -296,7 +405,7 @@ async fn require_account(pool: &PgPool, account_id: i64) -> Result<(), ApiError>
 }
 
 /// Walk to the root of the account hierarchy (cycles are bounded).
-async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, ApiError> {
+pub(crate) async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, ApiError> {
     let mut current = account_id;
     for _ in 0..MAX_ACCOUNT_TREE_DEPTH {
         let row: Option<(Option<i64>,)> =
@@ -313,7 +422,7 @@ async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, ApiError
 }
 
 /// True when the account has no parent.
-async fn is_root_account(pool: &PgPool, account_id: i64) -> Result<bool, ApiError> {
+pub(crate) async fn is_root_account(pool: &PgPool, account_id: i64) -> Result<bool, ApiError> {
     let row: Option<(Option<i64>,)> =
         sqlx::query_as("SELECT parent_account_id FROM accounts WHERE id = $1")
             .bind(account_id)
@@ -323,7 +432,7 @@ async fn is_root_account(pool: &PgPool, account_id: i64) -> Result<bool, ApiErro
 }
 
 /// Require manage rights on the account that owns a registration.
-async fn require_registration_permission(
+pub(crate) async fn require_registration_permission(
     pool: &PgPool,
     auth: &AuthUser,
     registration: &RegistrationRow,
@@ -340,7 +449,10 @@ async fn require_registration_permission(
 // ---------------------------------------------------------------------------
 
 /// Fetch a registration that has not been soft-deleted (Canvas `.active`).
-async fn find_active_registration(pool: &PgPool, id: i64) -> Result<RegistrationRow, ApiError> {
+pub(crate) async fn find_active_registration(
+    pool: &PgPool,
+    id: i64,
+) -> Result<RegistrationRow, ApiError> {
     let sql = format!(
         "SELECT {REGISTRATION_COLUMNS} FROM lti_registrations \
          WHERE id = $1 AND workflow_state <> '{STATE_DELETED}'"
@@ -352,7 +464,7 @@ async fn find_active_registration(pool: &PgPool, id: i64) -> Result<Registration
 /// Fetch a registration scoped to the Canvas account path segment. Canvas
 /// renders `400 {errors: "registration does not belong to account"}` when the
 /// registration lives in a different account.
-async fn find_registration_in_account(
+pub(crate) async fn find_registration_in_account(
     pool: &PgPool,
     id: i64,
     account_id: i64,
@@ -371,7 +483,10 @@ async fn find_registration_in_account(
 // ---------------------------------------------------------------------------
 
 /// Canvas `user_json` subset used for `created_by` / `updated_by`.
-async fn user_summary(pool: &PgPool, user_id: Option<i64>) -> Result<Option<Value>, ApiError> {
+pub(crate) async fn user_summary(
+    pool: &PgPool,
+    user_id: Option<i64>,
+) -> Result<Option<Value>, ApiError> {
     let Some(user_id) = user_id else {
         return Ok(None);
     };
@@ -487,7 +602,7 @@ async fn registration_json(
 }
 
 /// Canvas `lti_deployment_json` shape.
-fn deployment_json(deployment: &DeploymentRow, root_account_deployment: bool) -> Value {
+pub(crate) fn deployment_json(deployment: &DeploymentRow, root_account_deployment: bool) -> Value {
     // Canvas hides "disabled"/"deleted" as-is and normalizes everything else
     // to "active".
     let workflow_state = match deployment.workflow_state.as_str() {
@@ -549,7 +664,9 @@ pub fn router() -> Router<AppState> {
         // Canvas-nested registration paths.
         .route(
             "/accounts/{account_id}/lti_registrations/{id}",
-            get(show_registration_scoped).delete(delete_registration_scoped),
+            get(show_registration_scoped)
+                .put(update_registration_scoped)
+                .delete(delete_registration_scoped),
         )
         .route(
             "/accounts/{account_id}/lti_registrations/{registration_id}/deployments",
@@ -564,10 +681,79 @@ pub fn router() -> Router<AppState> {
             "/lti_registrations/{id}/deployments",
             get(list_deployments).post(create_deployment),
         )
+        // Issue #69 — registration lifecycle (registrations_controller.rb).
+        .route(
+            "/accounts/{account_id}/lti_registrations/{registration_id}/bind",
+            post(bind_registration).delete(unbind_registration),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{registration_id}/history",
+            get(registration_history),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{registration_id}/overlay_history",
+            get(overlay_history),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{registration_id}/reset",
+            put(reset_registration),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{registration_id}/install_from_template",
+            post(install_from_template),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{registration_id}/latest_update_request",
+            get(latest_update_request),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{registration_id}/update_requests/{update_request_id}",
+            get(show_update_request),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{registration_id}/update_requests/{update_request_id}/apply",
+            put(apply_update_request),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{registration_id}/deployments/{deployment_id}",
+            get(show_deployment_scoped).delete(delete_deployment_scoped),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/{registration_id}/deployments/{deployment_id}/context_search",
+            get(deployment_context_search),
+        )
+        // Static siblings of {id} at the same tree position — matchit prefers
+        // the literal segments (same pattern as the `uuid` route in
+        // dynamic_registration.rs).
+        .route(
+            "/accounts/{account_id}/lti_registration_by_client_id/{client_id}",
+            get(show_registration_by_client_id),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/by_utid/{utid}",
+            get(show_registration_by_utid),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/check_domain_duplicates",
+            get(check_domain_duplicates),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/configuration/validate",
+            post(validate_configuration),
+        )
+        .route(
+            "/accounts/{account_id}/lti_registrations/install_status/{client_id}",
+            get(install_status),
+        )
+        .merge(context_controls::router())
+        .merge(lti_apps::router())
         .merge(external_tools::router())
         .merge(data_services::router())
         .merge(tool_proxy::router())
         .merge(support_helpers::router())
+        // Issue #95 — LTI resource links API (resource_links_controller.rb),
+        // served under /api/v1 like the other course-scoped routes.
+        .merge(resource_links::router())
 }
 
 /// Router for the Canvas `/api/lti` family (LTI Advantage services).
@@ -575,6 +761,9 @@ pub fn router() -> Router<AppState> {
 /// Canvas serves these routes outside `/api/v1` (`ApiRouteSet.draw(self,
 /// "/api/lti")`), so the paths carry the `/api/lti` prefix and the router is
 /// mounted at the application root — see `star-http/src/main.rs`.
+/// Test/dev helper: mint an LTI Advantage service token (see `ags_auth`).
+pub use ags_auth::mint_service_token as mint_service_token_for_tests;
+
 pub fn lti_advantage_router() -> Router<AppState> {
     Router::new()
         .merge(dynamic_registration::advantage_router())
@@ -582,6 +771,18 @@ pub fn lti_advantage_router() -> Router<AppState> {
         .merge(tool_proxy::advantage_router())
         .merge(tool_setting::router())
         .merge(external_tools::advantage_router())
+        // Issue #94 — LTI AGS scores/results and NRPS memberships.
+        .merge(ags_scores::router())
+        .merge(ags_results::router())
+        .merge(nrps::router())
+        // Issue #95 — LTI 1.3 launch flows: OIDC login initiation and
+        // authentication request (authentication_controller.rb), the LTI 2
+        // authorization server (authorization_controller.rb) and the deep
+        // linking content selection (deep_linking_controller.rb, served at
+        // the root like Canvas' default route set).
+        .merge(authentication::advantage_router())
+        .merge(lti_authorization::advantage_router())
+        .merge(deep_linking::advantage_router())
 }
 
 // ---------------------------------------------------------------------------
@@ -1039,4 +1240,1575 @@ fn generate_deployment_id(root_account_id: i64) -> String {
     let nanos = Utc::now().timestamp_nanos_opt().unwrap_or_default();
     let pid = std::process::id();
     format!("{root_account_id}:{nanos:x}{pid:x}")
+}
+
+// ---------------------------------------------------------------------------
+// Issue #69 — registration lifecycle handlers (registrations_controller.rb)
+// ---------------------------------------------------------------------------
+
+/// Canvas `render_error` (registrations_controller.rb:2238-2240):
+/// `422 { "errors": [{ "code", "message" }] }`.
+pub(crate) fn render_error(code: &str, message: &str) -> Response {
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(json!({ "errors": [{ "code": code, "message": message }] })),
+    )
+        .into_response()
+}
+
+/// Canvas `render_configuration_errors` (:2149-2151): `422 { "errors": [...] }`.
+fn configuration_error_list(errors: Vec<String>) -> Response {
+    (
+        StatusCode::UNPROCESSABLE_ENTITY,
+        Json(json!({ "errors": errors })),
+    )
+        .into_response()
+}
+
+/// The account chain from `account_id` up to (excluding) the root, farthest
+/// first — the display path Canvas builds for context_search
+/// (registrations_controller.rb:1922-1931, `tap(&:pop).reverse`).
+async fn display_path_names(
+    pool: &PgPool,
+    account_id: i64,
+    include_self: bool,
+) -> Result<Vec<String>, ApiError> {
+    let rows: Vec<(i64, String)> = sqlx::query_as(
+        "WITH RECURSIVE up AS ( \
+             SELECT id, name, parent_account_id FROM accounts WHERE id = $1 \
+             UNION ALL \
+             SELECT a.id, a.name, a.parent_account_id FROM accounts a \
+             JOIN up ON a.id = up.parent_account_id \
+         ) SELECT id, name FROM up",
+    )
+    .bind(account_id)
+    .fetch_all(pool)
+    .await?;
+    // rows are [self, parent, ..., root]; drop the root (last), drop self
+    // unless include_self, then reverse so the highest level comes first.
+    let mut chain: Vec<(i64, String)> = rows;
+    chain.pop(); // root
+    if !include_self && !chain.is_empty() {
+        chain.remove(0);
+    }
+    chain.reverse();
+    Ok(chain.into_iter().map(|(_, name)| name).collect())
+}
+
+/// Record an overlay version row (Canvas `Lti::OverlayVersion`).
+async fn record_overlay_version(
+    pool: &PgPool,
+    registration_id: i64,
+    account_id: i64,
+    root_account_id: i64,
+    overlay: &Value,
+    caused_by_reset: bool,
+    user_id: i64,
+) -> Result<(), ApiError> {
+    // The Canvas schema (migration 0224) keeps one Lti::Overlay row per
+    // registration+account with the live data, and versions reference it
+    // through the lti_overlay_id foreign key. The workspace keeps the live
+    // overlay on lti_registrations.overlay; the lti_overlays row is
+    // maintained in sync so the FK holds. diff stores the full new overlay
+    // snapshot (Canvas stores a JSON patch; the column is NOT NULL from the
+    // Canvas schema dump).
+    let existing: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM lti_overlays \
+         WHERE registration_id = $1 AND account_id = $2 AND workflow_state <> 'deleted' \
+         LIMIT 1",
+    )
+    .bind(registration_id)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+    let lti_overlay_id: i64 = match existing {
+        Some((overlay_row_id,)) => {
+            sqlx::query("UPDATE lti_overlays SET data = $3, updated_at = now() WHERE id = $2")
+                .bind(registration_id)
+                .bind(overlay_row_id)
+                .bind(overlay)
+                .execute(pool)
+                .await?;
+            overlay_row_id
+        }
+        None => {
+            sqlx::query_scalar(
+                "INSERT INTO lti_overlays \
+             (registration_id, account_id, root_account_id, workflow_state, data, \
+              created_at, updated_at) \
+             VALUES ($1, $2, $3, 'active', $4, now(), now()) RETURNING id",
+            )
+            .bind(registration_id)
+            .bind(account_id)
+            .bind(root_account_id)
+            .bind(overlay)
+            .fetch_one(pool)
+            .await?
+        }
+    };
+
+    sqlx::query(
+        "INSERT INTO lti_overlay_versions \
+         (registration_id, account_id, root_account_id, lti_overlay_id, overlay, \
+          diff, caused_by_reset, created_by_id, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $5, $6, $7, now(), now())",
+    )
+    .bind(registration_id)
+    .bind(account_id)
+    .bind(root_account_id)
+    .bind(lti_overlay_id)
+    .bind(overlay)
+    .bind(caused_by_reset)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Record a registration history entry (Canvas
+/// `Lti::RegistrationHistoryEntry`).
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn record_history_entry(
+    pool: &PgPool,
+    registration_id: i64,
+    root_account_id: i64,
+    update_type: &str,
+    diff: Value,
+    comment: Option<&str>,
+    old_configuration: Option<&Value>,
+    new_configuration: Option<&Value>,
+    user_id: i64,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "INSERT INTO lti_registration_history_entries \
+         (lti_registration_id, root_account_id, update_type, diff, comment, \
+          old_configuration, new_configuration, created_by_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(registration_id)
+    .bind(root_account_id)
+    .bind(update_type)
+    .bind(diff)
+    .bind(comment)
+    .bind(old_configuration)
+    .bind(new_configuration)
+    .bind(user_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Canvas `lti_overlay_version_json` shape (lib/api/v1/lti/
+/// overlay_version.rb) — `lti_overlay_id` is null because the workspace
+/// keeps the overlay on the registration row instead of a separate
+/// `Lti::Overlay`.
+/// A row of `lti_overlay_versions`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct OverlayVersionRow {
+    id: i64,
+    account_id: i64,
+    root_account_id: Option<i64>,
+    lti_overlay_id: i64,
+    overlay: Value,
+    diff: Option<Value>,
+    caused_by_reset: bool,
+    created_by_id: Option<i64>,
+    created_at: DateTime<Utc>,
+}
+
+async fn overlay_version_json(pool: &PgPool, version_id: i64) -> Result<Option<Value>, ApiError> {
+    let row: Option<OverlayVersionRow> = sqlx::query_as(
+        "SELECT id, account_id, root_account_id, lti_overlay_id, overlay, diff, \
+                caused_by_reset, created_by_id, created_at \
+         FROM lti_overlay_versions WHERE id = $1",
+    )
+    .bind(version_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(version) = row else {
+        return Ok(None);
+    };
+    let mut json = json!({
+        "id": version.id,
+        "account_id": version.account_id,
+        "root_account_id": version.root_account_id,
+        "lti_overlay_id": version.lti_overlay_id,
+        "overlay": version.overlay,
+        "diff": version.diff,
+        "caused_by_reset": version.caused_by_reset,
+        "created_at": version.created_at,
+        "updated_at": version.created_at,
+    });
+    if let Some(user) = user_summary(pool, version.created_by_id).await? {
+        json["created_by"] = user;
+    }
+    Ok(Some(json))
+}
+
+/// Overlay versions for a registration in an account, newest first.
+async fn overlay_versions_json(
+    pool: &PgPool,
+    registration_id: i64,
+    account_id: i64,
+    limit: i64,
+) -> Result<Vec<Value>, ApiError> {
+    let ids: Vec<(i64,)> = sqlx::query_as(
+        "SELECT id FROM lti_overlay_versions \
+         WHERE registration_id = $1 AND account_id = $2 \
+         ORDER BY id DESC LIMIT $3",
+    )
+    .bind(registration_id)
+    .bind(account_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    let mut versions = Vec::with_capacity(ids.len());
+    for (id,) in ids {
+        if let Some(version) = overlay_version_json(pool, id).await? {
+            versions.push(version);
+        }
+    }
+    Ok(versions)
+}
+
+/// Canvas `overlaid_configuration` — the configuration with the overlay
+/// applied. Canvas resolves this through `Lti::Overlay` placement merging;
+/// the workspace applies a shallow top-level merge of the overlay keys.
+fn overlaid_configuration(configuration: &Value, overlay: Option<&Value>) -> Value {
+    let mut merged = configuration.clone();
+    if let Some(Value::Object(keys)) = overlay {
+        for (key, value) in keys {
+            merged[key] = value.clone();
+        }
+    }
+    merged
+}
+
+/// `registration_json` plus the overlay/version includes Canvas's update,
+/// reset and apply endpoints carry (`overlaid_configuration`, `overlay`,
+/// `overlay_versions`).
+async fn registration_json_with_versions(
+    pool: &PgPool,
+    registration: &RegistrationRow,
+    account_id: i64,
+) -> Result<Value, ApiError> {
+    let includes = Includes {
+        configuration: true,
+        overlay: true,
+    };
+    let mut json = registration_json(pool, registration, includes).await?;
+    let overlay = registration.overlay.clone().unwrap_or_else(|| json!({}));
+    json["overlaid_configuration"] =
+        overlaid_configuration(&registration.configuration, Some(&overlay));
+    json["overlay_versions"] =
+        json!(overlay_versions_json(pool, registration.id, account_id, MAX_PER_PAGE).await?);
+    Ok(json)
+}
+
+/// `PUT /accounts/{account_id}/lti_registrations/{id}` — update the permitted
+/// registration fields, configuration and overlay
+/// (registrations_controller.rb:1637-1682).
+async fn update_registration_scoped(
+    State(state): State<AppState>,
+    Path((account_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateRegistrationRequest>,
+) -> Result<Response, ApiError> {
+    let registration = find_registration_in_account(&state.db, id, account_id).await?;
+    require_registration_permission(&state.db, &auth, &registration).await?;
+
+    // validate_workflow_state (:2202-2213): allow is site-admin only.
+    if let Some(workflow_state) = payload.workflow_state.as_deref() {
+        if !matches!(
+            workflow_state,
+            "on" | "off" | "allow" | "active" | "inactive"
+        ) {
+            return Ok(render_error(
+                "invalid_workflow_state",
+                "workflow_state must be one of 'on', 'off', 'allow', 'active', or 'inactive'",
+            ));
+        }
+        if workflow_state == "allow" {
+            return Ok(render_error(
+                "invalid_workflow_state",
+                "only site admin registrations can have a state of 'allow'",
+            ));
+        }
+    }
+
+    // restrict_dynamic_registration_updates (:2231-2236): the base
+    // configuration of a dynamic registration is immutable.
+    if payload.configuration.is_some() && registration.dynamic_registration {
+        return Ok(render_error(
+            "tool_configuration_required",
+            "Only manual configurations can be updated. Please create a new registration if you need to update the base tool configuration of a Dynamic Registration.",
+        ));
+    }
+
+    let (registration_state, binding_state) = match payload.workflow_state.as_deref() {
+        None | Some("on") | Some("active") => (None, None),
+        Some("off") => (None, Some("off")),
+        Some("inactive") => (Some("inactive"), Some("off")),
+        Some(_) => (None, None),
+    };
+
+    if let Some(configuration) = &payload.configuration {
+        if !configuration.is_object() {
+            return Ok(configuration_error_list(vec![
+                "configuration must be an object".to_string(),
+            ]));
+        }
+    }
+    if let Some(overlay) = &payload.overlay {
+        if !overlay.is_object() {
+            return Ok(configuration_error_list(vec![
+                "overlay must be an object".to_string()
+            ]));
+        }
+    }
+
+    let old_configuration = registration.configuration.clone();
+    let new_overlay = payload.overlay.clone();
+
+    let sql = format!(
+        "UPDATE lti_registrations SET \
+         name = COALESCE($2, name), \
+         admin_nickname = COALESCE($3, admin_nickname), \
+         vendor = COALESCE($4, vendor), \
+         description = COALESCE($5, description), \
+         lock_deploying = COALESCE($6, lock_deploying), \
+         workflow_state = COALESCE($7, workflow_state), \
+         configuration = COALESCE($8, configuration), \
+         overlay = COALESCE($9, overlay), \
+         updated_by_id = $10, updated_at = now() \
+         WHERE id = $1 \
+         RETURNING {REGISTRATION_COLUMNS}"
+    );
+    let updated: Option<RegistrationRow> = sqlx::query_as(&sql)
+        .bind(id)
+        .bind(payload.name)
+        .bind(payload.admin_nickname)
+        .bind(payload.vendor)
+        .bind(payload.description)
+        .bind(payload.lock_deploying)
+        .bind(registration_state)
+        .bind(payload.configuration)
+        .bind(&new_overlay)
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await?;
+    let Some(updated) = updated else {
+        return Err(ApiError::NotFound);
+    };
+
+    // A workflow_state of on/off moves the account binding (Canvas
+    // UpdateRegistrationService resolves both, like create).
+    if let Some(binding_state) = binding_state {
+        let root_id = root_account_id(&state.db, account_id).await?;
+        sqlx::query(
+            "INSERT INTO lti_registration_account_bindings \
+             (registration_id, account_id, root_account_id, workflow_state, created_by_id, updated_by_id) \
+             VALUES ($1, $2, $3, $4, $5, $5) \
+             ON CONFLICT (registration_id, account_id) DO UPDATE \
+             SET workflow_state = EXCLUDED.workflow_state, updated_at = now()",
+        )
+        .bind(id)
+        .bind(account_id)
+        .bind(root_id)
+        .bind(binding_state)
+        .bind(auth.id)
+        .execute(&state.db)
+        .await?;
+    }
+
+    if let Some(overlay) = &new_overlay {
+        let root_id = root_account_id(&state.db, account_id).await?;
+        record_overlay_version(&state.db, id, account_id, root_id, overlay, false, auth.id).await?;
+    }
+    let root_id = root_account_id(&state.db, account_id).await?;
+    record_history_entry(
+        &state.db,
+        id,
+        root_id,
+        "update",
+        json!({ "fields": ["name", "admin_nickname", "vendor", "description", "workflow_state", "lock_deploying", "configuration", "overlay"] }),
+        payload.comment.as_deref(),
+        Some(&old_configuration),
+        Some(&updated.configuration),
+        auth.id,
+    )
+    .await?;
+
+    Ok(
+        Json(registration_json_with_versions(&state.db, &updated, account_id).await?)
+            .into_response(),
+    )
+}
+
+/// `POST /accounts/{account_id}/lti_registrations/{id}/bind` — enable or
+/// disable a registration for the account by upserting the account binding
+/// (registrations_controller.rb:1747-1784).
+async fn bind_registration(
+    State(state): State<AppState>,
+    Path((account_id, registration_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<BindRequest>,
+) -> Result<Response, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let _ = find_active_registration(&state.db, registration_id).await?;
+
+    let Some(workflow_state) = payload.workflow_state.as_deref() else {
+        return Ok(render_error(
+            "invalid_workflow_state",
+            "workflow_state must be one of 'on', 'off'",
+        ));
+    };
+    if !matches!(workflow_state, "on" | "off") {
+        return Ok(render_error(
+            "invalid_workflow_state",
+            "workflow_state must be one of 'on', 'off'",
+        ));
+    }
+
+    let root_id = root_account_id(&state.db, account_id).await?;
+    sqlx::query(
+        "INSERT INTO lti_registration_account_bindings \
+         (registration_id, account_id, root_account_id, workflow_state, created_by_id, updated_by_id) \
+         VALUES ($1, $2, $3, $4, $5, $5) \
+         ON CONFLICT (registration_id, account_id) DO UPDATE \
+         SET workflow_state = EXCLUDED.workflow_state, updated_by_id = EXCLUDED.updated_by_id, \
+             updated_at = now()",
+    )
+    .bind(registration_id)
+    .bind(account_id)
+    .bind(root_id)
+    .bind(workflow_state)
+    .bind(auth.id)
+    .execute(&state.db)
+    .await?;
+
+    let binding = account_binding_json(&state.db, registration_id, account_id).await?;
+    Ok(Json(binding.unwrap_or(Value::Null)).into_response())
+}
+
+/// `DELETE /accounts/{account_id}/lti_registrations/{id}/bind` — remove an
+/// inherited registration's binding for the account
+/// (registrations_controller.rb:1786-1820).
+async fn unbind_registration(
+    State(state): State<AppState>,
+    Path((account_id, registration_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let registration = find_active_registration(&state.db, registration_id).await?;
+
+    if registration.account_id == account_id {
+        return Ok(render_error(
+            "invalid_registration",
+            "use destroy to delete local registrations",
+        ));
+    }
+
+    let binding = account_binding_json(&state.db, registration_id, account_id).await?;
+    let Some(binding) = binding else {
+        // Canvas renders this one with status :not_found (:1801).
+        return Ok(
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "errors": [{ "code": "not_found", "message": "No binding found for this registration in this account." }] })),
+            )
+                .into_response(),
+        );
+    };
+
+    // Canvas destroys the binding and the local copy (if any).
+    sqlx::query(
+        "UPDATE lti_registration_account_bindings SET workflow_state = 'deleted', \
+         updated_at = now() WHERE registration_id = $1 AND account_id = $2",
+    )
+    .bind(registration_id)
+    .bind(account_id)
+    .execute(&state.db)
+    .await?;
+    sqlx::query(
+        "UPDATE lti_registrations SET workflow_state = 'deleted', updated_at = now() \
+         WHERE template_registration_id = $1 AND account_id = $2 AND workflow_state <> 'deleted'",
+    )
+    .bind(registration_id)
+    .bind(account_id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(Json(binding).into_response())
+}
+
+/// A row of `lti_registration_history_entries`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct HistoryEntryRow {
+    id: i64,
+    root_account_id: Option<i64>,
+    update_type: String,
+    diff: Value,
+    comment: Option<String>,
+    old_configuration: Option<Value>,
+    new_configuration: Option<Value>,
+    created_by_id: Option<i64>,
+    created_at: DateTime<Utc>,
+}
+
+/// `GET /accounts/{account_id}/lti_registrations/{id}/history` — the
+/// registration changelog, newest first
+/// (registrations_controller.rb:2000-2026).
+async fn registration_history(
+    State(state): State<AppState>,
+    Path((account_id, registration_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Query(params): Query<HistoryQuery>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let _ = find_active_registration(&state.db, registration_id).await?;
+
+    let page = params.page.unwrap_or(1).max(1);
+    let per_page = params.per_page.unwrap_or(10).clamp(1, MAX_PER_PAGE);
+    let offset = page.saturating_sub(1).saturating_mul(per_page);
+    let root_id = root_account_id(&state.db, account_id).await?;
+
+    let rows: Vec<HistoryEntryRow> = sqlx::query_as(
+        "SELECT id, root_account_id, update_type, diff, comment, old_configuration, \
+                new_configuration, created_by_id, created_at \
+         FROM lti_registration_history_entries \
+         WHERE lti_registration_id = $1 AND root_account_id = $2 \
+         ORDER BY created_at DESC, id DESC LIMIT $3 OFFSET $4",
+    )
+    .bind(registration_id)
+    .bind(root_id)
+    .bind(per_page)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut entries = Vec::with_capacity(rows.len());
+    for entry in rows {
+        let mut json = json!({
+            "id": entry.id,
+            "root_account_id": entry.root_account_id,
+            "lti_registration_id": registration_id,
+            "created_at": entry.created_at,
+            "updated_at": entry.created_at,
+            "diff": entry.diff,
+            "update_type": entry.update_type,
+            "comment": entry.comment,
+            "old_configuration": entry.old_configuration,
+            "new_configuration": entry.new_configuration,
+            "old_controls_by_deployment": json!({}),
+            "new_controls_by_deployment": json!({}),
+        });
+        if let Some(user) = user_summary(&state.db, entry.created_by_id).await? {
+            json["created_by"] = user;
+        }
+        entries.push(json);
+    }
+    Ok(Json(entries))
+}
+
+/// `GET /accounts/{account_id}/lti_registrations/{id}/overlay_history` —
+/// overlay edit history, newest first (:1968-1998).
+async fn overlay_history(
+    State(state): State<AppState>,
+    Path((account_id, registration_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Query(params): Query<OverlayHistoryQuery>,
+) -> Result<Json<Vec<Value>>, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let registration = find_active_registration(&state.db, registration_id).await?;
+
+    // Canvas renders [] when the registration has no overlay at all.
+    if registration.overlay.is_none() {
+        return Ok(Json(vec![]));
+    }
+    let limit = params.limit.unwrap_or(10).clamp(1, 100);
+    Ok(Json(
+        overlay_versions_json(&state.db, registration_id, account_id, limit).await?,
+    ))
+}
+
+/// `PUT /accounts/{account_id}/lti_registrations/{id}/reset` — reset the
+/// overlay to defaults (registrations_controller.rb:1684-1706).
+async fn reset_registration(
+    State(state): State<AppState>,
+    Path((account_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    let registration = find_registration_in_account(&state.db, id, account_id).await?;
+    require_registration_permission(&state.db, &auth, &registration).await?;
+
+    let sql = format!(
+        "UPDATE lti_registrations SET overlay = '{{}}'::jsonb, \
+         updated_by_id = $2, updated_at = now() \
+         WHERE id = $1 \
+         RETURNING {REGISTRATION_COLUMNS}"
+    );
+    let updated: Option<RegistrationRow> = sqlx::query_as(&sql)
+        .bind(id)
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await?;
+    let Some(updated) = updated else {
+        return Err(ApiError::NotFound);
+    };
+
+    let root_id = root_account_id(&state.db, account_id).await?;
+    record_overlay_version(
+        &state.db,
+        id,
+        account_id,
+        root_id,
+        &json!({}),
+        true,
+        auth.id,
+    )
+    .await?;
+    record_history_entry(
+        &state.db,
+        id,
+        root_id,
+        "overlay_reset",
+        json!({ "overlay": "reset" }),
+        None,
+        Some(&registration.overlay.clone().unwrap_or_else(|| json!({}))),
+        Some(&json!({})),
+        auth.id,
+    )
+    .await?;
+
+    Ok(Json(
+        registration_json_with_versions(&state.db, &updated, account_id).await?,
+    ))
+}
+
+/// `POST /accounts/{account_id}/lti_registrations/{id}/install_from_template`
+/// — install a local copy of a template registration
+/// (registrations_controller.rb:1822-1862).
+async fn install_from_template(
+    State(state): State<AppState>,
+    Path((account_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let template = find_active_registration(&state.db, id).await?;
+
+    // Canvas' InstallTemplateRegistrationService refuses to shadow an
+    // existing local copy.
+    let existing: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM lti_registrations \
+         WHERE template_registration_id = $1 AND account_id = $2 AND workflow_state <> 'deleted'",
+    )
+    .bind(id)
+    .bind(account_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if existing.is_some() {
+        return Ok(render_error(
+            "invalid_template",
+            "A local copy of this template already exists for this account",
+        ));
+    }
+
+    let root_id = root_account_id(&state.db, account_id).await?;
+    let sql = format!(
+        "INSERT INTO lti_registrations \
+         (account_id, root_account_id, name, admin_nickname, vendor, description, icon_url, \
+          lti_version, dynamic_registration, lock_deploying, template_registration_id, \
+          workflow_state, configuration, created_by_id, updated_by_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13, $13) \
+         RETURNING {REGISTRATION_COLUMNS}"
+    );
+    let local_copy: RegistrationRow = sqlx::query_as(&sql)
+        .bind(account_id)
+        .bind(root_id)
+        .bind(&template.name)
+        .bind(template.admin_nickname.clone())
+        .bind(template.vendor.clone())
+        .bind(template.description.clone())
+        .bind(template.icon_url.clone())
+        .bind(&template.lti_version)
+        .bind(template.dynamic_registration)
+        .bind(template.lock_deploying)
+        .bind(id)
+        .bind(&template.configuration)
+        .bind(auth.id)
+        .fetch_one(&state.db)
+        .await?;
+
+    sqlx::query(
+        "INSERT INTO lti_registration_account_bindings \
+         (registration_id, account_id, root_account_id, workflow_state, created_by_id, updated_by_id) \
+         VALUES ($1, $2, $3, 'on', $4, $4) \
+         ON CONFLICT (registration_id, account_id) DO UPDATE \
+         SET workflow_state = 'on', updated_at = now()",
+    )
+    .bind(local_copy.id)
+    .bind(account_id)
+    .bind(root_id)
+    .bind(auth.id)
+    .execute(&state.db)
+    .await?;
+
+    record_history_entry(
+        &state.db,
+        local_copy.id,
+        root_id,
+        "installed_from_template",
+        json!({ "template_registration_id": id }),
+        None,
+        None,
+        Some(&local_copy.configuration),
+        auth.id,
+    )
+    .await?;
+
+    let includes = Includes {
+        configuration: true,
+        overlay: true,
+    };
+    let body = registration_json(&state.db, &local_copy, includes).await?;
+    Ok(Json(body).into_response())
+}
+
+/// Canvas `lti_registration_update_request_json` shape (lib/api/v1/lti/
+/// registration_update_request.rb).
+/// A row of `lti_registration_update_requests`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct UpdateRequestRow {
+    id: i64,
+    root_account_id: Option<i64>,
+    lti_registration_id: i64,
+    uuid: String,
+    created_by_id: Option<i64>,
+    accepted_at: Option<DateTime<Utc>>,
+    rejected_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+async fn update_request_json(pool: &PgPool, rur_id: i64) -> Result<Option<Value>, ApiError> {
+    let row: Option<UpdateRequestRow> = sqlx::query_as(
+        "SELECT id, root_account_id, lti_registration_id, uuid, created_by_id, \
+                accepted_at, rejected_at, created_at, updated_at \
+         FROM lti_registration_update_requests WHERE id = $1",
+    )
+    .bind(rur_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(rur) = row else {
+        return Ok(None);
+    };
+    let status = if rur.accepted_at.is_some() {
+        "applied"
+    } else if rur.rejected_at.is_some() {
+        "rejected"
+    } else {
+        "pending"
+    };
+    let mut json = json!({
+        "id": rur.id,
+        "root_account_id": rur.root_account_id,
+        "lti_registration_id": rur.lti_registration_id,
+        "uuid": rur.uuid,
+        "reinstall": Value::Null,
+        "tool_initiated": Value::Null,
+        "comment": Value::Null,
+        "created_at": rur.created_at,
+        "updated_at": rur.updated_at,
+        "accepted_at": rur.accepted_at,
+        "rejected_at": rur.rejected_at,
+        "status": status,
+    });
+    if let Some(user) = user_summary(pool, rur.created_by_id).await? {
+        json["created_by"] = user;
+    }
+    // The workspace's lti_registration_update_requests (migration 0115)
+    // carries no updated_by column, so Canvas' updated_by is always null.
+    json["updated_by"] = Value::Null;
+    Ok(Some(json))
+}
+
+/// `GET .../lti_registrations/{id}/latest_update_request`
+/// (registrations_controller.rb:2058-2094).
+async fn latest_update_request(
+    State(state): State<AppState>,
+    Path((account_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    let registration = find_registration_in_account(&state.db, id, account_id).await?;
+    require_registration_permission(&state.db, &auth, &registration).await?;
+
+    let latest: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM lti_registration_update_requests \
+         WHERE lti_registration_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((rur_id,)) = latest else {
+        return Err(ApiError::NotFound);
+    };
+    let json = update_request_json(&state.db, rur_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(json))
+}
+
+/// `GET .../lti_registrations/{id}/update_requests/{update_request_id}`
+/// (registrations_controller.rb:2028-2056).
+async fn show_update_request(
+    State(state): State<AppState>,
+    Path((account_id, id, update_request_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    let registration = find_registration_in_account(&state.db, id, account_id).await?;
+    require_registration_permission(&state.db, &auth, &registration).await?;
+
+    let found: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM lti_registration_update_requests \
+         WHERE id = $1 AND lti_registration_id = $2",
+    )
+    .bind(update_request_id)
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((rur_id,)) = found else {
+        return Err(ApiError::NotFound);
+    };
+    let json = update_request_json(&state.db, rur_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(json))
+}
+
+/// `PUT .../lti_registrations/{id}/update_requests/{update_request_id}/apply`
+/// — accept (and apply) or reject a registration update request
+/// (registrations_controller.rb:2096-2148).
+async fn apply_update_request(
+    State(state): State<AppState>,
+    Path((account_id, id, update_request_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<ApplyUpdateRequest>,
+) -> Result<Response, ApiError> {
+    let registration = find_registration_in_account(&state.db, id, account_id).await?;
+    require_registration_permission(&state.db, &auth, &registration).await?;
+
+    // Canvas scopes to Lti::RegistrationUpdateRequest.active — already
+    // applied or rejected requests 404.
+    let rur: Option<(i64, Value, Option<i64>)> = sqlx::query_as(
+        "SELECT id, lti_ims_registration, created_by_id \
+         FROM lti_registration_update_requests \
+         WHERE id = $1 AND lti_registration_id = $2 \
+           AND accepted_at IS NULL AND rejected_at IS NULL",
+    )
+    .bind(update_request_id)
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((rur_id, ims_registration, _rur_author)) = rur else {
+        return Err(ApiError::NotFound);
+    };
+
+    let Some(accepted) = payload.accepted else {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "errors": "accepted parameter is required" })),
+        )
+            .into_response());
+    };
+
+    // most_recent? — a newer pending request makes this one outdated.
+    let newer: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM lti_registration_update_requests \
+         WHERE lti_registration_id = $1 AND id <> $2 \
+           AND accepted_at IS NULL AND rejected_at IS NULL \
+           AND created_at > (SELECT created_at FROM lti_registration_update_requests WHERE id = $2) \
+         LIMIT 1",
+    )
+    .bind(id)
+    .bind(rur_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if newer.is_some() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "errors": "Cannot apply an outdated registration update request. A newer update request exists." })),
+        )
+            .into_response());
+    }
+
+    let root_id = root_account_id(&state.db, account_id).await?;
+    let old_configuration = registration.configuration.clone();
+
+    if accepted {
+        // ApplyRegistrationUpdateRequestService replaces the configuration
+        // with the update request's stored registration state. The workspace
+        // stores the IMS registration payload in
+        // lti_registration_update_requests.lti_ims_registration; its
+        // `lti_tool_configuration` (or the object itself) is the new base
+        // configuration, its `client_name` the new name.
+        let new_configuration = ims_registration
+            .get("lti_tool_configuration")
+            .filter(|config| config.is_object())
+            .cloned()
+            .unwrap_or(ims_registration.clone());
+        let new_name = ims_registration
+            .get("client_name")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+
+        if let Some(overlay) = &payload.overlay {
+            if !overlay.is_object() {
+                return Ok(configuration_error_list(vec![
+                    "overlay must be an object".to_string()
+                ]));
+            }
+        }
+
+        let sql = format!(
+            "UPDATE lti_registrations SET \
+             name = COALESCE($2, name), \
+             configuration = $3, \
+             overlay = COALESCE($4, overlay), \
+             updated_by_id = $5, updated_at = now() \
+             WHERE id = $1 \
+             RETURNING {REGISTRATION_COLUMNS}"
+        );
+        let updated: Option<RegistrationRow> = sqlx::query_as(&sql)
+            .bind(id)
+            .bind(new_name)
+            .bind(&new_configuration)
+            .bind(&payload.overlay)
+            .bind(auth.id)
+            .fetch_optional(&state.db)
+            .await?;
+        let Some(updated) = updated else {
+            return Err(ApiError::NotFound);
+        };
+
+        if let Some(overlay) = &payload.overlay {
+            record_overlay_version(&state.db, id, account_id, root_id, overlay, false, auth.id)
+                .await?;
+        }
+        sqlx::query(
+            "UPDATE lti_registration_update_requests SET accepted_at = now(), \
+             updated_at = now() WHERE id = $1",
+        )
+        .bind(rur_id)
+        .execute(&state.db)
+        .await?;
+        record_history_entry(
+            &state.db,
+            id,
+            root_id,
+            "update_request_applied",
+            json!({ "update_request_id": rur_id }),
+            payload.comment.as_deref(),
+            Some(&old_configuration),
+            Some(&updated.configuration),
+            auth.id,
+        )
+        .await?;
+
+        Ok(
+            Json(registration_json_with_versions(&state.db, &updated, account_id).await?)
+                .into_response(),
+        )
+    } else {
+        sqlx::query(
+            "UPDATE lti_registration_update_requests SET rejected_at = now(), \
+             updated_at = now() WHERE id = $1",
+        )
+        .bind(rur_id)
+        .execute(&state.db)
+        .await?;
+        record_history_entry(
+            &state.db,
+            id,
+            root_id,
+            "update_request_rejected",
+            json!({ "update_request_id": rur_id }),
+            payload.comment.as_deref(),
+            None,
+            None,
+            auth.id,
+        )
+        .await?;
+        Ok(
+            Json(registration_json_with_versions(&state.db, &registration, account_id).await?)
+                .into_response(),
+        )
+    }
+}
+
+/// `GET .../deployments/{deployment_id}` — show one deployment
+/// (deployments_controller.rb:103-110).
+async fn show_deployment_scoped(
+    State(state): State<AppState>,
+    Path((account_id, registration_id, deployment_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    let registration = find_registration_in_account(&state.db, registration_id, account_id).await?;
+    require_registration_permission(&state.db, &auth, &registration).await?;
+    let deployment = find_active_deployment(&state.db, registration_id, deployment_id).await?;
+    let root = deployment.context_type == "Account"
+        && is_root_account(&state.db, deployment.context_id).await?;
+    Ok(Json(deployment_json(&deployment, root)))
+}
+
+/// `DELETE .../deployments/{deployment_id}` — soft-delete a deployment
+/// (deployments_controller.rb:158-175); Canvas renders the destroyed
+/// deployment's JSON.
+async fn delete_deployment_scoped(
+    State(state): State<AppState>,
+    Path((account_id, registration_id, deployment_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    let registration = find_registration_in_account(&state.db, registration_id, account_id).await?;
+    require_registration_permission(&state.db, &auth, &registration).await?;
+    let deployment = find_active_deployment(&state.db, registration_id, deployment_id).await?;
+
+    sqlx::query(
+        "UPDATE lti_deployments SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(deployment_id)
+    .execute(&state.db)
+    .await?;
+
+    // Canvas renders the destroyed deployment's JSON (deployments_
+    // controller.rb:164-170), with workflow_state 'deleted' on the returned
+    // record — the same shape delete_registration uses.
+    let mut deleted = deployment;
+    deleted.workflow_state = STATE_DELETED.to_string();
+    let root =
+        deleted.context_type == "Account" && is_root_account(&state.db, deleted.context_id).await?;
+    Ok(Json(deployment_json(&deleted, root)))
+}
+
+/// An active deployment of a registration (Canvas
+/// `ContextExternalTool.for_lti_registration`).
+pub(crate) async fn find_active_deployment(
+    pool: &PgPool,
+    registration_id: i64,
+    deployment_id: i64,
+) -> Result<DeploymentRow, ApiError> {
+    let sql = format!(
+        "SELECT {DEPLOYMENT_COLUMNS} FROM lti_deployments \
+         WHERE id = $1 AND registration_id = $2 AND workflow_state <> '{STATE_DELETED}'"
+    );
+    let row: Option<DeploymentRow> = sqlx::query_as(&sql)
+        .bind(deployment_id)
+        .bind(registration_id)
+        .fetch_optional(pool)
+        .await?;
+    row.ok_or(ApiError::NotFound)
+}
+
+/// `GET .../deployments/{deployment_id}/context_search` — accounts and
+/// courses usable as deployment contexts (registrations_controller.rb:
+/// 1864-1966).
+async fn deployment_context_search(
+    State(state): State<AppState>,
+    Path((account_id, registration_id, deployment_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Query(params): Query<ContextSearchQuery>,
+) -> Result<Response, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let _ = find_active_registration(&state.db, registration_id).await?;
+    let deployment = find_active_deployment(&state.db, registration_id, deployment_id).await?;
+
+    if deployment.context_type != "Account" {
+        return Ok(Json(json!({ "accounts": [], "courses": [] })).into_response());
+    }
+
+    // The deployment's account subtree.
+    let subtree: Vec<(i64, String)> = sqlx::query_as(
+        "WITH RECURSIVE down AS ( \
+             SELECT id, name, parent_account_id, workflow_state FROM accounts WHERE id = $1 \
+             UNION ALL \
+             SELECT a.id, a.name, a.parent_account_id, a.workflow_state FROM accounts a \
+             JOIN down ON a.parent_account_id = down.id \
+         ) SELECT id, name FROM down WHERE workflow_state <> 'deleted'",
+    )
+    .bind(deployment.context_id)
+    .fetch_all(&state.db)
+    .await?;
+    let subtree_ids: Vec<i64> = subtree.iter().map(|(id, _)| *id).collect();
+
+    let only_children_of = params.only_children_of;
+    if let Some(filter_id) = only_children_of {
+        if !subtree_ids.contains(&filter_id) {
+            return Ok(render_error(
+                "invalid_account_id",
+                "only_children_of account ID must be or belong to deployment's account",
+            ));
+        }
+    }
+
+    let search = params
+        .search_term
+        .as_deref()
+        .map(str::trim)
+        .filter(|term| !term.is_empty())
+        .map(|term| format!("%{term}%"));
+
+    // Canvas also matches ids when the search term parses as a positive
+    // integer (:1914-1918).
+    let search_id = params
+        .search_term
+        .as_deref()
+        .map(str::trim)
+        .and_then(|term| term.parse::<i64>().ok())
+        .filter(|parsed| *parsed > 0);
+
+    let account_rows: Vec<(i64, String)> = if let Some(filter_id) = only_children_of {
+        sqlx::query_as(
+            "SELECT id, name FROM accounts \
+             WHERE parent_account_id = $1 AND workflow_state <> 'deleted' \
+               AND ($2::text IS NULL OR name ILIKE $2) \
+             ORDER BY name LIMIT 20",
+        )
+        .bind(filter_id)
+        .bind(search.as_deref())
+        .fetch_all(&state.db)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT id, name FROM accounts \
+             WHERE id = ANY($1) AND workflow_state <> 'deleted' \
+               AND ($2::text IS NULL OR name ILIKE $2) \
+             ORDER BY name LIMIT 20",
+        )
+        .bind(&subtree_ids)
+        .bind(search.as_deref())
+        .fetch_all(&state.db)
+        .await?
+    };
+    let mut account_rows = account_rows;
+    if let (Some(search_id), Some(pattern)) = (search_id, search.as_deref()) {
+        let extra: Option<(i64, String)> = sqlx::query_as(
+            "SELECT id, name FROM accounts \
+             WHERE id = $1 AND workflow_state <> 'deleted' \
+               AND NOT ($2::text IS NULL OR name ILIKE $2) \
+             LIMIT 1",
+        )
+        .bind(search_id)
+        .bind(pattern)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some(extra) = extra {
+            account_rows.push(extra);
+        }
+    }
+
+    let course_rows: Vec<(i64, String, String)> = if let Some(filter_id) = only_children_of {
+        sqlx::query_as(
+            "SELECT id, name, course_code FROM courses \
+             WHERE account_id = $1 AND workflow_state <> 'deleted' \
+               AND ($2::text IS NULL OR name ILIKE $2 OR course_code ILIKE $2) \
+             ORDER BY name LIMIT 20",
+        )
+        .bind(filter_id)
+        .bind(search.as_deref())
+        .fetch_all(&state.db)
+        .await?
+    } else {
+        sqlx::query_as(
+            "SELECT id, name, course_code FROM courses \
+             WHERE (account_id = ANY($1) OR account_id = $3) AND workflow_state <> 'deleted' \
+               AND ($2::text IS NULL OR name ILIKE $2 OR course_code ILIKE $2) \
+             ORDER BY name LIMIT 20",
+        )
+        .bind(&subtree_ids)
+        .bind(search.as_deref())
+        .bind(deployment.context_id)
+        .fetch_all(&state.db)
+        .await?
+    };
+    let mut course_rows = course_rows;
+    if let (Some(search_id), Some(pattern)) = (search_id, search.as_deref()) {
+        let extra: Option<(i64, String, String)> = sqlx::query_as(
+            "SELECT id, name, course_code FROM courses \
+             WHERE id = $1 AND workflow_state <> 'deleted' \
+               AND NOT ($2::text IS NULL OR name ILIKE $2 OR course_code ILIKE $2) \
+             LIMIT 1",
+        )
+        .bind(search_id)
+        .bind(pattern)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some(extra) = extra {
+            course_rows.push(extra);
+        }
+    }
+
+    // Canvas limits each list to 20 after the id OR-merge.
+    account_rows.truncate(20);
+    course_rows.truncate(20);
+
+    // The workspace schema carries no SIS columns, so sis_id is always
+    // null (Canvas nulls it for callers without read_sis).
+    let mut accounts_json = Vec::with_capacity(account_rows.len());
+    for (id, name) in &account_rows {
+        let display_path = display_path_names(&state.db, *id, false).await?;
+        accounts_json.push(json!({
+            "id": id.to_string(),
+            "name": name,
+            "sis_id": Value::Null,
+            "display_path": display_path,
+        }));
+    }
+
+    let mut courses_json = Vec::with_capacity(course_rows.len());
+    for (id, name, course_code) in &course_rows {
+        let account_of_course: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+                .bind(id)
+                .fetch_optional(&state.db)
+                .await?;
+        let display_path = match account_of_course {
+            Some((Some(course_account),)) => {
+                display_path_names(&state.db, course_account, true).await?
+            }
+            _ => vec![],
+        };
+        courses_json.push(json!({
+            "id": id.to_string(),
+            "name": name,
+            "sis_id": Value::Null,
+            "course_code": course_code,
+            "display_path": display_path,
+        }));
+    }
+
+    Ok(Json(json!({ "accounts": accounts_json, "courses": courses_json })).into_response())
+}
+
+/// Find an active registration by the client id stored in its
+/// configuration. Canvas resolves `DeveloperKey#lti_registration`
+/// (:1462-1480); the workspace keeps the client id inside the registration
+/// configuration JSON, and developer keys carry no client id column
+/// (migration 0032).
+async fn find_registration_by_client_id(
+    pool: &PgPool,
+    client_id: &str,
+) -> Result<Option<RegistrationRow>, ApiError> {
+    let sql = format!(
+        "SELECT {REGISTRATION_COLUMNS} FROM lti_registrations \
+         WHERE configuration->>'client_id' = $1 AND workflow_state <> '{STATE_DELETED}'"
+    );
+    let row: Option<RegistrationRow> = sqlx::query_as(&sql)
+        .bind(client_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row)
+}
+
+/// `GET /accounts/{account_id}/lti_registration_by_client_id/{client_id}`
+/// (registrations_controller.rb:1462-1480).
+async fn show_registration_by_client_id(
+    State(state): State<AppState>,
+    Path((account_id, client_id)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let not_found = || {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "errors": "LTI registration not found" })),
+        )
+            .into_response()
+    };
+    let Some(registration) = find_registration_by_client_id(&state.db, &client_id).await? else {
+        return Ok(not_found());
+    };
+    if registration.account_id != account_id {
+        return Ok(not_found());
+    }
+    let includes = Includes {
+        configuration: true,
+        overlay: true,
+    };
+    let mut json = registration_json(&state.db, &registration, includes).await?;
+    let overlay = registration.overlay.clone().unwrap_or_else(|| json!({}));
+    json["overlaid_configuration"] =
+        overlaid_configuration(&registration.configuration, Some(&overlay));
+    Ok(Json(json).into_response())
+}
+
+/// `GET /accounts/{account_id}/lti_registrations/by_utid/{utid}`
+/// (registrations_controller.rb:1502-1541) — searches manual registrations
+/// and IMS registrations by unified tool id.
+async fn show_registration_by_utid(
+    State(state): State<AppState>,
+    Path((account_id, utid)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let not_found = || {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "errors": "LTI registration not found" })),
+        )
+            .into_response()
+    };
+
+    let sql = format!(
+        "SELECT {REGISTRATION_COLUMNS} FROM lti_registrations \
+         WHERE unified_tool_id = $1 AND workflow_state <> '{STATE_DELETED}'"
+    );
+    let mut registration: Option<RegistrationRow> = sqlx::query_as(&sql)
+        .bind(&utid)
+        .fetch_optional(&state.db)
+        .await?;
+    if registration.is_none() {
+        let via_ims: Option<(i64,)> = sqlx::query_as(
+            "SELECT lti_registration_id FROM lti_ims_registrations \
+             WHERE unified_tool_id = $1 AND lti_registration_id IS NOT NULL",
+        )
+        .bind(&utid)
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some((registration_id,)) = via_ims {
+            registration = find_active_registration(&state.db, registration_id)
+                .await
+                .ok();
+        }
+    }
+    let Some(registration) = registration else {
+        return Ok(not_found());
+    };
+    if registration.account_id != account_id {
+        return Ok(not_found());
+    }
+    let includes = Includes {
+        configuration: true,
+        overlay: false,
+    };
+    Ok(Json(registration_json(&state.db, &registration, includes).await?).into_response())
+}
+
+/// `GET .../lti_registrations/check_domain_duplicates?domain=`
+/// (registrations_controller.rb:1312-1338). Canvas also consults Site Admin
+/// and inherited registrations; the workspace has no site-admin account, so
+/// the check covers registrations owned by the account.
+async fn check_domain_duplicates(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Query(params): Query<DomainQuery>,
+) -> Result<Json<Value>, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let domain = params.domain.unwrap_or_default();
+    let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+        "SELECT id, name, admin_nickname FROM lti_registrations \
+         WHERE account_id = $1 AND workflow_state <> 'deleted' \
+           AND configuration->>'domain' = $2",
+    )
+    .bind(account_id)
+    .bind(&domain)
+    .fetch_all(&state.db)
+    .await?;
+    let duplicates: Vec<Value> = rows
+        .into_iter()
+        .map(|(id, name, admin_nickname)| {
+            json!({ "id": id.to_string(), "name": name, "admin_nickname": admin_nickname })
+        })
+        .collect();
+    Ok(Json(json!({ "duplicates": duplicates })))
+}
+
+/// `POST .../lti_registrations/configuration/validate`
+/// (registrations_controller.rb:1244-1310). Validates an LTI 1.3 tool
+/// configuration — inline or fetched from a URL — against the Canvas schema
+/// (lib/schemas/lti_configuration.rb: title, description, target_link_uri,
+/// oidc_initiation_url) and returns the internal configuration.
+async fn validate_configuration(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    payload: Result<Json<ValidateConfigurationRequest>, axum::extract::rejection::JsonRejection>,
+) -> Result<Response, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let payload = match payload {
+        Ok(Json(payload)) => payload,
+        Err(_) => {
+            return Ok(configuration_error_list(vec![
+                "one of lti_configuration or url is required".to_string(),
+            ]))
+        }
+    };
+
+    let has_config = payload.lti_configuration.is_some();
+    let has_url = payload
+        .url
+        .as_deref()
+        .is_some_and(|url| !url.trim().is_empty());
+    if !has_config && !has_url {
+        return Ok(configuration_error_list(vec![
+            "one of lti_configuration or url is required".to_string(),
+        ]));
+    }
+    if has_config && has_url {
+        return Ok(configuration_error_list(vec![
+            "only one of lti_configuration or url is allowed".to_string(),
+        ]));
+    }
+
+    let config = if let Some(config) = payload.lti_configuration {
+        config
+    } else {
+        // Canvas fetches the URL and parses the body as JSON
+        // (registrations_controller.rb:1264-1284).
+        let url = payload.url.unwrap_or_default();
+        let response = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| ApiError::Db(e.to_string()))?
+            .get(&url)
+            .send()
+            .await;
+        let response = match response {
+            Ok(response) if response.status().is_success() => response,
+            _ => {
+                return Ok(configuration_error_list(vec![
+                    "invalid configuration url".to_string()
+                ]))
+            }
+        };
+        let text = response
+            .text()
+            .await
+            .map_err(|_| ApiError::Db("configuration url read failed".to_string()))?;
+        match serde_json::from_str(&text) {
+            Ok(config) => config,
+            Err(_) => {
+                return Ok(configuration_error_list(vec![
+                    "url does not return JSON".to_string()
+                ]))
+            }
+        }
+    };
+
+    if !config.is_object() {
+        return Ok(configuration_error_list(vec![
+            "lti_configuration must be an object".to_string(),
+        ]));
+    }
+    let mut errors = Vec::new();
+    for field in [
+        "title",
+        "description",
+        "target_link_uri",
+        "oidc_initiation_url",
+    ] {
+        if !config.get(field).is_some_and(Value::is_string) {
+            errors.push(format!("{field} is missing"));
+        }
+    }
+    if !errors.is_empty() {
+        return Ok(configuration_error_list(errors));
+    }
+
+    // Schemas::InternalLtiConfiguration.from_lti_configuration + the
+    // redirect_uris defaulting the controller performs (:1294-1302).
+    let mut configuration = config.clone();
+    let target_link_uri = config
+        .get("target_link_uri")
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    let redirect_uris = configuration
+        .get("redirect_uris")
+        .cloned()
+        .filter(|uris| uris.is_array())
+        .unwrap_or_else(|| json!([target_link_uri]));
+    configuration["redirect_uris"] = redirect_uris;
+
+    Ok(Json(json!({ "configuration": configuration })).into_response())
+}
+
+/// `GET .../lti_registrations/install_status/{client_id}`
+/// (registrations_controller.rb:1543-1635) — the local installation of a
+/// registration: the registration itself when it lives in this account, or
+/// its local copy (template install) otherwise.
+async fn install_status(
+    State(state): State<AppState>,
+    Path((account_id, client_id)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    require_account(&state.db, account_id).await?;
+    if !can_manage_account(&state.db, &auth, account_id).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let not_found = || {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "errors": "LTI registration not found" })),
+        )
+            .into_response()
+    };
+    let Some(registration) = find_registration_by_client_id(&state.db, &client_id).await? else {
+        return Ok(not_found());
+    };
+
+    let installed = if registration.account_id == account_id {
+        registration
+    } else {
+        let sql = format!(
+            "SELECT {REGISTRATION_COLUMNS} FROM lti_registrations \
+             WHERE template_registration_id = $1 AND account_id = $2 \
+               AND workflow_state <> '{STATE_DELETED}'"
+        );
+        let local: Option<RegistrationRow> = sqlx::query_as(&sql)
+            .bind(registration.id)
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await?;
+        let Some(local) = local else {
+            return Ok(not_found());
+        };
+        local
+    };
+
+    let includes = Includes {
+        configuration: true,
+        overlay: true,
+    };
+    Ok(Json(registration_json(&state.db, &installed, includes).await?).into_response())
 }

@@ -1,0 +1,15 @@
+{% extends "layouts/course.html" %}
+{# SpeedGrader empty state (issue #108): the course has no assignments or no
+   enrollments, so there is nothing to grade. #}
+{% block content %}
+  <div id="speedgrader" class="speedgrader full-width">
+    <div id="speedgrader-toolbar" class="speedgrader-toolbar">
+      <h1 class="speedgrader-heading">SpeedGrader</h1>
+      <div class="speedgrader-toolbar-actions">
+        <a id="back_to_gradebook" class="btn" href="/courses/{{ course_id }}/gradebook">Gradebook</a>
+        <a id="speedgrader_assignments" class="btn" href="/courses/{{ course_id }}/assignments">Assignments</a>
+      </div>
+    </div>
+    <p class="speedgrader-empty" id="speedgrader_empty">{{ message }}</p>
+  </div>
+{% endblock content %}

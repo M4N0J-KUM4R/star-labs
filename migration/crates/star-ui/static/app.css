@@ -432,6 +432,70 @@ textarea.ic-Input { width: 100%; font-family: inherit; }
 }
 .gradebook-cell, .gradebook-total { text-align: center; white-space: nowrap; }
 
+/* ---- SpeedGrader (issue #108) ---- */
+.speedgrader-toolbar {
+  display: flex; justify-content: space-between; align-items: center;
+  flex-wrap: wrap; gap: 12px; margin-bottom: 12px;
+}
+.speedgrader-heading { margin: 0; }
+.speedgrader-toolbar-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.speedgrader-assignment-bar {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 16px;
+  padding: 8px 12px; background: #f2f5f7; border-radius: 4px;
+}
+.speedgrader-assignment-select { display: flex; align-items: center; gap: 8px; }
+.speedgrader-columns { display: flex; gap: 16px; align-items: flex-start; }
+.speedgrader-student-list {
+  flex: 0 0 240px; max-width: 240px; border: 1px solid #c7cdd1;
+  border-radius: 4px; background: #fff; overflow-y: auto;
+}
+.speedgrader-student-menu { list-style: none; margin: 0; padding: 0; }
+.speedgrader-student-link {
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 8px; padding: 8px 12px; border-bottom: 1px solid #e8ebee;
+  text-decoration: none; color: inherit;
+}
+.speedgrader-student-row.selected .speedgrader-student-link {
+  background: #0374b5; color: #fff;
+}
+.speedgrader-student-row.selected .speedgrader-student-state { color: #fff; }
+.speedgrader-student-state { font-size: 12px; color: #73858c; white-space: nowrap; }
+.speedgrader-main { flex: 1 1 auto; min-width: 0; }
+.speedgrader-submission-header {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+.speedgrader-student-heading { margin: 0; }
+.speedgrader-position { color: #73858c; font-size: 13px; }
+.speedgrader-nav { display: flex; gap: 8px; margin-left: auto; }
+.speedgrader-meta { max-width: 480px; margin-bottom: 16px; }
+.speedgrader-submission-body {
+  background: #fff; border: 1px solid #c7cdd1; border-radius: 4px;
+  padding: 12px 16px; margin-bottom: 16px;
+}
+.speedgrader-submission-body .submission-text {
+  margin: 0; white-space: pre-wrap; word-wrap: break-word;
+  font-family: inherit;
+}
+.speedgrader-rubric { margin-bottom: 16px; }
+.rubric-title { margin: 0 0 8px; }
+.rubric-points { font-weight: 400; color: #73858c; font-size: 14px; }
+.rubric-description { max-width: 220px; }
+.rubric-rating { max-width: 280px; }
+.speedgrader-grade-form {
+  background: #fff; border: 1px solid #c7cdd1; border-radius: 4px;
+  padding: 16px; margin-bottom: 16px; max-width: 640px;
+}
+.speedgrader-comments .comment-list { list-style: none; padding: 0; }
+.speedgrader-comments .comment {
+  border: 1px solid #e8ebee; border-radius: 4px; padding: 8px 12px;
+  margin-bottom: 8px; background: #fff;
+}
+.comment-author { font-weight: 600; margin-right: 8px; }
+.comment-time { font-size: 12px; color: #73858c; }
+.comment-body { margin: 4px 0 0; }
+.speedgrader-empty { color: #73858c; }
+
 /* ---- Error page ---- */
 .ic-Error { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
 .ic-Error__content { text-align: center; }
@@ -447,5 +511,9 @@ textarea.ic-Input { width: 100%; font-family: inherit; }
   .ic-Layout-columns { flex-direction: column; }
   #left-side.ic-app-course-menu {
     width: 100%; flex: none; border-right: none; border-bottom: 1px solid #c7cdd1;
+  }
+  .speedgrader-columns { flex-direction: column; }
+  .speedgrader-student-list {
+    flex: 1 1 auto; max-width: none; width: 100%; max-height: 240px;
   }
 }

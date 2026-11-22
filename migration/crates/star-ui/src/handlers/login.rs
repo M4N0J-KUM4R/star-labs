@@ -15,7 +15,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum_extra::extract::{CookieJar, Form};
 use serde::Deserialize;
 
-use star_auth::{create_token, verify_password};
+use star_auth::{create_token, login_rate_limiter, verify_password};
 use star_common::{ApiError, AppState};
 
 use crate::env::JsEnv;
@@ -119,9 +119,31 @@ pub async fn login_submit(
             .into_response();
     }
 
+    // Locked accounts are refused before the password check (issue #106;
+    // Canvas LoginRegistry returns :too_many_attempts up front). The UI
+    // shares the API's limiter so both surfaces count the same budget.
+    let limiter = login_rate_limiter();
+    let email = form.email.trim().to_lowercase();
+    if limiter.is_locked(&email) {
+        let (jar, csrf_token) = ensure_csrf_cookie(jar);
+        let page = LoginPage {
+            title: "Log In".to_string(),
+            body_class: "full-width ic-Login-Body no-headers".to_string(),
+            css_url: crate::assets::app_css_url(),
+            env_json: JsEnv::anonymous(&crate::request_origin(), Vec::new()).to_json_string(),
+            notices: Vec::new(),
+            csrf_token,
+            next: sanitize_next(form.next.as_deref()),
+            email: form.email.clone(),
+            error: "Too many failed login attempts. Please try again later.".to_string(),
+            session_expired: false,
+        };
+        return (StatusCode::FORBIDDEN, jar, page).into_response();
+    }
+
     let row: Option<(i64, String, String)> =
         match sqlx::query_as("SELECT id, password_hash, role FROM users WHERE email = $1")
-            .bind(form.email.trim().to_lowercase())
+            .bind(&email)
             .fetch_optional(&app.db)
             .await
         {
@@ -139,6 +161,9 @@ pub async fn login_submit(
         .unwrap_or(false);
 
     if !verified {
+        // Count the failure against the shared budget (unknown email
+        // included, so the shell cannot be used to probe for accounts).
+        limiter.record_failure(&email);
         let (jar, csrf_token) = ensure_csrf_cookie(jar);
         let page = LoginPage {
             title: "Log In".to_string(),
@@ -156,6 +181,9 @@ pub async fn login_submit(
     }
 
     let (user_id, _, role) = row.expect("verified implies the row exists");
+
+    // Success clears the failed-login counter (Canvas successful_login!).
+    limiter.record_success(&email);
 
     // Mint the session JWT — same claims, secret and 7-day lifetime the API
     // login mints; only the transport differs (cookie vs Bearer).

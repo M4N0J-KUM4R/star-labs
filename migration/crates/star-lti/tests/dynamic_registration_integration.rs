@@ -655,3 +655,128 @@ async fn tool_proxy_student_forbidden() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// Issue #40 — uuid lookups (dynamic_registration_controller.rb:95-113):
+// `find_by!` raises RecordNotFound, so an unknown uuid is a 404 on all
+// three routes; `lti_registration_by_uuid` renders the PARENT registration
+// (lti_registration_json shape), `ims_registration_by_uuid` the IMS row,
+// `lti_registration_update_request_by_uuid` the update request.
+// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn uuid_lookups_find_rows_and_404_on_miss() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "root", None).await;
+    seed_account_admin(&pool, account, admin).await;
+
+    // Create an IMS registration via the DR create route — the response
+    // carries the generated guid.
+    let response = server
+        .post("/api/lti/registrations")
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "client_name": format!("{prefix}-tool"),
+            "redirect_uris": "https://example.com/callback",
+            "initiate_login_uri": "https://example.com/oidc/login",
+            "jwks_uri": "https://example.com/.well-known/jwks.json",
+            "scopes": "openid",
+        }))
+        .await;
+    assert_eq!(response.status_code(), 201, "create: {}", response.text());
+    let created: Value = response.json();
+    let parent_id = created["lti_registration_id"].as_i64().expect("parent id");
+    let guid = created["guid"].as_str().expect("guid").to_string();
+
+    // Seed an update request for the same parent registration.
+    let rur_uuid = format!("{prefix}-rur-uuid");
+    sqlx::query(
+        "INSERT INTO lti_registration_update_requests \
+         (uuid, lti_registration_id, root_account_id, lti_ims_registration) \
+         VALUES ($1, $2, $3, $4)",
+    )
+    .bind(&rur_uuid)
+    .bind(parent_id)
+    .bind(account)
+    .bind(json!({ "client_name": "Updated" }))
+    .execute(&pool)
+    .await
+    .expect("seed update request");
+
+    // /registrations/uuid/:uuid — the IMS registration.
+    let resp = server
+        .get(&format!(
+            "/api/lti/accounts/{account}/registrations/uuid/{guid}"
+        ))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "ims by uuid: {}", resp.text());
+    let ims: Value = resp.json();
+    assert_eq!(ims["guid"].as_str(), Some(guid.as_str()));
+    assert_eq!(ims["lti_registration_id"].as_i64(), Some(parent_id));
+
+    // /lti_registrations/uuid/:uuid — the PARENT registration shape.
+    let resp = server
+        .get(&format!(
+            "/api/lti/accounts/{account}/lti_registrations/uuid/{guid}"
+        ))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "parent by uuid: {}", resp.text());
+    let parent: Value = resp.json();
+    assert_eq!(parent["id"].as_i64(), Some(parent_id));
+    assert_eq!(parent["lti_version"], "1.3");
+    assert!(
+        parent.get("guid").is_none(),
+        "parent shape has no guid field"
+    );
+
+    // /lti_registration_update_request/uuid/:uuid — the update request.
+    let resp = server
+        .get(&format!(
+            "/api/lti/accounts/{account}/lti_registration_update_request/uuid/{rur_uuid}"
+        ))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "rur by uuid: {}", resp.text());
+    let rur: Value = resp.json();
+    assert_eq!(rur["uuid"].as_str(), Some(rur_uuid.as_str()));
+    assert_eq!(rur["lti_registration_id"].as_i64(), Some(parent_id));
+
+    // Unknown uuids are 404s on all three routes (find_by! semantics).
+    for path in [
+        format!("/api/lti/accounts/{account}/registrations/uuid/{prefix}-no-such-guid"),
+        format!("/api/lti/accounts/{account}/lti_registrations/uuid/{prefix}-no-such-guid"),
+        format!(
+            "/api/lti/accounts/{account}/lti_registration_update_request/uuid/{prefix}-no-such-rur"
+        ),
+    ] {
+        let resp = server
+            .get(&path)
+            .add_header(AUTHORIZATION, auth(admin, "admin"))
+            .await;
+        assert_eq!(resp.status_code(), 404, "unknown uuid on {path}");
+    }
+
+    // Students cannot use the uuid lookups.
+    let student = seed_user(&pool, &prefix, "student", "student").await;
+    let resp = server
+        .get(&format!(
+            "/api/lti/accounts/{account}/registrations/uuid/{guid}"
+        ))
+        .add_header(AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student uuid lookup");
+
+    // The DR create route parents its registrations on account 1, which the
+    // prefix-based account cleanup never reaches — remove the row directly.
+    let _ = sqlx::query("DELETE FROM lti_registrations WHERE id = $1")
+        .bind(parent_id)
+        .execute(&pool)
+        .await;
+    cleanup(&pool, &prefix).await;
+}
