@@ -56,6 +56,7 @@ mod modules;
 mod mutations;
 mod outcomes_media;
 mod mutations_batch_b;
+mod mutations_batch_c;
 mod pages;
 mod quiz;
 mod rubrics;
@@ -1060,6 +1061,7 @@ impl Query {
 pub struct Mutation(
     mutations::AssignmentMutations,
     mutations_batch_b::BatchBMutations,
+    mutations_batch_c::BatchCMutations,
 );
 
 impl Mutation {
@@ -1069,6 +1071,7 @@ impl Mutation {
         Mutation(
             mutations::AssignmentMutations,
             mutations_batch_b::BatchBMutations,
+            mutations_batch_c::BatchCMutations,
         )
     }
 }
