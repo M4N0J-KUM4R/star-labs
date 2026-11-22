@@ -49,8 +49,12 @@ mod discussion_entries;
 mod discussion_topic;
 mod external_tools;
 mod files;
+// Leaf enums/inputs registered for parity; entity batches wire the
+// ones Canvas nests, the rest stay schema-orphans (allowed dead code).
 mod grading_periods;
 mod grading_standards_account_notifications;
+#[allow(dead_code)]
+mod graphql_enums_inputs;
 mod groups;
 mod modules;
 mod mutations;
