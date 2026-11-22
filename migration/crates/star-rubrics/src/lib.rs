@@ -868,7 +868,7 @@ async fn course_association(
     .bind(course_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.ok_or(ApiError::NotFound)?)
+    row.ok_or(ApiError::NotFound)
 }
 
 /// POST /courses/{courseId}/rubric_associations/{rubric_association_id}/rubric_assessments  → 201
@@ -1425,7 +1425,7 @@ async fn update_rubric_association(
         }
     }
     if let Some(association_type) = params.association_type.as_deref() {
-        if !is_supported_association_type(&association_type) {
+        if !is_supported_association_type(association_type) {
             return Err(ApiError::BadRequest(
                 "association_type must be Assignment or Course".into(),
             ));
