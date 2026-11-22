@@ -162,17 +162,17 @@ async fn seed_collaboration_tool(pool: &PgPool, prefix: &str, course_id: i64, ac
 }
 
 /// One `collaborations` row.
-async fn seed_collaboration(
-    pool: &PgPool,
-    prefix: &str,
-    context_type: &str,
+struct SeedCollaboration<'a> {
+    context_type: &'a str,
     context_id: i64,
     user_id: i64,
-    title: &str,
-    kind: &str,
-    workflow_state: &str,
-    data: Option<&str>,
-) -> i64 {
+    title: &'a str,
+    kind: &'a str,
+    workflow_state: &'a str,
+    data: Option<&'a str>,
+}
+
+async fn seed_collaboration(pool: &PgPool, prefix: &str, seed: SeedCollaboration<'_>) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO collaborations \
            (context_type, context_id, user_id, title, url, type, workflow_state, data, \
@@ -181,14 +181,14 @@ async fn seed_collaboration(
                  (now() AT TIME ZONE 'UTC'), (now() AT TIME ZONE 'UTC')) \
          RETURNING id",
     )
-    .bind(context_type)
-    .bind(context_id)
-    .bind(user_id)
+    .bind(seed.context_type)
+    .bind(seed.context_id)
+    .bind(seed.user_id)
     .bind(format!("{prefix}-{title}"))
     .bind(format!("https://tool.example/{title}"))
-    .bind(kind)
-    .bind(workflow_state)
-    .bind(data)
+    .bind(seed.kind)
+    .bind(seed.workflow_state)
+    .bind(seed.data)
     .fetch_one(pool)
     .await
     .expect("seed collaboration")
@@ -292,38 +292,41 @@ async fn course_index_lists_the_external_tool_collaborations() {
 
     let active = seed_collaboration(
         &pool,
-        &prefix,
-        "Course",
-        course,
-        teacher,
-        "Active",
-        "ExternalToolCollaboration",
-        "active",
-        Some(r#"{"updateUrl":"https://tool.example/update"}"#),
+        SeedCollaboration {
+            context_type: "Course",
+            context_id: course,
+            user_id: teacher,
+            title: "Active",
+            kind: "ExternalToolCollaboration",
+            workflow_state: "active",
+            data: Some(r#"{"updateUrl":"https://tool.example/update"}"#),
+        },
     )
     .await;
     seed_collaboration(
         &pool,
-        &prefix,
-        "Course",
-        course,
-        teacher,
-        "Removed",
-        "ExternalToolCollaboration",
-        "deleted",
-        None,
+        SeedCollaboration {
+            context_type: "Course",
+            context_id: course,
+            user_id: teacher,
+            title: "Removed",
+            kind: "ExternalToolCollaboration",
+            workflow_state: "deleted",
+            data: None,
+        },
     )
     .await;
     seed_collaboration(
         &pool,
-        &prefix,
-        "Course",
-        course,
-        teacher,
-        "Google",
-        "GoogleDocsCollaboration",
-        "active",
-        None,
+        SeedCollaboration {
+            context_type: "Course",
+            context_id: course,
+            user_id: teacher,
+            title: "Google",
+            kind: "GoogleDocsCollaboration",
+            workflow_state: "active",
+            data: None,
+        },
     )
     .await;
 
@@ -372,38 +375,41 @@ async fn course_index_hides_the_collaborations_of_other_users_from_students() {
 
     let own = seed_collaboration(
         &pool,
-        &prefix,
-        "Course",
-        course,
-        student,
-        "Own",
-        "ExternalToolCollaboration",
-        "active",
-        None,
+        SeedCollaboration {
+            context_type: "Course",
+            context_id: course,
+            user_id: student,
+            title: "Own",
+            kind: "ExternalToolCollaboration",
+            workflow_state: "active",
+            data: None,
+        },
     )
     .await;
     let invited = seed_collaboration(
         &pool,
-        &prefix,
-        "Course",
-        course,
-        teacher,
-        "Invited",
-        "ExternalToolCollaboration",
-        "active",
-        None,
+        SeedCollaboration {
+            context_type: "Course",
+            context_id: course,
+            user_id: teacher,
+            title: "Invited",
+            kind: "ExternalToolCollaboration",
+            workflow_state: "active",
+            data: None,
+        },
     )
     .await;
     let foreign = seed_collaboration(
         &pool,
-        &prefix,
-        "Course",
-        course,
-        other,
-        "Foreign",
-        "ExternalToolCollaboration",
-        "active",
-        None,
+        SeedCollaboration {
+            context_type: "Course",
+            context_id: course,
+            user_id: other,
+            title: "Foreign",
+            kind: "ExternalToolCollaboration",
+            workflow_state: "active",
+            data: None,
+        },
     )
     .await;
     seed_collaborator(&pool, invited, Some(student), None).await;
@@ -444,14 +450,15 @@ async fn group_index_lists_the_groups_collaborations() {
 
     let collaboration = seed_collaboration(
         &pool,
-        &prefix,
-        "Group",
-        group,
-        teacher,
-        "GroupCollab",
-        "ExternalToolCollaboration",
-        "active",
-        None,
+        SeedCollaboration {
+            context_type: "Group",
+            context_id: group,
+            user_id: teacher,
+            title: "GroupCollab",
+            kind: "ExternalToolCollaboration",
+            workflow_state: "active",
+            data: None,
+        },
     )
     .await;
 
@@ -486,14 +493,15 @@ async fn members_lists_user_and_group_collaborators() {
 
     let collaboration = seed_collaboration(
         &pool,
-        &prefix,
-        "Course",
-        course,
-        teacher,
-        "Members",
-        "ExternalToolCollaboration",
-        "active",
-        None,
+        SeedCollaboration {
+            context_type: "Course",
+            context_id: course,
+            user_id: teacher,
+            title: "Members",
+            kind: "ExternalToolCollaboration",
+            workflow_state: "active",
+            data: None,
+        },
     )
     .await;
     seed_collaborator(&pool, collaboration, Some(student), None).await;
@@ -633,14 +641,15 @@ async fn destroy_soft_deletes_the_collaboration() {
 
     let collaboration = seed_collaboration(
         &pool,
-        &prefix,
-        "Course",
-        course,
-        teacher,
-        "Doomed",
-        "ExternalToolCollaboration",
-        "active",
-        None,
+        SeedCollaboration {
+            context_type: "Course",
+            context_id: course,
+            user_id: teacher,
+            title: "Doomed",
+            kind: "ExternalToolCollaboration",
+            workflow_state: "active",
+            data: None,
+        },
     )
     .await;
 
@@ -686,14 +695,15 @@ async fn destroy_of_a_collaboration_of_another_course_is_404() {
 
     let collaboration = seed_collaboration(
         &pool,
-        &prefix,
-        "Course",
-        other_course,
-        teacher,
-        "Foreign",
-        "ExternalToolCollaboration",
-        "active",
-        None,
+        SeedCollaboration {
+            context_type: "Course",
+            context_id: other_course,
+            user_id: teacher,
+            title: "Foreign",
+            kind: "ExternalToolCollaboration",
+            workflow_state: "active",
+            data: None,
+        },
     )
     .await;
 
@@ -721,7 +731,7 @@ async fn anonymous_requests_are_401() {
         format!("/groups/{group}/collaborations"),
         format!("/courses/{course}/potential_collaborators"),
         format!("/groups/{group}/potential_collaborators"),
-        format!("/collaborations/1/members"),
+        "/collaborations/1/members".to_string(),
     ] {
         let resp = server.get(&path).await;
         assert_eq!(resp.status_code(), 401, "path {path}: {}", resp.text());
