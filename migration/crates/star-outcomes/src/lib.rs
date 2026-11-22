@@ -40,6 +40,8 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod outcome_proficiency;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -2071,6 +2073,7 @@ async fn list_account_outcome_group_links(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(outcome_proficiency::outcome_proficiency_routes())
         // outcome groups
         .route(
             "/courses/{courseId}/outcome_groups",
