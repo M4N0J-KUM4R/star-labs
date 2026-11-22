@@ -454,6 +454,56 @@ async fn delete_group_category_soft_deletes_it_and_protects_builtin_roles() {
     cleanup(&pool, &prefix).await;
 }
 
+// POST /group_categories/{id}/groups (Canvas groups#create, config/routes.rb:2129)
+// shares its path with GET (group_categories#groups, config/routes.rb:2595).
+// Regression: registering the POST under a differently named param
+// ({groupCategoryId} vs {id}) panicked the router at startup.
+#[tokio::test]
+async fn create_group_in_category_shares_path_with_list_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let category = seed_category(&pool, course, "Study Groups", Some("student")).await;
+
+    // Teacher creates a group inside the category (Canvas 201).
+    let resp = server
+        .post(&format!("/group_categories/{category}/groups"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "name": "Blue Team" }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["name"], "Blue Team");
+    assert_eq!(body["group_category_id"].as_i64(), Some(category));
+    assert_eq!(body["course_id"].as_i64(), Some(course));
+    let group_id = body["id"].as_i64().expect("group id");
+
+    // Creating groups in a category requires manage permissions.
+    let resp = server
+        .post(&format!("/group_categories/{category}/groups"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "name": "Nope" }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // GET on the same path still lists the category's groups.
+    let resp = server
+        .get(&format!("/group_categories/{category}/groups"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let groups: Value = resp.json();
+    let groups = groups.as_array().expect("groups array");
+    assert!(groups.iter().any(|g| g["id"].as_i64() == Some(group_id)));
+
+    cleanup(&pool, &prefix).await;
+}
+
 // ---------------------------------------------------------------------------
 // Canvas group users / invitations / files — GET/POST/DELETE /groups/{groupId}/users,
 // POST /groups/{groupId}/invite, GET /groups/{groupId}/files,
@@ -646,6 +696,532 @@ async fn self_groups_and_group_file_metadata_are_member_scoped() {
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// C4: POST /courses/{courseId}/group_categories/bulk_manage_differentiation_tag
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn bulk_manage_differentiation_tag_forbidden_for_student() {
+    let (server, pool, prefix) = setup().await.expect("setup");
+    let teacher = seed_user(&pool, &prefix, "teacher", "admin").await;
+    let student = seed_user(&pool, &prefix, "student", "student").await;
+    let course = seed_course(&pool, &prefix, "c1").await;
+    seed_teacher(&pool, teacher, course).await;
+
+    // Create a diff-tag category in this course.
+    let gc: (i64,) = sqlx::query_as(
+        "INSERT INTO group_categories (course_id, name, non_collaborative) VALUES ($1, $2, true) RETURNING id",
+    )
+    .bind(course)
+    .bind("Diff Tag 1")
+    .fetch_one(&pool)
+    .await
+    .expect("seed diff tag category");
+
+    let payload = json!({
+        "operations": { "create": [{ "name": "Group A" }] },
+        "group_category": { "id": gc.0 }
+    });
+
+    // Student → 403.
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/group_categories/bulk_manage_differentiation_tag"
+        ))
+        .json(&payload)
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn bulk_manage_differentiation_tag_creates_and_updates_groups() {
+    let (server, pool, prefix) = setup().await.expect("setup");
+    let teacher = seed_user(&pool, &prefix, "teacher", "admin").await;
+    let course = seed_course(&pool, &prefix, "c1").await;
+    seed_teacher(&pool, teacher, course).await;
+
+    // Create diff-tag category.
+    let gc: (i64,) = sqlx::query_as(
+        "INSERT INTO group_categories (course_id, name, non_collaborative) VALUES ($1, $2, true) RETURNING id",
+    )
+    .bind(course)
+    .bind("Diff Tag 1")
+    .fetch_one(&pool)
+    .await
+    .expect("seed diff tag category");
+
+    // Teacher: create groups via bulk_manage.
+    let payload = json!({
+        "operations": {
+            "create": [{ "name": "Morning Group" }, { "name": "Afternoon Group" }],
+            "update": [],
+            "delete": []
+        },
+        "group_category": { "id": gc.0 }
+    });
+
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/group_categories/bulk_manage_differentiation_tag"
+        ))
+        .json(&payload)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let created = body["created"].as_array().expect("created array");
+    assert_eq!(created.len(), 2);
+
+    // Update a group name.
+    let group_id = created[0]["id"].as_i64().unwrap();
+    let update_payload = json!({
+        "operations": {
+            "create": [],
+            "update": [{ "id": group_id, "name": "Morning Group Renamed" }],
+            "delete": []
+        },
+        "group_category": { "id": gc.0 }
+    });
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/group_categories/bulk_manage_differentiation_tag"
+        ))
+        .json(&update_payload)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["updated"][0]["name"], "Morning Group Renamed");
+
+    // Delete a group.
+    let delete_payload = json!({
+        "operations": {
+            "create": [],
+            "update": [],
+            "delete": [{ "id": group_id }]
+        },
+        "group_category": { "id": gc.0 }
+    });
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/group_categories/bulk_manage_differentiation_tag"
+        ))
+        .json(&delete_payload)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["deleted"].as_array().unwrap().len(), 1);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn bulk_manage_differentiation_tag_rejects_non_collaborative() {
+    let (server, pool, prefix) = setup().await.expect("setup");
+    let teacher = seed_user(&pool, &prefix, "teacher", "admin").await;
+    let course = seed_course(&pool, &prefix, "c1").await;
+    seed_teacher(&pool, teacher, course).await;
+
+    // Create a regular (collaborative) category — not a diff tag.
+    let gc: (i64,) = sqlx::query_as(
+        "INSERT INTO group_categories (course_id, name, non_collaborative) VALUES ($1, $2, false) RETURNING id",
+    )
+    .bind(course)
+    .bind("Regular Group")
+    .fetch_one(&pool)
+    .await
+    .expect("seed category");
+
+    let payload = json!({
+        "operations": { "create": [{ "name": "Group A" }] },
+        "group_category": { "id": gc.0 }
+    });
+
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/group_categories/bulk_manage_differentiation_tag"
+        ))
+        .json(&payload)
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// C5: POST /courses/{courseId}/group_categories/import_tags
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn import_tags_returns_progress_for_teacher() {
+    let (server, pool, prefix) = setup().await.expect("setup");
+    let teacher = seed_user(&pool, &prefix, "teacher", "admin").await;
+    let course = seed_course(&pool, &prefix, "c1").await;
+    seed_teacher(&pool, teacher, course).await;
+
+    let resp = server
+        .post(&format!("/courses/{course}/group_categories/import_tags"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["workflow_state"], "running");
+    assert_eq!(body["tag"], "course_tag_import");
+    assert!(body["id"].is_number(), "progress id present");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn import_tags_forbidden_for_student() {
+    let (server, pool, prefix) = setup().await.expect("setup");
+    let teacher = seed_user(&pool, &prefix, "teacher", "admin").await;
+    let student = seed_user(&pool, &prefix, "student", "student").await;
+    let course = seed_course(&pool, &prefix, "c1").await;
+    seed_teacher(&pool, teacher, course).await;
+
+    let resp = server
+        .post(&format!("/courses/{course}/group_categories/import_tags"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// C6: GET /courses/{courseId}/group_categories/export_tags
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn export_tags_returns_csv_for_teacher() {
+    let (server, pool, prefix) = setup().await.expect("setup");
+    let teacher = seed_user(&pool, &prefix, "teacher", "admin").await;
+    let student = seed_user(&pool, &prefix, "student", "student").await;
+    let course = seed_course(&pool, &prefix, "c1").await;
+    seed_teacher(&pool, teacher, course).await;
+    sqlx::query("INSERT INTO enrollments (user_id, course_id, role) VALUES ($1, $2, 'student')")
+        .bind(student)
+        .bind(course)
+        .execute(&pool)
+        .await
+        .expect("seed student enrollment");
+
+    let resp = server
+        .get(&format!("/courses/{course}/group_categories/export_tags"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(
+        resp.headers()
+            .get("content-type")
+            .map(|v| v.to_str().unwrap()),
+        Some("text/csv")
+    );
+    assert!(
+        resp.headers()
+            .get("content-disposition")
+            .map(|v| v.to_str().unwrap())
+            .unwrap_or("")
+            .contains("Tags.csv"),
+        "content-disposition should contain Tags.csv"
+    );
+    // CSV must have header row.
+    let text = resp.text();
+    assert!(
+        text.starts_with("name,canvas_user_id,login_id"),
+        "header row must match export_tags_headers: {}",
+        text
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn export_tags_forbidden_for_student() {
+    let (server, pool, prefix) = setup().await.expect("setup");
+    let teacher = seed_user(&pool, &prefix, "teacher", "admin").await;
+    let student = seed_user(&pool, &prefix, "student", "student").await;
+    let course = seed_course(&pool, &prefix, "c1").await;
+    seed_teacher(&pool, teacher, course).await;
+
+    let resp = server
+        .get(&format!("/courses/{course}/group_categories/export_tags"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// POST /groups/{groupId}/preview_html — auth check
+// ---------------------------------------------------------------------------
+
+// Canvas groups#preview_html (config/routes.rb:2128) is guarded by
+// `authorized_action(@group, @current_user, :read)` (groups_controller.rb,
+// preview_html action). Canvas's own API specs show a teacher of the group's
+// course — without being a group member — succeeding
+// (spec/apis/v1/groups_api_spec.rb, "/preview_html" → "sanitizes html and
+// process links"), while a user with no enrollment and no membership is
+// forbidden (same spec, "requires permission to preview" → 403).
+#[tokio::test]
+async fn preview_html_allows_course_teacher_but_forbids_unaffiliated_user() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let group = seed_group(&pool, course, &format!("{prefix}-PreviewGroup")).await;
+    // Teacher is enrolled as teacher but not a group member: Canvas still
+    // grants group :read through the course context, so preview succeeds.
+    let resp = server
+        .post(&format!("/groups/{group}/preview_html"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "html": "<p>test</p>" }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "course teacher should get 200: {}",
+        resp.text()
+    );
+    let body: Value = resp.json();
+    assert_eq!(
+        body.get("html").and_then(|v| v.as_str()),
+        Some("<p>test</p>")
+    );
+
+    // Student is not enrolled in the course and not a group member: 403,
+    // like Canvas's "requires permission to preview" spec.
+    let resp = server
+        .post(&format!("/groups/{group}/preview_html"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "html": "<p>test</p>" }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        403,
+        "unaffiliated user should get 403: {}",
+        resp.text()
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn preview_html_succeeds_for_group_member() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let group = seed_group(&pool, course, &format!("{prefix}-PreviewGroup2")).await;
+    // Add student as a group membership.
+    sqlx::query("INSERT INTO group_memberships (group_id, user_id, workflow_state) VALUES ($1, $2, 'invited')")
+        .bind(group)
+        .bind(student)
+        .execute(&pool)
+        .await
+        .expect("seed group membership");
+
+    let resp = server
+        .post(&format!("/groups/{group}/preview_html"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "html": "<p>hello</p>" }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "member should get 200: {}",
+        resp.text()
+    );
+    let body: Value = resp.json();
+    assert_eq!(
+        body.get("html").and_then(|v| v.as_str()),
+        Some("<p>hello</p>")
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn get_membership_returns_membership_with_user() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let group = seed_group(&pool, course, &format!("{prefix}-Group")).await;
+
+    // Create membership
+    let resp = server
+        .post(&format!("/groups/{group}/memberships"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "user_id": student }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    let created: Value = resp.json();
+    let membership_id = created["id"].as_i64().expect("membership id");
+
+    // Teacher reads the membership
+    let resp = server
+        .get(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["id"].as_i64(), Some(membership_id));
+    assert_eq!(body["user_id"].as_i64(), Some(student));
+    assert_eq!(body["group_id"].as_i64(), Some(group));
+    assert!(body["user_name"].is_string());
+    assert!(body["user_email"].is_string());
+    assert!(body["moderator"].is_boolean());
+
+    // The member themselves can also read their own membership
+    let resp = server
+        .get(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // Outsider cannot read
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let resp = server
+        .get(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn get_membership_by_user_returns_membership() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let group = seed_group(&pool, course, &format!("{prefix}-Group")).await;
+
+    // Create membership
+    let resp = server
+        .post(&format!("/groups/{group}/memberships"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "user_id": student }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+
+    // GET by user id
+    let resp = server
+        .get(&format!("/groups/{group}/users/{student}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["user_id"].as_i64(), Some(student));
+    assert_eq!(body["group_id"].as_i64(), Some(group));
+
+    // "self" resolves to the authenticated user
+    let resp = server
+        .get(&format!("/groups/{group}/users/self"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["user_id"].as_i64(), Some(student));
+
+    // Non-existent user returns 404
+    let resp = server
+        .get(&format!("/groups/{group}/users/99999999"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn update_membership_accepts_and_sets_moderator() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_teacher(&pool, teacher, course).await;
+    let group = seed_group(&pool, course, &format!("{prefix}-Group")).await;
+
+    // Create membership (invited state)
+    let resp = server
+        .post(&format!("/groups/{group}/memberships"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "user_id": student }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    let created: Value = resp.json();
+    let membership_id = created["id"].as_i64().expect("membership id");
+    assert_eq!(created["workflow_state"], "invited");
+
+    // Accept the membership (teacher promotes to accepted)
+    let resp = server
+        .put(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "workflow_state": "accepted" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["workflow_state"], "accepted");
+
+    // Set moderator flag
+    let resp = server
+        .put(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "moderator": true }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["moderator"], true);
+
+    // Non-teacher cannot accept a membership (not owner)
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let resp = server
+        .put(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .json(&json!({ "workflow_state": "accepted" }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // Cannot set invalid workflow_state
+    let resp = server
+        .put(&format!("/groups/{group}/memberships/{membership_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "workflow_state": "invalid_state" }))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }

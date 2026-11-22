@@ -422,13 +422,13 @@ Related display gates (all from `abstract_assignment.rb`):
 
 | Migration | Provides | Used by |
 |---|---|---|
-| `0080_submission_read_states.sql` | `submissions.anonymous_id` (+index), `assignments.anonymous_id`, `assignments.anonymous_grading`, `submission_reads.read_at`/`.source` | slices A/E (anonymous submissions, read states, `clear_unread`, `bulk_mark_read`), slice F status/JSON `anonymous_id` fields |
-| `0092_grade_change_audit.sql` | `grade_change_events` (uuid, course/assignment/student/grader ids, before/after grade+score, `graded_anonymously`, `version_number`, `request_id`, time-descending indexes per filter column) | slice B audit routes — all 12 can be served from this table; the 7 todo routes only add query combinations and the admin/student/grader entry points |
-| `0104_peer_reviews.sql` | `assessment_requests` (assessor/assessee/asset, workflow_state, unique(asset, assessor)) | slice D; peer-review index/create/destroy and (with the allocation service) `allocate` |
+| `submission_read_states` migration | `submissions.anonymous_id` (+index), `assignments.anonymous_id`, `assignments.anonymous_grading`, `submission_reads.read_at`/`.source` | slices A/E (anonymous submissions, read states, `clear_unread`, `bulk_mark_read`), slice F status/JSON `anonymous_id` fields |
+| `grade_change_audit` migration | `grade_change_events` (uuid, course/assignment/student/grader ids, before/after grade+score, `graded_anonymously`, `version_number`, `request_id`, time-descending indexes per filter column) | slice B audit routes — all 12 can be served from this table; the 7 todo routes only add query combinations and the admin/student/grader entry points |
+| `peer_reviews` migration | `assessment_requests` (assessor/assessee/asset, workflow_state, unique(asset, assessor)) | slice D; peer-review index/create/destroy and (with the allocation service) `allocate` |
 
-Also existing from earlier migrations: `submission_reads` itself (0060, extended by 0080), `rubrics`/`rubric_criteria` (0094), quiz statistics (0102). The `assignments` table already carries the flags needed for moderated grading decisions except those in §5.2.
+Also existing from earlier migrations: `submission_reads` itself (extended by the read-states migration), `rubrics`/`rubric_criteria`, quiz statistics. The `assignments` table already carries the flags needed for moderated grading decisions except those in §5.2.
 
-**Migration reservation protocol**: new numbers are assigned by the coordinator via `orchestration/migration-reservations.json` (currently `max_merged: 0107`, `next_available: 0108`, `active: {}`). Agents never self-assign. The implementing issues (#30/#31/#32) must request a reservation at dispatch time; this spec does not reserve numbers.
+**Migration reservation protocol**: MIGRATION: coordinator-assigned — see orchestration/migration-reservations.json. Agents never self-assign. The implementing issues (#30/#31/#32) must request a reservation at dispatch time; this spec does not reserve numbers.
 
 ### 5.2 New tables required (additive only)
 
@@ -480,7 +480,7 @@ Index: unique `(assignment_id, user_id)`; `(anonymous_id)`.
 ### 5.3 Routes needing no schema change
 
 - All slice B routes: `gradebook_history_api` reads submission **versions**. The snapshot already versions submissions for the gradebook/history family — verify the `versions`/submission-history mechanism used by the landed gradebook (`star-assignments` `gradebook` handler) covers `version_id`-ordered pagination; if Star's submission history table lacks a `version_id` monotonically increasing key, a small additive migration (new index or column) may be needed and must be requested through the reservation ledger.
-- Slice E: purely permission/serialization semantics on top of 0080 columns.
+- Slice E: purely permission/serialization semantics on top of the read-states migration columns.
 - Slices C, D, G: `rubrics_api` upload/import needs a `rubric_imports` table (Canvas `RubricImport`: context, user, attachment, workflow_state, import_id) — that belongs to the future rubrics issue, noted here for completeness. Quiz tail, overrides batch/aliases, assignments remainder, and submission-comments `annotation_notification` need no new tables (progress objects already exist for async jobs).
 
 ---
@@ -588,7 +588,7 @@ Each crate follows the existing pattern: unit tests beside handlers plus DB-back
 2. **`anonymous_student_identities`.** Canvas's `AnonymousUserDisplay.display_name` reads `assignment.anonymous_student_identities` (per-student pseudonyms). The snapshot has no such mapping; the landed Star handler emits `"Student"`. Confirm the intended parity level for #30: shape parity only (current behavior) or full identity generation (needs an assignments×users pseudonym table).
 3. **`can_view_student_names?` scope.** The landed `gradeable_students` gates on the `anonymous_grading` flag; Canvas gates on `anonymize_students?`, which additionally depends on grades-published state and unposted submissions. #30 must switch the gate; confirm no UI currently depends on the looser behavior.
 4. **Moderation events / live SpeedGrader reload.** Canvas's `create_moderation_event` and submission `touch` drive websocket updates. Out of scope for #31 unless the coordinator says otherwise; the spec's slice F omits them (API responses don't expose them).
-5. **Audit `page_view` links.** `grade_change_events_compound_json` links a `page_view` id when one exists. The Star audit table has no page-view association; decide whether to always omit the link or accept a null (current 0092-based handlers presumably omit).
+5. **Audit `page_view` links.** `grade_change_events_compound_json` links a `page_view` id when one exists. The Star audit table has no page-view association; decide whether to always omit the link or accept a null (the current audit-table-based handlers presumably omit).
 6. **Non-API submissions create route.** `POST /courses/:course_id/assignments/:assignment_id/submissions` belongs to the non-API `submissions` controller; it is outside this spec's manifest totals but overlaps slice A handlers. Confirm with the coordinator whether the #32 slice should reuse the update handler or skip it.
 7. **`submissions_clear_unread` semantics.** Canvas's handler reports a warning to error capture while returning 204 with an empty body (no explicit render). Star should return 204; the Canvas-side observability call is not parity-relevant.
 8. **Rubric import ownership.** §5.3's `rubric_imports` table and the account-context rubrics routes are left to a future issue; confirm the coordinator wants a separate spec rather than folding them into #32.

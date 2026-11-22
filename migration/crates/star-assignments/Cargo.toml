@@ -16,3 +16,4 @@ chrono = { workspace = true }
 star-db = { path = "../star-db" }
 tokio = { workspace = true }
 axum-test = { workspace = true }
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }

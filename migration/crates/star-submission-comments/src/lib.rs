@@ -30,7 +30,8 @@
 //! - comment files upload: same audience as POST (teacher/admin or own student)
 
 use axum::{
-    extract::{Path, State},
+    body::Bytes,
+    extract::{Path, RawQuery, State},
     http::StatusCode,
     routing::{delete, get, post, put},
     Json, Router,
@@ -40,6 +41,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
+
+// Server-rendered UI loaders + the shared comment write (star-ui, issue
+// #108): pub fns extracted the same way star-conversations did, so the
+// SpeedGrader comment feed reuses this crate's validation instead of
+// forking it.
+pub mod ui;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -817,6 +824,118 @@ async fn comments_unread_count(
 }
 
 // ---------------------------------------------------------------------------
+// Annotation notification (Canvas SubmissionCommentsApiController
+// #annotation_notification; issue #55)
+// ---------------------------------------------------------------------------
+
+/// POST /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/annotation_notification
+/// — Canvas `annotation_notification`: site-admin broadcast helper for
+/// document annotations. Canvas gates on `send_messages` on the Site Admin
+/// account (star's global admin role), then resolves the assignment, the
+/// annotation author and the submission's user, answering `{}` on 200.
+/// Star has no annotation read-state table or notification delivery for
+/// this path, so those side effects are intentionally absent — the route's
+/// observable contract (gates, 404/400 ordering, empty 200 body) is what
+/// ships.
+async fn annotation_notification(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+    body: Bytes,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    // Canvas require_context: missing or deleted courses are 404.
+    let course: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if course.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // Site-admin-only broadcast (Canvas: send_messages on Account.site_admin).
+    if !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
+    let assignment: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM assignments WHERE id = $1 AND course_id = $2")
+            .bind(assignment_id)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if assignment.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // author_id arrives as a query param (Canvas -F form) or a JSON body.
+    let mut author_id: Option<i64> = None;
+    if let Some(query) = raw_query.as_deref() {
+        for pair in query.split('&') {
+            let Some((raw_key, raw_value)) = pair.split_once('=') else {
+                continue;
+            };
+            if raw_key == "author_id" {
+                author_id = raw_value.parse::<i64>().ok();
+            }
+        }
+    }
+    if author_id.is_none() && !body.is_empty() {
+        if let Ok(payload) = serde_json::from_slice::<serde_json::Value>(&body) {
+            author_id = payload.get("author_id").and_then(|value| match value {
+                serde_json::Value::Number(number) => number.as_i64(),
+                serde_json::Value::String(text) => text.parse::<i64>().ok(),
+                _ => None,
+            });
+        }
+    }
+    let Some(author_id) = author_id else {
+        // Canvas api_find(User.active, nil) raises RecordNotFound.
+        return Err(ApiError::NotFound);
+    };
+    let author: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM users WHERE id = $1")
+        .bind(author_id)
+        .fetch_optional(&state.db)
+        .await?;
+    if author.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // Canvas api_find(@context.all_current_users, params[:user_id]).
+    let enrolled: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM enrollments WHERE course_id = $1 AND user_id = $2 \
+         AND workflow_state <> 'deleted' LIMIT 1",
+    )
+    .bind(course_id)
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await?;
+    if enrolled.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    let submission: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM submissions WHERE assignment_id = $1 AND user_id = $2")
+            .bind(assignment_id)
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?;
+    if submission.is_none() {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": format!(
+                    "Couldn't find Submission for user with API id {user_id}"
+                )
+            })),
+        ));
+    }
+
+    Ok((StatusCode::OK, Json(serde_json::json!({}))))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -870,5 +989,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}",
             delete(delete_comment_nested),
+        )
+        // Annotation notification (Canvas SubmissionCommentsApiController
+        // #annotation_notification, issue #55). Canvas declares this route
+        // inside the API route set with an absolute path (no /api/v1
+        // prefix); star mounts the API set under /api/v1, matching the
+        // landed create_file route.
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/annotation_notification",
+            post(annotation_notification),
         )
 }

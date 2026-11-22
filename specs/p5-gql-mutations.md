@@ -4,6 +4,8 @@ Issue: #21 (epic: specs) · Status: Draft for review · Parity target: canvas-lm
 (mutations, types) · Implementation target: `migration/crates/star-graphql/` (async-graphql 7,
 `EmptyMutation` today).
 
+> Inherits transport rules from specs/gql/CONTRACT.md.
+
 This spec defines the first GraphQL mutation batches for star-lms with Canvas permission checks,
 Canvas validation messages (exact strings, exact `attribute` values), and Canvas payload shapes.
 All Canvas behavior below was verified against the canvas-lms sources cited per section; star-lms
@@ -13,10 +15,10 @@ line numbers refer to `migration/crates/*/src/lib.rs` on `main` (3dc34f6).
 
 The star-graphql foundation (`migration/crates/star-graphql/src/lib.rs`) already provides the
 execution shell every mutation will reuse: the router mounted at `/api/graphql`, a `GraphQLContext`
-holding the `PgPool` plus the `AuthUser` resolved by the shared extractor **before** execution
-(unauthenticated requests get HTTP 401 and never reach the schema), and `db_err` mapping any
-sqlx failure to a generic `async_graphql::Error("database error")`. What is missing is the
-mutation root (`EmptyMutation`) and the domain payloads — this spec adds them in five batches:
+holding the `PgPool` plus the `AuthUser` resolved by the shared extractor **before** execution, and
+`db_err` mapping any sqlx failure to a generic `async_graphql::Error("database error")`. What is
+missing is the mutation root (`EmptyMutation`) and the domain payloads — this spec adds them in
+five batches:
 
 | Batch | Mutations | Count | Canvas source |
 | --- | --- | --- | --- |
@@ -159,7 +161,7 @@ type CreateSubmissionPayload { submission: SubmissionType errors: [ValidationErr
   | `No attachments found for the following ids: {ids}` | `file_ids` | some `fileIds` unresolvable |
   | `Invalid file type` | `file_ids` | extension not in `allowedExtensions` |
 - star-lms mapping: own-submission upsert from `create_submission` (`src/lib.rs:1244`, INSERT …
-  ON CONFLICT), `online_upload` via the `submission_files` table (migration 0060); attachments
+  ON CONFLICT), `online_upload` via the `submission_files` table; attachments
   must belong to the submitting user. `online_url`/`basic_lti_launch` are **deferred** — the
   `submissions.url` column does not exist (§4). Proxy submissions (`studentId`) may ship later in
   the batch behind `check_teacher_or_admin` (§7).
@@ -362,11 +364,11 @@ type CreateConversationPayload { conversations: [ConversationParticipantType] er
 
 ## 3. Error mapping
 
-Three error channels, never mixed:
+In-band error channels, never mixed (the unauthenticated → HTTP 401 transport channel is defined
+in `specs/gql/CONTRACT.md` §1 and is not repeated here):
 
 | Channel | Transport | When | star-lms implementation |
 | --- | --- | --- | --- |
-| Unauthenticated | HTTP 401, non-GraphQL body, **before execution** | missing/garbage bearer token | `AuthUser` extractor in the router (already tested by `graphql_integration.rs`) — mutations inherit it, no code needed |
 | Execution error | HTTP 200, top-level `errors[]`, `data.<field>` null | authz failure, record not found, DB failure | `async_graphql::Error::new(msg)`; `db_err(e)` → `"database error"` (never leak SQL) |
 | Validation error | HTTP 200, payload `errors: [{attribute, message}]` | input/validation failures | payload field `errors: Option<Vec<ValidationError>>` on every mutation payload type |
 
@@ -397,15 +399,16 @@ conflates via `"invalid course: {id}"`).
 ## 4. Data model needs
 
 Existing columns are complete unless listed. All changes are additive `ALTER TABLE … ADD COLUMN
-IF NOT EXISTS` migrations following the star-db conventions (latest: 0107).
+IF NOT EXISTS` migrations following the star-db conventions (see
+`orchestration/migration-reservations.json`).
 
 | Batch | Table | Gap | Migration needed |
 | --- | --- | --- | --- |
-| A | `assignments` (0001) | **no `published`/`workflow_state` column** — biggest gap in this spec; blocks `state` input, soft delete, restore | add `workflow_state TEXT NOT NULL DEFAULT 'unpublished' CHECK (… IN ('unpublished','published','deleted'))` (Canvas semantics: `published` bool ⇄ state; `deleted` for destroy) |
-| B | `submissions` (0001 + 0060) | no `url` column — blocks `online_url` and `basic_lti_launch` submission types | add `url TEXT` when those types ship; `online_text_entry` + `online_upload` (via `submission_files`) + grading (`graded_at`, `grader_id`, `workflow_state`) already exist |
-| C | `discussion_topics` (0017) | no `user_id` (author) — blocks student own-topic update/delete and anonymity; no anonymous columns | add `user_id BIGINT REFERENCES users(id) ON DELETE SET NULL` with the student-editing path; anonymous columns deferred with `anonymous_state` |
-| D | `enrollments` (0001 + 0010) | role strings `student|teacher|ta` only, no Canvas `type` distinction (5 types) and no custom-role support | widen role whitelist / add `type` column when Designer/Observer ship; `workflow_state` (0010) already covers concluded/active |
-| E | `conversations` (0020) | no `context_type`/`context_id` — blocks context-scoped sends and their error paths | add `context_type TEXT`, `context_id BIGINT` (nullable) when contextCode ships; participants/messages tables already sufficient |
+| A | `assignments` | **no `published`/`workflow_state` column** — biggest gap in this spec; blocks `state` input, soft delete, restore | add `workflow_state TEXT NOT NULL DEFAULT 'unpublished' CHECK (… IN ('unpublished','published','deleted'))` (Canvas semantics: `published` bool ⇄ state; `deleted` for destroy) |
+| B | `submissions` | no `url` column — blocks `online_url` and `basic_lti_launch` submission types | add `url TEXT` when those types ship; `online_text_entry` + `online_upload` (via `submission_files`) + grading (`graded_at`, `grader_id`, `workflow_state`) already exist |
+| C | `discussion_topics` | no `user_id` (author) — blocks student own-topic update/delete and anonymity; no anonymous columns | add `user_id BIGINT REFERENCES users(id) ON DELETE SET NULL` with the student-editing path; anonymous columns deferred with `anonymous_state` |
+| D | `enrollments` | role strings `student|teacher|ta` only, no Canvas `type` distinction (5 types) and no custom-role support | widen role whitelist / add `type` column when Designer/Observer ship; `workflow_state` already covers concluded/active |
+| E | `conversations` | no `context_type`/`context_id` — blocks context-scoped sends and their error paths | add `context_type TEXT`, `context_id BIGINT` (nullable) when contextCode ships; participants/messages tables already sufficient |
 
 ## 5. Test plan
 
@@ -419,8 +422,8 @@ All tests are DB-backed integration tests in
 - `seed_user` / `seed_course` / `seed_enrollment` helpers + `token_for`/`auth` bearer minting;
 - `gql_post` asserts HTTP 200 and returns the JSON body (payload `errors` are 200-responses);
   execution errors are asserted as top-level `errors[]` with `data.<mutation>` null;
-- unauthenticated mutation calls reuse the existing 401-pre-execution test pattern (assert the
-  body is not a GraphQL error shape).
+- unauthenticated mutation calls reuse the transport 401 test pattern from
+  `specs/gql/CONTRACT.md` §1 (assert the body is not a GraphQL error shape).
 
 Per batch (each list = one `#[tokio::test]`):
 
@@ -479,8 +482,8 @@ Recommended order: **C → B → A → E → D**.
    `workflow_state` (soft delete + published mapping) and `discussion_type`. Only the student
    own-topic path waits on `user_id`. Best ratio of Canvas parity per unit of work.
 2. **B (submissions) second** — handlers exist (`create_submission`, `grade_submission`,
-   star-submission-comments); `online_text_entry`, `online_upload` (via `submission_files`,
-   migration 0060) and grading need no schema change. Only `url`-typed submissions wait on one
+   star-submission-comments); `online_text_entry`, `online_upload` (via `submission_files`)
+   and grading need no schema change. Only `url`-typed submissions wait on one
    column.
 3. **A (assignments) third** — highest-value surface and complete handlers, but **blocked on the
    `published`/`workflow_state` column** (§4): the `state` input, soft delete and restore all
@@ -493,16 +496,19 @@ Recommended order: **C → B → A → E → D**.
    (Canvas 5 types vs star-lms 3). Ship once §7 Q4 is decided; the REST handler already covers
    the happy path.
 
-## 7. Open questions
+## 7. Decisions and open questions
 
-1. **IDs**: Canvas mutations accept relay-or-legacy IDs (`GraphQLHelpers.parse_relay_or_legacy_id`);
-   the star-graphql foundation uses plain stringified i64 `ID!`. Propose staying with plain IDs
-   and rejecting non-numeric input as `"not found"` — confirm.
-2. **Mutation name quirk**: Canvas's `graphql_name` is `"UpdateSubmissionsGrade"` (plural, the
-   class is `UpdateSubmissionGrade`). Keep the exact Canvas name for client compatibility, or
-   normalize? Propose keeping the Canvas name.
-3. **`score: Int!` vs NUMERIC(10,2)**: Canvas types the grade input as `Int` while star-lms
-   stores NUMERIC. Propose `Int` for byte-parity; decimals via a later mutation or REST.
+Items 1–3 were decided by `specs/gql/CONTRACT.md` (issue #137); 4–8 remain
+open for the coordinator.
+
+1. **IDs**: **DECIDED — see `specs/gql/CONTRACT.md` §5.** Plain decimal stringified i64 in and
+   out; Canvas's base64 relay layer is not ported; malformed ids are execution errors, unknown
+   ids are null / Canvas not-found strings.
+2. **Mutation name quirk**: **DECIDED — see `specs/gql/CONTRACT.md` §6.** Canvas's `graphql_name`
+   is kept verbatim, quirks included: `UpdateSubmissionsGrade` stays plural.
+3. **`score: Int!` vs NUMERIC(10,2)**: **DECIDED — see `specs/gql/CONTRACT.md` §6.** Input stays
+   `Int!` for Canvas byte-parity; the read field stays `Float`; decimals via REST or a later
+   mutation.
 4. **Enrollment types**: widen star-lms roles to Canvas's five enrollment types (add
    `designer`, `observer`) or introduce a `type` column distinct from `role` (Canvas's custom
    roles)? Affects REST `validate_enrollment_role` and this mutation's `"Invalid type"`/`"Invalid

@@ -43,6 +43,17 @@
 //! - GET/PUT /{context}/discussion_topics/{topicId}/insights/entries — insight entries (empty state)
 //! - POST   /{context}/discussion_topics/{topicId}/accessibility/scan — accessibility scan (401 shape)
 //! - POST   /{context}/discussion_topics/{topicId}/accessibility/queue_scan — queue scan (401 shape)
+//! - GET/POST /groups/{groupId}/discussion_topics — group topic index / create
+//!   (Canvas discussion_topics controller; create is group leader /
+//!   parent-course teacher / admin only — user_can_create via create_forum /
+//!   moderate_forum)
+//! - PUT/DELETE /groups/{groupId}/discussion_topics/{topicId} — group topic
+//!   update / destroy (destroy renders the deleted topic plus the author's
+//!   name, like Canvas' as_json(include: {user: {only: :name}}))
+//! - POST   /{context}/discussion_topics/reorder — reorder pinned topics
+//!   (acts_as_list update_order semantics; {"reorder": true, "order": [...]})
+//! - GET    /{context}/discussion_topics/{topicId}/messageable_users — users
+//!   who can be messaged in the topic's context (conversation_user_json shape)
 
 use axum::{
     extract::{Path, Query, RawQuery, State},
@@ -58,6 +69,11 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 use std::collections::HashMap;
+
+// Server-rendered UI loaders (star-ui, issue #72): pub loaders extracted the
+// same way star-courses extracted load_course_for_viewer / load_course_tabs.
+pub mod ui;
+pub use ui::TopicIndexRow;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -132,6 +148,9 @@ pub struct CreateTopic {
     pub title: String,
     pub message: Option<String>,
     pub discussion_type: Option<String>,
+    /// Canvas `pinned` — a pinned topic starts at the bottom of the
+    /// context's pinned list (acts_as_list `add_to_list_bottom`).
+    pub pinned: Option<bool>,
 }
 
 /// Request body for updating a discussion topic.
@@ -232,7 +251,9 @@ fn is_admin(auth: &AuthUser) -> bool {
     auth.role == "admin"
 }
 
-async fn check_enrolled_or_admin(
+// `pub(crate)`: shared with the UI loader module (ui.rs) so the shell runs
+// the exact same gate SQL as the REST handlers.
+pub(crate) async fn check_enrolled_or_admin(
     pool: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -251,7 +272,7 @@ async fn check_enrolled_or_admin(
     Ok(row.is_some())
 }
 
-async fn check_teacher_or_admin(
+pub(crate) async fn check_teacher_or_admin(
     pool: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -293,10 +314,27 @@ async fn create_topic(
             "discussion_type must be 'side_comment', 'threaded', 'flat', or 'not_threaded'".into(),
         ));
     }
+    // Canvas records the author (@topic.user = @current_user) and, for a
+    // pinned create, adds the topic to the bottom of the pinned list
+    // (acts_as_list scope {context, pinned: true}).
+    let pinned = payload.pinned.unwrap_or(false);
+    let position: Option<i64> = if pinned {
+        sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(MAX(position), 0) + 1 FROM discussion_topics
+            WHERE course_id = $1 AND group_id IS NULL AND pinned AND workflow_state <> 'deleted'
+            "#,
+        )
+        .bind(course_id)
+        .fetch_one(&state.db)
+        .await?
+    } else {
+        None
+    };
     let row: DiscussionTopic = sqlx::query_as(
         r#"
-        INSERT INTO discussion_topics (course_id, title, message, discussion_type, workflow_state)
-        VALUES ($1, $2, $3, $4, 'active')
+        INSERT INTO discussion_topics (course_id, title, message, discussion_type, workflow_state, pinned, locked, position, user_id)
+        VALUES ($1, $2, $3, $4, 'active', $5, FALSE, $6, $7)
         RETURNING id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
         "#,
     )
@@ -304,6 +342,9 @@ async fn create_topic(
     .bind(&payload.title)
     .bind(&payload.message)
     .bind(discussion_type)
+    .bind(pinned)
+    .bind(position)
+    .bind(auth.id)
     .fetch_one(&state.db)
     .await?;
     Ok((StatusCode::CREATED, Json(row)))
@@ -349,7 +390,7 @@ async fn get_topic(
         r#"
         SELECT id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
         FROM discussion_topics
-        WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+        WHERE id = $1 AND course_id = $2 AND group_id IS NULL AND workflow_state <> 'deleted'
         "#,
     )
     .bind(id)
@@ -371,7 +412,7 @@ async fn update_topic(
         r#"
         SELECT id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
         FROM discussion_topics
-        WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+        WHERE id = $1 AND course_id = $2 AND group_id IS NULL AND workflow_state <> 'deleted'
         "#,
     )
     .bind(id)
@@ -379,6 +420,11 @@ async fn update_topic(
     .fetch_optional(&state.db)
     .await?;
     let existing = existing.ok_or(ApiError::NotFound)?;
+    let existing_position: Option<i64> =
+        sqlx::query_scalar("SELECT position FROM discussion_topics WHERE id = $1")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await?;
 
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
@@ -406,12 +452,31 @@ async fn update_topic(
         ));
     }
 
+    // Canvas `process_pin_parameters`: when the pinned flag flips, the
+    // position resets — pinning goes to the bottom of the pinned list,
+    // unpinning clears it.
+    let position: Option<i64> = if payload.pinned == Some(true) && !existing.pinned {
+        sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(MAX(position), 0) + 1 FROM discussion_topics
+            WHERE course_id = $1 AND group_id IS NULL AND pinned AND workflow_state <> 'deleted'
+            "#,
+        )
+        .bind(course_id)
+        .fetch_one(&state.db)
+        .await?
+    } else if payload.pinned == Some(false) {
+        None
+    } else {
+        existing_position
+    };
+
     let updated: DiscussionTopic = sqlx::query_as(
         r#"
         UPDATE discussion_topics
         SET title = $1, message = $2, discussion_type = $3, workflow_state = $4,
-            pinned = $5, locked = $6, updated_at = now()
-        WHERE id = $7 AND course_id = $8 AND workflow_state <> 'deleted'
+            pinned = $5, locked = $6, position = $7, updated_at = now()
+        WHERE id = $8 AND course_id = $9 AND group_id IS NULL AND workflow_state <> 'deleted'
         RETURNING id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
         "#,
     )
@@ -421,6 +486,7 @@ async fn update_topic(
     .bind(&workflow_state)
     .bind(pinned)
     .bind(locked)
+    .bind(position)
     .bind(id)
     .bind(course_id)
     .fetch_one(&state.db)
@@ -435,7 +501,7 @@ async fn delete_topic(
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
     let row: Option<(i64,)> =
-        sqlx::query_as("SELECT course_id FROM discussion_topics WHERE id = $1 AND course_id = $2")
+        sqlx::query_as("SELECT course_id FROM discussion_topics WHERE id = $1 AND course_id = $2 AND group_id IS NULL")
             .bind(id)
             .bind(course_id)
             .fetch_optional(&state.db)
@@ -3397,6 +3463,652 @@ async fn group_accessibility_queue_scan(
 }
 
 // ---------------------------------------------------------------------------
+// Group-context topic CRUD (Canvas discussion_topics controller)
+// ---------------------------------------------------------------------------
+
+/// Canvas topic management rights in a group context: `user_can_create` /
+/// the topic `:update` / `:delete` policies resolve to `create_forum` /
+/// `moderate_forum`, which a group grants to its leader (membership
+/// `moderator` flag), the parent course's teachers, and site admins. Plain
+/// members may read the forum and post entries but not manage topics
+/// (`user_can_manage_own_discussion_posts?` defaults to false).
+async fn check_group_topic_manage_access(
+    pool: &PgPool,
+    group_id: i64,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    if is_admin(auth) {
+        return Ok(true);
+    }
+    // Group leader (Canvas GroupMembership#moderator → Group#moderate_forum).
+    let leader: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM group_memberships
+        WHERE group_id = $1 AND user_id = $2 AND workflow_state <> 'deleted' AND moderator
+        LIMIT 1
+        "#,
+    )
+    .bind(group_id)
+    .bind(auth.id)
+    .fetch_optional(pool)
+    .await?;
+    if leader.is_some() {
+        return Ok(true);
+    }
+    // Parent-course teachers (Canvas Group#create_forum / :moderate_forum
+    // delegate to the owning course's teachers).
+    let teacher: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM enrollments e
+        JOIN groups g ON g.course_id = e.course_id
+        WHERE g.id = $1 AND e.user_id = $2 AND e.role = 'teacher'
+        LIMIT 1
+        "#,
+    )
+    .bind(group_id)
+    .bind(auth.id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(teacher.is_some())
+}
+
+/// GET /groups/{groupId}/discussion_topics — index (group read).
+///
+/// Canvas `index` for a group: active topics only, default order
+/// `by_position_legacy` (position DESC, created_at DESC, id DESC — on
+/// Postgres NULL positions sort first, so unpinned topics precede the
+/// pinned ones, exactly like Canvas).
+async fn group_list_topics(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    Query(pag): Query<Pagination>,
+    auth: AuthUser,
+) -> Result<Json<Vec<DiscussionTopic>>, ApiError> {
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    let rows: Vec<DiscussionTopic> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
+        FROM discussion_topics
+        WHERE group_id = $1 AND workflow_state <> 'deleted'
+        ORDER BY position DESC, created_at DESC, id DESC
+        LIMIT $2 OFFSET $3
+        "#,
+    )
+    .bind(group_id)
+    .bind(pag.limit())
+    .bind(pag.offset())
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(rows))
+}
+
+/// POST /groups/{groupId}/discussion_topics — create a topic (Canvas
+/// `user_can_create`: group leader / parent-course teacher / admin).
+async fn group_create_topic(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CreateTopic>,
+) -> Result<(StatusCode, Json<DiscussionTopic>), ApiError> {
+    // Canvas order: require_context_and_read_access, then the create right.
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    if !check_group_topic_manage_access(&state.db, group_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if payload.title.trim().is_empty() {
+        return Err(ApiError::Validation("title cannot be empty".into()));
+    }
+    let discussion_type = payload.discussion_type.as_deref().unwrap_or("side_comment");
+    if !["side_comment", "threaded", "flat", "not_threaded"].contains(&discussion_type) {
+        return Err(ApiError::Validation(
+            "discussion_type must be 'side_comment', 'threaded', 'flat', or 'not_threaded'".into(),
+        ));
+    }
+    // A group topic stores the group's parent course (star's
+    // discussion_topics.course_id is NOT NULL; account-level groups are out
+    // of scope per migration 0018).
+    let course: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT course_id FROM groups WHERE id = $1")
+            .bind(group_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (parent_course_id,) = course.ok_or(ApiError::NotFound)?;
+    let parent_course_id = parent_course_id
+        .ok_or_else(|| ApiError::Validation("group must belong to a course".into()))?;
+
+    let pinned = payload.pinned.unwrap_or(false);
+    let position: Option<i64> = if pinned {
+        sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(MAX(position), 0) + 1 FROM discussion_topics
+            WHERE group_id = $1 AND pinned AND workflow_state <> 'deleted'
+            "#,
+        )
+        .bind(group_id)
+        .fetch_one(&state.db)
+        .await?
+    } else {
+        None
+    };
+    let row: DiscussionTopic = sqlx::query_as(
+        r#"
+        INSERT INTO discussion_topics (course_id, group_id, title, message, discussion_type, workflow_state, pinned, locked, position, user_id)
+        VALUES ($1, $2, $3, $4, $5, 'active', $6, FALSE, $7, $8)
+        RETURNING id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
+        "#,
+    )
+    .bind(parent_course_id)
+    .bind(group_id)
+    .bind(&payload.title)
+    .bind(&payload.message)
+    .bind(discussion_type)
+    .bind(pinned)
+    .bind(position)
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+/// PUT /groups/{groupId}/discussion_topics/{topicId} — update a topic
+/// (Canvas topic `:update`: group leader / parent-course teacher / admin).
+async fn group_update_topic(
+    State(state): State<AppState>,
+    Path((group_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateTopic>,
+) -> Result<Json<DiscussionTopic>, ApiError> {
+    // Canvas order: require_context_and_read_access, find the topic in the
+    // context (404), then the update right.
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    let existing: Option<DiscussionTopic> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
+        FROM discussion_topics
+        WHERE id = $1 AND group_id = $2 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(id)
+    .bind(group_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let existing = existing.ok_or(ApiError::NotFound)?;
+    let existing_position: Option<i64> =
+        sqlx::query_scalar("SELECT position FROM discussion_topics WHERE id = $1")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await?;
+    if !check_group_topic_manage_access(&state.db, group_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let title = payload.title.unwrap_or(existing.title);
+    let message = payload.message.or(existing.message);
+    let discussion_type = payload.discussion_type.unwrap_or(existing.discussion_type);
+    let workflow_state = match payload.published {
+        Some(true) => "active".to_string(),
+        Some(false) => "unpublished".to_string(),
+        None => existing.workflow_state.clone(),
+    };
+    let pinned = payload.pinned.unwrap_or(existing.pinned);
+    let locked = payload.locked.unwrap_or(existing.locked);
+
+    if title.trim().is_empty() {
+        return Err(ApiError::Validation("title cannot be empty".into()));
+    }
+    if !["side_comment", "threaded", "flat", "not_threaded"].contains(&discussion_type.as_str()) {
+        return Err(ApiError::Validation(
+            "discussion_type must be 'side_comment', 'threaded', 'flat', or 'not_threaded'".into(),
+        ));
+    }
+
+    // Canvas `process_pin_parameters`: a pin flip resets the position.
+    let position: Option<i64> = if payload.pinned == Some(true) && !existing.pinned {
+        sqlx::query_scalar(
+            r#"
+            SELECT COALESCE(MAX(position), 0) + 1 FROM discussion_topics
+            WHERE group_id = $1 AND pinned AND workflow_state <> 'deleted'
+            "#,
+        )
+        .bind(group_id)
+        .fetch_one(&state.db)
+        .await?
+    } else if payload.pinned == Some(false) {
+        None
+    } else {
+        existing_position
+    };
+
+    let updated: DiscussionTopic = sqlx::query_as(
+        r#"
+        UPDATE discussion_topics
+        SET title = $1, message = $2, discussion_type = $3, workflow_state = $4,
+            pinned = $5, locked = $6, position = $7, updated_at = now()
+        WHERE id = $8 AND group_id = $9 AND workflow_state <> 'deleted'
+        RETURNING id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
+        "#,
+    )
+    .bind(&title)
+    .bind(&message)
+    .bind(&discussion_type)
+    .bind(&workflow_state)
+    .bind(pinned)
+    .bind(locked)
+    .bind(position)
+    .bind(id)
+    .bind(group_id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(updated))
+}
+
+/// The destroyed-topic response: Canvas renders
+/// `@topic.as_json(include: { user: { only: :name } })` with status 200.
+#[derive(Debug, Serialize)]
+struct DeletedTopic {
+    #[serde(flatten)]
+    topic: DiscussionTopic,
+    user: Option<DeletedTopicUser>,
+}
+
+#[derive(Debug, Serialize)]
+struct DeletedTopicUser {
+    name: Option<String>,
+}
+
+/// DELETE /groups/{groupId}/discussion_topics/{topicId} — soft-delete a
+/// topic; the response carries the destroyed topic plus the author's name.
+async fn group_delete_topic(
+    State(state): State<AppState>,
+    Path((group_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<(StatusCode, Json<DeletedTopic>), ApiError> {
+    // Canvas order: require_context_and_read_access, find the topic in
+    // `all_discussion_topics` (no active filter — an already-deleted topic is
+    // still found and re-destroyed), then the :delete right.
+    ensure_group_read_access(&state.db, group_id, &auth).await?;
+    let existing: Option<(i64, Option<i64>)> =
+        sqlx::query_as("SELECT id, user_id FROM discussion_topics WHERE id = $1 AND group_id = $2")
+            .bind(id)
+            .bind(group_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (topic_id, author_id) = existing.ok_or(ApiError::NotFound)?;
+    if !check_group_topic_manage_access(&state.db, group_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    sqlx::query(
+        "UPDATE discussion_topics SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(topic_id)
+    .execute(&state.db)
+    .await?;
+
+    // The destroyed row plus the author's name (Canvas `as_json(include:
+    // { user: { only: :name } })`).
+    let topic: DiscussionTopic = sqlx::query_as(
+        r#"
+        SELECT id, course_id, title, message, workflow_state, discussion_type, pinned, locked, created_at, updated_at
+        FROM discussion_topics
+        WHERE id = $1
+        "#,
+    )
+    .bind(topic_id)
+    .fetch_one(&state.db)
+    .await?;
+    let author_name: Option<String> = match author_id {
+        Some(user_id) => sqlx::query_scalar("SELECT name FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?
+            .flatten(),
+        None => None,
+    };
+    Ok((
+        StatusCode::OK,
+        Json(DeletedTopic {
+            topic,
+            user: Some(DeletedTopicUser { name: author_name }),
+        }),
+    ))
+}
+
+// ---------------------------------------------------------------------------
+// Reorder pinned topics (Canvas discussion_topics#reorder)
+// ---------------------------------------------------------------------------
+
+/// Canvas `Api.value_to_array(params[:order])`: `order=104,102,103` or
+/// `order[]=104&order[]=102`. Unparseable ids collapse to 0, which matches no
+/// topic, reproducing Rails' integer cast (→ "topics not found").
+fn parse_order_query(raw_query: Option<&str>) -> Vec<i64> {
+    let mut order = Vec::new();
+    let Some(raw_query) = raw_query else {
+        return order;
+    };
+    for pair in raw_query.split('&') {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = decode_query_component(raw_key).to_ascii_lowercase();
+        let key = key.strip_suffix("[]").unwrap_or(key.as_str());
+        if key != "order" {
+            continue;
+        }
+        for part in decode_query_component(raw_value).split(',') {
+            let part = part.trim();
+            if part.is_empty() {
+                continue;
+            }
+            order.push(part.parse::<i64>().unwrap_or(0));
+        }
+    }
+    order
+}
+
+/// Canvas `reject!` (RequestError) renders this body with the given status.
+fn canvas_reject(status: StatusCode, message: &str) -> Response {
+    (
+        status,
+        Json(serde_json::json!({
+            "status": "bad_request",
+            "message": message,
+        })),
+    )
+        .into_response()
+}
+
+/// The context filter for pinned-topic queries: `(sql, ctx_id)`. `param` is
+/// the 1-based placeholder index the context id binds to.
+fn pinned_topics_filter(ctx: TopicContext, param: usize) -> (String, i64) {
+    match ctx {
+        TopicContext::Course(course_id) => (
+            format!(
+                "course_id = ${param} AND group_id IS NULL AND pinned AND workflow_state <> 'deleted'"
+            ),
+            course_id,
+        ),
+        TopicContext::Group(group_id) => (
+            format!("group_id = ${param} AND pinned AND workflow_state <> 'deleted'"),
+            group_id,
+        ),
+    }
+}
+
+/// Canvas `reorder` (acts_as_list `update_order` over the context's pinned
+/// topics): the listed topics get positions 1..N in the given order, then the
+/// remaining pinned topics follow in their current display order. Simplified
+/// from acts_as_list's raw CASE update: identical whenever `order` covers all
+/// pinned topics (the documented contract — "All pinned topics should be
+/// included") and collision-free otherwise. Positions are written without
+/// touching `updated_at` (Canvas uses `update_all`).
+async fn ctx_reorder_topics(
+    state: &AppState,
+    ctx: TopicContext,
+    auth: &AuthUser,
+    raw_query: Option<&str>,
+) -> Result<Response, ApiError> {
+    // Canvas: authorized_action(context.discussion_topics.temp_record,
+    // :update) — course teachers/admins; in a group the forum managers.
+    let allowed = match ctx {
+        TopicContext::Course(course_id) => {
+            check_teacher_or_admin(&state.db, auth.id, course_id, auth).await?
+        }
+        TopicContext::Group(group_id) => {
+            check_group_topic_manage_access(&state.db, group_id, auth).await?
+        }
+    };
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    let order = parse_order_query(raw_query);
+    if order.is_empty() {
+        return Ok(canvas_reject(
+            StatusCode::BAD_REQUEST,
+            "order parameter required",
+        ));
+    }
+
+    // `pinned_topics.where(id: order)` — an id that is unknown, unpinned,
+    // soft-deleted or from another context matches nothing, and duplicates
+    // cannot match twice: either way the counts diverge and Canvas rejects.
+    let (filter, ctx_id) = pinned_topics_filter(ctx, 1);
+    let matched: Vec<(i64,)> = sqlx::query_as(&format!(
+        "SELECT id FROM discussion_topics WHERE {filter} AND id = ANY($2)"
+    ))
+    .bind(ctx_id)
+    .bind(&order)
+    .fetch_all(&state.db)
+    .await?;
+    if matched.len() != order.len() {
+        return Ok(canvas_reject(StatusCode::BAD_REQUEST, "topics not found"));
+    }
+
+    // $1 = the listed ids, $2 = how many were listed, $3 = the context id.
+    let listed_count = order.len() as i64;
+    let (filter, ctx_id) = pinned_topics_filter(ctx, 3);
+    sqlx::query(&format!(
+        r#"
+        WITH listed AS (
+            SELECT t.ord AS new_pos, t.id
+            FROM unnest($1::bigint[]) WITH ORDINALITY AS t(id, ord)
+        ),
+        remaining AS (
+            SELECT d.id, $2::bigint + row_number() OVER (
+                ORDER BY d.position ASC NULLS LAST, d.created_at DESC, d.id DESC
+            ) AS new_pos
+            FROM discussion_topics d
+            WHERE {filter} AND NOT (d.id = ANY($1))
+        ),
+        target AS (
+            SELECT id, new_pos FROM listed
+            UNION ALL
+            SELECT id, new_pos FROM remaining
+        )
+        UPDATE discussion_topics t
+        SET position = target.new_pos
+        FROM target
+        WHERE t.id = target.id
+        "#
+    ))
+    .bind(&order)
+    .bind(listed_count)
+    .bind(ctx_id)
+    .execute(&state.db)
+    .await?;
+
+    // `pinned_topics.by_position.pluck(:id).map(&:to_s)`.
+    let (filter, ctx_id) = pinned_topics_filter(ctx, 1);
+    let new_order: Vec<(i64,)> = sqlx::query_as(&format!(
+        "SELECT id FROM discussion_topics WHERE {filter} ORDER BY position ASC, created_at DESC, id DESC"
+    ))
+    .bind(ctx_id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok((
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "reorder": true,
+            "order": new_order
+                .into_iter()
+                .map(|(id,)| id.to_string())
+                .collect::<Vec<String>>(),
+        })),
+    )
+        .into_response())
+}
+
+/// POST /courses/{courseId}/discussion_topics/reorder.
+async fn course_reorder_topics(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    ctx_reorder_topics(
+        &state,
+        TopicContext::Course(course_id),
+        &auth,
+        raw_query.as_deref(),
+    )
+    .await
+}
+
+/// POST /groups/{groupId}/discussion_topics/reorder.
+async fn group_reorder_topics(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    RawQuery(raw_query): RawQuery,
+    auth: AuthUser,
+) -> Result<Response, ApiError> {
+    ctx_reorder_topics(
+        &state,
+        TopicContext::Group(group_id),
+        &auth,
+        raw_query.as_deref(),
+    )
+    .await
+}
+
+// ---------------------------------------------------------------------------
+// Messageable users (Canvas discussion_topic_users#search)
+// ---------------------------------------------------------------------------
+
+/// Query parameters for messageable_users: the search terms plus pagination.
+#[derive(Debug, Deserialize, Default)]
+struct MessageableUsersParams {
+    search: Option<String>,
+    page: Option<i64>,
+    per_page: Option<i64>,
+}
+
+/// Canvas `conversation_user_json` without options (the shape
+/// `discussion_topic_users#search` renders): id, short name, full name and
+/// pronouns. star users carry a single `name` (used for both `name` and
+/// `full_name`) and no pronouns (rendered as null, like Canvas does when the
+/// attribute is unset).
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct MessageableUserJson {
+    id: i64,
+    name: String,
+    full_name: String,
+    pronouns: Option<String>,
+}
+
+/// Canvas `search_messageable_users(context: topic)`: the users the caller
+/// could message inside the topic's context — enrolled users for a course
+/// topic, the group's members for a group topic — filtered by the
+/// whitespace-separated search terms (every term must match the name) and
+/// ordered by sortable name like `MessageableUser.prepped`. Deviations from
+/// the full MessageableUser machinery, which star does not model: enrollment
+/// visibility restrictions, concluded-teacher inclusion for instructor
+/// callers, and the section-specific topic visibility filter.
+async fn ctx_messageable_users(
+    state: &AppState,
+    ctx: TopicContext,
+    topic_id: i64,
+    params: &MessageableUsersParams,
+    auth: &AuthUser,
+) -> Result<Json<Vec<MessageableUserJson>>, ApiError> {
+    // Canvas before_action order: require_context_and_read_access (403),
+    // then require_topic_and_read_access (404 for an unknown topic).
+    if !check_ctx_read_access(&state.db, ctx, auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_ctx_topic(&state.db, ctx, topic_id).await?;
+
+    let terms: Vec<String> = params
+        .search
+        .as_deref()
+        .map(|search| {
+            search
+                .split_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<String>>()
+        })
+        .unwrap_or_default();
+
+    // $1 = the context id, then one placeholder per search term. The
+    // `sort_key` column exists so DISTINCT allows the ORDER BY expression
+    // (Postgres requires it in the select list); the row struct ignores it.
+    let mut sql = match ctx {
+        TopicContext::Course(_) => String::from(
+            r#"
+            SELECT DISTINCT u.id, u.name, u.name AS full_name, NULL::text AS pronouns,
+                   COALESCE(u.sortable_name, u.name) AS sort_key
+            FROM users u
+            JOIN enrollments e ON e.user_id = u.id
+            WHERE e.course_id = $1 AND e.workflow_state IN ('active', 'invited')
+            "#,
+        ),
+        TopicContext::Group(_) => String::from(
+            r#"
+            SELECT DISTINCT u.id, u.name, u.name AS full_name, NULL::text AS pronouns,
+                   COALESCE(u.sortable_name, u.name) AS sort_key
+            FROM users u
+            JOIN group_memberships m ON m.user_id = u.id
+            WHERE m.group_id = $1 AND m.workflow_state = 'accepted'
+            "#,
+        ),
+    };
+    for (index, _) in terms.iter().enumerate() {
+        sql.push_str(&format!(" AND u.name ILIKE '%' || ${} || '%'", index + 2));
+    }
+    sql.push_str(" ORDER BY sort_key, u.id");
+    let pag = Pagination {
+        page: params.page,
+        per_page: params.per_page,
+    };
+    sql.push_str(&format!(" LIMIT {} OFFSET {}", pag.limit(), pag.offset()));
+
+    let ctx_id = match ctx {
+        TopicContext::Course(course_id) => course_id,
+        TopicContext::Group(group_id) => group_id,
+    };
+    let mut query = sqlx::query_as::<_, MessageableUserJson>(&sql).bind(ctx_id);
+    for term in &terms {
+        query = query.bind(term);
+    }
+    let users = query.fetch_all(&state.db).await?;
+    Ok(Json(users))
+}
+
+/// GET /courses/{courseId}/discussion_topics/{topicId}/messageable_users.
+async fn course_messageable_users(
+    State(state): State<AppState>,
+    Path((course_id, topic_id)): Path<(i64, i64)>,
+    Query(params): Query<MessageableUsersParams>,
+    auth: AuthUser,
+) -> Result<Json<Vec<MessageableUserJson>>, ApiError> {
+    ctx_messageable_users(
+        &state,
+        TopicContext::Course(course_id),
+        topic_id,
+        &params,
+        &auth,
+    )
+    .await
+}
+
+/// GET /groups/{groupId}/discussion_topics/{topicId}/messageable_users.
+async fn group_messageable_users(
+    State(state): State<AppState>,
+    Path((group_id, topic_id)): Path<(i64, i64)>,
+    Query(params): Query<MessageableUsersParams>,
+    auth: AuthUser,
+) -> Result<Json<Vec<MessageableUserJson>>, ApiError> {
+    ctx_messageable_users(
+        &state,
+        TopicContext::Group(group_id),
+        topic_id,
+        &params,
+        &auth,
+    )
+    .await
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
@@ -3609,5 +4321,32 @@ pub fn router() -> Router<AppState> {
         .route(
             "/groups/{groupId}/discussion_topics/{topicId}/accessibility/queue_scan",
             post(group_accessibility_queue_scan),
+        )
+        // Group-context topic CRUD (Canvas discussion_topics controller).
+        .route(
+            "/groups/{groupId}/discussion_topics",
+            get(group_list_topics).post(group_create_topic),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}",
+            put(group_update_topic).delete(group_delete_topic),
+        )
+        // Reorder pinned topics (Canvas discussion_topics#reorder).
+        .route(
+            "/courses/{courseId}/discussion_topics/reorder",
+            post(course_reorder_topics),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/reorder",
+            post(group_reorder_topics),
+        )
+        // Messageable users (Canvas discussion_topic_users#search).
+        .route(
+            "/courses/{courseId}/discussion_topics/{topicId}/messageable_users",
+            get(course_messageable_users),
+        )
+        .route(
+            "/groups/{groupId}/discussion_topics/{topicId}/messageable_users",
+            get(group_messageable_users),
         )
 }

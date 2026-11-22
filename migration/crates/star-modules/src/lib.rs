@@ -343,6 +343,21 @@ async fn list_modules(
     let limit = params.limit.unwrap_or(100).min(100);
     let offset = params.offset.unwrap_or(0);
 
+    let modules = load_modules(&state.db, course_id, limit, offset).await?;
+
+    Ok(Json(modules))
+}
+
+/// Load a course's visible modules (soft-deleted excluded, position ASC then
+/// id ASC — the same rows `GET /courses/{id}/modules` returns). Extracted as a
+/// pub loader so the server-rendered UI shell (star-ui) can render the course
+/// home module list from the same query the API serves.
+pub async fn load_modules(
+    db: &PgPool,
+    course_id: i64,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<Module>, ApiError> {
     let modules = sqlx::query_as::<_, Module>(
         r#"
         SELECT id, course_id, name, position, workflow_state, created_at, updated_at
@@ -355,10 +370,10 @@ async fn list_modules(
     .bind(course_id)
     .bind(limit)
     .bind(offset)
-    .fetch_all(&state.db)
+    .fetch_all(db)
     .await?;
 
-    Ok(Json(modules))
+    Ok(modules)
 }
 
 /// POST /courses/{courseId}/modules

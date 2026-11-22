@@ -1,0 +1,57 @@
+{% extends "layouts/course.html" %}
+{# Assignment new/edit form (issue #71) — Canvas assignments#new / #edit as a
+   plain HTML form: name, description, points, due date+time, group select
+   and the published checkbox. POSTs are CSRF double-submit protected. #}
+{% block content %}
+  <div id="assignment_form" class="assignment-form content_underline_links">
+    <h1 class="assignment-form-heading">{{ heading }}</h1>
+    {% if !error.is_empty() %}
+    <div class="ic-flash error" role="alert">{{ error }}</div>
+    {% endif %}
+    <form id="assignment_edit_form" class="assignment-edit-form" method="post" action="{{ form_action }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="assignment_name">Name</label>
+        <input class="ic-Input" type="text" id="assignment_name" name="name" value="{{ name_value }}" required>
+      </div>
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="assignment_description">Description</label>
+        <textarea class="ic-Input" id="assignment_description" name="description" rows="5" placeholder="Add assignment description">{{ description_value }}</textarea>
+      </div>
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="assignment_points">Points Possible</label>
+        <input class="ic-Input" type="number" id="assignment_points" name="points_possible" min="0" step="0.5" value="{{ points_value }}">
+      </div>
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="assignment_due_date">Due Date</label>
+        <input class="ic-Input" type="date" id="assignment_due_date" name="due_date" value="{{ due_date_value }}">
+        <label class="ic-Label" for="assignment_due_time">Time</label>
+        <input class="ic-Input" type="time" id="assignment_due_time" name="due_time" value="{{ due_time_value }}">
+      </div>
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="assignment_group">Assignment Group</label>
+        <select class="ic-Input" id="assignment_group" name="assignment_group_id">
+          <option value="">No group</option>
+          {% for option in group_options %}
+          <option value="{{ option.0 }}"{% if selected_group_id == option.0 %} selected{% endif %}>{{ option.1 }}</option>
+          {% endfor %}
+        </select>
+      </div>
+
+      <div class="ic-Form-control ic-Form-control--checkbox">
+        <input type="checkbox" id="assignment_published" name="published" value="published"{% if published %} checked{% endif %}>
+        <label class="ic-Label" for="assignment_published">Published</label>
+      </div>
+
+      <div class="assignment-form-actions">
+        <button type="submit" class="btn btn-primary" id="assignment_form_submit">Save</button>
+        <a class="btn" href="/courses/{{ course_id }}/assignments">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock content %}

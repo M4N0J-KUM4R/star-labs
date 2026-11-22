@@ -727,6 +727,21 @@ async fn dashboard_cards_handler(
     State(state): State<AppState>,
     auth: AuthUser,
 ) -> Result<Json<Vec<DashboardCard>>, ApiError> {
+    Ok(Json(
+        load_dashboard_cards(&state.db, auth.id, &auth.role).await?,
+    ))
+}
+
+/// Load the current user's dashboard cards (same query and shape the
+/// `/dashboard/dashboard_cards` API returns). Extracted as a pub loader so the
+/// server-rendered UI shell (star-ui) renders exactly what the API serves
+/// instead of duplicating the SQL. Same semantics: DISTINCT ON (c.id) primary
+/// enrollment by role-rank, position NULLS LAST, name ASC, LIMIT 50.
+pub async fn load_dashboard_cards(
+    db: &sqlx::PgPool,
+    user_id: i64,
+    auth_role: &str,
+) -> Result<Vec<DashboardCard>, ApiError> {
     let rows: Vec<DashboardCardRow> = sqlx::query_as(
         r#"
         SELECT id, name, course_code, workflow_state, role, enrollment_state, position
@@ -755,15 +770,15 @@ async fn dashboard_cards_handler(
         LIMIT 50
         "#,
     )
-    .bind(auth.id)
-    .fetch_all(&state.db)
+    .bind(user_id)
+    .fetch_all(db)
     .await?;
 
     let cards = rows
         .into_iter()
         .map(|row| {
             let can_manage =
-                matches!(row.role.as_str(), "teacher" | "ta" | "designer") || auth.role == "admin";
+                matches!(row.role.as_str(), "teacher" | "ta" | "designer") || auth_role == "admin";
             DashboardCard {
                 long_name: format!("{} - {}", row.name, row.course_code),
                 short_name: row.course_code.clone(),
@@ -796,7 +811,7 @@ async fn dashboard_cards_handler(
         })
         .collect();
 
-    Ok(Json(cards))
+    Ok(cards)
 }
 
 // -----------------------------------------------------------------------

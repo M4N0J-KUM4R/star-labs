@@ -100,6 +100,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // -------------------------------------------------------------------------
     let app = Router::new()
         .route("/health", get(health))
+        // Server-rendered UI shell (star-ui, spec p5): top level, NOT under
+        // /api/v1 — /, /login, /logout, /dashboard, /courses/:id, /static.
+        .merge(star_ui::router())
+        // Canvas serves the LTI Advantage family at /api/lti (outside
+        // /api/v1), so the router carries the prefix and is merged here.
+        .merge(star_lti::lti_advantage_router())
+        // Canvas serves the login/oauth2 family (auth, token, revoke, jwks)
+        // at the top level, outside /api/v1 (config/routes.rb:3087-3094).
+        .merge(star_auth::login_router())
         .nest("/api/v1", api_router)
         // Canvas serves its GraphQL API at /api/graphql (outside /api/v1).
         .nest("/api/graphql", star_graphql::router())
@@ -156,4 +165,14 @@ fn build_api_router() -> Router<AppState> {
         .merge(star_learning_dates::router())
         .merge(star_audit::router())
         .merge(star_media::router())
+        // Scaffold crates (issue #138) — routers are empty until the feature
+        // workers land their routes; merged here once so they never have to
+        // touch this file.
+        .merge(star_account_reports::router())
+        .merge(star_collaborations::router())
+        .merge(star_conferences::router())
+        .merge(star_eportfolios::router())
+        .merge(star_polling::router())
+        .merge(star_search::router())
+        .merge(star_sis::router())
 }

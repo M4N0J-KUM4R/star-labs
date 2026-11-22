@@ -327,9 +327,9 @@ Abilities below are the Canvas `authorized_action`/`grants_right` checks verifie
 
 ## 5. Data model and migration needs
 
-**Numbering protocol:** max merged migration is `0107`; the next number is coordinator-assigned via `orchestration/migration-reservations.json` (currently `next_available: 0108`). Agents never self-assign. All changes below are **additive columns only** — no renumbering, no DROP/TRUNCATE. All needed tables already exist (`files`, `folders`, `pages`, `page_revisions`, `modules`, `module_items`, `module_item_completions`, `content_migrations`, `content_exports`, `migration_issues`, `usage_rights`), so the needs are new columns on existing tables.
+**Numbering protocol:** MIGRATION: coordinator-assigned — see orchestration/migration-reservations.json. Agents never self-assign. All changes below are **additive columns only** — no renumbering, no DROP/TRUNCATE. All needed tables already exist (`files`, `folders`, `pages`, `page_revisions`, `modules`, `module_items`, `module_item_completions`, `content_migrations`, `content_exports`, `migration_issues`, `usage_rights`), so the needs are new columns on existing tables.
 
-Correction to earlier notes (spot-checked against `migration/crates/star-db/migrations/`): `files.uuid` and `files.visibility_level` **already exist** — added by `0061_folder_tree.sql` (along with `workflow_state`, `hidden`, `locked`, `lock_at`/`unlock_at`, `modified_at`, `category`, `position`). Canvas has no separate verifier column (the URL verifier *is* the uuid). The real additive gaps:
+Correction to earlier notes (spot-checked against `migration/crates/star-db/migrations/`): `files.uuid` and `files.visibility_level` **already exist** — added by the folder-tree migration (along with `workflow_state`, `hidden`, `locked`, `lock_at`/`unlock_at`, `modified_at`, `category`, `position`). Canvas has no separate verifier column (the URL verifier *is* the uuid). The real additive gaps:
 
 | Table | Existing (highlights) | Additive needs |
 |---|---|---|
@@ -341,7 +341,7 @@ Correction to earlier notes (spot-checked against `migration/crates/star-db/migr
 | `module_item_completions` | module_id, item_id, user_id, state | none required (optionally `requirement_completed_at`) |
 | `content_migrations` | course_id, user_id, migration_type, workflow_state (full Canvas state set), migration_settings, source_course_id, attachment_name/size | `context_type` + `context_id` (account/group/user fan-out — today course-only); `initiated_source`; `asset_id_mapping` JSONB (Section 6.6); `use_global_identifiers` BOOLEAN; `child_subscription_id` BIGINT NULL (index filter) |
 | `content_exports` | course_id, user_id, export_type, workflow_state, progress | `context_type` + `context_id`; `selected_content` JSONB (the `select` param); `attachment_id` (export artifact, once MIG-04 lands); `new_quizzes_export_state`; `new_quizzes_export_url` |
-| `migration_issues` | full set incl. `0086` extras (issue_link, fixable_by_web_upload, fixable_by_admin) | none required |
+| `migration_issues` | full set incl. the migration-issues-deep extras (issue_link, fixable_by_web_upload, fixable_by_admin) | none required |
 
 ---
 

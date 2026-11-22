@@ -28,7 +28,7 @@
 //! backing resolvers and the documented omissions (fields with no backing
 //! column in star-db).
 
-use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Schema, SimpleObject, ID};
+use async_graphql::{Context, EmptySubscription, MergedObject, Object, Schema, SimpleObject, ID};
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 use axum::{
     extract::State,
@@ -42,15 +42,26 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 mod assignment;
+mod conversations;
 mod course_user_fields;
 mod discussion_topic;
+mod files;
+mod groups;
+mod modules;
+mod mutations;
+mod pages;
 mod quiz;
 mod submission;
 mod terms_sections;
 
 use assignment::AssignmentConnection;
+use conversations::ConversationParticipantConnection;
 use course_user_fields::{CoursePermissions, UserConnection};
 use discussion_topic::DiscussionTopicConnection;
+use files::FolderConnection;
+use groups::{GroupConnection, GroupSetConnection};
+use modules::ModuleConnection;
+use pages::PageConnection;
 use quiz::QuizConnection;
 use terms_sections::{CourseSection, EnrollmentTerm};
 
@@ -113,7 +124,7 @@ struct CourseRow {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct UserRow {
+pub(crate) struct UserRow {
     id: i64,
     name: String,
     email: String,
@@ -354,6 +365,79 @@ impl Course {
             .await?,
         ))
     }
+
+    /// Paginated non-deleted modules (LIMIT first+1, ORDER BY id), like
+    /// Canvas `Course.modulesConnection` (course_type.rb:263). Everyone who
+    /// can resolve the course sees its modules — parity with the
+    /// star-modules REST index.
+    async fn modules_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<ModuleConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            modules::fetch_module_page(&gctx.pool, self.id, first, after.as_deref()).await?,
+        ))
+    }
+
+    /// Paginated wiki pages (LIMIT first+1, ORDER BY id). Everyone who can
+    /// resolve the course sees its pages — parity with the star-pages REST
+    /// index.
+    async fn pages_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<PageConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            pages::fetch_page_page(&gctx.pool, self.id, first, after.as_deref()).await?,
+        ))
+    }
+
+    /// Paginated root folders (LIMIT first+1, ORDER BY id), like Canvas
+    /// `Course.foldersConnection` (course_type.rb:545).
+    async fn folders_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<FolderConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            files::fetch_folder_page(&gctx.pool, self.id, first, after.as_deref()).await?,
+        ))
+    }
+
+    /// Paginated course groups (LIMIT first+1, ORDER BY id), like Canvas
+    /// `Course.groupsConnection` (course_type.rb:484).
+    async fn groups_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<GroupConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            groups::fetch_group_page(&gctx.pool, self.id, first, after.as_deref()).await?,
+        ))
+    }
+
+    /// Paginated group sets / categories (LIMIT first+1, ORDER BY id),
+    /// like Canvas `Course.groupSetsConnection` (course_type.rb:528).
+    async fn group_sets_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<GroupSetConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            groups::fetch_group_set_page(&gctx.pool, self.id, first, after.as_deref()).await?,
+        ))
+    }
 }
 
 /// Canvas GraphQL `User` (subset of `app/graphql/types/user_type.rb`).
@@ -439,6 +523,31 @@ impl User {
             fetch_enrollment_page(&gctx.pool, None, Some(self.id), first, after.as_deref()).await?,
         ))
     }
+
+    /// Mirrors Canvas `user_type.rb#conversations_connection` (line 431):
+    /// only the user's own participation rows; admins also see only their
+    /// own — Canvas conversations are per-user scoped with no admin
+    /// override.
+    async fn conversations_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<ConversationParticipantConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        if gctx.auth_user.id != self.id {
+            return Ok(None);
+        }
+        Ok(Some(
+            conversations::fetch_user_conversations_page(
+                &gctx.pool,
+                self.id,
+                first,
+                after.as_deref(),
+            )
+            .await?,
+        ))
+    }
 }
 
 /// Canvas GraphQL `Enrollment` (subset of `enrollment_type.rb`). Field names
@@ -488,6 +597,44 @@ pub struct PageInfo {
 pub struct EnrollmentConnection {
     pub edges: Vec<EnrollmentEdge>,
     pub page_info: PageInfo,
+}
+
+// ---------------------------------------------------------------------------
+// Shared user fetch (used by the group/conversation slices for
+// GroupMembership.user / ConversationMessage.author / participant user)
+// ---------------------------------------------------------------------------
+
+/// Fetch a user by id for nested resolvers. Any authenticated caller may
+/// read the basic profile shape — the same visibility as `Query.user`.
+pub(crate) async fn fetch_user(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+) -> Result<Option<User>, async_graphql::Error> {
+    let row: Option<UserRow> = sqlx::query_as(
+        r#"
+        SELECT u.id, u.name, u.email,
+               COALESCE(u.sortable_name, u.name) AS sortable_name,
+               up.avatar_url,
+               u.created_at
+        FROM users u
+        LEFT JOIN user_profiles up ON up.user_id = u.id
+        WHERE u.id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(|row| User {
+        id: row.id,
+        name: row.name,
+        email: row.email,
+        sis_user_id: None,
+        sortable_name: row.sortable_name,
+        avatar_url: row.avatar_url,
+        created_at: row.created_at,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -612,6 +759,80 @@ impl Query {
         terms_sections::fetch_section(&gctx.pool, gctx.auth_user.id, gctx.is_admin(), section_id)
             .await
     }
+
+    /// `moduleItem(id: ID!)` — Canvas `Query.moduleItem`
+    /// (query_type.rb:275). Visible to enrolled users of the item's course
+    /// (any role) and admins; everyone else gets null.
+    async fn module_item(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+    ) -> Result<Option<modules::ModuleItem>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        let item_id: i64 =
+            id.0.parse()
+                .map_err(|_| async_graphql::Error::new("invalid module item id"))?;
+        modules::fetch_module_item(&gctx.pool, gctx.auth_user.id, gctx.is_admin(), item_id).await
+    }
+
+    /// `folder(id: ID!)` — Canvas `Query.folder` (query_type.rb:410).
+    /// The folder's context gates visibility: enrolled users of the
+    /// context course (any role) and admins; everyone else gets null.
+    async fn folder(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+    ) -> Result<Option<files::Folder>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        let folder_id: i64 =
+            id.0.parse()
+                .map_err(|_| async_graphql::Error::new("invalid folder id"))?;
+        files::fetch_folder_authorized(&gctx.pool, gctx.auth_user.id, gctx.is_admin(), folder_id)
+            .await
+    }
+
+    /// `progress(id: ID!)` — star-lms exposure of the Canvas `Progress`
+    /// orphan type. Canvas reaches Progress only through mutation payloads
+    /// (canvas_schema.rb:137); the REST progress endpoints have no GraphQL
+    /// root in Canvas. star-lms exposes the read by id so the type is
+    /// reachable: the caller must own the progress row or be an admin,
+    /// mirroring the REST progress handler's ownership gate.
+    async fn progress(
+        &self,
+        ctx: &Context<'_>,
+        id: ID,
+    ) -> Result<Option<pages::Progress>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        let progress_id: i64 =
+            id.0.parse()
+                .map_err(|_| async_graphql::Error::new("invalid progress id"))?;
+        let progress = pages::fetch_progress(&gctx.pool, progress_id).await?;
+        match progress {
+            Some(p) if gctx.is_admin() || p.owner_is(gctx.auth_user.id) => Ok(Some(p)),
+            _ => Ok(None),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Mutation root (issue #29: Batch A — assignment create/update/delete)
+// ---------------------------------------------------------------------------
+
+/// Mutation root for the first batch. Canvas conventions (`base_mutation.rb`):
+/// exactly one `input` argument per mutation, payload carries
+/// `errors: [ValidationErrorType]`, authz failures are top-level execution
+/// errors with Canvas's exact strings. Deletion is `updateAssignment` with
+/// `state: deleted` — Canvas has no `deleteAssignment` mutation and neither
+/// do we (spec §2.1). Batches B–E land with their own issues.
+#[derive(MergedObject, Default)]
+pub struct Mutation(mutations::AssignmentMutations);
+
+impl Mutation {
+    fn new() -> Self {
+        // `AssignmentMutations` is a unit struct; clippy's
+        // default_constructed_unit_structs rejects `::default()` under -D warnings.
+        Mutation(mutations::AssignmentMutations)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -636,7 +857,7 @@ async fn user_enrolled_in_course(
     Ok(row.is_some())
 }
 
-async fn user_teaches_course(
+pub(crate) async fn user_teaches_course(
     pool: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -784,7 +1005,7 @@ async fn graphql_handler(
         Err(e) => return e.into_response(),
     };
 
-    let schema = Schema::build(Query, EmptyMutation, EmptySubscription)
+    let schema = Schema::build(Query, Mutation::new(), EmptySubscription)
         .data(GraphQLContext {
             pool: state.db.clone(),
             auth_user,

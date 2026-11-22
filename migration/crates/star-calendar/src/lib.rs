@@ -3308,11 +3308,290 @@ async fn save_enabled_account_calendars(
 }
 
 // ---------------------------------------------------------------------------
+// Planner overrides (Canvas `PlannerOverridesController`)
+// ---------------------------------------------------------------------------
+
+/// A row of the `planner_overrides` table.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct PlannerOverride {
+    pub id: i64,
+    pub user_id: i64,
+    pub plannable_id: i64,
+    pub plannable_type: String,
+    pub workflow_state: String,
+    pub marked_complete: bool,
+    pub dismissed: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Canvas `Api::V1::PlannerOverride#planner_override_json`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PlannerOverrideResponse {
+    pub id: i64,
+    pub user_id: i64,
+    pub plannable_id: i64,
+    pub plannable_type: String,
+    pub workflow_state: String,
+    pub marked_complete: bool,
+    pub dismissed: bool,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    /// The assignment the override belongs to, when the plannable is one.
+    pub assignment_id: Option<i64>,
+}
+
+impl From<PlannerOverride> for PlannerOverrideResponse {
+    fn from(row: PlannerOverride) -> Self {
+        // Canvas resolves the assignment of a sub assignment to its parent;
+        // for every other plannable type it is the plannable itself.
+        let assignment_id = match row.plannable_type.as_str() {
+            "assignment" | "sub_assignment" | "peer_review_sub_assignment" => {
+                Some(row.plannable_id)
+            }
+            _ => None,
+        };
+        Self {
+            id: row.id,
+            user_id: row.user_id,
+            plannable_id: row.plannable_id,
+            plannable_type: row.plannable_type,
+            workflow_state: row.workflow_state,
+            marked_complete: row.marked_complete,
+            dismissed: row.dismissed,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            assignment_id,
+        }
+    }
+}
+
+/// The plannable types Canvas accepts (`PlannerHelper::PLANNABLE_TYPES`).
+const PLANNABLE_TYPES: &[&str] = &[
+    "discussion_topic",
+    "announcement",
+    "quiz",
+    "assignment",
+    "wiki_page",
+    "planner_note",
+    "calendar_event",
+    "assessment_request",
+    "sub_assignment",
+    "peer_review_sub_assignment",
+];
+
+/// Canvas `value_to_boolean`.
+fn planner_value_to_boolean(value: Option<&str>) -> bool {
+    match value.map(|v| v.to_ascii_lowercase()) {
+        Some(v) => matches!(v.as_str(), "yes" | "y" | "true" | "t" | "on" | "1"),
+        None => false,
+    }
+}
+
+/// Request to create a planner override.
+#[derive(Debug, Deserialize)]
+pub struct CreatePlannerOverride {
+    pub plannable_type: Option<String>,
+    pub plannable_id: Option<i64>,
+    pub marked_complete: Option<String>,
+    pub dismissed: Option<String>,
+}
+
+/// Canvas finds the override through the current user, so a foreign override
+/// is a 404.
+async fn fetch_owned_planner_override(
+    pool: &PgPool,
+    id: i64,
+    user_id: i64,
+) -> Result<PlannerOverride, ApiError> {
+    let row = sqlx::query_as(
+        r#"
+        SELECT id, user_id, plannable_id, plannable_type, workflow_state,
+               marked_complete, dismissed, created_at, updated_at
+        FROM planner_overrides
+        WHERE id = $1 AND user_id = $2 AND workflow_state != 'deleted'
+        "#,
+    )
+    .bind(id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    row.ok_or(ApiError::NotFound)
+}
+
+/// Whether the plannable row exists.  Canvas raises RecordNotFound for a
+/// missing plannable; the types the port does not model are accepted.
+async fn plannable_exists(
+    pool: &PgPool,
+    plannable_type: &str,
+    plannable_id: i64,
+) -> Result<bool, ApiError> {
+    let sql = match plannable_type {
+        "assignment" => "SELECT 1 FROM assignments WHERE id = $1",
+        "wiki_page" => "SELECT 1 FROM pages WHERE id = $1",
+        "announcement" => "SELECT 1 FROM announcements WHERE id = $1",
+        "quiz" => "SELECT 1 FROM quizzes WHERE id = $1",
+        "discussion_topic" => "SELECT 1 FROM discussion_topics WHERE id = $1",
+        "planner_note" => "SELECT 1 FROM planner_notes WHERE id = $1",
+        "calendar_event" => "SELECT 1 FROM calendar_events WHERE id = $1",
+        _ => return Ok(true),
+    };
+    let row: Option<(i32,)> = sqlx::query_as(sql)
+        .bind(plannable_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.is_some())
+}
+
+/// GET /planner/overrides — the current user's active overrides.
+async fn list_planner_overrides(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<PlannerOverrideResponse>>, ApiError> {
+    let rows = sqlx::query_as::<_, PlannerOverride>(
+        r#"
+        SELECT id, user_id, plannable_id, plannable_type, workflow_state,
+               marked_complete, dismissed, created_at, updated_at
+        FROM planner_overrides
+        WHERE user_id = $1 AND workflow_state = 'active'
+        ORDER BY id
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(
+        rows.into_iter()
+            .map(PlannerOverrideResponse::from)
+            .collect(),
+    ))
+}
+
+/// GET /planner/overrides/{id} — one of the current user's overrides.
+async fn get_planner_override(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<PlannerOverrideResponse>, ApiError> {
+    let row = fetch_owned_planner_override(&state.db, id, auth.id).await?;
+    Ok(Json(PlannerOverrideResponse::from(row)))
+}
+
+/// PUT /planner/overrides/{id} — mark complete and/or dismiss.
+async fn update_planner_override(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CreatePlannerOverride>,
+) -> Result<Json<PlannerOverrideResponse>, ApiError> {
+    let existing = fetch_owned_planner_override(&state.db, id, auth.id).await?;
+    let marked_complete = planner_value_to_boolean(payload.marked_complete.as_deref());
+    let dismissed = planner_value_to_boolean(payload.dismissed.as_deref());
+
+    let row = sqlx::query_as::<_, PlannerOverride>(
+        r#"
+        UPDATE planner_overrides
+        SET marked_complete = $2,
+            dismissed = $3,
+            updated_at = now()
+        WHERE id = $1 AND user_id = $4 AND workflow_state != 'deleted'
+        RETURNING id, user_id, plannable_id, plannable_type, workflow_state,
+                  marked_complete, dismissed, created_at, updated_at
+        "#,
+    )
+    .bind(existing.id)
+    .bind(marked_complete)
+    .bind(dismissed)
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(PlannerOverrideResponse::from(row)))
+}
+
+/// POST /planner/overrides — create an override for a plannable.
+async fn create_planner_override(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<CreatePlannerOverride>,
+) -> Result<(StatusCode, Json<PlannerOverrideResponse>), ApiError> {
+    let Some(plannable_type) = payload.plannable_type.as_deref() else {
+        return Err(ApiError::BadRequest("plannable_type is required".into()));
+    };
+    if !PLANNABLE_TYPES.contains(&plannable_type) {
+        return Err(ApiError::BadRequest("plannable_type is invalid".into()));
+    }
+    let Some(plannable_id) = payload.plannable_id else {
+        return Err(ApiError::BadRequest("plannable_id is required".into()));
+    };
+    if !plannable_exists(&state.db, plannable_type, plannable_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    let marked_complete = planner_value_to_boolean(payload.marked_complete.as_deref());
+    let dismissed = planner_value_to_boolean(payload.dismissed.as_deref());
+
+    let row = sqlx::query_as::<_, PlannerOverride>(
+        r#"
+        INSERT INTO planner_overrides
+            (user_id, plannable_id, plannable_type, marked_complete, dismissed)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (user_id, plannable_id, plannable_type)
+        DO UPDATE SET marked_complete = EXCLUDED.marked_complete,
+                      dismissed = EXCLUDED.dismissed,
+                      workflow_state = 'active',
+                      updated_at = now()
+        RETURNING id, user_id, plannable_id, plannable_type, workflow_state,
+                  marked_complete, dismissed, created_at, updated_at
+        "#,
+    )
+    .bind(auth.id)
+    .bind(plannable_id)
+    .bind(plannable_type)
+    .bind(marked_complete)
+    .bind(dismissed)
+    .fetch_one(&state.db)
+    .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(PlannerOverrideResponse::from(row)),
+    ))
+}
+
+/// DELETE /planner/overrides/{id} — Canvas soft deletes the override and
+/// still renders it.
+async fn delete_planner_override(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<PlannerOverrideResponse>, ApiError> {
+    let existing = fetch_owned_planner_override(&state.db, id, auth.id).await?;
+    let row = sqlx::query_as::<_, PlannerOverride>(
+        r#"
+        UPDATE planner_overrides
+        SET workflow_state = 'deleted', updated_at = now()
+        WHERE id = $1 AND user_id = $2
+        RETURNING id, user_id, plannable_id, plannable_type, workflow_state,
+                  marked_complete, dismissed, created_at, updated_at
+        "#,
+    )
+    .bind(existing.id)
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(PlannerOverrideResponse::from(row)))
+}
+
+// ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // Planner overrides
+        .route("/planner/overrides", get(list_planner_overrides))
+        .route("/planner/overrides", post(create_planner_override))
+        .route("/planner/overrides/{id}", get(get_planner_override))
+        .route("/planner/overrides/{id}", put(update_planner_override))
+        .route("/planner/overrides/{id}", delete(delete_planner_override))
         // Course-scoped
         .route(
             "/courses/{courseId}/calendar_events",

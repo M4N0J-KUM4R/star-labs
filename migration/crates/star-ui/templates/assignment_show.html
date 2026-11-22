@@ -1,0 +1,96 @@
+{% extends "layouts/course.html" %}
+{# Assignment show (issue #71) — Canvas assignments#show: description (user
+   content, sanitized server-side), due date, points, the student's
+   submission state pill + text-entry submit form, and — for teachers — the
+   read-only submissions table. The interactive grading UI (SpeedGrader) is
+   issue #108. #}
+{% block content %}
+  <div id="assignment_show" class="assignment content_underline_links">
+    <div class="assignment-title">
+      <h1 class="title">{{ assignment_title }}</h1>
+      {% if published %}
+      <span class="publish-state publish-state-published">Published</span>
+      {% else %}
+      <span class="publish-state publish-state-unpublished">Unpublished</span>
+      {% endif %}
+      {% if is_teacher %}
+      <div class="assignment-title-actions">
+        <a id="edit_assignment" class="btn" href="/courses/{{ course_id }}/assignments/{{ assignment_id }}/edit">Edit</a>
+      </div>
+      {% endif %}
+    </div>
+
+    <table class="ic-Table assignment_dates">
+      <caption class="screenreader-only">Assignment details</caption>
+      <tbody>
+        <tr><th scope="row">Due</th><td class="due-at">{{ due_label }}</td></tr>
+        <tr><th scope="row">Points</th><td class="points">{{ points_label }}</td></tr>
+        {% if let Some(group) = group_name.clone() %}
+        <tr><th scope="row">Group</th><td class="assignment-group-name">{{ group }}</td></tr>
+        {% endif %}
+      </tbody>
+    </table>
+
+    <div class="description user_content" id="assignment_description">
+      {% if description_html.is_empty() %}
+      <p class="no-description">No content has been added for this assignment yet.</p>
+      {% else %}
+      {{ description_html }}
+      {% endif %}
+    </div>
+
+    {% if is_student %}
+    <div id="student_assignment_overview" class="student-assignment-overview">
+      <h2 class="screenreader-only">Submission</h2>
+      <p class="submission-status">Your submission:
+        <span class="submission-pill pill-{{ submission_pill_class }}">{{ submission_pill }}</span>
+        {% if !submission_score_label.is_empty() %}
+        <span class="submission-score">Score: {{ submission_score_label }}</span>
+        {% endif %}
+      </p>
+      <form id="submit_assignment" class="submit-assignment-form" method="post" action="/courses/{{ course_id }}/assignments/{{ assignment_id }}/submit">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div class="ic-Form-control">
+          <label class="ic-Label" for="submission_body">Text Entry</label>
+          <textarea class="ic-Input" id="submission_body" name="body" rows="6" required placeholder="Type or paste your submission here"></textarea>
+        </div>
+        <button type="submit" class="btn btn-primary" id="submit_assignment_button">Submit Assignment</button>
+      </form>
+    </div>
+    {% endif %}
+
+    {% if is_teacher %}
+    <div id="assignment_submissions" class="assignment-submissions">
+      <h2>Submissions ({{ submissions_count }})</h2>
+      {% if submissions.is_empty() %}
+      <p class="no-submissions">No submissions yet.</p>
+      {% else %}
+      <div class="table-wrapper">
+        <table class="ic-Table submissions-table" id="submissions_table">
+          <thead>
+            <tr>
+              <th scope="col">Student</th>
+              <th scope="col">State</th>
+              <th scope="col">Submitted</th>
+              <th scope="col">Score</th>
+              <th scope="col">Text</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for s in submissions %}
+            <tr class="submission-row" data-user-id="{{ s.user_id }}">
+              <td class="submission-student">{{ s.user_name }}</td>
+              <td class="submission-state"><span class="submission-pill pill-{{ s.state }}">{{ s.state }}</span></td>
+              <td class="submission-submitted-at">{{ s.submitted_label }}</td>
+              <td class="submission-score">{{ s.score_label }}</td>
+              <td class="submission-body">{{ s.body_preview }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% endif %}
+    </div>
+    {% endif %}
+  </div>
+{% endblock content %}

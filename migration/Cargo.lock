@@ -60,6 +60,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "askama"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6024d73179f43f15ccd2b881bfea6fee7f3a46ec53f33b52210dea749ebebaa4"
+dependencies = [
+ "askama_macros",
+ "itoa",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "askama_derive"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "071ee5ebf2138e3ad180e0aacf6940c2cab5e6d8333741d9925c7bee2b153f39"
+dependencies = [
+ "askama_parser",
+ "basic-toml",
+ "glob",
+ "memchr",
+ "proc-macro2",
+ "quote",
+ "rustc-hash",
+ "serde",
+ "serde_derive",
+ "syn 3.0.9",
+]
+
+[[package]]
+name = "askama_macros"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "643e1c7cbb6aec1d920332fe51a7c0d8219e273dcb8602db03f5263e4d16487b"
+dependencies = [
+ "askama_derive",
+]
+
+[[package]]
+name = "askama_parser"
+version = "0.16.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c5ae75772275d268b03ab8bdccdd12117b6169ee23256942b34e46c9f476583"
+dependencies = [
+ "rustc-hash",
+ "serde",
+ "serde_derive",
+ "unicode-ident",
+ "winnow",
+]
+
+[[package]]
 name = "assert-json-diff"
 version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -281,6 +334,32 @@ dependencies = [
 ]
 
 [[package]]
+name = "axum-extra"
+version = "0.12.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be44683b41ccb9ab2d23a5230015c9c3c55be97a25e4428366de8873103f7970"
+dependencies = [
+ "axum",
+ "axum-core",
+ "bytes",
+ "cookie",
+ "form_urlencoded",
+ "futures-core",
+ "futures-util",
+ "http 1.5.0",
+ "http-body",
+ "http-body-util",
+ "mime",
+ "pin-project-lite",
+ "serde_core",
+ "serde_html_form",
+ "serde_path_to_error",
+ "tower-layer",
+ "tower-service",
+ "tracing",
+]
+
+[[package]]
 name = "axum-macros"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -337,6 +416,15 @@ name = "base64ct"
 version = "1.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2af50177e190e07a26ab74f8b1efbfe2ef87da2116221318cb1c2e82baf7de06"
+
+[[package]]
+name = "basic-toml"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba62675e8242a4c4e806d12f11d136e626e6c8361d6b829310732241652a178a"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "bitflags"
@@ -460,6 +548,7 @@ version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1a373e3602691c3cdea496d2f0ee5935151e6168fe87739483c463db1b2f2f87"
 dependencies = [
+ "percent-encoding",
  "time",
  "version_check",
 ]
@@ -760,21 +849,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "futures"
-version = "0.3.34"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a31d2a3fbaaeb2af2368bbdd904aa8e812d3c04a1ee10d3171f52d556e5d0a3"
-dependencies = [
- "futures-channel",
- "futures-core",
- "futures-executor",
- "futures-io",
- "futures-sink",
- "futures-task",
- "futures-util",
-]
-
-[[package]]
 name = "futures-channel"
 version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -857,7 +931,6 @@ version = "0.3.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d50a92467f8ba5dd6e3ee5d4bd04d73ab2e4e1c44474a0674821dfce14b79bc"
 dependencies = [
- "futures-channel",
  "futures-core",
  "futures-io",
  "futures-macro",
@@ -916,6 +989,12 @@ dependencies = [
  "rand_core 0.10.1",
  "wasm-bindgen",
 ]
+
+[[package]]
+name = "glob"
+version = "0.3.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4eba85ea1d0a966a983acd07deee566e67395d2d96b6fb39e62b5a833f1eb0b"
 
 [[package]]
 name = "h2"
@@ -2269,6 +2348,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_html_form"
+version = "0.2.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2f2d7ff8a2140333718bb329f5c40fc5f0865b84c426183ce14c97d2ab8154f"
+dependencies = [
+ "form_urlencoded",
+ "indexmap",
+ "itoa",
+ "ryu",
+ "serde_core",
+]
+
+[[package]]
 name = "serde_json"
 version = "1.0.154"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2637,6 +2729,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-account-reports"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "sqlx",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
 name = "star-accounts"
 version = "0.1.0"
 dependencies = [
@@ -2708,6 +2812,7 @@ dependencies = [
  "axum",
  "axum-test",
  "chrono",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",
@@ -2745,8 +2850,10 @@ dependencies = [
  "chrono",
  "http 1.5.0",
  "jsonwebtoken",
+ "rsa",
  "serde",
  "serde_json",
+ "sha2",
  "sqlx",
  "star-common",
  "star-db",
@@ -2759,12 +2866,25 @@ name = "star-calendar"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "axum-test",
  "chrono",
  "reqwest",
  "serde",
  "serde_json",
  "sqlx",
  "star-auth",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
+name = "star-collaborations"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "sqlx",
  "star-common",
  "star-db",
  "tokio",
@@ -2783,6 +2903,18 @@ dependencies = [
  "sqlx",
  "star-db",
  "thiserror 2.0.21",
+ "tokio",
+]
+
+[[package]]
+name = "star-conferences"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "sqlx",
+ "star-common",
+ "star-db",
  "tokio",
 ]
 
@@ -2809,6 +2941,7 @@ name = "star-conversations"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "axum-test",
  "chrono",
  "reqwest",
  "serde",
@@ -2816,6 +2949,7 @@ dependencies = [
  "sqlx",
  "star-auth",
  "star-common",
+ "star-db",
  "tokio",
 ]
 
@@ -2900,6 +3034,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-eportfolios"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "sqlx",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
 name = "star-features"
 version = "0.1.0"
 dependencies = [
@@ -2922,7 +3068,6 @@ dependencies = [
  "axum",
  "axum-test",
  "chrono",
- "futures",
  "jsonwebtoken",
  "reqwest",
  "serde",
@@ -2933,6 +3078,7 @@ dependencies = [
  "star-db",
  "tokio",
  "tower",
+ "uuid",
 ]
 
 [[package]]
@@ -3000,6 +3146,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+ "star-account-reports",
  "star-accounts",
  "star-announcements",
  "star-assignment-groups",
@@ -3007,7 +3154,9 @@ dependencies = [
  "star-audit",
  "star-auth",
  "star-calendar",
+ "star-collaborations",
  "star-common",
+ "star-conferences",
  "star-content",
  "star-conversations",
  "star-courses",
@@ -3015,6 +3164,7 @@ dependencies = [
  "star-db",
  "star-discussions",
  "star-enrollments",
+ "star-eportfolios",
  "star-features",
  "star-files",
  "star-grading-standards",
@@ -3029,9 +3179,13 @@ dependencies = [
  "star-outcomes",
  "star-pages",
  "star-permissions",
+ "star-polling",
  "star-quizzes",
  "star-rubrics",
+ "star-search",
+ "star-sis",
  "star-submission-comments",
+ "star-ui",
  "star-users",
  "tokio",
  "tower",
@@ -3080,6 +3234,9 @@ dependencies = [
  "axum",
  "axum-test",
  "chrono",
+ "jsonwebtoken",
+ "rand 0.8.8",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",
@@ -3087,6 +3244,8 @@ dependencies = [
  "star-common",
  "star-db",
  "tokio",
+ "url",
+ "uuid",
 ]
 
 [[package]]
@@ -3190,6 +3349,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-polling"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "star-auth",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
 name = "star-quizzes"
 version = "0.1.0"
 dependencies = [
@@ -3224,6 +3399,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-search"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "sqlx",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
+name = "star-sis"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "sqlx",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
 name = "star-submission-comments"
 version = "0.1.0"
 dependencies = [
@@ -3238,6 +3437,42 @@ dependencies = [
  "star-common",
  "star-db",
  "tokio",
+]
+
+[[package]]
+name = "star-ui"
+version = "0.1.0"
+dependencies = [
+ "askama",
+ "axum",
+ "axum-extra",
+ "axum-test",
+ "chrono",
+ "jsonwebtoken",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "star-assignment-groups",
+ "star-assignments",
+ "star-auth",
+ "star-common",
+ "star-conversations",
+ "star-courses",
+ "star-dashboard",
+ "star-db",
+ "star-discussions",
+ "star-enrollments",
+ "star-grading-standards",
+ "star-modules",
+ "star-pages",
+ "star-quizzes",
+ "star-rubrics",
+ "star-submission-comments",
+ "time",
+ "tokio",
+ "url",
 ]
 
 [[package]]
@@ -3803,6 +4038,18 @@ name = "utf_types"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a3b425286980a367278453f3b6d28cdcb134b574e5a35824a6ff5eebad50bb6"
+
+[[package]]
+name = "uuid"
+version = "1.29.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c14b15dffa2f4bd712103e857140aa04a4f2ff6e955c77d7eb8e53ee02a3b64"
+dependencies = [
+ "getrandom 0.4.3",
+ "js-sys",
+ "serde_core",
+ "wasm-bindgen",
+]
 
 [[package]]
 name = "valuable"

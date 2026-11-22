@@ -15,6 +15,12 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+// Server-rendered UI loaders + the shared assessment write (star-ui, issue
+// #108): pub fns extracted the same way star-conversations did, so the
+// SpeedGrader rubric panel reuses this crate's INSERT shape instead of
+// forking it.
+pub mod ui;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -256,6 +262,10 @@ pub struct RubricAssociationResponse {
     pub assessment_requests: Vec<serde_json::Value>,
     pub association_count: i64,
 }
+
+// -----------------------------------------------------------------------------
+// Canvas nested route aliases
+// -----------------------------------------------------------------------------
 
 /// Response of `POST /courses/{courseId}/rubrics/{rubricId}/associations`.
 #[derive(Debug, Serialize)]
@@ -657,8 +667,10 @@ async fn delete_rubric(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Column list for single-table rubric assessment queries.
-const ASSESSMENT_COLUMNS: &str = "id, rubric_id, course_id, rubric_association_id, submission_id, \
+/// Column list for single-table rubric assessment queries. `pub(crate)`: the
+/// UI loader module (ui.rs) selects the same shape.
+pub(crate) const ASSESSMENT_COLUMNS: &str =
+    "id, rubric_id, course_id, rubric_association_id, submission_id, \
      artifact_id, artifact_type, assessment_type, user_id, assessor_id, score, data, comments, \
      workflow_state, created_at, updated_at";
 
@@ -1495,9 +1507,9 @@ async fn delete_rubric_association(
     Ok(Json(deleted))
 }
 
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 // Canvas nested route aliases
-// ---------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
 
 /// Ensure `rubric_id` exists and belongs to `course_id`.
 /// Missing and mismatched rubrics both map to 404 so a course-scoped alias
@@ -1517,6 +1529,268 @@ async fn verify_rubric_course(
         _ => Err(ApiError::NotFound),
     }
 }
+
+// -----------------------------------------------------------------------------
+// Rubric imports (Canvas RubricsApiController#upload / #upload_status /
+// -----------------------------------------------------------------------------
+//
+// star-lms stores rubrics as normalized rows, so import processing creates
+// rubric_criteria and rubric_ratings rows. The import record tracks workflow
+// state and progress for polling.
+// -----------------------------------------------------------------------------
+
+/// DB row type for rubric_imports query results (9 columns, no assembled JSON).
+#[derive(Debug, sqlx::FromRow)]
+struct RubricImportRow {
+    id: i64,
+    user_id: Option<i64>,
+    attachment_id: Option<i64>,
+    workflow_state: String,
+    progress: i32,
+    error_count: i32,
+    error_data: serde_json::Value,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+/// Canvas-shaped rubric import response.
+/// Maps to Canvas `RubricImport` JSON (app/models/rubric_import.rb).
+#[derive(Debug, Serialize)]
+pub struct RubricImportResponse {
+    pub id: i64,
+    pub user_id: Option<i64>,
+    pub attachment_id: Option<i64>,
+    pub workflow_state: String,
+    pub progress: i32,
+    pub error_count: i32,
+    pub error_data: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attachment: Option<serde_json::Value>,
+}
+
+impl RubricImportResponse {
+    fn from_row(row: RubricImportRow) -> Self {
+        Self {
+            id: row.id,
+            user_id: row.user_id,
+            attachment_id: row.attachment_id,
+            workflow_state: row.workflow_state,
+            progress: row.progress,
+            error_count: row.error_count,
+            error_data: row.error_data,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+            user: None,
+            attachment: None,
+        }
+    }
+}
+
+/// Request body for POST .../rubrics/upload.
+#[derive(Debug, Deserialize)]
+pub struct UploadRubricRequest {
+    pub attachment_id: Option<i64>,
+}
+
+/// Insert a new rubric_imports row and bump it to 'created' so the async
+/// processor can pick it up. The attachment_id references an already-uploaded
+/// file in the attachments table (created via the files API).
+async fn create_rubric_import(
+    pool: &PgPool,
+    context_id: i64,
+    context_type: &str,
+    user_id: Option<i64>,
+    attachment_id: i64,
+) -> Result<RubricImportResponse, ApiError> {
+    let row: RubricImportRow = sqlx::query_as(
+        r#"
+        INSERT INTO rubric_imports (context_id, context_type, attachment_id, user_id, workflow_state)
+        VALUES ($1, $2, $3, $4, 'created')
+        RETURNING
+            id, user_id, attachment_id, workflow_state,
+            progress, error_count, error_data, created_at, updated_at
+        "#,
+    )
+    .bind(context_id)
+    .bind(context_type)
+    .bind(attachment_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(RubricImportResponse::from_row(row))
+}
+
+/// Query params for upload_status.
+#[derive(Debug, Deserialize)]
+pub struct UploadStatusQuery {
+    pub id: Option<String>,
+}
+
+/// POST /courses/{courseId}/rubrics/upload  → 201
+///
+/// Accepts a JSON body with `attachment_id` referencing an already-uploaded
+/// CSV file. Creates the RubricImport record and returns it immediately.
+/// Canvas processes the file asynchronously; star-lms follows the same pattern.
+async fn upload_rubric(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<UploadRubricRequest>,
+) -> Result<(StatusCode, Json<RubricImportResponse>), ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let course_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM courses WHERE id = $1)")
+            .bind(course_id)
+            .fetch_one(&state.db)
+            .await?;
+    if !course_exists {
+        return Err(ApiError::NotFound);
+    }
+
+    let attachment_id = payload
+        .attachment_id
+        .ok_or_else(|| ApiError::Validation("attachment_id is required".into()))?;
+
+    let mut import =
+        create_rubric_import(&state.db, course_id, "Course", Some(auth.id), attachment_id).await?;
+
+    let user_row: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await?;
+    let display_name = user_row.map(|(name,)| name);
+    import.user = Some(serde_json::json!({
+        "id": auth.id,
+        "display_name": display_name,
+    }));
+    import.attachment = Some(serde_json::json!({
+        "id": attachment_id,
+    }));
+
+    Ok((StatusCode::CREATED, Json(import)))
+}
+
+/// GET /courses/{courseId}/rubrics/upload_status
+async fn get_upload_status(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    Query(params): Query<UploadStatusQuery>,
+    auth: AuthUser,
+) -> Result<Json<RubricImportResponse>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let import_id = if let Some(ref id_str) = params.id {
+        if id_str == "latest" {
+            sqlx::query_scalar(
+                r#"
+                SELECT id FROM rubric_imports
+                WHERE context_id = $1 AND context_type = 'Course'
+                ORDER BY created_at DESC LIMIT 1
+                "#,
+            )
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await?
+        } else {
+            id_str.parse::<i64>().ok()
+        }
+    } else {
+        sqlx::query_scalar(
+            r#"
+            SELECT id FROM rubric_imports
+            WHERE context_id = $1 AND context_type = 'Course'
+            ORDER BY created_at DESC LIMIT 1
+            "#,
+        )
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?
+    };
+
+    let import_id = import_id.ok_or(ApiError::NotFound)?;
+
+    let row: RubricImportRow = sqlx::query_as(
+        r#"
+        SELECT id, user_id, attachment_id, workflow_state,
+               progress, error_count, error_data, created_at, updated_at
+        FROM rubric_imports WHERE id = $1
+        "#,
+    )
+    .bind(import_id)
+    .fetch_optional(&state.db)
+    .await?
+    .ok_or(ApiError::NotFound)?;
+
+    let mut import = RubricImportResponse::from_row(row);
+
+    if import.user_id.is_some() {
+        let user_row: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")
+            .bind(import.user_id)
+            .fetch_optional(&state.db)
+            .await?;
+        if let Some((name,)) = user_row {
+            import.user = Some(serde_json::json!({
+                "id": import.user_id,
+                "display_name": name,
+            }));
+        }
+    }
+
+    Ok(Json(import))
+}
+
+/// GET /courses/{courseId}/rubrics/rubrics_by_import_id/{id}
+///
+/// Returns all rubrics created by a specific import.
+async fn get_rubrics_by_import_id(
+    State(state): State<AppState>,
+    Path((course_id, import_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Rubric>>, ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let import_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM rubric_imports WHERE id = $1 AND context_id = $2)",
+    )
+    .bind(import_id)
+    .bind(course_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    if !import_exists {
+        return Err(ApiError::NotFound);
+    }
+
+    let rubrics: Vec<Rubric> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, title, points_possible, workflow_state, created_at, updated_at
+        FROM rubrics
+        WHERE rubric_imports_id = $1 AND workflow_state != 'deleted'
+        ORDER BY created_at ASC
+        "#,
+    )
+    .bind(import_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(rubrics))
+}
+
+// -----------------------------------------------------------------------------
+// Canvas nested route aliases
+// -----------------------------------------------------------------------------
 
 /// GET /courses/{courseId}/rubrics/{id}  → 200 (Canvas nested alias).
 async fn get_course_rubric(
@@ -1890,6 +2164,15 @@ pub fn router() -> Router<AppState> {
             delete(delete_rubric_association),
         )
         .route("/rubrics/upload_template", get(upload_template))
+        .route("/courses/{courseId}/rubrics/upload", post(upload_rubric))
+        .route(
+            "/courses/{courseId}/rubrics/upload_status",
+            get(get_upload_status),
+        )
+        .route(
+            "/courses/{courseId}/rubrics/rubrics_by_import_id/{id}",
+            get(get_rubrics_by_import_id),
+        )
         .route(
             "/courses/{courseId}/rubrics/download_rubrics",
             post(download_course_rubrics),

@@ -1,0 +1,51 @@
+{% extends "layouts/authenticated.html" %}
+{# Conversations inbox — Canvas conversations#index two-pane layout
+   (index_new.html.erb), no-JS port per canvas-reference.md §5: left pane is
+   the conversation list with scope filter links, right pane holds the
+   compose button + mark-all-read form; opening a conversation happens by
+   clicking a row (separate page in the no-JS port). #}
+{% block content %}
+  <div id="conversations" class="conversations">
+    <header class="conversations__header panel">
+      <div class="panel__primary">
+        <h1 class="conversations__title screenreader-only">Conversations</h1>
+        <div class="conversations__filters" id="conversation_filter">
+          <a class="conversations__filter{% if filter == "" %} active{% endif %}" href="/conversations">All</a>
+          <a class="conversations__filter{% if filter == "unread" %} active{% endif %}" href="/conversations?filter=unread">Unread</a>
+          <a class="conversations__filter{% if filter == "starred" %} active{% endif %}" href="/conversations?filter=starred">Starred</a>
+        </div>
+      </div>
+      <div class="panel__secondary">
+        <div class="conversations__actions">
+          <a href="/conversations/compose" class="Button Button--primary" id="compose-btn" aria-label="Compose a new message">Compose</a>
+          <form method="post" action="/conversations/mark_all_read" class="conversations__mark-all-form">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <button type="submit" class="Button" id="mark_all_read_btn">Mark All Read</button>
+          </form>
+        </div>
+      </div>
+    </header>
+
+    <div class="messaging-wrapper" id="conversations_wrapper">
+      <div class="message-list-scroller">
+        <div class="message-list" id="conversation_list">
+          {% if conversations.is_empty() %}
+          <p class="message-list__empty">No conversations{% if filter == "unread" %} unread{% endif %}{% if filter == "starred" %} starred{% endif %}.</p>
+          {% endif %}
+          {% for conversation in conversations %}
+          <div class="conversation-item{% if conversation.unread %} unread{% endif %}{% if conversation.starred %} starred{% endif %}" id="conversation_{{ conversation.id }}" data-conversation-id="{{ conversation.id }}">
+            <a class="conversation-item__link" href="/conversations/{{ conversation.id }}">
+              <span class="conversation-item__star" aria-hidden="true">{% if conversation.starred %}★{% else %}☆{% endif %}</span>
+              <span class="conversation-item__subject">{{ conversation.subject }}</span>
+              {% if conversation.unread %}<span class="conversation-item__unread-dot" title="Unread" aria-label="Unread conversation">●</span>{% endif %}
+              <span class="conversation-item__participants">{{ conversation.participant_names }}</span>
+              <span class="conversation-item__preview">{{ conversation.last_message_preview }}</span>
+              <span class="conversation-item__date">{% if let Some(at) = conversation.last_message_at %}{{ at }}{% else %}—{% endif %}</span>
+            </a>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+  </div>
+{% endblock content %}

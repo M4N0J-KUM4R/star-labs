@@ -1,0 +1,11 @@
+{
+  "name": "star-labs-browser-smoke",
+  "private": true,
+  "description": "Playwright browser smoke tests for the star-ui server-rendered shell (specs/p5-ui-shell.md §4 journeys, §6 CI plan).",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

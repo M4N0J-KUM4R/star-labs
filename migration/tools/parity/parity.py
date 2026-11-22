@@ -3,10 +3,12 @@
 
 Two deterministic subcommands:
 
-    manifest  extract Canvas API routes and source-size counts from a
-              canvas-lms checkout into canvas_manifest.json
-    report    compare the Rust workspace's axum routes against that manifest
-              and write coverage.json, report.md, baseline.json
+    manifest  extract Canvas API routes, source-size counts, and GraphQL
+              operation-name inventories from a canvas-lms checkout into
+              canvas_manifest.json
+    report    compare the Rust workspace's axum routes and star-graphql
+              type/mutation names against that manifest and write
+              coverage.json, report.md, baseline.json
 
 Stdlib only. No network, no timestamps, no absolute paths in the output.
 """
@@ -53,6 +55,33 @@ RESOURCE_ACTIONS = (
 )
 JS_ENV_RE = re.compile(r"\bjs_env\b")
 UI_API_RE = re.compile(r"[\"'`](/api/v1/[^\"'`\s]*)")
+
+# --- Canvas GraphQL name extraction -----------------------------------------
+# Class declarations in app/graphql (both styles Canvas uses):
+#   class Mutations::CreateAssignment < Mutations::AssignmentBase::Mutation
+#   module Types \n class CourseType < ApplicationObjectType
+RUBY_CLASS_RE = re.compile(
+    r"^\s*class\s+((?:[A-Za-z0-9_]+::)*[A-Za-z0-9_]+)\s*<\s*([A-Za-z0-9_:]+)")
+GRAPHQL_NAME_RE = re.compile(r"^\s*graphql_name\s+[\"']([A-Za-z0-9_]+)[\"']")
+RUBY_END_RE = re.compile(r"^\s*end\b")
+
+# Superclasses that make a class in types/*_type.rb a GraphQL schema type
+# (verified inventory over canvas-lms master: ApplicationObjectType 153,
+# BaseEnum 56, BaseInputObject 26, BaseUnion 6, BaseScalar 3, BaseEdge 1,
+# GraphQL::Schema::Object 2, one nested AssignmentType subclass; Loader /
+# FieldExtension / ForeignKeyLoader helpers are excluded).
+GRAPHQL_TYPE_SUPERS = {
+    "ApplicationObjectType", "BaseEnum", "BaseInputObject", "BaseUnion",
+    "BaseScalar", "BaseEdge", "Object", "AssignmentType",
+}
+
+# Abstract mutation base classes: they subclass (or are) Mutations::BaseMutation
+# but define no operation themselves.
+MUTATION_ABSTRACT_BASES = {
+    "BaseMutation", "BaseLearningOutcomeMutation", "BaseAiFeedback", "Mutation",
+    "AllocationRuleBase", "DiscussionBase", "GroupSetBase",
+    "OutcomeCalculationMethodBase", "OutcomeProficiencyBase",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -509,6 +538,99 @@ def count_canvas_sources(canvas_src):
     }
 
 
+def canvas_graphql_type_names(canvas_src):
+    """Distinct GraphQL type names defined in app/graphql/types/*_type.rb.
+
+    A file may define several types (course_type.rb also defines
+    SubmissionOrderField / SubmissionOrderCriteria). The GraphQL name is the
+    explicit `graphql_name "X"` when present, else the class name with a
+    trailing `Type` suffix stripped (SectionType -> Section), which is
+    graphql-ruby's default derivation. Validated against Canvas's committed
+    schema.graphql: every extracted name appears there.
+    """
+    names = set()
+    for path in sorted((canvas_src / "app" / "graphql" / "types").glob("*_type.rb")):
+        classes = []
+        open_classes = []
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            match = RUBY_CLASS_RE.match(line)
+            if match and "; end" not in line:
+                classes.append({
+                    "class": match.group(1).split("::")[-1],
+                    "super": match.group(2).split("::")[-1],
+                    "name": None,
+                })
+                open_classes.append(
+                    (len(line) - len(line.lstrip()), len(classes) - 1))
+                continue
+            named = GRAPHQL_NAME_RE.match(line)
+            if named and open_classes:
+                idx = open_classes[-1][1]
+                if classes[idx]["name"] is None:
+                    classes[idx]["name"] = named.group(1)
+                continue
+            if RUBY_END_RE.match(line):
+                indent = len(line) - len(line.lstrip())
+                open_classes = [f for f in open_classes if f[0] < indent]
+        for entry in classes:
+            if entry["super"] not in GRAPHQL_TYPE_SUPERS:
+                continue
+            if entry["class"] == "ApplicationObjectType":
+                continue  # abstract base in application_object_type.rb
+            if entry["name"]:
+                names.add(entry["name"])
+            elif entry["class"].endswith("Type") and len(entry["class"]) > 4:
+                names.add(entry["class"][:-4])
+            else:
+                names.add(entry["class"])
+    return sorted(names)
+
+
+def _ruby_camel(pascal):
+    """PascalCase Ruby class name -> camelCase GraphQL field name.
+
+    graphql-ruby registers `Mutations::CreateAssignment` as the field
+    `createAssignment` (verified 1:1 against mutation_type.rb's
+    `field :create_assignment, mutation: Mutations::CreateAssignment`).
+    """
+    return pascal[:1].lower() + pascal[1:]
+
+
+def canvas_graphql_mutation_names(canvas_src):
+    """GraphQL mutation operation names from app/graphql/mutations/**/*.rb.
+
+    An operation is a class whose superclass chain reaches
+    Mutations::BaseMutation, excluding the abstract base classes themselves.
+    This handles every declaration style Canvas uses:
+      class Mutations::CreateAssignment < Mutations::AssignmentBase::Mutation
+      class Mutations::CreateDiscussionTopic < Mutations::DiscussionBase
+      module Mutations / class AcceptEnrollmentInvitation < BaseMutation
+    The returned names are the camelCase mutation field names
+    (CreateAssignment -> createAssignment), matching how async-graphql
+    exposes `async fn create_assignment` as `createAssignment`; the mapping
+    was verified 1:1 against the 100 `field :x, mutation: Mutations::X`
+    registrations in app/graphql/types/mutation_type.rb.
+    """
+    supers = {}
+    for path in sorted((canvas_src / "app" / "graphql" / "mutations").glob("**/*.rb")):
+        for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            match = RUBY_CLASS_RE.match(line)
+            if match:
+                supers.setdefault(match.group(1).split("::")[-1],
+                                  match.group(2).split("::")[-1])
+
+    def reaches_base_mutation(cls, seen):
+        if cls in seen or cls not in supers:
+            return False
+        seen.add(cls)
+        sup = supers[cls]
+        return sup == "BaseMutation" or reaches_base_mutation(sup, seen)
+
+    return sorted(_ruby_camel(cls) for cls in supers
+                  if reaches_base_mutation(cls, set())
+                  and cls not in MUTATION_ABSTRACT_BASES)
+
+
 def scan_ui_api_references(canvas_src):
     refs = set()
     literal_count = 0
@@ -636,6 +758,107 @@ def count_star_sources(star_src):
     return impl
 
 
+# --- Star (Rust) GraphQL name extraction -------------------------------------
+
+# star-graphql deliberately renames four Canvas types for clarity; the Canvas
+# graphql_name is what the scoreboard matches against (each rename is
+# documented in the corresponding star-graphql module doc comment).
+STAR_GRAPHQL_TYPE_ALIASES = {
+    "CourseSection": "Section",        # app/graphql/types/section_type.rb
+    "EnrollmentTerm": "Term",          # app/graphql/types/term_type.rb
+    "DiscussionTopic": "Discussion",   # app/graphql/types/discussion_type.rb
+    "QuizQuestion": "QuizItem",        # app/graphql/types/quiz_item_type.rb
+}
+
+# async-graphql derives that make a struct a GraphQL schema type.
+STAR_GRAPHQL_DERIVES = {
+    "SimpleObject", "Interface", "Union", "InputObject", "Enum", "MergedObject",
+}
+
+RUST_DERIVE_RE = re.compile(r"^\s*#\[\s*derive\(([^)]*)\)\s*\]")
+RUST_OBJECT_ATTR_RE = re.compile(r"^\s*#\[\s*Object(?:\s*\([^)]*\))?\s*\]")
+RUST_STRUCT_RE = re.compile(r"^\s*(?:pub(?:\([a-z]+\))?\s+)?struct\s+([A-Za-z0-9_]+)")
+RUST_IMPL_RE = re.compile(r"^\s*impl\s+(?:<[^>]*>\s*)?([A-Za-z0-9_:]+)")
+RUST_FN_RE = re.compile(
+    r"^\s*(?:pub(?:\([a-z]+\))?\s+)?(?:async\s+)?fn\s+([a-z_][a-z0-9_]*)")
+
+
+def _rust_camel(name):
+    """snake_case Rust fn name -> camelCase GraphQL field name (async-graphql)."""
+    parts = name.split("_")
+    return parts[0] + "".join(part[:1].upper() + part[1:] for part in parts[1:])
+
+
+def _next_declaration(lines, start, pattern, limit=4):
+    """Match `pattern` on the first declaration line after `start`.
+
+    Skips nothing else: an attribute sits directly above its item, so the
+    struct/impl must appear within a few lines or the attribute belongs to
+    something the scoreboard does not track. Returns the match's line index,
+    or None.
+    """
+    for j in range(start + 1, min(start + 1 + limit, len(lines))):
+        if lines[j].lstrip().startswith("#["):
+            return None
+        match = pattern.match(lines[j])
+        if match:
+            return j
+    return None
+
+
+def _impl_body(lines, impl_index):
+    """Lines of the impl body opened on `lines[impl_index]` (brace counted)."""
+    depth = lines[impl_index].count("{") - lines[impl_index].count("}")
+    body = []
+    j = impl_index + 1
+    while j < len(lines) and depth > 0:
+        depth += lines[j].count("{") - lines[j].count("}")
+        if depth > 0 or "}" not in lines[j]:
+            body.append(lines[j])
+        j += 1
+    return body
+
+
+def parse_star_graphql(star_src):
+    """Implemented GraphQL type and mutation names from star-graphql sources.
+
+    Types are structs with an async-graphql derive (SimpleObject, ...) or the
+    target of an `#[Object]` impl (Course, User, Query, ...). Mutations are
+    the functions of `#[Object]` impls whose target is the Mutation root or a
+    `*Mutations` container merged into it (the MergedObject pattern), with
+    async-graphql's snake_case -> camelCase field renaming applied.
+    """
+    types = set()
+    mutations = set()
+    root = star_src / "crates" / "star-graphql" / "src"
+    if not root.is_dir():
+        return [], []
+    for path in sorted(root.rglob("*.rs")):
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        for i, line in enumerate(lines):
+            derive = RUST_DERIVE_RE.match(line)
+            if derive:
+                names = {d.strip() for d in derive.group(1).split(",")}
+                if names & STAR_GRAPHQL_DERIVES:
+                    j = _next_declaration(lines, i, RUST_STRUCT_RE)
+                    if j is not None:
+                        types.add(RUST_STRUCT_RE.match(lines[j]).group(1))
+                continue
+            if RUST_OBJECT_ATTR_RE.match(line):
+                j = _next_declaration(lines, i, RUST_IMPL_RE)
+                if j is None:
+                    continue
+                target = RUST_IMPL_RE.match(lines[j]).group(1).split("::")[-1]
+                if target == "Mutation" or target.endswith("Mutations"):
+                    for body_line in _impl_body(lines, j):
+                        fn = RUST_FN_RE.match(body_line)
+                        if fn:
+                            mutations.add(_rust_camel(fn.group(1)))
+                else:
+                    types.add(target)
+    return sorted(types), sorted(mutations)
+
+
 # ---------------------------------------------------------------------------
 # Percent helper
 # ---------------------------------------------------------------------------
@@ -684,6 +907,8 @@ def build_manifest(canvas_src):
         "normalization": "strip /api/v1; :param, {param}, #{...} -> {}",
         "routes": routes,
         "counts": counts,
+        "graphql_type_names": canvas_graphql_type_names(canvas_src),
+        "graphql_mutation_names": canvas_graphql_mutation_names(canvas_src),
     }
 
 
@@ -696,6 +921,9 @@ def cmd_manifest(args):
     print("ui-referenced: %d routes from %d /api/v1 literals" %
           (sum(1 for r in manifest["routes"] if r["ui_referenced"]),
            counts["ui_api_ref_strings"]))
+    print("graphql names: %d types, %d mutation operations" %
+          (len(manifest["graphql_type_names"]),
+           len(manifest["graphql_mutation_names"])))
     print("wrote %s" % args.out)
 
 
@@ -734,6 +962,17 @@ def build_coverage(manifest, star_src):
     star_impl = count_star_sources(star_src)
     counts = manifest["counts"]
 
+    # GraphQL parity by operation name: implemented names from star-graphql
+    # (with the documented renames mapped to Canvas graphql_names) intersected
+    # with the Canvas inventories from the manifest.
+    star_types, star_mutations = parse_star_graphql(star_src)
+    canvas_types = set(manifest.get("graphql_type_names") or [])
+    canvas_mutations = set(manifest.get("graphql_mutation_names") or [])
+    type_alias = STAR_GRAPHQL_TYPE_ALIASES
+    star_types_canonical = {type_alias.get(t, t) for t in star_types}
+    impl_type_names = sorted(star_types_canonical & canvas_types)
+    impl_mutation_names = sorted(set(star_mutations) & canvas_mutations)
+
     return {
         "summary": {
             "canvas_api_routes": len(canvas_routes),
@@ -750,9 +989,9 @@ def build_coverage(manifest, star_src):
             "graphql_files": counts["graphql_files"],
             "graphql_files_implemented": star_impl["graphql_files"],
             "graphql_types": counts["graphql_types"],
-            "graphql_types_implemented": 0,
+            "graphql_types_implemented": len(impl_type_names),
             "graphql_mutations": counts["graphql_mutations"],
-            "graphql_mutations_implemented": 0,
+            "graphql_mutations_implemented": len(impl_mutation_names),
             "ui_feature_dirs": counts["ui_feature_dirs"],
             "ui_feature_dirs_implemented": star_impl["ui_feature_dirs"],
             "js_tsx_files": counts["js_tsx_files"],
@@ -768,6 +1007,18 @@ def build_coverage(manifest, star_src):
         "controllers": controllers,
         "implemented_routes": implemented,
         "unmatched_star_routes": extras,
+        "graphql": {
+            "type_aliases": dict(sorted(type_alias.items())),
+            "implemented_type_names": impl_type_names,
+            "missing_type_names": sorted(canvas_types - star_types_canonical),
+            "star_type_names_unmatched": sorted(
+                star_types_canonical - canvas_types),
+            "implemented_mutation_names": impl_mutation_names,
+            "missing_mutation_names": sorted(
+                canvas_mutations - set(star_mutations)),
+            "star_mutation_names_unmatched": sorted(
+                set(star_mutations) - canvas_mutations),
+        },
     }
 
 
@@ -832,6 +1083,56 @@ def render_report(coverage):
              fmt_pct(data["implemented"], data["total"])))
     add("")
 
+    gql = coverage["graphql"]
+    add("## GraphQL operation coverage")
+    add("")
+    add("Names are matched exactly: star-graphql type names (mapped through "
+        "the documented renames below) against Canvas `graphql_name`s from "
+        "`app/graphql/types/*_type.rb`, and mutation field names against the "
+        "operations of `app/graphql/mutations/**` (classes whose superclass "
+        "chain reaches `Mutations::BaseMutation`).")
+    add("")
+    add("### Implemented types (%d of %d Canvas names)" %
+        (len(gql["implemented_type_names"]), s["graphql_types"]))
+    add("")
+    if gql["implemented_type_names"]:
+        add(", ".join("`%s`" % n for n in gql["implemented_type_names"]))
+    else:
+        add("(none)")
+    add("")
+    if gql["type_aliases"]:
+        add("Renames mapped to Canvas names: %s." % ", ".join(
+            "`%s` -> `%s`" % (star, canvas)
+            for star, canvas in gql["type_aliases"].items()))
+        add("")
+    add("### Missing types (%d)" % len(gql["missing_type_names"]))
+    add("")
+    if gql["missing_type_names"]:
+        add(", ".join("`%s`" % n for n in gql["missing_type_names"]))
+    else:
+        add("(none)")
+    add("")
+    add("### Implemented mutations (%d of %d Canvas operations)" %
+        (len(gql["implemented_mutation_names"]), s["graphql_mutations"]))
+    add("")
+    if gql["implemented_mutation_names"]:
+        add(", ".join("`%s`" % n for n in gql["implemented_mutation_names"]))
+    else:
+        add("(none)")
+    add("")
+    add("### Missing mutations (%d)" % len(gql["missing_mutation_names"]))
+    add("")
+    if gql["missing_mutation_names"]:
+        add(", ".join("`%s`" % n for n in gql["missing_mutation_names"]))
+    else:
+        add("(none)")
+    add("")
+    if gql["star_type_names_unmatched"] or gql["star_mutation_names_unmatched"]:
+        add("Star names with no Canvas counterpart (not counted): %s." %
+            ", ".join("`%s`" % n for n in gql["star_type_names_unmatched"] +
+                      gql["star_mutation_names_unmatched"]))
+        add("")
+
     extras = coverage["unmatched_star_routes"]
     add("## Star routes with no Canvas match (%d)" % len(extras))
     add("")
@@ -856,6 +1157,18 @@ def render_report(coverage):
         "left as `{}` and cannot match concrete Rust paths.")
     add("- UI references are `/api/v1/...` string literals in `ui/`; runtime-built "
         "paths and hard-coded ids that cannot be normalized are missed.")
+    add("- GraphQL type names come from `graphql_name` declarations (or the "
+        "class name minus a trailing `Type`) in `app/graphql/types/*_type.rb`, "
+        "and mutation operations from classes whose superclass chain reaches "
+        "`Mutations::BaseMutation` in `app/graphql/mutations/**`; the "
+        "denominators remain the file counts (170 type files, 110 mutation "
+        "files). star-graphql names are extracted from `#[Object]` impls and "
+        "async-graphql derives, with documented renames "
+        "(CourseSection->Section, EnrollmentTerm->Term, "
+        "DiscussionTopic->Discussion, QuizQuestion->QuizItem) mapped to their "
+        "Canvas graphql_names before matching. Connection and edge helpers "
+        "(e.g. `PageInfo`, `*Edge`, `*Connection`) only count when Canvas "
+        "defines a type of the same name.")
     add("- Rust paths are matched by `(verb, normalized path)`; axum's "
         "`nest(\"/api/v1\", ...)` mount is assumed for all crate routers.")
     add("- Extras include deliberate flat-path deviations (for example "
@@ -894,6 +1207,9 @@ def cmd_report(args):
     s = coverage["summary"]
     print("REST: %d/%d (%s)" % (current, s["canvas_api_routes"],
                                 fmt_pct(current, s["canvas_api_routes"])))
+    print("GraphQL: %d/%d types, %d/%d mutations" %
+          (s["graphql_types_implemented"], s["graphql_types"],
+           s["graphql_mutations_implemented"], s["graphql_mutations"]))
     print("UI-referenced: %d/%d (%s)" %
           (s["ui_referenced_implemented"], s["ui_referenced_routes"],
            fmt_pct(s["ui_referenced_implemented"], s["ui_referenced_routes"])))

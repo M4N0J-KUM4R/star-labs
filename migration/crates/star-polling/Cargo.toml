@@ -1,0 +1,19 @@
+[package]
+name = "star-polling"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+star-common = { path = "../star-common" }
+star-auth = { path = "../star-auth" }
+axum = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sqlx = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+star-db = { path = "../star-db" }
+sqlx = { workspace = true }
+tokio = { workspace = true }
+axum-test = { workspace = true }

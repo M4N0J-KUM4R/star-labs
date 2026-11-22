@@ -5,6 +5,11 @@ name: Production build
 # it is deliberately NOT duplicated here, which used to double every push's
 # test cost. Release builds run on `main` and on demand; PRs get the full
 # compile via clippy --all-targets plus the sharded test suite.
+#
+# Wave-4 fast path: docs-only PRs (classified by tools/ci/change_class.py via
+# the `changes` job) skip the fmt/clippy steps; the `Format and lint` job still
+# runs and reports green so the required check name is unchanged. The
+# migration-file hygiene check always runs (no toolchain needed).
 
 on:
   push:
@@ -17,6 +22,8 @@ on:
       - 'specs/**'
       - 'migration/**'
       - 'orchestration/**'
+      - 'tools/ci/**'
+      - 'browser-smoke/**'
       - '.github/workflows/production-build.yml'
   merge_group:
   workflow_dispatch:
@@ -39,11 +46,65 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Quality gates: formatting, linting, migration-file hygiene. Runs in parallel
-  # with everything else — it is no longer a serial prerequisite.
+  # Fast-path gate: classify the diff so docs-only PRs can skip the Rust
+  # toolchain work. Non-pull_request events short-circuit to a full run.
+  # Rules live in tools/ci/change_class.py (single source of truth).
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Change class
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.class.outputs.rust }}
+      lab: ${{ steps.class.outputs.lab }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Classify the diff
+        id: class
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            {
+              echo "rust=true"
+              echo "lab=true"
+            } >> "$GITHUB_OUTPUT"
+            echo "event '${{ github.event_name }}' — full run by design"
+            exit 0
+          fi
+          # base...head compare: exactly this PR's changes. API hiccups and
+          # truncated lists (>=300 files) degrade to a full run, never to a
+          # wrong skip.
+          payload=""
+          for attempt in 1 2 3; do
+            if payload="$(gh api "repos/$REPO/compare/$BASE...$HEAD")"; then
+              break
+            fi
+            echo "compare API attempt $attempt failed; retrying in 5s"
+            sleep 5
+          done
+          if [ -z "$payload" ]; then
+            echo "::warning::compare unavailable — defaulting to full run"
+            {
+              echo "rust=true"
+              echo "lab=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$payload" | python3 tools/ci/change_class.py --github-output "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
+  # Quality gates: formatting, linting, migration-file hygiene. This job is
+  # the required check `Format and lint` and therefore always runs; the
+  # toolchain steps are conditional on the PR actually changing Rust source.
   # ---------------------------------------------------------------------------
   quality:
     name: Format and lint
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 20
     defaults:
@@ -52,16 +113,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        if: needs.changes.outputs.rust == 'true'
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+        if: needs.changes.outputs.rust == 'true'
         with:
           workspaces: migration -> target
           shared-key: quality
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Enforce rustfmt
+        if: needs.changes.outputs.rust == 'true'
         run: cargo fmt --all -- --check
       - name: Enforce clippy
+        if: needs.changes.outputs.rust == 'true'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Verify migration files are unique and well formed
         run: |
@@ -75,6 +140,11 @@ jobs:
           if [ -n "$dups" ]; then
             echo "::error::duplicate migration prefixes:"; echo "$dups"; exit 1
           fi
+      - name: Report fast path
+        if: needs.changes.outputs.rust != 'true'
+        run: |
+          echo "no Rust-source changes in this PR — fmt/clippy skipped by design."
+          echo "full run happens on merge to main, on merge_group, and on dispatch."
 
   # ---------------------------------------------------------------------------
   # Dependency vulnerability audit (RustSec advisory database).
@@ -129,9 +199,9 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U star -d star_lms_test"
-          --health-interval 10s
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
     env:
       DATABASE_URL: postgres://star:star-test-only@localhost:5432/star_lms_test
       STAR_JWT_SECRET: github-actions-test-secret

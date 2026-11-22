@@ -41,6 +41,14 @@ star-learning-dates = { path = "../star-learning-dates" }
 star-audit = { path = "../star-audit" }
 star-media = { path = "../star-media" }
 star-graphql = { path = "../star-graphql" }
+star-account-reports = { path = "../star-account-reports" }
+star-collaborations = { path = "../star-collaborations" }
+star-conferences = { path = "../star-conferences" }
+star-eportfolios = { path = "../star-eportfolios" }
+star-polling = { path = "../star-polling" }
+star-search = { path = "../star-search" }
+star-sis = { path = "../star-sis" }
+star-ui = { path = "../star-ui" }
 axum = { workspace = true }
 tokio = { workspace = true }
 sqlx = { workspace = true }

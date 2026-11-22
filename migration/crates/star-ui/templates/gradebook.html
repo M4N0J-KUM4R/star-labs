@@ -1,0 +1,63 @@
+{% extends "layouts/course.html" %}
+{# Gradebook grid (issue #71) — Canvas gradebooks#show, server-rendered
+   (Canvas' grid is a JS-only SlickGrid app; the shell renders a plain
+   table). Rows = enrollments, columns = assignments ordered by group
+   position then insertion order; cells carry score / state pill / dash.
+   Custom gradebook columns have no API in star-lms, so the grid omits them
+   (documented deviation). #}
+{% block content %}
+  <div id="gradebook" class="gradebook full-width">
+    <div id="gradebook-toolbar" class="gradebook-toolbar">
+      <h1 class="gradebook-heading">Gradebook</h1>
+      <div class="gradebook-toolbar-actions">
+        <a id="gradebook_csv_link" class="btn" href="{{ csv_url }}">Export CSV</a>
+        <a id="back_to_assignments" class="btn" href="/courses/{{ course_id }}/assignments">Assignments</a>
+      </div>
+    </div>
+
+    <div class="table-wrapper">
+      <table id="gradebook_grid" class="ic-Table gradebook-grid">
+        <thead>
+          <tr>
+            <th scope="col" class="student-header">Student</th>
+            {% for a in assignments %}
+            <th scope="col" class="assignment-header" data-assignment-id="{{ a.id }}">
+              <a class="assignment-header-link" href="/courses/{{ course_id }}/assignments/{{ a.id }}">{{ a.title }}</a>
+              <span class="assignment-header-points">{{ a.points_possible }} pts</span>
+            </th>
+            {% endfor %}
+            <th scope="col" class="total-header">Total</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in rows %}
+          <tr class="gradebook-row" data-user-id="{{ row.user_id }}">
+            <th scope="row" class="student-name">{{ row.user_name }}</th>
+            {% for cell in row.cells %}
+            <td class="gradebook-cell" data-assignment-id="{{ cell.assignment_id }}">
+              {% if let Some(score) = cell.score %}
+              <span class="gradebook-score">{{ score }}</span>
+              {% else if let Some(state) = cell.submission_state.clone() %}
+              <span class="gradebook-cell-state pill-{{ state }}">{{ state }}</span>
+              {% else %}
+              <span class="gradebook-cell-empty">&#8211;</span>
+              {% endif %}
+            </td>
+            {% endfor %}
+            <td class="gradebook-total">
+              {% if let Some(grade) = row.current_grade %}
+              <span class="gradebook-total-percent">{{ grade }}</span>
+              {% else %}
+              <span class="gradebook-cell-empty">&#8211;</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+          {% if rows.is_empty() %}
+          <tr class="gradebook-empty-row"><td colspan="2">No enrollments in this course yet.</td></tr>
+          {% endif %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endblock content %}

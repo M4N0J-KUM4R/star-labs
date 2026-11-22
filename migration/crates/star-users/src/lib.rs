@@ -907,6 +907,76 @@ pub fn router() -> Router<AppState> {
             "/users/self/todo/{asset_string}/{purpose}",
             delete(ignore_todo_item),
         )
+        // Canvas users_controller#activity_stream — deprecated
+        // `/users/activity_stream` alias of the self route (config/routes.rb
+        // line 1784); same action, so the same handler.
+        .route("/users/activity_stream", get(activity_stream))
+        // Canvas users_controller#create_self_registered_user (open
+        // registration path; `require_self_registration` gate inside).
+        .route(
+            "/accounts/{account_id}/self_registration",
+            post(create_self_registered_user),
+        )
+        // Canvas users_controller#expire_mobile_sessions — global (no id)
+        // and per-user variants share one action.
+        .route("/users/mobile_sessions", delete(expire_mobile_sessions_all))
+        .route(
+            "/users/{id}/mobile_sessions",
+            delete(expire_mobile_sessions),
+        )
+        // Canvas users_controller#pandata_events_token.
+        .route(
+            "/users/self/pandata_events_token",
+            post(pandata_events_token),
+        )
+        // Canvas users_controller#show_k5_dashboard.
+        .route("/show_k5_dashboard", get(show_k5_dashboard))
+        // Canvas users_controller#clear_cache.
+        .route("/users/{id}/clear_cache", post(clear_cache))
+        // Canvas user_observees controller — 7 routes:
+        // observers (who watches this user), observees (who this user watches),
+        // create/show/update/delete observee links.
+        .route("/users/{userId}/observers", get(list_observers))
+        .route("/users/{userId}/observees", get(list_observees))
+        .route("/users/{userId}/observees", post(create_observee))
+        .route(
+            "/users/{userId}/observees/{observeeId}",
+            get(get_observee)
+                .put(update_observee)
+                .delete(delete_observee),
+        )
+        .route("/users/{userId}/observers/{observerId}", get(get_observer))
+        // Canvas users_controller#set_text_editor_preference /
+        // #set_files_ui_version_preference (user preferences, migration 0123).
+        .route(
+            "/users/{id}/text_editor_preference",
+            put(set_text_editor_preference),
+        )
+        .route(
+            "/users/{id}/files_ui_version_preference",
+            put(set_files_ui_version_preference),
+        )
+        // Canvas users_controller#get_new_user_tutorial_statuses /
+        // #set_new_user_tutorial_status (current-user only).
+        .route(
+            "/users/{id}/new_user_tutorial_statuses",
+            get(get_new_user_tutorial_statuses),
+        )
+        .route(
+            "/users/{id}/new_user_tutorial_statuses/{page_name}",
+            put(set_new_user_tutorial_status),
+        )
+        // Canvas users_controller#merge_into — simple and cross-account forms.
+        .route(
+            "/users/{id}/merge_into/{destination_user_id}",
+            put(merge_into),
+        )
+        .route(
+            "/users/{id}/merge_into/accounts/{destination_account_id}/users/{destination_user_id}",
+            put(merge_into_cross_account),
+        )
+        // Canvas users_controller#split.
+        .route("/users/{id}/split", post(split_user))
 }
 
 // --------------------------------------------------------------------------
@@ -2124,6 +2194,1650 @@ async fn asset_type_exists(
         .await
         .map_err(ApiError::from)?;
     Ok(row.is_some())
+}
+
+// --------------------------------------------------------------------------
+// Users controller tail: self registration, mobile sessions, pandata token,
+// k5 dashboard, clear cache (issue #57, Group A).
+// --------------------------------------------------------------------------
+
+/// Request body for POST /accounts/{account_id}/self_registration. Canvas
+/// wraps the fields (`user[name]`, `user[initial_enrollment_type]`,
+/// `pseudonym[unique_id]`, `communication_channel[...]`) but the API also
+/// accepts the flattened `unique_id` form used by the mobile
+/// self-registration screen.
+#[derive(Debug, Default, Deserialize)]
+pub struct SelfRegistrationRequest {
+    #[serde(default)]
+    pub user: SelfRegistrationUserFields,
+    #[serde(default)]
+    pub pseudonym: AccountPseudonym,
+    /// Flattened fallback for `pseudonym[unique_id]`.
+    pub unique_id: Option<String>,
+    pub password: Option<String>,
+}
+
+/// `user[...]` fields for self registration. `initial_enrollment_type`
+/// (e.g. "observer") participates in the
+/// `self_registration_allowed_for?` check.
+#[derive(Debug, Default, Deserialize)]
+pub struct SelfRegistrationUserFields {
+    pub name: Option<String>,
+    pub sortable_name: Option<String>,
+    pub initial_enrollment_type: Option<String>,
+}
+
+/// Canvas `Account#self_registration?` / `#self_registration_allowed_for?`
+/// (app/models/account.rb): the root account's active `canvas` auth provider
+/// must have `jit_provisioning` on, and `self_registration_type` (Canvas
+/// column `auth_filter`) must be `"all"` or match the requested enrollment
+/// type. star-lms keeps provider config in the `settings` JSONB (migration
+/// 0103) — `jit_provisioning` / `auth_filter` keys — which is the documented
+/// mapping for the Canvas columns of the same name.
+async fn self_registration_allowed(
+    pool: &PgPool,
+    root_account_id: i64,
+    initial_enrollment_type: Option<&str>,
+) -> Result<bool, ApiError> {
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        r#"
+        SELECT COALESCE(settings, '{}'::jsonb)
+        FROM authentication_providers
+        WHERE account_id = $1
+          AND auth_type = 'canvas'
+          AND workflow_state = 'active'
+        ORDER BY position NULLS LAST, id
+        LIMIT 1
+        "#,
+    )
+    .bind(root_account_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    let Some((settings,)) = row else {
+        return Ok(false);
+    };
+    let enabled = settings
+        .get("jit_provisioning")
+        .and_then(canvas_boolean)
+        .unwrap_or(false);
+    if !enabled {
+        return Ok(false);
+    }
+    let reg_type = settings
+        .get("auth_filter")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    Ok(reg_type == "all" || Some(reg_type) == initial_enrollment_type.filter(|t| !t.is_empty()))
+}
+
+/// Resolve an account id to its root account. Unknown ids fall back to the
+/// site root account, mirroring Canvas `require_self_registration`'s
+/// `@context = @domain_root_account unless @context.is_a?(Account)`.
+async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, ApiError> {
+    let mut current = account_id;
+    for _ in 0..16 {
+        let row: Option<(Option<i64>,)> =
+            sqlx::query_as("SELECT parent_account_id FROM accounts WHERE id = $1")
+                .bind(current)
+                .fetch_optional(pool)
+                .await
+                .map_err(ApiError::from)?;
+        match row {
+            None => {
+                // Unknown id: Canvas substitutes the domain root account.
+                let root: Option<(i64,)> = sqlx::query_as(
+                    "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id LIMIT 1",
+                )
+                .fetch_optional(pool)
+                .await
+                .map_err(ApiError::from)?;
+                return Ok(root.map(|(root_id,)| root_id).unwrap_or(current));
+            }
+            Some((Some(parent),)) if parent != current => current = parent,
+            Some(_) => return Ok(current),
+        }
+    }
+    Ok(current)
+}
+
+/// POST /accounts/{account_id}/self_registration — Canvas
+/// UsersController#create_self_registered_user (delegates to create_user).
+///
+/// `require_self_registration` (users_controller.rb) runs first: the root
+/// account must allow self registration for the requested
+/// `user[initial_enrollment_type]`, otherwise 403
+/// `{"error": "Self registration has not been enabled for this account"}`.
+/// The anonymous path then mirrors the admin create: name defaults to the
+/// unique_id, `pre_registered` workflow is simplified to a directly usable
+/// account (this schema has no email-confirmation loop), and the response is
+/// the Canvas user JSON.
+async fn create_self_registered_user(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    Json(payload): Json<SelfRegistrationRequest>,
+) -> Result<Json<UserResponse>, ApiError> {
+    let root = root_account_id(&state.db, account_id).await?;
+    if !self_registration_allowed(
+        &state.db,
+        root,
+        payload.user.initial_enrollment_type.as_deref(),
+    )
+    .await?
+    {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas' require_self_registration falls back to the root account when
+    // the id does not name an Account, so the gate above ran against the
+    // root; the creation itself still needs a real account row.
+    let account: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM accounts WHERE id = $1")
+        .bind(account_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    account.ok_or(ApiError::NotFound)?;
+
+    let email = payload
+        .pseudonym
+        .unique_id
+        .or(payload.unique_id)
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
+        .ok_or_else(|| ApiError::BadRequest("pseudonym[unique_id] is required".into()))?;
+
+    let taken: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM users WHERE email = $1")
+        .bind(&email)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+    if taken.is_some() {
+        return Err(ApiError::BadRequest("email has already been taken".into()));
+    }
+
+    let name = payload
+        .user
+        .name
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| email.clone());
+    let sortable_name = payload
+        .user
+        .sortable_name
+        .unwrap_or_else(|| match name.rsplit_once(' ') {
+            Some((first, last)) => format!("{last}, {first}"),
+            None => name.clone(),
+        });
+    let password = payload
+        .password
+        .unwrap_or_else(|| SaltString::generate(&mut OsRng).as_str().to_string());
+    let hash = hash_password(&password).map_err(ApiError::BadRequest)?;
+
+    let user: UserResponse = sqlx::query_as(
+        r#"
+        INSERT INTO users (name, sortable_name, email, password_hash, role)
+        VALUES ($1, $2, $3, $4, 'student')
+        RETURNING id, name, sortable_name, email, role, created_at
+        "#,
+    )
+    .bind(&name)
+    .bind(&sortable_name)
+    .bind(&email)
+    .bind(&hash)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(user))
+}
+
+/// DELETE /users/mobile_sessions — Canvas UsersController#expire_mobile_sessions
+/// (no-id form: every user in the institution). `manage_user_logins` on the
+/// root account; `skip_admins` keeps account admins' sessions.
+///
+/// Token invalidation is a documented no-op: Canvas scopes it to
+/// `DeveloperKey.mobile_app_keys` (rows with a non-null sns_arn) and this
+/// schema's developer_keys table (migration 0032) has no sns_arn, so the
+/// matching key set — and therefore the affected token set — is empty.
+async fn expire_mobile_sessions_all(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    expire_mobile_sessions_impl(&state, &auth).await
+}
+
+/// DELETE /users/{id}/mobile_sessions — per-user variant of the same action.
+async fn expire_mobile_sessions(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = resolve_path_user(&raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+    expire_mobile_sessions_impl(&state, &auth).await
+}
+
+async fn expire_mobile_sessions_impl(
+    state: &AppState,
+    auth: &AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Canvas checks `manage_user_logins` on the root account (account 1).
+    if !is_admin(&auth.role) {
+        let admin: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM account_users WHERE account_id = 1 AND user_id = $1 AND role = 'admin'",
+        )
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+        if admin.is_none() {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    Ok(Json(
+        serde_json::json!({ "message": "All mobile sessions terminated" }),
+    ))
+}
+
+/// POST /users/self/pandata_events_token — Canvas
+/// UsersController#pandata_events_token.
+///
+/// Canvas requires the request to be authenticated with an API access token
+/// (`@access_token`); bearer JWTs are not one, so the action's first guard
+/// fires: 400 `{"message": "Access token required"}`. This is a faithful
+/// pin, not a stub — the star-lms API has no access-token auth path.
+async fn pandata_events_token(_auth: AuthUser) -> Result<Json<serde_json::Value>, ApiError> {
+    Err(ApiError::BadRequest("Access token required".into()))
+}
+
+/// POST /users/{id}/clear_cache — Canvas UsersController#clear_cache.
+///
+/// `manage_site_settings` on the root account; a missing user is 404 (the
+/// `api_find` runs first), then `{"status": "ok"}`.
+async fn clear_cache(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = resolve_path_user(&raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+
+    // Canvas: authorized_action(@domain_root_account, ..., :manage_site_settings)
+    if !is_admin(&auth.role) {
+        let admin: Option<(i32,)> = sqlx::query_as(
+            "SELECT 1 FROM account_users WHERE account_id = 1 AND user_id = $1 AND role = 'admin'",
+        )
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+        if admin.is_none() {
+            return Err(ApiError::Forbidden);
+        }
+    }
+    Ok(Json(serde_json::json!({ "status": "ok" })))
+}
+
+/// GET /show_k5_dashboard — Canvas UsersController#show_k5_dashboard.
+///
+/// Returns `{show_k5_dashboard, use_classic_font}` from K5::UserService:
+/// the caller is a k5 user when they have an enrollment or admin
+/// association with any account listed in a root account's
+/// `settings.k5_accounts` (Canvas `Account#settings`), and admins/teachers
+/// may opt out via the `elementary_dashboard_disabled` preference
+/// (user_settings). `use_classic_font` additionally requires an association
+/// with a `k5_classic_font_accounts` entry.
+async fn show_k5_dashboard(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let k5_accounts = k5_setting_accounts(&state.db, "k5_accounts").await?;
+    let classic_accounts = k5_setting_accounts(&state.db, "k5_classic_font_accounts").await?;
+
+    // Only admins and teachers can opt out (K5::UserService::ROLES_THAT_CAN_DISABLE_K5).
+    let can_disable = is_admin(&auth.role) || user_has_role(&state.db, auth.id, "teacher").await?;
+
+    let associated = user_associated_with_accounts(&state.db, auth.id, &k5_accounts).await?;
+    let k5 = if can_disable {
+        let disabled: Option<(bool,)> = sqlx::query_as(
+            "SELECT elementary_dashboard_disabled FROM user_settings WHERE user_id = $1",
+        )
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+        !disabled.map(|(disabled,)| disabled).unwrap_or(false) && associated
+    } else {
+        associated
+    };
+
+    let classic =
+        k5 && user_associated_with_accounts(&state.db, auth.id, &classic_accounts).await?;
+
+    Ok(Json(serde_json::json!({
+        "show_k5_dashboard": k5,
+        "use_classic_font": classic,
+    })))
+}
+
+/// Collect the account ids listed under `settings.<key>` across root accounts
+/// (Canvas K5::UserService#global_k5_account_ids reads the same setting).
+async fn k5_setting_accounts(pool: &PgPool, key: &str) -> Result<Vec<i64>, ApiError> {
+    let rows: Vec<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT COALESCE(settings, '{}'::jsonb) FROM accounts WHERE parent_account_id IS NULL",
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+    let mut ids = Vec::new();
+    for (settings,) in rows {
+        if let Some(list) = settings.get(key).and_then(|v| v.as_array()) {
+            ids.extend(list.iter().filter_map(|v| v.as_i64()));
+        }
+    }
+    Ok(ids)
+}
+
+/// Canvas K5::UserService#user_has_association?: the user is enrolled in a
+/// course whose account (or any k5 account in its chain, via
+/// Account#multi_account_chain_ids) is in `account_ids`, or is an active
+/// account admin of one of them.
+async fn user_associated_with_accounts(
+    pool: &PgPool,
+    user_id: i64,
+    account_ids: &[i64],
+) -> Result<bool, ApiError> {
+    if account_ids.is_empty() {
+        return Ok(false);
+    }
+    let enrolled: Option<(i32,)> = sqlx::query_as(
+        r#"
+        WITH RECURSIVE chain AS (
+            SELECT id, parent_account_id FROM accounts WHERE id = ANY($2)
+            UNION ALL
+            SELECT a.id, a.parent_account_id
+            FROM accounts a
+            JOIN chain ch ON a.parent_account_id = ch.id
+        )
+        SELECT 1
+        FROM enrollments e
+        JOIN courses c ON c.id = e.course_id
+        WHERE e.user_id = $1
+          AND e.workflow_state = 'active'
+          AND c.account_id IN (SELECT id FROM chain)
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .bind(account_ids)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    if enrolled.is_some() {
+        return Ok(true);
+    }
+    let admin: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM account_users WHERE user_id = $1 AND account_id = ANY($2) LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(account_ids)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(admin.is_some())
+}
+
+/// Whether the user holds the given role in any enrollment.
+async fn user_has_role(pool: &PgPool, user_id: i64, role: &str) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM enrollments WHERE user_id = $1 AND role = $2 LIMIT 1")
+            .bind(user_id)
+            .bind(role)
+            .fetch_optional(pool)
+            .await
+            .map_err(ApiError::from)?;
+    Ok(row.is_some())
+}
+
+// --------------------------------------------------------------------------
+// User-observees (observer enrollment) types
+// --------------------------------------------------------------------------
+
+/// Canvas UserObservee / Observer JSON shape:
+/// `{"id": <user_id>, "name": ..., "display_name": ..., "enrollments": [...]}`
+/// The enrollments array holds the course-scoped observer links.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ObserveeResponse {
+    pub id: i64,
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<String>,
+    pub enrollments: Vec<ObserverEnrollmentJson>,
+}
+
+/// One observer-link record embedded in an observee response.
+/// course_id = NULL means "all courses" (global observer link).
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct ObserverEnrollmentJson {
+    pub course_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub course_name: Option<String>,
+    pub enrollment_state: String,
+}
+
+/// 6-tuple returned by observee queries:
+/// (user_id, name, display_name, course_id, course_name, workflow_state)
+type ObserveeRow = (
+    i64,
+    String,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    String,
+);
+
+/// Observer link created by POST /users/{userId}/observees.
+#[derive(Debug, Deserialize)]
+pub struct CreateObserveeRequest {
+    pub user_id: i64,
+    pub course_id: Option<i64>,
+}
+
+/// Course-scoped update for PUT /users/{userId}/observees/{observeeId}.
+#[derive(Debug, Deserialize)]
+pub struct UpdateObserveeRequest {
+    pub course_id: Option<i64>,
+}
+
+// --------------------------------------------------------------------------
+// User-observees helpers
+// --------------------------------------------------------------------------
+
+/// Check whether `auth_user` may read/modify observee links for `user_id`.
+async fn authorize_observee_access(
+    state: &AppState,
+    auth: &AuthUser,
+    user_id: i64,
+) -> Result<(), ApiError> {
+    let role = get_user_role(&state.db, auth.id).await?;
+    let role = role.unwrap_or_else(|| "student".to_string());
+    if is_self(auth.id, user_id) || is_admin(&role) {
+        return Ok(());
+    }
+    // Observers may manage their own observee links.
+    let observer_link: Option<(i32,)> =
+        sqlx::query_as("SELECT 1 FROM observer_enrollments WHERE observer_id = $1 LIMIT 1")
+            .bind(auth.id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+    if observer_link.is_some() {
+        return Ok(());
+    }
+    Err(ApiError::Forbidden)
+}
+
+/// Load all observees for a given observer user, optionally scoped to a
+/// course.  Each distinct (user_id, course_id) pair is returned as one
+/// ObserverEnrollmentJson entry; the user name is emitted once.
+async fn load_observees(
+    pool: &PgPool,
+    observer_id: i64,
+    course_id: Option<i64>,
+) -> Result<Vec<ObserveeResponse>, ApiError> {
+    let rows: Vec<ObserveeRow> = sqlx::query_as(
+        r#"
+            SELECT oe.user_id,
+                   u.name,
+                   NULL::text          AS display_name,
+                   oe.course_id,
+                   c.name              AS course_name,
+                   oe.workflow_state
+            FROM observer_enrollments oe
+            JOIN users u ON u.id = oe.user_id
+            LEFT JOIN courses c ON c.id = oe.course_id
+            WHERE oe.observer_id = $1
+              AND ($2::bigint IS NULL OR oe.course_id = $2)
+            ORDER BY u.name, oe.course_id
+            "#,
+    )
+    .bind(observer_id)
+    .bind(course_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Group by observee user id; collapse multiple course links into one
+    // enrollments array per user.
+    let mut by_user: BTreeMap<i64, ObserveeResponse> = BTreeMap::new();
+    for (user_id, name, display_name, cid, course_name, workflow_state) in rows {
+        let entry = by_user.entry(user_id).or_insert_with(|| ObserveeResponse {
+            id: user_id,
+            name,
+            display_name,
+            enrollments: Vec::new(),
+        });
+        entry.enrollments.push(ObserverEnrollmentJson {
+            course_id: cid,
+            course_name,
+            enrollment_state: workflow_state,
+        });
+    }
+    Ok(by_user.into_values().collect())
+}
+
+/// Load all observers for a given observee user (users who watch this user).
+async fn load_observers(pool: &PgPool, user_id: i64) -> Result<Vec<UserResponse>, ApiError> {
+    let observers: Vec<UserResponse> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT u.id, u.name, COALESCE(u.sortable_name, u.name) AS sortable_name,
+               u.email, u.role, u.created_at
+        FROM observer_enrollments oe
+        JOIN users u ON u.id = oe.observer_id
+        WHERE oe.user_id = $1
+        ORDER BY u.name
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(observers)
+}
+
+// --------------------------------------------------------------------------
+// User-observees handlers
+// --------------------------------------------------------------------------
+
+/// GET /users/{userId}/observers — list observers of this user.
+async fn list_observers(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(user_id): Path<i64>,
+) -> Result<Json<Vec<UserResponse>>, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+    load_observers(&state.db, user_id).await.map(Json)
+}
+
+/// GET /users/{userId}/observees — list users this user observes.
+async fn list_observees(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(user_id): Path<i64>,
+    Query(params): Query<ObserveeQuery>,
+) -> Result<Json<Vec<ObserveeResponse>>, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+    load_observees(&state.db, user_id, params.course_id)
+        .await
+        .map(Json)
+}
+
+/// Query params for GET /users/{userId}/observees.
+#[derive(Debug, Default, Deserialize)]
+pub struct ObserveeQuery {
+    pub course_id: Option<i64>,
+}
+
+/// POST /users/{userId}/observees — link a user as an observee.
+async fn create_observee(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(user_id): Path<i64>,
+    Json(payload): Json<CreateObserveeRequest>,
+) -> Result<Json<ObserveeResponse>, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+
+    // The observee must exist.
+    ensure_user_exists(&state.db, payload.user_id).await?;
+
+    // Validate course_id if provided.
+    if let Some(cid) = payload.course_id {
+        let course: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+            .bind(cid)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+        if course.is_none() {
+            return Err(ApiError::NotFound);
+        }
+    }
+
+    sqlx::query(
+        r#"
+            INSERT INTO observer_enrollments (observer_id, user_id, course_id)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (observer_id, user_id, course_id) DO UPDATE
+                SET updated_at = now()
+            "#,
+    )
+    .bind(user_id)
+    .bind(payload.user_id)
+    .bind(payload.course_id)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let rows: Vec<ObserveeRow> = sqlx::query_as(
+        r#"
+            SELECT oe.user_id, u.name, NULL::text,
+                   oe.course_id, c.name, oe.workflow_state
+            FROM observer_enrollments oe
+            JOIN users u ON u.id = oe.user_id
+            LEFT JOIN courses c ON c.id = oe.course_id
+            WHERE oe.observer_id = $1 AND oe.user_id = $2
+              AND oe.course_id IS NOT DISTINCT FROM $3
+            ORDER BY oe.course_id
+            "#,
+    )
+    .bind(user_id)
+    .bind(payload.user_id)
+    .bind(payload.course_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let row = rows.first().ok_or(ApiError::NotFound)?;
+
+    let (uid, name, display_name, cid, course_name, workflow_state) = row.clone();
+
+    Ok(Json(ObserveeResponse {
+        id: uid,
+        name,
+        display_name,
+        enrollments: vec![ObserverEnrollmentJson {
+            course_id: cid,
+            course_name,
+            enrollment_state: workflow_state,
+        }],
+    }))
+}
+
+/// GET /users/{userId}/observees/{observeeId} — fetch one observee record.
+async fn get_observee(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((user_id, observee_id)): Path<(i64, i64)>,
+) -> Result<Json<ObserveeResponse>, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+
+    let rows: Vec<ObserveeRow> = sqlx::query_as(
+        r#"
+            SELECT oe.user_id, u.name, NULL::text,
+                   oe.course_id, c.name, oe.workflow_state
+            FROM observer_enrollments oe
+            JOIN users u ON u.id = oe.user_id
+            LEFT JOIN courses c ON c.id = oe.course_id
+            WHERE oe.observer_id = $1 AND oe.user_id = $2
+            ORDER BY oe.course_id
+            "#,
+    )
+    .bind(user_id)
+    .bind(observee_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let first = rows.first().ok_or(ApiError::NotFound)?;
+    let (uid, name, display_name, _, _, _) = first.clone();
+
+    let enrollments: Vec<ObserverEnrollmentJson> = rows
+        .into_iter()
+        .map(
+            |(_, _, _, cid, course_name, workflow_state)| ObserverEnrollmentJson {
+                course_id: cid,
+                course_name,
+                enrollment_state: workflow_state,
+            },
+        )
+        .collect();
+
+    Ok(Json(ObserveeResponse {
+        id: uid,
+        name,
+        display_name,
+        enrollments,
+    }))
+}
+
+/// GET /users/{userId}/observers/{observerId} — fetch one observer record.
+async fn get_observer(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((user_id, observer_id)): Path<(i64, i64)>,
+) -> Result<Json<UserResponse>, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+
+    let observer: Option<UserResponse> = sqlx::query_as(
+        r#"
+        SELECT u.id, u.name, COALESCE(u.sortable_name, u.name) AS sortable_name,
+               u.email, u.role, u.created_at
+        FROM observer_enrollments oe
+        JOIN users u ON u.id = oe.observer_id
+        WHERE oe.user_id = $1 AND oe.observer_id = $2
+        "#,
+    )
+    .bind(user_id)
+    .bind(observer_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    observer.ok_or(ApiError::NotFound).map(Json)
+}
+
+/// PUT /users/{userId}/observees/{observeeId} — update the course scope of an
+/// existing observee link.
+async fn update_observee(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((user_id, observee_id)): Path<(i64, i64)>,
+    Json(payload): Json<UpdateObserveeRequest>,
+) -> Result<Json<ObserveeResponse>, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+
+    if let Some(cid) = payload.course_id {
+        let course: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+            .bind(cid)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+        if course.is_none() {
+            return Err(ApiError::NotFound);
+        }
+    }
+
+    sqlx::query(
+        r#"
+            UPDATE observer_enrollments
+            SET course_id = $3, updated_at = now()
+            WHERE observer_id = $1 AND user_id = $2
+            "#,
+    )
+    .bind(user_id)
+    .bind(observee_id)
+    .bind(payload.course_id)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let rows: Vec<ObserveeRow> = sqlx::query_as(
+        r#"
+            SELECT oe.user_id, u.name, NULL::text,
+                   oe.course_id, c.name, oe.workflow_state
+            FROM observer_enrollments oe
+            JOIN users u ON u.id = oe.user_id
+            LEFT JOIN courses c ON c.id = oe.course_id
+            WHERE oe.observer_id = $1 AND oe.user_id = $2
+              AND oe.course_id IS NOT DISTINCT FROM $3
+            ORDER BY oe.course_id
+            "#,
+    )
+    .bind(user_id)
+    .bind(observee_id)
+    .bind(payload.course_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let row = rows.first().ok_or(ApiError::NotFound)?;
+
+    let (uid, name, display_name, cid, course_name, workflow_state) = row.clone();
+
+    Ok(Json(ObserveeResponse {
+        id: uid,
+        name,
+        display_name,
+        enrollments: vec![ObserverEnrollmentJson {
+            course_id: cid,
+            course_name,
+            enrollment_state: workflow_state,
+        }],
+    }))
+}
+
+/// DELETE /users/{userId}/observees/{observeeId} — remove an observee link.
+async fn delete_observee(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((user_id, observee_id)): Path<(i64, i64)>,
+) -> Result<StatusCode, ApiError> {
+    ensure_user_exists(&state.db, user_id).await?;
+    authorize_observee_access(&state, &auth, user_id).await?;
+
+    let result =
+        sqlx::query("DELETE FROM observer_enrollments WHERE observer_id = $1 AND user_id = $2")
+            .bind(user_id)
+            .bind(observee_id)
+            .execute(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// --------------------------------------------------------------------------
+// Users controller tail group B: preferences, merge_into, split (#57,
+// migration 0123: user_preferences + user_merges).
+// --------------------------------------------------------------------------
+
+/// Canvas `User#set_preference` / `#get_preference` backed by the
+/// `user_preferences` JSONB document (migration 0123). Setting None removes
+/// the key so it reads back as null, mirroring Canvas' serialized hash.
+async fn set_user_preference(
+    pool: &PgPool,
+    user_id: i64,
+    key: &str,
+    value: Option<&serde_json::Value>,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        r#"
+        INSERT INTO user_preferences (user_id, preferences)
+        VALUES ($1, jsonb_build_object($2::text, $3::jsonb))
+        ON CONFLICT (user_id) DO UPDATE
+        SET preferences = CASE
+                WHEN $3::jsonb = 'null'::jsonb
+                THEN user_preferences.preferences - $2::text
+                ELSE user_preferences.preferences || jsonb_build_object($2::text, $3::jsonb)
+            END,
+            updated_at = now()
+        "#,
+    )
+    .bind(user_id)
+    .bind(key)
+    .bind(value.unwrap_or(&serde_json::Value::Null))
+    .execute(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(())
+}
+
+/// Read one preference key (null when unset).
+async fn get_user_preference(
+    pool: &PgPool,
+    user_id: i64,
+    key: &str,
+) -> Result<serde_json::Value, ApiError> {
+    let row: Option<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT COALESCE(preferences -> $2::text, 'null'::jsonb) \
+         FROM user_preferences WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .bind(key)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(row.map(|(v,)| v).unwrap_or(serde_json::Value::Null))
+}
+
+/// Canvas users_controller#set_text_editor_preference (~line 2045).
+///
+/// `api_find` (404) then `[:manage, :manage_user_details]` (self or admin).
+/// Canvas raises `ActiveRecord::RecordInvalid` for values outside
+/// rce/block_editor/"" — an unhandled 500; reproduced as a 500. The empty
+/// string clears the preference (stored as null, read back as null).
+async fn set_text_editor_preference(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+    Json(payload): Json<TextEditorPreferenceRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = authorize_preference_update(&state, &auth, &raw_user_id).await?;
+
+    let pref = payload.text_editor_preference.as_deref();
+    if !matches!(pref, Some("rce") | Some("block_editor") | Some("") | None) {
+        // Canvas: raise ActiveRecord::RecordInvalid -> 500
+        return Err(ApiError::Db("Record invalid".into()));
+    }
+    let value = match pref {
+        Some("") | None => None,
+        Some(v) => Some(serde_json::json!(v)),
+    };
+    set_user_preference(&state.db, user_id, "text_editor_preference", value.as_ref()).await?;
+    let stored = get_user_preference(&state.db, user_id, "text_editor_preference").await?;
+    Ok(Json(
+        serde_json::json!({ "text_editor_preference": stored }),
+    ))
+}
+
+/// Body for PUT /users/{id}/text_editor_preference.
+#[derive(Debug, Default, Deserialize)]
+pub struct TextEditorPreferenceRequest {
+    pub text_editor_preference: Option<String>,
+}
+
+/// Canvas users_controller#set_files_ui_version_preference (~line 2080).
+///
+/// Same permission as the text editor route; invalid values (outside
+/// v1/v2) are a 400 `{"message": "Invalid files_ui_version provided"}`.
+async fn set_files_ui_version_preference(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+    Json(payload): Json<FilesUiVersionRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = authorize_preference_update(&state, &auth, &raw_user_id).await?;
+
+    let Some(version) = payload.files_ui_version.as_deref() else {
+        return Err(ApiError::BadRequest(
+            "Invalid files_ui_version provided".into(),
+        ));
+    };
+    if !matches!(version, "v1" | "v2") {
+        return Err(ApiError::BadRequest(
+            "Invalid files_ui_version provided".into(),
+        ));
+    }
+    let value = serde_json::json!(version);
+    set_user_preference(&state.db, user_id, "files_ui_version", Some(&value)).await?;
+    let stored = get_user_preference(&state.db, user_id, "files_ui_version").await?;
+    Ok(Json(serde_json::json!({ "files_ui_version": stored })))
+}
+
+/// Body for PUT /users/{id}/files_ui_version_preference.
+#[derive(Debug, Default, Deserialize)]
+pub struct FilesUiVersionRequest {
+    pub files_ui_version: Option<String>,
+}
+
+/// Resolve the user and enforce Canvas'
+/// `authorized_action(user, @current_user, [:manage, :manage_user_details])`:
+/// self or an admin (the star-lams stand-in for manage_user_details, which
+/// Canvas grants alongside manage_user_logins).
+async fn authorize_preference_update(
+    state: &AppState,
+    auth: &AuthUser,
+    raw_user_id: &str,
+) -> Result<i64, ApiError> {
+    let user_id = resolve_path_user(raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+    if !is_self(auth.id, user_id) && !is_admin(&auth.role) {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(user_id)
+}
+
+/// Canvas `valid_names` list for new_user_tutorial_statuses.
+const TUTORIAL_PAGE_NAMES: [&str; 15] = [
+    "home",
+    "modules",
+    "pages",
+    "assignments",
+    "quizzes",
+    "settings",
+    "files",
+    "people",
+    "announcements",
+    "grades",
+    "discussions",
+    "syllabus",
+    "collaborations",
+    "import",
+    "conferences",
+];
+
+/// Canvas users_controller#get_new_user_tutorial_statuses (~line 1866).
+/// Current-user only: 401 JSON message when the id is someone else, then
+/// the `:manage` right (self always has it), then
+/// `{new_user_tutorial_statuses: {collapsed: {page: bool, ...}}}`.
+async fn get_new_user_tutorial_statuses(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = resolve_path_user(&raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+    if user_id != auth.id {
+        return Err(ApiError::Unauthorized);
+    }
+    let statuses = get_user_preference(&state.db, user_id, "new_user_tutorial_statuses").await?;
+    let collapsed = statuses.as_object().cloned().unwrap_or_default();
+    Ok(Json(serde_json::json!({
+        "new_user_tutorial_statuses": { "collapsed": collapsed }
+    })))
+}
+
+/// Canvas users_controller#set_new_user_tutorial_status (~line 1876).
+/// Current-user only (401), page_name must be in the valid list (400
+/// `{"message": "Invalid Page Name Provided"}`), `collapsed` coerced with
+/// `value_to_boolean`, response mirrors the GET.
+async fn set_new_user_tutorial_status(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((raw_user_id, page_name)): Path<(String, String)>,
+    Json(payload): Json<TutorialStatusRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = resolve_path_user(&raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+    if user_id != auth.id {
+        return Err(ApiError::Unauthorized);
+    }
+    if !TUTORIAL_PAGE_NAMES.contains(&page_name.as_str()) {
+        return Err(ApiError::BadRequest("Invalid Page Name Provided".into()));
+    }
+    // The deserializer already applies Canvas' value_to_boolean coercion.
+    let collapsed = payload.collapsed.unwrap_or(false);
+
+    let mut statuses = get_user_preference(&state.db, user_id, "new_user_tutorial_statuses")
+        .await?
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    statuses.insert(page_name.clone(), serde_json::json!(collapsed));
+    let value = serde_json::json!(statuses);
+    set_user_preference(
+        &state.db,
+        user_id,
+        "new_user_tutorial_statuses",
+        Some(&value),
+    )
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "new_user_tutorial_statuses": { "collapsed": statuses }
+    })))
+}
+
+/// Body for PUT /users/{id}/new_user_tutorial_statuses/{page_name};
+/// `collapsed` accepts the Canvas boolean coercions.
+#[derive(Debug, Default, Deserialize)]
+pub struct TutorialStatusRequest {
+    #[serde(default, deserialize_with = "deserialize_optional_bool")]
+    pub collapsed: Option<bool>,
+}
+
+/// Canvas `:merge` right (app/models/user.rb ~line 1551): granted when a
+/// pseudonym of the user grants `:update`, i.e. the caller holds
+/// `manage_user_logins` on the user's account. star-lms stand-in: the
+/// global admin role or a root-account account_users admin.
+async fn can_merge_users(state: &AppState, auth: &AuthUser) -> Result<bool, ApiError> {
+    if is_admin(&auth.role) {
+        return Ok(true);
+    }
+    let admin: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM account_users WHERE account_id = 1 AND user_id = $1 AND role = 'admin'",
+    )
+    .bind(auth.id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(admin.is_some())
+}
+
+/// Snapshot of the merged-away user recorded at merge time (Canvas
+/// UserMergeDataItem `user_name` / pseudonym data).
+#[derive(Debug, sqlx::FromRow)]
+struct MergeSnapshot {
+    name: Option<String>,
+    email: Option<String>,
+    sortable_name: Option<String>,
+    password_hash: Option<String>,
+}
+
+/// A splitable `user_merges` row (Canvas UserMergeData active + splitable).
+#[derive(Debug, sqlx::FromRow)]
+struct SplitCandidate {
+    id: i64,
+    from_user_id: i64,
+    name: Option<String>,
+    email: Option<String>,
+    sortable_name: Option<String>,
+    password_hash: Option<String>,
+}
+
+/// Path params for the simple merge form
+/// PUT /users/{id}/merge_into/{destination_user_id}.
+#[derive(Debug, Deserialize)]
+pub struct MergeIntoPath {
+    pub id: String,
+    pub destination_user_id: String,
+}
+
+/// Path params for the cross-account form
+/// PUT /users/{id}/merge_into/accounts/{destination_account_id}/users/{destination_user_id}.
+#[derive(Debug, Deserialize)]
+pub struct MergeIntoAccountPath {
+    pub id: String,
+    pub destination_account_id: String,
+    pub destination_user_id: String,
+}
+
+/// Canvas users_controller#merge_into (~line 2736).
+///
+/// Order: `api_find(from)` 404 → `:merge` on from_user 403 → resolve the
+/// destination account (`Account.find_by_domain` else `Account.find`, the
+/// site root when absent) → `api_find(into_user)` 404 → `:merge` on
+/// into_user 403 → merge → 200 with the surviving user's JSON.
+///
+/// The merge mirrors lib/user_merge.rb for the tables this schema has:
+/// enrollments and submissions move to the surviving user (unique-index
+/// conflicts keep the survivor's row, matching Canvas' swap logic that
+/// preserves the graded one), account_users move unless the survivor
+/// already has one on that account, communication channels move unless the
+/// path is taken (the loser is retired), stream items and dashboard
+/// positions move, preferences merge (survivor's win), and the merged-away
+/// user row is deleted after its snapshot is recorded in `user_merges`
+/// (Canvas soft-deletes it and stores UserMergeData).
+async fn merge_into(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(path): Path<MergeIntoPath>,
+) -> Result<Json<UserResponse>, ApiError> {
+    merge_into_impl(state, auth, &path.id, None, &path.destination_user_id).await
+}
+async fn merge_into_cross_account(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(path): Path<MergeIntoAccountPath>,
+) -> Result<Json<UserResponse>, ApiError> {
+    merge_into_impl(
+        state,
+        auth,
+        &path.id,
+        Some(&path.destination_account_id),
+        &path.destination_user_id,
+    )
+    .await
+}
+
+async fn merge_into_impl(
+    state: AppState,
+    auth: AuthUser,
+    raw_from: &str,
+    raw_destination_account: Option<&str>,
+    raw_into: &str,
+) -> Result<Json<UserResponse>, ApiError> {
+    let from_user = resolve_path_user(raw_from, auth.id)?;
+    ensure_user_exists(&state.db, from_user).await?;
+    if !can_merge_users(&state, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Cross-account form: the destination account gates api_find(User, ...).
+    if let Some(raw_account) = raw_destination_account {
+        let account_id: i64 = raw_account.parse().map_err(|_| ApiError::NotFound)?;
+        let account: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM accounts WHERE id = $1")
+            .bind(account_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+        account.ok_or(ApiError::NotFound)?;
+    }
+
+    let into_user = resolve_path_user(raw_into, auth.id)?;
+    ensure_user_exists(&state.db, into_user).await?;
+    if !can_merge_users(&state, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    if from_user == into_user {
+        // Canvas: `return if target_user == from_user` — the action renders
+        // nothing, which Rails answers as an empty 200.
+        return Ok(Json(user_response(&state.db, into_user).await?));
+    }
+
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| ApiError::Db(e.to_string()))?;
+
+    // Snapshot the merged-away user for split (Canvas UserMergeDataItem).
+    let snapshot: Option<MergeSnapshot> =
+        sqlx::query_as("SELECT name, email, sortable_name, password_hash FROM users WHERE id = $1")
+            .bind(from_user)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(ApiError::from)?;
+    let MergeSnapshot {
+        name: from_name,
+        email: from_email,
+        sortable_name: from_sortable,
+        password_hash: from_hash,
+    } = snapshot.ok_or(ApiError::NotFound)?;
+    sqlx::query(
+        r#"
+        INSERT INTO user_merges
+            (user_id, from_user_id, from_name, from_email, from_sortable_name,
+             from_password_hash, workflow_state)
+        VALUES ($1, $2, $3, $4, $5, $6, 'active')
+        "#,
+    )
+    .bind(into_user)
+    .bind(from_user)
+    .bind(&from_name)
+    .bind(&from_email)
+    .bind(&from_sortable)
+    .bind(&from_hash)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Enrollments move; pairs already unique on (user, course, role) keep
+    // the survivor's row (Canvas keeps the better workflow state of the
+    // pair — the survivor's row stays).
+    sqlx::query(
+        r#"
+        UPDATE enrollments e
+        SET user_id = $2, updated_at = now()
+        WHERE e.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM enrollments e2
+               WHERE e2.user_id = $2 AND e2.course_id = e.course_id AND e2.role = e.role)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Submissions move when the survivor has none for the assignment
+    // (Canvas swaps colliding pairs so no submission is lost).
+    sqlx::query(
+        r#"
+        UPDATE submissions s
+        SET user_id = $2, updated_at = now()
+        WHERE s.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM submissions s2
+               WHERE s2.user_id = $2 AND s2.assignment_id = s.assignment_id)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // account_users move unless the survivor already administers the account.
+    sqlx::query(
+        r#"
+        UPDATE account_users au
+        SET user_id = $2, updated_at = now()
+        WHERE au.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM account_users a2 WHERE a2.user_id = $2 AND a2.account_id = au.account_id)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Communication channels: move free paths, retire conflicting ones.
+    sqlx::query(
+        r#"
+        UPDATE communication_channels cc
+        SET user_id = $2, updated_at = now()
+        WHERE cc.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM communication_channels c2
+               WHERE c2.user_id = $2 AND c2.path = cc.path AND c2.path_type = cc.path_type)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        "UPDATE communication_channels SET workflow_state = 'retired', updated_at = now() \
+         WHERE user_id = $1",
+    )
+    .bind(from_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Per-user rows move with the user. Tables with a uniqueness tied to
+    // user_id + a context column (dashboard_positions, user_colors,
+    // favorites, todo_ignores) or user_id alone (user_settings) skip rows
+    // the survivor already has — Canvas soft-deletes those losers.
+    for table in [
+        "stream_items",
+        "todo_ignores",
+        "user_files",
+        "access_tokens",
+        "planner_notes",
+    ] {
+        sqlx::query(&format!(
+            "UPDATE {table} SET user_id = $2, updated_at = now() WHERE user_id = $1"
+        ))
+        .bind(from_user)
+        .bind(into_user)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+    }
+    sqlx::query(
+        r#"
+        UPDATE dashboard_positions dp
+        SET user_id = $2, updated_at = now()
+        WHERE dp.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM dashboard_positions dp2
+               WHERE dp2.user_id = $2 AND dp2.course_id = dp.course_id)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        r#"
+        UPDATE user_colors uc
+        SET user_id = $2, updated_at = now()
+        WHERE uc.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM user_colors uc2
+               WHERE uc2.user_id = $2 AND uc2.context = uc.context)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        r#"
+        UPDATE favorites f
+        SET user_id = $2, updated_at = now()
+        WHERE f.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM favorites f2
+               WHERE f2.user_id = $2 AND f2.context_type = f.context_type
+                 AND f2.context_id = f.context_id)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        r#"
+        UPDATE todo_ignores ti
+        SET user_id = $2, updated_at = now()
+        WHERE ti.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM todo_ignores ti2
+               WHERE ti2.user_id = $2 AND ti2.asset_type = ti.asset_type
+                 AND ti2.asset_id = ti.asset_id AND ti2.purpose = ti.purpose
+                 AND ti2.permanent = ti.permanent)
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query(
+        r#"
+        UPDATE user_settings us
+        SET manual_mark_as_read = us.manual_mark_as_read OR victim.manual_mark_as_read,
+            collapse_global_nav = us.collapse_global_nav OR victim.collapse_global_nav,
+            collapse_course_nav = us.collapse_course_nav OR victim.collapse_course_nav,
+            hide_dashcard_color_overlays =
+                us.hide_dashcard_color_overlays OR victim.hide_dashcard_color_overlays,
+            release_notes_badge_disabled =
+                us.release_notes_badge_disabled OR victim.release_notes_badge_disabled,
+            comment_library_suggestions_enabled =
+                us.comment_library_suggestions_enabled
+                OR victim.comment_library_suggestions_enabled,
+            elementary_dashboard_disabled =
+                us.elementary_dashboard_disabled OR victim.elementary_dashboard_disabled,
+            default_to_block_editor =
+                us.default_to_block_editor OR victim.default_to_block_editor,
+            widget_dashboard_user_preference =
+                us.widget_dashboard_user_preference OR victim.widget_dashboard_user_preference,
+            widget_dashboard_dark_mode =
+                us.widget_dashboard_dark_mode OR victim.widget_dashboard_dark_mode,
+            updated_at = now()
+        FROM (
+            SELECT * FROM user_settings WHERE user_id = $1
+        ) victim
+        WHERE us.user_id = $2
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query("DELETE FROM user_settings WHERE user_id = $1")
+        .bind(from_user)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+
+    // Preferences merge (survivor's keys win, Canvas merges the hashes).
+    sqlx::query(
+        r#"
+        UPDATE user_preferences up
+        SET preferences = COALESCE(moved.preferences, '{}'::jsonb) || up.preferences,
+            updated_at = now()
+        FROM (
+            SELECT preferences FROM user_preferences WHERE user_id = $1
+        ) moved
+        WHERE up.user_id = $2
+        "#,
+    )
+    .bind(from_user)
+    .bind(into_user)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+    sqlx::query("DELETE FROM user_preferences WHERE user_id = $1")
+        .bind(from_user)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+
+    // Canvas: from_user.update!(merged_into_user: target); from_user.destroy
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(from_user)
+        .execute(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+
+    tx.commit().await.map_err(|e| ApiError::Db(e.to_string()))?;
+
+    Ok(Json(user_response(&state.db, into_user).await?))
+}
+
+/// Canvas users_controller#split (~line 2832).
+///
+/// Order: `api_find` 404 → `UserMergeData.active.splitable.exists?`
+/// (400 `{"message": "Nothing to split off of this user"}` FIRST, before
+/// the permission) → `:merge` right → SplitUsers.split_db_users → array of
+/// the resulting users sorted by short_name.
+///
+/// Split re-creates the merged-away user from the `user_merges` snapshot
+/// (Canvas restores its name/preferences from UserMergeDataItem and a
+/// fresh "registered" user), moves enrollments/submissions/channels back
+/// (skipping rows the survivor legitimately owns), marks the merge deleted
+/// and returns both users.
+async fn split_user(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<Vec<UserResponse>>, ApiError> {
+    let user_id = resolve_path_user(&raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+
+    // Canvas: active (not deleted/failed) AND splitable (< 180 days old).
+    let merge: Option<SplitCandidate> = sqlx::query_as(
+        r#"
+            SELECT id, from_user_id,
+                   from_name AS name, from_email AS email,
+                   from_sortable_name AS sortable_name,
+                   from_password_hash AS password_hash
+            FROM user_merges
+            WHERE user_id = $1
+              AND workflow_state = 'active'
+              AND created_at > now() - interval '180 days'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            "#,
+    )
+    .bind(user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+    let Some(SplitCandidate {
+        id: merge_id,
+        from_user_id,
+        name: from_name,
+        email: from_email,
+        sortable_name: from_sortable,
+        password_hash: from_hash,
+    }) = merge
+    else {
+        return Err(ApiError::BadRequest(
+            "Nothing to split off of this user".into(),
+        ));
+    };
+
+    if !can_merge_users(&state, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let mut tx = state
+        .db
+        .begin()
+        .await
+        .map_err(|e| ApiError::Db(e.to_string()))?;
+
+    // Re-create the merged-away user (Canvas: User.new(name: ...,
+    // workflow_state: "registered"); the email must stay unique — when the
+    // survivor took it over (channels moved, not duplicated), keep it only
+    // on the restored user and fall back otherwise).
+    let survivor_email: Option<(String,)> = sqlx::query_as("SELECT email FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(ApiError::from)?;
+    let mut restored_email = from_email.clone().unwrap_or_default();
+    if let Some((survivor,)) = &survivor_email {
+        if Some(survivor.clone()) == from_email {
+            // The survivor kept the address; give the restored user a
+            // derived one (Canvas would have moved the pseudonym away).
+            restored_email = format!("restored-{from_user_id}-{survivor}");
+        }
+    }
+    let restored_name = from_name.unwrap_or_else(|| "restored user".to_string());
+    let restored_sortable = from_sortable.unwrap_or_else(|| match restored_name.rsplit_once(' ') {
+        Some((first, last)) => format!("{last}, {first}"),
+        None => restored_name.clone(),
+    });
+    let restored_hash = from_hash.unwrap_or_default();
+    let restored_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO users (name, sortable_name, email, password_hash, role)
+        VALUES ($1, $2, $3, $4, 'student')
+        RETURNING id
+        "#,
+    )
+    .bind(&restored_name)
+    .bind(&restored_sortable)
+    .bind(&restored_email)
+    .bind(&restored_hash)
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Move enrollments back unless the survivor has one for the course+role.
+    sqlx::query(
+        r#"
+        UPDATE enrollments e
+        SET user_id = $2, updated_at = now()
+        WHERE e.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM enrollments e2
+               WHERE e2.user_id = $2 AND e2.course_id = e.course_id AND e2.role = e.role)
+        "#,
+    )
+    .bind(user_id)
+    .bind(restored_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Submissions back where the survivor has none for the assignment.
+    sqlx::query(
+        r#"
+        UPDATE submissions s
+        SET user_id = $2, updated_at = now()
+        WHERE s.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM submissions s2
+               WHERE s2.user_id = $2 AND s2.assignment_id = s.assignment_id)
+        "#,
+    )
+    .bind(user_id)
+    .bind(restored_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Communication channels back where the survivor doesn't own the path.
+    sqlx::query(
+        r#"
+        UPDATE communication_channels cc
+        SET user_id = $2, updated_at = now()
+        WHERE cc.user_id = $1
+          AND NOT EXISTS (
+              SELECT 1 FROM communication_channels c2
+               WHERE c2.user_id = $2 AND c2.path = cc.path AND c2.path_type = cc.path_type)
+        "#,
+    )
+    .bind(user_id)
+    .bind(restored_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    // Canvas: merge_data.destroy sets workflow_state 'deleted'.
+    sqlx::query(
+        "UPDATE user_merges SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(merge_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(ApiError::from)?;
+
+    tx.commit().await.map_err(|e| ApiError::Db(e.to_string()))?;
+
+    // Canvas sorts the pair by short_name.
+    let mut users = vec![
+        user_response(&state.db, user_id).await?,
+        user_response(&state.db, restored_id).await?,
+    ];
+    users.sort_by(|a, b| a.sortable_name.cmp(&b.sortable_name));
+    Ok(Json(users))
+}
+
+/// Fetch the Canvas user JSON shape for one user.
+async fn user_response(pool: &PgPool, user_id: i64) -> Result<UserResponse, ApiError> {
+    let user: Option<UserResponse> = sqlx::query_as(
+        "SELECT id, name, COALESCE(sortable_name, name) AS sortable_name, email, role, created_at \
+         FROM users WHERE id = $1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    user.ok_or(ApiError::NotFound)
 }
 
 #[cfg(test)]

@@ -1,0 +1,43 @@
+{% extends "layouts/course.html" %}
+{# Teacher-only minimal quiz creation form. Phase 1 has NO question editor:
+   questions are added via the seed or the REST question endpoints
+   (documented deviation). #}
+{% block content %}
+  <div id="quiz_new" class="quizzes">
+    <h1 class="new-quiz-title">New Quiz</h1>
+    {% if !error.is_empty() %}
+    <div class="ic-flash error" role="alert">{{ error }}</div>
+    {% endif %}
+    <form id="new_quiz_form" method="post" action="/courses/{{ course_id }}/quizzes/new" class="quiz-form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="quiz_title_input">Title</label>
+        <input class="ic-Input" type="text" id="quiz_title_input" name="title" required>
+      </div>
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="quiz_description_input">Instructions</label>
+        <textarea class="ic-Input" id="quiz_description_input" name="description" rows="4"></textarea>
+      </div>
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="quiz_points_input">Points</label>
+        <input class="ic-Input" type="number" step="0.01" min="0" id="quiz_points_input" name="points_possible" value="0">
+      </div>
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="quiz_available_from_input">Available from</label>
+        <input class="ic-Input" type="datetime-local" id="quiz_available_from_input" name="available_from">
+      </div>
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="quiz_available_until_input">Available until</label>
+        <input class="ic-Input" type="datetime-local" id="quiz_available_until_input" name="available_until">
+      </div>
+      <div class="ic-Form-control ic-Form-control--checkbox">
+        <input type="checkbox" id="quiz_published_input" name="published" value="true">
+        <label class="ic-Label" for="quiz_published_input">Publish on create</label>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary" id="quiz_create_button">Save</button>
+        <a class="btn" href="/courses/{{ course_id }}/quizzes">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock content %}

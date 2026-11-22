@@ -4,9 +4,18 @@ name: Rust migration validation
 # The workspace test suite is sharded across 4 parallel runners, each with its
 # own PostgreSQL 16 service, then a cheap `test` gate job fans the shards in so
 # the required check name stays exactly `test` (protocol: issue #20).
+#
+# Wave-4 fast path: a `changes` job classifies the PR diff first (rules in
+# tools/ci/change_class.py). Docs-only PRs (specs/, orchestration/, *.md) skip
+# the shard matrix entirely and the `test` gate reports success with an
+# explicit skip reason. Non-PR events (push to main, merge_group, dispatch)
+# always run everything. Push runs are restricted to `main`: lane branches
+# are validated through their pull_request runs, so the same SHA is no longer
+# tested twice per push.
 
 on:
   push:
+    branches: [main]
     paths:
       - 'migration/**'
       - '.github/workflows/rust-migration.yml'
@@ -16,6 +25,7 @@ on:
       - 'migration/**'
       - 'orchestration/**'
       - 'tools/ci/**'
+      - 'browser-smoke/**'
       - '.github/workflows/rust-migration.yml'
   merge_group:
   workflow_dispatch:
@@ -34,12 +44,70 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
+  # Fast-path gate: classify the diff so docs-only PRs can skip the matrix.
+  # Non-pull_request events short-circuit to a full run inside the step.
+  # ---------------------------------------------------------------------------
+  changes:
+    name: Change class
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.class.outputs.rust }}
+      lab: ${{ steps.class.outputs.lab }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Classify the diff
+        id: class
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            {
+              echo "rust=true"
+              echo "lab=true"
+            } >> "$GITHUB_OUTPUT"
+            echo "event '${{ github.event_name }}' — full run by design"
+            exit 0
+          fi
+          # base...head compare: exactly this PR's changes. API hiccups and
+          # truncated lists (>=300 files) degrade to a full run, never to a
+          # wrong skip.
+          payload=""
+          for attempt in 1 2 3; do
+            if payload="$(gh api "repos/$REPO/compare/$BASE...$HEAD")"; then
+              break
+            fi
+            echo "compare API attempt $attempt failed; retrying in 5s"
+            sleep 5
+          done
+          if [ -z "$payload" ]; then
+            echo "::warning::compare unavailable — defaulting to full run"
+            {
+              echo "rust=true"
+              echo "lab=true"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          printf '%s' "$payload" | python3 tools/ci/change_class.py --github-output "$GITHUB_OUTPUT"
+
+  # ---------------------------------------------------------------------------
   # Shard map: crates are partitioned by measured test count so all four shards
   # finish at roughly the same time. Every crate appears exactly once; the
   # `shard-coverage` job below asserts the partition stays complete.
+  #
+  # No pre-migration step: every DB-backed test applies `star_db::MIGRATOR`
+  # itself (checksummed, idempotent), and star-http migrates at startup, so a
+  # per-shard `cargo test -p star-db` warm-up only duplicated that suite four
+  # times per push.
   # ---------------------------------------------------------------------------
   test-shard:
     name: Test shard ${{ matrix.shard }}
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -50,11 +118,14 @@ jobs:
             crates: >-
               -p star-assignments -p star-courses -p star-api -p star-common
               -p star-db -p star-http -p star-announcements -p star-media
+              -p star-account-reports -p star-collaborations -p star-conferences
+              -p star-ui
           - shard: 2
             crates: >-
               -p star-notifications -p star-accounts -p star-enrollments
               -p star-permissions -p star-groups -p star-assignment-groups
               -p star-jobs
+              -p star-eportfolios -p star-polling -p star-search -p star-sis
           - shard: 3
             crates: >-
               -p star-auth -p star-users -p star-discussions -p star-quizzes
@@ -77,9 +148,9 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd "pg_isready -U star -d star_lms_test"
-          --health-interval 10s
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
     env:
       DATABASE_URL: postgres://star:star-test-only@localhost:5432/star_lms_test
       STAR_JWT_SECRET: github-actions-test-secret
@@ -94,8 +165,6 @@ jobs:
           workspaces: migration -> target
           shared-key: shard-${{ matrix.shard }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
-      - name: Migrate schema (shards are order-independent)
-        run: cargo test -p star-db --locked
       - name: Run workspace shard ${{ matrix.shard }}
         run: cargo test --locked --no-fail-fast ${{ matrix.crates }}
 
@@ -105,6 +174,8 @@ jobs:
   # ---------------------------------------------------------------------------
   shard-coverage:
     name: Shard coverage
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -114,19 +185,33 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # Fan-in gate. This job's name is the required status check `test`.
+  # Rust-changing PRs: every shard must have passed. Docs-only PRs: the suite
+  # is skipped by design and the gate says so explicitly (still green, so the
+  # required check reports on every PR). A failed `changes` job fails here.
   # ---------------------------------------------------------------------------
   test:
     name: test
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [test-shard, shard-coverage]
+    needs: [changes, test-shard, shard-coverage]
     if: always()
     steps:
       - name: Require every shard to have passed
         run: |
           set -euo pipefail
+          echo "changes:         ${{ needs.changes.result }}"
+          echo "rust-changes:    ${{ needs.changes.outputs.rust }}"
           echo "test-shard:      ${{ needs.test-shard.result }}"
           echo "shard-coverage:  ${{ needs.shard-coverage.result }}"
+          if [ "${{ needs.changes.result }}" != "success" ]; then
+            echo "::error::change classification failed"
+            exit 1
+          fi
+          if [ "${{ needs.changes.outputs.rust }}" != "true" ]; then
+            echo "no Rust-source changes in this PR — suite skipped by design."
+            echo "full run happens on merge to main, on merge_group, and on dispatch."
+            exit 0
+          fi
           if [ "${{ needs.test-shard.result }}" != "success" ] ||
              [ "${{ needs.shard-coverage.result }}" != "success" ]; then
             echo "::error::workspace test shards did not all pass"
