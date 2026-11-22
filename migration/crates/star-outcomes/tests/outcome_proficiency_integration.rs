@@ -271,8 +271,10 @@ async fn course_fallback_and_override() {
     assert_eq!(body["context_type"], "Course", "own row overrides");
     assert_eq!(body["ratings"][0]["description"], "Course Level");
 
-    // A course with neither own nor account proficiency → 404.
-    let other = seed_course(&pool, &prefix, "Bare", account).await;
+    // A course with neither own nor account proficiency → 404 (a fresh
+    // account — `account` itself carries the fallback row above).
+    let bare_account = seed_account(&pool, &prefix, "bare-acct", None).await;
+    let other = seed_course(&pool, &prefix, "Bare", bare_account).await;
     let resp = server
         .get(&format!("/courses/{other}/outcome_proficiency"))
         .add_header("Authorization", auth(admin, "admin"))
