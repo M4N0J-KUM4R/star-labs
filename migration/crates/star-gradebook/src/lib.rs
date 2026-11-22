@@ -70,11 +70,7 @@ fn canvas_not_found() -> Response {
 /// Rails `render json: record.errors, status: :bad_request` — one field,
 /// one message (the first failure of that field).
 fn canvas_validation(field: &str, message: &str) -> Response {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({ field: [message] })),
-    )
-        .into_response()
+    (StatusCode::BAD_REQUEST, Json(json!({ field: [message] }))).into_response()
 }
 
 /// `GradebookImporter::GRADEBOOK_IMPORTER_RESERVED_NAMES` (Canvas
@@ -452,11 +448,7 @@ async fn index_columns(
         .fetch_all(&state.db)
         .await?;
 
-    Ok(Json(rows
-        .into_iter()
-        .map(ColumnJson::from)
-        .collect::<Vec<_>>())
-    .into_response())
+    Ok(Json(rows.into_iter().map(ColumnJson::from).collect::<Vec<_>>()).into_response())
 }
 
 /// POST /courses/{courseId}/custom_gradebook_columns — create

@@ -367,10 +367,7 @@ async fn root_account_feature_enabled(
 
 /// Canvas `Course#discussion_checkpoints_enabled?` (an account feature flag)
 /// — it decides whether the overrides carry `sub_assignment_due_dates`.
-async fn include_child_override_due_dates(
-    db: &PgPool,
-    course_id: i64,
-) -> Result<bool, ApiError> {
+async fn include_child_override_due_dates(db: &PgPool, course_id: i64) -> Result<bool, ApiError> {
     root_account_feature_enabled(db, course_id, "discussion_checkpoints").await
 }
 

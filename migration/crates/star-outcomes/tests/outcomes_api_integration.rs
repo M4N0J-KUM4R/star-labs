@@ -168,13 +168,12 @@ async fn seed(pool: &PgPool, prefix: &str) -> Fixture {
     // A DEDICATED root account per fixture (test isolation, issue #75): the
     // course's account chain root is the fixture's own account, so the
     // `outcomes_rollup_propagation` flag toggles only ever touch it.
-    let account_id: i64 = sqlx::query_scalar(
-        "INSERT INTO accounts (name) VALUES ($1) RETURNING id",
-    )
-    .bind(format!("{prefix}-account"))
-    .fetch_one(pool)
-    .await
-    .expect("seed account");
+    let account_id: i64 =
+        sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+            .bind(format!("{prefix}-account"))
+            .fetch_one(pool)
+            .await
+            .expect("seed account");
 
     let course_id: i64 = sqlx::query_scalar(
         "INSERT INTO courses (name, course_code, account_id) VALUES ($1, $2, $3) RETURNING id",

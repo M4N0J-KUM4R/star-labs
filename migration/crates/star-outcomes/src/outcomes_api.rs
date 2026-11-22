@@ -2089,10 +2089,7 @@ async fn assign_outcome_order(
 
 /// The root account of a course's account chain (`@course.root_account`);
 /// `None` when the course id is absent, unparseable, or unknown.
-async fn course_chain_root(
-    pool: &PgPool,
-    course_id: &str,
-) -> Result<Option<i64>, sqlx::Error> {
+async fn course_chain_root(pool: &PgPool, course_id: &str) -> Result<Option<i64>, sqlx::Error> {
     let Ok(course_id) = course_id.parse::<i64>() else {
         return Ok(None);
     };
@@ -2131,9 +2128,7 @@ async fn enqueue_outcome_rollup_calculation(
     // account (test isolation, issue #75).
     let course_id_param = params.get("course_id").unwrap_or("").to_string();
     let enabled = match course_chain_root(pool, &course_id_param).await? {
-        Some(root) => {
-            account_feature_enabled(pool, root, "outcomes_rollup_propagation").await?
-        }
+        Some(root) => account_feature_enabled(pool, root, "outcomes_rollup_propagation").await?,
         None => false,
     };
     if !enabled {

@@ -53,7 +53,9 @@ async fn unknown_path_is_404() {
         resp.text()
     );
     // A genuinely unknown path still falls through to axum's 404.
-    let resp = server.get("/accounts/999999999/reports_extra_unknown").await;
+    let resp = server
+        .get("/accounts/999999999/reports_extra_unknown")
+        .await;
     assert_eq!(
         resp.status_code(),
         404,

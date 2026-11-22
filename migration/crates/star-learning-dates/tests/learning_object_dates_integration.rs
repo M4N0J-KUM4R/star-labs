@@ -106,13 +106,12 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
 /// feature flags are toggled on the course's own account, never on the
 /// shared root, so parallel tests cannot see each other's flag state.
 async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
-    let account_id: i64 = sqlx::query_scalar(
-        "INSERT INTO accounts (name) VALUES ($1) RETURNING id",
-    )
-    .bind(format!("{prefix}-{name}-account"))
-    .fetch_one(pool)
-    .await
-    .expect("seed account");
+    let account_id: i64 =
+        sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+            .bind(format!("{prefix}-{name}-account"))
+            .fetch_one(pool)
+            .await
+            .expect("seed account");
     sqlx::query_scalar(
         "INSERT INTO courses (name, course_code, account_id) VALUES ($1, $2, $3) RETURNING id",
     )
@@ -272,13 +271,11 @@ async fn seed_override(
 /// Canvas `@course.root_account.feature_enabled?(feature)` — the test
 /// toggles the flag on the course's OWN dedicated root account.
 async fn set_course_feature(pool: &PgPool, course_id: i64, feature: &str, state: &str) {
-    let account_id: i64 = sqlx::query_scalar(
-        "SELECT account_id FROM courses WHERE id = $1",
-    )
-    .bind(course_id)
-    .fetch_one(pool)
-    .await
-    .expect("query course account");
+    let account_id: i64 = sqlx::query_scalar("SELECT account_id FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_one(pool)
+        .await
+        .expect("query course account");
 
     sqlx::query(
         "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
