@@ -461,7 +461,7 @@ async fn migration_issues_require_authentication() {
 
     // The context fan-out routes require auth as well.
     let res = server
-        .get("/accounts/1/content_migrations/1/migration_issues")
+        .get("/accounts/999999999/content_migrations/1/migration_issues")
         .await;
     assert_eq!(res.status_code(), 401);
     let res = server

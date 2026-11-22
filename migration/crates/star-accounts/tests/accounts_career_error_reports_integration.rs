@@ -256,7 +256,7 @@ async fn the_environment_route_answers_the_root_account_settings() {
     sqlx::query(
         "UPDATE accounts SET settings = settings || jsonb_build_object( \
             'open_registration', true, 'calendar_contexts_limit', 3) \
-         WHERE parent_account_id IS NULL",
+         WHERE id = (SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1)",
     )
     .execute(&pool)
     .await
@@ -275,7 +275,11 @@ async fn the_environment_route_answers_the_root_account_settings() {
     let resp = server.get("/settings/environment").await;
     assert_eq!(resp.status_code(), 401);
 
-    sqlx::query("UPDATE accounts SET settings = $1 WHERE parent_account_id IS NULL")
+    // Restore ONLY the global-first root account this test read (issue #75:
+    // the bare `parent_account_id IS NULL` form also resets every dedicated
+    // root account that sibling tests seed in parallel, wiping their
+    // ip_filters/career settings mid-test).
+    sqlx::query("UPDATE accounts SET settings = $1 WHERE id = (SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1)")
         .bind(original)
         .execute(&pool)
         .await
@@ -313,11 +317,14 @@ async fn the_course_and_horizon_account_lists_answer_the_accounts_of_the_caller(
     assert!(resp.json::<Value>().as_array().expect("array").is_empty());
 
     // The horizon accounts are the accounts of the horizon sub tree of the
-    // root account (Canvas `adminable_horizon_accounts_scope`).
+    // root account (Canvas `adminable_horizon_accounts_scope`). The route
+    // reads horizon_account_ids from the ROOTS OF THE CALLER'S adminable
+    // accounts — for this teacher that is the dedicated account itself
+    // (issue #75: seed it there, never on the shared global root).
     sqlx::query(
         "UPDATE accounts SET settings = settings || \
-            jsonb_build_object('horizon_account_ids', jsonb_build_array($1::bigint)) \
-         WHERE parent_account_id IS NULL",
+            jsonb_build_object('horizon_account_ids', jsonb_build_array(id::bigint)) \
+         WHERE id = $1",
     )
     .bind(account)
     .execute(&pool)
@@ -622,7 +629,7 @@ async fn the_career_routes_follow_the_root_account_flag() {
         "UPDATE accounts SET settings = settings || jsonb_build_object( \
             'horizon_account_ids', '[1]'::jsonb, \
             'canvas_career_config', jsonb_build_object('learner_launch_url', 'http://career.test')) \
-         WHERE parent_account_id IS NULL",
+         WHERE id = (SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1)",
     )
     .execute(&pool)
     .await
@@ -716,7 +723,11 @@ async fn the_career_routes_follow_the_root_account_flag() {
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
-    sqlx::query("UPDATE accounts SET settings = $1 WHERE parent_account_id IS NULL")
+    // Restore ONLY the global-first root account this test read (issue #75:
+    // the bare `parent_account_id IS NULL` form also resets every dedicated
+    // root account that sibling tests seed in parallel, wiping their
+    // ip_filters/career settings mid-test).
+    sqlx::query("UPDATE accounts SET settings = $1 WHERE id = (SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1)")
         .bind(original)
         .execute(&pool)
         .await

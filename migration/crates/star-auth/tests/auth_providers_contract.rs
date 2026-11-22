@@ -91,21 +91,9 @@ fn auth(user_id: i64, role: &str) -> String {
     format!("Bearer {}", token_for(user_id, role))
 }
 
-async fn seed_account_if_needed(pool: &PgPool) {
-    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = 1")
-        .fetch_optional(pool)
-        .await
-        .expect("check account");
-    if exists.is_none() {
-        sqlx::query("INSERT INTO accounts (id, name) VALUES (1, 'Test Account') ON CONFLICT (id) DO NOTHING")
-            .execute(pool)
-            .await
-            .expect("seed account");
-    }
-}
-
-/// Distinct account per mutating test — parallel sso_settings PUTs on the
-/// shared account 1 overwrite each other between PUT and GET.
+/// Distinct account per mutating test (issue #75): parallel writes on the
+/// shared root account 1 overwrite each other between PUT and GET, and
+/// provider rows seeded there leak into every sibling's list assertions.
 async fn seed_unique_account(pool: &PgPool, prefix: &str, tag: &str) -> i64 {
     sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
         .bind(format!("{prefix}-{tag}"))
@@ -142,11 +130,11 @@ async fn list_auth_providers_returns_wrapped_array() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "ListAdmin", "admin").await;
 
     let resp = server
-        .get("/accounts/1/authentication_providers")
+        .get(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
@@ -171,11 +159,11 @@ async fn list_auth_providers_rejects_non_admin() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let teacher = seed_user(&pool, &prefix, "TeacherList", "teacher").await;
 
     let resp = server
-        .get("/accounts/1/authentication_providers")
+        .get(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
 
@@ -198,7 +186,7 @@ async fn list_auth_providers_ordered_by_position_then_id() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "OrderAdmin", "admin").await;
 
     // Create three providers with explicit positions.
@@ -206,7 +194,7 @@ async fn list_auth_providers_ordered_by_position_then_id() {
     let mut ids = vec![];
     for pos in positions {
         let resp = server
-            .post("/accounts/1/authentication_providers")
+            .post(&format!("/accounts/{account}/authentication_providers"))
             .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
             .json(&json!({
                 "authentication_provider": {
@@ -221,7 +209,7 @@ async fn list_auth_providers_ordered_by_position_then_id() {
 
     // Read list.
     let resp = server
-        .get("/accounts/1/authentication_providers")
+        .get(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     let body: Value = resp.json();
@@ -258,11 +246,11 @@ async fn create_auth_provider_requires_auth_type() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "NoTypeAdmin", "admin").await;
 
     let resp = server
-        .post("/accounts/1/authentication_providers")
+        .post(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "authentication_provider": {
@@ -290,11 +278,11 @@ async fn create_auth_provider_defaults_position_to_zero() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "DefaultPosAdmin", "admin").await;
 
     let resp = server
-        .post("/accounts/1/authentication_providers")
+        .post(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "authentication_provider": {
@@ -323,11 +311,11 @@ async fn create_auth_provider_accepts_flat_params() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "FlatAdmin", "admin").await;
 
     let resp = server
-        .post("/accounts/1/authentication_providers")
+        .post(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "auth_type": "saml",
@@ -358,12 +346,12 @@ async fn show_auth_provider_returns_unwrapped_object() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "ShowAdmin", "admin").await;
 
     // Create first.
     let create_resp = server
-        .post("/accounts/1/authentication_providers")
+        .post(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "authentication_provider": {
@@ -376,7 +364,9 @@ async fn show_auth_provider_returns_unwrapped_object() {
 
     // Show: must NOT be wrapped in {"authentication_providers": [...]}.
     let resp = server
-        .get(&format!("/accounts/1/authentication_providers/{id}"))
+        .get(&format!(
+            "/accounts/{account}/authentication_providers/{id}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
@@ -403,11 +393,13 @@ async fn show_auth_provider_unknown_id_is_404() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "UnknownShowAdmin", "admin").await;
 
     let resp = server
-        .get("/accounts/1/authentication_providers/999999999")
+        .get(&format!(
+            "/accounts/{account}/authentication_providers/999999999"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
@@ -430,12 +422,12 @@ async fn update_auth_provider_merges_settings() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "MergeAdmin", "admin").await;
 
     // Create with two settings.
     let create_resp = server
-        .post("/accounts/1/authentication_providers")
+        .post(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "authentication_provider": {
@@ -449,7 +441,9 @@ async fn update_auth_provider_merges_settings() {
 
     // Update only log_in_url — idp_entity_id must survive.
     let update_resp = server
-        .put(&format!("/accounts/1/authentication_providers/{id}"))
+        .put(&format!(
+            "/accounts/{account}/authentication_providers/{id}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "authentication_provider": {
@@ -486,11 +480,11 @@ async fn delete_auth_provider_returns_deleted_object_and_purges_from_list() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "DelAdmin", "admin").await;
 
     let create_resp = server
-        .post("/accounts/1/authentication_providers")
+        .post(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "authentication_provider": {
@@ -503,7 +497,9 @@ async fn delete_auth_provider_returns_deleted_object_and_purges_from_list() {
 
     // Delete returns the object with workflow_state "deleted".
     let delete_resp = server
-        .delete(&format!("/accounts/1/authentication_providers/{id}"))
+        .delete(&format!(
+            "/accounts/{account}/authentication_providers/{id}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
@@ -523,7 +519,9 @@ async fn delete_auth_provider_returns_deleted_object_and_purges_from_list() {
 
     // Subsequent show is 404.
     let show_resp = server
-        .get(&format!("/accounts/1/authentication_providers/{id}"))
+        .get(&format!(
+            "/accounts/{account}/authentication_providers/{id}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(
@@ -547,11 +545,11 @@ async fn sso_settings_show_returns_wrapped_object() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "SsoShowAdmin", "admin").await;
 
     let resp = server
-        .get("/accounts/1/sso_settings")
+        .get(&format!("/accounts/{account}/sso_settings"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
 
@@ -575,11 +573,11 @@ async fn sso_settings_rejects_non_admin() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let teacher = seed_user(&pool, &prefix, "SsoTeacher", "teacher").await;
 
     let resp = server
-        .get("/accounts/1/sso_settings")
+        .get(&format!("/accounts/{account}/sso_settings"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
 
@@ -758,12 +756,12 @@ async fn auth_provider_show_ignores_account_id_path_param() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "AcctMismatchAdmin", "admin").await;
 
     // Create for account 1.
     let create_resp = server
-        .post("/accounts/1/authentication_providers")
+        .post(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "authentication_provider": {

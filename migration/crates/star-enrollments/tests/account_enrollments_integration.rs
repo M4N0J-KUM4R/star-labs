@@ -77,18 +77,10 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
 }
 
 async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
-    sqlx::query_scalar(
-        r#"
-        INSERT INTO courses (name, course_code, account_id)
-        VALUES ($1, $2, 1)
-        RETURNING id
-        "#,
-    )
-    .bind(name)
-    .bind(format!("{prefix}-{name}"))
-    .fetch_one(pool)
-    .await
-    .expect("seed course")
+    // Dedicated account per course (issue #75): never the shared root
+    // account 1 — account-scoped state must not leak between parallel tests.
+    let account = seed_account(pool, prefix, name, None).await;
+    seed_course_in_account(pool, prefix, name, account).await
 }
 
 /// Seed a course hanging under a dedicated account (not the root account), so
@@ -208,11 +200,12 @@ async fn show_own_enrollment_via_root_account_returns_200() {
     };
 
     let student = seed_user(&pool, &prefix, "student", "student").await;
-    let course = seed_course(&pool, &prefix, "course").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
+    let course = seed_course_in_account(&pool, &prefix, "course", account).await;
     let enrollment = seed_student_enrollment(&pool, student, course).await;
 
     let resp = server
-        .get(&format!("/accounts/1/enrollments/{enrollment}"))
+        .get(&format!("/accounts/{account}/enrollments/{enrollment}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(
@@ -275,13 +268,14 @@ async fn show_enrollment_as_site_admin_via_root_account_returns_200() {
 
     let student = seed_user(&pool, &prefix, "student", "student").await;
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
-    let course = seed_course(&pool, &prefix, "course").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
+    let course = seed_course_in_account(&pool, &prefix, "course", account).await;
     let enrollment = seed_student_enrollment(&pool, student, course).await;
 
-    // Root-account context (account 1) sees enrollments of any course under
-    // it; the site admin passes `:read_roster`.
+    // Root-account context (a dedicated root account, issue #75) sees
+    // enrollments of any course under it; the site admin passes `:read_roster`.
     let resp = server
-        .get(&format!("/accounts/1/enrollments/{enrollment}"))
+        .get(&format!("/accounts/{account}/enrollments/{enrollment}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -298,11 +292,12 @@ async fn show_enrollment_of_other_user_without_roster_right_is_401() {
 
     let student = seed_user(&pool, &prefix, "student", "student").await;
     let stranger = seed_user(&pool, &prefix, "stranger", "student").await;
-    let course = seed_course(&pool, &prefix, "course").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
+    let course = seed_course_in_account(&pool, &prefix, "course", account).await;
     let enrollment = seed_student_enrollment(&pool, student, course).await;
 
     let resp = server
-        .get(&format!("/accounts/1/enrollments/{enrollment}"))
+        .get(&format!("/accounts/{account}/enrollments/{enrollment}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(stranger, "student"))
         .await;
     assert_eq!(
@@ -323,9 +318,10 @@ async fn show_unknown_enrollment_is_404() {
     };
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
 
     let resp = server
-        .get("/accounts/1/enrollments/999999999")
+        .get(&format!("/accounts/{account}/enrollments/999999999"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -396,7 +392,8 @@ async fn show_deleted_enrollment_still_renders() {
     // Canvas `all_enrollments` does not filter workflow_state, so a deleted
     // enrollment is still found by #show.
     let student = seed_user(&pool, &prefix, "student", "student").await;
-    let course = seed_course(&pool, &prefix, "course").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
+    let course = seed_course_in_account(&pool, &prefix, "course", account).await;
     let enrollment: i64 = sqlx::query_scalar(
         "INSERT INTO enrollments (user_id, course_id, role, workflow_state) VALUES ($1, $2, 'student', 'deleted') RETURNING id",
     )
@@ -407,7 +404,7 @@ async fn show_deleted_enrollment_still_renders() {
     .expect("seed deleted enrollment");
 
     let resp = server
-        .get(&format!("/accounts/1/enrollments/{enrollment}"))
+        .get(&format!("/accounts/{account}/enrollments/{enrollment}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -431,11 +428,12 @@ async fn bulk_enrollment_creates_enrollments_and_returns_progress() {
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
     let s1 = seed_user(&pool, &prefix, "s1", "student").await;
     let s2 = seed_user(&pool, &prefix, "s2", "student").await;
-    let c1 = seed_course(&pool, &prefix, "c1").await;
-    let c2 = seed_course(&pool, &prefix, "c2").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
+    let c1 = seed_course_in_account(&pool, &prefix, "c1", account).await;
+    let c2 = seed_course_in_account(&pool, &prefix, "c2", account).await;
 
     let resp = server
-        .post("/accounts/1/bulk_enrollment")
+        .post(&format!("/accounts/{account}/bulk_enrollment"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "user_ids": [s1, s2],
@@ -451,7 +449,9 @@ async fn bulk_enrollment_creates_enrollments_and_returns_progress() {
     );
     let body: Value = resp.json();
     assert_eq!(body["context_type"], json!("Account"));
-    assert_eq!(body["context_id"].as_i64(), Some(1));
+    // The progress row is scoped to the account the POST targeted — the
+    // test's dedicated account (issue #75), never the shared account 1.
+    assert_eq!(body["context_id"].as_i64(), Some(account));
     assert_eq!(body["tag"], json!("bulk_enrollment"));
     assert_eq!(body["workflow_state"], json!("completed"));
     assert_eq!(body["completion"], json!(100));
@@ -485,11 +485,12 @@ async fn bulk_enrollment_with_default_type_enrolls_students() {
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
     let student = seed_user(&pool, &prefix, "student", "student").await;
-    let course = seed_course(&pool, &prefix, "course").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
+    let course = seed_course_in_account(&pool, &prefix, "course", account).await;
 
     // no enrollment_type -> Canvas defaults to StudentEnrollment
     let resp = server
-        .post("/accounts/1/bulk_enrollment")
+        .post(&format!("/accounts/{account}/bulk_enrollment"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "user_ids": [student],
@@ -520,10 +521,11 @@ async fn bulk_enrollment_invalid_type_is_400() {
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
     let student = seed_user(&pool, &prefix, "student", "student").await;
-    let course = seed_course(&pool, &prefix, "course").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
+    let course = seed_course_in_account(&pool, &prefix, "course", account).await;
 
     let resp = server
-        .post("/accounts/1/bulk_enrollment")
+        .post(&format!("/accounts/{account}/bulk_enrollment"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "user_ids": [student],
@@ -550,13 +552,14 @@ async fn bulk_enrollment_over_500_pairs_is_400() {
     };
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
 
     // 501 pairs without seeding that many rows: user_ids 1..=501 x one course
     // id. The pair-count check runs before any course lookup in Canvas, so
     // the ids do not need to exist.
     let user_ids: Vec<i64> = (1..=501).collect();
     let resp = server
-        .post("/accounts/1/bulk_enrollment")
+        .post(&format!("/accounts/{account}/bulk_enrollment"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "user_ids": user_ids,
@@ -583,10 +586,11 @@ async fn bulk_enrollment_by_plain_student_is_401() {
 
     let student = seed_user(&pool, &prefix, "student", "student").await;
     let other = seed_user(&pool, &prefix, "other", "student").await;
-    let course = seed_course(&pool, &prefix, "course").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
+    let course = seed_course_in_account(&pool, &prefix, "course", account).await;
 
     let resp = server
-        .post("/accounts/1/bulk_enrollment")
+        .post(&format!("/accounts/{account}/bulk_enrollment"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({
             "user_ids": [other],
@@ -620,11 +624,12 @@ async fn bulk_enrollment_by_course_teacher_succeeds() {
     // teachers pass can_create_enrollment_for? on the courses they teach
     let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "student", "student").await;
-    let course = seed_course(&pool, &prefix, "course").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
+    let course = seed_course_in_account(&pool, &prefix, "course", account).await;
     seed_course_teacher(&pool, teacher, course).await;
 
     let resp = server
-        .post("/accounts/1/bulk_enrollment")
+        .post(&format!("/accounts/{account}/bulk_enrollment"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({
             "user_ids": [student],
@@ -655,9 +660,10 @@ async fn bulk_enrollment_unknown_course_is_404() {
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
     let student = seed_user(&pool, &prefix, "student", "student").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
 
     let resp = server
-        .post("/accounts/1/bulk_enrollment")
+        .post(&format!("/accounts/{account}/bulk_enrollment"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "user_ids": [student],
@@ -705,7 +711,8 @@ async fn bulk_enrollment_is_idempotent_for_existing_pairs() {
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
     let student = seed_user(&pool, &prefix, "student", "student").await;
-    let course = seed_course(&pool, &prefix, "course").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
+    let course = seed_course_in_account(&pool, &prefix, "course", account).await;
 
     let body = json!({
         "user_ids": [student],
@@ -713,7 +720,7 @@ async fn bulk_enrollment_is_idempotent_for_existing_pairs() {
     });
     for i in 0..2 {
         let resp = server
-            .post("/accounts/1/bulk_enrollment")
+            .post(&format!("/accounts/{account}/bulk_enrollment"))
             .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
             .json(&body)
             .await;
@@ -744,10 +751,11 @@ async fn bulk_enrollment_teacher_enrollment_type_sets_teacher_role() {
 
     let admin = seed_user(&pool, &prefix, "admin", "admin").await;
     let teacher = seed_user(&pool, &prefix, "teacher", "student").await;
-    let course = seed_course(&pool, &prefix, "course").await;
+    let account = seed_account(&pool, &prefix, "acct", None).await;
+    let course = seed_course_in_account(&pool, &prefix, "course", account).await;
 
     let resp = server
-        .post("/accounts/1/bulk_enrollment")
+        .post(&format!("/accounts/{account}/bulk_enrollment"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "user_ids": [teacher],
@@ -778,7 +786,7 @@ async fn bulk_enrollment_without_token_is_401() {
     };
 
     let resp = server
-        .post("/accounts/1/bulk_enrollment")
+        .post("/accounts/999999999/bulk_enrollment")
         .json(&json!({
             "user_ids": [1],
             "course_ids": [1]
@@ -796,7 +804,7 @@ async fn show_without_token_is_401() {
         return;
     };
 
-    let resp = server.get("/accounts/1/enrollments/1").await;
+    let resp = server.get("/accounts/999999999/enrollments/1").await;
     assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
 
     cleanup(&pool, &prefix).await;

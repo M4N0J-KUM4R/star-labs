@@ -77,6 +77,42 @@ async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
         .expect("seed course")
 }
 
+/// Dedicated per-test account (issue #75: never the shared root account 1).
+/// With no parent it is itself a root account, so account-scoped feature
+/// flags resolve against it alone.
+async fn seed_account(pool: &PgPool, prefix: &str, name: &str) -> i64 {
+    sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+        .bind(format!("{prefix}-{name}"))
+        .fetch_one(pool)
+        .await
+        .expect("seed account")
+}
+
+async fn seed_course_in_account(pool: &PgPool, prefix: &str, name: &str, account_id: i64) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO courses (name, course_code, account_id) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(format!("{prefix}-{name}"))
+    .bind(format!("{prefix}-{name}"))
+    .bind(account_id)
+    .fetch_one(pool)
+    .await
+    .expect("seed course in account")
+}
+
+async fn enable_feature(pool: &PgPool, account_id: i64, feature: &str) {
+    sqlx::query(
+        "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
+         VALUES ('Account', $1, $2, $2, 'enabled') \
+         ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
+    )
+    .bind(account_id)
+    .bind(feature)
+    .execute(pool)
+    .await
+    .expect("enable feature");
+}
+
 async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str) {
     sqlx::query(
         "INSERT INTO enrollments (user_id, course_id, role) VALUES ($1, $2, $3) \
@@ -159,6 +195,19 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
         .await;
     let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1")
         .bind(format!("{prefix}%"))
+        .execute(pool)
+        .await;
+    // feature_flags rows for the dedicated accounts (no FK; delete explicitly),
+    // then the accounts themselves (issue #75).
+    let _ = sqlx::query(
+        "DELETE FROM feature_flags WHERE context_type = 'Account' \
+           AND context_id IN (SELECT id FROM accounts WHERE name LIKE $1)",
+    )
+    .bind(format!("{prefix}-%"))
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE name LIKE $1")
+        .bind(format!("{prefix}-%"))
         .execute(pool)
         .await;
     let _ = sqlx::query("DELETE FROM users WHERE email LIKE $1")
@@ -463,25 +512,16 @@ async fn an_epub_export_is_created_with_a_progress() {
     };
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "Course").await;
+    // Dedicated root account for this test (issue #75): the epub flag and the
+    // offline-web-export settings live on it, never on the shared account 1.
+    let account = seed_account(&pool, &prefix, "EpubRoot").await;
+    let course = seed_course_in_account(&pool, &prefix, "Course", account).await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
 
-    // Canvas `EpubExportsController#check_feature_enabled`: the root account
-    // has to allow the epub export feature.
-    let root_account: i64 = sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("read the root account");
-    sqlx::query(
-        "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state)          VALUES ('Account', $1, 'epub_export', 'epub_export', 'enabled')          ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
-    )
-    .bind(root_account)
-    .execute(&pool)
-    .await
-    .expect("enable the epub export feature");
+    // Canvas `EpubExportsController#check_feature_enabled`: the domain root
+    // account has to allow the epub export feature.
+    enable_feature(&pool, account, "epub_export").await;
 
     // A student may not create an export.
     let resp = server
@@ -537,8 +577,9 @@ async fn an_epub_export_is_created_with_a_progress() {
     sqlx::query(
         "UPDATE accounts SET settings = settings || \
             jsonb_build_object('enable_offline_web_export', jsonb_build_object('value', true)) \
-         WHERE id = (SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1)",
+         WHERE id = $1",
     )
+    .bind(account)
     .execute(&pool)
     .await
     .expect("enable the offline web export of the account");

@@ -95,12 +95,63 @@ fn is_admin(auth: &AuthUser) -> bool {
 /// Canvas `EpubExportsController#check_feature_enabled`: the root account has
 /// to allow the `epub_export` feature and the offline web export has to be
 /// off.
-async fn feature_enabled(db: &PgPool) -> Result<bool, ApiError> {
-    let root: Option<(i64, Value)> = sqlx::query_as(
-        "SELECT id, settings FROM accounts \
-         WHERE parent_account_id IS NULL AND workflow_state <> 'deleted' \
-         ORDER BY id ASC LIMIT 1",
+///
+/// `@domain_root_account` is the root of the COURSE's account chain (issue
+/// #75: resolving the globally-first root account instead made every test
+/// share account 1), so the check takes the course and walks its chain.
+async fn feature_enabled_for_course(db: &PgPool, course_id: i64) -> Result<bool, ApiError> {
+    let course_account: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
+            .bind(course_id)
+            .fetch_optional(db)
+            .await?;
+    let Some((account_id,)) = course_account else {
+        return Ok(false);
+    };
+    feature_enabled_for_account(db, account_id).await
+}
+
+/// The user-scoped `index` route has no course in the path; Canvas resolves
+/// `@domain_root_account` from the caller's context. This workspace has no
+/// pseudonyms, so the caller's first enrolled course stands in for that
+/// context: the root of ITS account chain.
+async fn feature_enabled_for_user(db: &PgPool, user_id: i64) -> Result<bool, ApiError> {
+    let first_course_account: Option<(Option<i64>,)> = sqlx::query_as(
+        "SELECT c.account_id FROM enrollments e \
+         JOIN courses c ON c.id = e.course_id \
+         WHERE e.user_id = $1 ORDER BY e.id ASC LIMIT 1",
     )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await?;
+    let Some((account_id,)) = first_course_account else {
+        return Ok(false);
+    };
+    feature_enabled_for_account(db, account_id).await
+}
+
+/// Check the flag and offline-web-export settings on the domain root
+/// account of `account_id`: walk the parent chain to the topmost account
+/// (Canvas `@domain_root_account`).
+async fn feature_enabled_for_account(
+    db: &PgPool,
+    account_id: Option<i64>,
+) -> Result<bool, ApiError> {
+    let Some(account_id) = account_id else {
+        return Ok(false);
+    };
+    let root: Option<(i64, Value)> = sqlx::query_as(
+        "WITH RECURSIVE chain AS ( \
+             SELECT id, parent_account_id, settings, workflow_state \
+             FROM accounts WHERE id = $1 \
+             UNION ALL \
+             SELECT a.id, a.parent_account_id, a.settings, a.workflow_state \
+             FROM accounts a JOIN chain c ON a.id = c.parent_account_id \
+         ) SELECT id, settings FROM chain \
+         WHERE parent_account_id IS NULL AND workflow_state <> 'deleted' \
+         LIMIT 1",
+    )
+    .bind(account_id)
     .fetch_optional(db)
     .await?;
     let Some((root_id, settings)) = root else {
@@ -187,7 +238,7 @@ async fn list_epub_exports(
     Query(params): Query<std::collections::HashMap<String, String>>,
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
-    if !feature_enabled(&state.db).await? {
+    if !feature_enabled_for_user(&state.db, auth.id).await? {
         return Err(ApiError::NotFound);
     }
 
@@ -250,7 +301,7 @@ async fn create_epub_export(
     Path(course_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    if !feature_enabled(&state.db).await? {
+    if !feature_enabled_for_course(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
     }
     ensure_course(&state.db, course_id).await?;
@@ -294,7 +345,7 @@ async fn show_epub_export(
     Path((course_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
-    if !feature_enabled(&state.db).await? {
+    if !feature_enabled_for_course(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
     }
     ensure_course(&state.db, course_id).await?;
