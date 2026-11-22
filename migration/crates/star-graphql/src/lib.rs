@@ -52,6 +52,7 @@ mod grading_periods;
 mod groups;
 mod modules;
 mod mutations;
+mod mutations_batch_b;
 mod pages;
 mod quiz;
 mod rubrics;
@@ -932,13 +933,19 @@ impl Query {
 /// `state: deleted` — Canvas has no `deleteAssignment` mutation and neither
 /// do we (spec §2.1). Batches B–E land with their own issues.
 #[derive(MergedObject, Default)]
-pub struct Mutation(mutations::AssignmentMutations);
+pub struct Mutation(
+    mutations::AssignmentMutations,
+    mutations_batch_b::BatchBMutations,
+);
 
 impl Mutation {
     fn new() -> Self {
-        // `AssignmentMutations` is a unit struct; clippy's
+        // The mutation containers are unit structs; clippy's
         // default_constructed_unit_structs rejects `::default()` under -D warnings.
-        Mutation(mutations::AssignmentMutations)
+        Mutation(
+            mutations::AssignmentMutations,
+            mutations_batch_b::BatchBMutations,
+        )
     }
 }
 
