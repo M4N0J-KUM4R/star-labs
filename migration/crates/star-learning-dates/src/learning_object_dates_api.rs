@@ -27,10 +27,10 @@
 //! 2. `check_authorized_action`:
 //!    a. the asset is looked up first, so a missing asset is a **404**;
 //!    b. for an `Attachment` the site-admin `differentiated_files` feature
-//!       must be on, otherwise **400** `{"error": "This API does not
-//!       support files."}`;
+//!    must be on, otherwise **400** `{"error": "This API does not
+//!    support files."}`;
 //!    c. `asset.grants_right?(@current_user, :manage_assign_to)` — otherwise
-//!       **403**.
+//!    **403**.
 //!
 //! An anonymous caller is rejected with **401** by the `AuthUser` extractor
 //! before any of that runs.
