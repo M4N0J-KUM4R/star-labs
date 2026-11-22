@@ -1140,7 +1140,12 @@ async fn channel_preference_updates_unknown_user_returns_404() {
             "notification_preferences": { "new_announcement": { "frequency": "daily" } }
         }))
         .await;
-    assert_eq!(resp.status_code(), 404, "unknown user must be 404: {}", resp.text());
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "unknown user must be 404: {}",
+        resp.text()
+    );
 
     teardown(&pool, &[user_id]).await;
 }

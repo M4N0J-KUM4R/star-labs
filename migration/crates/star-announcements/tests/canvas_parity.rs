@@ -260,4 +260,3 @@ async fn parity_deleted_announcement_excluded_from_list() {
         "soft-deleted announcement should 404"
     );
 }
-

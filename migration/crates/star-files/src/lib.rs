@@ -2017,8 +2017,6 @@ async fn get_folder(
     Ok(Json(FolderResponse::from_row(folder, can_manage)))
 }
 
-
-
 /// GET /folders/{id}/files — Canvas files#api_index for one folder.
 async fn list_folder_files(
     State(state): State<AppState>,
@@ -3046,8 +3044,6 @@ async fn media_folder_course(
     .await?;
     Ok(Json(FolderResponse::from_row(folder, can_manage)))
 }
-
-
 
 // ── user-scoped duplicates ──────────────────────────────────────────────────
 

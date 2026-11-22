@@ -303,7 +303,10 @@ async fn list_filters_by_bucket_and_emits_canvas_info() {
     let rows: Value = resp.json();
     assert_eq!(rows.as_array().map(Vec::len), Some(1));
     assert_eq!(rows[0]["workflow_state"], Value::Null);
-    assert!(rows[0].get("bucket").is_none(), "bucket listings omit bucket");
+    assert!(
+        rows[0].get("bucket").is_none(),
+        "bucket listings omit bucket"
+    );
     assert!(rows[0].get("info").is_some(), "bucket listings carry info");
 
     // Canvas routes only the four bucket names, so any other segment is a 404.

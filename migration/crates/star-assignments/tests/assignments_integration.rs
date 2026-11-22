@@ -1090,7 +1090,14 @@ async fn resubmit_upserts_same_row_and_retains_score() {
     )
     .await;
     let submission_id = first["id"].as_i64().expect("submission id");
-    api_grade(&server, &pool, &auth(f.teacher, "teacher"), submission_id, 6.0).await;
+    api_grade(
+        &server,
+        &pool,
+        &auth(f.teacher, "teacher"),
+        submission_id,
+        6.0,
+    )
+    .await;
 
     let second = api_submit(
         &server,
@@ -1508,7 +1515,14 @@ async fn grade_submission_persists_echoes_and_is_visible_to_student() {
     .await;
     let submission_id = sub["id"].as_i64().expect("submission id");
 
-    let graded = api_grade(&server, &pool, &auth(f.teacher, "teacher"), submission_id, 8.5).await;
+    let graded = api_grade(
+        &server,
+        &pool,
+        &auth(f.teacher, "teacher"),
+        submission_id,
+        8.5,
+    )
+    .await;
 
     // The response echoes the graded submission.
     assert_eq!(graded["id"], submission_id);
@@ -1560,12 +1574,26 @@ async fn regrade_overwrites_previous_score() {
     let sub = api_submit(&server, &auth(f.student, "student"), f.assignment, "answer").await;
     let submission_id = sub["id"].as_i64().expect("submission id");
 
-    api_grade(&server, &pool, &auth(f.teacher, "teacher"), submission_id, 5.0).await;
+    api_grade(
+        &server,
+        &pool,
+        &auth(f.teacher, "teacher"),
+        submission_id,
+        5.0,
+    )
+    .await;
     assert_eq!(db_submission_score(&pool, submission_id).await, Some(5.0));
 
     // Grading again overwrites; the NUMERIC(10,2) column rounds to 2
     // decimals, and the response echoes the stored value.
-    let regraded = api_grade(&server, &pool, &auth(f.teacher, "teacher"), submission_id, 9.123).await;
+    let regraded = api_grade(
+        &server,
+        &pool,
+        &auth(f.teacher, "teacher"),
+        submission_id,
+        9.123,
+    )
+    .await;
     assert_eq!(regraded["score"].as_f64(), Some(9.12));
     assert_eq!(db_submission_score(&pool, submission_id).await, Some(9.12));
 

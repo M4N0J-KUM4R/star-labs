@@ -247,7 +247,7 @@ async fn project_rules(
     if rules.is_empty() {
         sqlx::query("DELETE FROM assignment_group_rules WHERE assignment_group_id = $1")
             .bind(group_id)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         return Ok(());
     }
@@ -268,7 +268,7 @@ async fn project_rules(
     .bind(rules.drop_lowest.unwrap_or_default())
     .bind(rules.drop_highest.unwrap_or_default())
     .bind(&rules.never_drop)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
 
     Ok(())
