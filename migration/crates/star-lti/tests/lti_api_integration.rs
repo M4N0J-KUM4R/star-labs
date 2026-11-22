@@ -89,7 +89,6 @@ async fn seed_tool(pool: &PgPool, prefix: &str, consumer_key: &str) -> i64 {
     )
     .bind(format!("{prefix}-tool"))
     .bind(consumer_key)
-    .bind(consumer_key)
     .bind(SHARED_SECRET)
     .fetch_one(pool)
     .await
