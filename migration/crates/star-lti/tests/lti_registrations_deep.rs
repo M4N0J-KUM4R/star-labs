@@ -831,14 +831,17 @@ async fn client_id_utid_domain_and_install_status() {
     let status: Value = response.json();
     assert_eq!(status["id"], local_copy["id"]);
 
-    // A second install is refused.
+    // A second install reuses the existing local copy
+    // (install_template_registration_service.rb:40-42).
     let response = server
         .post(&format!(
             "/accounts/{other_account}/lti_registrations/{id}/install_from_template"
         ))
         .add_header(AUTHORIZATION, auth(admin_id, "admin"))
         .await;
-    assert_eq!(response.status_code(), 422);
+    assert_eq!(response.status_code(), 200, "body: {}", response.text());
+    let again: Value = response.json();
+    assert_eq!(again["id"], local_copy["id"]);
 
     cleanup(&pool, &prefix).await;
 }

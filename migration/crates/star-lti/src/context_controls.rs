@@ -940,7 +940,7 @@ fn display_path_for(path: &str, account_names: &HashMap<i64, String>) -> Vec<Str
     // Canvas: "Excludes the root, and the current account if context is an
     // account" (context_controls_controller.rb display_path docs).
     let visible = if context.starts_with('a') {
-        &accounts[1..]
+        accounts.get(1..).unwrap_or(&[])
     } else {
         accounts
     };

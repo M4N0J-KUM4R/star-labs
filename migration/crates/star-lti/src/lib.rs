@@ -2166,18 +2166,19 @@ async fn unbind_registration(
         );
     };
 
-    // Canvas destroys the binding and the local copy (if any).
+    // Canvas destroys the binding and the local copy (if any) — real
+    // destroys, not soft deletes (registrations_controller.rb:1796-1802).
     sqlx::query(
-        "UPDATE lti_registration_account_bindings SET workflow_state = 'deleted', \
-         updated_at = now() WHERE registration_id = $1 AND account_id = $2",
+        "DELETE FROM lti_registration_account_bindings \
+         WHERE registration_id = $1 AND account_id = $2",
     )
     .bind(registration_id)
     .bind(account_id)
     .execute(&state.db)
     .await?;
     sqlx::query(
-        "UPDATE lti_registrations SET workflow_state = 'deleted', updated_at = now() \
-         WHERE template_registration_id = $1 AND account_id = $2 AND workflow_state <> 'deleted'",
+        "DELETE FROM lti_registrations \
+         WHERE template_registration_id = $1 AND account_id = $2",
     )
     .bind(registration_id)
     .bind(account_id)
