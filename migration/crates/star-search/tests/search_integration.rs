@@ -189,7 +189,7 @@ async fn recipients_and_term_context_and_excludes() {
     let alice = seed_user(&pool, &prefix, "Alice Anderson", "student").await;
     let bob = seed_user(&pool, &prefix, "Bob Barker", "student").await;
     let carol = seed_user(&pool, &prefix, "Carol Crenshaw", "student").await;
-    let outsider = seed_user(&pool, &prefix, "Zed Zeta", "student").await;
+    let _outsider = seed_user(&pool, &prefix, "Zed Zeta", "student").await;
 
     let course1 = seed_course(&pool, &prefix, "Biology").await;
     let course2 = seed_course(&pool, &prefix, "Chemistry").await;
@@ -639,7 +639,7 @@ async fn rubrics_matching_and_bare_array() {
     // rubrics.course_id is NOT NULL in this workspace — the pool is
     // structurally empty (documented deviation); the managed-context arm is
     // what these tests exercise.
-    let seed_rubric = |title: &str| {
+    let seed_rubric = |title: String| {
         let prefix = prefix.clone();
         let pool = pool.clone();
         async move {
@@ -653,8 +653,8 @@ async fn rubrics_matching_and_bare_array() {
             .expect("seed rubric")
         }
     };
-    let r_match = seed_rubric("Essay Rubric").await;
-    let r_other = seed_rubric("Lab Rubric").await;
+    let r_match = seed_rubric("Essay Rubric".to_string()).await;
+    let r_other = seed_rubric("Lab Rubric".to_string()).await;
 
     let bearer = auth(teacher, "teacher");
 

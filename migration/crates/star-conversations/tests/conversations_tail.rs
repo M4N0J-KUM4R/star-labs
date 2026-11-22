@@ -671,7 +671,7 @@ async fn find_recipients_alias_is_served_by_star_search() {
 
     let alice = seed_user(&pool, &prefix, "Alice Anderson", "user").await;
     let bob = seed_user(&pool, &prefix, "Bob Barker", "user").await;
-    let stranger = seed_user(&pool, &prefix, "Zed Zeta", "user").await;
+    let _stranger = seed_user(&pool, &prefix, "Zed Zeta", "user").await;
     let course = seed_course(&pool, &prefix, "Course").await;
     seed_enrollment(&pool, alice, course, "student", None).await;
     seed_enrollment(&pool, bob, course, "student", None).await;
@@ -706,7 +706,7 @@ async fn find_recipients_alias_is_served_by_star_search() {
     let body = get_ok(
         &server,
         &auth(alice, "user"),
-        &format!("/conversations/find_recipients?search={prefix}-Zed"),
+        "/conversations/find_recipients?search=zed",
     )
     .await;
     assert_eq!(body.as_array().expect("array").len(), 0);
