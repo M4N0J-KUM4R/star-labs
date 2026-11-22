@@ -1207,6 +1207,8 @@ async fn smart_search_index_status(
     let (status, progress) = index_status_row(&state.db, course_id).await?;
     Ok(Json(json!({
         "status": if status == "indexed" { "indexed" } else { "indexing" },
+        // Canvas check_course/indexing_progress end in .to_i — the API
+        // always reports an integer percentage.
         "progress": progress as i64,
     })))
 }

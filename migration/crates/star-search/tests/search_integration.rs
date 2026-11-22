@@ -757,28 +757,30 @@ async fn smartsearch_guards_and_results() {
     )
     .bind(course)
     .bind("Nicolaus Copernicus")
-    .bind("Renaissance-era mathematician and astronomer")
+    .bind(format!(
+        "Renaissance-era mathematician and astronomer {prefix}"
+    ))
     .fetch_one(&pool)
     .await
     .expect("seed page");
     sqlx::query("INSERT INTO assignments (course_id, title, description) VALUES ($1, $2, $3)")
         .bind(course)
         .bind("Kepler Essay")
-        .bind("Write about planetary motion")
+        .bind(format!("Write about planetary motion {prefix}"))
         .execute(&pool)
         .await
         .expect("seed assignment");
     sqlx::query("INSERT INTO announcements (course_id, title, message) VALUES ($1, $2, $3)")
         .bind(course)
         .bind("Welcome Announcement")
-        .bind("Welcome to astronomy class")
+        .bind(format!("Welcome to astronomy class {prefix}"))
         .execute(&pool)
         .await
         .expect("seed announcement");
     sqlx::query("INSERT INTO discussion_topics (course_id, title, message) VALUES ($1, $2, $3)")
         .bind(course)
         .bind("Galileo Discussion")
-        .bind("Telescope observations")
+        .bind(format!("Telescope observations {prefix}"))
         .execute(&pool)
         .await
         .expect("seed discussion");
@@ -859,7 +861,10 @@ async fn smartsearch_guards_and_results() {
     assert_eq!(r["content_type"], "WikiPage");
     assert_eq!(r["readable_type"], "Page");
     assert_eq!(r["title"], "Nicolaus Copernicus");
-    assert_eq!(r["body"], "Renaissance-era mathematician and astronomer");
+    assert_eq!(
+        r["body"],
+        format!("Renaissance-era mathematician and astronomer {prefix}")
+    );
     assert_eq!(
         r["html_url"],
         format!("/courses/{course}/pages/nicolaus-copernicus")
@@ -990,9 +995,10 @@ async fn smartsearch_index_status_and_log() {
     .await
     .expect("flip index row");
     let body = get_ok(&server, &bearer, &format!("{base}/index_status")).await;
+    // Canvas indexing_progress ends in .to_i — 42.5 reports as 42.
     assert_eq!(
         body,
-        json!({"status": "indexing", "progress": 42.5}),
+        json!({"status": "indexing", "progress": 42}),
         "{body}"
     );
 
