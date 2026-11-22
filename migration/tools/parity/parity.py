@@ -1288,7 +1288,7 @@ EXTRA_CLASSES = (
     "web_nested",          # Canvas has it nested under a parent (web)
     "api_nested",          # manifest nests it under a parent star does not serve
     "api_extra_nested",    # manifest nests it, and that nested route IS implemented
-    "absent",              # nowhere in Canvas: invented or intentional custom
+    "absent",              # no Canvas path or path-tail match: alias, rename, or new
 )
 
 
@@ -1584,8 +1584,11 @@ def render_report(coverage):
         "entirely); `api_extra_*` means Canvas' own verbs at that path are all "
         "implemented and the registration is additive; `web_*` means Canvas "
         "answers that path as a **web** (HTML/JS) route rather than an API "
-        "route -- a port, not a REST parity item; and `absent` means Canvas has "
-        "nothing like it.")
+        "route -- a port, not a REST parity item; and `absent` means no Canvas "
+        "path or path-tail matches, which covers deliberate aliases (`"
+        "/assignment_overrides/{id}` for Canvas' "
+        "`/courses/{course_id}/assignments/{assignment_id}/overrides/{id}`, "
+        "whose nested form IS implemented) as well as genuinely new endpoints.")
     add("")
     classes = s.get("star_extras_by_class") or {}
     add("| Class | Count | Action |")
@@ -1599,7 +1602,8 @@ def render_report(coverage):
             "web_nested": "web route flattened to top level: re-nest or label",
             "api_nested": "Canvas serves the nested form and star does not: re-nest",
             "api_extra_nested": "nested form already served: keep, no change",
-            "absent": "delete, or document as an intentional custom endpoint",
+            "absent": "no Canvas path or tail: a renamed alias, a custom "
+                      "endpoint, or unused -- check before deleting",
         }[name]
         add("| `%s` | %d | %s |" % (name, classes.get(name, 0), action))
     add("")

@@ -278,7 +278,7 @@ Star names with no Canvas counterpart (not counted): `AcceptEnrollmentInvitation
 
 ## Star routes with no Canvas API match (207)
 
-Classified, because the fix differs by class: only `api_verb_mismatch` and `api_nested` are Canvas gaps (star misses a verb or the nested form entirely); `api_extra_*` means Canvas' own verbs at that path are all implemented and the registration is additive; `web_*` means Canvas answers that path as a **web** (HTML/JS) route rather than an API route -- a port, not a REST parity item; and `absent` means Canvas has nothing like it.
+Classified, because the fix differs by class: only `api_verb_mismatch` and `api_nested` are Canvas gaps (star misses a verb or the nested form entirely); `api_extra_*` means Canvas' own verbs at that path are all implemented and the registration is additive; `web_*` means Canvas answers that path as a **web** (HTML/JS) route rather than an API route -- a port, not a REST parity item; and `absent` means no Canvas path or path-tail matches, which covers deliberate aliases (`/assignment_overrides/{id}` for Canvas' `/courses/{course_id}/assignments/{assignment_id}/overrides/{id}`, whose nested form IS implemented) as well as genuinely new endpoints.
 
 | Class | Count | Action |
 |---|---:|---|
@@ -289,7 +289,7 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | `web_nested` | 26 | web route flattened to top level: re-nest or label |
 | `api_nested` | 0 | Canvas serves the nested form and star does not: re-nest |
 | `api_extra_nested` | 19 | nested form already served: keep, no change |
-| `absent` | 85 | delete, or document as an intentional custom endpoint |
+| `absent` | 85 | no Canvas path or tail: a renamed alias, a custom endpoint, or unused -- check before deleting |
 
 | Verb | Path | Crate | Class | Canvas closest |
 |---|---|---|---|---|
