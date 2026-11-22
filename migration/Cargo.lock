@@ -2894,7 +2894,6 @@ dependencies = [
 name = "star-common"
 version = "0.1.0"
 dependencies = [
- "argon2",
  "axum",
  "chrono",
  "jsonwebtoken",
