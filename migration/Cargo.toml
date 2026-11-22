@@ -18,6 +18,7 @@ members = [
     "crates/star-dashboard",
     "crates/star-api",
     "crates/star-assignment-groups",
+    "crates/star-gradebook",
     "crates/star-accounts",
     "crates/star-calendar",
     "crates/star-conversations",

@@ -6,8 +6,8 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 971 | 1403 | 69.2% |
-| REST routes referenced from `ui/` | 360 | 503 | 71.6% |
+| REST API routes | 982 | 1403 | 70.0% |
+| REST routes referenced from `ui/` | 368 | 503 | 73.2% |
 | GraphQL files | 1 | 390 | 0.3% |
 | GraphQL object types | 28 | 170 | 16.5% |
 | GraphQL mutations | 2 | 110 | 1.8% |
@@ -17,13 +17,13 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | js_env files | 0 | 124 | 0.0% |
 | Schema tables (vs 688 Canvas models) | 370 | 688 | n/a |
 
-Implemented REST route count: **971 / 1403** (69.2%).
+Implemented REST route count: **982 / 1403** (70.0%).
 
-Star registrations: 1184 route/method pairs from 977 `.route(...)` calls (0 unparsed); 213 have no Canvas match and are listed as extras below.
+Star registrations: 1202 route/method pairs from 989 `.route(...)` calls (0 unparsed); 218 have no Canvas match and are listed as extras below.
 
 Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 
-## Controllers with coverage (113)
+## Controllers with coverage (116)
 
 | Controller | Implemented | Total | Coverage |
 |---|---:|---:|---:|
@@ -83,6 +83,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `release_notes` | 6 | 8 | 75.0% |
 | `sections` | 6 | 9 | 66.7% |
 | `context_modules_api` | 5 | 8 | 62.5% |
+| `custom_gradebook_columns_api` | 5 | 5 | 100.0% |
 | `lti/data_services` | 5 | 5 | 100.0% |
 | `lti/deployments` | 5 | 5 | 100.0% |
 | `lti/ims/line_items` | 5 | 5 | 100.0% |
@@ -108,8 +109,10 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `provisional_grades` | 4 | 4 | 100.0% |
 | `quizzes/quiz_reports` | 4 | 4 | 100.0% |
 | `submission_comments_api` | 4 | 4 | 100.0% |
+| `custom_gradebook_column_data_api` | 3 | 3 | 100.0% |
 | `epub_exports` | 3 | 3 | 100.0% |
 | `jobs` | 3 | 3 | 100.0% |
+| `late_policy` | 3 | 3 | 100.0% |
 | `lti/ims/authentication` | 3 | 3 | 100.0% |
 | `media_objects` | 3 | 10 | 30.0% |
 | `rubrics` | 3 | 3 | 100.0% |
@@ -165,7 +168,7 @@ Renames mapped to Canvas names: `CourseSection` -> `Section`, `DiscussionTopic` 
 
 Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `AssignmentEdge`, `ConversationMessageConnection`, `ConversationMessageEdge`, `ConversationParticipantConnection`, `ConversationParticipantEdge`, `CreateAssignmentPayload`, `DiscussionTopicConnection`, `DiscussionTopicEdge`, `EnrollmentConnection`, `EnrollmentEdge`, `FolderConnection`, `FolderEdge`, `GroupConnection`, `GroupEdge`, `GroupMembershipConnection`, `GroupMembershipEdge`, `GroupSetConnection`, `GroupSetEdge`, `ModuleConnection`, `ModuleEdge`, `ModuleItemConnection`, `ModuleItemEdge`, `PageConnection`, `PageEdge`, `PageInfo`, `QuizConnection`, `QuizEdge`, `QuizQuestionConnection`, `QuizQuestionEdge`, `QuizSubmissionConnection`, `QuizSubmissionEdge`, `SubmissionConnection`, `SubmissionEdge`, `UpdateAssignmentPayload`, `UserConnection`, `UserEdge`.
 
-## Star routes with no Canvas match (213)
+## Star routes with no Canvas match (218)
 
 | Verb | Path | Crate |
 |---|---|---|
@@ -263,7 +266,12 @@ Star names with no Canvas counterpart (not counted): `AssignmentConnection`, `As
 | GET | `/courses/{courseId}/rubrics/{rubricId}/assessments` | `star-rubrics` |
 | POST | `/courses/{courseId}/rubrics/{rubricId}/assessments` | `star-rubrics` |
 | POST | `/courses/{courseId}/rubrics/{rubricId}/associations` | `star-rubrics` |
+| POST | `/courses/{id}/settings` | `star-ui` |
 | PUT | `/courses/{courseId}/submissions/{submissionId}/read/{item}` | `star-assignments` |
+| GET | `/courses/{id}/users/add` | `star-ui` |
+| POST | `/courses/{id}/users/add` | `star-ui` |
+| POST | `/courses/{id}/users/{user_id}/conclude` | `star-ui` |
+| POST | `/courses/{id}/users/{user_id}/reactivate` | `star-ui` |
 | GET | `/courses/{id}/{tab}` | `star-ui` |
 | GET | `/dashboard` | `star-dashboard` |
 | GET | `/dashboard` | `star-ui` |

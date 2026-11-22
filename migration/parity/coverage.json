@@ -135,6 +135,16 @@
       "pct": 100.0,
       "total": 8
     },
+    "custom_gradebook_column_data_api": {
+      "implemented": 3,
+      "pct": 100.0,
+      "total": 3
+    },
+    "custom_gradebook_columns_api": {
+      "implemented": 5,
+      "pct": 100.0,
+      "total": 5
+    },
     "developer_keys": {
       "implemented": 2,
       "pct": 40.0,
@@ -249,6 +259,11 @@
       "implemented": 7,
       "pct": 58.3,
       "total": 12
+    },
+    "late_policy": {
+      "implemented": 3,
+      "pct": 100.0,
+      "total": 3
     },
     "learn_platform": {
       "implemented": 6,
@@ -7227,6 +7242,70 @@
     },
     {
       "action": "index",
+      "controller": "custom_gradebook_columns_api",
+      "normalized_path": "courses/{}/custom_gradebook_columns",
+      "path": "/api/v1/courses/:course_id/custom_gradebook_columns",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "custom_gradebook_columns_api",
+      "normalized_path": "courses/{}/custom_gradebook_columns",
+      "path": "/api/v1/courses/:course_id/custom_gradebook_columns",
+      "ui_referenced": true,
+      "verb": "POST"
+    },
+    {
+      "action": "reorder",
+      "controller": "custom_gradebook_columns_api",
+      "normalized_path": "courses/{}/custom_gradebook_columns/reorder",
+      "path": "/api/v1/courses/:course_id/custom_gradebook_columns/reorder",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "custom_gradebook_columns_api",
+      "normalized_path": "courses/{}/custom_gradebook_columns/{}",
+      "path": "/api/v1/courses/:course_id/custom_gradebook_columns/:id",
+      "ui_referenced": true,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "custom_gradebook_columns_api",
+      "normalized_path": "courses/{}/custom_gradebook_columns/{}",
+      "path": "/api/v1/courses/:course_id/custom_gradebook_columns/:id",
+      "ui_referenced": true,
+      "verb": "DELETE"
+    },
+    {
+      "action": "index",
+      "controller": "custom_gradebook_column_data_api",
+      "normalized_path": "courses/{}/custom_gradebook_columns/{}/data",
+      "path": "/api/v1/courses/:course_id/custom_gradebook_columns/:id/data",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "update",
+      "controller": "custom_gradebook_column_data_api",
+      "normalized_path": "courses/{}/custom_gradebook_columns/{}/data/{}",
+      "path": "/api/v1/courses/:course_id/custom_gradebook_columns/:id/data/:user_id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "bulk_update",
+      "controller": "custom_gradebook_column_data_api",
+      "normalized_path": "courses/{}/custom_gradebook_column_data",
+      "path": "/api/v1/courses/:course_id/custom_gradebook_column_data",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "index",
       "controller": "content_exports_api",
       "normalized_path": "courses/{}/content_exports",
       "path": "/api/v1/courses/:course_id/content_exports",
@@ -7784,6 +7863,30 @@
       "path": "/api/v1/courses/:course_id/blueprint_subscriptions/:subscription_id/migrations/:id/details",
       "ui_referenced": false,
       "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "late_policy",
+      "normalized_path": "courses/{}/late_policy",
+      "path": "/api/v1/courses/:id/late_policy",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "late_policy",
+      "normalized_path": "courses/{}/late_policy",
+      "path": "/api/v1/courses/:id/late_policy",
+      "ui_referenced": true,
+      "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "late_policy",
+      "normalized_path": "courses/{}/late_policy",
+      "path": "/api/v1/courses/:id/late_policy",
+      "ui_referenced": true,
+      "verb": "PATCH"
     },
     {
       "action": "index",
@@ -8750,22 +8853,22 @@
     "graphql_mutations_implemented": 2,
     "graphql_types": 170,
     "graphql_types_implemented": 28,
-    "implemented_rest_pct": 69.2,
-    "implemented_rest_routes": 971,
+    "implemented_rest_pct": 70.0,
+    "implemented_rest_routes": 982,
     "js_env_call_sites": 490,
     "js_env_files": 124,
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
-    "star_extras": 213,
-    "star_route_calls": 977,
-    "star_route_registrations": 1184,
+    "star_extras": 218,
+    "star_route_calls": 989,
+    "star_route_registrations": 1202,
     "star_tables": 370,
     "star_unparsed_calls": 0,
     "ui_feature_dirs": 232,
     "ui_feature_dirs_implemented": 0,
-    "ui_referenced_implemented": 360,
-    "ui_referenced_pct": 71.6,
+    "ui_referenced_implemented": 368,
+    "ui_referenced_pct": 73.2,
     "ui_referenced_routes": 503
   },
   "unmatched_star_routes": [
@@ -9428,11 +9531,46 @@
       "verb": "POST"
     },
     {
+      "crate": "star-ui",
+      "normalized_path": "courses/{}/settings",
+      "path": "/courses/{id}/settings",
+      "source": "crates/star-ui/src/lib.rs",
+      "verb": "POST"
+    },
+    {
       "crate": "star-assignments",
       "normalized_path": "courses/{}/submissions/{}/read/{}",
       "path": "/courses/{courseId}/submissions/{submissionId}/read/{item}",
       "source": "crates/star-assignments/src/lib.rs",
       "verb": "PUT"
+    },
+    {
+      "crate": "star-ui",
+      "normalized_path": "courses/{}/users/add",
+      "path": "/courses/{id}/users/add",
+      "source": "crates/star-ui/src/lib.rs",
+      "verb": "GET"
+    },
+    {
+      "crate": "star-ui",
+      "normalized_path": "courses/{}/users/add",
+      "path": "/courses/{id}/users/add",
+      "source": "crates/star-ui/src/lib.rs",
+      "verb": "POST"
+    },
+    {
+      "crate": "star-ui",
+      "normalized_path": "courses/{}/users/{}/conclude",
+      "path": "/courses/{id}/users/{user_id}/conclude",
+      "source": "crates/star-ui/src/lib.rs",
+      "verb": "POST"
+    },
+    {
+      "crate": "star-ui",
+      "normalized_path": "courses/{}/users/{}/reactivate",
+      "path": "/courses/{id}/users/{user_id}/reactivate",
+      "source": "crates/star-ui/src/lib.rs",
+      "verb": "POST"
     },
     {
       "crate": "star-ui",
