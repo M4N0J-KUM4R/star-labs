@@ -17,6 +17,7 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 mod ai_experiences;
+mod gradebook_api;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -4654,6 +4655,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         // Canvas AiExperiencesController / AiConversationsController.
         .merge(ai_experiences::router())
+        // Canvas CustomGradebookColumnsController + gradebook filters.
+        .merge(gradebook_api::router())
         .route("/courses", get(list_courses))
         .route("/courses", post(create_course))
         .route("/accounts/{id}/courses", post(create_course_in_account))

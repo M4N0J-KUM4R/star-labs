@@ -37,6 +37,13 @@ use star_common::AppState;
 
 const JWT_SECRET: &str = "test-jwt-secret";
 
+/// The file date-details tests toggle the GLOBAL `differentiated_files`
+/// site-admin feature flag on the shared root account; the default test
+/// harness runs them in parallel threads, so serialize them to keep the
+/// flag state deterministic (Canvas `check_authorized_action` reads the
+/// flag on every request).
+static FILE_FLAG_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // ---------------------------------------------------------------------------
 // Harness
 // ---------------------------------------------------------------------------
@@ -747,6 +754,9 @@ async fn file_date_details_needs_the_differentiated_files_feature() {
         eprintln!("SKIP: DATABASE_URL not set");
         return;
     };
+    let _flag_guard = FILE_FLAG_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
@@ -816,6 +826,9 @@ async fn file_date_details_put_updates_the_attachment() {
         eprintln!("SKIP: DATABASE_URL not set");
         return;
     };
+    let _flag_guard = FILE_FLAG_MUTEX
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let course = seed_course(&pool, &prefix, "FilePut").await;

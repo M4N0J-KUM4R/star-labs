@@ -380,6 +380,6 @@ async fn feed_json(db: &PgPool, feed: &ExternalFeed) -> Result<Value, ApiError> 
         "created_at": feed.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "verbosity": feed.verbosity,
         "display_name": display_name,
-        "external_feed_entries_count": count,
+        "external_feed_entries_count": count.0,
     }))
 }

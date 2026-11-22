@@ -331,8 +331,7 @@ async fn create_asr(
     require_update(&state.db, auth, &media_object).await?;
 
     let locale = body
-        .map(|Json(body)| body.locale)
-        .flatten()
+        .and_then(|Json(body)| body.locale)
         .unwrap_or_default();
     if locale.is_empty() || !locale.chars().all(|c| c.is_ascii_alphabetic() || c == '-') {
         return Err(ApiError::BadRequest(

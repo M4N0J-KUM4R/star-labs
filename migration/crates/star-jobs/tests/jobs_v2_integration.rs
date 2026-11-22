@@ -644,10 +644,12 @@ async fn grouped_info_groups_queued_jobs_by_tag() {
     // is not disturbed by jobs other tests seed in the same database.
     let base = now - Duration::days(100);
 
-    // Two jobs share a tag, one job has its own tag.
+    // Two jobs share a tag, one job has its own tag. Canvas groups by the RAW
+    // tag column (`JobsV2Controller#grouped_info` → `.group(@group)`), so the
+    // two pp jobs must carry the same tag to land in one group.
     seed_strand_job(
         &pool,
-        &format!("{prefix}-pp-1"),
+        &format!("{prefix}-pp"),
         None,
         None,
         base,
@@ -658,7 +660,7 @@ async fn grouped_info_groups_queued_jobs_by_tag() {
     .await;
     seed_strand_job(
         &pool,
-        &format!("{prefix}-pp-2"),
+        &format!("{prefix}-pp"),
         None,
         None,
         base + Duration::hours(1),
@@ -713,7 +715,7 @@ async fn grouped_info_groups_queued_jobs_by_tag() {
     assert_eq!(rows.len(), 2, "two tag groups: {rows:?}");
 
     // Default order is the bucket's info column (oldest run_at first).
-    assert_eq!(rows[0]["tag"], format!("{prefix}-pp-1"));
+    assert_eq!(rows[0]["tag"], format!("{prefix}-pp"));
     assert_eq!(rows[0]["count"], 2);
     assert!(
         rows[0]["info"]
@@ -738,7 +740,7 @@ async fn grouped_info_groups_queued_jobs_by_tag() {
     let rows: Value = resp.json();
     let rows = rows.as_array().expect("grouped info is a JSON array");
     assert_eq!(rows[0]["count"], 2);
-    assert_eq!(rows[0]["tag"], format!("{prefix}-pp-1"));
+    assert_eq!(rows[0]["tag"], format!("{prefix}-pp"));
 
     // Canvas paginates with per_page / page.
     let resp = server
@@ -749,7 +751,7 @@ async fn grouped_info_groups_queued_jobs_by_tag() {
     let rows: Value = resp.json();
     let rows = rows.as_array().expect("grouped info is a JSON array");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["tag"], format!("{prefix}-pp-1"));
+    assert_eq!(rows[0]["tag"], format!("{prefix}-pp"));
 
     let resp = server
         .get(&format!("/jobs2/queued/by_tag?per_page=1&page=2&{window}"))

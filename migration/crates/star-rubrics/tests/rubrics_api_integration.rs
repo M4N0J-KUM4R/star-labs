@@ -384,11 +384,11 @@ async fn account_rubric_is_shown_with_its_used_locations() {
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
     let body: Value = resp.json();
-    let style_errors = body["style"].as_array().expect("style errors");
-    assert!(style_errors.iter().any(|message| message
-        .as_str()
-        .unwrap_or_default()
-        .contains("invalid style requested")));
+    // Canvas renders the validation error as a plain string keyed by the
+    // param (rubrics_api_controller.rb:
+    // `errs["style"] = "invalid style requested. Must be one of ..."`).
+    let style_error = body["style"].as_str().expect("style error");
+    assert!(style_error.contains("invalid style requested"), "body: {body}");
 
     // A style without an assessment include is a 400 as well.
     let resp = server

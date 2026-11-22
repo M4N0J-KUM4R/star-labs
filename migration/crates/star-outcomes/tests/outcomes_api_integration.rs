@@ -111,11 +111,20 @@ async fn setup() -> Option<TestApp> {
 
     star_db::MIGRATOR.run(&pool).await.expect("run migrations");
 
-    for statement in OUTCOMES_DDL {
-        sqlx::query(statement)
-            .execute(&pool)
-            .await
-            .expect("apply the outcome DDL");
+    // Serialize the one-shot DDL across the parallel tests of this binary:
+    // concurrent `CREATE INDEX IF NOT EXISTS` statements race on the catalog
+    // check and can both try to insert the same pg_class row.
+    static DDL_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    {
+        let _ddl_guard = DDL_MUTEX
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for statement in OUTCOMES_DDL {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("apply the outcome DDL");
+        }
     }
 
     let state = AppState {

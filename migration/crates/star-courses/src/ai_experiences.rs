@@ -56,7 +56,7 @@ use axum::{
     routing::{delete, get, post},
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use sqlx::PgPool;
@@ -171,8 +171,10 @@ struct AiExperienceRow {
     workflow_state: String,
     llm_conversation_context_id: Option<String>,
     context_index_status: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    // `ai_experiences` comes from the canvas-schema dump (migration 0223)
+    // where the timestamps are `timestamp` (no time zone).
+    created_at: NaiveDateTime,
+    updated_at: NaiveDateTime,
 }
 
 /// A row of the `ai_conversations` table.
@@ -187,8 +189,10 @@ struct AiConversationRow {
     root_account_id: i64,
     llm_conversation_id: String,
     workflow_state: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    // `ai_conversations` comes from the canvas-schema dump (migration
+    // 0223); its timestamps are `timestamp` (no time zone).
+    created_at: NaiveDateTime,
+    updated_at: NaiveDateTime,
 }
 
 /// A student of the course, with the Canvas `user_json` subset the
@@ -446,8 +450,8 @@ async fn experience_json(
         "workflow_state": row.workflow_state,
         "course_id": row.course_id,
         "context_index_status": row.context_index_status,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
+        "created_at": Utc.from_utc_datetime(&row.created_at),
+        "updated_at": Utc.from_utc_datetime(&row.updated_at),
     });
 
     if let Some(can_manage) = opts.can_manage {
@@ -503,8 +507,8 @@ fn conversation_json(row: &AiConversationRow) -> Value {
         "id": row.id,
         "llm_conversation_id": row.llm_conversation_id,
         "workflow_state": row.workflow_state,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
+        "created_at": Utc.from_utc_datetime(&row.created_at),
+        "updated_at": Utc.from_utc_datetime(&row.updated_at),
         "user_id": row.user_id,
     })
 }
@@ -1826,8 +1830,8 @@ mod tests {
             workflow_state: "published".into(),
             llm_conversation_context_id: None,
             context_index_status: "not_started".into(),
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: Utc::now().naive_utc(),
+            updated_at: Utc::now().naive_utc(),
         };
         let fields = ExperienceFields {
             title: Some(Some("New".into())),
