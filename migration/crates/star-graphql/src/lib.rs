@@ -42,6 +42,7 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 mod assignment;
+mod assignment_group;
 mod conversations;
 mod course_user_fields;
 mod discussion_topic;
@@ -55,6 +56,7 @@ mod submission;
 mod terms_sections;
 
 use assignment::AssignmentConnection;
+use assignment_group::AssignmentGroupConnection;
 use conversations::ConversationParticipantConnection;
 use course_user_fields::{CoursePermissions, UserConnection};
 use discussion_topic::DiscussionTopicConnection;
@@ -321,6 +323,30 @@ impl Course {
         let gctx = ctx.data::<GraphQLContext>()?;
         Ok(Some(
             assignment::fetch_assignment_page(&gctx.pool, self.id, first, after.as_deref()).await?,
+        ))
+    }
+
+    /// Paginated assignment groups in this course (LIMIT first+1, ORDER BY
+    /// position then id — Canvas `AssignmentGroup.natural_order`). Includes
+    /// the 0049 grading rules via LEFT JOIN; groups without a rules row
+    /// resolve `rules` to null. Everyone who can resolve the course sees
+    /// its groups — parity with the star-assignment-groups REST index;
+    /// deleted groups are filtered (Canvas `AssignmentGroup.active`).
+    async fn assignment_groups_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<AssignmentGroupConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            assignment_group::fetch_assignment_group_page(
+                &gctx.pool,
+                self.id,
+                first,
+                after.as_deref(),
+            )
+            .await?,
         ))
     }
 
