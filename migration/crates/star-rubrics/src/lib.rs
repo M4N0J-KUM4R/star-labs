@@ -3,7 +3,7 @@
 //! Implements Canvas-style rubrics API with teacher-based access control.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, post, put},
@@ -206,7 +206,8 @@ pub struct AssociationParams {
     pub url: Option<String>,
 }
 
-/// Body of `POST /courses/{courseId}/rubrics/{rubricId}/associations`.
+/// Body of `POST /courses/{courseId}/rubric_associations` (Canvas nests the
+/// documented arguments under the `rubric_association` key).
 #[derive(Debug, Default, Deserialize)]
 pub struct AssociationRequest {
     #[serde(default)]
@@ -674,11 +675,6 @@ pub(crate) const ASSESSMENT_COLUMNS: &str =
      artifact_id, artifact_type, assessment_type, user_id, assessor_id, score, data, comments, \
      workflow_state, created_at, updated_at";
 
-/// Column list for rubric assessment queries joined with submissions.
-const ASSESSMENT_COLUMNS_QUALIFIED: &str = "ra.id, ra.rubric_id, ra.course_id, ra.rubric_association_id, \
-     ra.submission_id, ra.artifact_id, ra.artifact_type, ra.assessment_type, ra.user_id, \
-     ra.assessor_id, ra.score, ra.data, ra.comments, ra.workflow_state, ra.created_at, ra.updated_at";
-
 /// Canvas only accepts these three rubric assessment types.
 const VALID_ASSESSMENT_TYPES: [&str; 3] = ["grading", "peer_review", "provisional_grade"];
 
@@ -854,66 +850,38 @@ async fn insert_assessment(
         .await?)
 }
 
-/// List assessments for a rubric, scoped to `course_id`.
+/// Fetch the active association row scoped to a course.
 ///
-/// Preserves the pre-existing visibility rules: admins see everything, while
-/// other callers only see assessments they recorded or that assess them.
-async fn list_assessments_for_course(
+/// Canvas `RubricAssessmentsController` resolves
+/// `@context.rubric_associations.find(params[:rubric_association_id])`, so a
+/// missing, cross-course, or soft-deleted association is a 404.
+async fn course_association(
     pool: &PgPool,
-    rubric_id: i64,
     course_id: i64,
-    submission_id: Option<i64>,
-    caller_id: i64,
-    is_admin: bool,
-) -> Result<Vec<RubricAssessment>, ApiError> {
-    let mut sql = format!(
-        "SELECT {ASSESSMENT_COLUMNS_QUALIFIED} FROM rubric_assessments ra \
-         LEFT JOIN submissions s ON s.id = ra.submission_id \
-         LEFT JOIN assignments a ON a.id = s.assignment_id \
-         WHERE ra.rubric_id = $1 AND COALESCE(ra.course_id, a.course_id) = $2"
-    );
-
-    if submission_id.is_some() {
-        sql.push_str(" AND ra.submission_id = $3");
-    }
-    let visibility_param = if submission_id.is_some() { 4 } else { 3 };
-    if !is_admin {
-        sql.push_str(&format!(
-            " AND (ra.assessor_id = ${visibility_param} OR COALESCE(ra.user_id, s.user_id) = ${visibility_param})"
-        ));
-    }
-    sql.push_str(" ORDER BY ra.created_at DESC");
-
-    let mut query = sqlx::query_as::<_, RubricAssessment>(&sql)
-        .bind(rubric_id)
-        .bind(course_id);
-    if let Some(sub_id) = submission_id {
-        query = query.bind(sub_id);
-    }
-    if !is_admin {
-        query = query.bind(caller_id);
-    }
-
-    Ok(query.fetch_all(pool).await?)
+    association_id: i64,
+) -> Result<(i64, i64), ApiError> {
+    let row: Option<(i64, i64)> = sqlx::query_as(
+        r#"SELECT id, rubric_id FROM rubric_associations
+           WHERE id = $1 AND context_id = $2 AND workflow_state <> 'deleted'"#,
+    )
+    .bind(association_id)
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await?;
+    row.ok_or(ApiError::NotFound)
 }
 
-/// Look up the rubric's course, returning 404 when it does not exist.
-async fn rubric_course_id(pool: &PgPool, rubric_id: i64) -> Result<i64, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM rubrics WHERE id = $1"#)
-        .bind(rubric_id)
-        .fetch_optional(pool)
-        .await?;
-    Ok(row.ok_or(ApiError::NotFound)?.0)
-}
-
-/// POST /rubrics/{rubricId}/assessments  → 201 (existing flat route)
-async fn create_assessment(
+/// POST /courses/{courseId}/rubric_associations/{rubric_association_id}/rubric_assessments  → 201
+///
+/// Canvas `RubricAssessmentsController#create` keys the assessment on the
+/// rubric association; the rubric is reached through it.
+async fn create_association_assessment(
     State(state): State<AppState>,
-    Path(rubric_id): Path<i64>,
+    Path((course_id, association_id)): Path<(i64, i64)>,
     auth: AuthUser,
     Json(payload): Json<CreateAssessment>,
 ) -> Result<(StatusCode, Json<RubricAssessment>), ApiError> {
-    let course_id = rubric_course_id(&state.db, rubric_id).await?;
+    let (_, rubric_id) = course_association(&state.db, course_id, association_id).await?;
 
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
@@ -923,117 +891,23 @@ async fn create_assessment(
     Ok((StatusCode::CREATED, Json(assessment)))
 }
 
-/// Query params for listing assessments.
-#[derive(Debug, Deserialize)]
-pub struct ListAssessmentsQuery {
-    pub submission_id: Option<i64>,
-}
-
-/// GET /rubrics/{rubricId}/assessments?submission_id=
-/// Teachers or the assessed student can list.
-async fn list_assessments(
+/// PUT /courses/{courseId}/rubric_associations/{rubric_association_id}/rubric_assessments/{id}  → 200
+async fn update_association_rubric_assessment(
     State(state): State<AppState>,
-    Path(rubric_id): Path<i64>,
-    Query(params): Query<ListAssessmentsQuery>,
-    auth: AuthUser,
-) -> Result<Json<Vec<RubricAssessment>>, ApiError> {
-    let course_id = rubric_course_id(&state.db, rubric_id).await?;
-
-    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let rows = list_assessments_for_course(
-        &state.db,
-        rubric_id,
-        course_id,
-        params.submission_id,
-        auth.id,
-        is_admin(&auth),
-    )
-    .await?;
-    Ok(Json(rows))
-}
-
-/// POST /courses/{courseId}/rubrics/{rubricId}/assessments  → 201
-async fn create_course_assessment(
-    State(state): State<AppState>,
-    Path((course_id, rubric_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-    Json(payload): Json<CreateAssessment>,
-) -> Result<(StatusCode, Json<RubricAssessment>), ApiError> {
-    verify_rubric_course(&state.db, course_id, rubric_id).await?;
-
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let assessment = insert_assessment(&state.db, course_id, rubric_id, auth.id, payload).await?;
-    Ok((StatusCode::CREATED, Json(assessment)))
-}
-
-/// GET /courses/{courseId}/rubrics/{rubricId}/assessments?submission_id=
-async fn list_course_assessments(
-    State(state): State<AppState>,
-    Path((course_id, rubric_id)): Path<(i64, i64)>,
-    Query(params): Query<ListAssessmentsQuery>,
-    auth: AuthUser,
-) -> Result<Json<Vec<RubricAssessment>>, ApiError> {
-    verify_rubric_course(&state.db, course_id, rubric_id).await?;
-
-    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let rows = list_assessments_for_course(
-        &state.db,
-        rubric_id,
-        course_id,
-        params.submission_id,
-        auth.id,
-        is_admin(&auth),
-    )
-    .await?;
-    Ok(Json(rows))
-}
-
-/// GET /rubric_assessments/{id}  → 200
-async fn get_rubric_assessment(
-    State(state): State<AppState>,
-    Path(assessment_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<RubricAssessment>, ApiError> {
-    let assessment = fetch_assessment(&state.db, assessment_id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    let (course_id, assessed_user_id) = assessment_context(&state.db, &assessment).await?;
-    let is_teacher = caller_manages_course(&state.db, &auth, course_id).await?;
-
-    if !can_read_assessment(
-        is_admin(&auth),
-        is_teacher,
-        assessment.assessor_id == auth.id,
-        assessed_user_id == Some(auth.id),
-    ) {
-        return Err(ApiError::Forbidden);
-    }
-
-    Ok(Json(assessment))
-}
-
-/// PUT /rubric_assessments/{id}  → 200
-async fn update_rubric_assessment(
-    State(state): State<AppState>,
-    Path(assessment_id): Path<i64>,
+    Path((course_id, association_id, assessment_id)): Path<(i64, i64, i64)>,
     auth: AuthUser,
     Json(payload): Json<UpdateAssessment>,
 ) -> Result<Json<RubricAssessment>, ApiError> {
+    let (_, rubric_id) = course_association(&state.db, course_id, association_id).await?;
+
     let assessment = fetch_assessment(&state.db, assessment_id)
         .await?
         .ok_or(ApiError::NotFound)?;
-    let (course_id, _) = assessment_context(&state.db, &assessment).await?;
-    let is_teacher = caller_manages_course(&state.db, &auth, course_id).await?;
+    if assessment.rubric_id != rubric_id {
+        return Err(ApiError::NotFound);
+    }
 
+    let is_teacher = caller_manages_course(&state.db, &auth, Some(course_id)).await?;
     if !can_modify_assessment(
         is_admin(&auth),
         is_teacher,
@@ -1042,6 +916,55 @@ async fn update_rubric_assessment(
         return Err(ApiError::Forbidden);
     }
 
+    Ok(Json(
+        apply_assessment_update(&state.db, assessment_id, payload).await?,
+    ))
+}
+
+/// DELETE /courses/{courseId}/rubric_associations/{rubric_association_id}/rubric_assessments/{id}  → 200
+///
+/// Mirrors Canvas `RubricAssessmentsController#destroy`, which removes the row
+/// and renders the assessment JSON rather than returning 204.
+async fn delete_association_rubric_assessment(
+    State(state): State<AppState>,
+    Path((course_id, association_id, assessment_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<RubricAssessment>, ApiError> {
+    let (_, rubric_id) = course_association(&state.db, course_id, association_id).await?;
+
+    let assessment = fetch_assessment(&state.db, assessment_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    if assessment.rubric_id != rubric_id {
+        return Err(ApiError::NotFound);
+    }
+
+    let is_teacher = caller_manages_course(&state.db, &auth, Some(course_id)).await?;
+    if !can_modify_assessment(
+        is_admin(&auth),
+        is_teacher,
+        assessment.assessor_id == auth.id,
+    ) {
+        return Err(ApiError::Forbidden);
+    }
+
+    let sql =
+        format!("DELETE FROM rubric_assessments WHERE id = $1 RETURNING {ASSESSMENT_COLUMNS}");
+    let deleted = sqlx::query_as::<_, RubricAssessment>(&sql)
+        .bind(assessment_id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    Ok(Json(deleted))
+}
+
+/// Shared partial-UPDATE for assessment writes (Canvas `#update` semantics).
+async fn apply_assessment_update(
+    db: &PgPool,
+    assessment_id: i64,
+    payload: UpdateAssessment,
+) -> Result<RubricAssessment, ApiError> {
     if payload
         .assessment_type
         .as_deref()
@@ -1079,18 +1002,14 @@ async fn update_rubric_assessment(
         .bind(payload.comments)
         .bind(payload.assessment_type)
         .bind(payload.workflow_state)
-        .fetch_optional(&state.db)
+        .fetch_optional(db)
         .await?
         .ok_or(ApiError::NotFound)?;
-
-    Ok(Json(updated))
+    Ok(updated)
 }
 
-/// DELETE /rubric_assessments/{id}  → 200 with the deleted assessment.
-///
-/// Mirrors Canvas `RubricAssessmentsController#destroy`, which removes the row
-/// and renders the assessment JSON rather than returning 204.
-async fn delete_rubric_assessment(
+/// GET /rubric_assessments/{id}  → 200
+async fn get_rubric_assessment(
     State(state): State<AppState>,
     Path(assessment_id): Path<i64>,
     auth: AuthUser,
@@ -1098,26 +1017,19 @@ async fn delete_rubric_assessment(
     let assessment = fetch_assessment(&state.db, assessment_id)
         .await?
         .ok_or(ApiError::NotFound)?;
-    let (course_id, _) = assessment_context(&state.db, &assessment).await?;
+    let (course_id, assessed_user_id) = assessment_context(&state.db, &assessment).await?;
     let is_teacher = caller_manages_course(&state.db, &auth, course_id).await?;
 
-    if !can_modify_assessment(
+    if !can_read_assessment(
         is_admin(&auth),
         is_teacher,
         assessment.assessor_id == auth.id,
+        assessed_user_id == Some(auth.id),
     ) {
         return Err(ApiError::Forbidden);
     }
 
-    let sql =
-        format!("DELETE FROM rubric_assessments WHERE id = $1 RETURNING {ASSESSMENT_COLUMNS}");
-    let deleted = sqlx::query_as::<_, RubricAssessment>(&sql)
-        .bind(assessment_id)
-        .fetch_optional(&state.db)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-
-    Ok(Json(deleted))
+    Ok(Json(assessment))
 }
 
 // ---------------------------------------------------------------------------
@@ -1236,15 +1148,6 @@ async fn upsert_course_association(
     payload: AssociationRequest,
 ) -> Result<AssociationCreateResponse, ApiError> {
     let params = payload.rubric_association;
-
-    if params
-        .rubric_id
-        .is_some_and(|body_rubric_id| body_rubric_id != rubric_id)
-    {
-        return Err(ApiError::BadRequest(
-            "rubric_id must match the rubric in the path".into(),
-        ));
-    }
 
     let association_type = params
         .association_type
@@ -1445,16 +1348,24 @@ async fn list_used_locations(
     Ok(Json(locations))
 }
 
-/// POST /courses/{courseId}/rubrics/{rubricId}/associations  → 200
+/// POST /courses/{courseId}/rubric_associations  → 200
 ///
-/// Canvas `RubricAssociationsController#create` renders
+/// Canvas `RubricAssociationsController#create` delegates to `#update`: the
+/// rubric arrives as `rubric_association[rubric_id]` in the body and renders
 /// `{ rubric, rubric_association }` with a 200.
-async fn create_course_rubric_association(
+async fn create_rubric_association(
     State(state): State<AppState>,
-    Path((course_id, rubric_id)): Path<(i64, i64)>,
+    Path(course_id): Path<i64>,
     auth: AuthUser,
     Json(payload): Json<AssociationRequest>,
 ) -> Result<Json<AssociationCreateResponse>, ApiError> {
+    let rubric_id = payload
+        .rubric_association
+        .rubric_id
+        .ok_or_else(|| ApiError::BadRequest("rubric_association.rubric_id is required".into()))?;
+    // Canvas resolves `Rubric.find(rubric_id)` before the permission check,
+    // so a missing (or cross-course) rubric is a 404 even for a caller who
+    // could not manage the course anyway.
     verify_rubric_course(&state.db, course_id, rubric_id).await?;
 
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
@@ -1465,14 +1376,134 @@ async fn create_course_rubric_association(
     Ok(Json(response))
 }
 
-/// DELETE /rubric_associations/{id}  → 200 with the soft-deleted association.
+/// PUT /courses/{courseId}/rubric_associations/{id}  → 200
+///
+/// Canvas `RubricAssociationsController#update`: partial update of the
+/// association by id, rendering the same `{ rubric, rubric_association }`
+/// body as `#create`. Re-pointing to a rubric from another course is a 404
+/// (the star rubric stays course-scoped).
+async fn update_rubric_association(
+    State(state): State<AppState>,
+    Path((course_id, association_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<AssociationRequest>,
+) -> Result<Json<AssociationCreateResponse>, ApiError> {
+    let existing: Option<(i64, i64, String)> = sqlx::query_as(
+        "SELECT id, rubric_id, workflow_state FROM rubric_associations \
+         WHERE id = $1 AND context_id = $2",
+    )
+    .bind(association_id)
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (_, previous_rubric_id, workflow_state) = existing.ok_or(ApiError::NotFound)?;
+    if workflow_state == "deleted" {
+        return Err(ApiError::NotFound);
+    }
+
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let params = payload.rubric_association;
+
+    // Optional re-point to another rubric of the same course.
+    let rubric_id = if let Some(new_rubric_id) = params.rubric_id {
+        if new_rubric_id != previous_rubric_id {
+            verify_rubric_course(&state.db, course_id, new_rubric_id).await?;
+        }
+        new_rubric_id
+    } else {
+        previous_rubric_id
+    };
+
+    if let Some(purpose) = params.purpose.as_deref() {
+        if !is_valid_association_purpose(purpose) {
+            return Err(ApiError::Validation(
+                "purpose must be grading or bookmark".into(),
+            ));
+        }
+    }
+    if let Some(association_type) = params.association_type.as_deref() {
+        if !is_supported_association_type(association_type) {
+            return Err(ApiError::BadRequest(
+                "association_type must be Assignment or Course".into(),
+            ));
+        }
+    }
+    let hide_points = params.hide_points.unwrap_or(false);
+    if hide_points {
+        // Canvas makes the hide_points display mode mutually exclusive with
+        // the grading/score-total toggles (see RubricAssociationsController).
+        if params.use_for_grading.unwrap_or(false) || params.hide_score_total.unwrap_or(false) {
+            return Err(ApiError::BadRequest(
+                "hide_points cannot be combined with use_for_grading or hide_score_total".into(),
+            ));
+        }
+    }
+
+    let sql = format!(
+        "UPDATE rubric_associations SET rubric_id = $2, title = COALESCE($3, title), \
+         use_for_grading = COALESCE($4, use_for_grading), \
+         hide_score_total = COALESCE($5, hide_score_total), \
+         hide_points = COALESCE($6, hide_points), \
+         hide_outcome_results = COALESCE($7, hide_outcome_results), \
+         purpose = COALESCE($8, purpose), bookmarked = COALESCE($9, bookmarked), \
+         url = COALESCE($10, url), updated_at = now() \
+         WHERE id = $1 RETURNING {ASSOCIATION_COLUMNS}"
+    );
+    let association = sqlx::query_as::<_, RubricAssociation>(&sql)
+        .bind(association_id)
+        .bind(rubric_id)
+        .bind(&params.title)
+        .bind(params.use_for_grading)
+        .bind(params.hide_score_total)
+        .bind(params.hide_points)
+        .bind(params.hide_outcome_results)
+        .bind(&params.purpose)
+        .bind(params.bookmarked)
+        .bind(&params.url)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    if previous_rubric_id != rubric_id {
+        refresh_rubric_association_counts(&state.db, previous_rubric_id).await?;
+    }
+    refresh_rubric_association_counts(&state.db, rubric_id).await?;
+
+    let rubric = fetch_rubric_with_nested(&state.db, rubric_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    let rubric_assessments = assessments_for_association(&state.db, association.id).await?;
+    let association_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM rubric_associations \
+         WHERE rubric_id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(rubric_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(AssociationCreateResponse {
+        rubric,
+        rubric_association: RubricAssociationResponse {
+            association,
+            rubric_assessments,
+            assessment_requests: Vec::new(),
+            association_count,
+        },
+    }))
+}
+
+/// DELETE /courses/{courseId}/rubric_associations/{id}  → 200 with the
+/// soft-deleted association.
 ///
 /// Mirrors Canvas `RubricAssociationsController#destroy`: the row is
 /// soft-deleted (Canvas::SoftDeletable), the rubric counters are refreshed,
 /// and the association JSON is rendered rather than a 204.
-async fn delete_rubric_association(
+async fn delete_course_rubric_association(
     State(state): State<AppState>,
-    Path(association_id): Path<i64>,
+    Path((course_id, association_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<RubricAssociation>, ApiError> {
     let existing: Option<(i64, i64, String)> = sqlx::query_as(
@@ -1481,7 +1512,13 @@ async fn delete_rubric_association(
     .bind(association_id)
     .fetch_optional(&state.db)
     .await?;
-    let (course_id, rubric_id, workflow_state) = existing.ok_or(ApiError::NotFound)?;
+    let (context_id, rubric_id, workflow_state) = existing.ok_or(ApiError::NotFound)?;
+
+    // Canvas resolves the association inside `@context.rubric_associations`,
+    // so a cross-course association id is a 404, not a permission leak.
+    if context_id != course_id {
+        return Err(ApiError::NotFound);
+    }
 
     // Canvas::SoftDeletable hides deleted rows from the context scope.
     if workflow_state == "deleted" {
@@ -1625,10 +1662,65 @@ async fn create_rubric_import(
     Ok(RubricImportResponse::from_row(row))
 }
 
-/// Query params for upload_status.
-#[derive(Debug, Deserialize)]
-pub struct UploadStatusQuery {
-    pub id: Option<String>,
+/// Shared upload-status lookup.
+///
+/// Canvas `RubricsApiController#upload_status` accepts the literal `latest`
+/// or a numeric import id; anything else fails the lookup with a 404.
+async fn load_upload_status(
+    db: &PgPool,
+    context_id: i64,
+    context_type: &str,
+    id: &str,
+) -> Result<RubricImportResponse, ApiError> {
+    let import_id: Option<i64> = if id == "latest" {
+        sqlx::query_scalar(
+            r#"
+            SELECT id FROM rubric_imports
+            WHERE context_id = $1 AND context_type = $2
+            ORDER BY created_at DESC LIMIT 1
+            "#,
+        )
+        .bind(context_id)
+        .bind(context_type)
+        .fetch_optional(db)
+        .await?
+    } else {
+        id.parse::<i64>().ok()
+    };
+
+    let import_id = import_id.ok_or(ApiError::NotFound)?;
+
+    let row: Option<RubricImportRow> = sqlx::query_as(
+        r#"
+        SELECT id, user_id, attachment_id, workflow_state,
+               progress, error_count, error_data, created_at, updated_at
+        FROM rubric_imports
+        WHERE id = $1 AND context_id = $2 AND context_type = $3
+        "#,
+    )
+    .bind(import_id)
+    .bind(context_id)
+    .bind(context_type)
+    .fetch_optional(db)
+    .await?;
+    let row = row.ok_or(ApiError::NotFound)?;
+
+    let mut import = RubricImportResponse::from_row(row);
+
+    if import.user_id.is_some() {
+        let user_row: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")
+            .bind(import.user_id)
+            .fetch_optional(db)
+            .await?;
+        if let Some((name,)) = user_row {
+            import.user = Some(serde_json::json!({
+                "id": import.user_id,
+                "display_name": name,
+            }));
+        }
+    }
+
+    Ok(import)
 }
 
 /// POST /courses/{courseId}/rubrics/upload  → 201
@@ -1678,80 +1770,41 @@ async fn upload_rubric(
     Ok((StatusCode::CREATED, Json(import)))
 }
 
-/// GET /courses/{courseId}/rubrics/upload_status
+/// GET /courses/{courseId}/rubrics/upload/{id}
+///
+/// Canvas nests the status under the upload path; `{id}` is the import id or
+/// the literal `latest`.
 async fn get_upload_status(
     State(state): State<AppState>,
-    Path(course_id): Path<i64>,
-    Query(params): Query<UploadStatusQuery>,
+    Path((course_id, id)): Path<(i64, String)>,
     auth: AuthUser,
 ) -> Result<Json<RubricImportResponse>, ApiError> {
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
-    let import_id = if let Some(ref id_str) = params.id {
-        if id_str == "latest" {
-            sqlx::query_scalar(
-                r#"
-                SELECT id FROM rubric_imports
-                WHERE context_id = $1 AND context_type = 'Course'
-                ORDER BY created_at DESC LIMIT 1
-                "#,
-            )
-            .bind(course_id)
-            .fetch_optional(&state.db)
-            .await?
-        } else {
-            id_str.parse::<i64>().ok()
-        }
-    } else {
-        sqlx::query_scalar(
-            r#"
-            SELECT id FROM rubric_imports
-            WHERE context_id = $1 AND context_type = 'Course'
-            ORDER BY created_at DESC LIMIT 1
-            "#,
-        )
-        .bind(course_id)
-        .fetch_optional(&state.db)
-        .await?
-    };
-
-    let import_id = import_id.ok_or(ApiError::NotFound)?;
-
-    let row: RubricImportRow = sqlx::query_as(
-        r#"
-        SELECT id, user_id, attachment_id, workflow_state,
-               progress, error_count, error_data, created_at, updated_at
-        FROM rubric_imports WHERE id = $1
-        "#,
-    )
-    .bind(import_id)
-    .fetch_optional(&state.db)
-    .await?
-    .ok_or(ApiError::NotFound)?;
-
-    let mut import = RubricImportResponse::from_row(row);
-
-    if import.user_id.is_some() {
-        let user_row: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")
-            .bind(import.user_id)
-            .fetch_optional(&state.db)
-            .await?;
-        if let Some((name,)) = user_row {
-            import.user = Some(serde_json::json!({
-                "id": import.user_id,
-                "display_name": name,
-            }));
-        }
-    }
-
-    Ok(Json(import))
+    Ok(Json(
+        load_upload_status(&state.db, course_id, "Course", &id).await?,
+    ))
 }
 
-/// GET /courses/{courseId}/rubrics/rubrics_by_import_id/{id}
+/// GET /accounts/{accountId}/rubrics/upload/{id}
+async fn get_account_upload_status(
+    State(state): State<AppState>,
+    Path((account_id, id)): Path<(i64, String)>,
+    auth: AuthUser,
+) -> Result<Json<RubricImportResponse>, ApiError> {
+    check_admin_on_account(&state.db, &auth, account_id).await?;
+
+    Ok(Json(
+        load_upload_status(&state.db, account_id, "Account", &id).await?,
+    ))
+}
+
+/// GET /courses/{courseId}/rubrics/upload/{id}/rubrics
 ///
-/// Returns all rubrics created by a specific import.
+/// Canvas `#rubrics_by_import_id`: returns all rubrics created by a specific
+/// import, nested under the upload path.
 async fn get_rubrics_by_import_id(
     State(state): State<AppState>,
     Path((course_id, import_id)): Path<(i64, i64)>,
@@ -1766,6 +1819,239 @@ async fn get_rubrics_by_import_id(
     )
     .bind(import_id)
     .bind(course_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    if !import_exists {
+        return Err(ApiError::NotFound);
+    }
+
+    let rubrics: Vec<Rubric> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, title, points_possible, workflow_state, created_at, updated_at
+        FROM rubrics
+        WHERE rubric_imports_id = $1 AND workflow_state != 'deleted'
+        ORDER BY created_at ASC
+        "#,
+    )
+    .bind(import_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(rubrics))
+}
+
+// -----------------------------------------------------------------------------
+// Account-scoped rubric routes (Canvas rubrics_api account context)
+// -----------------------------------------------------------------------------
+//
+// star-lms rubrics are course-scoped, so an account reaches the rubrics of
+// the courses it owns (the same scope `#download_rubrics` uses for
+// accounts). Account-level `manage_rubrics` maps to the site-admin role.
+
+/// Site-admin gate for account-scoped rubric routes; 404 when the account
+/// itself does not exist.
+async fn check_admin_on_account(
+    pool: &PgPool,
+    auth: &AuthUser,
+    account_id: i64,
+) -> Result<(), ApiError> {
+    if !is_admin(auth) {
+        return Err(ApiError::Forbidden);
+    }
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM accounts WHERE id = $1)")
+        .bind(account_id)
+        .fetch_one(pool)
+        .await?;
+    if !exists {
+        return Err(ApiError::NotFound);
+    }
+    Ok(())
+}
+
+/// Rubric id reachable from an account (through its courses), if visible.
+async fn account_rubric_id(
+    pool: &PgPool,
+    account_id: i64,
+    rubric_id: i64,
+) -> Result<Option<i64>, ApiError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT r.id FROM rubrics r
+        JOIN courses c ON c.id = r.course_id
+        WHERE r.id = $1 AND c.account_id = $2 AND r.workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(rubric_id)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|(id,)| id))
+}
+
+/// GET /accounts/{accountId}/rubrics
+///
+/// Canvas `RubricsApiController#index` for an account context.
+async fn list_account_rubrics(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Rubric>>, ApiError> {
+    check_admin_on_account(&state.db, &auth, account_id).await?;
+
+    let rows: Vec<Rubric> = sqlx::query_as(
+        r#"
+        SELECT r.id, r.course_id, r.title, r.points_possible, r.workflow_state,
+               r.created_at, r.updated_at
+        FROM rubrics r
+        JOIN courses c ON c.id = r.course_id
+        WHERE c.account_id = $1 AND r.workflow_state != 'deleted'
+        ORDER BY r.created_at ASC, r.id ASC
+        "#,
+    )
+    .bind(account_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(rows))
+}
+
+/// GET /accounts/{accountId}/rubrics/{id}
+///
+/// Canvas `RubricsApiController#show` for an account context: the rubric with
+/// nested criteria and ratings.
+async fn get_account_rubric(
+    State(state): State<AppState>,
+    Path((account_id, rubric_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<RubricResponse>, ApiError> {
+    check_admin_on_account(&state.db, &auth, account_id).await?;
+
+    let rubric_id = account_rubric_id(&state.db, account_id, rubric_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let rubric = fetch_rubric_with_nested(&state.db, rubric_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(rubric))
+}
+
+/// GET /accounts/{accountId}/rubrics/{id}/used_locations
+///
+/// Canvas `#used_locations` for an account context: the courses and
+/// assignments where the rubric is used.
+async fn list_account_used_locations(
+    State(state): State<AppState>,
+    Path((account_id, rubric_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<UsedLocationCourse>>, ApiError> {
+    check_admin_on_account(&state.db, &auth, account_id).await?;
+
+    let rubric_id = account_rubric_id(&state.db, account_id, rubric_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    let rows: Vec<UsedLocationRow> = sqlx::query_as(
+        r#"
+        SELECT c.id AS course_id,
+               c.name AS course_name,
+               (c.workflow_state = 'completed'
+                OR (c.end_at IS NOT NULL AND c.end_at < now())) AS concluded,
+               a.id AS assignment_id,
+               a.title AS assignment_title
+        FROM assignments a
+        JOIN rubric_associations ra
+          ON ra.association_id = a.id
+         AND ra.association_type = 'Assignment'
+         AND ra.workflow_state <> 'deleted'
+        JOIN courses c ON c.id = a.course_id
+        WHERE ra.rubric_id = $1
+          AND c.workflow_state <> 'deleted'
+        ORDER BY c.name ASC, c.id ASC, a.title ASC
+        "#,
+    )
+    .bind(rubric_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let mut locations: Vec<UsedLocationCourse> = Vec::new();
+    for row in rows {
+        let assignment = UsedLocationAssignment {
+            id: row.assignment_id,
+            title: row.assignment_title,
+        };
+        match locations.last_mut() {
+            Some(course) if course.id == row.course_id => course.assignments.push(assignment),
+            _ => locations.push(UsedLocationCourse {
+                id: row.course_id,
+                name: row.course_name,
+                concluded: row.concluded,
+                assignments: vec![assignment],
+            }),
+        }
+    }
+
+    Ok(Json(locations))
+}
+
+/// POST /accounts/{accountId}/rubrics/upload  → 201
+///
+/// Canvas `#upload` for an account context: creates the RubricImport record
+/// (`rubric_imports.context_type = 'Account'`).
+async fn upload_account_rubric(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<UploadRubricRequest>,
+) -> Result<(StatusCode, Json<RubricImportResponse>), ApiError> {
+    check_admin_on_account(&state.db, &auth, account_id).await?;
+
+    let attachment_id = payload
+        .attachment_id
+        .ok_or_else(|| ApiError::Validation("attachment_id is required".into()))?;
+
+    let mut import = create_rubric_import(
+        &state.db,
+        account_id,
+        "Account",
+        Some(auth.id),
+        attachment_id,
+    )
+    .await?;
+
+    let user_row: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")
+        .bind(auth.id)
+        .fetch_optional(&state.db)
+        .await?;
+    let display_name = user_row.map(|(name,)| name);
+    import.user = Some(serde_json::json!({
+        "id": auth.id,
+        "display_name": display_name,
+    }));
+    import.attachment = Some(serde_json::json!({
+        "id": attachment_id,
+    }));
+
+    Ok((StatusCode::CREATED, Json(import)))
+}
+
+/// GET /accounts/{accountId}/rubrics/upload/{id}/rubrics
+///
+/// Canvas `#rubrics_by_import_id` for an account context.
+async fn get_account_rubrics_by_import_id(
+    State(state): State<AppState>,
+    Path((account_id, import_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<Rubric>>, ApiError> {
+    check_admin_on_account(&state.db, &auth, account_id).await?;
+
+    let import_exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM rubric_imports \
+         WHERE id = $1 AND context_id = $2 AND context_type = 'Account')",
+    )
+    .bind(import_id)
+    .bind(account_id)
     .fetch_one(&state.db)
     .await?;
 
@@ -2138,40 +2424,70 @@ pub fn router() -> Router<AppState> {
         .route("/rubrics/{id}", get(get_rubric))
         .route("/rubrics/{id}", put(update_rubric))
         .route("/rubrics/{id}", delete(delete_rubric))
-        .route("/rubrics/{rubricId}/assessments", post(create_assessment))
-        .route("/rubrics/{rubricId}/assessments", get(list_assessments))
+        // Canvas rubric_assessment_api scope: assessment CRUD hangs off the
+        // rubric association, not the rubric.
         .route(
-            "/courses/{courseId}/rubrics/{rubricId}/assessments",
-            post(create_course_assessment),
+            "/courses/{courseId}/rubric_associations/{rubric_association_id}/rubric_assessments",
+            post(create_association_assessment),
         )
         .route(
-            "/courses/{courseId}/rubrics/{rubricId}/assessments",
-            get(list_course_assessments),
+            "/courses/{courseId}/rubric_associations/{rubric_association_id}/rubric_assessments/{id}",
+            put(update_association_rubric_assessment),
+        )
+        .route(
+            "/courses/{courseId}/rubric_associations/{rubric_association_id}/rubric_assessments/{id}",
+            delete(delete_association_rubric_assessment),
         )
         .route("/rubric_assessments/{id}", get(get_rubric_assessment))
-        .route("/rubric_assessments/{id}", put(update_rubric_assessment))
-        .route("/rubric_assessments/{id}", delete(delete_rubric_assessment))
         .route(
             "/courses/{courseId}/rubrics/{rubricId}/used_locations",
             get(list_used_locations),
         )
+        // Canvas rubric_associations scope (course-scoped create/update/destroy).
         .route(
-            "/courses/{courseId}/rubrics/{rubricId}/associations",
-            post(create_course_rubric_association),
+            "/courses/{courseId}/rubric_associations",
+            post(create_rubric_association),
         )
         .route(
-            "/rubric_associations/{id}",
-            delete(delete_rubric_association),
+            "/courses/{courseId}/rubric_associations/{id}",
+            put(update_rubric_association),
+        )
+        .route(
+            "/courses/{courseId}/rubric_associations/{id}",
+            delete(delete_course_rubric_association),
         )
         .route("/rubrics/upload_template", get(upload_template))
         .route("/courses/{courseId}/rubrics/upload", post(upload_rubric))
+        // Canvas paths: upload status and imported rubrics are nested under
+        // `/rubrics/upload/:id` (`:id` may be the literal `latest`).
         .route(
-            "/courses/{courseId}/rubrics/upload_status",
+            "/courses/{courseId}/rubrics/upload/{id}",
             get(get_upload_status),
         )
         .route(
-            "/courses/{courseId}/rubrics/rubrics_by_import_id/{id}",
+            "/courses/{courseId}/rubrics/upload/{id}/rubrics",
             get(get_rubrics_by_import_id),
+        )
+        .route(
+            "/accounts/{accountId}/rubrics",
+            get(list_account_rubrics),
+        )
+        .route("/accounts/{accountId}/rubrics/{id}", get(get_account_rubric))
+        .route(
+            "/accounts/{accountId}/rubrics/{id}/used_locations",
+            get(list_account_used_locations),
+        )
+        .route(
+            "/accounts/{accountId}/rubrics/upload",
+            post(upload_account_rubric),
+        )
+        .route(
+            "/accounts/{accountId}/rubrics/upload/{id}",
+            get(get_account_upload_status),
+        )
+        .route(
+            "/accounts/{accountId}/rubrics/upload/{id}/rubrics",
+            get(get_account_rubrics_by_import_id),
         )
         .route(
             "/courses/{courseId}/rubrics/download_rubrics",
