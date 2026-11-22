@@ -43,6 +43,9 @@ STAR_METHOD_HEAD_RE = re.compile(
 EACH_RE = re.compile(r"^\s*(.+?)\.each\s+do\s*\|([^|]*)\|\s*$")
 WORD_ARRAY_RE = re.compile(r"%w\[([^\]]*)\]")
 RESOURCES_RE = re.compile(r"^\s*resources\s+:([a-z_][a-z0-9_]*)\b(.*)$")
+# Rails' singular `resource :name` — same DSL but there is no index and the
+# member path is the collection path (no `:id` segment).
+SINGULAR_RESOURCE_RE = re.compile(r"^\s*resource\s+:([a-z_][a-z0-9_]*)\b(.*)$")
 CONCERN_DEF_RE = re.compile(
     r"^\s*concern\s+:([a-z_][a-z0-9_]*)\b[^\n]*\bdo\b\s*(?:#.*)?$")
 CONCERN_USE_RE = re.compile(
@@ -60,6 +63,14 @@ RESOURCE_ACTIONS = (
     ("index", "GET", False),
     ("create", "POST", False),
     ("show", "GET", True),
+    ("update", "PATCH", True),
+    ("update", "PUT", True),
+    ("destroy", "DELETE", True),
+)
+# Singular `resource` has no index; everything else hangs off one path.
+SINGULAR_RESOURCE_ACTIONS = (
+    ("show", "GET", True),
+    ("create", "POST", False),
     ("update", "PATCH", True),
     ("update", "PUT", True),
     ("destroy", "DELETE", True),
@@ -289,7 +300,7 @@ def _action_set(match):
             if action.strip()}
 
 
-def _build_resource_routes(name, options, stack, prefix):
+def _build_resource_routes(name, options, stack, prefix, singular=False):
     path_match = PATH_OPT_RE.search(options)
     controller_match = SCOPE_CTRL_RE.search(options)
     controller = (controller_match.group(1) or controller_match.group(2)) \
@@ -320,19 +331,27 @@ def _build_resource_routes(name, options, stack, prefix):
         r"/{2,}", "/",
         (inherited if inherited is not None else base)
         + "/" + segment.lstrip("/"))
-    member = collection + "/:id"
+    if singular:
+        # Rails' `resource :x` serves one record: the member path is the
+        # collection path and nested resources hang straight off it.
+        member = collection
+        nested = collection
+    else:
+        member = collection + "/:id"
+        nested = collection + "/:" + _singularize(name) + "_id"
     resource = {
         "name": name,
         "collection": collection,
         "member": member,
-        "nested": collection + "/:" + _singularize(name) + "_id",
+        "nested": nested,
         "controller": controller,
     }
 
     routes = []
     seen = set()
     bindings = stack[-1]["bindings"]
-    for action, verb, is_member in RESOURCE_ACTIONS:
+    actions = SINGULAR_RESOURCE_ACTIONS if singular else RESOURCE_ACTIONS
+    for action, verb, is_member in actions:
         if only is not None and action not in only:
             continue
         if except_ is not None and action in except_:
@@ -463,12 +482,14 @@ def _scan_lines(lines, i, end_index, stop_indent, prefix, stack, routes,
             i += 1
             continue
 
-        if RESOURCES_RE.match(line):
+        if RESOURCES_RE.match(line) or SINGULAR_RESOURCE_RE.match(line):
             statement, i = _join_statement(lines, i)
             i += 1
-            match = RESOURCES_RE.match(statement)
+            plural = RESOURCES_RE.match(statement)
+            match = plural or SINGULAR_RESOURCE_RE.match(statement)
             resource_routes, resource = _build_resource_routes(
-                match.group(1), match.group(2), stack, prefix)
+                match.group(1), match.group(2), stack, prefix,
+                singular=plural is None)
             routes.extend(resource_routes)
             if BLOCK_RE.search(statement):
                 # Rails nests a `resources :x do ... end` block's own route
@@ -641,18 +662,41 @@ def _parse_route_statement(statement, prefix, stack):
             else:
                 original = base.rstrip("/") + "/" + path.lstrip("/")
             original = re.sub(r"/{2,}", "/", original)
-            key = (verb, original, controller, action)
-            if key in seen:
-                continue
-            seen.add(key)
-            routes.append({
-                "verb": verb,
-                "path": original,
-                "normalized_path": normalize_path(original),
-                "controller": controller,
-                "action": action,
-            })
+            for variant in _optional_variants(original):
+                key = (verb, variant, controller, action)
+                if key in seen:
+                    continue
+                seen.add(key)
+                routes.append({
+                    "verb": verb,
+                    "path": variant,
+                    "normalized_path": normalize_path(variant),
+                    "controller": controller,
+                    "action": action,
+                })
     return routes
+
+
+def _optional_variants(path, depth=0):
+    """Rails registers `(/:id)` twice: with the segment present and absent.
+
+    Without this, an optional tail (`…/tool_consumer_profile(/:id)`) is only
+    ever measured as its short form, so the long form that star serves reads
+    as a fabricated extra.
+    """
+    if depth > 4:
+        return [path]
+    m = re.search(r"\((/[^)]*)\)", path)
+    if not m:
+        return [path]
+    without = path[:m.start()] + path[m.end():]
+    with_seg = path[:m.start()] + m.group(1) + path[m.end():]
+    out = []
+    for variant in (_optional_variants(without, depth + 1)
+                    + _optional_variants(with_seg, depth + 1)):
+        if variant not in out:
+            out.append(variant)
+    return out
 
 
 # ---------------------------------------------------------------------------

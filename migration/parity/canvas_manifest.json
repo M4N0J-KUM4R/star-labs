@@ -1,6 +1,6 @@
 {
   "counts": {
-    "api_routes": 1403,
+    "api_routes": 1410,
     "controllers": 222,
     "erb_views": 475,
     "graphql_files": 390,
@@ -13,7 +13,7 @@
     "ui_api_ref_paths": 559,
     "ui_api_ref_strings": 2660,
     "ui_feature_dirs": 232,
-    "web_routes": 1305
+    "web_routes": 1359
   },
   "graphql_mutation_names": [
     "acceptEnrollmentInvitation",
@@ -3859,7 +3859,15 @@
       "action": "create",
       "controller": "outcome_imports_api",
       "normalized_path": "accounts/{}/outcome_imports",
-      "path": "/api/v1/accounts/:account_id/outcome_imports(/group/:learning_outcome_group_id)",
+      "path": "/api/v1/accounts/:account_id/outcome_imports",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "create",
+      "controller": "outcome_imports_api",
+      "normalized_path": "accounts/{}/outcome_imports/group/{}",
+      "path": "/api/v1/accounts/:account_id/outcome_imports/group/:learning_outcome_group_id",
       "ui_referenced": false,
       "verb": "POST"
     },
@@ -3867,7 +3875,15 @@
       "action": "create",
       "controller": "outcome_imports_api",
       "normalized_path": "courses/{}/outcome_imports",
-      "path": "/api/v1/courses/:course_id/outcome_imports(/group/:learning_outcome_group_id)",
+      "path": "/api/v1/courses/:course_id/outcome_imports",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "create",
+      "controller": "outcome_imports_api",
+      "normalized_path": "courses/{}/outcome_imports/group/{}",
+      "path": "/api/v1/courses/:course_id/outcome_imports/group/:learning_outcome_group_id",
       "ui_referenced": false,
       "verb": "POST"
     },
@@ -4587,7 +4603,15 @@
       "action": "get_data",
       "controller": "custom_data",
       "normalized_path": "users/{}/custom_data",
-      "path": "/api/v1/users/:user_id/custom_data(/*scope)",
+      "path": "/api/v1/users/:user_id/custom_data",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "get_data",
+      "controller": "custom_data",
+      "normalized_path": "users/{}/custom_data/{}",
+      "path": "/api/v1/users/:user_id/custom_data/*scope",
       "ui_referenced": false,
       "verb": "GET"
     },
@@ -4595,7 +4619,15 @@
       "action": "set_data",
       "controller": "custom_data",
       "normalized_path": "users/{}/custom_data",
-      "path": "/api/v1/users/:user_id/custom_data(/*scope)",
+      "path": "/api/v1/users/:user_id/custom_data",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "set_data",
+      "controller": "custom_data",
+      "normalized_path": "users/{}/custom_data/{}",
+      "path": "/api/v1/users/:user_id/custom_data/*scope",
       "ui_referenced": false,
       "verb": "PUT"
     },
@@ -4603,7 +4635,15 @@
       "action": "delete_data",
       "controller": "custom_data",
       "normalized_path": "users/{}/custom_data",
-      "path": "/api/v1/users/:user_id/custom_data(/*scope)",
+      "path": "/api/v1/users/:user_id/custom_data",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "delete_data",
+      "controller": "custom_data",
+      "normalized_path": "users/{}/custom_data/{}",
+      "path": "/api/v1/users/:user_id/custom_data/*scope",
       "ui_referenced": false,
       "verb": "DELETE"
     },
@@ -10939,7 +10979,15 @@
       "action": "show",
       "controller": "lti/ims/tool_consumer_profile",
       "normalized_path": "api/lti/courses/{}/tool_consumer_profile",
-      "path": "/api/lti/courses/:course_id/tool_consumer_profile(/:tool_consumer_profile_id)",
+      "path": "/api/lti/courses/:course_id/tool_consumer_profile",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "lti/ims/tool_consumer_profile",
+      "normalized_path": "api/lti/courses/{}/tool_consumer_profile/{}",
+      "path": "/api/lti/courses/:course_id/tool_consumer_profile/:tool_consumer_profile_id",
       "ui_referenced": false,
       "verb": "GET"
     },
@@ -10947,7 +10995,15 @@
       "action": "show",
       "controller": "lti/ims/tool_consumer_profile",
       "normalized_path": "api/lti/accounts/{}/tool_consumer_profile",
-      "path": "/api/lti/accounts/:account_id/tool_consumer_profile(/:tool_consumer_profile_id)",
+      "path": "/api/lti/accounts/:account_id/tool_consumer_profile",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "lti/ims/tool_consumer_profile",
+      "normalized_path": "api/lti/accounts/{}/tool_consumer_profile/{}",
+      "path": "/api/lti/accounts/:account_id/tool_consumer_profile/:tool_consumer_profile_id",
       "ui_referenced": false,
       "verb": "GET"
     },
@@ -11843,14 +11899,28 @@
       "action": null,
       "controller": null,
       "normalized_path": "confirmations/{}/re_send",
-      "path": "/confirmations/:user_id/re_send(/:id)",
+      "path": "/confirmations/:user_id/re_send",
+      "verb": "POST"
+    },
+    {
+      "action": null,
+      "controller": null,
+      "normalized_path": "confirmations/{}/re_send/{}",
+      "path": "/confirmations/:user_id/re_send/:id",
       "verb": "POST"
     },
     {
       "action": null,
       "controller": null,
       "normalized_path": "confirmations/{}/limit_reached",
-      "path": "/confirmations/:user_id/limit_reached(/:id)",
+      "path": "/confirmations/:user_id/limit_reached",
+      "verb": "GET"
+    },
+    {
+      "action": null,
+      "controller": null,
+      "normalized_path": "confirmations/{}/limit_reached/{}",
+      "path": "/confirmations/:user_id/limit_reached/:id",
       "verb": "GET"
     },
     {
@@ -12911,17 +12981,136 @@
       "verb": "POST"
     },
     {
+      "action": "show",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook",
+      "path": "/courses/:cours_id/gradebook",
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook",
+      "path": "/courses/:cours_id/gradebook",
+      "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook",
+      "path": "/courses/:cours_id/gradebook",
+      "verb": "PATCH"
+    },
+    {
+      "action": "update",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook",
+      "path": "/courses/:cours_id/gradebook",
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook",
+      "path": "/courses/:cours_id/gradebook",
+      "verb": "DELETE"
+    },
+    {
       "action": null,
-      "controller": "courses",
-      "normalized_path": "courses/{}/submissions_upload/{}",
-      "path": "/courses/:cours_id/submissions_upload/:assignment_id",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook/submissions_upload/{}",
+      "path": "/courses/:cours_id/gradebook/submissions_upload/:assignment_id",
       "verb": "GET"
     },
     {
       "action": null,
-      "controller": "courses",
-      "normalized_path": "courses/{}/submissions_upload/{}",
-      "path": "/courses/:cours_id/submissions_upload/:assignment_id",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook/submissions_upload/{}",
+      "path": "/courses/:cours_id/gradebook/submissions_upload/:assignment_id",
+      "verb": "POST"
+    },
+    {
+      "action": "change_gradebook_version",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook/change_gradebook_version",
+      "path": "/courses/:cours_id/gradebook/change_gradebook_version",
+      "verb": "GET"
+    },
+    {
+      "action": "blank_submission",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook/blank_submission",
+      "path": "/courses/:cours_id/gradebook/blank_submission",
+      "verb": "GET"
+    },
+    {
+      "action": "final_grade_overrides",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook/final_grade_overrides",
+      "path": "/courses/:cours_id/gradebook/final_grade_overrides",
+      "verb": "GET"
+    },
+    {
+      "action": "speed_grader",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook/speed_grader",
+      "path": "/courses/:cours_id/gradebook/speed_grader",
+      "verb": "GET"
+    },
+    {
+      "action": "speed_grader_settings",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook/speed_grader_settings",
+      "path": "/courses/:cours_id/gradebook/speed_grader_settings",
+      "verb": "POST"
+    },
+    {
+      "action": "history",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook/history",
+      "path": "/courses/:cours_id/gradebook/history",
+      "verb": "GET"
+    },
+    {
+      "action": "update_submission",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook/update_submission",
+      "path": "/courses/:cours_id/gradebook/update_submission",
+      "verb": "POST"
+    },
+    {
+      "action": "change_gradebook_column_size",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook/change_gradebook_column_size",
+      "path": "/courses/:cours_id/gradebook/change_gradebook_column_size",
+      "verb": "POST"
+    },
+    {
+      "action": "save_gradebook_column_order",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook/save_gradebook_column_order",
+      "path": "/courses/:cours_id/gradebook/save_gradebook_column_order",
+      "verb": "POST"
+    },
+    {
+      "action": "user_ids",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook/user_ids",
+      "path": "/courses/:cours_id/gradebook/user_ids",
+      "verb": "GET"
+    },
+    {
+      "action": "grading_period_assignments",
+      "controller": "gradebook",
+      "normalized_path": "courses/{}/gradebook/grading_period_assignments",
+      "path": "/courses/:cours_id/gradebook/grading_period_assignments",
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "gradebook_csv",
+      "normalized_path": "courses/{}/gradebook_csv",
+      "path": "/courses/:cours_id/gradebook_csv",
       "verb": "POST"
     },
     {
@@ -12939,10 +13128,45 @@
       "verb": "GET"
     },
     {
+      "action": "show",
+      "controller": "gradebook_upload",
+      "normalized_path": "courses/{}/gradebook_upload",
+      "path": "/courses/:cours_id/gradebook_upload",
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "gradebook_upload",
+      "normalized_path": "courses/{}/gradebook_upload",
+      "path": "/courses/:cours_id/gradebook_upload",
+      "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "gradebook_upload",
+      "normalized_path": "courses/{}/gradebook_upload",
+      "path": "/courses/:cours_id/gradebook_upload",
+      "verb": "PATCH"
+    },
+    {
+      "action": "update",
+      "controller": "gradebook_upload",
+      "normalized_path": "courses/{}/gradebook_upload",
+      "path": "/courses/:cours_id/gradebook_upload",
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "gradebook_upload",
+      "normalized_path": "courses/{}/gradebook_upload",
+      "path": "/courses/:cours_id/gradebook_upload",
+      "verb": "DELETE"
+    },
+    {
       "action": null,
-      "controller": "courses",
-      "normalized_path": "courses/{}/data",
-      "path": "/courses/:cours_id/data",
+      "controller": "gradebook_upload",
+      "normalized_path": "courses/{}/gradebook_upload/data",
+      "path": "/courses/:cours_id/gradebook_upload/data",
       "verb": "GET"
     },
     {
@@ -13317,66 +13541,101 @@
       "verb": "GET"
     },
     {
+      "action": "show",
+      "controller": "rubric_association",
+      "normalized_path": "courses/{}/assignments/{}/rubric",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric",
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "rubric_association",
+      "normalized_path": "courses/{}/assignments/{}/rubric",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric",
+      "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "rubric_association",
+      "normalized_path": "courses/{}/assignments/{}/rubric",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric",
+      "verb": "PATCH"
+    },
+    {
+      "action": "update",
+      "controller": "rubric_association",
+      "normalized_path": "courses/{}/assignments/{}/rubric",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric",
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "rubric_association",
+      "normalized_path": "courses/{}/assignments/{}/rubric",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric",
+      "verb": "DELETE"
+    },
+    {
       "action": "index",
       "controller": "rubric_assessments",
-      "normalized_path": "courses/{}/assignments/{}/assessments",
-      "path": "/courses/:cours_id/assignments/:assignment_id/assessments",
+      "normalized_path": "courses/{}/assignments/{}/rubric/assessments",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric/assessments",
       "verb": "GET"
     },
     {
       "action": "create",
       "controller": "rubric_assessments",
-      "normalized_path": "courses/{}/assignments/{}/assessments",
-      "path": "/courses/:cours_id/assignments/:assignment_id/assessments",
+      "normalized_path": "courses/{}/assignments/{}/rubric/assessments",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric/assessments",
       "verb": "POST"
     },
     {
       "action": "show",
       "controller": "rubric_assessments",
-      "normalized_path": "courses/{}/assignments/{}/assessments/{}",
-      "path": "/courses/:cours_id/assignments/:assignment_id/assessments/:id",
+      "normalized_path": "courses/{}/assignments/{}/rubric/assessments/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric/assessments/:id",
       "verb": "GET"
     },
     {
       "action": "update",
       "controller": "rubric_assessments",
-      "normalized_path": "courses/{}/assignments/{}/assessments/{}",
-      "path": "/courses/:cours_id/assignments/:assignment_id/assessments/:id",
+      "normalized_path": "courses/{}/assignments/{}/rubric/assessments/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric/assessments/:id",
       "verb": "PATCH"
     },
     {
       "action": "update",
       "controller": "rubric_assessments",
-      "normalized_path": "courses/{}/assignments/{}/assessments/{}",
-      "path": "/courses/:cours_id/assignments/:assignment_id/assessments/:id",
+      "normalized_path": "courses/{}/assignments/{}/rubric/assessments/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric/assessments/:id",
       "verb": "PUT"
     },
     {
       "action": "destroy",
       "controller": "rubric_assessments",
-      "normalized_path": "courses/{}/assignments/{}/assessments/{}",
-      "path": "/courses/:cours_id/assignments/:assignment_id/assessments/:id",
+      "normalized_path": "courses/{}/assignments/{}/rubric/assessments/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric/assessments/:id",
       "verb": "DELETE"
     },
     {
       "action": "create",
       "controller": "rubric_assessment_imports",
-      "normalized_path": "courses/{}/assignments/{}/assessments/{}/imports",
-      "path": "/courses/:cours_id/assignments/:assignment_id/assessments/:rubric_assessment_id/imports",
+      "normalized_path": "courses/{}/assignments/{}/rubric/assessments/{}/imports",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric/assessments/:rubric_assessment_id/imports",
       "verb": "POST"
     },
     {
       "action": "show",
       "controller": "rubric_assessment_imports",
-      "normalized_path": "courses/{}/assignments/{}/assessments/{}/imports/{}",
-      "path": "/courses/:cours_id/assignments/:assignment_id/assessments/:rubric_assessment_id/imports/:id",
+      "normalized_path": "courses/{}/assignments/{}/rubric/assessments/{}/imports/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric/assessments/:rubric_assessment_id/imports/:id",
       "verb": "GET"
     },
     {
       "action": "export",
       "controller": "rubric_assessments",
-      "normalized_path": "courses/{}/assignments/{}/assessments/{}/export",
-      "path": "/courses/:cours_id/assignments/:assignment_id/assessments/:id/export",
+      "normalized_path": "courses/{}/assignments/{}/rubric/assessments/{}/export",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric/assessments/:id/export",
       "verb": "GET"
     },
     {
@@ -13453,56 +13712,112 @@
       "action": "launch",
       "controller": "new_quizzes",
       "normalized_path": "courses/{}/assignments/{}/build",
-      "path": "/courses/:cours_id/assignments/:assignment_id/build(/*path)",
+      "path": "/courses/:cours_id/assignments/:assignment_id/build",
+      "verb": "GET"
+    },
+    {
+      "action": "launch",
+      "controller": "new_quizzes",
+      "normalized_path": "courses/{}/assignments/{}/build/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/build/*path",
       "verb": "GET"
     },
     {
       "action": "launch",
       "controller": "new_quizzes",
       "normalized_path": "courses/{}/assignments/{}/reporting",
-      "path": "/courses/:cours_id/assignments/:assignment_id/reporting(/*path)",
+      "path": "/courses/:cours_id/assignments/:assignment_id/reporting",
+      "verb": "GET"
+    },
+    {
+      "action": "launch",
+      "controller": "new_quizzes",
+      "normalized_path": "courses/{}/assignments/{}/reporting/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/reporting/*path",
       "verb": "GET"
     },
     {
       "action": "launch",
       "controller": "new_quizzes",
       "normalized_path": "courses/{}/assignments/{}/moderation",
-      "path": "/courses/:cours_id/assignments/:assignment_id/moderation(/*path)",
+      "path": "/courses/:cours_id/assignments/:assignment_id/moderation",
+      "verb": "GET"
+    },
+    {
+      "action": "launch",
+      "controller": "new_quizzes",
+      "normalized_path": "courses/{}/assignments/{}/moderation/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/moderation/*path",
       "verb": "GET"
     },
     {
       "action": "launch",
       "controller": "new_quizzes",
       "normalized_path": "courses/{}/assignments/{}/exports",
-      "path": "/courses/:cours_id/assignments/:assignment_id/exports(/*path)",
+      "path": "/courses/:cours_id/assignments/:assignment_id/exports",
+      "verb": "GET"
+    },
+    {
+      "action": "launch",
+      "controller": "new_quizzes",
+      "normalized_path": "courses/{}/assignments/{}/exports/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/exports/*path",
       "verb": "GET"
     },
     {
       "action": "launch",
       "controller": "new_quizzes",
       "normalized_path": "courses/{}/assignments/{}/taking",
-      "path": "/courses/:cours_id/assignments/:assignment_id/taking(/*path)",
+      "path": "/courses/:cours_id/assignments/:assignment_id/taking",
+      "verb": "GET"
+    },
+    {
+      "action": "launch",
+      "controller": "new_quizzes",
+      "normalized_path": "courses/{}/assignments/{}/taking/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/taking/*path",
       "verb": "GET"
     },
     {
       "action": "launch",
       "controller": "new_quizzes",
       "normalized_path": "courses/{}/assignments/{}/observing",
-      "path": "/courses/:cours_id/assignments/:assignment_id/observing(/*path)",
+      "path": "/courses/:cours_id/assignments/:assignment_id/observing",
+      "verb": "GET"
+    },
+    {
+      "action": "launch",
+      "controller": "new_quizzes",
+      "normalized_path": "courses/{}/assignments/{}/observing/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/observing/*path",
       "verb": "GET"
     },
     {
       "action": "launch",
       "controller": "new_quizzes",
       "normalized_path": "courses/{}/assignments/{}/errors",
-      "path": "/courses/:cours_id/assignments/:assignment_id/errors(/*path)",
+      "path": "/courses/:cours_id/assignments/:assignment_id/errors",
+      "verb": "GET"
+    },
+    {
+      "action": "launch",
+      "controller": "new_quizzes",
+      "normalized_path": "courses/{}/assignments/{}/errors/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/errors/*path",
       "verb": "GET"
     },
     {
       "action": "launch",
       "controller": "new_quizzes",
       "normalized_path": "courses/{}/assignments/{}/settings",
-      "path": "/courses/:cours_id/assignments/:assignment_id/settings(/*path)",
+      "path": "/courses/:cours_id/assignments/:assignment_id/settings",
+      "verb": "GET"
+    },
+    {
+      "action": "launch",
+      "controller": "new_quizzes",
+      "normalized_path": "courses/{}/assignments/{}/settings/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/settings/*path",
       "verb": "GET"
     },
     {
@@ -13523,14 +13838,28 @@
       "action": "launch",
       "controller": "new_quizzes",
       "normalized_path": "courses/{}/assignments/{}/banks",
-      "path": "/courses/:cours_id/assignments/:assignment_id/banks(/*path)",
+      "path": "/courses/:cours_id/assignments/:assignment_id/banks",
+      "verb": "GET"
+    },
+    {
+      "action": "launch",
+      "controller": "new_quizzes",
+      "normalized_path": "courses/{}/assignments/{}/banks/{}",
+      "path": "/courses/:cours_id/assignments/:assignment_id/banks/*path",
       "verb": "GET"
     },
     {
       "action": "banks",
       "controller": "new_quizzes",
       "normalized_path": "courses/{}/banks",
-      "path": "/courses/:cours_id/banks(/*path)",
+      "path": "/courses/:cours_id/banks",
+      "verb": "GET"
+    },
+    {
+      "action": "banks",
+      "controller": "new_quizzes",
+      "normalized_path": "courses/{}/banks/{}",
+      "path": "/courses/:cours_id/banks/*path",
       "verb": "GET"
     },
     {
@@ -15462,14 +15791,28 @@
       "action": null,
       "controller": "courses",
       "normalized_path": "courses/{}/student_view",
-      "path": "/courses/:cours_id/student_view(/:redirect_to_referer)",
+      "path": "/courses/:cours_id/student_view",
+      "verb": "GET"
+    },
+    {
+      "action": null,
+      "controller": "courses",
+      "normalized_path": "courses/{}/student_view/{}",
+      "path": "/courses/:cours_id/student_view/:redirect_to_referer",
       "verb": "GET"
     },
     {
       "action": null,
       "controller": "courses",
       "normalized_path": "courses/{}/student_view",
-      "path": "/courses/:cours_id/student_view(/:redirect_to_referer)",
+      "path": "/courses/:cours_id/student_view",
+      "verb": "POST"
+    },
+    {
+      "action": null,
+      "controller": "courses",
+      "normalized_path": "courses/{}/student_view/{}",
+      "path": "/courses/:cours_id/student_view/:redirect_to_referer",
       "verb": "POST"
     },
     {
@@ -15597,6 +15940,27 @@
       "normalized_path": "courses/{}/accessibility",
       "path": "/courses/:cours_id/accessibility",
       "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "issues",
+      "normalized_path": "courses/{}/accessibility/{}/issues",
+      "path": "/courses/:cours_id/accessibility/:accessibility_id/issues",
+      "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "issues",
+      "normalized_path": "courses/{}/accessibility/{}/issues",
+      "path": "/courses/:cours_id/accessibility/:accessibility_id/issues",
+      "verb": "PATCH"
+    },
+    {
+      "action": "update",
+      "controller": "issues",
+      "normalized_path": "courses/{}/accessibility/{}/issues",
+      "path": "/courses/:cours_id/accessibility/:accessibility_id/issues",
+      "verb": "PUT"
     },
     {
       "action": null,
@@ -17226,7 +17590,14 @@
       "action": "course_user_search",
       "controller": "accounts",
       "normalized_path": "accounts/{}/search",
-      "path": "/accounts/:account_id/search(/:tab)",
+      "path": "/accounts/:account_id/search",
+      "verb": "GET"
+    },
+    {
+      "action": "course_user_search",
+      "controller": "accounts",
+      "normalized_path": "accounts/{}/search/{}",
+      "path": "/accounts/:account_id/search/:tab",
       "verb": "GET"
     },
     {
@@ -17318,13 +17689,6 @@
       "controller": "accounts",
       "normalized_path": "accounts/{}/accessibility",
       "path": "/accounts/:id/accessibility",
-      "verb": "GET"
-    },
-    {
-      "action": null,
-      "controller": "accounts",
-      "normalized_path": "accounts/{}/search",
-      "path": "/accounts/:account_id/search",
       "verb": "GET"
     },
     {
@@ -18031,7 +18395,14 @@
       "action": "banks",
       "controller": "new_quizzes",
       "normalized_path": "accounts/{}/banks",
-      "path": "/accounts/:account_id/banks(/*path)",
+      "path": "/accounts/:account_id/banks",
+      "verb": "GET"
+    },
+    {
+      "action": "banks",
+      "controller": "new_quizzes",
+      "normalized_path": "accounts/{}/banks/{}",
+      "path": "/accounts/:account_id/banks/*path",
       "verb": "GET"
     },
     {
@@ -19918,46 +20289,109 @@
       "verb": "GET"
     },
     {
-      "action": "create",
-      "controller": "profile",
-      "normalized_path": "pseudonyms",
-      "path": "/pseudonyms",
-      "verb": "POST"
-    },
-    {
       "action": "show",
       "controller": "profile",
-      "normalized_path": "pseudonyms/{}",
-      "path": "/pseudonyms/:id",
+      "normalized_path": "profile",
+      "path": "/profile",
       "verb": "GET"
     },
     {
       "action": "update",
       "controller": "profile",
-      "normalized_path": "pseudonyms/{}",
-      "path": "/pseudonyms/:id",
+      "normalized_path": "profile",
+      "path": "/profile",
       "verb": "PATCH"
     },
     {
       "action": "update",
       "controller": "profile",
-      "normalized_path": "pseudonyms/{}",
-      "path": "/pseudonyms/:id",
+      "normalized_path": "profile",
+      "path": "/profile",
+      "verb": "PUT"
+    },
+    {
+      "action": "create",
+      "controller": "pseudonyms",
+      "normalized_path": "profile/pseudonyms",
+      "path": "/profile/pseudonyms",
+      "verb": "POST"
+    },
+    {
+      "action": "show",
+      "controller": "pseudonyms",
+      "normalized_path": "profile/pseudonyms/{}",
+      "path": "/profile/pseudonyms/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "update",
+      "controller": "pseudonyms",
+      "normalized_path": "profile/pseudonyms/{}",
+      "path": "/profile/pseudonyms/:id",
+      "verb": "PATCH"
+    },
+    {
+      "action": "update",
+      "controller": "pseudonyms",
+      "normalized_path": "profile/pseudonyms/{}",
+      "path": "/profile/pseudonyms/:id",
       "verb": "PUT"
     },
     {
       "action": "destroy",
-      "controller": "profile",
-      "normalized_path": "pseudonyms/{}",
-      "path": "/pseudonyms/:id",
+      "controller": "pseudonyms",
+      "normalized_path": "profile/pseudonyms/{}",
+      "path": "/profile/pseudonyms/:id",
       "verb": "DELETE"
     },
     {
       "action": "activate",
-      "controller": "profile",
-      "normalized_path": "tokens/{}/activate",
-      "path": "/tokens/:id/activate",
+      "controller": "tokens",
+      "normalized_path": "profile/tokens/{}/activate",
+      "path": "/profile/tokens/:id/activate",
       "verb": "POST"
+    },
+    {
+      "action": "update_profile",
+      "controller": "profile",
+      "normalized_path": "profile/update_profile",
+      "path": "/profile/update_profile",
+      "verb": "PUT"
+    },
+    {
+      "action": "communication",
+      "controller": "profile",
+      "normalized_path": "profile/communication",
+      "path": "/profile/communication",
+      "verb": "GET"
+    },
+    {
+      "action": "communication_update",
+      "controller": "profile",
+      "normalized_path": "profile/communication_update",
+      "path": "/profile/communication_update",
+      "verb": "PUT"
+    },
+    {
+      "action": "settings",
+      "controller": "profile",
+      "normalized_path": "profile/settings",
+      "path": "/profile/settings",
+      "verb": "GET"
+    },
+    {
+      "action": "content_shares",
+      "controller": "profile",
+      "normalized_path": "profile/content_shares",
+      "path": "/profile/content_shares",
+      "verb": "GET"
+    },
+    {
+      "action": "observees",
+      "controller": "profile",
+      "normalized_path": "profile/observees",
+      "path": "/profile/observees",
+      "verb": "GET"
     },
     {
       "action": null,
@@ -20088,43 +20522,43 @@
     {
       "action": "index",
       "controller": "content_exports",
-      "normalized_path": "data_exports",
-      "path": "/data_exports",
+      "normalized_path": "dashboard/data_exports",
+      "path": "/dashboard/data_exports",
       "verb": "GET"
     },
     {
       "action": "create",
       "controller": "content_exports",
-      "normalized_path": "data_exports",
-      "path": "/data_exports",
+      "normalized_path": "dashboard/data_exports",
+      "path": "/dashboard/data_exports",
       "verb": "POST"
     },
     {
       "action": "show",
       "controller": "content_exports",
-      "normalized_path": "data_exports/{}",
-      "path": "/data_exports/:id",
+      "normalized_path": "dashboard/data_exports/{}",
+      "path": "/dashboard/data_exports/:id",
       "verb": "GET"
     },
     {
       "action": "update",
       "controller": "content_exports",
-      "normalized_path": "data_exports/{}",
-      "path": "/data_exports/:id",
+      "normalized_path": "dashboard/data_exports/{}",
+      "path": "/dashboard/data_exports/:id",
       "verb": "PATCH"
     },
     {
       "action": "update",
       "controller": "content_exports",
-      "normalized_path": "data_exports/{}",
-      "path": "/data_exports/:id",
+      "normalized_path": "dashboard/data_exports/{}",
+      "path": "/dashboard/data_exports/:id",
       "verb": "PUT"
     },
     {
       "action": "destroy",
       "controller": "content_exports",
-      "normalized_path": "data_exports/{}",
-      "path": "/data_exports/:id",
+      "normalized_path": "dashboard/data_exports/{}",
+      "path": "/dashboard/data_exports/:id",
       "verb": "DELETE"
     },
     {
