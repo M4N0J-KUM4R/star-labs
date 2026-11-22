@@ -12946,8 +12946,10 @@
     "star_extras": 207,
     "star_extras_by_class": {
       "absent": 85,
-      "api_nested": 19,
-      "api_verb_mismatch": 18,
+      "api_extra_nested": 19,
+      "api_extra_verb": 18,
+      "api_nested": 0,
+      "api_verb_mismatch": 0,
       "web_exact": 43,
       "web_nested": 26,
       "web_verb_mismatch": 16
@@ -13024,7 +13026,7 @@
       "canvas_closest": [
         "GET"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-grading-standards",
       "normalized_path": "accounts/{}/grading_periods",
       "path": "/accounts/{accountId}/grading_periods",
@@ -13080,7 +13082,7 @@
       "canvas_closest": [
         "GET"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-accounts",
       "normalized_path": "accounts/{}/settings",
       "path": "/accounts/{id}/settings",
@@ -13091,7 +13093,7 @@
       "canvas_closest": [
         "DELETE"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-accounts",
       "normalized_path": "accounts/{}/users/{}",
       "path": "/accounts/{id}/users/{userId}",
@@ -13307,9 +13309,11 @@
     },
     {
       "canvas_closest": [
-        "accounts/{}/content_migrations/migrators"
+        "GET accounts/{}/content_migrations/migrators",
+        "GET courses/{}/content_migrations/migrators",
+        "GET groups/{}/content_migrations/migrators"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-content",
       "normalized_path": "content_migrations/migrators",
       "path": "/content_migrations/migrators",
@@ -13318,9 +13322,11 @@
     },
     {
       "canvas_closest": [
-        "accounts/{}/content_migrations/{}"
+        "GET accounts/{}/content_migrations/{}",
+        "PUT accounts/{}/content_migrations/{}",
+        "GET courses/{}/content_migrations/{}"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-content",
       "normalized_path": "content_migrations/{}",
       "path": "/content_migrations/{id}",
@@ -13367,7 +13373,7 @@
       "canvas_closest": [
         "GET"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-courses",
       "normalized_path": "courses",
       "path": "/courses",
@@ -13527,7 +13533,7 @@
         "DELETE",
         "PUT"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-submission-comments",
       "normalized_path": "courses/{}/assignments/{}/submissions/{}/comments/{}",
       "path": "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}",
@@ -13581,7 +13587,7 @@
         "DELETE",
         "PUT"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-discussions",
       "normalized_path": "courses/{}/discussion_topics/{}/entries/{}",
       "path": "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}",
@@ -13722,7 +13728,7 @@
       "canvas_closest": [
         "GET"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-groups",
       "normalized_path": "courses/{}/groups",
       "path": "/courses/{courseId}/groups",
@@ -13766,7 +13772,7 @@
       "canvas_closest": [
         "GET"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-outcomes",
       "normalized_path": "courses/{}/outcome_groups",
       "path": "/courses/{courseId}/outcome_groups",
@@ -13889,7 +13895,7 @@
         "GET",
         "PUT"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-ui",
       "normalized_path": "courses/{}/settings",
       "path": "/courses/{id}/settings",
@@ -14012,7 +14018,7 @@
         "DELETE",
         "PUT"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-auth",
       "normalized_path": "developer_keys/{}",
       "path": "/developer_keys/{id}",
@@ -14021,9 +14027,11 @@
     },
     {
       "canvas_closest": [
-        "sections/{}/enrollments"
+        "GET sections/{}/enrollments",
+        "POST sections/{}/enrollments",
+        "GET courses/{}/enrollments"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-enrollments",
       "normalized_path": "enrollments",
       "path": "/enrollments",
@@ -14032,9 +14040,11 @@
     },
     {
       "canvas_closest": [
-        "sections/{}/enrollments"
+        "GET sections/{}/enrollments",
+        "POST sections/{}/enrollments",
+        "GET courses/{}/enrollments"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-enrollments",
       "normalized_path": "enrollments",
       "path": "/enrollments",
@@ -14054,9 +14064,11 @@
     },
     {
       "canvas_closest": [
-        "courses/{}/files/quota"
+        "GET courses/{}/files/quota",
+        "GET groups/{}/files/quota",
+        "GET users/{}/files/quota"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-files",
       "normalized_path": "files/quota",
       "path": "/files/quota",
@@ -14109,9 +14121,11 @@
     },
     {
       "canvas_closest": [
-        "accounts/{}/grading_periods/{}"
+        "DELETE accounts/{}/grading_periods/{}",
+        "GET courses/{}/grading_periods/{}",
+        "PUT courses/{}/grading_periods/{}"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-grading-standards",
       "normalized_path": "grading_periods/{}",
       "path": "/grading_periods/{id}",
@@ -14120,9 +14134,11 @@
     },
     {
       "canvas_closest": [
-        "accounts/{}/grading_periods/{}"
+        "DELETE accounts/{}/grading_periods/{}",
+        "GET courses/{}/grading_periods/{}",
+        "PUT courses/{}/grading_periods/{}"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-grading-standards",
       "normalized_path": "grading_periods/{}",
       "path": "/grading_periods/{id}",
@@ -14131,9 +14147,11 @@
     },
     {
       "canvas_closest": [
-        "accounts/{}/grading_periods/{}"
+        "DELETE accounts/{}/grading_periods/{}",
+        "GET courses/{}/grading_periods/{}",
+        "PUT courses/{}/grading_periods/{}"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-grading-standards",
       "normalized_path": "grading_periods/{}",
       "path": "/grading_periods/{id}",
@@ -14211,7 +14229,7 @@
         "DELETE",
         "PUT"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-discussions",
       "normalized_path": "groups/{}/discussion_topics/{}/entries/{}",
       "path": "/groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}",
@@ -14233,7 +14251,7 @@
       "canvas_closest": [
         "GET"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-files",
       "normalized_path": "groups/{}/files/{}",
       "path": "/groups/{groupId}/files/{id}",
@@ -14246,7 +14264,7 @@
         "GET",
         "PUT"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-pages",
       "normalized_path": "groups/{}/pages/{}",
       "path": "/groups/{groupId}/pages/{urlOrId}",
@@ -14258,7 +14276,7 @@
         "DELETE",
         "GET"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-groups",
       "normalized_path": "groups/{}/users",
       "path": "/groups/{groupId}/users",
@@ -14372,9 +14390,11 @@
     },
     {
       "canvas_closest": [
-        "accounts/{}/lti_registrations/{}"
+        "DELETE accounts/{}/lti_registrations/{}",
+        "GET accounts/{}/lti_registrations/{}",
+        "PUT accounts/{}/lti_registrations/{}"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-lti",
       "normalized_path": "lti_registrations/{}",
       "path": "/lti_registrations/{id}",
@@ -14383,9 +14403,11 @@
     },
     {
       "canvas_closest": [
-        "accounts/{}/lti_registrations/{}"
+        "DELETE accounts/{}/lti_registrations/{}",
+        "GET accounts/{}/lti_registrations/{}",
+        "PUT accounts/{}/lti_registrations/{}"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-lti",
       "normalized_path": "lti_registrations/{}",
       "path": "/lti_registrations/{id}",
@@ -14394,9 +14416,10 @@
     },
     {
       "canvas_closest": [
-        "accounts/{}/lti_registrations/{}/deployments"
+        "GET accounts/{}/lti_registrations/{}/deployments",
+        "POST accounts/{}/lti_registrations/{}/deployments"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-lti",
       "normalized_path": "lti_registrations/{}/deployments",
       "path": "/lti_registrations/{id}/deployments",
@@ -14405,9 +14428,10 @@
     },
     {
       "canvas_closest": [
-        "accounts/{}/lti_registrations/{}/deployments"
+        "GET accounts/{}/lti_registrations/{}/deployments",
+        "POST accounts/{}/lti_registrations/{}/deployments"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-lti",
       "normalized_path": "lti_registrations/{}/deployments",
       "path": "/lti_registrations/{id}/deployments",
@@ -14460,9 +14484,11 @@
     },
     {
       "canvas_closest": [
-        "courses/{}/modules/{}/items/{}"
+        "GET courses/{}/modules/{}/items/{}",
+        "PUT courses/{}/modules/{}/items/{}",
+        "DELETE courses/{}/modules/{}/items/{}"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-modules",
       "normalized_path": "modules/{}/items/{}",
       "path": "/modules/{id}/items/{itemId}",
@@ -14531,9 +14557,11 @@
     },
     {
       "canvas_closest": [
-        "accounts/{}/outcome_groups/{}/outcomes"
+        "GET accounts/{}/outcome_groups/{}/outcomes",
+        "POST accounts/{}/outcome_groups/{}/outcomes",
+        "GET courses/{}/outcome_groups/{}/outcomes"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-outcomes",
       "normalized_path": "outcome_groups/{}/outcomes",
       "path": "/outcome_groups/{id}/outcomes",
@@ -14542,9 +14570,11 @@
     },
     {
       "canvas_closest": [
-        "accounts/{}/outcome_groups/{}/outcomes"
+        "GET accounts/{}/outcome_groups/{}/outcomes",
+        "POST accounts/{}/outcome_groups/{}/outcomes",
+        "GET courses/{}/outcome_groups/{}/outcomes"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-outcomes",
       "normalized_path": "outcome_groups/{}/outcomes",
       "path": "/outcome_groups/{id}/outcomes",
@@ -14699,9 +14729,10 @@
     },
     {
       "canvas_closest": [
-        "courses/{}/rubric_associations/{}/rubric_assessments/{}"
+        "PUT courses/{}/rubric_associations/{}/rubric_assessments/{}",
+        "DELETE courses/{}/rubric_associations/{}/rubric_assessments/{}"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-rubrics",
       "normalized_path": "rubric_assessments/{}",
       "path": "/rubric_assessments/{id}",
@@ -14828,9 +14859,10 @@
     },
     {
       "canvas_closest": [
-        "courses/{}/assignments/{}/submissions/{}/comments/{}"
+        "PUT courses/{}/assignments/{}/submissions/{}/comments/{}",
+        "DELETE courses/{}/assignments/{}/submissions/{}/comments/{}"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-submission-comments",
       "normalized_path": "submissions/{}/comments/{}",
       "path": "/submissions/{submissionId}/comments/{commentId}",
@@ -14839,9 +14871,10 @@
     },
     {
       "canvas_closest": [
-        "courses/{}/assignments/{}/submissions/{}/comments/{}"
+        "PUT courses/{}/assignments/{}/submissions/{}/comments/{}",
+        "DELETE courses/{}/assignments/{}/submissions/{}/comments/{}"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-submission-comments",
       "normalized_path": "submissions/{}/comments/{}",
       "path": "/submissions/{submissionId}/comments/{commentId}",
@@ -14850,9 +14883,10 @@
     },
     {
       "canvas_closest": [
-        "courses/{}/assignments/{}/submissions/{}/comments/{}"
+        "PUT courses/{}/assignments/{}/submissions/{}/comments/{}",
+        "DELETE courses/{}/assignments/{}/submissions/{}/comments/{}"
       ],
-      "classification": "api_nested",
+      "classification": "api_extra_nested",
       "crate": "star-submission-comments",
       "normalized_path": "submissions/{}/comments/{}",
       "path": "/submissions/{submissionId}/comments/{commentId}",
@@ -14952,7 +14986,7 @@
       "canvas_closest": [
         "PUT"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-notifications",
       "normalized_path": "users/self/communication_channels/{}/notification_preferences",
       "path": "/users/self/communication_channels/{communication_channel_id}/notification_preferences",
@@ -14963,7 +14997,7 @@
       "canvas_closest": [
         "PUT"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-notifications",
       "normalized_path": "users/self/communication_channels/{}/notification_preferences/{}",
       "path": "/users/self/communication_channels/{communication_channel_id}/notification_preferences/{notification}",
@@ -15019,7 +15053,7 @@
       "canvas_closest": [
         "GET"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-notifications",
       "normalized_path": "users/{}/communication_channels/{}/{}/notification_preferences",
       "path": "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences",
@@ -15030,7 +15064,7 @@
       "canvas_closest": [
         "GET"
       ],
-      "classification": "api_verb_mismatch",
+      "classification": "api_extra_verb",
       "crate": "star-notifications",
       "normalized_path": "users/{}/communication_channels/{}/{}/notification_preferences/{}",
       "path": "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}",

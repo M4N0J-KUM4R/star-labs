@@ -278,15 +278,17 @@ Star names with no Canvas counterpart (not counted): `AcceptEnrollmentInvitation
 
 ## Star routes with no Canvas API match (207)
 
-Classified, because the fix differs by class: `api_verb_mismatch` is a one-line verb change, `web_*` means Canvas answers that path as a **web** (HTML/JS) route rather than an API route — a port, not a REST parity item — and `absent` means Canvas has nothing like it.
+Classified, because the fix differs by class: only `api_verb_mismatch` and `api_nested` are Canvas gaps (star misses a verb or the nested form entirely); `api_extra_*` means Canvas' own verbs at that path are all implemented and the registration is additive; `web_*` means Canvas answers that path as a **web** (HTML/JS) route rather than an API route -- a port, not a REST parity item; and `absent` means Canvas has nothing like it.
 
 | Class | Count | Action |
 |---|---:|---|
-| `api_verb_mismatch` | 18 | change the registered verb to Canvas' |
+| `api_verb_mismatch` | 0 | Canvas verb at this path is unimplemented: add it |
+| `api_extra_verb` | 18 | Canvas' verbs here are all served: keep, no change |
 | `web_exact` | 43 | port of a Canvas web route: keep, label as web/UI |
 | `web_verb_mismatch` | 16 | web port with the wrong verb |
 | `web_nested` | 26 | web route flattened to top level: re-nest or label |
-| `api_nested` | 19 | API route missing its parent segment: re-nest |
+| `api_nested` | 0 | Canvas serves the nested form and star does not: re-nest |
+| `api_extra_nested` | 19 | nested form already served: keep, no change |
 | `absent` | 85 | delete, or document as an intentional custom endpoint |
 
 | Verb | Path | Crate | Class | Canvas closest |
@@ -376,43 +378,43 @@ Classified, because the fix differs by class: `api_verb_mismatch` is a one-line 
 | PUT | `/users/{user_id}/notification_preference_categories/{category}` | `star-notifications` | absent | - |
 | GET | `/users/{user_id}/notification_preferences` | `star-notifications` | absent | - |
 | PUT | `/users/{user_id}/notification_preferences` | `star-notifications` | absent | - |
-| GET | `/content_migrations/migrators` | `star-content` | api_nested | `accounts/{}/content_migrations/migrators` |
-| GET | `/content_migrations/{id}` | `star-content` | api_nested | `accounts/{}/content_migrations/{}` |
-| GET | `/enrollments` | `star-enrollments` | api_nested | `sections/{}/enrollments` |
-| POST | `/enrollments` | `star-enrollments` | api_nested | `sections/{}/enrollments` |
-| GET | `/files/quota` | `star-files` | api_nested | `courses/{}/files/quota` |
-| DELETE | `/grading_periods/{id}` | `star-grading-standards` | api_nested | `accounts/{}/grading_periods/{}` |
-| GET | `/grading_periods/{id}` | `star-grading-standards` | api_nested | `accounts/{}/grading_periods/{}` |
-| PUT | `/grading_periods/{id}` | `star-grading-standards` | api_nested | `accounts/{}/grading_periods/{}` |
-| DELETE | `/lti_registrations/{id}` | `star-lti` | api_nested | `accounts/{}/lti_registrations/{}` |
-| GET | `/lti_registrations/{id}` | `star-lti` | api_nested | `accounts/{}/lti_registrations/{}` |
-| GET | `/lti_registrations/{id}/deployments` | `star-lti` | api_nested | `accounts/{}/lti_registrations/{}/deployments` |
-| POST | `/lti_registrations/{id}/deployments` | `star-lti` | api_nested | `accounts/{}/lti_registrations/{}/deployments` |
-| DELETE | `/modules/{id}/items/{itemId}` | `star-modules` | api_nested | `courses/{}/modules/{}/items/{}` |
-| GET | `/outcome_groups/{id}/outcomes` | `star-outcomes` | api_nested | `accounts/{}/outcome_groups/{}/outcomes` |
-| POST | `/outcome_groups/{id}/outcomes` | `star-outcomes` | api_nested | `accounts/{}/outcome_groups/{}/outcomes` |
-| GET | `/rubric_assessments/{id}` | `star-rubrics` | api_nested | `courses/{}/rubric_associations/{}/rubric_assessments/{}` |
-| DELETE | `/submissions/{submissionId}/comments/{commentId}` | `star-submission-comments` | api_nested | `courses/{}/assignments/{}/submissions/{}/comments/{}` |
-| GET | `/submissions/{submissionId}/comments/{commentId}` | `star-submission-comments` | api_nested | `courses/{}/assignments/{}/submissions/{}/comments/{}` |
-| PUT | `/submissions/{submissionId}/comments/{commentId}` | `star-submission-comments` | api_nested | `courses/{}/assignments/{}/submissions/{}/comments/{}` |
-| POST | `/accounts/{accountId}/grading_periods` | `star-grading-standards` | api_verb_mismatch | `GET` |
-| PUT | `/accounts/{id}/settings` | `star-accounts` | api_verb_mismatch | `GET` |
-| POST | `/accounts/{id}/users/{userId}` | `star-accounts` | api_verb_mismatch | `DELETE` |
-| POST | `/courses` | `star-courses` | api_verb_mismatch | `GET` |
-| GET | `/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}` | `star-submission-comments` | api_verb_mismatch | `DELETE`, `PUT` |
-| GET | `/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}` | `star-discussions` | api_verb_mismatch | `DELETE`, `PUT` |
-| POST | `/courses/{courseId}/groups` | `star-groups` | api_verb_mismatch | `GET` |
-| POST | `/courses/{courseId}/outcome_groups` | `star-outcomes` | api_verb_mismatch | `GET` |
-| POST | `/courses/{id}/settings` | `star-ui` | api_verb_mismatch | `GET`, `PUT` |
-| GET | `/developer_keys/{id}` | `star-auth` | api_verb_mismatch | `DELETE`, `PUT` |
-| GET | `/groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}` | `star-discussions` | api_verb_mismatch | `DELETE`, `PUT` |
-| DELETE | `/groups/{groupId}/files/{id}` | `star-files` | api_verb_mismatch | `GET` |
-| POST | `/groups/{groupId}/pages/{urlOrId}` | `star-pages` | api_verb_mismatch | `DELETE`, `GET`, `PUT` |
-| POST | `/groups/{groupId}/users` | `star-groups` | api_verb_mismatch | `DELETE`, `GET` |
-| GET | `/users/self/communication_channels/{communication_channel_id}/notification_preferences` | `star-notifications` | api_verb_mismatch | `PUT` |
-| GET | `/users/self/communication_channels/{communication_channel_id}/notification_preferences/{notification}` | `star-notifications` | api_verb_mismatch | `PUT` |
-| PUT | `/users/{user_id}/communication_channels/{type}/{address}/notification_preferences` | `star-notifications` | api_verb_mismatch | `GET` |
-| PUT | `/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}` | `star-notifications` | api_verb_mismatch | `GET` |
+| GET | `/content_migrations/migrators` | `star-content` | api_extra_nested | `GET accounts/{}/content_migrations/migrators`, `GET courses/{}/content_migrations/migrators`, `GET groups/{}/content_migrations/migrators` |
+| GET | `/content_migrations/{id}` | `star-content` | api_extra_nested | `GET accounts/{}/content_migrations/{}`, `PUT accounts/{}/content_migrations/{}`, `GET courses/{}/content_migrations/{}` |
+| GET | `/enrollments` | `star-enrollments` | api_extra_nested | `GET sections/{}/enrollments`, `POST sections/{}/enrollments`, `GET courses/{}/enrollments` |
+| POST | `/enrollments` | `star-enrollments` | api_extra_nested | `GET sections/{}/enrollments`, `POST sections/{}/enrollments`, `GET courses/{}/enrollments` |
+| GET | `/files/quota` | `star-files` | api_extra_nested | `GET courses/{}/files/quota`, `GET groups/{}/files/quota`, `GET users/{}/files/quota` |
+| DELETE | `/grading_periods/{id}` | `star-grading-standards` | api_extra_nested | `DELETE accounts/{}/grading_periods/{}`, `GET courses/{}/grading_periods/{}`, `PUT courses/{}/grading_periods/{}` |
+| GET | `/grading_periods/{id}` | `star-grading-standards` | api_extra_nested | `DELETE accounts/{}/grading_periods/{}`, `GET courses/{}/grading_periods/{}`, `PUT courses/{}/grading_periods/{}` |
+| PUT | `/grading_periods/{id}` | `star-grading-standards` | api_extra_nested | `DELETE accounts/{}/grading_periods/{}`, `GET courses/{}/grading_periods/{}`, `PUT courses/{}/grading_periods/{}` |
+| DELETE | `/lti_registrations/{id}` | `star-lti` | api_extra_nested | `DELETE accounts/{}/lti_registrations/{}`, `GET accounts/{}/lti_registrations/{}`, `PUT accounts/{}/lti_registrations/{}` |
+| GET | `/lti_registrations/{id}` | `star-lti` | api_extra_nested | `DELETE accounts/{}/lti_registrations/{}`, `GET accounts/{}/lti_registrations/{}`, `PUT accounts/{}/lti_registrations/{}` |
+| GET | `/lti_registrations/{id}/deployments` | `star-lti` | api_extra_nested | `GET accounts/{}/lti_registrations/{}/deployments`, `POST accounts/{}/lti_registrations/{}/deployments` |
+| POST | `/lti_registrations/{id}/deployments` | `star-lti` | api_extra_nested | `GET accounts/{}/lti_registrations/{}/deployments`, `POST accounts/{}/lti_registrations/{}/deployments` |
+| DELETE | `/modules/{id}/items/{itemId}` | `star-modules` | api_extra_nested | `GET courses/{}/modules/{}/items/{}`, `PUT courses/{}/modules/{}/items/{}`, `DELETE courses/{}/modules/{}/items/{}` |
+| GET | `/outcome_groups/{id}/outcomes` | `star-outcomes` | api_extra_nested | `GET accounts/{}/outcome_groups/{}/outcomes`, `POST accounts/{}/outcome_groups/{}/outcomes`, `GET courses/{}/outcome_groups/{}/outcomes` |
+| POST | `/outcome_groups/{id}/outcomes` | `star-outcomes` | api_extra_nested | `GET accounts/{}/outcome_groups/{}/outcomes`, `POST accounts/{}/outcome_groups/{}/outcomes`, `GET courses/{}/outcome_groups/{}/outcomes` |
+| GET | `/rubric_assessments/{id}` | `star-rubrics` | api_extra_nested | `PUT courses/{}/rubric_associations/{}/rubric_assessments/{}`, `DELETE courses/{}/rubric_associations/{}/rubric_assessments/{}` |
+| DELETE | `/submissions/{submissionId}/comments/{commentId}` | `star-submission-comments` | api_extra_nested | `PUT courses/{}/assignments/{}/submissions/{}/comments/{}`, `DELETE courses/{}/assignments/{}/submissions/{}/comments/{}` |
+| GET | `/submissions/{submissionId}/comments/{commentId}` | `star-submission-comments` | api_extra_nested | `PUT courses/{}/assignments/{}/submissions/{}/comments/{}`, `DELETE courses/{}/assignments/{}/submissions/{}/comments/{}` |
+| PUT | `/submissions/{submissionId}/comments/{commentId}` | `star-submission-comments` | api_extra_nested | `PUT courses/{}/assignments/{}/submissions/{}/comments/{}`, `DELETE courses/{}/assignments/{}/submissions/{}/comments/{}` |
+| POST | `/accounts/{accountId}/grading_periods` | `star-grading-standards` | api_extra_verb | `GET` |
+| PUT | `/accounts/{id}/settings` | `star-accounts` | api_extra_verb | `GET` |
+| POST | `/accounts/{id}/users/{userId}` | `star-accounts` | api_extra_verb | `DELETE` |
+| POST | `/courses` | `star-courses` | api_extra_verb | `GET` |
+| GET | `/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}` | `star-submission-comments` | api_extra_verb | `DELETE`, `PUT` |
+| GET | `/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}` | `star-discussions` | api_extra_verb | `DELETE`, `PUT` |
+| POST | `/courses/{courseId}/groups` | `star-groups` | api_extra_verb | `GET` |
+| POST | `/courses/{courseId}/outcome_groups` | `star-outcomes` | api_extra_verb | `GET` |
+| POST | `/courses/{id}/settings` | `star-ui` | api_extra_verb | `GET`, `PUT` |
+| GET | `/developer_keys/{id}` | `star-auth` | api_extra_verb | `DELETE`, `PUT` |
+| GET | `/groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}` | `star-discussions` | api_extra_verb | `DELETE`, `PUT` |
+| DELETE | `/groups/{groupId}/files/{id}` | `star-files` | api_extra_verb | `GET` |
+| POST | `/groups/{groupId}/pages/{urlOrId}` | `star-pages` | api_extra_verb | `DELETE`, `GET`, `PUT` |
+| POST | `/groups/{groupId}/users` | `star-groups` | api_extra_verb | `DELETE`, `GET` |
+| GET | `/users/self/communication_channels/{communication_channel_id}/notification_preferences` | `star-notifications` | api_extra_verb | `PUT` |
+| GET | `/users/self/communication_channels/{communication_channel_id}/notification_preferences/{notification}` | `star-notifications` | api_extra_verb | `PUT` |
+| PUT | `/users/{user_id}/communication_channels/{type}/{address}/notification_preferences` | `star-notifications` | api_extra_verb | `GET` |
+| PUT | `/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}` | `star-notifications` | api_extra_verb | `GET` |
 | GET | `/` | `star-graphql` | web_exact | `WEB GET` |
 | GET | `/` | `star-ui` | web_exact | `WEB GET` |
 | DELETE | `/account_notifications/{id}` | `star-accounts` | web_exact | `WEB DELETE` |

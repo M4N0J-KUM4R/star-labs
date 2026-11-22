@@ -1281,21 +1281,29 @@ def cmd_manifest(args):
 # ---------------------------------------------------------------------------
 
 EXTRA_CLASSES = (
-    "api_verb_mismatch",   # Canvas' API has this path, star binds another verb
+    "api_verb_mismatch",   # Canvas' API has this path and star misses that verb
+    "api_extra_verb",      # Canvas' verbs here are all implemented; this is additive
     "web_exact",           # Canvas has this path+verb, but as a WEB route
     "web_verb_mismatch",   # Canvas has the path as a web route, other verb
     "web_nested",          # Canvas has it nested under a parent (web)
-    "api_nested",          # manifest has it nested under a parent (API)
+    "api_nested",          # manifest nests it under a parent star does not serve
+    "api_extra_nested",    # manifest nests it, and that nested route IS implemented
     "absent",              # nowhere in Canvas: invented or intentional custom
 )
 
 
-def classify_extras(extras, canvas_routes, web_routes):
+def classify_extras(extras, canvas_routes, web_routes, star_keys):
     """Say WHY each unmatched star registration is unmatched.
 
     Before this existed every one of them was reported as a bare "extra", which
     conflated three different jobs: fix the verb, port a Canvas web endpoint,
     or delete a route Canvas never had.
+
+    `api_*_mismatch`/`api_nested` now mean a real gap: Canvas answers this path
+    in a shape star does not serve. When star already serves every Canvas verb
+    at the path, the extra is additive (`api_extra_verb`) and the job is to
+    label it, not to change it -- conflating the two put 18 no-op "verb fixes"
+    on issue #233's list.
     """
     api_verbs = {}
     for route in canvas_routes:
@@ -1307,14 +1315,20 @@ def classify_extras(extras, canvas_routes, web_routes):
     # routes under a context, star registers them at the top level.
     api_paths = sorted(api_verbs, key=len, reverse=True)
     web_paths = sorted(web_verbs, key=len, reverse=True)
+    api_routes_by_path = {}
+    for route in canvas_routes:
+        api_routes_by_path.setdefault(route["normalized_path"], []).append(route)
 
     web_keys = {(r["verb"], r["normalized_path"]) for r in web_routes}
     counts = {name: 0 for name in EXTRA_CLASSES}
     for extra in extras:
         path, verb = extra["normalized_path"], extra["verb"]
         if path in api_verbs:
-            kind = "api_verb_mismatch"
+            missing = sorted(v for v in api_verbs[path] if (v, path) not in star_keys)
             closest = sorted(api_verbs[path])
+            kind = "api_verb_mismatch" if missing else "api_extra_verb"
+            if missing:
+                closest = missing
         elif (verb, path) in web_keys:
             kind = "web_exact"
             closest = ["WEB " + verb]
@@ -1326,8 +1340,14 @@ def classify_extras(extras, canvas_routes, web_routes):
             closest = [wp for wp in web_paths
                        if wp.endswith("/" + path)][:1]
         elif any(ap == path or ap.endswith("/" + path) for ap in api_paths):
-            kind = "api_nested"
-            closest = [ap for ap in api_paths if ap.endswith("/" + path)][:1]
+            parents = [ap for ap in api_paths if ap.endswith("/" + path)]
+            served = [r for ap in parents for r in api_routes_by_path[ap]
+                      if (r["verb"], r["normalized_path"]) in star_keys]
+            missing = [r for ap in parents for r in api_routes_by_path[ap]
+                       if (r["verb"], r["normalized_path"]) not in star_keys]
+            kind = "api_extra_nested" if served and not missing else "api_nested"
+            closest = [(r["verb"] + " " + r["normalized_path"])
+                       for r in (missing or served)][:3]
         else:
             kind = "absent"
             closest = []
@@ -1349,7 +1369,9 @@ def build_coverage(manifest, star_src):
 
     canvas_keys = {(r["verb"], r["normalized_path"]) for r in canvas_routes}
     extras = [r for r in star_routes if (r["verb"], r["normalized_path"]) not in canvas_keys]
-    extras_classes = classify_extras(extras, canvas_routes, manifest.get("web_routes") or [])
+    extras_classes = classify_extras(extras, canvas_routes,
+                                     manifest.get("web_routes") or [],
+                                     star_keys)
 
     controllers = {}
     for route in canvas_routes:
@@ -1557,21 +1579,26 @@ def render_report(coverage):
     extras = coverage["unmatched_star_routes"]
     add("## Star routes with no Canvas API match (%d)" % len(extras))
     add("")
-    add("Classified, because the fix differs by class: `api_verb_mismatch` is a "
-        "one-line verb change, `web_*` means Canvas answers that path as a **web** "
-        "(HTML/JS) route rather than an API route — a port, not a REST parity item — "
-        "and `absent` means Canvas has nothing like it.")
+    add("Classified, because the fix differs by class: only `api_verb_mismatch` "
+        "and `api_nested` are Canvas gaps (star misses a verb or the nested form "
+        "entirely); `api_extra_*` means Canvas' own verbs at that path are all "
+        "implemented and the registration is additive; `web_*` means Canvas "
+        "answers that path as a **web** (HTML/JS) route rather than an API "
+        "route -- a port, not a REST parity item; and `absent` means Canvas has "
+        "nothing like it.")
     add("")
     classes = s.get("star_extras_by_class") or {}
     add("| Class | Count | Action |")
     add("|---|---:|---|")
     for name in EXTRA_CLASSES:
         action = {
-            "api_verb_mismatch": "change the registered verb to Canvas'",
+            "api_verb_mismatch": "Canvas verb at this path is unimplemented: add it",
+            "api_extra_verb": "Canvas' verbs here are all served: keep, no change",
             "web_exact": "port of a Canvas web route: keep, label as web/UI",
             "web_verb_mismatch": "web port with the wrong verb",
             "web_nested": "web route flattened to top level: re-nest or label",
-            "api_nested": "API route missing its parent segment: re-nest",
+            "api_nested": "Canvas serves the nested form and star does not: re-nest",
+            "api_extra_nested": "nested form already served: keep, no change",
             "absent": "delete, or document as an intentional custom endpoint",
         }[name]
         add("| `%s` | %d | %s |" % (name, classes.get(name, 0), action))
