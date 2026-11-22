@@ -18,7 +18,6 @@
 use axum::Router;
 use star_common::AppState;
 
-
 /// Domain router for star-account-reports.
 pub fn router() -> Router<AppState> {
     Router::new()

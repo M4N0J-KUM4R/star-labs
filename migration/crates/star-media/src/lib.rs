@@ -25,8 +25,8 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
-mod services_api;
 mod media_objects;
+mod services_api;
 
 mod media_tracks;
 
@@ -460,11 +460,9 @@ pub fn router() -> Router<AppState> {
     // both within a single router and across `merge`. The media_objects /
     // media_tracks submodules own the Canvas media_objects key space; the
     // crate root keeps only the media_attachments CRUD that the submodules
-    // do not register.
+    // do not register (plus the services routes).
     Router::new()
         .merge(services_api::services_routes())
-        .route("/media_attachments", get(list_media_attachments))
-        .route("/media_attachments", post(create_media_attachment))
         .merge(media_objects::router())
         .merge(media_tracks::router())
         .route(
