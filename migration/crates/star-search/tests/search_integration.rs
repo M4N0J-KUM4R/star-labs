@@ -581,7 +581,8 @@ async fn all_courses_public_catalog_gating_and_filters() {
         .collect();
     let own_ids: Vec<i64> = own.iter().map(|c| c["id"].as_i64().unwrap()).collect();
     assert_eq!(
-        own_ids, vec![c_ok, c_public, c_open],
+        own_ids,
+        vec![c_ok, c_public, c_open],
         "available+indexed only (own courses): {body}"
     );
     assert!(!ids.contains(&c_unpublished), "unpublished leaked: {body}");
@@ -596,11 +597,7 @@ async fn all_courses_public_catalog_gating_and_filters() {
     // search filter: name substring (Canvas name_like is a single
     // coalesced ILIKE pattern across name/sis/course_code — the seed name
     // is "{prefix}-AOk", so the pattern uses the hyphen).
-    let body = get_ok_anon(
-        &server,
-        &format!("/search/all_courses?search={prefix}-AOk"),
-    )
-    .await;
+    let body = get_ok_anon(&server, &format!("/search/all_courses?search={prefix}-AOk")).await;
     let ids: Vec<i64> = body
         .as_array()
         .unwrap()
