@@ -192,13 +192,11 @@ pub async fn unstuck_strand(
         .await?;
         let count = match (any_next, oldest_id) {
             (Some(true), _) => 0,
-            (_, Some(id)) => {
-                sqlx::query("UPDATE jobs SET next_in_strand = TRUE WHERE id = $1")
-                    .bind(id)
-                    .execute(&state.db)
-                    .await?
-                    .rows_affected() as i64
-            }
+            (_, Some(id)) => sqlx::query("UPDATE jobs SET next_in_strand = TRUE WHERE id = $1")
+                .bind(id)
+                .execute(&state.db)
+                .await?
+                .rows_affected() as i64,
             (Some(false) | None, None) => return Err(ApiError::NotFound),
         };
         return Ok(Json(json!({ "status": "OK", "count": count })).into_response());
