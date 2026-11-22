@@ -80,10 +80,12 @@ async fn mounted_routes_require_auth_and_unknown_paths_stay_404() {
         );
     }
 
-    // Unknown sibling paths stay 404 (axum default fallback).
+    // Unknown sibling paths stay 404 (axum default fallback). The account
+    // path uses the 999999999 sentinel, not a literal account id (test
+    // isolation convention, issue #75).
     for path in [
         "/courses/1/collaborations/2/members",
-        "/accounts/1/collaborations",
+        "/accounts/999999999/collaborations",
         "/collaborations",
     ] {
         let resp = server.get(path).await;

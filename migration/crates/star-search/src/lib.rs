@@ -592,7 +592,8 @@ async fn recipients(
             OR ($3::BIGINT IS NOT NULL AND u.id IN (SELECT p2.user_id \
                  FROM conversation_participants p2 \
                  JOIN conversation_participants p1 ON p1.conversation_id = p2.conversation_id \
-                 WHERE p1.user_id = $2 AND p2.user_id = $1 \
+                 WHERE p1.conversation_id = $3 AND p2.conversation_id = $3 \
+                   AND p1.user_id = $2 AND p2.user_id = $1 \
                    AND p1.workflow_state <> 'deleted' AND p2.workflow_state <> 'deleted')))",
         )
         .bind(user_id)
@@ -968,25 +969,27 @@ async fn smart_search(
     let includes = all(&params, "include", "include[]");
 
     let mut response = Map::new();
-    let (status, progress) = index_status_row(&state.db, course_id).await?;
-    if status != "indexed" {
-        response.insert("status".to_string(), json!("index_incomplete"));
-        response.insert("indexing_progress".to_string(), json!(progress as i64));
-        // Spec §4.1 trivial first cut: the first touch marks the course
-        // indexed (no worker runs in this workspace).
-        sqlx::query(
-            "INSERT INTO smart_search_indexes (course_id, status, progress, updated_at) \
-             VALUES ($1, 'indexed', 100, now()) \
-             ON CONFLICT (course_id) DO UPDATE \
-             SET status = 'indexed', progress = 100, updated_at = now()",
-        )
-        .bind(course_id)
-        .execute(&state.db)
-        .await?;
-    }
-
     let mut results: Vec<Value> = Vec::new();
     if !q.trim().is_empty() {
+        // Canvas skips the search when q is blank — including the index
+        // interaction, so a blank probe does not consume the first-touch
+        // report. The first REAL search on an un-indexed course reports
+        // index_incomplete with the live progress and flips the row to
+        // indexed/100 (spec §4.1 trivial first cut; no worker runs here).
+        let (status, progress) = index_status_row(&state.db, course_id).await?;
+        if status != "indexed" {
+            response.insert("status".to_string(), json!("index_incomplete"));
+            response.insert("indexing_progress".to_string(), json!(progress as i64));
+            sqlx::query(
+                "INSERT INTO smart_search_indexes (course_id, status, progress, updated_at) \
+                 VALUES ($1, 'indexed', 100, now()) \
+                 ON CONFLICT (course_id) DO UPDATE \
+                 SET status = 'indexed', progress = 100, updated_at = now()",
+            )
+            .bind(course_id)
+            .execute(&state.db)
+            .await?;
+        }
         let pattern = like_pattern(&q.trim().to_lowercase());
         let allowed =
             |kind: &str| filters.is_empty() || filters.iter().any(|f| f == kind || f == "context");
@@ -1204,7 +1207,7 @@ async fn smart_search_index_status(
     let (status, progress) = index_status_row(&state.db, course_id).await?;
     Ok(Json(json!({
         "status": if status == "indexed" { "indexed" } else { "indexing" },
-        "progress": progress,
+        "progress": progress as i64,
     })))
 }
 

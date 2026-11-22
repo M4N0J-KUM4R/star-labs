@@ -448,6 +448,7 @@ async fn moderation_and_moderate_all() {
     let other_admin = seed_user(&pool, &prefix, "Admin2", "admin", true).await;
     let owner_bearer = auth(owner, "student");
     let admin_bearer = auth(admin, "admin");
+    let other_admin_bearer = auth(other_admin, "admin");
     let eport = seed_portfolio(&pool, owner, "Suspect", true, "active", None).await;
     let keepline = seed_portfolio(
         &pool,
@@ -566,7 +567,7 @@ async fn moderation_and_moderate_all() {
     .expect("soft delete");
     let resp = server
         .put(&format!("/users/{owner}/eportfolios"))
-        .add_header(axum::http::header::AUTHORIZATION, other_admin)
+        .add_header(axum::http::header::AUTHORIZATION, other_admin_bearer)
         .json(&json!({ "spam_status": "marked_as_safe" }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
