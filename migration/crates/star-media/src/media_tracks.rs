@@ -347,8 +347,41 @@ async fn create_asr(
     }
 
     // Canvas creates the caption asset with the Kaltura client; the
-    // workspace has no Kaltura, so the caption cannot be created.
-    Err(ApiError::Db("Failed to create caption asset".to_string()))
+    // workspace has no Kaltura, so the pending track row stands in for
+    // the asset (external_id marks the asr origin, like Canvas'
+    // caption-asset id) and the media object json embeds the tracks.
+    sqlx::query(
+        "INSERT INTO media_tracks (media_object_id, user_id, kind, locale, external_id) \
+         VALUES ($1, $2, 'subtitles', $3, $4) \
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(media_object.id)
+    .bind(auth.id)
+    .bind(&locale)
+    .bind(format!("asr:{locale}"))
+    .execute(&state.db)
+    .await?;
+
+    let rows: Vec<TrackRow> = sqlx::query_as(
+        "SELECT id, media_object_id, user_id, kind, locale, content, external_id, \
+                workflow_state, created_at, updated_at \
+         FROM media_tracks WHERE media_object_id = $1 AND workflow_state <> 'deleted' \
+         ORDER BY locale ASC, id ASC",
+    )
+    .bind(media_object.id)
+    .fetch_all(&state.db)
+    .await?;
+    let mut payload = serde_json::Map::new();
+    payload.insert("id".to_string(), json!(media_object.id));
+    payload.insert(
+        "media_tracks".to_string(),
+        serde_json::Value::Array(
+            rows.iter()
+                .map(|row| track_json(row, &["content".to_string()]))
+                .collect(),
+        ),
+    );
+    Ok(Json(serde_json::Value::Object(payload)).into_response())
 }
 
 /// The `:read` right on the context of the media object.

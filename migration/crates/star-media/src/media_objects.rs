@@ -616,16 +616,34 @@ async fn fetch_media_object_by_media_id(
     db: &PgPool,
     media_id: &str,
 ) -> Result<Option<MediaObjectRow>, ApiError> {
-    let row: Option<MediaObjectRow> = sqlx::query_as(&format!(
-        "SELECT {MEDIA_OBJECT_COLUMNS} FROM media_objects
-         WHERE workflow_state <> 'deleted'
-           AND (media_id = $1 OR (old_media_id = $1 AND old_media_id IS NOT NULL))
-         ORDER BY id ASC
-         LIMIT 1"
-    ))
-    .bind(media_id)
-    .fetch_optional(db)
-    .await?;
+    // Canvas resolves by the Kaltura entry id (media_id / old_media_id).
+    // Clients that only have the database row (the attachment flows)
+    // address it by the numeric id — accept that spelling too.
+    let row: Option<MediaObjectRow> = if let Ok(numeric) = media_id.parse::<i64>() {
+        sqlx::query_as(&format!(
+            "SELECT {MEDIA_OBJECT_COLUMNS} FROM media_objects
+             WHERE workflow_state <> 'deleted'
+               AND (media_id = $1 OR (old_media_id = $1 AND old_media_id IS NOT NULL)
+                    OR id = $2)
+             ORDER BY id ASC
+             LIMIT 1"
+        ))
+        .bind(media_id)
+        .bind(numeric)
+        .fetch_optional(db)
+        .await?
+    } else {
+        sqlx::query_as(&format!(
+            "SELECT {MEDIA_OBJECT_COLUMNS} FROM media_objects
+             WHERE workflow_state <> 'deleted'
+               AND (media_id = $1 OR (old_media_id = $1 AND old_media_id IS NOT NULL))
+             ORDER BY id ASC
+             LIMIT 1"
+        ))
+        .bind(media_id)
+        .fetch_optional(db)
+        .await?
+    };
     Ok(row)
 }
 
