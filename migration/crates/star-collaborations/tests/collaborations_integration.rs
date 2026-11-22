@@ -135,9 +135,9 @@ async fn seed_collaboration(
     sqlx::query_scalar(
         "INSERT INTO collaborations \
          (collaboration_type, user_id, context_id, context_type, title, description, url, \
-          type, workflow_state) \
+          type, workflow_state, created_at, updated_at) \
          VALUES ('ExternalToolCollaboration', $1, $2, $3, $4, $5, $6, \
-                 'ExternalToolCollaboration', 'active') RETURNING id",
+                 'ExternalToolCollaboration', 'active', now(), now()) RETURNING id",
     )
     .bind(user_id)
     .bind(context_id)

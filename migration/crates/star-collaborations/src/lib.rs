@@ -404,6 +404,9 @@ async fn collaborations_tab_enabled(pool: &PgPool, ctx: ContextRef) -> Result<bo
 /// where Canvas wraps (members/potential use bare arrays + meta via
 /// Api.paginate headers upstream; star-lms pins the body shape used by the
 /// polling crate for consistency).
+/// potential_collaborators row (users table columns).
+type PotentialUserRow = (i64, String, Option<String>, String, String, DateTime<Utc>);
+
 /// Paginated bare-array response (Canvas `render json: records.map {...}` +
 /// `Api.paginate`): a top-level `items` array with the repo's
 /// `meta.pagination` envelope alongside it (same shape as star-eportfolios).
@@ -692,7 +695,7 @@ async fn potential_collaborators(
     }
     let (page_no, per_page, offset) = pagination_values(&page);
 
-    let rows: Vec<(i64, String, Option<String>, String, String, DateTime<Utc>)> = match ctx.kind {
+    let rows: Vec<PotentialUserRow> = match ctx.kind {
         ContextKind::Course => {
             sqlx::query_as(
                 "SELECT DISTINCT u.id, u.name, u.sortable_name, u.email, u.role, u.created_at \

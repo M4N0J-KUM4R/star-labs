@@ -775,8 +775,9 @@ async fn create_inner(
     let row: ConferenceRow = sqlx::query_as(&format!(
         "INSERT INTO web_conferences \
          (title, conference_type, context_id, context_type, user_id, description, duration, \
-          start_at, end_at, settings, context_code, type, root_account_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1) \
+          start_at, end_at, settings, context_code, type, root_account_id, \
+          created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1, now(), now()) \
          RETURNING {CONFERENCE_COLUMNS}"
     ))
     .bind(&title)

@@ -44,7 +44,7 @@ async fn setup() -> Option<(TestServer, PgPool)> {
 
 #[tokio::test]
 async fn mounted_routes_require_auth_and_unknown_paths_stay_404() {
-    let Some((server, _pool)) = setup().await else {
+    let Some((server, pool)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
@@ -96,8 +96,23 @@ async fn mounted_routes_require_auth_and_unknown_paths_stay_404() {
     }
 
     // Authenticated caller on a real route with an unknown context id: 404
-    // from the scoped lookup, never 500.
-    let token = star_auth::create_token(1, "teacher", JWT_SECRET).expect("mint token");
+    // from the scoped lookup, never 500. AuthUser rejects ids with no users
+    // row, so a real caller is seeded (and torn down) first.
+    let suffix = format!(
+        "smoke_{}_{}",
+        std::process::id(),
+        chrono::Utc::now().timestamp_millis()
+    );
+    let user_id: i64 = sqlx::query_scalar(
+        "INSERT INTO users (name, email, password_hash, role)          VALUES ($1, $2, $3, 'teacher') RETURNING id",
+    )
+    .bind(format!("{suffix}-Teacher"))
+    .bind(format!("{suffix}@test.local"))
+    .bind("not-a-real-hash")
+    .fetch_one(&pool)
+    .await
+    .expect("seed caller");
+    let token = star_auth::create_token(user_id, "teacher", JWT_SECRET).expect("mint token");
     let bearer = format!("Bearer {token}");
     let resp = server
         .get("/courses/999999999/collaborations")
@@ -109,4 +124,9 @@ async fn mounted_routes_require_auth_and_unknown_paths_stay_404() {
         "unknown course must 404; body: {}",
         resp.text()
     );
+    sqlx::query("DELETE FROM users WHERE id = $1")
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .expect("teardown caller");
 }

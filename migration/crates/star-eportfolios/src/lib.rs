@@ -627,8 +627,10 @@ async fn moderate_all(
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/users/{user_id}/eportfolios", get(index).put(moderate_all))
-        .route("/eportfolios/{id}", delete(delete_portfolio))
-        .route("/eportfolios/{eportfolio_id}", get(show))
+        .route(
+            "/eportfolios/{eportfolio_id}",
+            get(show).delete(delete_portfolio),
+        )
         .route("/eportfolios/{eportfolio_id}/pages", get(pages))
         .route("/eportfolios/{eportfolio_id}/restore", put(restore))
         .route("/eportfolios/{eportfolio_id}/moderate", put(moderate))
