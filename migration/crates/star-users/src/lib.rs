@@ -19,6 +19,8 @@ use star_auth::{hash_password, AuthUser};
 use star_common::{ApiError, AppState};
 use std::collections::BTreeMap;
 
+pub mod users_api;
+
 // --------------------------------------------------------------------------
 // Domain types
 // --------------------------------------------------------------------------
@@ -844,6 +846,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(custom_data::custom_data_routes())
         .merge(observer_alerts_api::observer_alerts_routes())
+        .merge(users_api::router())
         .route("/users", get(list_users))
         .route("/users/self", get(get_self))
         .route(

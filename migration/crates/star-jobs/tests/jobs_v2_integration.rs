@@ -7,7 +7,7 @@
 
 use axum::http::header::AUTHORIZATION;
 use axum_test::TestServer;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde_json::Value;
 use sqlx::PgPool;
 use star_common::AppState;
@@ -102,11 +102,63 @@ async fn seed_job(
     .expect("seed job")
 }
 
+/// Insert one job with strand / singleton attributes.
+#[allow(clippy::too_many_arguments)]
+async fn seed_strand_job(
+    pool: &PgPool,
+    tag: &str,
+    strand: Option<&str>,
+    singleton: Option<&str>,
+    run_at: DateTime<Utc>,
+    next_in_strand: bool,
+    max_concurrent: i32,
+    locked_by: Option<&str>,
+) -> i64 {
+    sqlx::query_scalar(
+        r#"
+        INSERT INTO jobs (
+            tag, workflow_state, progress, run_at, next_in_strand, max_concurrent,
+            strand, singleton, locked_by
+        )
+        VALUES ($1, 'queued', 0, $2, $3, $4, $5, $6, $7)
+        RETURNING id
+        "#,
+    )
+    .bind(tag)
+    .bind(run_at)
+    .bind(next_in_strand)
+    .bind(max_concurrent)
+    .bind(strand)
+    .bind(singleton)
+    .bind(locked_by)
+    .fetch_one(pool)
+    .await
+    .expect("seed strand job")
+}
+
 async fn cleanup(pool: &PgPool, prefix: &str) {
     let _ = sqlx::query("DELETE FROM jobs WHERE tag LIKE $1")
         .bind(format!("{prefix}-%"))
         .execute(pool)
         .await;
+    // The unstucker job row carries a fixed tag, so it is removed by tag and
+    // by the test user that requested it.
+    let _ = sqlx::query(
+        "DELETE FROM jobs WHERE tag = $1 \
+         AND user_id IN (SELECT id FROM users WHERE email LIKE $2)",
+    )
+    .bind("JobsV2Controller::run_unstucker!")
+    .bind(format!("{prefix}%@test.local"))
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        "DELETE FROM progress WHERE tag = $1 \
+         AND user_id IN (SELECT id FROM users WHERE email LIKE $2)",
+    )
+    .bind("JobsV2Controller::run_unstucker!")
+    .bind(format!("{prefix}%@test.local"))
+    .execute(pool)
+    .await;
     let _ = sqlx::query("DELETE FROM job_clusters WHERE database_server_id LIKE $1")
         .bind(format!("{prefix}-%"))
         .execute(pool)
@@ -570,6 +622,781 @@ async fn clusters_report_counts_and_jobs2_is_admin_only() {
     assert_eq!(server.get("/jobs2").await.status_code(), 401);
     assert_eq!(server.get("/jobs2/clusters").await.status_code(), 401);
     assert_eq!(server.post("/jobs2/1/requeue").await.status_code(), 401);
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// Jobs V2: grouped info, search, manage, unstuck, throttle, stuck
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn grouped_info_groups_queued_jobs_by_tag() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let now = Utc::now();
+
+    // The jobs live in their own time window (100 days ago) so the listing
+    // is not disturbed by jobs other tests seed in the same database.
+    let base = now - Duration::days(100);
+
+    // Two jobs share a tag, one job has its own tag. Canvas groups by the RAW
+    // tag column (`JobsV2Controller#grouped_info` → `.group(@group)`), so the
+    // two pp jobs must carry the same tag to land in one group.
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-pp"),
+        None,
+        None,
+        base,
+        true,
+        1,
+        None,
+    )
+    .await;
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-pp"),
+        None,
+        None,
+        base + Duration::hours(1),
+        true,
+        1,
+        None,
+    )
+    .await;
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-p"),
+        None,
+        None,
+        base + Duration::hours(2),
+        true,
+        1,
+        None,
+    )
+    .await;
+    // A future job is not queued.
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-future"),
+        None,
+        None,
+        now + Duration::hours(2),
+        true,
+        1,
+        None,
+    )
+    .await;
+
+    let window = format!(
+        "start_date={}&end_date={}",
+        (now - Duration::days(101)).to_rfc3339_opts(SecondsFormat::Millis, true),
+        (now - Duration::days(99)).to_rfc3339_opts(SecondsFormat::Millis, true)
+    );
+    let bearer = auth(admin, "admin");
+
+    let resp = server
+        .get(&format!("/jobs2/queued/by_tag?{window}"))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "grouped info; body: {}",
+        resp.text()
+    );
+    let rows: Value = resp.json();
+    let rows = rows.as_array().expect("grouped info is a JSON array");
+    assert_eq!(rows.len(), 2, "two tag groups: {rows:?}");
+
+    // Default order is the bucket's info column (oldest run_at first).
+    assert_eq!(rows[0]["tag"], format!("{prefix}-pp"));
+    assert_eq!(rows[0]["count"], 2);
+    assert!(
+        rows[0]["info"]
+            .as_i64()
+            .is_some_and(|seconds| seconds >= 8_000_000),
+        "queued info is the seconds waited: {}",
+        rows[0]["info"]
+    );
+    assert_eq!(rows[1]["tag"], format!("{prefix}-p"));
+    assert_eq!(rows[1]["count"], 1);
+    assert!(
+        rows[0].get("orphaned").is_none(),
+        "tag groups carry no orphaned flag"
+    );
+
+    // order=count sorts by the group size (descending).
+    let resp = server
+        .get(&format!("/jobs2/queued/by_tag?order=count&{window}"))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let rows: Value = resp.json();
+    let rows = rows.as_array().expect("grouped info is a JSON array");
+    assert_eq!(rows[0]["count"], 2);
+    assert_eq!(rows[0]["tag"], format!("{prefix}-pp"));
+
+    // Canvas paginates with per_page / page.
+    let resp = server
+        .get(&format!("/jobs2/queued/by_tag?per_page=1&{window}"))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let rows: Value = resp.json();
+    let rows = rows.as_array().expect("grouped info is a JSON array");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["tag"], format!("{prefix}-pp"));
+
+    let resp = server
+        .get(&format!("/jobs2/queued/by_tag?per_page=1&page=2&{window}"))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let rows: Value = resp.json();
+    let rows = rows.as_array().expect("grouped info is a JSON array");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["tag"], format!("{prefix}-p"));
+
+    // An unknown bucket is rejected.
+    let resp = server
+        .get("/jobs2/bogus/by_tag")
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 400, "invalid bucket must be a 400");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn grouped_info_flags_orphaned_strands_and_singletons() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let now = Utc::now();
+
+    let stuck_strand = format!("{prefix}-bar");
+    let healthy_strand = format!("{prefix}-foo");
+    let stuck_singleton = format!("{prefix}-misery");
+
+    // A strand whose jobs are all waiting behind each other.
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-bar-1"),
+        Some(&stuck_strand),
+        None,
+        now - Duration::hours(2),
+        false,
+        2,
+        None,
+    )
+    .await;
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-bar-2"),
+        Some(&stuck_strand),
+        None,
+        now - Duration::hours(1),
+        false,
+        2,
+        None,
+    )
+    .await;
+    // A strand that can progress.
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-foo"),
+        Some(&healthy_strand),
+        None,
+        now - Duration::hours(1),
+        true,
+        1,
+        None,
+    )
+    .await;
+    // A singleton that cannot progress.
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-misery"),
+        None,
+        Some(&stuck_singleton),
+        now - Duration::hours(1),
+        false,
+        1,
+        None,
+    )
+    .await;
+
+    let bearer = auth(admin, "admin");
+
+    let resp = server
+        .get("/jobs2/queued/by_strand")
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "grouped info; body: {}",
+        resp.text()
+    );
+    let rows: Value = resp.json();
+    let rows = rows.as_array().expect("grouped info is a JSON array");
+
+    let bar = rows
+        .iter()
+        .find(|row| row["strand"] == stuck_strand.as_str())
+        .expect("stuck strand group");
+    assert_eq!(bar["count"], 2);
+    assert_eq!(bar["orphaned"], true);
+
+    let foo = rows
+        .iter()
+        .find(|row| row["strand"] == healthy_strand.as_str())
+        .expect("healthy strand group");
+    assert_eq!(foo["count"], 1);
+    assert_eq!(foo["orphaned"], false);
+
+    // Singletons are grouped and flagged the same way.
+    let resp = server
+        .get("/jobs2/queued/by_singleton")
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let rows: Value = resp.json();
+    let rows = rows.as_array().expect("grouped info is a JSON array");
+    let misery = rows
+        .iter()
+        .find(|row| row["singleton"] == stuck_singleton.as_str())
+        .expect("singleton group");
+    assert_eq!(misery["count"], 1);
+    assert_eq!(misery["orphaned"], true);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn search_counts_matching_groups() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let now = Utc::now();
+
+    for _ in 0..2 {
+        seed_strand_job(
+            &pool,
+            &format!("{prefix}-Kernel.pp"),
+            None,
+            None,
+            now - Duration::hours(2),
+            true,
+            1,
+            None,
+        )
+        .await;
+    }
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-Kernel.p"),
+        None,
+        None,
+        now - Duration::hours(1),
+        true,
+        1,
+        None,
+    )
+    .await;
+
+    let bearer = auth(admin, "admin");
+
+    let resp = server
+        .get(&format!(
+            "/jobs2/queued/by_tag/search?term={prefix}-Kernel.p"
+        ))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "search; body: {}", resp.text());
+    let counts: Value = resp.json();
+    assert_eq!(
+        counts.get(format!("{prefix}-Kernel.pp")),
+        Some(&Value::from(2)),
+        "search counts the matching tags: {counts}"
+    );
+    assert_eq!(
+        counts.get(format!("{prefix}-Kernel.p")),
+        Some(&Value::from(1)),
+        "search counts the matching tags: {counts}"
+    );
+
+    // The term is required.
+    let resp = server
+        .get("/jobs2/queued/by_tag/search")
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 400, "search without a term is a 400");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn manage_updates_strand_settings() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let now = Utc::now();
+    let strand = format!("{prefix}-manage");
+
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-manage-1"),
+        Some(&strand),
+        None,
+        now,
+        true,
+        1,
+        None,
+    )
+    .await;
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-manage-2"),
+        Some(&strand),
+        None,
+        now,
+        false,
+        1,
+        None,
+    )
+    .await;
+
+    let bearer = auth(admin, "admin");
+
+    let resp = server
+        .put("/jobs2/manage")
+        .json(&serde_json::json!({
+            "strand": strand,
+            "max_concurrent": 11,
+            "priority": 23,
+        }))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "manage; body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["status"], "OK");
+    assert_eq!(body["count"], 2);
+
+    let rows: Vec<(i32, i32, bool)> = sqlx::query_as(
+        "SELECT max_concurrent, priority, next_in_strand FROM jobs WHERE strand = $1 ORDER BY id",
+    )
+    .bind(&strand)
+    .fetch_all(&pool)
+    .await
+    .expect("load managed strand jobs");
+    assert_eq!(rows.len(), 2);
+    for (max_concurrent, priority, next_in_strand) in rows {
+        assert_eq!(max_concurrent, 11);
+        assert_eq!(priority, 23);
+        // Raising max_concurrent unblocks the strand.
+        assert!(next_in_strand);
+    }
+
+    // The strand is required.
+    let resp = server
+        .put("/jobs2/manage")
+        .json(&serde_json::json!({ "max_concurrent": 3 }))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 400, "manage without a strand is a 400");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn unstuck_unblocks_strands_and_singletons() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let now = Utc::now();
+    let strand = format!("{prefix}-stuck");
+    let singleton = format!("{prefix}-singleton");
+
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-stuck-1"),
+        Some(&strand),
+        None,
+        now,
+        false,
+        2,
+        None,
+    )
+    .await;
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-stuck-2"),
+        Some(&strand),
+        None,
+        now,
+        false,
+        2,
+        None,
+    )
+    .await;
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-singleton"),
+        None,
+        Some(&singleton),
+        now,
+        false,
+        1,
+        None,
+    )
+    .await;
+
+    let bearer = auth(admin, "admin");
+
+    // A stuck strand is unblocked synchronously.
+    let resp = server
+        .put("/jobs2/unstuck")
+        .json(&serde_json::json!({ "strand": strand }))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "unstuck; body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["status"], "OK");
+    assert_eq!(body["count"], 2);
+
+    let next_in_strand: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE strand = $1 AND next_in_strand = TRUE")
+            .bind(&strand)
+            .fetch_one(&pool)
+            .await
+            .expect("count unblocked strand jobs");
+    assert_eq!(next_in_strand, 2);
+
+    // A strand that is not stuck reports a count of zero.
+    let resp = server
+        .put("/jobs2/unstuck")
+        .json(&serde_json::json!({ "strand": strand }))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body: Value = resp.json();
+    assert_eq!(body["status"], "OK");
+    assert_eq!(body["count"], 0);
+
+    // A stuck singleton is unblocked as well.
+    let resp = server
+        .put("/jobs2/unstuck")
+        .json(&serde_json::json!({ "singleton": singleton }))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let body: Value = resp.json();
+    assert_eq!(body["status"], "OK");
+    assert_eq!(body["count"], 1);
+
+    // An unknown strand is a 404.
+    let resp = server
+        .put("/jobs2/unstuck")
+        .json(&serde_json::json!({ "strand": format!("{prefix}-missing") }))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 404, "unknown strand is a 404");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn unstuck_without_target_queues_the_unstucker() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let bearer = auth(admin, "admin");
+
+    let resp = server
+        .put("/jobs2/unstuck")
+        .json(&serde_json::json!({}))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 202, "unstuck; body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["status"], "pending");
+
+    let progress = &body["progress"];
+    assert!(progress["id"].as_i64().is_some(), "progress id: {progress}");
+    assert_eq!(progress["tag"], "JobsV2Controller::run_unstucker!");
+    assert_eq!(progress["workflow_state"], "queued");
+    assert_eq!(progress["completion"], 0);
+    assert_eq!(progress["context_type"], "User");
+    assert_eq!(progress["context_id"], admin);
+
+    let progress_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM progress WHERE tag = $1")
+        .bind("JobsV2Controller::run_unstucker!")
+        .fetch_one(&pool)
+        .await
+        .expect("count progress rows");
+    assert!(progress_rows >= 1, "a progress row was created");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn throttle_check_and_throttle_strand_matched_jobs() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let now = Utc::now();
+
+    for _ in 0..3 {
+        seed_strand_job(
+            &pool,
+            &format!("{prefix}-print"),
+            None,
+            None,
+            now,
+            true,
+            1,
+            None,
+        )
+        .await;
+    }
+    for _ in 0..2 {
+        seed_strand_job(
+            &pool,
+            &format!("{prefix}-printf"),
+            None,
+            None,
+            now,
+            true,
+            1,
+            None,
+        )
+        .await;
+    }
+
+    let bearer = auth(admin, "admin");
+
+    let resp = server
+        .get(&format!("/jobs2/throttle/check?term={prefix}-print"))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "throttle check; body: {}",
+        resp.text()
+    );
+    let body: Value = resp.json();
+    assert_eq!(body["matched_jobs"], 5);
+    assert_eq!(body["matched_tags"], 2);
+
+    // The term is required.
+    let resp = server
+        .get("/jobs2/throttle/check")
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        400,
+        "throttle check without a term is a 400"
+    );
+
+    // Throttling strands the matched jobs under a temporary strand.
+    let resp = server
+        .put("/jobs2/throttle")
+        .json(&serde_json::json!({
+            "term": format!("{prefix}-print"),
+            "max_concurrent": 2,
+        }))
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "throttle; body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["job_count"], 5);
+    let new_strand = body["new_strand"].as_str().expect("new strand").to_string();
+    assert!(new_strand.starts_with("tmp_strand_"), "{new_strand}");
+
+    let stranded: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE strand = $1")
+        .bind(&new_strand)
+        .fetch_one(&pool)
+        .await
+        .expect("count stranded jobs");
+    assert_eq!(stranded, 5);
+
+    let next_in_strand: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM jobs WHERE strand = $1 AND next_in_strand = TRUE")
+            .bind(&new_strand)
+            .fetch_one(&pool)
+            .await
+            .expect("count runnable stranded jobs");
+    assert_eq!(next_in_strand, 2, "max_concurrent jobs may run");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn stuck_strands_and_singletons_are_listed() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let now = Utc::now();
+
+    let stuck_strand = format!("{prefix}-sadness");
+    let healthy_strand = format!("{prefix}-happiness");
+    let stuck_singleton = format!("{prefix}-misery");
+
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-sadness-1"),
+        Some(&stuck_strand),
+        None,
+        now,
+        false,
+        1,
+        None,
+    )
+    .await;
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-sadness-2"),
+        Some(&stuck_strand),
+        None,
+        now,
+        false,
+        1,
+        None,
+    )
+    .await;
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-happiness"),
+        Some(&healthy_strand),
+        None,
+        now,
+        true,
+        1,
+        None,
+    )
+    .await;
+    seed_strand_job(
+        &pool,
+        &format!("{prefix}-misery"),
+        None,
+        Some(&stuck_singleton),
+        now,
+        false,
+        1,
+        None,
+    )
+    .await;
+
+    let bearer = auth(admin, "admin");
+
+    let resp = server
+        .get("/jobs2/stuck/strands")
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "stuck strands; body: {}",
+        resp.text()
+    );
+    let rows: Value = resp.json();
+    let rows = rows.as_array().expect("stuck strands is a JSON array");
+
+    let sadness = rows
+        .iter()
+        .find(|row| row["name"] == stuck_strand.as_str())
+        .expect("stuck strand listed");
+    assert_eq!(sadness["count"], 2);
+    assert!(
+        !rows
+            .iter()
+            .any(|row| row["name"] == healthy_strand.as_str()),
+        "a strand that can progress is not stuck"
+    );
+
+    let resp = server
+        .get("/jobs2/stuck/singletons")
+        .add_header(AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    let rows: Value = resp.json();
+    let rows = rows.as_array().expect("stuck singletons is a JSON array");
+    let misery = rows
+        .iter()
+        .find(|row| row["name"] == stuck_singleton.as_str())
+        .expect("stuck singleton listed");
+    assert_eq!(misery["count"], 1);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn jobs_v2_grouped_and_write_routes_require_admin() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "teacher", "teacher").await;
+    let teacher_bearer = auth(teacher, "teacher");
+
+    for path in [
+        "/jobs2/queued/by_tag",
+        "/jobs2/queued/by_strand",
+        "/jobs2/queued/by_singleton",
+        "/jobs2/queued/by_tag/search?term=x",
+        "/jobs2/throttle/check?term=x",
+        "/jobs2/stuck/strands",
+        "/jobs2/stuck/singletons",
+    ] {
+        let resp = server
+            .get(path)
+            .add_header(AUTHORIZATION, teacher_bearer.clone())
+            .await;
+        assert_eq!(resp.status_code(), 403, "{path} must be admin only");
+        let resp = server.get(path).await;
+        assert_eq!(resp.status_code(), 401, "{path} must require a token");
+    }
+
+    for path in ["/jobs2/manage", "/jobs2/unstuck", "/jobs2/throttle"] {
+        let resp = server
+            .put(path)
+            .add_header(AUTHORIZATION, teacher_bearer.clone())
+            .await;
+        assert_eq!(resp.status_code(), 403, "{path} must be admin only");
+        let resp = server.put(path).await;
+        assert_eq!(resp.status_code(), 401, "{path} must require a token");
+    }
 
     cleanup(&pool, &prefix).await;
 }

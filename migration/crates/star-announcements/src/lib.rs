@@ -25,6 +25,8 @@ use star_common::{ApiError, AppState};
 
 use star_auth::AuthUser;
 
+mod external_feeds;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -612,6 +614,8 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/announcements/{id}/accessibility/queue_scan",
             post(accessibility_queue_scan),
         )
+        // The RSS feeds of a course or a group.
+        .merge(external_feeds::router())
         .route("/courses/{courseId}/announcements", get(list_announcements))
         .route(
             "/courses/{courseId}/announcements",

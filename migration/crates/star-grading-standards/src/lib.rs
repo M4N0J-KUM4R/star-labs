@@ -27,6 +27,8 @@ use axum::{
     routing::{delete, get, patch, post, put},
     Json, Router,
 };
+
+mod grading_standards_api;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -2771,6 +2773,8 @@ async fn batch_update_periods(
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(grading_period_sets::grading_period_sets_routes())
+        // Canvas GradingStandardsApiController (account scope + course PUT).
+        .merge(grading_standards_api::router())
         .route(
             "/courses/{courseId}/grading_standards",
             post(create_grading_standard),

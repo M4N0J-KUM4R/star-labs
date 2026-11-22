@@ -21,4 +21,9 @@ use star_common::AppState;
 /// `Router::new()` base already gives unmounted paths the standard 404.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(sis_imports_api::router())
+        .merge(sis_import_errors_api::router())
 }
+
+mod sis_import_errors_api;
+pub mod sis_imports_api;

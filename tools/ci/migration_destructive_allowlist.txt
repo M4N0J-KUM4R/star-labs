@@ -11,3 +11,13 @@
 # The migration drops it and immediately re-adds the correct FK pointing at
 # lti_deployments, in the same file.
 0228_lti_registrations_deep.sql:35 DROP
+# 0233 line 47 / 0234 lines 27 and 34 (batch-3 lane, same repair family as
+# the 0228 entry above): the canvas-schema baseline (0223/0227) gave
+# course_pace_module_items a foreign key pointing at Canvas' polymorphic
+# content_tags and lti_context_controls a check constraint plus a foreign
+# key that the workspace's module_items / lti_deployments tables cannot
+# satisfy. Each DROP is immediately followed in the same file by the ADD of
+# the correct constraint; nothing else is removed.
+0233_course_paces.sql:47 DROP
+0234_lti_context_controls_columns.sql:27 DROP
+0234_lti_context_controls_columns.sql:34 DROP

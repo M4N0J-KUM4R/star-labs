@@ -169,6 +169,21 @@ async fn update_reset_and_histories() {
     let admin_id = seed_user(&pool, &prefix, "admin", "admin").await;
     seed_account_admin(&pool, account_id, admin_id).await;
 
+    // overlay_history and history are gated on the registrations feature
+    // flags (registrations_controller.rb:2275-2282).
+    for feature in ["lti_registrations_next", "lti_registrations_history"] {
+        sqlx::query(
+            "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
+             VALUES ('Account', $1, $2, $2, 'enabled') \
+             ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
+        )
+        .bind(account_id)
+        .bind(feature)
+        .execute(&pool)
+        .await
+        .expect("enable the registrations flag");
+    }
+
     let registration = create_registration(
         &server,
         account_id,
@@ -195,8 +210,14 @@ async fn update_reset_and_histories() {
     let updated: Value = response.json();
     assert_eq!(updated["name"], "Renamed Tool");
     assert_eq!(updated["admin_nickname"], "Renicknamed");
-    assert_eq!(updated["overlay"]["privacy_level"], "public");
-    assert!(!updated["overlay_versions"].as_array().unwrap().is_empty());
+    // Manual registrations merge the overlay into the configuration and
+    // CLEAR the stored overlay (update_registration_service.rb:100-121);
+    // the merged value shows up in overlaid_configuration below. No
+    // overlay row ever existed, so `update_overlay!` is a no-op and the
+    // overlay history stays empty (Lti::Overlay before_update
+    // create_version only fires on an overlay save).
+    assert_eq!(updated["overlay"], json!({}));
+    assert_eq!(updated["overlay_versions"], json!([]));
     assert_eq!(updated["overlaid_configuration"]["privacy_level"], "public");
 
     // Invalid workflow_state and dynamic-registration configuration updates
@@ -210,7 +231,10 @@ async fn update_reset_and_histories() {
     let body: Value = response.json();
     assert_eq!(body["errors"][0]["code"], "invalid_workflow_state");
 
-    // overlay_history lists the recorded version.
+    // overlay_history: the manual merge cleared the overlay without ever
+    // creating one, so no version is recorded (update_registration_
+    // service.rb:148-149 clears @overlay_params; Lti::Overlay's
+    // before_update :create_version never fires).
     let response = server
         .get(&format!(
             "/accounts/{account_id}/lti_registrations/{id}/overlay_history"
@@ -218,10 +242,8 @@ async fn update_reset_and_histories() {
         .add_header(AUTHORIZATION, auth(admin_id, "admin"))
         .await;
     assert_eq!(response.status_code(), 200);
-    let versions: Vec<Value> = response.json();
-    assert!(!versions.is_empty());
-    assert_eq!(versions[0]["overlay"]["privacy_level"], "public");
-    assert_eq!(versions[0]["caused_by_reset"], false);
+    let versions: Value = response.json();
+    assert_eq!(versions, json!([]));
 
     // reset clears the overlay and flags the version (:1684-1706).
     let response = server
@@ -276,6 +298,24 @@ async fn bind_and_unbind_registration() {
     let admin_id = seed_user(&pool, &prefix, "admin", "admin").await;
     seed_account_admin(&pool, owner_account, admin_id).await;
     seed_account_admin(&pool, other_account, admin_id).await;
+
+    // Canvas `require_lti_deactivate_registrations_flag` — the unbind
+    // half of the journey is hidden (404) without the flag
+    // (registrations_controller.rb:2284-2292), so both roots carry it.
+    for account in [owner_account, other_account] {
+        for feature in ["lti_deactivate_registrations", "lti_registrations_next"] {
+            sqlx::query(
+                "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
+                 VALUES ('Account', $1, $2, $2, 'enabled') \
+                 ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
+            )
+            .bind(account)
+            .bind(feature)
+            .execute(&pool)
+            .await
+            .expect("enable the lti feature flag");
+        }
+    }
 
     // A registration owned by the first account, bound into the second.
     let registration = create_registration(
@@ -545,6 +585,19 @@ async fn deployments_show_delete_context_search() {
     seed_account_admin(&pool, root_account, admin_id).await;
     let course_id = seed_course(&pool, &prefix, "course", sub_account).await;
 
+    // context_search and the registration routes are gated on the
+    // `lti_registrations_next` feature flag (registrations_controller.rb:
+    // 2275-2282).
+    sqlx::query(
+        "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
+         VALUES ('Account', $1, 'lti_registrations_next', 'lti_registrations_next', 'enabled') \
+         ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
+    )
+    .bind(root_account)
+    .execute(&pool)
+    .await
+    .expect("enable the registrations flag");
+
     let registration = create_registration(
         &server,
         root_account,
@@ -742,7 +795,7 @@ async fn client_id_utid_domain_and_install_status() {
     let body: Value = response.json();
     let duplicates = body["duplicates"].as_array().unwrap();
     assert_eq!(duplicates.len(), 1);
-    assert_eq!(duplicates[0]["id"], id.to_string());
+    assert_eq!(duplicates[0]["id"], json!(id));
 
     // install_status: installed directly in this account (:1543-1635).
     let response = server
@@ -778,14 +831,17 @@ async fn client_id_utid_domain_and_install_status() {
     let status: Value = response.json();
     assert_eq!(status["id"], local_copy["id"]);
 
-    // A second install is refused.
+    // A second install reuses the existing local copy
+    // (install_template_registration_service.rb:40-42).
     let response = server
         .post(&format!(
             "/accounts/{other_account}/lti_registrations/{id}/install_from_template"
         ))
         .add_header(AUTHORIZATION, auth(admin_id, "admin"))
         .await;
-    assert_eq!(response.status_code(), 422);
+    assert_eq!(response.status_code(), 200, "body: {}", response.text());
+    let again: Value = response.json();
+    assert_eq!(again["id"], local_copy["id"]);
 
     cleanup(&pool, &prefix).await;
 }
@@ -892,6 +948,18 @@ async fn context_controls_crud_and_bulk() {
     };
     let root_account = seed_account(&pool, &prefix, "root", None).await;
     let sub_account = seed_account(&pool, &prefix, "sub", Some(root_account)).await;
+
+    // The controls routes are gated on `lti_registrations_next`
+    // (context_controls_controller before_actions).
+    sqlx::query(
+        "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
+         VALUES ('Account', $1, 'lti_registrations_next', 'lti_registrations_next', 'enabled') \
+         ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
+    )
+    .bind(root_account)
+    .execute(&pool)
+    .await
+    .expect("enable the registrations flag");
     let admin_id = seed_user(&pool, &prefix, "admin", "admin").await;
     seed_account_admin(&pool, root_account, admin_id).await;
     let course_id = seed_course(&pool, &prefix, "course", sub_account).await;
@@ -918,7 +986,7 @@ async fn context_controls_crud_and_bulk() {
     assert_eq!(response.status_code(), 422);
     let body: Value = response.json();
     assert_eq!(
-        body["errors"][0],
+        body["errors"],
         "No active deployment found for the root account."
     );
 
@@ -974,7 +1042,7 @@ async fn context_controls_crud_and_bulk() {
     assert_eq!(response.status_code(), 422);
     let body: Value = response.json();
     assert_eq!(
-        body["errors"][0],
+        body["errors"],
         "A context control for this deployment and context already exists."
     );
 
@@ -1176,7 +1244,9 @@ async fn lti_apps_listings() {
         .iter()
         .find(|app| app["name"] == format!("{prefix}-account-app"))
         .expect("account app listed");
-    assert_eq!(account_app["app_type"], "lti_tool");
+    // Canvas `Lti::AppCollator#external_tool_definition`:
+    // `app_type: "ContextExternalTool"` (lib/lti/app_collator.rb:58).
+    assert_eq!(account_app["app_type"], "ContextExternalTool");
     assert_eq!(account_app["installed"], true);
 
     let response = server
@@ -1199,7 +1269,7 @@ async fn lti_apps_listings() {
     // launch_definitions for a placement (app_launch_collator.rb:102-153).
     let response = server
         .get(&format!(
-            "/courses/{course_id}/lti_apps/launch_definitions?placements[]=course_navigation"
+            "/courses/{course_id}/lti_apps/launch_definitions?placements=course_navigation"
         ))
         .add_header(AUTHORIZATION, auth(student_id, "student"))
         .await;
@@ -1215,7 +1285,7 @@ async fn lti_apps_listings() {
     // outsider does not.
     let response = server
         .get(&format!(
-            "/accounts/{account_id}/lti_apps/launch_definitions?placements[]=global_navigation&include_context_name=true"
+            "/accounts/{account_id}/lti_apps/launch_definitions?placements=global_navigation&include_context_name=true"
         ))
         .add_header(AUTHORIZATION, auth(student_id, "student"))
         .await;
@@ -1230,7 +1300,7 @@ async fn lti_apps_listings() {
 
     let response = server
         .get(&format!(
-            "/accounts/{account_id}/lti_apps/launch_definitions?placements[]=global_navigation"
+            "/accounts/{account_id}/lti_apps/launch_definitions?placements=global_navigation"
         ))
         .add_header(AUTHORIZATION, auth(outsider_id, "student"))
         .await;

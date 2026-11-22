@@ -42,6 +42,7 @@ use star_common::{ApiError, AppState};
 
 mod outcome_proficiency;
 mod outcomes_api;
+mod outcomes_direct_api;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -2075,7 +2076,9 @@ async fn list_account_outcome_group_links(
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(outcome_proficiency::outcome_proficiency_routes())
-        .merge(outcomes_api::outcomes_api_routes())
+        .merge(outcomes_direct_api::outcomes_api_routes())
+        // The outcome imports and the outcome results.
+        .merge(outcomes_api::router())
         // outcome groups
         .route(
             "/courses/{courseId}/outcome_groups",

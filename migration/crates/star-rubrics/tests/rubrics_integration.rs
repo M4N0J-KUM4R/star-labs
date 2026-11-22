@@ -1248,7 +1248,9 @@ async fn rubric_upload_status_and_imported_rubrics_follow_canvas_paths() {
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "attachment_id": 424242 }))
         .await;
-    assert_eq!(uploaded.status_code(), 201, "body: {}", uploaded.text());
+    // Canvas rubrics_api#upload renders the import JSON with the default
+    // status (200) — `render json:` without :created.
+    assert_eq!(uploaded.status_code(), 200, "body: {}", uploaded.text());
     let import_id = uploaded.json::<Value>()["id"].as_i64().expect("import id");
 
     let latest = server
@@ -1288,9 +1290,11 @@ async fn rubric_upload_status_and_imported_rubrics_follow_canvas_paths() {
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "attachment_id": 424243 }))
         .await;
+    // Account uploads render the same default 200 as the course path
+    // (Canvas rubrics_api#upload — `render json:` without :created).
     assert_eq!(
         account_upload.status_code(),
-        201,
+        200,
         "body: {}",
         account_upload.text()
     );

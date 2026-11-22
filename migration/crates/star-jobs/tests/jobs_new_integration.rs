@@ -418,6 +418,79 @@ async fn batch_update_force_delete_and_unblock() {
     cleanup(&pool, &prefix).await;
 }
 
+/// Canvas `Delayed::Job.bulk_update` — the destroy action deletes the jobs
+/// no worker holds and leaves the locked ones alone.
+#[tokio::test]
+async fn batch_update_destroy_removes_the_unlocked_jobs() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
+    let now = Utc::now();
+
+    let free = seed_job(
+        &pool,
+        &format!("{prefix}-destroy-free"),
+        "queued",
+        now,
+        None,
+        None,
+        None,
+        true,
+    )
+    .await;
+    let locked = seed_job(
+        &pool,
+        &format!("{prefix}-destroy-locked"),
+        "queued",
+        now,
+        None,
+        None,
+        None,
+        true,
+    )
+    .await;
+    sqlx::query("UPDATE jobs SET locked_by = 'worker-1', locked_at = now() WHERE id = $1")
+        .bind(locked)
+        .execute(&pool)
+        .await
+        .expect("lock the job");
+
+    let bearer = auth(admin, "admin");
+    let resp = server
+        .post("/jobs/batch_update")
+        .add_header(AUTHORIZATION, bearer)
+        .json(&json!({
+            "update_action": "destroy",
+            "job_ids": [free, locked]
+        }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "batch_update destroy; body: {}",
+        resp.text()
+    );
+    let body: Value = resp.json();
+    assert_eq!(body["status"], "OK");
+    assert_eq!(body["count"], 1, "only the unlocked job is destroyed");
+
+    let remaining: Vec<(i64,)> = sqlx::query_as("SELECT id FROM jobs WHERE id = ANY($1)")
+        .bind(vec![free, locked])
+        .fetch_all(&pool)
+        .await
+        .expect("read the jobs");
+    assert_eq!(
+        remaining,
+        vec![(locked,)],
+        "the destroyed job is gone, the locked job is kept"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
 // ---------------------------------------------------------------------------
 // Route 4: GET /jobs2/:bucket/by_:group/search
 // ---------------------------------------------------------------------------

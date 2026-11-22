@@ -176,4 +176,8 @@ fn build_api_router() -> Router<AppState> {
         .merge(star_polling::router())
         .merge(star_search::router())
         .merge(star_sis::router())
+    // NOTE: star_pages / star_modules / star_announcements are NOT merged
+    // here — star-content/src/lib.rs already merges their routers (lines
+    // 56-58). Merging them here as well panics axum at startup with
+    // "Overlapping method route" (e.g. GET /pages/{id} registered twice).
 }

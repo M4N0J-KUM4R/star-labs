@@ -123,10 +123,12 @@ async fn create_shared_brand_config(
         return Err(ApiError::Forbidden);
     }
 
-    let payload = body.map(|Json(value)| value).unwrap_or(SharedBrandConfigPayload {
-        name: None,
-        brand_config_md5: None,
-    });
+    let payload = body
+        .map(|Json(value)| value)
+        .unwrap_or(SharedBrandConfigPayload {
+            name: None,
+            brand_config_md5: None,
+        });
     let (name, md5) = payload.into_params()?;
 
     let row: SharedBrandConfigRow = sqlx::query_as(
@@ -160,10 +162,12 @@ async fn update_shared_brand_config(
         return Err(ApiError::Forbidden);
     }
 
-    let payload = body.map(|Json(value)| value).unwrap_or(SharedBrandConfigPayload {
-        name: None,
-        brand_config_md5: None,
-    });
+    let payload = body
+        .map(|Json(value)| value)
+        .unwrap_or(SharedBrandConfigPayload {
+            name: None,
+            brand_config_md5: None,
+        });
     let (name, md5) = payload.into_params()?;
 
     let updated: SharedBrandConfigRow = sqlx::query_as(

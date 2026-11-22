@@ -3,7 +3,7 @@
  "free": [
   "0111"
  ],
- "max_merged": "0243",
+ "max_merged": "0252",
  "next_available": "0253",
  "reservations": {
   "0001": {
@@ -636,6 +636,16 @@
    "note": "merged by wave (no issue)",
    "status": "merged"
   },
+  "0128": {
+   "issue": null,
+   "note": "star-collaborations (re-registered via PR #213 merge)",
+   "status": "merged"
+  },
+  "0131": {
+   "issue": null,
+   "note": "star-search smart_search (re-registered via PR #213 merge)",
+   "status": "merged"
+  },
   "0141": {
    "issue": null,
    "note": "merged by wave (no issue)",
@@ -708,157 +718,147 @@
   },
   "0223": {
    "issue": null,
-   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "note": "star-db: the Canvas schema tables (part a)",
    "status": "merged"
   },
   "0224": {
    "issue": null,
-   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "note": "star-db: the Canvas schema tables (part b)",
    "status": "merged"
   },
   "0225": {
    "issue": null,
-   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "note": "star-db: the Canvas schema tables (part c)",
    "status": "merged"
   },
   "0226": {
    "issue": null,
-   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "note": "star-db: the Canvas schema indexes",
    "status": "merged"
   },
   "0227": {
    "issue": null,
-   "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
+   "note": "star-db: the Canvas schema foreign keys",
    "status": "merged"
   },
   "0228": {
-   "issue": 69,
-   "note": "LTI registrations deep: context controls, overlay versions, registration history",
-   "status": "merged"
-  },
-  "0128": {
-   "issue": 91,
-   "note": "collaborations domain tail (guarded; snapshot 0223 owns the tables) \u2014 reserved at #91 dispatch",
-   "status": "merged"
-  },
-  "0131": {
-   "issue": 91,
-   "note": "smart_search_indexes for the smartsearch routes \u2014 reserved at #91 dispatch",
+   "issue": null,
+   "note": "star-lti: the LTI registration history",
    "status": "merged"
   },
   "0229": {
-   "issue": 91,
-   "note": "web_conferences tails (recordings JSONB, calendar_events FK); 0129 reserved number unusable (snapshot ordering) so the post-snapshot hole 0229 was used per PR #212 precedent",
+   "issue": null,
+   "note": "star-courses: the AI experiences and their conversations",
+   "status": "merged"
+  },
+  "0231": {
+   "issue": null,
+   "note": "star-media: the media object columns, the tracks and the media files",
+   "status": "merged"
+  },
+  "0232": {
+   "issue": null,
+   "note": "star-lti and star-search: the LTI registration history and the page views",
+   "status": "merged"
+  },
+  "0233": {
+   "issue": null,
+   "note": "star-modules: the course paces and their module items",
+   "status": "merged"
+  },
+  "0234": {
+   "issue": null,
+   "note": "star-lti: the LTI context controls get nullable owner columns",
+   "status": "merged"
+  },
+  "0235": {
+   "issue": null,
+   "note": "star-users: the course nicknames",
+   "status": "merged"
+  },
+  "0236": {
+   "issue": null,
+   "note": "star-courses: the AI experiences and their conversations (moved off 0229; main's conferences lane owns 0229)",
+   "status": "merged"
+  },
+  "0237": {
+   "issue": null,
+   "note": "star-calendar: the account calendar settings",
+   "status": "merged"
+  },
+  "0238": {
+   "issue": null,
+   "note": "star-lti: the nonces of the LTI 1.1 requests",
+   "status": "merged"
+  },
+  "0239": {
+   "issue": null,
+   "note": "star-lti: the tool setting of an originality report",
+   "status": "merged"
+  },
+  "0240": {
+   "issue": null,
+   "note": "star-lti: update-request columns (batch-3, commit fd0fbe3)",
+   "status": "merged"
+  },
+  "0241": {
+   "issue": null,
+   "note": "star-account-reports: course_reports table (CourseReportsController, batch-3 parity tail)",
+   "status": "merged"
+  },
+  "0242": {
+   "issue": null,
+   "note": "star-sis: sis_import_errors table (SisImportsErrorsApiController, batch-3 parity tail)",
+   "status": "merged"
+  },
+  "0243": {
+   "issue": null,
+   "note": "accounts.allow_sis_import backfill (sis_imports_api, batch-3 CI)",
    "status": "merged"
   },
   "0244": {
    "issue": 228,
    "note": "star-grading-standards: grading_period_sets API (parity gap)",
-   "status": "open"
+   "status": "merged"
   },
   "0245": {
    "issue": 228,
    "note": "star-outcomes: outcomes_api columns (parity gap)",
-   "status": "open"
+   "status": "merged"
   },
   "0246": {
    "issue": 228,
    "note": "star-audit: authentication_events (parity gap)",
-   "status": "open"
+   "status": "merged"
   },
   "0247": {
    "issue": 228,
    "note": "star-assignments: module assignment overrides (parity gap)",
-   "status": "open"
+   "status": "merged"
   },
   "0248": {
    "issue": 228,
    "note": "star-gradebook: user_preferences + what-if scores (parity gap)",
-   "status": "open"
+   "status": "merged"
   },
   "0249": {
    "issue": 228,
    "note": "star-gradebook: score_overrides (parity gap)",
-   "status": "open"
+   "status": "merged"
   },
   "0250": {
    "issue": 228,
    "note": "star-auth: course_events audit table (parity gap)",
-   "status": "open"
+   "status": "merged"
   },
   "0251": {
    "issue": 228,
    "note": "star-quizzes: quiz family tables (parity gap)",
-   "status": "open"
+   "status": "merged"
   },
   "0252": {
    "issue": 228,
    "note": "star-courses: misc gap tables (parity gap)",
-   "status": "open"
-  },
-  "0231": {
-   "issue": null,
-   "note": "batch-3 reservation 0231 (merging via #197)",
-   "status": "merged"
-  },
-  "0232": {
-   "issue": null,
-   "note": "batch-3 reservation 0232 (merging via #197)",
-   "status": "merged"
-  },
-  "0233": {
-   "issue": null,
-   "note": "batch-3 reservation 0233 (merging via #197)",
-   "status": "merged"
-  },
-  "0234": {
-   "issue": null,
-   "note": "batch-3 reservation 0234 (merging via #197)",
-   "status": "merged"
-  },
-  "0235": {
-   "issue": null,
-   "note": "batch-3 reservation 0235 (merging via #197)",
-   "status": "merged"
-  },
-  "0236": {
-   "issue": null,
-   "note": "batch-3 reservation 0236 (merging via #197)",
-   "status": "merged"
-  },
-  "0237": {
-   "issue": null,
-   "note": "batch-3 reservation 0237 (merging via #197)",
-   "status": "merged"
-  },
-  "0238": {
-   "issue": null,
-   "note": "batch-3 reservation 0238 (merging via #197)",
-   "status": "merged"
-  },
-  "0239": {
-   "issue": null,
-   "note": "batch-3 reservation 0239 (merging via #197)",
-   "status": "merged"
-  },
-  "0240": {
-   "issue": null,
-   "note": "batch-3 reservation 0240 (merging via #197)",
-   "status": "merged"
-  },
-  "0241": {
-   "issue": null,
-   "note": "batch-3 reservation 0241 (merging via #197)",
-   "status": "merged"
-  },
-  "0242": {
-   "issue": null,
-   "note": "batch-3 reservation 0242 (merging via #197)",
-   "status": "merged"
-  },
-  "0243": {
-   "issue": null,
-   "note": "batch-3 reservation 0243 (merging via #197)",
    "status": "merged"
   }
  }
