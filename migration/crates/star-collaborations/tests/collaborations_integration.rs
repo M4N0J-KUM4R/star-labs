@@ -455,9 +455,8 @@ async fn members_pagination_and_mixed_collaborators() {
     let body: Value = resp.json();
     let page2 = body["items"].as_array().unwrap();
     assert_eq!(page2.len(), 3);
-    let group_item = page2.iter().find(|i| i["type"] == "user").is_none();
     assert!(
-        group_item,
+        page2.iter().any(|i| i["type"] == "group"),
         "page 2 must contain the group collaborator: {body}"
     );
     let group_entry = page2

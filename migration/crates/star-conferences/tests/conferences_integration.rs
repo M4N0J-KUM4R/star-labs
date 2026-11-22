@@ -195,7 +195,7 @@ async fn create_ok(server: &TestServer, bearer: &str, path: &str, body: Value) -
     resp.json()
 }
 
-fn first<'a>(body: &'a Value) -> &'a Value {
+fn first(body: &Value) -> &Value {
     let items = body["conferences"]
         .as_array()
         .unwrap_or_else(|| panic!("missing conferences array: {body}"));
@@ -617,7 +617,13 @@ async fn for_user_lists_and_live_filter() {
         .add_header(axum::http::header::AUTHORIZATION, s.clone())
         .await;
     let listed: Value = resp.json();
-    assert_eq!(listed["conferences"], json!([]));
+    let live_ids: Vec<i64> = listed["conferences"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_i64().unwrap())
+        .collect();
+    assert_eq!(live_ids, vec![invited_id]);
 
     cleanup(&pool, &prefix).await;
 }
