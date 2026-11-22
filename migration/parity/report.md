@@ -6,8 +6,8 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 1002 | 1403 | 71.4% |
-| REST routes referenced from `ui/` | 361 | 503 | 71.8% |
+| REST API routes | 1013 | 1403 | 72.2% |
+| REST routes referenced from `ui/` | 369 | 503 | 73.4% |
 | GraphQL files | 1 | 390 | 0.3% |
 | GraphQL object types | 28 | 170 | 16.5% |
 | GraphQL mutations | 2 | 110 | 1.8% |
@@ -17,13 +17,13 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | js_env files | 0 | 124 | 0.0% |
 | Schema tables (vs 688 Canvas models) | 370 | 688 | n/a |
 
-Implemented REST route count: **1002 / 1403** (71.4%).
+Implemented REST route count: **1013 / 1403** (72.2%).
 
-Star registrations: 1212 route/method pairs from 1003 `.route(...)` calls (0 unparsed); 208 have no Canvas match and are listed as extras below.
+Star registrations: 1223 route/method pairs from 1010 `.route(...)` calls (0 unparsed); 208 have no Canvas match and are listed as extras below.
 
 Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 
-## Controllers with coverage (115)
+## Controllers with coverage (118)
 
 | Controller | Implemented | Total | Coverage |
 |---|---:|---:|---:|
@@ -86,6 +86,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `release_notes` | 6 | 8 | 75.0% |
 | `sections` | 6 | 9 | 66.7% |
 | `context_modules_api` | 5 | 8 | 62.5% |
+| `custom_gradebook_columns_api` | 5 | 5 | 100.0% |
 | `lti/data_services` | 5 | 5 | 100.0% |
 | `lti/deployments` | 5 | 5 | 100.0% |
 | `lti/ims/line_items` | 5 | 5 | 100.0% |
@@ -110,8 +111,10 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `provisional_grades` | 4 | 4 | 100.0% |
 | `quizzes/quiz_reports` | 4 | 4 | 100.0% |
 | `submission_comments_api` | 4 | 4 | 100.0% |
+| `custom_gradebook_column_data_api` | 3 | 3 | 100.0% |
 | `epub_exports` | 3 | 3 | 100.0% |
 | `jobs` | 3 | 3 | 100.0% |
+| `late_policy` | 3 | 3 | 100.0% |
 | `lti/ims/authentication` | 3 | 3 | 100.0% |
 | `rubric_assessments` | 3 | 3 | 100.0% |
 | `rubric_associations` | 3 | 3 | 100.0% |
