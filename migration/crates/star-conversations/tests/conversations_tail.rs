@@ -59,9 +59,42 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
 }
 
 fn conversations_router(state: AppState) -> axum::Router {
+    // GET /conversations/find_recipients moved to star-search (issue #91);
+    // merging both routers keeps this suite covering the alias path exactly
+    // the way star-http assembles it.
     axum::Router::new()
         .merge(star_conversations::router())
+        .merge(star_search::router())
         .with_state(state)
+}
+
+async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
+    sqlx::query_scalar("INSERT INTO courses (name, course_code) VALUES ($1, $2) RETURNING id")
+        .bind(format!("{prefix}-{name}"))
+        .bind(format!("{prefix}-{name}"))
+        .fetch_one(pool)
+        .await
+        .expect("seed course")
+}
+
+async fn seed_enrollment(
+    pool: &PgPool,
+    user_id: i64,
+    course_id: i64,
+    role: &str,
+    section: Option<i64>,
+) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO enrollments (user_id, course_id, role, course_section_id) \
+         VALUES ($1, $2, $3, $4) RETURNING id",
+    )
+    .bind(user_id)
+    .bind(course_id)
+    .bind(role)
+    .bind(section)
+    .fetch_one(pool)
+    .await
+    .expect("seed enrollment")
 }
 
 async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
@@ -623,19 +656,29 @@ async fn delete_for_all_hard_deletes_for_everyone() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /conversations/find_recipients (§5.7)
-// ---------------------------------------------------------------------------
-
+// GET /conversations/find_recipients (§5.7) — served by star-search (issue
+// #91, Canvas SearchController#recipients). The legacy global name/email
+// index this suite previously pinned is superseded by the shared-context
+// recipient search (AddressBook semantics: the caller plus users sharing a
+// course/group); star-search's own suite covers the action in depth — this
+// keeps one cross-crate sanity that the alias is mounted and answers.
 #[tokio::test]
-async fn find_recipients_matches_name_email_and_sortable_name() {
+async fn find_recipients_alias_is_served_by_star_search() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
 
     let alice = seed_user(&pool, &prefix, "Alice Anderson", "user").await;
-    let _bob = seed_user(&pool, &prefix, "Bob Barker", "user").await;
+    let bob = seed_user(&pool, &prefix, "Bob Barker", "user").await;
+    let _stranger = seed_user(&pool, &prefix, "Zed Zeta", "user").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_enrollment(&pool, alice, course, "student", None).await;
+    seed_enrollment(&pool, bob, course, "student", None).await;
+    // stranger shares nothing.
 
+    // Shared-course lookup through the deprecated alias path (the caller
+    // herself matches too — Canvas merges a "self" collection).
     let body = get_ok(
         &server,
         &auth(alice, "user"),
@@ -646,27 +689,31 @@ async fn find_recipients_matches_name_email_and_sortable_name() {
     assert_eq!(rows.len(), 1, "one hit expected: {rows:?}");
     assert_eq!(rows[0]["id"].as_i64(), Some(alice));
     assert_eq!(rows[0]["name"], "Alice Anderson");
-    assert_eq!(rows[0]["sortable_name"], "Alice Anderson");
-    assert_eq!(rows[0]["common_name"]["model"], "User");
+    assert_eq!(rows[0]["full_name"], "Alice Anderson");
     assert!(rows[0]["avatar_url"].is_null(), "avatars land with MIG-04");
 
-    // Email matches too (the recipient index searches the login column).
     let body = get_ok(
         &server,
         &auth(alice, "user"),
-        &format!("/conversations/find_recipients?search={prefix}-Bob"),
+        "/conversations/find_recipients?search=barker",
     )
     .await;
-    assert_eq!(body.as_array().expect("array").len(), 1);
+    let rows = body.as_array().expect("array");
+    assert_eq!(rows.len(), 1, "bob via shared course: {rows:?}");
+    assert_eq!(rows[0]["id"].as_i64(), Some(bob));
 
-    // Empty search lists everyone within the limit.
+    // A user with no shared context is invisible (AddressBook semantics).
     let body = get_ok(
         &server,
         &auth(alice, "user"),
-        "/conversations/find_recipients?limit=1",
+        "/conversations/find_recipients?search=zed",
     )
     .await;
-    assert_eq!(body.as_array().expect("array").len(), 1);
+    assert_eq!(body.as_array().expect("array").len(), 0);
+
+    // Anonymous stays 401 on the alias.
+    let resp = server.get("/conversations/find_recipients?search=x").await;
+    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }

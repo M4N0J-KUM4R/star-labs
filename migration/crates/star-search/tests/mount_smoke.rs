@@ -1,9 +1,9 @@
-//! Mount-smoke test for star-search (scaffold, issue #138).
+//! Mount-smoke test for star-search.
 //!
-//! Verifies the crate's router mounts and answers unknown paths with 404
-//! (not 500, not open) exactly the way star-http assembles it. No domain
-//! routes exist yet — the smoke request targets a path owned by this crate's
-//! future route set.
+//! With the domain routes landed (issue #91) the smoke contract is:
+//! - authenticated routes answer 401 without a bearer token (AuthUser
+//!   extractor), never an open 200;
+//! - unknown sibling paths stay 404 (axum default fallback).
 //!
 //! Conventions (mirrors star-enrollments):
 //! - Skipped cleanly when DATABASE_URL is not set (prints SKIP and returns).
@@ -37,19 +37,43 @@ async fn setup() -> Option<TestServer> {
 }
 
 #[tokio::test]
-async fn unknown_path_is_404() {
+async fn mounted_routes_require_auth_and_unknown_paths_stay_404() {
     let Some(server) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
 
-    // A path this crate will own once routes land. With the scaffold's empty
-    // router it must 404 (axum default fallback), never 500 or open.
-    let resp = server.get("/search/recipients").await;
+    // Real authed GET routes without a token: 401, never an open 200 (the
+    // scaffold-era expectation of a bare 404 no longer holds once the
+    // routes exist).
+    for path in [
+        "/search/recipients",
+        "/conversations/find_recipients",
+        "/search/rubrics",
+        "/courses/1/smartsearch",
+        "/courses/1/smartsearch/index_status",
+        "/courses/1/smartsearch/log",
+    ] {
+        let resp = server.get(path).await;
+        assert_eq!(
+            resp.status_code(),
+            401,
+            "GET {path} without auth must be 401; body: {}",
+            resp.text()
+        );
+    }
+
+    // The PUBLIC catalog route (search/all_courses) has no auth extractor —
+    // its 401-when-catalog-off / 200-when-on behavior is pinned by
+    // search_integration.rs (which owns the root-account setting it flips);
+    // asserting it here would race that suite's parallel run.
+
+    // A genuinely unmounted sibling path stays 404.
+    let resp = server.get("/search/fractions").await;
     assert_eq!(
         resp.status_code(),
         404,
-        "scaffold must 404 on unimplemented paths; body: {}",
+        "unknown path must 404; body: {}",
         resp.text()
     );
 }

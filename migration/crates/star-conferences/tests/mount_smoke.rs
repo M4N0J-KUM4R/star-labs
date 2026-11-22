@@ -1,11 +1,10 @@
-//! Mount-smoke test for star-conferences (scaffold, issue #138).
+//! Mount-smoke test for star-conferences (scaffold, issue #138; routes
+//! landed with issue #91).
 //!
 //! Verifies the crate's router mounts and answers unknown paths with 404
-//! (not 500, not open) exactly the way star-http assembles it. No domain
-//! routes exist yet — the smoke request targets a path owned by this crate's
-//! future route set.
+//! (not 500, not open) exactly the way star-http assembles it.
 //!
-//! Conventions (mirrors star-enrollments):
+//! Conventions (mirrors star-polling):
 //! - Skipped cleanly when DATABASE_URL is not set (prints SKIP and returns).
 //! - Run with: DATABASE_URL=postgres://... cargo test -p star-conferences
 
@@ -43,13 +42,58 @@ async fn unknown_path_is_404() {
         return;
     };
 
-    // A path this crate will own once routes land. With the scaffold's empty
-    // router it must 404 (axum default fallback), never 500 or open.
-    let resp = server.get("/courses/1/conferences_extra").await;
+    // A path outside this crate's route set must 404 (axum default
+    // fallback), never 500 or open.
+    let resp = server.get("/courses/1/conferences/999").await;
     assert_eq!(
         resp.status_code(),
         404,
-        "scaffold must 404 on unimplemented paths; body: {}",
+        "unknown paths must 404; body: {}",
         resp.text()
     );
+}
+
+#[tokio::test]
+async fn routes_mount_and_auth_gate() {
+    let Some(server) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    // The seven mounted routes answer (401 without a token, except the
+    // recording_ready webhooks which take no user at all — those answer
+    // 404 for an unknown conference id instead).
+    let authed = [
+        "/courses/1/conferences",
+        "/groups/1/conferences",
+        "/conferences",
+    ];
+    for path in authed {
+        let resp = server.get(path).await;
+        assert_eq!(
+            resp.status_code(),
+            401,
+            "GET {path} must be auth-gated; body: {}",
+            resp.text()
+        );
+    }
+    for path in ["/courses/1/conferences", "/groups/1/conferences"] {
+        let resp = server.post(path).json(&serde_json::json!({})).await;
+        assert_eq!(resp.status_code(), 401, "POST {path} must be auth-gated");
+    }
+    for path in [
+        "/courses/999999999/conferences/2/recording_ready",
+        "/groups/999999999/conferences/2/recording_ready",
+    ] {
+        let resp = server
+            .post(path)
+            .json(&serde_json::json!({ "signed_parameters": "bad" }))
+            .await;
+        assert_eq!(
+            resp.status_code(),
+            404,
+            "POST {path} with unknown ids is 404; body: {}",
+            resp.text()
+        );
+    }
 }

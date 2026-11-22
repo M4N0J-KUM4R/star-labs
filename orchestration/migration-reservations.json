@@ -787,6 +787,16 @@
    "issue": null,
    "note": "star-lti: update-request columns (batch-3, commit fd0fbe3)",
    "status": "merged"
+  },
+  "0128": {
+   "issue": null,
+   "note": "star-collaborations (re-registered via PR #213 merge)",
+   "status": "merged"
+  },
+  "0131": {
+   "issue": null,
+   "note": "star-search smart_search (re-registered via PR #213 merge)",
+   "status": "merged"
   }
  }
 }

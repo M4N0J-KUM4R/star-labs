@@ -2965,6 +2965,7 @@ dependencies = [
  "star-auth",
  "star-common",
  "star-db",
+ "star-search",
  "tokio",
 ]
 
