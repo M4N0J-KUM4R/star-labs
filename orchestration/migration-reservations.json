@@ -3,8 +3,8 @@
  "free": [
   "0111"
  ],
- "max_merged": "0242",
- "next_available": "0243",
+ "max_merged": "0243",
+ "next_available": "0244",
  "reservations": {
   "0001": {
    "issue": null,
@@ -809,6 +809,11 @@
   "0242": {
    "issue": null,
    "note": "star-sis: sis_import_errors table (SisImportsErrorsApiController, batch-3 parity tail)",
+   "status": "merged"
+  },
+  "0243": {
+   "issue": null,
+   "note": "accounts.allow_sis_import backfill (sis_imports_api, batch-3 CI)",
    "status": "merged"
   }
  }

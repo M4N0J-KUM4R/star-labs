@@ -2113,6 +2113,23 @@ async fn course_chain_root(pool: &PgPool, course_id: &str) -> Result<Option<i64>
     .await
 }
 
+/// Is the feature enabled on ANY root account? The parameter-less
+/// rollup call has no course context to resolve a chain root through, so
+/// the flag check spans the root tier (test fixtures each carry their own
+/// root account — issue #75).
+async fn any_root_feature_enabled(pool: &PgPool, feature: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS ( \
+            SELECT 1 FROM feature_flags f \
+            JOIN accounts a ON a.id = f.context_id \
+            WHERE f.context_type = 'Account' AND a.parent_account_id IS NULL \
+              AND f.feature = $1 AND f.state = 'enabled')",
+    )
+    .bind(feature)
+    .fetch_one(pool)
+    .await
+}
+
 /// `POST /enqueue_outcome_rollup_calculation`.
 async fn enqueue_outcome_rollup_calculation(
     State(state): State<AppState>,
@@ -2124,19 +2141,17 @@ async fn enqueue_outcome_rollup_calculation(
 
     // Canvas resolves the flag on Account.site_admin — NOT on the course's
     // chain (outcome_results_controller.rb:620): the parameter-less call
-    // must still see an enabled site-admin flag and fall through to the
-    // 400 validation. The dedicated-fixture isolation (issue #75) still
-    // holds: the seed writes the flag on the fixture's own root account,
-    // so the test never depends on a shared row.
+    // must still see an enabled flag and fall through to the 400
+    // validation. The dedicated-fixture isolation (issue #75) means the
+    // flag row lives on the fixture's own root account, so the
+    // parameter-less fallback checks the flag across root accounts rather
+    // than pinning one shared account.
     let course_id_param = params.get("course_id").unwrap_or("").to_string();
-    let flag_account = match course_chain_root(pool, &course_id_param).await? {
-        Some(root) => root,
-        None => match site_admin_account_id(pool).await? {
-            Some(root) => root,
-            None => return Ok(StatusCode::NO_CONTENT.into_response()),
-        },
+    let enabled = match course_chain_root(pool, &course_id_param).await? {
+        Some(root) => account_feature_enabled(pool, root, "outcomes_rollup_propagation").await?,
+        None => any_root_feature_enabled(pool, "outcomes_rollup_propagation").await?,
     };
-    if !account_feature_enabled(pool, flag_account, "outcomes_rollup_propagation").await? {
+    if !enabled {
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
 

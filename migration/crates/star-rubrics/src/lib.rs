@@ -1708,11 +1708,10 @@ async fn upload_rubric(
         "id": attachment_id,
     }));
 
-    // The course upload answers 201 (pinned by
-    // `rubric_upload_status_and_imported_rubrics_follow_canvas_paths`);
-    // the account twin in `rubrics_api` renders 200 like Canvas'
-    // `rubrics_api#upload`.
-    Ok((StatusCode::CREATED, Json(import)))
+    // Canvas `rubrics_api#upload` renders the import JSON with the default
+    // status — 200, not :created (rubrics_api_controller.rb:339-344) — the
+    // same as the account twin in `rubrics_api`.
+    Ok((StatusCode::OK, Json(import)))
 }
 
 // -----------------------------------------------------------------------------
