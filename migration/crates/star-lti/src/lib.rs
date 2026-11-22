@@ -2009,7 +2009,7 @@ async fn bind_registration(
     if !can_manage_account(&state.db, &auth, account_id).await? {
         return Err(ApiError::Forbidden);
     }
-    let _ = find_active_registration(&state.db, registration_id).await?;
+    let registration = find_active_registration(&state.db, registration_id).await?;
 
     // Canvas `bind` refuses the Site Admin account itself
     // (registrations_controller.rb:1747-1750: "site admin local bindings
@@ -2041,6 +2041,13 @@ async fn bind_registration(
     }
 
     let root_id = root_account_id(&state.db, account_id).await?;
+
+    // Canvas `Lti::InstallTemplateRegistrationService.call`
+    // (registrations_controller.rb:1764-1772): binding a template
+    // registration installs a local copy of it for the account first —
+    // the same install the install_from_template route performs.
+    install_template_for_account(&state.db, &registration, account_id, root_id, auth.id).await?;
+
     sqlx::query(
         "INSERT INTO lti_registration_account_bindings \
          (registration_id, account_id, root_account_id, workflow_state, created_by_id, updated_by_id) \
@@ -2059,6 +2066,63 @@ async fn bind_registration(
 
     let binding = account_binding_json(&state.db, registration_id, account_id).await?;
     Ok(Json(binding.unwrap_or(Value::Null)).into_response())
+}
+
+/// Canvas `Lti::InstallTemplateRegistrationService` — a local copy of the
+/// template for the account, unless one exists already. The copy is only
+/// created for a registration that lives in the Site Admin account (an
+/// inherited template); a registration of another root account is only
+/// bound, never copied.
+async fn install_template_for_account(
+    db: &PgPool,
+    template: &RegistrationRow,
+    account_id: i64,
+    root_id: i64,
+    user_id: i64,
+) -> Result<(), ApiError> {
+    let site_admin: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
+    )
+    .fetch_optional(db)
+    .await?;
+    if site_admin != Some(template.account_id) {
+        return Ok(());
+    }
+    let existing: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM lti_registrations \
+         WHERE template_registration_id = $1 AND account_id = $2 AND workflow_state <> 'deleted'",
+    )
+    .bind(template.id)
+    .bind(account_id)
+    .fetch_optional(db)
+    .await?;
+    if existing.is_some() {
+        return Ok(());
+    }
+    let sql = format!(
+        "INSERT INTO lti_registrations \
+         (account_id, root_account_id, name, admin_nickname, vendor, description, icon_url, \
+          lti_version, dynamic_registration, lock_deploying, template_registration_id, \
+          workflow_state, configuration, created_by_id, updated_by_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13, $13)"
+    );
+    sqlx::query(&sql)
+        .bind(account_id)
+        .bind(root_id)
+        .bind(&template.name)
+        .bind(template.admin_nickname.clone())
+        .bind(template.vendor.clone())
+        .bind(template.description.clone())
+        .bind(template.icon_url.clone())
+        .bind(&template.lti_version)
+        .bind(template.dynamic_registration)
+        .bind(template.lock_deploying)
+        .bind(template.id)
+        .bind(&template.configuration)
+        .bind(user_id)
+        .execute(db)
+        .await?;
+    Ok(())
 }
 
 /// `DELETE /accounts/{account_id}/lti_registrations/{id}/bind` — remove an

@@ -169,6 +169,21 @@ async fn update_reset_and_histories() {
     let admin_id = seed_user(&pool, &prefix, "admin", "admin").await;
     seed_account_admin(&pool, account_id, admin_id).await;
 
+    // overlay_history and history are gated on the registrations feature
+    // flags (registrations_controller.rb:2275-2282).
+    for feature in ["lti_registrations_next", "lti_registrations_history"] {
+        sqlx::query(
+            "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
+             VALUES ('Account', $1, $2, $2, 'enabled') \
+             ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
+        )
+        .bind(account_id)
+        .bind(feature)
+        .execute(&pool)
+        .await
+        .expect("enable the registrations flag");
+    }
+
     let registration = create_registration(
         &server,
         account_id,
@@ -967,7 +982,7 @@ async fn context_controls_crud_and_bulk() {
     assert_eq!(response.status_code(), 422);
     let body: Value = response.json();
     assert_eq!(
-        body["errors"][0],
+        body["errors"],
         "No active deployment found for the root account."
     );
 

@@ -244,9 +244,18 @@ async fn require_read(db: &PgPool, auth: &AuthUser, context: AppContext) -> Resu
 
 /// Canvas `Lti::LtiAppsController#user_in_account?`.
 async fn user_in_account(db: &PgPool, auth: &AuthUser, account_id: i64) -> Result<bool, ApiError> {
+    // Canvas `user_in_account?` checks `user.associated_accounts`, which
+    // includes the accounts of the user's enrolled courses — an enrolled
+    // student is associated with the account of their course
+    // (lti_apps_controller.rb:183-188).
     let membership: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM account_users \
-         WHERE account_id = $1 AND user_id = $2 LIMIT 1",
+         WHERE account_id = $1 AND user_id = $2 \
+         UNION \
+         SELECT 1 FROM enrollments e \
+         JOIN courses c ON c.id = e.course_id \
+         WHERE c.account_id = $1 AND e.user_id = $2 \
+         LIMIT 1",
     )
     .bind(account_id)
     .bind(auth.id)

@@ -414,11 +414,9 @@ fn validate_args(args: &ShowArgs) -> Option<Value> {
         return None;
     }
 
-    let body: Map<String, Value> = errs
-        .into_iter()
-        .map(|(key, message)| (key, json!([message])))
-        .collect();
-    Some(Value::Object(body))
+    // Canvas renders the errors map as-is — every value a plain string
+    // (rubrics_api_controller.rb:524-540).
+    Some(Value::Object(errs.into_iter().collect()))
 }
 
 // ---------------------------------------------------------------------------

@@ -1350,12 +1350,17 @@ async fn find_outcome_import(
         return Ok(row);
     }
 
+    // The path id is numeric (the "latest" alias is handled above); a
+    // non-numeric id simply does not match, like Rails' find.
+    let Ok(import_id) = id.parse::<i64>() else {
+        return Ok(None);
+    };
     let row = sqlx::query_as::<_, OutcomeImportRow>(
         "SELECT id, workflow_state, user_id, progress, ended_at, created_at, updated_at, data
          FROM outcome_imports
          WHERE id = $1 AND context_id = $2 AND context_type = $3",
     )
-    .bind(id)
+    .bind(import_id)
     .bind(context.id())
     .bind(context.type_name())
     .fetch_optional(pool)
