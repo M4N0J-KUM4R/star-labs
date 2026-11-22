@@ -114,9 +114,13 @@ async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
     .expect("seed course")
 }
 
-/// Creates a course with the temporary-enrollments feature explicitly enabled
-/// on its dedicated account.
-async fn seed_course_with_feature(pool: &PgPool, prefix: &str, name: &str) -> i64 {
+/// Creates a course (in its own dedicated account) with the
+/// temporary-enrollments feature explicitly enabled on that account.
+/// Returns (course_id, account_id): the status endpoints scope their
+/// enrollment lookups to the request's account (default: the shared root
+/// account 1), so tests must pass `account_id` explicitly to see
+/// enrollments in the dedicated account.
+async fn seed_course_with_feature(pool: &PgPool, prefix: &str, name: &str) -> (i64, i64) {
     let course_id = seed_course(pool, prefix, name).await;
     // Ensure the account has the feature flag enabled; insert if absent.
     // 0088_feature_flags keys overrides on (context_type, context_id, feature)
@@ -135,7 +139,12 @@ async fn seed_course_with_feature(pool: &PgPool, prefix: &str, name: &str) -> i6
     .execute(pool)
     .await
     .expect("enable temporary_enrollments feature");
-    course_id
+    let account_id: i64 = sqlx::query_scalar("SELECT account_id FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_one(pool)
+        .await
+        .expect("read the course's dedicated account");
+    (course_id, account_id)
 }
 
 async fn seed_enrollment(
@@ -461,7 +470,7 @@ async fn contract_temporary_status_self_returns_three_flags() {
 
     let _admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let user = seed_user(&pool, &prefix, "User", "student").await;
-    let course = seed_course_with_feature(&pool, &prefix, "TempSelf").await;
+    let (course, _account) = seed_course_with_feature(&pool, &prefix, "TempSelf").await;
     seed_enrollment(&pool, user, course, "student", None).await;
 
     let resp = server
@@ -504,7 +513,7 @@ async fn contract_temporary_status_teacher_cannot_read_other_user() {
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let other = seed_user(&pool, &prefix, "Other", "student").await;
-    let course = seed_course_with_feature(&pool, &prefix, "TempCross").await;
+    let (course, _account) = seed_course_with_feature(&pool, &prefix, "TempCross").await;
     seed_enrollment(&pool, teacher, course, "teacher", None).await;
     seed_enrollment(&pool, other, course, "student", None).await;
 
@@ -536,15 +545,18 @@ async fn contract_temporary_status_is_provider_flag() {
 
     let provider = seed_user(&pool, &prefix, "Provider", "teacher").await;
     let recipient = seed_user(&pool, &prefix, "Recipient", "student").await;
-    let course = seed_course_with_feature(&pool, &prefix, "TempIsProvider").await;
+    let (course, account) = seed_course_with_feature(&pool, &prefix, "TempIsProvider").await;
     // Provider is a teacher; recipient is a student with temporary enrollment
     // sourced from provider.
     seed_enrollment(&pool, provider, course, "teacher", None).await;
     seed_enrollment(&pool, recipient, course, "student", Some(provider)).await;
 
-    // Provider checks their own status.
+    // Provider checks their own status (scoped to the course's dedicated
+    // account — the status lookup joins enrollments through the account).
     let resp = server
-        .get(&format!("/users/{provider}/temporary_enrollment_status"))
+        .get(&format!(
+            "/users/{provider}/temporary_enrollment_status?account_id={account}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(provider, "teacher"))
         .await;
 
@@ -565,7 +577,9 @@ async fn contract_temporary_status_is_provider_flag() {
 
     // Recipient checks their own status.
     let resp = server
-        .get(&format!("/users/{recipient}/temporary_enrollment_status"))
+        .get(&format!(
+            "/users/{recipient}/temporary_enrollment_status?account_id={account}"
+        ))
         .add_header(
             axum::http::header::AUTHORIZATION,
             auth(recipient, "student"),
@@ -609,7 +623,9 @@ async fn contract_bulk_temporary_status_missing_user_ids_is_400_empty_body() {
     };
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
-    let _course = seed_course_with_feature(&pool, &prefix, "BulkMissing").await;
+    let _course = seed_course_with_feature(&pool, &prefix, "BulkMissing")
+        .await
+        .0;
 
     let resp = server
         .get("/temporary_enrollment_status")
@@ -639,7 +655,7 @@ async fn contract_bulk_temporary_status_user_ids_as_string_keys() {
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let user = seed_user(&pool, &prefix, "User", "student").await;
-    let course = seed_course_with_feature(&pool, &prefix, "BulkKeys").await;
+    let (course, _account) = seed_course_with_feature(&pool, &prefix, "BulkKeys").await;
     seed_enrollment(&pool, user, course, "student", None).await;
 
     let resp = server
@@ -681,7 +697,7 @@ async fn contract_bulk_temporary_status_limit_caps_at_100() {
     };
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
-    let course = seed_course_with_feature(&pool, &prefix, "BulkLimit").await;
+    let (course, _account) = seed_course_with_feature(&pool, &prefix, "BulkLimit").await;
     let _ = course;
 
     // Seed 110 users (over the 100 cap).

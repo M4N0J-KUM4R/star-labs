@@ -449,7 +449,9 @@ async fn bulk_enrollment_creates_enrollments_and_returns_progress() {
     );
     let body: Value = resp.json();
     assert_eq!(body["context_type"], json!("Account"));
-    assert_eq!(body["context_id"].as_i64(), Some(1));
+    // The progress row is scoped to the account the POST targeted — the
+    // test's dedicated account (issue #75), never the shared account 1.
+    assert_eq!(body["context_id"].as_i64(), Some(account));
     assert_eq!(body["tag"], json!("bulk_enrollment"));
     assert_eq!(body["workflow_state"], json!("completed"));
     assert_eq!(body["completion"], json!(100));
