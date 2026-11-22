@@ -11,4 +11,5 @@ pub mod error;
 pub mod grades;
 pub mod login;
 pub mod quiz;
+pub mod settings;
 pub mod speedgrader;

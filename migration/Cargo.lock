@@ -2904,7 +2904,6 @@ dependencies = [
 name = "star-common"
 version = "0.1.0"
 dependencies = [
- "argon2",
  "axum",
  "chrono",
  "jsonwebtoken",
@@ -3102,6 +3101,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-gradebook"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "axum-test",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "star-auth",
+ "star-common",
+ "star-db",
+ "tokio",
+]
+
+[[package]]
 name = "star-grading-standards"
 version = "0.1.0"
 dependencies = [
@@ -3187,6 +3202,7 @@ dependencies = [
  "star-eportfolios",
  "star-features",
  "star-files",
+ "star-gradebook",
  "star-grading-standards",
  "star-graphql",
  "star-groups",
@@ -3497,6 +3513,7 @@ dependencies = [
  "star-dashboard",
  "star-db",
  "star-discussions",
+ "star-enrollments",
  "star-grading-standards",
  "star-modules",
  "star-pages",

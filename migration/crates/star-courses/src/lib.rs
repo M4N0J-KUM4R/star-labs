@@ -691,6 +691,20 @@ async fn update_course(
     auth: AuthUser,
     Json(payload): Json<UpdateCourse>,
 ) -> Result<Json<Course>, ApiError> {
+    let updated = update_course_record(&state.db, course_id, &auth, payload).await?;
+    Ok(Json(updated))
+}
+
+/// Update a course behind the same gate + validation as `PUT /courses/{id}`.
+/// Extracted as a pub loader so the server-rendered settings page (star-ui,
+/// issue #73) saves through the exact REST validation and cannot bypass the
+/// teacher-or-admin check.
+pub async fn update_course_record(
+    pool: &PgPool,
+    course_id: i64,
+    auth: &AuthUser,
+    payload: UpdateCourse,
+) -> Result<Course, ApiError> {
     // Check course exists
     let existing: Option<Course> = sqlx::query_as(
         r#"
@@ -699,12 +713,12 @@ async fn update_course(
         "#,
     )
     .bind(course_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(pool)
     .await?;
 
     let existing = existing.ok_or(ApiError::NotFound)?;
 
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+    if !check_teacher_or_admin(pool, auth.id, course_id, auth).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -743,10 +757,10 @@ async fn update_course(
     .bind(start_at)
     .bind(end_at)
     .bind(&syllabus_body)
-    .fetch_one(&state.db)
+    .fetch_one(pool)
     .await?;
 
-    Ok(Json(updated))
+    Ok(updated)
 }
 
 /// DELETE /courses/{id} — soft-delete a course (admin only: sets workflow_state = 'deleted')

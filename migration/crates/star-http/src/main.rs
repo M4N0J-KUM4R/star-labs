@@ -148,6 +148,7 @@ fn build_api_router() -> Router<AppState> {
         .merge(star_dashboard::router())
         .merge(star_quizzes::router())
         .merge(star_assignment_groups::router())
+        .merge(star_gradebook::router())
         .merge(star_accounts::router())
         .merge(star_calendar::router())
         .merge(star_conversations::router())

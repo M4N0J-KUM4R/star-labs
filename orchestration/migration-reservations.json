@@ -1,7 +1,6 @@
 {
- "comment": "Coordinator-owned ledger of migration number reservations (protocol: issue #20). Agents never self-assign a number; the coordinator reserves one at dispatch time. Additive migrations only, no renumbering, no DROP/TRUNCATE. status 'merged' = a NNNN_*.sql file exists in migration/crates/star-db/migrations/ on main; status 'open' = reserved for an open issue (verify the issue is still open before reuse). 'issue' is the GitHub issue number; null marks pre-protocol merges that predate issue-linked PRs. 'free' lists unallocated holes below next_available (0011/0100 never existed; 0111/0115 were released). Validate with: python3 orchestration/check-migration-ledger.py",
+ "comment": "Coordinator-owned ledger of migration number reservations (protocol: issue #20). Agents never self-assign a number; the coordinator reserves one at dispatch time. Additive migrations only, no renumbering, no DROP/TRUNCATE. status 'merged' = a NNNN_*.sql file exists in migration/crates/star-db/migrations/ on main; status 'open' = reserved for an open issue (verify the issue is still open before reuse). 'issue' is the GitHub issue number; null marks pre-protocol merges that predate issue-linked PRs. 'free' lists unallocated holes below next_available (0011 never existed; 0111/0115 were released; 0100 was a hole until PR #212 took it). Validate with: python3 orchestration/check-migration-ledger.py",
  "free": [
-  "0100",
   "0111"
  ],
  "max_merged": "0239",
@@ -500,6 +499,11 @@
   "0099": {
    "issue": null,
    "note": "PR #10",
+   "status": "merged"
+  },
+  "0100": {
+   "issue": 89,
+   "note": "PR #212 (polling) took the free hole for 0100_polling.sql; the ledger was not updated at merge time",
    "status": "merged"
   },
   "0101": {

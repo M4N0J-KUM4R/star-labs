@@ -125,7 +125,33 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     .bind(format!("{prefix}-%"))
     .execute(pool)
     .await;
+    let _ = sqlx::query("DELETE FROM attachments WHERE media_entry_id LIKE $1")
+        .bind(format!("{prefix}-%"))
+        .execute(pool)
+        .await;
     let _ = sqlx::query("DELETE FROM media_objects WHERE media_id LIKE $1")
+        .bind(format!("{prefix}-%"))
+        .execute(pool)
+        .await;
+    let _ = sqlx::query(
+        "DELETE FROM group_memberships WHERE group_id IN
+         (SELECT id FROM groups WHERE name LIKE $1)",
+    )
+    .bind(format!("{prefix}-%"))
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM groups WHERE name LIKE $1")
+        .bind(format!("{prefix}-%"))
+        .execute(pool)
+        .await;
+    let _ = sqlx::query(
+        "DELETE FROM enrollments WHERE course_id IN
+         (SELECT id FROM courses WHERE name LIKE $1)",
+    )
+    .bind(format!("{prefix}-%"))
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM courses WHERE name LIKE $1")
         .bind(format!("{prefix}-%"))
         .execute(pool)
         .await;
@@ -1119,4 +1145,374 @@ async fn api_create_media_object_accepts_query_parameters() {
     assert_eq!(created["media_object"]["media_type"], "video");
 
     api_cleanup(&pool, &prefix).await;
+}
+
+// Issue #65: context-scoped index, media_objects variants, track batch
+// update and ASR
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn media_object_create_with_context_and_owner_only_update() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let owner = seed_user(&pool, &prefix, "Owner", "student").await;
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let stranger = seed_user(&pool, &prefix, "Stranger", "student").await;
+    let course: i64 =
+        sqlx::query_scalar("INSERT INTO courses (name, course_code) VALUES ($1, $2) RETURNING id")
+            .bind(format!("{prefix}-Course"))
+            .bind(format!("{prefix}-C"))
+            .fetch_one(&pool)
+            .await
+            .expect("seed course");
+    sqlx::query("INSERT INTO enrollments (user_id, course_id, role) VALUES ($1, $2, 'student')")
+        .bind(owner)
+        .bind(course)
+        .execute(&pool)
+        .await
+        .expect("seed enrollment");
+
+    // POST /media_objects without a context behaves like /media_attachments.
+    let created = server
+        .post("/media_objects")
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .json(&json!({ "media_id": format!("{prefix}-m1"), "media_type": "video", "title": "Lecture" }))
+        .await;
+    assert_eq!(created.status_code(), 201, "body: {}", created.text());
+    let created_body: Value = created.json();
+    let media_id = created_body["id"].as_i64().expect("media object id");
+
+    // POST /media_objects with an enrolled course context is accepted.
+    let contextual = server
+        .post("/media_objects")
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .json(&json!({
+            "media_id": format!("{prefix}-m2"),
+            "media_type": "video",
+            "title": "Seminar",
+            "context_code": format!("course_{course}")
+        }))
+        .await;
+    assert_eq!(contextual.status_code(), 201, "body: {}", contextual.text());
+
+    // Unknown course in the context code: 404.
+    let unknown = server
+        .post("/media_objects")
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .json(&json!({
+            "media_id": format!("{prefix}-m3"),
+            "context_code": "course_99999999"
+        }))
+        .await;
+    assert_eq!(unknown.status_code(), 404);
+
+    // Caller without read access to the context: 403.
+    let denied = server
+        .post("/media_objects")
+        .add_header(axum::http::header::AUTHORIZATION, auth(stranger, "student"))
+        .json(&json!({
+            "media_id": format!("{prefix}-m4"),
+            "context_code": format!("course_{course}")
+        }))
+        .await;
+    assert_eq!(denied.status_code(), 403);
+
+    // PUT /media_objects/{id}: Canvas updates the title (blank -> 400 JSON
+    // message) and the response omits sources/tracks.
+    let renamed = server
+        .put(&format!("/media_objects/{media_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .json(&json!({ "user_entered_title": "Renamed Lecture" }))
+        .await;
+    assert_eq!(renamed.status_code(), 200, "body: {}", renamed.text());
+    let renamed_body: Value = renamed.json();
+    assert_eq!(
+        renamed_body["user_entered_title"].as_str(),
+        Some("Renamed Lecture")
+    );
+    assert!(renamed_body.get("media_tracks").is_none());
+    assert!(renamed_body.get("media_sources").is_none());
+
+    let blank = server
+        .put(&format!("/media_objects/{media_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .json(&json!({ "user_entered_title": "  " }))
+        .await;
+    assert_eq!(blank.status_code(), 400);
+    assert!(blank.text().contains("user_entered_title"));
+
+    // Canvas' media-object variant is strictly owner-only: even admins 403.
+    let admin_denied = server
+        .put(&format!("/media_objects/{media_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "user_entered_title": "Nope" }))
+        .await;
+    assert_eq!(admin_denied.status_code(), 403);
+
+    let stranger_denied = server
+        .put(&format!("/media_objects/{media_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(stranger, "student"))
+        .json(&json!({ "user_entered_title": "Nope" }))
+        .await;
+    assert_eq!(stranger_denied.status_code(), 403);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn context_scoped_listing_follows_media_attachments() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let owner = seed_user(&pool, &prefix, "Owner", "student").await;
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let course: i64 =
+        sqlx::query_scalar("INSERT INTO courses (name, course_code) VALUES ($1, $2) RETURNING id")
+            .bind(format!("{prefix}-Course"))
+            .bind(format!("{prefix}-C"))
+            .fetch_one(&pool)
+            .await
+            .expect("seed course");
+    sqlx::query("INSERT INTO enrollments (user_id, course_id, role) VALUES ($1, $2, 'student')")
+        .bind(owner)
+        .bind(course)
+        .execute(&pool)
+        .await
+        .expect("seed enrollment");
+
+    // Two media objects for the owner; only the first is linked to the course
+    // through a video attachment.
+    let linked = create_ok(
+        &server,
+        &auth(owner, "student"),
+        &format!("{prefix}-linked"),
+        "Course Video",
+    )
+    .await;
+    create_ok(
+        &server,
+        &auth(owner, "student"),
+        &format!("{prefix}-private"),
+        "Private Video",
+    )
+    .await;
+    sqlx::query(
+        "INSERT INTO attachments (context_id, context_type, media_entry_id, content_type) \
+         VALUES ($1, 'Course', $2, 'video/mp4')",
+    )
+    .bind(course)
+    .bind(format!("{prefix}-linked"))
+    .execute(&pool)
+    .await
+    .expect("seed attachment");
+
+    // A non-media attachment and a deleted one never surface.
+    sqlx::query(
+        "INSERT INTO attachments (context_id, context_type, media_entry_id, content_type) \
+         VALUES ($1, 'Course', $2, 'application/pdf')",
+    )
+    .bind(course)
+    .bind(format!("{prefix}-private"))
+    .execute(&pool)
+    .await
+    .expect("seed pdf attachment");
+
+    for path in [
+        format!("/courses/{course}/media_objects"),
+        format!("/courses/{course}/media_attachments"),
+    ] {
+        let listed = server
+            .get(&path)
+            .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+            .await;
+        assert_eq!(listed.status_code(), 200, "body: {}", listed.text());
+        let rows: Vec<Value> = listed.json();
+        assert_eq!(rows.len(), 1, "only the linked media object appears");
+        assert_eq!(rows[0]["id"].as_i64(), linked["id"].as_i64());
+    }
+
+    // The unscoped user listing still shows both of the caller's objects.
+    let mine = server
+        .get("/media_objects")
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .await;
+    assert_eq!(mine.status_code(), 200);
+    let mine_rows: Vec<Value> = mine.json();
+    assert_eq!(mine_rows.len(), 2);
+
+    // Not enrolled in the course: 403 (Canvas render_unauthorized_action).
+    let denied = server
+        .get(&format!("/courses/{course}/media_objects"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(denied.status_code(), 403);
+
+    // Unknown course: 404.
+    let missing = server
+        .get("/courses/99999999/media_objects")
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .await;
+    assert_eq!(missing.status_code(), 404);
+
+    // Group context: member sees the linked object; non-members 403.
+    let group: i64 = sqlx::query_scalar("INSERT INTO groups (name) VALUES ($1) RETURNING id")
+        .bind(format!("{prefix}-Group"))
+        .fetch_one(&pool)
+        .await
+        .expect("seed group");
+    sqlx::query("INSERT INTO group_memberships (group_id, user_id) VALUES ($1, $2)")
+        .bind(group)
+        .bind(owner)
+        .execute(&pool)
+        .await
+        .expect("seed membership");
+    sqlx::query(
+        "INSERT INTO attachments (context_id, context_type, media_entry_id, content_type) \
+         VALUES ($1, 'Group', $2, 'audio/ogg')",
+    )
+    .bind(group)
+    .bind(format!("{prefix}-linked"))
+    .execute(&pool)
+    .await
+    .expect("seed group attachment");
+
+    let group_listed = server
+        .get(&format!("/groups/{group}/media_objects"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .await;
+    assert_eq!(
+        group_listed.status_code(),
+        200,
+        "body: {}",
+        group_listed.text()
+    );
+    let group_rows: Vec<Value> = group_listed.json();
+    assert_eq!(group_rows.len(), 1);
+
+    let group_denied = server
+        .get(&format!("/groups/{group}/media_attachments"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(group_denied.status_code(), 403);
+
+    let group_missing = server
+        .get("/groups/99999999/media_objects")
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .await;
+    assert_eq!(group_missing.status_code(), 404);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn media_tracks_batch_update_and_asr_requests() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let owner = seed_user(&pool, &prefix, "Owner", "student").await;
+    let stranger = seed_user(&pool, &prefix, "Stranger", "student").await;
+    let object = create_ok(
+        &server,
+        &auth(owner, "student"),
+        &format!("{prefix}-m1"),
+        "Lecture",
+    )
+    .await;
+    let id = object["id"].as_i64().expect("media object id");
+    seed_track(&pool, id, owner, "en", "hello").await;
+    seed_track(&pool, id, owner, "es", "hola").await;
+
+    // Batch update: keep en with new content, add fr; es is dropped because
+    // its locale is missing; the blank-content entry is left alone (it refers
+    // to an unedited client row and creates nothing).
+    let updated = server
+        .put(&format!("/media_objects/{id}/media_tracks"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .json(&json!([
+            { "locale": "en", "content": "hello (v2)" },
+            { "locale": "fr", "content": "bonjour" },
+            { "locale": "de" }
+        ]))
+        .await;
+    assert_eq!(updated.status_code(), 200, "body: {}", updated.text());
+    let rows: Vec<Value> = updated.json();
+    let locales: Vec<&str> = rows.iter().filter_map(|r| r["locale"].as_str()).collect();
+    assert!(locales.contains(&"en"));
+    assert!(locales.contains(&"fr"));
+    assert!(!locales.contains(&"es"), "missing locale is deleted");
+    assert!(!locales.contains(&"de"), "blank content creates nothing");
+
+    let (content,): (String,) = sqlx::query_as(
+        "SELECT content FROM media_tracks WHERE media_object_id = $1 AND locale = 'en'",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .expect("fetch en track");
+    assert_eq!(content, "hello (v2)");
+
+    // The attachment-keyed twin lists the same tracks.
+    let twin = server
+        .get(&format!(
+            "/media_attachments/{id}/media_tracks?include[]=content"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .await;
+    assert_eq!(twin.status_code(), 200, "body: {}", twin.text());
+    let twin_rows: Vec<Value> = twin.json();
+    assert_eq!(twin_rows.len(), 2);
+
+    // Non-owners cannot rewrite the set.
+    let denied = server
+        .put(&format!("/media_attachments/{id}/media_tracks"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(stranger, "student"))
+        .json(&json!([{ "locale": "en", "content": "hijack" }]))
+        .await;
+    assert_eq!(denied.status_code(), 403);
+
+    // ASR: a valid locale creates the pending track (asr marker), and the
+    // response is the media object json with the new track embedded.
+    let asr = server
+        .post(&format!("/media_objects/{id}/asr"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .json(&json!({ "locale": "en-US" }))
+        .await;
+    assert_eq!(asr.status_code(), 200, "body: {}", asr.text());
+    let asr_body: Value = asr.json();
+    assert_eq!(asr_body["id"].as_i64(), Some(id));
+    let track = &asr_body["media_tracks"][0];
+    assert_eq!(track["locale"].as_str(), Some("en-US"));
+    assert_eq!(track["kind"].as_str(), Some("subtitles"));
+    assert_eq!(track["asr"].as_bool(), Some(true));
+
+    // An invalid locale is a 400 with the Canvas error body.
+    let invalid = server
+        .post(&format!("/media_attachments/{id}/asr"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .json(&json!({ "locale": "en_US" }))
+        .await;
+    assert_eq!(invalid.status_code(), 400);
+    assert!(invalid.text().contains("Invalid or missing locale"));
+
+    // Non-owners cannot request captions.
+    let denied_asr = server
+        .post(&format!("/media_objects/{id}/asr"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(stranger, "student"))
+        .json(&json!({ "locale": "fr" }))
+        .await;
+    assert_eq!(denied_asr.status_code(), 403);
+
+    // Unknown media object: 404.
+    let missing = server
+        .post("/media_objects/99999999/asr")
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "student"))
+        .json(&json!({ "locale": "en" }))
+        .await;
+    assert_eq!(missing.status_code(), 404);
+
+    cleanup(&pool, &prefix).await;
 }

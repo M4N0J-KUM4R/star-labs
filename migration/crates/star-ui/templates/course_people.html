@@ -1,0 +1,55 @@
+{% extends "layouts/course.html" %}
+{# People page (issue #73) — Canvas context#roster as a server-rendered
+   roster table: user name, enrollment role, enrollment state (with
+   active/invited/inactive row styling). Teachers/admins get the
+   "Add People" button and per-row conclude/reactivate forms. #}
+{% block content %}
+  <div id="people" class="roster-container">
+    <div class="header-bar">
+      <h1 class="people-title">People</h1>
+      {% if is_teacher %}
+      <a id="add_people_link" class="btn btn-primary add-people" href="/courses/{{ course_id }}/users/add">Add People</a>
+      {% endif %}
+    </div>
+    {% if rows.is_empty() %}
+    <p class="no-people">There are no people in this course yet.</p>
+    {% endif %}
+    <table class="roster-list" id="roster_table">
+      <thead>
+        <tr>
+          <th class="roster-name">Name</th>
+          <th class="roster-role">Role</th>
+          <th class="roster-state">State</th>
+          {% if is_teacher %}
+          <th class="roster-actions">Actions</th>
+          {% endif %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        <tr class="user-list__item roster-row enrollment-{{ row.state }}" id="user_{{ row.user_id }}">
+          <td class="roster-name"><span class="user_name">{{ row.name }}</span> <span class="email">{{ row.email }}</span></td>
+          <td class="roster-role">{{ row.role_label }}</td>
+          <td class="roster-state"><span class="enrollment-state state-{{ row.state }}">{{ row.state_label }}</span></td>
+          {% if is_teacher %}
+          <td class="roster-actions">
+            {% if row.state == "active" || row.state == "invited" %}
+            <form class="roster-action-form" method="post" action="/courses/{{ course_id }}/users/{{ row.user_id }}/conclude">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-small conclude-link">Conclude</button>
+            </form>
+            {% endif %}
+            {% if row.state == "inactive" %}
+            <form class="roster-action-form" method="post" action="/courses/{{ course_id }}/users/{{ row.user_id }}/reactivate">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <button type="submit" class="btn btn-small reactivate-link">Reactivate</button>
+            </form>
+            {% endif %}
+          </td>
+          {% endif %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock content %}

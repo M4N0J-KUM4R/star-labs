@@ -37,6 +37,19 @@ pass, live HTTP verified on EC2).
 - Handlers return `Result<Json<T>, ApiError>`.
 - Tests: integration tests live next to handlers; DB tests run against
   DATABASE_URL if set, otherwise skipped.
+- Test isolation (issue #75): integration tests NEVER use the shared root
+  account 1 (seeded by migration 0024; `courses.account_id` DEFAULTs to 1
+  since migration 0030, so course seeds must pass an explicit `account_id`).
+  Every test binary seeds DEDICATED accounts
+  (`INSERT INTO accounts (name) VALUES ('<prefix>-…')`) and its `cleanup()`
+  deletes the seeded `feature_flags` rows (no FK — delete explicitly) before
+  the accounts. Unauthenticated 401/404 probes use a sentinel id (999999999),
+  never 1. Canonical helpers: `seed_account` / `seed_course_in_account` /
+  `enable_feature` (see
+  `crates/star-content/tests/content_exports_contexts_integration.rs`).
+  Enforced by `crates/star-db/tests/test_isolation_guard.rs`: no account-1
+  seeds, no literal `/accounts/1` paths, no feature_flags writes in files
+  that grab the globally-first root account.
 - JSON responses mirror Canvas API v1 shapes (id, name, created_at ...).
 
 ## Non-goals (explicitly)

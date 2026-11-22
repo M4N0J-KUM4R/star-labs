@@ -19,6 +19,9 @@ use star_common::{ApiError, AppState};
 mod observer_alert_thresholds;
 mod temporary_enrollment_pairings;
 
+/// Pub loaders for the server-rendered people/admin pages (star-ui, #73).
+pub mod ui;
+
 // --------------------------------------------------------------------------
 // Domain types
 // --------------------------------------------------------------------------

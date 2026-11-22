@@ -1,0 +1,75 @@
+name: Migration guard
+
+# CI guard for star-db sqlx migrations (issue #102): duplicate numbers,
+# renumbered/renamed/deleted files, bad NNNN_snake_case.sql names, and
+# destructive (DROP/TRUNCATE) statements. Runs on every PR with no path
+# filter so the check is always reported and can be made required later;
+# push runs are main-only (wave-4 push policy).
+#
+# Checkout uses the event's default ref — the pull_request MERGE REF (PR head
+# merged onto main), not the bare PR head. Two reasons:
+#   * GitHub selects this workflow from the merge ref, so the checkout and
+#     the workflow must come from the same tree. A PR branch that has not
+#     synced main still gets tools/ci/migration_guard.py from main's side of
+#     the merge; checking out the bare head made the step fail with
+#     "No such file or directory" (seen on PR #213 before this fix-up).
+#   * The merge ref already contains the current base tip, so
+#     merge-base(HEAD, origin/main) is exactly the main state incorporated
+#     into the merge: migrations main gained after the PR branched are both
+#     in the baseline AND in the checked-out tree, and only PR-side changes
+#     to existing migrations can trip the renumber rule.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  migration-guard:
+    name: Migration guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so merge-base can resolve the baseline.
+          fetch-depth: 0
+      - name: Extract merge-base migration snapshot
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/mig-base
+          git fetch --no-tags origin +main:refs/remotes/origin/main || true
+          if git rev-parse --verify --quiet refs/remotes/origin/main >/dev/null; then
+            base_sha="$(git merge-base HEAD refs/remotes/origin/main || true)"
+            if [ -n "$base_sha" ] && git cat-file -e "$base_sha:migration/crates/star-db/migrations" 2>/dev/null; then
+              git archive "$base_sha" migration/crates/star-db/migrations | tar -x -C /tmp/mig-base
+              echo "renumber baseline: $base_sha (merge-base with origin/main)"
+            else
+              echo "::warning::no merge-base migration directory — renumber checks skipped"
+            fi
+          else
+            echo "::warning::origin/main unavailable — renumber checks skipped"
+          fi
+      - name: Run migration guard
+        run: |
+          set -euo pipefail
+          if [ ! -f tools/ci/migration_guard.py ]; then
+            echo "::error::tools/ci/migration_guard.py is missing from this checkout — the guard itself must not be deleted."
+            exit 1
+          fi
+          if [ -d /tmp/mig-base/migration/crates/star-db/migrations ]; then
+            python3 tools/ci/migration_guard.py --base /tmp/mig-base/migration/crates/star-db/migrations
+          else
+            python3 tools/ci/migration_guard.py
+          fi
+      - name: Migration guard unit tests
+        run: python3 -m unittest discover -s tools/ci/tests -v
