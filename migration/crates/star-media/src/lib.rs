@@ -630,11 +630,12 @@ async fn update_media_object(
     .await?;
 
     // Canvas excludes `sources` and `tracks` from this response.
+    let title = guaranteed_title(&row);
     let mut json = serde_json::to_value(MediaObjectJson {
         id: row.id,
         media_id: row.media_id.clone(),
         media_type: row.media_type,
-        title: guaranteed_title(&row),
+        title,
         user_entered_title: row.user_entered_title,
         can_add_captions: true,
         media_sources: Vec::new(),
