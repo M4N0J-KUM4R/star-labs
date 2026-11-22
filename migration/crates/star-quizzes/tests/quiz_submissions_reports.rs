@@ -183,7 +183,7 @@ async fn seed_fixture(
 /// Start the quiz as the student and return the submission id.
 async fn start_submission(server: &TestServer, student: i64, quiz_id: i64) -> i64 {
     let resp = server
-        .post(&format!("/quizzes/{quiz_id}/start"))
+        .post(&format!("/courses/{course}/quizzes/{quiz_id}/submissions"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 201, "start quiz: {}", resp.text());

@@ -1,7 +1,7 @@
 //! Integration tests for star-assignments.
 //!
 //! Exercises the real assignments router (assignment CRUD, student
-//! submissions, grading, and the course gradebook) through axum-test
+//! submissions and Canvas' nested grading route) through axum-test
 //! against a real Postgres.
 //!
 //! Conventions (mirrors star-enrollments/tests/enrollments_integration.rs):
@@ -262,10 +262,35 @@ async fn api_submit(server: &TestServer, token: &str, assignment_id: i64, body: 
     resp.json()
 }
 
-/// Grade a submission through the API; asserts 200.
-async fn api_grade(server: &TestServer, token: &str, submission_id: i64, score: f64) -> Value {
+/// Grade a submission through Canvas' nested grading route; asserts 200.
+///
+/// Canvas has no submission-id-addressable grade endpoint: the grade goes to
+/// `PUT /courses/:course_id/assignments/:assignment_id/submissions/:user_id`,
+/// so the helper resolves the submission's owners from the database first.
+async fn api_grade(
+    server: &TestServer,
+    pool: &PgPool,
+    token: &str,
+    submission_id: i64,
+    score: f64,
+) -> Value {
+    let (course_id, assignment_id, user_id): (i64, i64, i64) = sqlx::query_as(
+        r#"
+        SELECT a.course_id, s.assignment_id, s.user_id
+        FROM submissions s
+        JOIN assignments a ON a.id = s.assignment_id
+        WHERE s.id = $1
+        "#,
+    )
+    .bind(submission_id)
+    .fetch_one(pool)
+    .await
+    .expect("resolve submission owners for grading");
+
     let resp = server
-        .put(&format!("/submissions/{submission_id}/grade"))
+        .put(&format!(
+            "/courses/{course_id}/assignments/{assignment_id}/submissions/{user_id}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, token)
         .json(&json!({ "score": score }))
         .await;
@@ -1065,7 +1090,7 @@ async fn resubmit_upserts_same_row_and_retains_score() {
     )
     .await;
     let submission_id = first["id"].as_i64().expect("submission id");
-    api_grade(&server, &auth(f.teacher, "teacher"), submission_id, 6.0).await;
+    api_grade(&server, &pool, &auth(f.teacher, "teacher"), submission_id, 6.0).await;
 
     let second = api_submit(
         &server,
@@ -1228,7 +1253,7 @@ async fn submit_after_due_date_is_accepted() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /assignments/{id}/submissions/me
+// GET /courses/{courseId}/assignments/{assignmentId}/submissions/self
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -1260,7 +1285,10 @@ async fn my_submission_returns_own_submission_only() {
     let mine1 = get_ok(
         &server,
         &auth(f.student, "student"),
-        &format!("/assignments/{}/submissions/me", f.assignment),
+        &format!(
+            "/courses/{}/assignments/{}/submissions/self",
+            f.course, f.assignment
+        ),
     )
     .await;
     assert_eq!(mine1["id"], sub1["id"]);
@@ -1271,7 +1299,10 @@ async fn my_submission_returns_own_submission_only() {
     let mine2 = get_ok(
         &server,
         &auth(second, "student"),
-        &format!("/assignments/{}/submissions/me", f.assignment),
+        &format!(
+            "/courses/{}/assignments/{}/submissions/self",
+            f.course, f.assignment
+        ),
     )
     .await;
     assert_eq!(mine2["id"], sub2["id"]);
@@ -1282,7 +1313,7 @@ async fn my_submission_returns_own_submission_only() {
 }
 
 #[tokio::test]
-async fn my_submission_without_submission_is_404() {
+async fn my_submission_without_submission_is_synthesized_unsubmitted() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -1290,21 +1321,31 @@ async fn my_submission_without_submission_is_404() {
 
     let f = seed_fixture(&server, &pool, &prefix, "MeNone").await;
 
+    // Canvas `SubmissionsApiController#show` renders a synthesized
+    // unsubmitted record instead of a 404 when the student has not
+    // submitted yet.
     let resp = server
-        .get(&format!("/assignments/{}/submissions/me", f.assignment))
+        .get(&format!(
+            "/courses/{}/assignments/{}/submissions/self",
+            f.course, f.assignment
+        ))
         .add_header(
             axum::http::header::AUTHORIZATION,
             auth(f.student, "student"),
         )
         .await;
 
-    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: serde_json::Value = resp.into_json();
+    assert_eq!(body["workflow_state"], "unsubmitted");
+    assert_eq!(body["user_id"], f.student);
+    assert_eq!(body["assignment_id"], f.assignment);
 
     cleanup(&pool, &prefix).await;
 }
 
 #[tokio::test]
-async fn my_submission_as_unenrolled_student_is_403() {
+async fn my_submission_as_outsider_is_404() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -1314,12 +1355,17 @@ async fn my_submission_as_unenrolled_student_is_403() {
     api_submit(&server, &auth(f.student, "student"), f.assignment, "answer").await;
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
 
+    // Canvas resolves the :user_id through the course's students, so a user
+    // outside the course is a 404 before any permission check.
     let resp = server
-        .get(&format!("/assignments/{}/submissions/me", f.assignment))
+        .get(&format!(
+            "/courses/{}/assignments/{}/submissions/self",
+            f.course, f.assignment
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
 
-    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }
@@ -1334,7 +1380,7 @@ async fn my_submission_missing_assignment_is_404() {
     let student = seed_user(&pool, &prefix, "Student", "student").await;
 
     let resp = server
-        .get("/assignments/999999999/submissions/me")
+        .get("/courses/999999998/assignments/999999999/submissions/self")
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
 
@@ -1442,7 +1488,7 @@ async fn list_submissions_missing_assignment_is_404() {
 }
 
 // ---------------------------------------------------------------------------
-// PUT /submissions/{id}/grade
+// PUT /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -1462,7 +1508,7 @@ async fn grade_submission_persists_echoes_and_is_visible_to_student() {
     .await;
     let submission_id = sub["id"].as_i64().expect("submission id");
 
-    let graded = api_grade(&server, &auth(f.teacher, "teacher"), submission_id, 8.5).await;
+    let graded = api_grade(&server, &pool, &auth(f.teacher, "teacher"), submission_id, 8.5).await;
 
     // The response echoes the graded submission.
     assert_eq!(graded["id"], submission_id);
@@ -1478,7 +1524,10 @@ async fn grade_submission_persists_echoes_and_is_visible_to_student() {
     let mine = get_ok(
         &server,
         &auth(f.student, "student"),
-        &format!("/assignments/{}/submissions/me", f.assignment),
+        &format!(
+            "/courses/{}/assignments/{}/submissions/self",
+            f.course, f.assignment
+        ),
     )
     .await;
     assert_eq!(mine["score"].as_f64(), Some(8.5));
@@ -1511,12 +1560,12 @@ async fn regrade_overwrites_previous_score() {
     let sub = api_submit(&server, &auth(f.student, "student"), f.assignment, "answer").await;
     let submission_id = sub["id"].as_i64().expect("submission id");
 
-    api_grade(&server, &auth(f.teacher, "teacher"), submission_id, 5.0).await;
+    api_grade(&server, &pool, &auth(f.teacher, "teacher"), submission_id, 5.0).await;
     assert_eq!(db_submission_score(&pool, submission_id).await, Some(5.0));
 
     // Grading again overwrites; the NUMERIC(10,2) column rounds to 2
     // decimals, and the response echoes the stored value.
-    let regraded = api_grade(&server, &auth(f.teacher, "teacher"), submission_id, 9.123).await;
+    let regraded = api_grade(&server, &pool, &auth(f.teacher, "teacher"), submission_id, 9.123).await;
     assert_eq!(regraded["score"].as_f64(), Some(9.12));
     assert_eq!(db_submission_score(&pool, submission_id).await, Some(9.12));
 
@@ -1536,7 +1585,10 @@ async fn grade_as_student_is_403_and_score_unchanged() {
 
     // Even the submission's owner cannot grade it.
     let resp = server
-        .put(&format!("/submissions/{submission_id}/grade"))
+        .put(&format!(
+            "/courses/{}/assignments/{}/submissions/{}",
+            f.course, f.assignment, f.student
+        ))
         .add_header(
             axum::http::header::AUTHORIZATION,
             auth(f.student, "student"),
@@ -1570,7 +1622,10 @@ async fn grade_as_other_course_teacher_is_403() {
     seed_enrollment(&pool, other_teacher, other_course, "teacher").await;
 
     let resp = server
-        .put(&format!("/submissions/{submission_id}/grade"))
+        .put(&format!(
+            "/courses/{}/assignments/{}/submissions/{}",
+            f.course, f.assignment, f.student
+        ))
         .add_header(
             axum::http::header::AUTHORIZATION,
             auth(other_teacher, "teacher"),
@@ -1600,7 +1655,7 @@ async fn grade_as_admin_without_enrollment_succeeds() {
     let submission_id = sub["id"].as_i64().expect("submission id");
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
-    let graded = api_grade(&server, &auth(admin, "admin"), submission_id, 7.0).await;
+    let graded = api_grade(&server, &pool, &auth(admin, "admin"), submission_id, 7.0).await;
 
     assert_eq!(graded["score"].as_f64(), Some(7.0));
     assert_eq!(db_submission_score(&pool, submission_id).await, Some(7.0));
@@ -1617,232 +1672,15 @@ async fn grade_missing_submission_is_404() {
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
 
+    // Canvas resolves the assignment before the submission, so an unknown
+    // assignment is a 404 on the nested grading route.
     let resp = server
-        .put("/submissions/999999999/grade")
+        .put("/courses/999999998/assignments/999999997/submissions/999999999")
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "score": 1.0 }))
         .await;
 
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-
-    cleanup(&pool, &prefix).await;
-}
-
-// ---------------------------------------------------------------------------
-// GET /courses/{courseId}/gradebook
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn gradebook_points_based_current_grade() {
-    let Some((server, pool, prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
-    let alice = seed_user(&pool, &prefix, "Alice", "student").await;
-    let bob = seed_user(&pool, &prefix, "Bob", "student").await;
-    let carol = seed_user(&pool, &prefix, "Carol", "student").await;
-    let outsider = seed_user(&pool, &prefix, "Dana", "student").await;
-    let course = seed_course(&pool, &prefix, "Gradebook").await;
-    let other_course = seed_course(&pool, &prefix, "OtherCourse").await;
-    seed_enrollment(&pool, teacher, course, "teacher").await;
-    for s in [alice, bob, carol] {
-        seed_enrollment(&pool, s, course, "student").await;
-    }
-    seed_enrollment(&pool, outsider, other_course, "student").await;
-
-    let a1 =
-        api_create_assignment(&server, &auth(teacher, "teacher"), course, "Quiz One", 10.0).await;
-    let a2 = api_create_assignment(
-        &server,
-        &auth(teacher, "teacher"),
-        course,
-        "Essay One",
-        40.0,
-    )
-    .await;
-    let a1_id = a1["id"].as_i64().expect("a1 id");
-    let a2_id = a2["id"].as_i64().expect("a2 id");
-
-    // Alice submits to both and is graded on both.
-    let alice_a1 = api_submit(&server, &auth(alice, "student"), a1_id, "alice quiz").await;
-    let alice_a2 = api_submit(&server, &auth(alice, "student"), a2_id, "alice essay").await;
-    // Bob submits to both but is only graded on the quiz.
-    let bob_a1 = api_submit(&server, &auth(bob, "student"), a1_id, "bob quiz").await;
-    api_submit(&server, &auth(bob, "student"), a2_id, "bob essay").await;
-    // Carol never submits.
-    // The teacher also submits (the role gate allows it) but must not get a
-    // gradebook row.
-    api_submit(&server, &auth(teacher, "teacher"), a1_id, "teacher demo").await;
-
-    api_grade(
-        &server,
-        &auth(teacher, "teacher"),
-        alice_a1["id"].as_i64().unwrap(),
-        8.5,
-    )
-    .await;
-    api_grade(
-        &server,
-        &auth(teacher, "teacher"),
-        alice_a2["id"].as_i64().unwrap(),
-        30.0,
-    )
-    .await;
-    api_grade(
-        &server,
-        &auth(teacher, "teacher"),
-        bob_a1["id"].as_i64().unwrap(),
-        9.0,
-    )
-    .await;
-
-    let book = get_ok(
-        &server,
-        &auth(teacher, "teacher"),
-        &format!("/courses/{course}/gradebook"),
-    )
-    .await;
-
-    // Both assignments, in creation order.
-    let ids: Vec<i64> = book["assignment_ids"]
-        .as_array()
-        .expect("assignment_ids array")
-        .iter()
-        .map(|v| v.as_i64().expect("assignment id"))
-        .collect();
-    assert_eq!(ids, vec![a1_id, a2_id], "creation order");
-
-    // One row per enrolled student, ordered by name; the teacher and the
-    // other-course student are excluded.
-    let rows = book["rows"].as_array().expect("rows array");
-    assert_eq!(rows.len(), 3, "students only: {rows:?}");
-    let names: Vec<&str> = rows
-        .iter()
-        .map(|r| r["user"]["name"].as_str().expect("name"))
-        .collect();
-    assert_eq!(names, vec!["Alice", "Bob", "Carol"]);
-    assert!(rows.iter().all(|r| r["user"]["id"] != teacher));
-    assert!(rows.iter().all(|r| r["user"]["id"] != outsider));
-
-    // Alice: graded on both -> (8.5 + 30) / (10 + 40) * 100.
-    let alice_row = &rows[0];
-    assert_eq!(
-        alice_row["user"]["email"],
-        format!("{prefix}-Alice@test.local")
-    );
-    let alice_subs = alice_row["submissions"]
-        .as_array()
-        .expect("alice submissions");
-    assert_eq!(alice_subs.len(), 2);
-    assert_eq!(alice_subs[0]["assignment_id"], a1_id);
-    assert_eq!(alice_subs[0]["score"].as_f64(), Some(8.5));
-    assert_eq!(alice_subs[0]["points_possible"].as_f64(), Some(10.0));
-    assert_eq!(alice_subs[1]["assignment_id"], a2_id);
-    assert_eq!(alice_subs[1]["score"].as_f64(), Some(30.0));
-    assert_eq!(alice_subs[1]["points_possible"].as_f64(), Some(40.0));
-    let expected_alice = (8.5 + 30.0) / (10.0 + 40.0) * 100.0;
-    let actual_alice = alice_row["current_grade"].as_f64().expect("alice grade");
-    assert!(
-        (actual_alice - expected_alice).abs() < 0.01,
-        "alice: {actual_alice} vs {expected_alice}"
-    );
-
-    // Bob: graded only on the quiz; the ungraded essay is excluded from the
-    // denominator -> 9 / 10 * 100.
-    let bob_row = &rows[1];
-    let bob_subs = bob_row["submissions"].as_array().expect("bob submissions");
-    assert_eq!(bob_subs[0]["score"].as_f64(), Some(9.0));
-    assert!(bob_subs[1].get("score").is_none(), "ungraded: no score key");
-    assert_eq!(bob_subs[1]["points_possible"].as_f64(), Some(40.0));
-    let expected_bob = 9.0 / 10.0 * 100.0;
-    let actual_bob = bob_row["current_grade"].as_f64().expect("bob grade");
-    assert!(
-        (actual_bob - expected_bob).abs() < 0.01,
-        "bob: {actual_bob} vs {expected_bob}"
-    );
-
-    // Carol: no submissions at all -> null current_grade, one slot per
-    // assignment with the points but no score.
-    let carol_row = &rows[2];
-    assert!(carol_row["current_grade"].is_null());
-    let carol_subs = carol_row["submissions"]
-        .as_array()
-        .expect("carol submissions");
-    assert_eq!(carol_subs.len(), 2);
-    assert!(carol_subs.iter().all(|s| s.get("score").is_none()));
-    assert_eq!(carol_subs[0]["points_possible"].as_f64(), Some(10.0));
-    assert_eq!(carol_subs[1]["points_possible"].as_f64(), Some(40.0));
-
-    // Admins can read the gradebook without an enrollment.
-    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
-    let admin_view = server
-        .get(&format!("/courses/{course}/gradebook"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
-        .await;
-    assert_eq!(admin_view.status_code(), 200, "body: {}", admin_view.text());
-
-    cleanup(&pool, &prefix).await;
-}
-
-#[tokio::test]
-async fn gradebook_requires_teacher_or_admin() {
-    let Some((server, pool, prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let f = seed_fixture(&server, &pool, &prefix, "GradebookForbidden").await;
-
-    // Enrolled students cannot see the gradebook.
-    let resp = server
-        .get(&format!("/courses/{}/gradebook", f.course))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            auth(f.student, "student"),
-        )
-        .await;
-    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-
-    // Teachers without an enrollment in the course cannot either.
-    let other_teacher = seed_user(&pool, &prefix, "OtherTeacher", "teacher").await;
-    let resp = server
-        .get(&format!("/courses/{}/gradebook", f.course))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            auth(other_teacher, "teacher"),
-        )
-        .await;
-    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-
-    cleanup(&pool, &prefix).await;
-}
-
-#[tokio::test]
-async fn gradebook_empty_course_returns_empty_structure() {
-    let Some((server, pool, prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
-    let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "EmptyGradebook").await;
-    seed_enrollment(&pool, teacher, course, "teacher").await;
-    seed_enrollment(&pool, student, course, "student").await;
-
-    // No assignments: the handler short-circuits, so even enrolled students
-    // produce no rows.
-    let book = get_ok(
-        &server,
-        &auth(teacher, "teacher"),
-        &format!("/courses/{course}/gradebook"),
-    )
-    .await;
-
-    assert_eq!(book["assignment_ids"].as_array().unwrap().len(), 0);
-    assert_eq!(book["rows"].as_array().unwrap().len(), 0);
 
     cleanup(&pool, &prefix).await;
 }
@@ -2093,56 +1931,7 @@ async fn nested_create_submission_alias_matches_flat_route() {
 }
 
 #[tokio::test]
-async fn nested_self_submission_alias_returns_callers_submission() {
-    let Some((server, pool, prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let f = seed_fixture(&server, &pool, &prefix, "NestedSelf").await;
-    let second = seed_user(&pool, &prefix, "SecondStudent", "student").await;
-    seed_enrollment(&pool, second, f.course, "student").await;
-
-    api_submit(
-        &server,
-        &auth(f.student, "student"),
-        f.assignment,
-        "first student answer",
-    )
-    .await;
-    api_submit(
-        &server,
-        &auth(second, "student"),
-        f.assignment,
-        "second student answer",
-    )
-    .await;
-
-    let flat = get_ok(
-        &server,
-        &auth(f.student, "student"),
-        &format!("/assignments/{}/submissions/me", f.assignment),
-    )
-    .await;
-    let nested = get_ok(
-        &server,
-        &auth(f.student, "student"),
-        &format!(
-            "/courses/{}/assignments/{}/submissions/self",
-            f.course, f.assignment
-        ),
-    )
-    .await;
-
-    assert_eq!(nested, flat, "self alias returns the flat /me payload");
-    assert_eq!(nested["user_id"], f.student);
-    assert_eq!(nested["body"], "first student answer");
-
-    cleanup(&pool, &prefix).await;
-}
-
-#[tokio::test]
-async fn nested_grade_submission_alias_matches_flat_grade() {
+async fn nested_grade_accepts_canvas_posted_grade_shape() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -2158,9 +1947,8 @@ async fn nested_grade_submission_alias_matches_flat_grade() {
     .await;
     let submission_id = sub["id"].as_i64().expect("submission id");
 
-    // Same score through both routes: only updated_at may differ.
-    let flat = api_grade(&server, &auth(f.teacher, "teacher"), submission_id, 9.0).await;
-
+    // Canvas posts grades as `submission[posted_grade]`; the numeric `score`
+    // spelling stays supported for the existing star-lms clients.
     let nested_resp = server
         .put(&format!(
             "/courses/{}/assignments/{}/submissions/{}",
@@ -2170,7 +1958,7 @@ async fn nested_grade_submission_alias_matches_flat_grade() {
             axum::http::header::AUTHORIZATION,
             auth(f.teacher, "teacher"),
         )
-        .json(&json!({ "score": 9.0 }))
+        .json(&json!({ "submission": { "posted_grade": "9" } }))
         .await;
     assert_eq!(
         nested_resp.status_code(),
@@ -2178,14 +1966,12 @@ async fn nested_grade_submission_alias_matches_flat_grade() {
         "nested: {}",
         nested_resp.text()
     );
-    let mut nested: Value = nested_resp.json();
-
-    let mut flat_cmp = flat.clone();
-    strip_fields(&mut flat_cmp, &["updated_at"]);
-    strip_fields(&mut nested, &["updated_at"]);
-    assert_eq!(nested, flat_cmp, "nested grade returns the flat payload");
+    let nested: Value = nested_resp.json();
 
     assert_eq!(nested["user_id"], f.student);
+    assert_eq!(nested["assignment_id"], f.assignment);
+    assert_eq!(nested["score"].as_f64(), Some(9.0));
+    assert_eq!(nested["workflow_state"], "graded");
     assert_eq!(db_submission_score(&pool, submission_id).await, Some(9.0));
 
     cleanup(&pool, &prefix).await;
@@ -2320,13 +2106,10 @@ async fn unauthenticated_requests_are_401() {
     assert_eq!(resp.status_code(), 401, "submit: {}", resp.text());
 
     let resp = server
-        .put("/submissions/1/grade")
+        .put("/courses/1/assignments/1/submissions/1")
         .json(&json!({ "score": 1.0 }))
         .await;
     assert_eq!(resp.status_code(), 401, "grade: {}", resp.text());
-
-    let resp = server.get("/courses/1/gradebook").await;
-    assert_eq!(resp.status_code(), 401, "gradebook: {}", resp.text());
 
     // A malformed bearer token is rejected the same way.
     let resp = server
@@ -2374,25 +2157,18 @@ async fn test_assignment_overrides_crud() {
     assert!(created["course_section_id"].is_null());
     assert!(created["group_id"].is_null());
 
-    // List (nested) and show (flat + nested alias).
+    // List and show, both through Canvas' nested override path.
     let list = get_ok(&server, &teacher, &nested).await;
     assert_eq!(list.as_array().map(|rows| rows.len()), Some(1));
 
-    let shown = get_ok(
-        &server,
-        &teacher,
-        &format!("/assignment_overrides/{override_id}"),
-    )
-    .await;
-    assert_eq!(shown["title"], "Extended deadline");
-
     let shown_nested = get_ok(&server, &teacher, &format!("{nested}/{override_id}")).await;
     assert_eq!(shown_nested["id"].as_i64(), Some(override_id));
+    assert_eq!(shown_nested["title"], "Extended deadline");
 
-    // Update through the flat route; omitting student_ids keeps the ad-hoc
-    // target set unchanged.
+    // Update through Canvas' nested route; omitting student_ids keeps the
+    // ad-hoc target set unchanged.
     let resp = server
-        .put(&format!("/assignment_overrides/{override_id}"))
+        .put(&format!("{nested}/{override_id}"))
         .add_header(axum::http::header::AUTHORIZATION, &teacher)
         .json(&json!({
             "title": "Extended again",
@@ -2406,7 +2182,7 @@ async fn test_assignment_overrides_crud() {
 
     // Delete soft-deletes and returns the former details (Canvas behavior).
     let resp = server
-        .delete(&format!("/assignment_overrides/{override_id}"))
+        .delete(&format!("{nested}/{override_id}"))
         .add_header(axum::http::header::AUTHORIZATION, &teacher)
         .await;
     assert_eq!(resp.status_code(), 200, "delete override: {}", resp.text());
@@ -2418,7 +2194,7 @@ async fn test_assignment_overrides_crud() {
     assert_eq!(list.as_array().map(|rows| rows.len()), Some(0));
 
     let resp = server
-        .get(&format!("/assignment_overrides/{override_id}"))
+        .get(&format!("{nested}/{override_id}"))
         .add_header(axum::http::header::AUTHORIZATION, &teacher)
         .await;
     assert_eq!(resp.status_code(), 404, "deleted show: {}", resp.text());

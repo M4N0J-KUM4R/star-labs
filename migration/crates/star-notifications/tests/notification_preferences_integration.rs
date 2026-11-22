@@ -6,10 +6,13 @@
 //! - GET /users/{userId}/communication_channels/{communicationChannelId}/notification_preferences/{notification}
 //! - GET /users/{userId}/communication_channels/{type}/{address}/notification_preferences
 //! - GET /users/{userId}/communication_channels/{type}/{address}/notification_preferences/{notification}
-//! - GET /users/{userId}/notification_preference_categories
+//! - GET /users/{userId}/communication_channels/{communicationChannelId}/notification_preference_categories
 //! - PUT /users/{userId}/communication_channels/{type}/{address}/notification_preferences
 //! - PUT /users/{userId}/communication_channels/{type}/{address}/notification_preferences/{notification}
-//! - PUT /users/{userId}/notification_preference_categories/{category}
+//!
+//! Canvas scopes every preference path to a communication channel, so the
+//! category list has only the channel-id form here; the category *update*
+//! (routes.rb:2076) is the channel-id form and is served by star-users.
 //!
 //! Permission semantics: GETs self-or-admin; updates SELF only (Canvas
 //! render_unauthorized_action). Channel-address forms resolve the channel by
@@ -709,84 +712,6 @@ async fn channel_preference_show_by_address_defaults_to_never() {
 }
 
 // ---------------------------------------------------------------------------
-// Tests — GET /users/{userId}/notification_preference_categories
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn notification_preference_categories_list_returns_canvas_envelope() {
-    let Some((server, pool, prefix)) = setup().await else {
-        eprintln!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let user_id = seed_user(&pool, &prefix, "cats", "student").await;
-    let token = auth_header(&pool, user_id, "student");
-
-    let resp = server
-        .get("/api/v1/users/self/notification_preference_categories")
-        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
-        .await;
-
-    assert_eq!(
-        resp.status_code(),
-        200,
-        "categories list: {:#?}",
-        resp.text()
-    );
-    let body: Value = resp.json::<Value>();
-    let categories = body["categories"]
-        .as_array()
-        .expect("response must wrap slugs in categories");
-    let slugs: Vec<&str> = categories
-        .iter()
-        .map(|slug| slug.as_str().unwrap())
-        .collect();
-    assert_eq!(
-        slugs,
-        vec![
-            "announcement",
-            "discussion",
-            "conversation",
-            "grading",
-            "due_date",
-            "calendar",
-            "registration",
-            "administrative",
-            "other",
-        ],
-        "all derive_category slugs, uncompressed and unique"
-    );
-
-    teardown(&pool, &[user_id]).await;
-}
-
-#[tokio::test]
-async fn notification_preference_categories_requires_auth_and_known_user() {
-    let Some((server, pool, prefix)) = setup().await else {
-        eprintln!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let resp = server
-        .get("/api/v1/users/self/notification_preference_categories")
-        .await;
-    assert_eq!(resp.status_code(), 401, "unauthenticated request");
-
-    let user_id = seed_user(&pool, &prefix, "cats-unk", "student").await;
-    let token = auth_header(&pool, user_id, "student");
-    let resp = server
-        .get("/api/v1/users/99999999/notification_preference_categories")
-        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
-        .await;
-    assert_eq!(resp.status_code(), 404, "unknown user must be 404");
-
-    teardown(&pool, &[user_id]).await;
-}
-
-// ---------------------------------------------------------------------------
-// Tests — GET .../communication_channels/{id}/notification_preference_categories
-// (Canvas `category_index` scoped by channel id)
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn scoped_channel_categories_returns_canvas_envelope() {
@@ -1123,115 +1048,6 @@ async fn update_channel_preferences_by_address_unknown_channel_returns_404() {
 }
 
 // ---------------------------------------------------------------------------
-// Tests — PUT /users/{userId}/notification_preference_categories/{category}
-// ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn update_channel_preferences_by_category_updates_every_notification() {
-    let Some((server, pool, prefix)) = setup().await else {
-        eprintln!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let user_id = seed_user(&pool, &prefix, "upd-cat", "student").await;
-    let channel_id = seed_channel(
-        &pool,
-        user_id,
-        &format!("{prefix}-cat@example.edu"),
-        "email",
-        "active",
-    )
-    .await;
-    // A discussion preference that must NOT be touched by an announcement
-    // category update.
-    seed_preference(
-        &pool,
-        user_id,
-        channel_id,
-        "new_discussion_entry",
-        "discussion",
-        "weekly",
-    )
-    .await;
-
-    let token = auth_header(&pool, user_id, "student");
-    let resp = server
-        .put("/api/v1/users/self/notification_preference_categories/announcement")
-        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
-        .json(&json!({
-            "notification_preferences": { "frequency": "daily" }
-        }))
-        .await;
-
-    assert_eq!(
-        resp.status_code(),
-        200,
-        "category update: {:#?}",
-        resp.text()
-    );
-    let body: Value = resp.json::<Value>();
-    let prefs = body["notification_preferences"]
-        .as_array()
-        .expect("category update returns the category's preferences");
-    let names: Vec<&str> = prefs
-        .iter()
-        .map(|p| p["notification"].as_str().unwrap())
-        .collect();
-    assert!(names.contains(&"new_announcement"), "names: {names:?}");
-    assert!(
-        names.contains(&"announcement_created_by_student"),
-        "names: {names:?}"
-    );
-    assert!(
-        prefs.iter().all(|p| p["frequency"] == "daily"),
-        "every category preference gets the frequency"
-    );
-    assert!(
-        prefs.iter().all(|p| p["category"] == "announcement"),
-        "only the requested category is returned"
-    );
-
-    // The discussion preference keeps its old frequency.
-    let discussion: String = sqlx::query_scalar(
-        "SELECT frequency FROM notification_preferences WHERE communication_channel_id = $1 AND notification = 'new_discussion_entry'",
-    )
-    .bind(channel_id)
-    .fetch_one(&pool)
-    .await
-    .expect("stored discussion frequency");
-    assert_eq!(discussion, "weekly", "other categories must be untouched");
-
-    teardown(&pool, &[user_id]).await;
-}
-
-#[tokio::test]
-async fn update_channel_preferences_by_category_unknown_returns_404() {
-    let Some((server, pool, prefix)) = setup().await else {
-        eprintln!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let user_id = seed_user(&pool, &prefix, "upd-cat-unk", "student").await;
-    let token = auth_header(&pool, user_id, "student");
-
-    let resp = server
-        .put("/api/v1/users/self/notification_preference_categories/not_a_category")
-        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
-        .json(&json!({
-            "notification_preferences": { "frequency": "daily" }
-        }))
-        .await;
-    assert_eq!(
-        resp.status_code(),
-        404,
-        "unknown category must be 404 (Canvas RecordNotFound): {:#?}",
-        resp.text()
-    );
-
-    teardown(&pool, &[user_id]).await;
-}
-
-// ---------------------------------------------------------------------------
 // Tests — write gates (self-only updates)
 // ---------------------------------------------------------------------------
 
@@ -1286,20 +1102,6 @@ async fn channel_preference_updates_are_self_only() {
         resp.text()
     );
 
-    let resp = server
-        .put(&format!(
-            "/api/v1/users/{owner_id}/notification_preference_categories/announcement"
-        ))
-        .add_header(axum::http::header::AUTHORIZATION, token.as_str())
-        .json(&payload_single)
-        .await;
-    assert_eq!(
-        resp.status_code(),
-        403,
-        "non-self category update must be 403: {:#?}",
-        resp.text()
-    );
-
     // Canvas keeps updates self-only even for admins
     // (render_unauthorized_action unless @user == @current_user).
     let admin_token = auth_header(&pool, admin_id, "admin");
@@ -1330,14 +1132,15 @@ async fn channel_preference_updates_unknown_user_returns_404() {
     let user_id = seed_user(&pool, &prefix, "upd-unk-user", "student").await;
     let token = auth_header(&pool, user_id, "student");
 
+    // Canvas 404s the unknown user before the self-only write gate is reached.
     let resp = server
-        .put("/api/v1/users/99999999/notification_preference_categories/announcement")
+        .put("/api/v1/users/99999999/communication_channels/email/ghost@example.edu/notification_preferences")
         .add_header(axum::http::header::AUTHORIZATION, token.as_str())
         .json(&json!({
-            "notification_preferences": { "frequency": "daily" }
+            "notification_preferences": { "new_announcement": { "frequency": "daily" } }
         }))
         .await;
-    assert_eq!(resp.status_code(), 404, "unknown user must be 404");
+    assert_eq!(resp.status_code(), 404, "unknown user must be 404: {}", resp.text());
 
     teardown(&pool, &[user_id]).await;
 }

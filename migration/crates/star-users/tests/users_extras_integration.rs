@@ -959,3 +959,147 @@ async fn activity_stream_empty_and_summary_shapes() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// /users/{userId}/custom_data(/:scope) — Canvas' optional glob segment
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn custom_data_nested_scope_round_trip() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let student = seed_user(&pool, &prefix, "Cora Custom", "student").await;
+    let ns = format!("com.{prefix}.custom-app");
+    let q = format!("?ns={ns}");
+
+    // First write to a nested scope is a 201 (Canvas: overwrite ? :created).
+    let resp = server
+        .put(&format!(
+            "/users/{student}/custom_data/body/measurements{q}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&serde_json::json!({ "data": { "waist": "32in", "chest": "40in" } }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+
+    // The glob form reaches a leaf, and `self` addresses the caller.
+    let resp = server
+        .get(&format!(
+            "/users/self/custom_data/body/measurements/waist{q}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>(), serde_json::json!({ "data": "32in" }));
+
+    // The empty form of the optional segment is the tree root.
+    let resp = server
+        .get(&format!("/users/self/custom_data{q}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(
+        resp.json::<Value>(),
+        serde_json::json!({ "data": { "body": { "measurements": { "waist": "32in", "chest": "40in" } } } })
+    );
+
+    // Overwriting one leaf answers 200 and leaves its sibling.
+    let resp = server
+        .put(&format!(
+            "/users/self/custom_data/body/measurements/waist{q}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&serde_json::json!({ "data": "33in" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    let resp = server
+        .delete(&format!(
+            "/users/self/custom_data/body/measurements/waist{q}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>(), serde_json::json!({ "data": "33in" }));
+
+    // A scope that no longer exists is Canvas' ArgumentError, not a 404.
+    let resp = server
+        .get(&format!(
+            "/users/self/custom_data/body/measurements/waist{q}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(
+        resp.json::<Value>(),
+        serde_json::json!({ "message": "invalid scope for hash" })
+    );
+
+    let _ = sqlx::query("DELETE FROM custom_data WHERE user_id = $1")
+        .bind(student)
+        .execute(&pool)
+        .await;
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn custom_data_requires_a_namespace_and_a_readable_scope() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let student = seed_user(&pool, &prefix, "Nora Namespace", "student").await;
+    let other = seed_user(&pool, &prefix, "Omar Other", "student").await;
+
+    // require_namespace runs before the scope work: blank ns is a 400.
+    let resp = server
+        .get(&format!("/users/{student}/custom_data/telephone?ns="))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(
+        resp.json::<Value>(),
+        serde_json::json!({ "message": "invalid namespace" })
+    );
+
+    // A missing row is Canvas' require_custom_data halt.
+    let resp = server
+        .get(&format!(
+            "/users/{student}/custom_data/telephone?ns=com.{prefix}.absent"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(
+        resp.json::<Value>(),
+        serde_json::json!({ "message": "no data for scope" })
+    );
+
+    // :read is self-or-admin, so another user's data is 403.
+    let resp = server
+        .get(&format!(
+            "/users/{other}/custom_data/telephone?ns=com.{prefix}.other"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // api_find: a non-numeric, non-self id is a 404 before any data access.
+    let resp = server
+        .get("/users/none-of-your-business/custom_data/telephone?ns=x")
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    for user_id in [student, other] {
+        let _ = sqlx::query("DELETE FROM custom_data WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&pool)
+            .await;
+    }
+    cleanup(&pool, &prefix).await;
+}

@@ -1,8 +1,12 @@
-//! Integration tests for star-submission-comments Canvas nested route aliases.
+//! Integration tests for star-submission-comments Canvas nested routes.
 //!
 //! Exercises the real router against a real Postgres:
-//! - GET/POST /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments
 //! - DELETE   /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
+//! - PUT      same nested member path
+//!
+//! The nested collection has no list/create route (Canvas exposes the thread
+//! through `include[]=submission_comments` and writes it through the
+//! submission update), so those sides are covered by the flat routes here.
 //!
 //! Skipped cleanly when DATABASE_URL is not set. Run with:
 //! DATABASE_URL=postgres://... cargo test -p star-submission-comments
@@ -156,7 +160,7 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
 }
 
 #[tokio::test]
-async fn nested_alias_list_create_delete_match_flat_routes() {
+async fn nested_member_edit_delete_match_flat_routes() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -171,44 +175,37 @@ async fn nested_alias_list_create_delete_match_flat_routes() {
     let nested = nested_path(course, assignment, student);
     let flat = flat_path(submission);
 
-    // Create via the nested alias.
-    let resp = server
-        .post(&nested)
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "comment": "via nested" }))
-        .await;
-    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
-    let created: Value = resp.json();
-    assert_eq!(created["submission_id"].as_i64(), Some(submission));
-    assert_eq!(created["author_id"].as_i64(), Some(teacher));
-    assert_eq!(created["workflow_state"], "active");
-    let created_id = created["id"].as_i64().unwrap();
-
-    // Create via the existing flat route.
+    // The thread is written through the flat route (Canvas writes comments on
+    // the submission update; the nested collection has no create route).
     let resp = server
         .post(&flat)
-        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "comment": "via flat" }))
         .await;
     assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
-    let flat_created_id = resp.json::<Value>()["id"].as_i64().unwrap();
+    let created_id = resp.json::<Value>()["id"].as_i64().unwrap();
 
-    // Nested list and flat list expose the same active comments.
-    let nested_list: Vec<Value> = server
-        .get(&nested)
+    // Editing through the nested member route is visible on the flat list.
+    let resp = server
+        .put(&format!("{nested}/{created_id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .await
-        .json();
+        .json(&json!({ "comment": "via nested" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "nested edit: {}", resp.text());
     let flat_list: Vec<Value> = server
         .get(&flat)
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await
         .json();
-    assert_eq!(nested_list.len(), 2, "nested list: {nested_list:?}");
-    assert_eq!(sorted_ids(&nested_list), sorted_ids(&flat_list));
-    assert_eq!(sorted_ids(&nested_list), vec![created_id, flat_created_id]);
+    assert_eq!(sorted_ids(&flat_list), vec![created_id]);
+    assert_eq!(flat_list[0]["comment"], "via nested");
+    assert!(
+        flat_list[0]["edited_at"].is_string(),
+        "edited_at stamped: {}",
+        flat_list[0]
+    );
 
-    // Delete via the nested alias, observe it through the flat route.
+    // Delete via the nested member route, observe it through the flat route.
     let resp = server
         .delete(&format!("{nested}/{created_id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
@@ -219,20 +216,13 @@ async fn nested_alias_list_create_delete_match_flat_routes() {
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await
         .json();
-    assert_eq!(sorted_ids(&flat_list), vec![flat_created_id]);
-
-    // The flat delete route keeps working unchanged.
-    let resp = server
-        .delete(&format!("{flat}/{flat_created_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
-        .await;
-    assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
+    assert!(flat_list.is_empty(), "soft-deleted: {flat_list:?}");
 
     cleanup(&pool, &prefix).await;
 }
 
 #[tokio::test]
-async fn nested_alias_cross_course_or_wrong_user_is_404() {
+async fn nested_member_cross_course_or_wrong_user_is_404() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -256,32 +246,47 @@ async fn nested_alias_cross_course_or_wrong_user_is_404() {
 
     // The assignment belongs to `course`, not `other_course`.
     let wrong_course = nested_path(other_course, assignment, student);
-    let resp = server
-        .get(&wrong_course)
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .await;
-    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-    let resp = server
-        .post(&wrong_course)
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "comment": "cross-course" }))
-        .await;
-    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    for (label, resp) in [
+        (
+            "get",
+            server
+                .get(&format!("{wrong_course}/{comment_id}"))
+                .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+                .await,
+        ),
+        (
+            "put",
+            server
+                .put(&format!("{wrong_course}/{comment_id}"))
+                .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+                .json(&json!({ "comment": "cross-course" }))
+                .await,
+        ),
+        (
+            "delete",
+            server
+                .delete(&format!("{wrong_course}/{comment_id}"))
+                .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+                .await,
+        ),
+    ] {
+        assert_eq!(
+            resp.status_code(),
+            404,
+            "wrong course {label}: {}",
+            resp.text()
+        );
+    }
 
     // `other` has no submission for this assignment.
     let wrong_user = nested_path(course, assignment, other);
     let resp = server
-        .get(&wrong_user)
+        .get(&format!("{wrong_user}/{comment_id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
-    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    assert_eq!(resp.status_code(), 404, "wrong user: {}", resp.text());
 
-    // Nested delete with a mismatched course must not touch the comment.
-    let resp = server
-        .delete(&format!("{wrong_course}/{comment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .await;
-    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    // The comment survived every mismatched request.
     let flat_list: Vec<Value> = server
         .get(&flat_path(submission))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
@@ -293,7 +298,7 @@ async fn nested_alias_cross_course_or_wrong_user_is_404() {
 }
 
 #[tokio::test]
-async fn nested_alias_keeps_existing_authorization() {
+async fn nested_member_keeps_existing_authorization() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -318,49 +323,69 @@ async fn nested_alias_keeps_existing_authorization() {
     assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
     let comment_id = resp.json::<Value>()["id"].as_i64().unwrap();
 
-    // Non-enrolled outsider is forbidden on both flat and nested routes.
+    // A non-enrolled outsider cannot reach the thread on either spelling.
     let resp = server
         .get(&flat_path(submission))
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "flat list: {}", resp.text());
     let resp = server
-        .get(&nested)
+        .get(&format!("{nested}/{comment_id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
-    assert_eq!(resp.status_code(), 403, "nested list: {}", resp.text());
+    assert_eq!(resp.status_code(), 403, "nested get: {}", resp.text());
     let resp = server
-        .post(&nested)
+        .put(&format!("{nested}/{comment_id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .json(&json!({ "comment": "not allowed" }))
         .await;
-    assert_eq!(resp.status_code(), 403, "nested create: {}", resp.text());
+    assert_eq!(resp.status_code(), 403, "nested edit: {}", resp.text());
 
-    // Only the comment author (or admin) may delete — unchanged via alias.
-    let resp = server
-        .delete(&format!("{nested}/{comment_id}"))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            auth(classmate, "student"),
-        )
-        .await;
-    assert_eq!(resp.status_code(), 403, "nested delete: {}", resp.text());
-    let resp = server
-        .delete(&format!("{}/{}", flat_path(submission), comment_id))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            auth(classmate, "student"),
-        )
-        .await;
-    assert_eq!(resp.status_code(), 403, "flat delete: {}", resp.text());
+    // Only the comment author (or admin) may edit or delete.
+    for (label, resp) in [
+        (
+            "classmate edit",
+            server
+                .put(&format!("{nested}/{comment_id}"))
+                .add_header(
+                    axum::http::header::AUTHORIZATION,
+                    auth(classmate, "student"),
+                )
+                .json(&json!({ "comment": "not yours" }))
+                .await,
+        ),
+        (
+            "classmate delete",
+            server
+                .delete(&format!("{nested}/{comment_id}"))
+                .add_header(
+                    axum::http::header::AUTHORIZATION,
+                    auth(classmate, "student"),
+                )
+                .await,
+        ),
+        (
+            "flat delete",
+            server
+                .delete(&format!("{}/{}", flat_path(submission), comment_id))
+                .add_header(
+                    axum::http::header::AUTHORIZATION,
+                    auth(classmate, "student"),
+                )
+                .await,
+        ),
+    ] {
+        assert_eq!(resp.status_code(), 403, "{label}: {}", resp.text());
+    }
 
-    // The comment survived the forbidden deletes.
+    // The comment survived the forbidden writes.
     let flat_list: Vec<Value> = server
         .get(&flat_path(submission))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await
         .json();
     assert_eq!(sorted_ids(&flat_list), vec![comment_id]);
+    assert_eq!(flat_list[0]["comment"], "teacher comment");
 
     cleanup(&pool, &prefix).await;
 }

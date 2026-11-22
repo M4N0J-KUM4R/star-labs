@@ -17,12 +17,13 @@
 //! Phase 3 adds the permission administration endpoints:
 //!
 //! * `GET/PUT /accounts/{accountId}/role_overrides`
-//! * `GET/PUT /courses/{courseId}/role_overrides`
 //!
 //! [`get_role_overrides`] and [`put_role_overrides`] carry the full endpoint
 //! behavior (context lookup, `manage_role_overrides` authorization, payload
-//! validation, upsert, Canvas-shaped rows), so the router only has to parse
-//! the path context and call them.
+//! validation, upsert, Canvas-shaped rows). They accept an account *or* course
+//! context because Canvas' `RoleOverride` model is polymorphic, but Canvas only
+//! ever routes the account form — course overrides are managed through the
+//! account permissions screens.
 //!
 //! Note: [`Role`] values are the star-lms role strings stored in
 //! `enrollments.role` ("student", "teacher", …); [`Role::canvas_enrollment_type`]
@@ -602,8 +603,8 @@ async fn fetch_context_role_overrides(
     Ok(rows)
 }
 
-/// `GET /accounts/{accountId}/role_overrides` and
-/// `GET /courses/{courseId}/role_overrides`.
+/// `GET /accounts/{accountId}/role_overrides` (also usable with a course
+/// context from inside the API surface).
 ///
 /// `404` when the context does not exist, `403` unless the caller holds
 /// `manage_role_overrides`; otherwise every override of the context as a bare
@@ -621,8 +622,8 @@ pub async fn get_role_overrides(
     fetch_context_role_overrides(db, context, context_id).await
 }
 
-/// `PUT /accounts/{accountId}/role_overrides` and
-/// `PUT /courses/{courseId}/role_overrides`.
+/// `PUT /accounts/{accountId}/role_overrides` (also usable with a course
+/// context from inside the API surface).
 ///
 /// Upserts the body's permissions for one built-in role and returns the
 /// context's overrides (same payload as GET). Existing rows keep their
@@ -1493,10 +1494,6 @@ pub fn router() -> Router<AppState> {
             get(get_account_overrides).put(put_account_overrides),
         )
         .route(
-            "/courses/{courseId}/role_overrides",
-            get(get_course_overrides).put(put_course_overrides),
-        )
-        .route(
             "/accounts/{accountId}/roles",
             get(list_account_roles).post(create_account_role),
         )
@@ -1541,33 +1538,6 @@ async fn put_account_overrides(
         auth.id,
         RoleOverrideContext::Account,
         account_id,
-        &update,
-    )
-    .await
-    .map(Json)
-}
-
-async fn get_course_overrides(
-    State(state): State<AppState>,
-    Path(course_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<Vec<RoleOverrideView>>, ApiError> {
-    get_role_overrides(&state.db, auth.id, RoleOverrideContext::Course, course_id)
-        .await
-        .map(Json)
-}
-
-async fn put_course_overrides(
-    State(state): State<AppState>,
-    Path(course_id): Path<i64>,
-    auth: AuthUser,
-    Json(update): Json<RoleOverridesUpdate>,
-) -> Result<Json<Vec<RoleOverrideView>>, ApiError> {
-    put_role_overrides(
-        &state.db,
-        auth.id,
-        RoleOverrideContext::Course,
-        course_id,
         &update,
     )
     .await

@@ -934,10 +934,6 @@ pub fn lti_gaps_advantage_routes() -> Router<AppState> {
         )
         // Lti::Ims::ToolConsumerProfileController.
         .route(
-            "/api/lti/{context}/{contextId}/tool_consumer_profile",
-            get(tool_consumer_profile),
-        )
-        .route(
             "/api/lti/courses/{courseId}/tool_consumer_profile/{toolConsumerProfileId}",
             get(tool_consumer_profile_course_with_profile),
         )

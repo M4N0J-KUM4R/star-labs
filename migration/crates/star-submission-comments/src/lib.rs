@@ -5,13 +5,11 @@
 //! - GET    /submissions/{submissionId}/comments → [comments], active only, ordered by created_at
 //! - DELETE /submissions/{submissionId}/comments/{commentId} → 204, soft-delete
 //!
-//! Canvas nested aliases (resolve submission by course/assignment/user):
-//! - GET, POST /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments
-//! - DELETE    /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
-//!
-//! Comment read state (Canvas mark-read parity):
-//! - PUT /submissions/{submissionId}/comments/read → 204, marks the thread read
-//! - GET /submissions/{submissionId}/comments/unread_count → { "unread_count": n }
+//! Canvas comment write/read paths (config/routes.rb has no comments index or
+//! create route — the thread arrives through `include[]=submission_comments`
+//! on the submission and is written through `PUT .../submissions/{userId}`,
+//! both in star-assignments):
+//! - DELETE /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
 //!
 //! Single comment + attachments (Canvas SubmissionCommentsApiController):
 //! - POST /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/files
@@ -26,7 +24,6 @@
 //! - GET:  course teacher/admin OR the submission's own student
 //! - DELETE: author of the comment or admin
 //! - PUT (edit): author of the comment or admin
-//! - read state: same audience as GET (teacher/admin or own student)
 //! - comment files upload: same audience as POST (teacher/admin or own student)
 
 use axum::{
@@ -136,12 +133,6 @@ struct CommentRow {
     edited_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
-}
-
-/// Unread comment count response (Canvas `unread_count` shape).
-#[derive(Debug, Clone, Serialize)]
-pub struct UnreadCount {
-    pub unread_count: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +253,7 @@ async fn check_can_view_or_comment(
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// Shared create logic for the flat and Canvas-nested routes.
+/// Shared create logic for the flat route.
 /// Course teacher/admin OR the submission's own student → 201
 async fn create_comment_for(
     state: &AppState,
@@ -362,18 +353,7 @@ async fn create_comment(
     create_comment_for(&state, submission_id, auth, payload).await
 }
 
-/// POST /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments
-async fn create_comment_nested(
-    State(state): State<AppState>,
-    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
-    auth: AuthUser,
-    Json(payload): Json<CreateComment>,
-) -> Result<(StatusCode, Json<SubmissionComment>), ApiError> {
-    let submission_id = resolve_submission_id(&state.db, course_id, assignment_id, user_id).await?;
-    create_comment_for(&state, submission_id, auth, payload).await
-}
-
-/// Shared list logic for the flat and Canvas-nested routes.
+/// Shared list logic for the flat routes.
 /// Course teacher/admin OR the submission's own student → [comments], active only, ordered by created_at
 async fn list_comments_for(
     state: &AppState,
@@ -411,16 +391,6 @@ async fn list_comments(
     Path(submission_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<Vec<SubmissionComment>>, ApiError> {
-    list_comments_for(&state, submission_id, auth).await
-}
-
-/// GET /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments
-async fn list_comments_nested(
-    State(state): State<AppState>,
-    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
-    auth: AuthUser,
-) -> Result<Json<Vec<SubmissionComment>>, ApiError> {
-    let submission_id = resolve_submission_id(&state.db, course_id, assignment_id, user_id).await?;
     list_comments_for(&state, submission_id, auth).await
 }
 
@@ -733,97 +703,6 @@ async fn upload_comment_file_nested(
 }
 
 // ---------------------------------------------------------------------------
-// Comment read state
-// ---------------------------------------------------------------------------
-
-/// Mark the whole comment thread read for the caller (Canvas mark-read parity).
-/// Stores the highest active comment id at mark time, so later comments count
-/// as unread again.
-async fn mark_comments_read_for(
-    state: &AppState,
-    submission_id: i64,
-    auth: AuthUser,
-) -> Result<StatusCode, ApiError> {
-    authorize_comment_thread(state, submission_id, &auth).await?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO submission_comment_reads
-            (submission_id, user_id, last_read_comment_id, read_at, updated_at)
-        VALUES (
-            $1,
-            $2,
-            (SELECT MAX(id) FROM submission_comments
-              WHERE submission_id = $1 AND workflow_state = 'active'),
-            now(),
-            now()
-        )
-        ON CONFLICT (submission_id, user_id) DO UPDATE
-        SET last_read_comment_id = EXCLUDED.last_read_comment_id,
-            read_at = now(),
-            updated_at = now()
-        "#,
-    )
-    .bind(submission_id)
-    .bind(auth.id)
-    .execute(&state.db)
-    .await?;
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// PUT /submissions/{submissionId}/comments/read
-async fn mark_comments_read(
-    State(state): State<AppState>,
-    Path(submission_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<StatusCode, ApiError> {
-    mark_comments_read_for(&state, submission_id, auth).await
-}
-
-/// Count unread comments for the caller: active comments authored by someone
-/// else with an id greater than the last read marker (all when never read).
-/// Comments the caller wrote never count as unread (Canvas parity).
-async fn unread_count_for(
-    state: &AppState,
-    submission_id: i64,
-    auth: &AuthUser,
-) -> Result<Json<UnreadCount>, ApiError> {
-    authorize_comment_thread(state, submission_id, auth).await?;
-
-    let (unread_count,): (i64,) = sqlx::query_as(
-        r#"
-        SELECT COUNT(*)::BIGINT
-        FROM submission_comments c
-        WHERE c.submission_id = $1
-          AND c.workflow_state = 'active'
-          AND c.author_id <> $2
-          AND c.id > COALESCE(
-              (SELECT r.last_read_comment_id
-                 FROM submission_comment_reads r
-                WHERE r.submission_id = $1 AND r.user_id = $2),
-              0
-          )
-        "#,
-    )
-    .bind(submission_id)
-    .bind(auth.id)
-    .fetch_one(&state.db)
-    .await?;
-
-    Ok(Json(UnreadCount { unread_count }))
-}
-
-/// GET /submissions/{submissionId}/comments/unread_count
-async fn comments_unread_count(
-    State(state): State<AppState>,
-    Path(submission_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<UnreadCount>, ApiError> {
-    unread_count_for(&state, submission_id, &auth).await
-}
-
-// ---------------------------------------------------------------------------
 // Annotation notification (Canvas SubmissionCommentsApiController
 // #annotation_notification; issue #55)
 // ---------------------------------------------------------------------------
@@ -955,24 +834,10 @@ pub fn router() -> Router<AppState> {
             "/submissions/{submissionId}/comments/{commentId}",
             delete(delete_comment),
         )
-        // Comment read state
-        .route(
-            "/submissions/{submissionId}/comments/read",
-            put(mark_comments_read),
-        )
-        .route(
-            "/submissions/{submissionId}/comments/unread_count",
-            get(comments_unread_count),
-        )
-        // Canvas nested aliases — resolve submission by course/assignment/user
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments",
-            post(create_comment_nested),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments",
-            get(list_comments_nested),
-        )
+        // Canvas nested member routes — resolve submission by course/assignment/user.
+        // Canvas has no comments index/create here: the thread is read through
+        // `include[]=submission_comments` and written through `PUT
+        // .../submissions/{userId}` (star-assignments).
         // Metadata-only comment file upload (Canvas SubmissionCommentsApiController#create_file)
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/files",

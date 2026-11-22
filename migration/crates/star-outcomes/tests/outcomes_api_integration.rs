@@ -509,6 +509,59 @@ async fn outcome_import_create_accepts_a_multipart_attachment() {
     cleanup(&app.pool, &fixture).await;
 }
 
+/// Canvas' optional `/group/:learning_outcome_group_id` route form records the
+/// target group on the import (`outcome_imports.learning_outcome_group_id`).
+#[tokio::test]
+async fn outcome_import_create_in_group_path_stores_the_group_id() {
+    let Some(app) = setup().await else {
+        return;
+    };
+    let prefix = run_prefix();
+    let fixture = seed(&app.pool, &prefix).await;
+
+    let boundary = "----staroutcomesgroupboundary";
+    let body = format!(
+        "--{boundary}\r\n\
+         Content-Disposition: form-data; name=\"attachment\"; filename=\"outcomes.csv\"\r\n\
+         Content-Type: text/csv\r\n\r\n\
+         {IMPORT_CSV}\r\n\
+         --{boundary}--\r\n"
+    );
+
+    let response = app
+        .client
+        .post(format!(
+            "{}/api/v1/courses/{}/outcome_imports/group/{}",
+            app.base_url, fixture.course_id, fixture.group_id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
+        .header(
+            "Content-Type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(body)
+        .send()
+        .await
+        .expect("create the grouped import");
+
+    assert_eq!(response.status(), 200);
+    let created: Value = response.json().await.expect("decode the body");
+    assert_eq!(created["workflow_state"], "created");
+
+    let stored: Option<i64> =
+        sqlx::query_scalar("SELECT learning_outcome_group_id FROM outcome_imports WHERE id = $1")
+            .bind(created["id"].as_i64().expect("import id"))
+            .fetch_one(&app.pool)
+            .await
+            .expect("read back the group id");
+    assert_eq!(stored, Some(fixture.group_id));
+
+    cleanup(&app.pool, &fixture).await;
+}
+
 #[tokio::test]
 async fn outcome_import_create_refuses_a_user_without_the_import_permission() {
     let Some(app) = setup().await else {

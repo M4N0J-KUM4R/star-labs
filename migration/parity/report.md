@@ -6,7 +6,7 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 1403 | 1403 | 100.0% |
+| REST API routes | 1410 | 1410 | 100.0% |
 | REST routes referenced from `ui/` | 503 | 503 | 100.0% |
 | GraphQL files | 1 | 390 | 0.3% |
 | GraphQL object types | 246 | 246 | 100.0% |
@@ -17,9 +17,9 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | js_env files | 0 | 124 | 0.0% |
 | Schema tables (vs 688 Canvas models) | 397 | 688 | n/a |
 
-Implemented REST route count: **1403 / 1403** (100.0%).
+Implemented REST route count: **1410 / 1410** (100.0%).
 
-Star registrations: 1612 route/method pairs from 1323 `.route(...)` calls (0 unparsed); 207 have no Canvas match and are listed as extras below.
+Star registrations: 1569 route/method pairs from 1280 `.route(...)` calls (0 unparsed); 157 have no Canvas match and are listed as extras below.
 
 Excluded before counting: 3 `.route(...)` calls inside `#[cfg(test)]` or `#[test]` bodies, 2 calls in `.rs` files no `mod` declaration reaches (not compiled, so not registered).
 
@@ -82,6 +82,7 @@ Canvas source sizes: 390 GraphQL files (246 object types, 100 mutations), 688 mo
 | `favorites` | 8 | 8 | 100.0% |
 | `grading_periods` | 8 | 8 | 100.0% |
 | `lti/tool_proxy` | 8 | 8 | 100.0% |
+| `outcome_imports_api` | 8 | 8 | 100.0% |
 | `release_notes` | 8 | 8 | 100.0% |
 | `role_overrides` | 8 | 8 | 100.0% |
 | `collaborations` | 7 | 7 | 100.0% |
@@ -96,13 +97,13 @@ Canvas source sizes: 390 GraphQL files (246 object types, 100 mutations), 688 mo
 | `account_calendars_api` | 6 | 6 | 100.0% |
 | `account_reports` | 6 | 6 | 100.0% |
 | `block_editor_templates_api` | 6 | 6 | 100.0% |
+| `custom_data` | 6 | 6 | 100.0% |
 | `external_feeds` | 6 | 6 | 100.0% |
 | `learn_platform` | 6 | 6 | 100.0% |
 | `lti/context_controls` | 6 | 6 | 100.0% |
 | `lti/resource_links` | 6 | 6 | 100.0% |
 | `lti_api` | 6 | 6 | 100.0% |
 | `media_tracks` | 6 | 6 | 100.0% |
-| `outcome_imports_api` | 6 | 6 | 100.0% |
 | `outcome_results` | 6 | 6 | 100.0% |
 | `pseudonyms` | 6 | 6 | 100.0% |
 | `quizzes/quiz_groups` | 6 | 6 | 100.0% |
@@ -138,6 +139,7 @@ Canvas source sizes: 390 GraphQL files (246 object types, 100 mutations), 688 mo
 | `gradebook_history_api` | 4 | 4 | 100.0% |
 | `grading_period_sets` | 4 | 4 | 100.0% |
 | `lti/account_external_tools` | 4 | 4 | 100.0% |
+| `lti/ims/tool_consumer_profile` | 4 | 4 | 100.0% |
 | `lti/lti_apps` | 4 | 4 | 100.0% |
 | `microsoft_sync/groups` | 4 | 4 | 100.0% |
 | `outcome_proficiency_api` | 4 | 4 | 100.0% |
@@ -151,7 +153,6 @@ Canvas source sizes: 390 GraphQL files (246 object types, 100 mutations), 688 mo
 | `authentication_audit_api` | 3 | 3 | 100.0% |
 | `brand_configs_api` | 3 | 3 | 100.0% |
 | `course_reports` | 3 | 3 | 100.0% |
-| `custom_data` | 3 | 3 | 100.0% |
 | `custom_gradebook_column_data_api` | 3 | 3 | 100.0% |
 | `discovery_pages_api` | 3 | 3 | 100.0% |
 | `epub_exports` | 3 | 3 | 100.0% |
@@ -192,7 +193,6 @@ Canvas source sizes: 390 GraphQL files (246 object types, 100 mutations), 688 mo
 | `lti/ims/names_and_roles` | 2 | 2 | 100.0% |
 | `lti/ims/notice_handlers` | 2 | 2 | 100.0% |
 | `lti/ims/results` | 2 | 2 | 100.0% |
-| `lti/ims/tool_consumer_profile` | 2 | 2 | 100.0% |
 | `lti/membership_service` | 2 | 2 | 100.0% |
 | `lti/token` | 2 | 2 | 100.0% |
 | `lti/users_api` | 2 | 2 | 100.0% |
@@ -276,7 +276,7 @@ Renames mapped to Canvas names: `CourseSection` -> `Section`, `DiscussionTopic` 
 
 Star names with no Canvas counterpart (not counted): `AcceptEnrollmentInvitationInput`, `AddConversationMessageInput`, `AllocationRulePayload`, `ApplyInstitutionalTagInput`, `AssignmentConnection`, `AssignmentEdge`, `AssignmentGroupConnection`, `AssignmentGroupEdge`, `AutoGradeSubmissionInput`, `AutoGradeSubmissionPayload`, `BatchBConversation`, `BatchBConversationMessage`, `BatchBDiscussionEntry`, `BatchBDiscussionTopic`, `BatchBError`, `BatchBGroup`, `BatchBGroupSet`, `BatchBModule`, `BatchBSubmission`, `BatchBSubmissionComment`, `BatchCError`, `BatchCLearningOutcome`, `BatchCLearningOutcomeGroup`, `BatchCNotificationPolicy`, `CommentBankItemPayload`, `ConversationMessageConnection`, `ConversationMessageEdge`, `ConversationParticipantConnection`, `ConversationParticipantEdge`, `ConversationParticipantPayload`, `ConversationPayload`, `CreateAllocationRuleInput`, `CreateAssignmentPayload`, `CreateCommentBankItemInput`, `CreateConversationInput`, `CreateDiscussionEntryInput`, `CreateDiscussionTopicInput`, `CreateGroupInSetInput`, `CreateGroupSetInput`, `CreateInstitutionalTagCategoryInput`, `CreateInstitutionalTagInput`, `CreateInternalSettingInput`, `CreateLearningOutcomeGroupInput`, `CreateLearningOutcomeInput`, `CreateModuleInput`, `CreateOutcomeCalculationMethodInput`, `CreateOutcomeProficiencyInput`, `CreateSubmissionCommentInput`, `CreateSubmissionDraftInput`, `CreateSubmissionInput`, `CreateUserInboxLabelInput`, `CustomGradeStatusPayload`, `DeleteAllocationRuleInput`, `DeleteCommentBankItemInput`, `DeleteConversationInput`, `DeleteConversationMessagesInput`, `DeleteConversationsInput`, `DeleteCustomGradeStatusInput`, `DeleteDiscussionEntryInput`, `DeleteDiscussionTopicInput`, `DeleteInternalSettingInput`, `DeleteLearningOutcomeGroupInput`, `DeleteLearningOutcomeInput`, `DeleteOutcomeCalculationMethodInput`, `DeleteOutcomeLinksInput`, `DeleteOutcomeProficiencyInput`, `DeleteSubmissionCommentInput`, `DeleteSubmissionDraftInput`, `DeleteUserInboxLabelInput`, `DiscussionEntryConnection`, `DiscussionEntryEdge`, `DiscussionEntryPayload`, `DiscussionTopicConnection`, `DiscussionTopicEdge`, `DiscussionTopicPayload`, `DismissAccountNotificationInput`, `DraftSubmissionCommentPayload`, `EnrollmentConnection`, `EnrollmentEdge`, `EnrollmentInvitationPayload`, `ExternalToolConnection`, `ExternalToolEdge`, `FolderConnection`, `FolderEdge`, `FriendlyDescriptionPayload`, `G1Error`, `G1SuccessPayload`, `G2Error`, `G2SuccessPayload`, `G3Error`, `G3SuccessPayload`, `GradebookFilterPayload`, `GroupConnection`, `GroupEdge`, `GroupMembershipConnection`, `GroupMembershipEdge`, `GroupPayload`, `GroupSetConnection`, `GroupSetEdge`, `GroupSetPayload`, `HideAssignmentGradesForSectionsInput`, `HideAssignmentGradesInput`, `ImportOutcomesInput`, `ImportOutcomesPayload`, `InboxSettingsPayload`, `InstitutionalTagAssociationPayload`, `InstitutionalTagCategoryPayload`, `InstitutionalTagPayload`, `InternalSettingPayload`, `LearnerDashboardTabSelectionPayload`, `LearningOutcomeConnection`, `LearningOutcomeEdge`, `LearningOutcomeGroupPayload`, `LearningOutcomePayload`, `MarkSubmissionCommentsReadInput`, `ModuleConnection`, `ModuleEdge`, `ModuleItemCompletionPayload`, `ModuleItemConnection`, `ModuleItemEdge`, `ModulePayload`, `MoveOutcomeLinksInput`, `NotificationPreferencePayload`, `OutcomeCalculationMethodPayload`, `OutcomeProficiencyPayload`, `OverrideScorePayload`, `OverrideStatusPayload`, `PageConnection`, `PageEdge`, `PageInfo`, `PostAssignmentGradesForSectionsInput`, `PostAssignmentGradesInput`, `PostAssignmentGradesPayload`, `PostDraftSubmissionCommentInput`, `QuizConnection`, `QuizEdge`, `QuizQuestionConnection`, `QuizQuestionEdge`, `QuizSubmissionConnection`, `QuizSubmissionEdge`, `RejectEnrollmentInvitationInput`, `RemoveInstitutionalTagInput`, `ReorderModuleItemsInput`, `RestoreDeletedDiscussionEntryInput`, `RubricAssessmentPayload`, `RubricConnection`, `RubricEdge`, `RubricSelfAssessmentPayload`, `SaveRubricAssessmentInput`, `SelectProvisionalGradeInput`, `SelectProvisionalGradePayload`, `SetAssignmentPostPolicyInput`, `SetCoursePostPolicyInput`, `SetFriendlyDescriptionInput`, `SetModuleItemCompletionInput`, `SetOverrideScoreInput`, `SetOverrideStatusInput`, `SetRubricSelfAssessmentInput`, `SpeedGraderSettingsPayload`, `SplitscreenPreferencePayload`, `StandardGradeStatusPayload`, `StringMapEntry`, `StudentEnteredScorePayload`, `SubmissionCommentPayload`, `SubmissionConnection`, `SubmissionDraftPayload`, `SubmissionEdge`, `SubmissionGradeStatusPayload`, `SubmissionPayload`, `SubmissionStickerPayload`, `SubmitAutoGradeFeedbackInput`, `SubscribeToDiscussionTopicInput`, `SuccessPayload`, `UpdateAllocationRuleInput`, `UpdateAssignmentPayload`, `UpdateCommentBankItemInput`, `UpdateConversationParticipantsInput`, `UpdateDiscussionEntriesReadStateInput`, `UpdateDiscussionEntryInput`, `UpdateDiscussionEntryParticipantInput`, `UpdateDiscussionEntryPayload`, `UpdateDiscussionReadStateInput`, `UpdateDiscussionThreadReadStateInput`, `UpdateDiscussionTopicInput`, `UpdateDiscussionTopicParticipantInput`, `UpdateDiscussionTopicPayload`, `UpdateGradebookGroupFilterInput`, `UpdateInstitutionalTagArchivedStateInput`, `UpdateInstitutionalTagCategoryArchivedStateInput`, `UpdateInstitutionalTagCategoryInput`, `UpdateInstitutionalTagInput`, `UpdateInternalSettingInput`, `UpdateLearnerDashboardTabSelectionInput`, `UpdateLearningOutcomeGroupInput`, `UpdateLearningOutcomeInput`, `UpdateMyInboxSettingsInput`, `UpdateNotificationPreferencesInput`, `UpdateOutcomeCalculationMethodInput`, `UpdateOutcomeProficiencyInput`, `UpdateRubricArchivedStateInput`, `UpdateRubricAssessmentReadStateInput`, `UpdateSpeedGraderSettingsInput`, `UpdateSplitScreenViewDeeplyNestedAlertInput`, `UpdateSubmissionGradeInput`, `UpdateSubmissionGradeStatusInput`, `UpdateSubmissionStickerInput`, `UpdateSubmissionStudentEnteredScoreInput`, `UpdateSubmissionsReadStateInput`, `UpdateUserDiscussionsSplitscreenViewInput`, `UpdateWidgetDashboardConfigInput`, `UpdateWidgetDashboardLayoutInput`, `UpdatedDiscussionEntry`, `UpdatedDiscussionTopic`, `UpsertCustomGradeStatusInput`, `UpsertStandardGradeStatusInput`, `UserConnection`, `UserEdge`, `UserInboxLabelPayload`, `WidgetDashboardPayload`, `deleteConversation`, `deleteLearningOutcome`, `deleteLearningOutcomeGroup`.
 
-## Star routes with no Canvas API match (207)
+## Star routes with no Canvas API match (157)
 
 Classified, because the fix differs by class: only `api_verb_mismatch` and `api_nested` are Canvas gaps (star misses a verb or the nested form entirely); `api_extra_*` means Canvas' own verbs at that path are all implemented and the registration is additive; `web_*` means Canvas answers that path as a **web** (HTML/JS) route rather than an API route -- a port, not a REST parity item; `api_alias` is Canvas' own `self` id spelling (canvas-src/lib/api.rb:51 maps the literal `self` to the current user), which is parity-exact and must not be deleted; and `absent` means no Canvas path or path-tail matches, which covers deliberate aliases (`/assignment_overrides/{id}` for Canvas' `/courses/{course_id}/assignments/{assignment_id}/overrides/{id}`, whose nested form IS implemented) as well as genuinely new endpoints.
 
@@ -284,95 +284,44 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 |---|---:|---|
 | `api_verb_mismatch` | 0 | Canvas verb at this path is unimplemented: add it |
 | `api_extra_verb` | 19 | Canvas' verbs here are all served: keep, no change |
-| `api_alias` | 6 | Canvas' `self` id alias (lib/api.rb): keep, parity-exact |
-| `web_exact` | 43 | port of a Canvas web route: keep, label as web/UI |
+| `api_alias` | 5 | Canvas' `self` id alias (lib/api.rb): keep, parity-exact |
+| `web_exact` | 44 | port of a Canvas web route: keep, label as web/UI |
 | `web_verb_mismatch` | 16 | web port with the wrong verb |
 | `web_nested` | 26 | web route flattened to top level: re-nest or label |
 | `api_nested` | 0 | Canvas serves the nested form and star does not: re-nest |
 | `api_extra_nested` | 19 | nested form already served: keep, no change |
-| `absent` | 78 | no Canvas path or tail: a renamed alias, a custom endpoint, or unused -- check before deleting |
+| `absent` | 28 | no Canvas path or tail: a renamed alias, a custom endpoint, or unused -- check before deleting |
 
 | Verb | Path | Crate | Class | Canvas closest |
 |---|---|---|---|---|
-| GET | `/api/lti/accounts/{accountId}/tool_consumer_profile/{toolConsumerProfileId}` | `star-lti` | absent | - |
-| GET | `/api/lti/courses/{courseId}/tool_consumer_profile/{toolConsumerProfileId}` | `star-lti` | absent | - |
-| GET | `/api/lti/{context}/{contextId}/tool_consumer_profile` | `star-lti` | absent | - |
-| GET | `/api/sis/{context}/{contextId}/assignments` | `star-auth` | absent | - |
-| DELETE | `/assignment_overrides/{id}` | `star-assignments` | absent | - |
-| GET | `/assignment_overrides/{id}` | `star-assignments` | absent | - |
-| PUT | `/assignment_overrides/{id}` | `star-assignments` | absent | - |
-| GET | `/assignments/{id}/submissions/me` | `star-assignments` | absent | - |
 | POST | `/auth/login` | `star-auth` | absent | - |
 | POST | `/auth/logout` | `star-auth` | absent | - |
 | GET | `/auth/me` | `star-auth` | absent | - |
 | POST | `/auth/register` | `star-auth` | absent | - |
 | GET | `/conversations/compose` | `star-ui` | absent | - |
 | POST | `/conversations/mark_all_read` | `star-ui` | absent | - |
-| GET | `/conversations/{id}/participants` | `star-conversations` | absent | - |
-| PUT | `/conversations/{id}/read` | `star-conversations` | absent | - |
-| GET | `/courses/{courseId}/announcements/unread_count` | `star-announcements` | absent | - |
-| DELETE | `/courses/{courseId}/announcements/{id}/read` | `star-announcements` | absent | - |
-| PUT | `/courses/{courseId}/announcements/{id}/read` | `star-announcements` | absent | - |
-| DELETE | `/courses/{courseId}/assignment_annotations/{id}/read` | `star-assignments` | absent | - |
-| PUT | `/courses/{courseId}/assignment_annotations/{id}/read` | `star-assignments` | absent | - |
-| GET | `/courses/{courseId}/assignment_groups/{id}/rules` | `star-assignment-groups` | absent | - |
-| PUT | `/courses/{courseId}/assignment_groups/{id}/rules` | `star-assignment-groups` | absent | - |
 | GET | `/courses/{id}/assignments/new` | `star-ui` | absent | - |
 | POST | `/courses/{id}/assignments/new` | `star-ui` | absent | - |
 | GET | `/courses/{id}/assignments/{aid}/edit` | `star-ui` | absent | - |
 | POST | `/courses/{id}/assignments/{aid}/edit` | `star-ui` | absent | - |
-| GET | `/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments` | `star-submission-comments` | absent | - |
-| POST | `/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments` | `star-submission-comments` | absent | - |
 | POST | `/courses/{id}/assignments/{aid}/submit` | `star-ui` | absent | - |
 | GET | `/courses/{id}/discussions` | `star-ui` | absent | - |
 | POST | `/courses/{id}/discussions` | `star-ui` | absent | - |
 | GET | `/courses/{id}/discussions/new` | `star-ui` | absent | - |
 | GET | `/courses/{id}/discussions/{topic_id}` | `star-ui` | absent | - |
 | POST | `/courses/{id}/discussions/{topic_id}/entries` | `star-ui` | absent | - |
-| GET | `/courses/{courseId}/final_grade` | `star-grading-standards` | absent | - |
-| GET | `/courses/{courseId}/folders/root` | `star-files` | absent | - |
-| GET | `/courses/{courseId}/gradebook` | `star-assignments` | absent | - |
-| GET | `/courses/{id}/gradebook` | `star-ui` | absent | - |
 | GET | `/courses/{id}/gradebook.csv` | `star-ui` | absent | - |
 | GET | `/courses/{id}/gradebook/speedgrader` | `star-ui` | absent | - |
 | POST | `/courses/{id}/gradebook/speedgrader/grade` | `star-ui` | absent | - |
 | POST | `/courses/{id}/quizzes/{qid}/submissions/{sid}/submit` | `star-ui` | absent | - |
-| GET | `/courses/{courseId}/role_overrides` | `star-permissions` | absent | - |
-| PUT | `/courses/{courseId}/role_overrides` | `star-permissions` | absent | - |
-| DELETE | `/courses/{courseId}/rubric_assessments/{id}/read` | `star-assignments` | absent | - |
-| PUT | `/courses/{courseId}/rubric_assessments/{id}/read` | `star-assignments` | absent | - |
-| PUT | `/courses/{courseId}/submissions/{submissionId}/read/{item}` | `star-assignments` | absent | - |
 | GET | `/courses/{id}/users/add` | `star-ui` | absent | - |
 | POST | `/courses/{id}/users/add` | `star-ui` | absent | - |
 | POST | `/courses/{id}/users/{user_id}/conclude` | `star-ui` | absent | - |
 | POST | `/courses/{id}/users/{user_id}/reactivate` | `star-ui` | absent | - |
 | GET | `/health` | `star-http` | absent | - |
-| POST | `/jobs/{id}/cancel` | `star-jobs` | absent | - |
-| GET | `/jobs2` | `star-jobs` | absent | - |
-| GET | `/notifications/unread_count` | `star-notifications` | absent | - |
-| DELETE | `/notifications/{id}` | `star-notifications` | absent | - |
-| PUT | `/notifications/{id}/read` | `star-notifications` | absent | - |
-| POST | `/quizzes/{id}/start` | `star-quizzes` | absent | - |
-| GET | `/quizzes/{id}/submissions/me` | `star-quizzes` | absent | - |
 | GET | `/reset_password/{token}` | `star-ui` | absent | - |
 | POST | `/reset_password/{token}` | `star-ui` | absent | - |
-| DELETE | `/sections/{sectionId}/assignment_annotations/{id}/read` | `star-assignments` | absent | - |
-| PUT | `/sections/{sectionId}/assignment_annotations/{id}/read` | `star-assignments` | absent | - |
-| DELETE | `/sections/{sectionId}/rubric_assessments/{id}/read` | `star-assignments` | absent | - |
-| PUT | `/sections/{sectionId}/rubric_assessments/{id}/read` | `star-assignments` | absent | - |
 | GET | `/static/{hash}/{file}` | `star-ui` | absent | - |
-| PUT | `/submissions/{submissionId}/comments/read` | `star-submission-comments` | absent | - |
-| GET | `/submissions/{submissionId}/comments/unread_count` | `star-submission-comments` | absent | - |
-| PUT | `/submissions/{id}/grade` | `star-assignments` | absent | - |
-| GET | `/users/self/notification_preferences` | `star-notifications` | absent | - |
-| PUT | `/users/self/notification_preferences` | `star-notifications` | absent | - |
-| GET | `/users/self/notifications` | `star-notifications` | absent | - |
-| GET | `/users/{userId}/folders/media` | `star-files` | absent | - |
-| GET | `/users/{user_id}/notification_preference_categories` | `star-notifications` | absent | - |
-| PUT | `/users/{user_id}/notification_preference_categories/{category}` | `star-notifications` | absent | - |
-| GET | `/users/{user_id}/notification_preferences` | `star-notifications` | absent | - |
-| PUT | `/users/{user_id}/notification_preferences` | `star-notifications` | absent | - |
-| GET | `/courses/{courseId}/assignments/{id}/submissions/self` | `star-assignments` | api_alias | `GET courses/{}/assignments/{}/submissions/{}`, `PUT courses/{}/assignments/{}/submissions/{}` |
 | GET | `/users/self` | `star-users` | api_alias | `DELETE users/{}`, `GET users/{}`, `PUT users/{}` |
 | GET | `/users/self/communication_channels` | `star-notifications` | api_alias | `GET users/{}/communication_channels`, `POST users/{}/communication_channels` |
 | POST | `/users/self/communication_channels` | `star-notifications` | api_alias | `GET users/{}/communication_channels`, `POST users/{}/communication_channels` |
@@ -433,6 +382,7 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | POST | `/courses/{courseId}/calendar_events` | `star-calendar` | web_exact | `WEB POST` |
 | POST | `/courses/{id}/deep_linking_response` | `star-lti` | web_exact | `WEB POST` |
 | GET | `/courses/{course_id}/external_tools/{id}/eula_launch` | `star-lti` | web_exact | `WEB GET` |
+| GET | `/courses/{id}/gradebook` | `star-ui` | web_exact | `WEB GET` |
 | GET | `/courses/{id}/grades` | `star-ui` | web_exact | `WEB GET` |
 | DELETE | `/courses/{courseId}/modules/items/{itemId}` | `star-modules` | web_exact | `WEB DELETE` |
 | GET | `/courses/{courseId}/modules/items/{itemId}` | `star-modules` | web_exact | `WEB GET` |

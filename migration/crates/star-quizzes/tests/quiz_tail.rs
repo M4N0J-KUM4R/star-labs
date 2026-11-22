@@ -204,15 +204,23 @@ async fn seed_fixture(
     (teacher, student, course, quiz)
 }
 
-/// Start the quiz as the student and return (submission id, validation token).
+/// Start the quiz as the student through Canvas' nested route and return
+/// (submission id, validation token).
 async fn take_quiz(
     server: &TestServer,
     pool: &PgPool,
     student: i64,
     quiz_id: i64,
 ) -> (i64, String) {
+    let course_id: i64 = sqlx::query_scalar("SELECT course_id FROM quizzes WHERE id = $1")
+        .bind(quiz_id)
+        .fetch_one(pool)
+        .await
+        .expect("quiz course");
     let resp = server
-        .post(&format!("/quizzes/{quiz_id}/start"))
+        .post(&format!(
+            "/courses/{course_id}/quizzes/{quiz_id}/submissions"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 201, "start quiz: {}", resp.text());
