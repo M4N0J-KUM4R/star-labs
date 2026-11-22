@@ -167,10 +167,10 @@ async fn a_signed_grade_passback_is_accepted() {
 
     let path = format!("/api/lti/v1/tools/{consumer_key}/grade_passback");
     let resp = server
-        .post(path)
+        .post(&path)
         .add_header(
             axum::http::header::AUTHORIZATION,
-            oauth_header(path, &consumer_key, "nonce-grade-1"),
+            oauth_header(&path, &consumer_key, "nonce-grade-1"),
         )
         .add_header(axum::http::header::CONTENT_TYPE, "application/xml")
         .bytes("<?xml version=\"1.0\"?><imsx_POXEnvelopeRequest/>".into())
@@ -190,8 +190,9 @@ async fn an_unsigned_request_is_unauthorized() {
     let consumer_key = format!("{prefix}-key");
     seed_tool(&pool, &prefix, &consumer_key).await;
 
+    let path = format!("/api/lti/v1/tools/{consumer_key}/grade_passback");
     let resp = server
-        .post(format!("/api/lti/v1/tools/{consumer_key}/grade_passback"))
+        .post(&path)
         .add_header(axum::http::header::CONTENT_TYPE, "application/xml")
         .bytes("<?xml version=\"1.0\"?><imsx_POXEnvelopeRequest/>".into())
         .await;
@@ -212,10 +213,10 @@ async fn a_reused_nonce_is_unauthorized() {
 
     let path = format!("/api/lti/v1/tools/{consumer_key}/ext_grade_passback");
     let resp = server
-        .post(path)
+        .post(&path)
         .add_header(
             axum::http::header::AUTHORIZATION,
-            oauth_header(path, &consumer_key, "nonce-reused"),
+            oauth_header(&path, &consumer_key, "nonce-reused"),
         )
         .bytes("{}".into())
         .await;
@@ -223,10 +224,10 @@ async fn a_reused_nonce_is_unauthorized() {
 
     // The same nonce a second time is rejected.
     let resp = server
-        .post(path)
+        .post(&path)
         .add_header(
             axum::http::header::AUTHORIZATION,
-            oauth_header(path, &consumer_key, "nonce-reused"),
+            oauth_header(&path, &consumer_key, "nonce-reused"),
         )
         .bytes("{}".into())
         .await;
@@ -246,10 +247,10 @@ async fn a_missing_tool_is_a_not_found() {
 
     let path = "/api/lti/v1/tools/unknown-tool/grade_passback";
     let resp = server
-        .post(path)
+        .post(&path)
         .add_header(
             axum::http::header::AUTHORIZATION,
-            oauth_header(path, &consumer_key, "nonce-missing"),
+            oauth_header(&path, &consumer_key, "nonce-missing"),
         )
         .add_header(axum::http::header::CONTENT_TYPE, "application/xml")
         .bytes("{}".into())
