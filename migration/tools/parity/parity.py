@@ -778,6 +778,7 @@ STAR_GRAPHQL_DERIVES = {
 RUST_DERIVE_RE = re.compile(r"^\s*#\[\s*derive\(([^)]*)\)\s*\]")
 RUST_OBJECT_ATTR_RE = re.compile(r"^\s*#\[\s*Object(?:\s*\([^)]*\))?\s*\]")
 RUST_STRUCT_RE = re.compile(r"^\s*(?:pub(?:\([a-z]+\))?\s+)?struct\s+([A-Za-z0-9_]+)")
+RUST_ENUM_RE = re.compile(r"^\s*(?:pub(?:\([a-z]+\))?\s+)?enum\s+([A-Za-z0-9_]+)")
 RUST_IMPL_RE = re.compile(r"^\s*impl\s+(?:<[^>]*>\s*)?([A-Za-z0-9_:]+)")
 RUST_FN_RE = re.compile(
     r"^\s*(?:pub(?:\([a-z]+\))?\s+)?(?:async\s+)?fn\s+([a-z_][a-z0-9_]*)")
@@ -798,7 +799,13 @@ def _next_declaration(lines, start, pattern, limit=4):
     or None.
     """
     for j in range(start + 1, min(start + 1 + limit, len(lines))):
-        if lines[j].lstrip().startswith("#["):
+        stripped = lines[j].lstrip()
+        if stripped.startswith("#["):
+            # Lint-control attributes (allow/deny/expect) legitimately sit
+            # between a derive and its item; skip them, but any other
+            # attribute means the derive belongs to something else.
+            if stripped.startswith(("#[allow", "#[deny", "#[expect")):
+                continue
             return None
         match = pattern.match(lines[j])
         if match:
@@ -838,11 +845,20 @@ def parse_star_graphql(star_src):
         for i, line in enumerate(lines):
             derive = RUST_DERIVE_RE.match(line)
             if derive:
-                names = {d.strip() for d in derive.group(1).split(",")}
+                # Normalize 'async_graphql::Enum' / 'async_graphql::Enum(copy)'
+                # style tokens to their bare derive names.
+                names = {d.strip().split("::")[-1].split("(")[0]
+                         for d in derive.group(1).split(",")}
                 if names & STAR_GRAPHQL_DERIVES:
+                    # async-graphql derives apply to structs AND enums
+                    # (Enum/InputObject both); try struct first, then enum.
                     j = _next_declaration(lines, i, RUST_STRUCT_RE)
                     if j is not None:
                         types.add(RUST_STRUCT_RE.match(lines[j]).group(1))
+                    else:
+                        j = _next_declaration(lines, i, RUST_ENUM_RE)
+                        if j is not None:
+                            types.add(RUST_ENUM_RE.match(lines[j]).group(1))
                 continue
             if RUST_OBJECT_ATTR_RE.match(line):
                 j = _next_declaration(lines, i, RUST_IMPL_RE)

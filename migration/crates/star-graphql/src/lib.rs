@@ -50,6 +50,8 @@ mod discussion_topic;
 // Entity types registered for parity; resolvers wire the Canvas-nested
 // fields, the rest are schema-orphans (allowed dead code).
 #[allow(dead_code)]
+mod entities_batch_f;
+#[allow(dead_code)]
 mod entities_modules_discussions_submissions;
 mod external_tools;
 mod files;
