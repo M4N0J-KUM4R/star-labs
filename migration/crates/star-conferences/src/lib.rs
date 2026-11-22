@@ -54,7 +54,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::{DateTime, Utc};
+use chrono::{NaiveDateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use sqlx::PgPool;
@@ -128,13 +128,13 @@ struct ConferenceRow {
     context_id: i64,
     context_type: String,
     user_id: Option<i64>,
-    started_at: Option<DateTime<Utc>>,
+    started_at: Option<NaiveDateTime>,
     description: Option<String>,
     duration: Option<f64>,
-    created_at: DateTime<Utc>,
-    ended_at: Option<DateTime<Utc>>,
-    start_at: Option<DateTime<Utc>>,
-    end_at: Option<DateTime<Utc>>,
+    created_at: NaiveDateTime,
+    ended_at: Option<NaiveDateTime>,
+    start_at: Option<NaiveDateTime>,
+    end_at: Option<NaiveDateTime>,
     settings: Option<String>,
     recording_ready: Option<bool>,
 }
@@ -143,6 +143,12 @@ struct ConferenceRow {
 struct ParticipantRow {
     user_id: Option<i64>,
     participation_type: Option<String>,
+}
+
+/// ISO8601 (UTC) rendering of a naive snapshot timestamp column.
+fn iso8601(t: NaiveDateTime) -> String {
+    t.and_utc()
+        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 // ---------------------------------------------------------------------------
@@ -185,12 +191,12 @@ fn int_param(value: Option<&Value>) -> Option<i64> {
 
 /// Timestamp param: an RFC 3339 / ISO 8601 string (Rails binds
 /// Time.zone.parse-able strings; star-lms accepts ISO8601).
-fn time_param(value: Option<&Value>, attr: &str) -> Result<Option<DateTime<Utc>>, ConferenceError> {
+fn time_param(value: Option<&Value>, attr: &str) -> Result<Option<NaiveDateTime>, ConferenceError> {
     match value {
         None | Some(Value::Null) => Ok(None),
         Some(Value::String(s)) if !s.trim().is_empty() => s
-            .parse::<DateTime<Utc>>()
-            .map(Some)
+            .parse::<chrono::DateTime<Utc>>()
+            .map(|t| Some(t.naive_utc()))
             .map_err(|_| param_errors(attr, "is invalid")),
         Some(Value::String(_)) => Ok(None),
         Some(_) => Err(param_errors(attr, "is invalid")),
@@ -443,10 +449,10 @@ async fn conference_json(
         "context_type": row.context_type,
         "context_id": row.context_id,
         "duration": row.duration.map(|d| d as i64),
-        "started_at": row.started_at,
-        "ended_at": row.ended_at,
-        "start_at": row.start_at,
-        "end_at": row.end_at,
+        "started_at": row.started_at.map(iso8601),
+        "ended_at": row.ended_at.map(iso8601),
+        "start_at": row.start_at.map(iso8601),
+        "end_at": row.end_at.map(iso8601),
         "users": users,
         "invitees": invitees,
         "attendees": attendees,
@@ -841,8 +847,8 @@ async fn create_inner(
             )
             .bind(course_id)
             .bind(&row.title)
-            .bind(row.start_at)
-            .bind(row.end_at)
+            .bind(row.start_at.map(|t| t.and_utc()))
+            .bind(row.end_at.map(|t| t.and_utc()))
             .bind(row.id)
             .execute(&state.db)
             .await?;

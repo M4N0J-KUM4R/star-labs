@@ -72,7 +72,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, put},
+    routing::{get, put},
     Json, Router,
 };
 use chrono::NaiveDateTime;

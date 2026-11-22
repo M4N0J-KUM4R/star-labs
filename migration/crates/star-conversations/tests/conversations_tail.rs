@@ -695,7 +695,7 @@ async fn find_recipients_alias_is_served_by_star_search() {
     let body = get_ok(
         &server,
         &auth(alice, "user"),
-        &format!("/conversations/find_recipients?search={prefix}-Bob"),
+        "/conversations/find_recipients?search=barker",
     )
     .await;
     let rows = body.as_array().expect("array");

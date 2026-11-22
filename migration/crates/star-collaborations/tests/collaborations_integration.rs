@@ -153,7 +153,8 @@ async fn seed_collaboration(
 /// Seed a user-collaborator row (Canvas Collaborator: user_id set).
 async fn seed_user_collaborator(pool: &PgPool, collaboration_id: i64, user_id: i64) -> i64 {
     sqlx::query_scalar(
-        "INSERT INTO collaborators (collaboration_id, user_id) VALUES ($1, $2) RETURNING id",
+        "INSERT INTO collaborators (collaboration_id, user_id, created_at, updated_at) \
+         VALUES ($1, $2, now(), now()) RETURNING id",
     )
     .bind(collaboration_id)
     .bind(user_id)
@@ -165,7 +166,8 @@ async fn seed_user_collaborator(pool: &PgPool, collaboration_id: i64, user_id: i
 /// Seed a group-collaborator row (Canvas Collaborator: group_id set).
 async fn seed_group_collaborator(pool: &PgPool, collaboration_id: i64, group_id: i64) -> i64 {
     sqlx::query_scalar(
-        "INSERT INTO collaborators (collaboration_id, group_id) VALUES ($1, $2) RETURNING id",
+        "INSERT INTO collaborators (collaboration_id, group_id, created_at, updated_at) \
+         VALUES ($1, $2, now(), now()) RETURNING id",
     )
     .bind(collaboration_id)
     .bind(group_id)
