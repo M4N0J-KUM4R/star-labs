@@ -1217,11 +1217,15 @@ async fn smart_search_index_status(
 /// SmartSearchController#log: a telemetry no-op ("TODO: do something more")
 /// accepting a/c/course_id/oid/ot/q; `head :no_content` → 204.
 async fn smart_search_log(
-    Path(_course_id): Path<i64>,
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
     Query(_params): Query<Vec<(String, String)>>,
     _auth: AuthUser,
-) -> StatusCode {
-    StatusCode::NO_CONTENT
+) -> Result<StatusCode, SearchError> {
+    // require_context parity: unknown course → 404 before the no-op body
+    // (the AuthUser extractor already handled 401 anonymous).
+    load_course(&state.db, course_id).await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // ---------------------------------------------------------------------------
