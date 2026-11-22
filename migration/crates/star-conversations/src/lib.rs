@@ -18,7 +18,7 @@
 //! - GET    /conversations/deleted              — admin deleted-message index (§5.4)
 //! - PUT    /conversations/restore              — admin restore a deleted message (§5.5)
 //! - DELETE /conversations/{id}/delete_for_all  — admin hard delete (§5.6)
-//! - GET    /conversations/find_recipients      — deprecated recipient search (§5.7)
+//! - GET    /conversations/find_recipients      — deprecated recipient search (§5.7) — SERVED BY star-search (issue #91, Canvas SearchController#recipients)
 
 use axum::{
     extract::{Path, Query, State},
@@ -1467,71 +1467,6 @@ async fn delete_conversation_for_all(
     Ok(Json(json!({})))
 }
 
-/// GET /conversations/find_recipients — deprecated Canvas alias (§5.7).
-///
-/// Canvas routes this through SearchController#recipients; the star-search
-/// crate (#91) has not landed, so star-conversations serves the same
-/// recipient index directly: name/email/sortable-name substring match with
-/// `limit` (default 50) / `offset` and Canvas' recipient hash shape
-/// (`avatar_url` stays null — profile pictures depend on MIG-04).
-async fn find_recipients(
-    State(state): State<AppState>,
-    Query(params): Query<HashMap<String, String>>,
-    auth: AuthUser,
-) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    let search = params.get("search").cloned().unwrap_or_default();
-    let limit: i64 = params
-        .get("limit")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(50)
-        .clamp(1, 100);
-    let offset: i64 = params
-        .get("offset")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0)
-        .max(0);
-    let pattern = format!("%{search}%");
-
-    let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
-        r#"
-        SELECT id, name, sortable_name
-        FROM users
-        WHERE name ILIKE $1 OR email ILIKE $1 OR COALESCE(sortable_name, name) ILIKE $1
-        ORDER BY COALESCE(sortable_name, name), id
-        LIMIT $2 OFFSET $3
-        "#,
-    )
-    .bind(&pattern)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&state.db)
-    .await?;
-    let _ = auth.id;
-
-    let out = rows
-        .into_iter()
-        .map(|(id, name, sortable_name)| {
-            json!({
-                "id": id,
-                "name": name,
-                "full_name": name,
-                "sortable_name": sortable_name.clone().unwrap_or_else(|| name.clone()),
-                "short_name": name,
-                "common_name": {
-                    "model": "User",
-                    "id": id,
-                    "short_name": name,
-                    "sortable_name": sortable_name.unwrap_or_else(|| name.clone()),
-                    "name": name,
-                },
-                "avatar_url": Value::Null,
-            })
-        })
-        .collect();
-
-    Ok(Json(out))
-}
-
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -1559,7 +1494,12 @@ pub fn router() -> Router<AppState> {
         .route("/conversations/mark_all_as_read", post(mark_all_as_read))
         .route("/conversations/deleted", get(deleted_index))
         .route("/conversations/restore", put(restore_message))
-        .route("/conversations/find_recipients", get(find_recipients))
+    // GET /conversations/find_recipients moved to the star-search crate
+    // (issue #91): Canvas routes it to SearchController#recipients and
+    // star-search now implements that action for both /search/recipients
+    // and this deprecated alias. The placeholder this crate served while
+    // #91 was pending is removed — axum Router::merge panics on duplicate
+    // route paths, so exactly one crate may register it.
 }
 
 #[cfg(test)]
