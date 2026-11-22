@@ -85,22 +85,42 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
 }
 
 async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
+    // Dedicated account per course (issue #75): courses.account_id defaults
+    // to the shared root account 1, which leaks account-scoped state (feature
+    // flags) between parallel tests.
+    let account: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO accounts (name)
+        VALUES ($1)
+        RETURNING id
+        "#,
+    )
+    .bind(format!("{prefix}-{name}Account"))
+    .fetch_one(pool)
+    .await
+    .expect("seed account");
     sqlx::query_scalar(
         r#"
-        INSERT INTO courses (name, course_code)
-        VALUES ($1, $2)
+        INSERT INTO courses (name, course_code, account_id)
+        VALUES ($1, $2, $3)
         RETURNING id
         "#,
     )
     .bind(name)
     .bind(format!("{prefix}-{name}"))
+    .bind(account)
     .fetch_one(pool)
     .await
     .expect("seed course")
 }
 
-/// Creates a course with the temporary-enrollments feature explicitly enabled.
-async fn seed_course_with_feature(pool: &PgPool, prefix: &str, name: &str) -> i64 {
+/// Creates a course (in its own dedicated account) with the
+/// temporary-enrollments feature explicitly enabled on that account.
+/// Returns (course_id, account_id): the status endpoints scope their
+/// enrollment lookups to the request's account (default: the shared root
+/// account 1), so tests must pass `account_id` explicitly to see
+/// enrollments in the dedicated account.
+async fn seed_course_with_feature(pool: &PgPool, prefix: &str, name: &str) -> (i64, i64) {
     let course_id = seed_course(pool, prefix, name).await;
     // Ensure the account has the feature flag enabled; insert if absent.
     // 0088_feature_flags keys overrides on (context_type, context_id, feature)
@@ -119,7 +139,12 @@ async fn seed_course_with_feature(pool: &PgPool, prefix: &str, name: &str) -> i6
     .execute(pool)
     .await
     .expect("enable temporary_enrollments feature");
-    course_id
+    let account_id: i64 = sqlx::query_scalar("SELECT account_id FROM courses WHERE id = $1")
+        .bind(course_id)
+        .fetch_one(pool)
+        .await
+        .expect("read the course's dedicated account");
+    (course_id, account_id)
 }
 
 async fn seed_enrollment(
@@ -164,6 +189,19 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
         .await;
     let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1")
         .bind(format!("{prefix}%"))
+        .execute(pool)
+        .await;
+    // feature_flags rows for the dedicated accounts (no FK; delete
+    // explicitly), then the accounts themselves (issue #75).
+    let _ = sqlx::query(
+        "DELETE FROM feature_flags WHERE context_type = 'Account' \
+           AND context_id IN (SELECT id FROM accounts WHERE name LIKE $1)",
+    )
+    .bind(format!("{prefix}-%"))
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE name LIKE $1")
+        .bind(format!("{prefix}-%"))
         .execute(pool)
         .await;
 }
@@ -432,7 +470,7 @@ async fn contract_temporary_status_self_returns_three_flags() {
 
     let _admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let user = seed_user(&pool, &prefix, "User", "student").await;
-    let course = seed_course_with_feature(&pool, &prefix, "TempSelf").await;
+    let (course, _account) = seed_course_with_feature(&pool, &prefix, "TempSelf").await;
     seed_enrollment(&pool, user, course, "student", None).await;
 
     let resp = server
@@ -475,7 +513,7 @@ async fn contract_temporary_status_teacher_cannot_read_other_user() {
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let other = seed_user(&pool, &prefix, "Other", "student").await;
-    let course = seed_course_with_feature(&pool, &prefix, "TempCross").await;
+    let (course, _account) = seed_course_with_feature(&pool, &prefix, "TempCross").await;
     seed_enrollment(&pool, teacher, course, "teacher", None).await;
     seed_enrollment(&pool, other, course, "student", None).await;
 
@@ -507,15 +545,18 @@ async fn contract_temporary_status_is_provider_flag() {
 
     let provider = seed_user(&pool, &prefix, "Provider", "teacher").await;
     let recipient = seed_user(&pool, &prefix, "Recipient", "student").await;
-    let course = seed_course_with_feature(&pool, &prefix, "TempIsProvider").await;
+    let (course, account) = seed_course_with_feature(&pool, &prefix, "TempIsProvider").await;
     // Provider is a teacher; recipient is a student with temporary enrollment
     // sourced from provider.
     seed_enrollment(&pool, provider, course, "teacher", None).await;
     seed_enrollment(&pool, recipient, course, "student", Some(provider)).await;
 
-    // Provider checks their own status.
+    // Provider checks their own status (scoped to the course's dedicated
+    // account — the status lookup joins enrollments through the account).
     let resp = server
-        .get(&format!("/users/{provider}/temporary_enrollment_status"))
+        .get(&format!(
+            "/users/{provider}/temporary_enrollment_status?account_id={account}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(provider, "teacher"))
         .await;
 
@@ -536,7 +577,9 @@ async fn contract_temporary_status_is_provider_flag() {
 
     // Recipient checks their own status.
     let resp = server
-        .get(&format!("/users/{recipient}/temporary_enrollment_status"))
+        .get(&format!(
+            "/users/{recipient}/temporary_enrollment_status?account_id={account}"
+        ))
         .add_header(
             axum::http::header::AUTHORIZATION,
             auth(recipient, "student"),
@@ -580,7 +623,9 @@ async fn contract_bulk_temporary_status_missing_user_ids_is_400_empty_body() {
     };
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
-    let _course = seed_course_with_feature(&pool, &prefix, "BulkMissing").await;
+    let _course = seed_course_with_feature(&pool, &prefix, "BulkMissing")
+        .await
+        .0;
 
     let resp = server
         .get("/temporary_enrollment_status")
@@ -610,7 +655,7 @@ async fn contract_bulk_temporary_status_user_ids_as_string_keys() {
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let user = seed_user(&pool, &prefix, "User", "student").await;
-    let course = seed_course_with_feature(&pool, &prefix, "BulkKeys").await;
+    let (course, _account) = seed_course_with_feature(&pool, &prefix, "BulkKeys").await;
     seed_enrollment(&pool, user, course, "student", None).await;
 
     let resp = server
@@ -652,7 +697,7 @@ async fn contract_bulk_temporary_status_limit_caps_at_100() {
     };
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
-    let course = seed_course_with_feature(&pool, &prefix, "BulkLimit").await;
+    let (course, _account) = seed_course_with_feature(&pool, &prefix, "BulkLimit").await;
     let _ = course;
 
     // Seed 110 users (over the 100 cap).
@@ -696,10 +741,9 @@ async fn contract_bulk_temporary_status_limit_caps_at_100() {
 /// standard three-field status object (empty, 404, or structured differently).
 ///
 /// The disabled account is a dedicated one (passed via Canvas's optional
-/// `account_id` argument) rather than the shared root account: sibling tests
-/// in this binary enable `temporary_enrollments` on the root account and the
-/// shared `cleanup()` never removes feature_flags rows, so a root-account
-/// "absent flag" scenario cannot be isolated from parallel siblings.
+/// `account_id` argument): every account this binary seeds is dedicated and
+/// its feature_flags rows are removed by `cleanup()` (issue #75), so the
+/// disabled scenario is isolated from parallel siblings by construction.
 #[tokio::test]
 async fn contract_temporary_status_feature_disabled_returns_empty_or_not_found() {
     let Some((server, pool, prefix)) = setup().await else {

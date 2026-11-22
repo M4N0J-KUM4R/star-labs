@@ -148,8 +148,13 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
         .bind(format!("{prefix}%"))
         .execute(pool)
         .await;
-    // SSO settings were updated in-place; we do not clean them up since they
-    // are account-level and the test account is shared infrastructure.
+    // Dedicated accounts are deleted by prefix (issue #75); their
+    // authentication_providers cascade and their sso settings live in the
+    // account row, so nothing leaks between runs.
+    let _ = sqlx::query("DELETE FROM accounts WHERE name LIKE $1")
+        .bind(format!("{prefix}%"))
+        .execute(pool)
+        .await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1742,20 +1747,15 @@ async fn tokens_are_scoped_to_their_owner() {
 // Authentication providers + SSO settings
 // ---------------------------------------------------------------------------
 
-/// Seed a real account row for auth-providers tests (needed because the
-/// FK references accounts.id). Uses id 1 which should exist from prior
-/// migrations.
-async fn seed_account_if_needed(pool: &PgPool) {
-    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = 1")
-        .fetch_optional(pool)
+/// Distinct account per mutating test (issue #75): never the shared root
+/// account 1 — parallel provider/sso writes there overwrite each other and
+/// leak into every sibling's assertions.
+async fn seed_unique_account(pool: &PgPool, prefix: &str, tag: &str) -> i64 {
+    sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+        .bind(format!("{prefix}-{tag}"))
+        .fetch_one(pool)
         .await
-        .expect("check account");
-    if exists.is_none() {
-        sqlx::query("INSERT INTO accounts (id, name) VALUES (1, 'Test Account') ON CONFLICT (id) DO NOTHING")
-            .execute(pool)
-            .await
-            .expect("seed account");
-    }
+        .expect("seed unique account")
 }
 
 #[tokio::test]
@@ -1765,25 +1765,27 @@ async fn auth_providers_crud_requires_admin() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
 
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
 
     // Anonymous → 401.
-    let resp = server.get("/accounts/1/authentication_providers").await;
+    let resp = server
+        .get(&format!("/accounts/{account}/authentication_providers"))
+        .await;
     assert_eq!(resp.status_code(), 401, "anonymous list: {}", resp.text());
 
     // Student → 403.
     let resp = server
-        .get("/accounts/1/authentication_providers")
+        .get(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "student list: {}", resp.text());
 
     // Admin → 200 (empty list, account has no providers yet).
     let resp = server
-        .get("/accounts/1/authentication_providers")
+        .get(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "admin list: {}", resp.text());
@@ -1800,13 +1802,13 @@ async fn auth_providers_create_show_update_delete() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "Admin2", "admin").await;
     let admin_auth = auth(admin, "admin");
 
     // POST create a SAML provider with settings.
     let create_resp = server
-        .post("/accounts/1/authentication_providers")
+        .post(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .json(&json!({
             "authentication_provider": {
@@ -1833,7 +1835,7 @@ async fn auth_providers_create_show_update_delete() {
     // GET show.
     let show_resp = server
         .get(&format!(
-            "/accounts/1/authentication_providers/{provider_id}"
+            "/accounts/{account}/authentication_providers/{provider_id}"
         ))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .await;
@@ -1843,7 +1845,7 @@ async fn auth_providers_create_show_update_delete() {
     // PUT update: change log_in_url and position.
     let update_resp = server
         .put(&format!(
-            "/accounts/1/authentication_providers/{provider_id}"
+            "/accounts/{account}/authentication_providers/{provider_id}"
         ))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .json(&json!({
@@ -1868,7 +1870,7 @@ async fn auth_providers_create_show_update_delete() {
     // DELETE soft-deletes.
     let delete_resp = server
         .delete(&format!(
-            "/accounts/1/authentication_providers/{provider_id}"
+            "/accounts/{account}/authentication_providers/{provider_id}"
         ))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .await;
@@ -1883,7 +1885,7 @@ async fn auth_providers_create_show_update_delete() {
     // GET after delete → 404.
     let gone_resp = server
         .get(&format!(
-            "/accounts/1/authentication_providers/{provider_id}"
+            "/accounts/{account}/authentication_providers/{provider_id}"
         ))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .await;
@@ -1904,13 +1906,13 @@ async fn sso_settings_show_and_update() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "Admin3", "admin").await;
     let admin_auth = auth(admin, "admin");
 
     // GET sso_settings returns current values (may be nulls).
     let get_resp = server
-        .get("/accounts/1/sso_settings")
+        .get(&format!("/accounts/{account}/sso_settings"))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .await;
     assert_eq!(
@@ -1924,7 +1926,7 @@ async fn sso_settings_show_and_update() {
 
     // PUT update sso_settings.
     let update_resp = server
-        .put("/accounts/1/sso_settings")
+        .put(&format!("/accounts/{account}/sso_settings"))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .json(&json!({
             "sso_settings": {
@@ -1954,7 +1956,7 @@ async fn sso_settings_show_and_update() {
 
     // GET reflects the update.
     let get2_resp = server
-        .get("/accounts/1/sso_settings")
+        .get(&format!("/accounts/{account}/sso_settings"))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .await;
     let get2_body: Value = get2_resp.json::<serde_json::Value>()["sso_settings"].clone();
