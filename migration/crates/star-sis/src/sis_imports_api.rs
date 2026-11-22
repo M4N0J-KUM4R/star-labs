@@ -338,7 +338,7 @@ struct ProgressRow {
 
 /// The account the request runs against.
 #[derive(Debug, sqlx::FromRow)]
-struct AccountRow {
+pub(crate) struct AccountRow {
     id: i64,
     parent_account_id: Option<i64>,
     allow_sis_import: bool,
