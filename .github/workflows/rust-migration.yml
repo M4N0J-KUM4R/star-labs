@@ -124,6 +124,7 @@ jobs:
             crates: >-
               -p star-notifications -p star-accounts -p star-enrollments
               -p star-permissions -p star-groups -p star-assignment-groups
+              -p star-gradebook
               -p star-jobs
               -p star-eportfolios -p star-polling -p star-search -p star-sis
           - shard: 3

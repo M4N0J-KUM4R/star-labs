@@ -115,6 +115,7 @@ jobs:
             crates: >-
               -p star-account-reports -p star-announcements
               -p star-assignment-groups -p star-collaborations
+              -p star-gradebook
               -p star-conferences -p star-conversations -p star-discussions
               -p star-eportfolios -p star-files -p star-groups -p star-jobs
               -p star-media -p star-polling -p star-quizzes -p star-search

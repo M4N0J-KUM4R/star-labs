@@ -23,6 +23,7 @@ star-enrollments = { path = "../star-enrollments" }
 star-dashboard = { path = "../star-dashboard" }
 star-quizzes = { path = "../star-quizzes" }
 star-assignment-groups = { path = "../star-assignment-groups" }
+star-gradebook = { path = "../star-gradebook" }
 star-accounts = { path = "../star-accounts" }
 star-calendar = { path = "../star-calendar" }
 star-conversations = { path = "../star-conversations" }
