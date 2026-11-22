@@ -12,6 +12,8 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use sqlx::PgPool;
+
+mod custom_data;
 use star_auth::{hash_password, AuthUser};
 use star_common::{ApiError, AppState};
 use std::collections::BTreeMap;
@@ -839,6 +841,7 @@ fn parse_dashboard_position(value: &serde_json::Value) -> Option<i64> {
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(custom_data::custom_data_routes())
         .route("/users", get(list_users))
         .route("/users/self", get(get_self))
         .route(
