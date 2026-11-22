@@ -33,6 +33,8 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod grading_period_sets;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -2768,6 +2770,7 @@ async fn batch_update_periods(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(grading_period_sets::grading_period_sets_routes())
         .route(
             "/courses/{courseId}/grading_standards",
             post(create_grading_standard),
