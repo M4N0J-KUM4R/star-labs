@@ -284,16 +284,18 @@ async fn bind_and_unbind_registration() {
     // half of the journey is hidden (404) without the flag
     // (registrations_controller.rb:2284-2292), so both roots carry it.
     for account in [owner_account, other_account] {
-        sqlx::query(
-            "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
-             VALUES ('Account', $1, 'lti_deactivate_registrations', \
-                     'lti_deactivate_registrations', 'enabled') \
-             ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
-        )
-        .bind(account)
-        .execute(&pool)
-        .await
-        .expect("enable the deactivate flag");
+        for feature in ["lti_deactivate_registrations", "lti_registrations_next"] {
+            sqlx::query(
+                "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
+                 VALUES ('Account', $1, $2, $2, 'enabled') \
+                 ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
+            )
+            .bind(account)
+            .bind(feature)
+            .execute(&pool)
+            .await
+            .expect("enable the lti feature flag");
+        }
     }
 
     // A registration owned by the first account, bound into the second.
@@ -563,6 +565,19 @@ async fn deployments_show_delete_context_search() {
     let admin_id = seed_user(&pool, &prefix, "admin", "admin").await;
     seed_account_admin(&pool, root_account, admin_id).await;
     let course_id = seed_course(&pool, &prefix, "course", sub_account).await;
+
+    // context_search and the registration routes are gated on the
+    // `lti_registrations_next` feature flag (registrations_controller.rb:
+    // 2275-2282).
+    sqlx::query(
+        "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
+         VALUES ('Account', $1, 'lti_registrations_next', 'lti_registrations_next', 'enabled') \
+         ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
+    )
+    .bind(root_account)
+    .execute(&pool)
+    .await
+    .expect("enable the registrations flag");
 
     let registration = create_registration(
         &server,
