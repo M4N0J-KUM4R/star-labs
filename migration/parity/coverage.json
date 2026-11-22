@@ -12943,19 +12943,21 @@
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
-    "star_extras": 208,
+    "star_extras": 207,
     "star_extras_by_class": {
-      "absent": 86,
+      "absent": 85,
       "api_nested": 19,
       "api_verb_mismatch": 18,
       "web_exact": 43,
       "web_nested": 26,
       "web_verb_mismatch": 16
     },
-    "star_route_calls": 1328,
-    "star_route_registrations": 1620,
+    "star_route_calls": 1323,
+    "star_route_registrations": 1612,
     "star_tables": 397,
+    "star_test_calls_excluded": 3,
     "star_unparsed_calls": 0,
+    "star_unreachable_calls_excluded": 2,
     "ui_feature_dirs": 232,
     "ui_feature_dirs_implemented": 0,
     "ui_referenced_implemented": 503,
@@ -13726,15 +13728,6 @@
       "path": "/courses/{courseId}/groups",
       "source": "crates/star-groups/src/lib.rs",
       "verb": "POST"
-    },
-    {
-      "canvas_closest": [],
-      "classification": "absent",
-      "crate": "star-modules",
-      "normalized_path": "courses/{}/mastery_paths/stats/{}",
-      "path": "/courses/{courseId}/mastery_paths/stats/{stat}",
-      "source": "crates/star-modules/src/module_gaps.rs",
-      "verb": "GET"
     },
     {
       "canvas_closest": [

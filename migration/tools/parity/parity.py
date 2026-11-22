@@ -36,6 +36,10 @@ ACTION_RE = re.compile(r"action:\s*(?::([A-Za-z0-9_]+)|[\"']([A-Za-z0-9_]+)[\"']
 TO_RE = re.compile(r"to:\s*[\"']([A-Za-z0-9_/]+)#([A-Za-z0-9_]+)[\"']")
 STR_RE = re.compile(r"[\"']([^\"']*)[\"']")
 STAR_METHOD_RE = re.compile(r"\b(get|post|put|delete|patch|head|options)\s*\(")
+# A method combinator in an axum chain, i.e. at the head of the `.route()`
+# second argument or directly after a `.`: `axum::routing::get(h)` / `.post(h)`.
+STAR_METHOD_HEAD_RE = re.compile(
+    r"\s*(?:[A-Za-z_][A-Za-z0-9_]*::)*\s*(get|post|put|delete|patch|head|options)\s*\(")
 EACH_RE = re.compile(r"^\s*(.+?)\.each\s+do\s*\|([^|]*)\|\s*$")
 WORD_ARRAY_RE = re.compile(r"%w\[([^\]]*)\]")
 RESOURCES_RE = re.compile(r"^\s*resources\s+:([a-z_][a-z0-9_]*)\b(.*)$")
@@ -857,21 +861,174 @@ def _extract_route_calls(text):
         pos = i
 
 
+def _skip_balanced(text, open_index, opener="(", closer=")"):
+    """Index just past the `closer` that balances the `opener` at open_index."""
+    depth = 0
+    i = open_index
+    in_string = False
+    escaped = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch == opener:
+            depth += 1
+        elif ch == closer:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return len(text)
+
+
+def _star_verbs(tail):
+    """HTTP verbs of one `.route(path, <tail>)` argument list.
+
+    axum chains method combinators, so only the chain head and the
+    dot-prefixed continuations are verbs: `.delete(delete(h))` registers DELETE
+    once, and the inner `delete(h)` is the handler's own name. The old
+    findall-based version counted that pair twice.
+    """
+    verbs = []
+    tail = tail.lstrip()
+    if tail.startswith(","):
+        tail = tail[1:]
+    i = 0
+    while i < len(tail):
+        match = STAR_METHOD_HEAD_RE.match(tail, i)
+        if not match:
+            break
+        verbs.append(match.group(1))
+        i = _skip_balanced(tail, match.end() - 1)
+        while i < len(tail) and tail[i] in " \t\r\n":
+            i += 1
+        if i < len(tail) and tail[i] == ".":
+            i += 1
+            continue
+        break
+    return verbs
+
+
+CFG_TEST_RE = re.compile(r"#\[\s*cfg\s*\(\s*test\s*\)\s*\]")
+TEST_ATTR_RE = re.compile(r"#\[\s*(?:tokio::)?(?:test|sqlx::test)\b")
+MOD_DECL_RE = re.compile(
+    r"^\s*(?:#\[\s*path\s*=\s*\"([^\"]+)\"\s*\]\s*)?"
+    r"(?:pub(?:\([^)]*\))?\s+)?(?:self\s+)?mod\s+([a-z_][a-z0-9_]*)\s*;")
+
+
+def _strip_tests(text):
+    """Drop `#[cfg(test)]` items and `#[test]` function bodies.
+
+    Test scaffolding registers nothing at runtime, and a test that builds a
+    sub-router inflates the registration count (and shows up as a phantom
+    duplicate of the product route it exercises).
+    """
+    for _ in range(500):
+        match = CFG_TEST_RE.search(text)
+        if not match:
+            break
+        brace = text.find("{", match.end())
+        semicolon = text.find(";", match.end())
+        if semicolon >= 0 and (brace < 0 or semicolon < brace):
+            # `#[cfg(test)] mod tests;` — a whole file we must not read.
+            text = text[:match.start()] + text[semicolon + 1:]
+            continue
+        if brace < 0:
+            break
+        text = text[:match.start()] + text[_skip_balanced(text, brace, "{", "}"):]
+    for _ in range(500):
+        match = TEST_ATTR_RE.search(text)
+        if not match:
+            break
+        brace = text.find("{", match.end())
+        if brace < 0:
+            break
+        text = text[:match.start()] + text[_skip_balanced(text, brace, "{", "}"):]
+    return text
+
+
+def star_reachable_files(star_src):
+    """.rs files under `crates/*/src/` that a crate's `mod` tree pulls in.
+
+    A file no `mod` declaration names is not compiled, so its routes are not
+    registrations. The real case (issue #233) is a scaffold copy left beside
+    the implemented module; skipping it keeps the extras list to what boots.
+    """
+    reachable = set()
+    stack = []
+    for crate_dir in sorted((star_src / "crates").iterdir()):
+        src = crate_dir / "src"
+        if not src.is_dir():
+            continue
+        for entry in ("lib.rs", "main.rs"):
+            path = src / entry
+            if path.is_file():
+                stack.append((path, src, entry))
+    seen = set()
+    while stack:
+        path, crate_src, name = stack.pop()
+        key = path.resolve()
+        if key in seen or not path.is_file():
+            continue
+        seen.add(key)
+        reachable.add(key)
+        text = _strip_tests(path.read_text(encoding="utf-8", errors="replace"))
+        for line in text.splitlines():
+            match = MOD_DECL_RE.match(line)
+            if not match:
+                continue
+            explicit, ident = match.group(1), match.group(2)
+            if explicit:
+                stack.append((path.parent / explicit, crate_src, name))
+                continue
+            # `mod x;` in lib.rs/main.rs resolves to src/x.rs or src/x/mod.rs;
+            # in a nested file it resolves under that file's own directory.
+            if name in ("lib.rs", "main.rs"):
+                bases = [crate_src]
+            else:
+                stem_dir = path.parent / path.stem
+                bases = [stem_dir, path.parent] if stem_dir.is_dir() \
+                    else [path.parent]
+            for base in bases:
+                for cand in (base / f"{ident}.rs", base / ident / "mod.rs"):
+                    if cand.is_file():
+                        stack.append((cand, crate_src, name))
+    return reachable
+
+
 def parse_star_routes(star_src):
     routes = []
     calls = 0
     unparsed = 0
+    test_calls = 0
+    unreachable_calls = 0
+    reachable = star_reachable_files(star_src)
     for path in sorted((star_src / "crates").glob("*/src/*.rs")):
         crate = path.parent.parent.name
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for args in _extract_route_calls(text):
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        raw_calls = list(_extract_route_calls(raw))
+        text_calls = list(_extract_route_calls(_strip_tests(raw)))
+        test_calls += max(len(raw_calls) - len(text_calls), 0)
+        if path.resolve() not in reachable:
+            # Uncompiled file: count its calls as excluded rather than
+            # silently crediting its routes to the product.
+            unreachable_calls += len(raw_calls)
+            continue
+        for args in text_calls:
             calls += 1
             sm = STR_RE.search(args)
             if not sm:
                 unparsed += 1
                 continue
             route_path = sm.group(1)
-            methods = STAR_METHOD_RE.findall(args[sm.end():])
+            methods = _star_verbs(args[sm.end():])
             if not methods:
                 unparsed += 1
                 continue
@@ -883,8 +1040,9 @@ def parse_star_routes(star_src):
                     "crate": crate,
                     "source": str(path.relative_to(star_src)),
                 })
-    return sorted(routes, key=lambda r: (r["normalized_path"], r["verb"],
-                                         r["crate"])), calls, unparsed
+    return (sorted(routes, key=lambda r: (r["normalized_path"], r["verb"],
+                                          r["crate"])), calls, unparsed,
+            test_calls, unreachable_calls)
 
 
 def count_star_sources(star_src):
@@ -1181,7 +1339,8 @@ def classify_extras(extras, canvas_routes, web_routes):
 
 def build_coverage(manifest, star_src):
     canvas_routes = manifest["routes"]
-    star_routes, calls, unparsed = parse_star_routes(star_src)
+    star_routes, calls, unparsed, test_calls, unreachable_calls = \
+        parse_star_routes(star_src)
     star_keys = {(r["verb"], r["normalized_path"]) for r in star_routes}
 
     implemented = [r for r in canvas_routes if (r["verb"], r["normalized_path"]) in star_keys]
@@ -1235,6 +1394,8 @@ def build_coverage(manifest, star_src):
             "star_route_registrations": len(star_routes),
             "star_route_calls": calls,
             "star_unparsed_calls": unparsed,
+            "star_test_calls_excluded": test_calls,
+            "star_unreachable_calls_excluded": unreachable_calls,
             "star_extras": len(extras),
             "star_extras_by_class": extras_classes,
             "graphql_files": counts["graphql_files"],
@@ -1317,6 +1478,11 @@ def render_report(coverage):
         "(%d unparsed); %d have no Canvas match and are listed as extras below." %
         (s["star_route_registrations"], s["star_route_calls"],
          s["star_unparsed_calls"], s["star_extras"]))
+    add("")
+    add("Excluded before counting: %d `.route(...)` calls inside `#[cfg(test)]` "
+        "or `#[test]` bodies, %d calls in `.rs` files no `mod` declaration "
+        "reaches (not compiled, so not registered)." %
+        (s["star_test_calls_excluded"], s["star_unreachable_calls_excluded"]))
     add("")
     add("Canvas source sizes: %d GraphQL files (%d object types, %d mutations), "
         "%d models, %d UI feature dirs, %d JS/TSX files, %d ERB views, "
@@ -1476,7 +1642,13 @@ def cmd_report(args):
     (out_dir / "report.md").write_text(render_report(coverage), encoding="utf-8")
 
     regressed = previous is not None and current < previous
-    if not regressed:
+    s = coverage["summary"]
+    # A parser that recognizes nothing reports 0 implemented routes, which is
+    # not a coverage regression the baseline can catch when the baseline itself
+    # is missing (first run, or a scratch --out). Fail loudly instead.
+    parser_broken = (s["star_route_calls"] > 0
+                     and s["star_unparsed_calls"] == s["star_route_calls"])
+    if not regressed and not parser_broken:
         write_json(baseline_path, {
             "implemented_rest_routes": current,
             "policy": "report fails when implemented REST routes fall below this number",
@@ -1493,8 +1665,15 @@ def cmd_report(args):
            fmt_pct(s["ui_referenced_implemented"], s["ui_referenced_routes"])))
     print("star registrations: %d (%d extras)" %
           (s["star_route_registrations"], s["star_extras"]))
+    print("excluded: %d test-code calls, %d calls in uncompiled files" %
+          (s["star_test_calls_excluded"], s["star_unreachable_calls_excluded"]))
     print("wrote %s" % out_dir)
 
+    if parser_broken:
+        print("parity parse failure: all %d `.route(...)` calls unparsed — "
+              "the star parser matched nothing, so every number above is "
+              "meaningless" % s["star_route_calls"], file=sys.stderr)
+        return 1
     if regressed:
         print("parity regression: implemented %d < baseline %d" %
               (current, previous), file=sys.stderr)
