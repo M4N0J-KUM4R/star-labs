@@ -231,7 +231,10 @@ async fn update_reset_and_histories() {
     let body: Value = response.json();
     assert_eq!(body["errors"][0]["code"], "invalid_workflow_state");
 
-    // overlay_history lists the recorded version.
+    // overlay_history: the manual merge cleared the overlay without ever
+    // creating one, so no version is recorded (update_registration_
+    // service.rb:148-149 clears @overlay_params; Lti::Overlay's
+    // before_update :create_version never fires).
     let response = server
         .get(&format!(
             "/accounts/{account_id}/lti_registrations/{id}/overlay_history"
@@ -239,10 +242,8 @@ async fn update_reset_and_histories() {
         .add_header(AUTHORIZATION, auth(admin_id, "admin"))
         .await;
     assert_eq!(response.status_code(), 200);
-    let versions: Vec<Value> = response.json();
-    assert!(!versions.is_empty());
-    assert_eq!(versions[0]["overlay"]["privacy_level"], "public");
-    assert_eq!(versions[0]["caused_by_reset"], false);
+    let versions: Value = response.json();
+    assert_eq!(versions, json!([]));
 
     // reset clears the overlay and flags the version (:1684-1706).
     let response = server
@@ -1038,7 +1039,7 @@ async fn context_controls_crud_and_bulk() {
     assert_eq!(response.status_code(), 422);
     let body: Value = response.json();
     assert_eq!(
-        body["errors"][0],
+        body["errors"],
         "A context control for this deployment and context already exists."
     );
 

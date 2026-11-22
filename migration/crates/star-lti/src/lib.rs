@@ -2387,48 +2387,49 @@ async fn install_from_template(
     }
     let template = find_active_registration(&state.db, id).await?;
 
-    // Canvas' InstallTemplateRegistrationService refuses to shadow an
-    // existing local copy.
-    let existing: Option<(i64,)> = sqlx::query_as(
+    // Canvas' InstallTemplateRegistrationService reuses an existing local
+    // copy instead of refusing (install_template_registration_service.rb:
+    // 38-48, `find_by` + `create_local_copy unless local_copy.present?`).
+    let existing: Option<i64> = sqlx::query_scalar(
         "SELECT id FROM lti_registrations \
          WHERE template_registration_id = $1 AND account_id = $2 AND workflow_state <> 'deleted'",
     )
     .bind(id)
     .bind(account_id)
     .fetch_optional(&state.db)
-    .await?;
-    if existing.is_some() {
-        return Ok(render_error(
-            "invalid_template",
-            "A local copy of this template already exists for this account",
-        ));
-    }
+    .await?
+    .flatten();
 
     let root_id = root_account_id(&state.db, account_id).await?;
-    let sql = format!(
-        "INSERT INTO lti_registrations \
-         (account_id, root_account_id, name, admin_nickname, vendor, description, icon_url, \
-          lti_version, dynamic_registration, lock_deploying, template_registration_id, \
-          workflow_state, configuration, created_by_id, updated_by_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13, $13) \
-         RETURNING {REGISTRATION_COLUMNS}"
-    );
-    let local_copy: RegistrationRow = sqlx::query_as(&sql)
-        .bind(account_id)
-        .bind(root_id)
-        .bind(&template.name)
-        .bind(template.admin_nickname.clone())
-        .bind(template.vendor.clone())
-        .bind(template.description.clone())
-        .bind(template.icon_url.clone())
-        .bind(&template.lti_version)
-        .bind(template.dynamic_registration)
-        .bind(template.lock_deploying)
-        .bind(id)
-        .bind(&template.configuration)
-        .bind(auth.id)
-        .fetch_one(&state.db)
-        .await?;
+    let local_copy: RegistrationRow = match existing {
+        Some(local_copy_id) => find_active_registration(&state.db, local_copy_id).await?,
+        None => {
+            let sql = format!(
+                "INSERT INTO lti_registrations \
+                 (account_id, root_account_id, name, admin_nickname, vendor, description, icon_url, \
+                  lti_version, dynamic_registration, lock_deploying, template_registration_id, \
+                  workflow_state, configuration, created_by_id, updated_by_id) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13, $13) \
+                 RETURNING {REGISTRATION_COLUMNS}"
+            );
+            sqlx::query_as(&sql)
+                .bind(account_id)
+                .bind(root_id)
+                .bind(&template.name)
+                .bind(template.admin_nickname.clone())
+                .bind(template.vendor.clone())
+                .bind(template.description.clone())
+                .bind(template.icon_url.clone())
+                .bind(&template.lti_version)
+                .bind(template.dynamic_registration)
+                .bind(template.lock_deploying)
+                .bind(id)
+                .bind(&template.configuration)
+                .bind(auth.id)
+                .fetch_one(&state.db)
+                .await?
+        }
+    };
 
     sqlx::query(
         "INSERT INTO lti_registration_account_bindings \

@@ -127,7 +127,7 @@ fn oauth_header(path: &str, consumer_key: &str, nonce: &str) -> String {
     let base = format!(
         "{}&{}&{}",
         percent_encode("POST"),
-        percent_encode(&format!("http://localhost{path}")),
+        percent_encode(&format!("http://canvas.test{path}")),
         percent_encode(&normalized.join("&"))
     );
     let mut mac =
@@ -168,7 +168,7 @@ async fn a_signed_grade_passback_is_accepted() {
     let path = format!("/api/lti/v1/tools/{consumer_key}/grade_passback");
     let resp = server
         .post(&path)
-        .add_header(axum::http::header::HOST, "localhost")
+        .add_header(axum::http::header::HOST, "canvas.test")
         .add_header(
             axum::http::header::AUTHORIZATION,
             oauth_header(&path, &consumer_key, "nonce-grade-1"),
@@ -215,7 +215,7 @@ async fn a_reused_nonce_is_unauthorized() {
     let path = format!("/api/lti/v1/tools/{consumer_key}/ext_grade_passback");
     let resp = server
         .post(&path)
-        .add_header(axum::http::header::HOST, "localhost")
+        .add_header(axum::http::header::HOST, "canvas.test")
         .add_header(
             axum::http::header::AUTHORIZATION,
             oauth_header(&path, &consumer_key, "nonce-reused"),
@@ -227,7 +227,7 @@ async fn a_reused_nonce_is_unauthorized() {
     // The same nonce a second time is rejected.
     let resp = server
         .post(&path)
-        .add_header(axum::http::header::HOST, "localhost")
+        .add_header(axum::http::header::HOST, "canvas.test")
         .add_header(
             axum::http::header::AUTHORIZATION,
             oauth_header(&path, &consumer_key, "nonce-reused"),
@@ -251,7 +251,7 @@ async fn a_missing_tool_is_a_not_found() {
     let path = "/api/lti/v1/tools/unknown-tool/grade_passback";
     let resp = server
         .post(&path)
-        .add_header(axum::http::header::HOST, "localhost")
+        .add_header(axum::http::header::HOST, "canvas.test")
         .add_header(
             axum::http::header::AUTHORIZATION,
             oauth_header(&path, &consumer_key, "nonce-missing"),

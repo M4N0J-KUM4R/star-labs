@@ -379,7 +379,9 @@ async fn account_rubric_is_shown_with_its_used_locations() {
 
     // An invalid style is a 400 (Canvas `validate_args`).
     let resp = server
-        .get(&format!("/accounts/{account}/rubrics/{rubric}?style=bogus"))
+        .get(&format!(
+            "/accounts/{account}/rubrics/{rubric}?style=bogus&include=assessments"
+        ))
         .add_header(AUTHORIZATION, auth(admin, "student"))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
