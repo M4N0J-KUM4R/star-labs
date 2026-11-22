@@ -1,9 +1,8 @@
-//! Mount-smoke test for star-eportfolios (scaffold, issue #138).
+//! Mount-smoke test for star-eportfolios (scaffold train, issue #138;
+//! routes landed with issue #91).
 //!
 //! Verifies the crate's router mounts and answers unknown paths with 404
-//! (not 500, not open) exactly the way star-http assembles it. No domain
-//! routes exist yet — the smoke request targets a path owned by this crate's
-//! future route set.
+//! (not 500, not open) exactly the way star-http assembles it.
 //!
 //! Conventions (mirrors star-enrollments):
 //! - Skipped cleanly when DATABASE_URL is not set (prints SKIP and returns).
@@ -43,13 +42,20 @@ async fn unknown_path_is_404() {
         return;
     };
 
-    // A path this crate will own once routes land. With the scaffold's empty
-    // router it must 404 (axum default fallback), never 500 or open.
-    let resp = server.get("/users/1/eportfolios").await;
+    // A path this crate owns, but with a segment no route matches: must be
+    // 404 (axum default fallback), never 500 or open.
+    let resp = server.get("/eportfolios/1/nope").await;
     assert_eq!(
         resp.status_code(),
         404,
-        "scaffold must 404 on unimplemented paths; body: {}",
+        "unknown path must 404; body: {}",
         resp.text()
     );
+
+    // Anonymous hits on mounted routes answer 401 (the AuthUser extractor),
+    // proving the domain routes really mounted.
+    let resp = server.get("/users/1/eportfolios").await;
+    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
+    let resp = server.get("/eportfolios/1").await;
+    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
 }
