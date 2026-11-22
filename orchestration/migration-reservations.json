@@ -3,8 +3,8 @@
  "free": [
   "0111"
  ],
- "max_merged": "0238",
- "next_available": "0239",
+ "max_merged": "0243",
+ "next_available": "0253",
  "reservations": {
   "0001": {
    "issue": null,
@@ -751,49 +751,114 @@
    "note": "web_conferences tails (recordings JSONB, calendar_events FK); 0129 reserved number unusable (snapshot ordering) so the post-snapshot hole 0229 was used per PR #212 precedent",
    "status": "merged"
   },
-  "0230": {
-   "issue": null,
+  "0244": {
+   "issue": 228,
    "note": "star-grading-standards: grading_period_sets API (parity gap)",
-   "status": "merged"
+   "status": "open"
+  },
+  "0245": {
+   "issue": 228,
+   "note": "star-outcomes: outcomes_api columns (parity gap)",
+   "status": "open"
+  },
+  "0246": {
+   "issue": 228,
+   "note": "star-audit: authentication_events (parity gap)",
+   "status": "open"
+  },
+  "0247": {
+   "issue": 228,
+   "note": "star-assignments: module assignment overrides (parity gap)",
+   "status": "open"
+  },
+  "0248": {
+   "issue": 228,
+   "note": "star-gradebook: user_preferences + what-if scores (parity gap)",
+   "status": "open"
+  },
+  "0249": {
+   "issue": 228,
+   "note": "star-gradebook: score_overrides (parity gap)",
+   "status": "open"
+  },
+  "0250": {
+   "issue": 228,
+   "note": "star-auth: course_events audit table (parity gap)",
+   "status": "open"
+  },
+  "0251": {
+   "issue": 228,
+   "note": "star-quizzes: quiz family tables (parity gap)",
+   "status": "open"
+  },
+  "0252": {
+   "issue": 228,
+   "note": "star-courses: misc gap tables (parity gap)",
+   "status": "open"
   },
   "0231": {
    "issue": null,
-   "note": "star-outcomes: outcomes_api columns (parity gap)",
+   "note": "batch-3 reservation 0231 (merging via #197)",
    "status": "merged"
   },
   "0232": {
    "issue": null,
-   "note": "star-audit: authentication_events (parity gap)",
+   "note": "batch-3 reservation 0232 (merging via #197)",
    "status": "merged"
   },
   "0233": {
    "issue": null,
-   "note": "star-assignments: module assignment overrides (parity gap)",
+   "note": "batch-3 reservation 0233 (merging via #197)",
    "status": "merged"
   },
   "0234": {
    "issue": null,
-   "note": "star-gradebook: user_preferences + what-if scores (parity gap)",
+   "note": "batch-3 reservation 0234 (merging via #197)",
    "status": "merged"
   },
   "0235": {
    "issue": null,
-   "note": "star-gradebook: score_overrides (parity gap)",
+   "note": "batch-3 reservation 0235 (merging via #197)",
    "status": "merged"
   },
   "0236": {
    "issue": null,
-   "note": "star-auth: course_events audit table (parity gap)",
+   "note": "batch-3 reservation 0236 (merging via #197)",
    "status": "merged"
   },
   "0237": {
    "issue": null,
-   "note": "star-quizzes: quiz family tables (parity gap)",
+   "note": "batch-3 reservation 0237 (merging via #197)",
    "status": "merged"
   },
   "0238": {
    "issue": null,
-   "note": "star-courses: misc gap tables (parity gap)",
+   "note": "batch-3 reservation 0238 (merging via #197)",
+   "status": "merged"
+  },
+  "0239": {
+   "issue": null,
+   "note": "batch-3 reservation 0239 (merging via #197)",
+   "status": "merged"
+  },
+  "0240": {
+   "issue": null,
+   "note": "batch-3 reservation 0240 (merging via #197)",
+   "status": "merged"
+  },
+  "0241": {
+   "issue": null,
+   "note": "batch-3 reservation 0241 (merging via #197)",
+   "status": "merged"
+  },
+  "0242": {
+   "issue": null,
+   "note": "batch-3 reservation 0242 (merging via #197)",
+   "status": "merged"
+  },
+  "0243": {
+   "issue": null,
+   "note": "batch-3 reservation 0243 (merging via #197)",
    "status": "merged"
   }
  }

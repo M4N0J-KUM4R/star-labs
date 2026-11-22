@@ -1,4 +1,4 @@
--- 0236: course audit events (parity gap — CourseAuditApiController
+-- 0250: course audit events (parity gap — CourseAuditApiController
 -- for_course/for_account). Mirrors the authentication_events convention
 -- (0232): plain BIGSERIAL table, jsonb payload, per-scope indexes.
 CREATE TABLE IF NOT EXISTS course_events (

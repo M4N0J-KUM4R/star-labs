@@ -1,4 +1,4 @@
--- 0238: misc parity gaps (course_tag_conversion job progress, planner
+-- 0245: misc parity gaps (course_tag_conversion job progress, planner
 -- items, plugins). Canvas CourseTagConversion tracks the conversion worker
 -- via progresses rows tagged differentiation_tag_conversion; planner_items
 -- is the Canvas planner note/shortcut store; plugins holds the site-admin

@@ -1,4 +1,4 @@
--- 0232: authentication audit events (parity gap —
+-- 0246: authentication audit events (parity gap —
 -- AuthenticationAuditApiController for_login/for_account/for_user).
 -- Canvas Auditors::Authentication streams events keyed by pseudonym with
 -- created_at/uuid columns; the workspace audit convention (0092

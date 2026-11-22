@@ -1,4 +1,4 @@
--- 0231: outcomes_api parity gap (OutcomesApiController show/update/destroy
+-- 0245: outcomes_api parity gap (OutcomesApiController show/update/destroy
 -- on /outcomes/{id}). Canvas LearningOutcome carries mastery/criterion and
 -- calculation attributes the 0022 snapshot lacks; the update action writes
 -- them directly (process_params: title, display_name, description,

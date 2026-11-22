@@ -1,7 +1,7 @@
 //! Misc parity gaps — twenty-two small Canvas controllers, batched.
 //!
 //! Grouped by domain:
-//!   SIS: sis_import_errors_api, disable_post_to_sis_api
+//!   SIS: disable_post_to_sis_api (sis_import_errors moved to star-sis, batch-3)
 //!   Courses: course_tag_conversion, permissions_help, scopes_api,
 //!            lmgb_user_details, learning_mastery_gradebook_settings_api,
 //!            conditional_release/stats, study_assist,
@@ -68,80 +68,7 @@ async fn course_exists(pool: &PgPool, course_id: i64) -> Result<bool, ApiError> 
 }
 
 // ---------------------------------------------------------------------------
-// sis_import_errors_api
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Default, Deserialize)]
-pub struct SisErrorsQuery {
-    pub id: Option<i64>,
-    /// Accepted for Canvas compatibility (failed-rows filter).
-    #[allow(dead_code)]
-    pub failure: Option<bool>,
-    pub per_page: Option<i64>,
-}
-
-/// GET /accounts/{accountId}/sis_imports/{id}/errors and
-/// GET /accounts/{accountId}/sis_import_errors — root account only (400),
-/// SIS imports enabled (403), import_sis/manage_sis (admin).
-async fn sis_import_errors(
-    State(state): State<AppState>,
-    Path((account_id, import_id)): Path<(i64, Option<i64>)>,
-    Query(query): Query<SisErrorsQuery>,
-    auth: AuthUser,
-) -> Result<Json<Value>, ApiError> {
-    // check_account: root only (400) + SIS enabled (403).
-    let account: Option<(bool, bool)> = sqlx::query_as(
-        "SELECT (parent_account_id IS NULL) AS is_root, \
-                COALESCE((settings ->> 'allow_sis_import')::boolean, FALSE) AS allow_sis \
-         FROM accounts WHERE id = $1",
-    )
-    .bind(account_id)
-    .fetch_optional(&state.db)
-    .await?;
-    let (is_root, allow_sis) = account.ok_or(ApiError::NotFound)?;
-    if !is_root {
-        return Err(ApiError::BadRequest(
-            "SIS imports can only be executed on root accounts".into(),
-        ));
-    }
-    if !allow_sis {
-        return Err(ApiError::Forbidden);
-    }
-    if !is_admin(&auth) {
-        return Err(ApiError::Forbidden);
-    }
-
-    let batch_id = import_id.or(query.id);
-    let per_page = query.per_page.unwrap_or(50).clamp(1, 100);
-    type SisErrorRow = (
-        i64,
-        String,
-        Option<String>,
-        Option<chrono::DateTime<chrono::Utc>>,
-    );
-    let rows: Vec<SisErrorRow> = sqlx::query_as(
-        "SELECT id, COALESCE(file, ''), message, created_at FROM sis_batch_errors \
-             WHERE root_account_id = $1 AND ($2::bigint IS NULL OR sis_batch_id = $2) \
-             ORDER BY created_at DESC LIMIT $3",
-    )
-    .bind(account_id)
-    .bind(batch_id)
-    .bind(per_page)
-    .fetch_all(&state.db)
-    .await?;
-    Ok(Json(json!({
-        "sis_import_errors": rows
-            .into_iter()
-            .map(|(id, file, message, created_at)| json!({
-                "id": id,
-                "file_name": file,
-                "message": message,
-                "created_at": created_at.map(|d| d.to_rfc3339()),
-            }))
-            .collect::<Vec<_>>(),
-    })))
-}
-
+// disable_post_to_sis_api
 // ---------------------------------------------------------------------------
 // disable_post_to_sis_api
 // ---------------------------------------------------------------------------
@@ -1166,15 +1093,7 @@ async fn create_or_update_binding(
 
 pub fn misc_gaps_routes() -> Router<AppState> {
     Router::new()
-        // SIS.
-        .route(
-            "/accounts/{accountId}/sis_imports/{id}/errors",
-            get(sis_import_errors),
-        )
-        .route(
-            "/accounts/{accountId}/sis_import_errors",
-            get(sis_import_errors),
-        )
+        // SIS (the sis_import_errors routes live in star-sis since batch-3).
         .route(
             "/api/sis/courses/{courseId}/disable_post_to_sis",
             put(disable_post_to_sis),

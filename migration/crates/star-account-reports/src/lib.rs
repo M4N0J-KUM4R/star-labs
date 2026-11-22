@@ -12,7 +12,6 @@
 use axum::Router;
 use star_common::AppState;
 
-mod course_reports;
 
 /// Domain router for star-account-reports.
 ///
@@ -20,5 +19,5 @@ mod course_reports;
 /// (`specs/p5-rest-account-reports.md` §2) are merged here by the feature workers; the
 /// `Router::new()` base already gives unmounted paths the standard 404.
 pub fn router() -> Router<AppState> {
-    Router::new().merge(course_reports::course_reports_routes())
+    Router::new()
 }

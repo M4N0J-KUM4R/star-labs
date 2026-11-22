@@ -1,4 +1,4 @@
--- 0237: quizzes-family parity gaps (quiz_extensions, quiz_ip_filters).
+-- 0244: quizzes-family parity gaps (quiz_extensions, quiz_ip_filters).
 -- Canvas Quizzes::QuizExtension (extend_attempts / extend_from /
 -- extend_to per user+quiz) and the quiz IP filters used by
 -- Quizzes::QuizIpFiltersController. quiz_submission_events already exists

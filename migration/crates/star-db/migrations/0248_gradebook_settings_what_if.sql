@@ -1,4 +1,4 @@
--- 0234: gradebook settings + what-if grades (parity gaps —
+-- 0248: gradebook settings + what-if grades (parity gaps —
 -- GradebookSettingsController#update and WhatIfGradesApiController
 -- update/reset_for_student_course).
 -- Canvas stores per-user gradebook preferences (User#get_preference/

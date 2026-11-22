@@ -1,4 +1,4 @@
--- 0235: gradebooks controller parity gap (update_final_grade_overrides,
+-- 0249: gradebooks controller parity gap (update_final_grade_overrides,
 -- apply_score_to_ungraded_submissions). Canvas stores per-student final
 -- grade override scores in score_overrides (current + grading-period
 -- scoped rows); the workspace gets the same shape.

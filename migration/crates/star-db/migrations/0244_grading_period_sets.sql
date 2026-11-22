@@ -1,4 +1,4 @@
--- 0230: grading_period_sets API (parity gap).
+-- 0244: grading_period_sets API (parity gap).
 -- Canvas GradingPeriodSetsController + GradingPeriodSetSerializer need
 --   GET    /accounts/{accountId}/grading_period_sets          (index)
 --   POST   /accounts/{accountId}/grading_period_sets          (create)
