@@ -1592,7 +1592,7 @@ async fn nested_start_enforces_student_only_and_409() {
         let resp = server
             .post(&format!(
                 "/courses/{}/quizzes/{}/submissions",
-                f.course, second_id
+                f.course, f.quiz
             ))
             .add_header(axum::http::header::AUTHORIZATION, &token)
             .await;
@@ -1603,26 +1603,20 @@ async fn nested_start_enforces_student_only_and_409() {
             resp.text()
         );
     }
-    assert_eq!(
-        db_count_quiz_submissions(&pool, second_id, f.teacher).await,
-        0
-    );
-    assert_eq!(db_count_quiz_submissions(&pool, second_id, admin).await, 0);
+    assert_eq!(db_count_quiz_submissions(&pool, f.quiz, f.teacher).await, 0);
+    assert_eq!(db_count_quiz_submissions(&pool, f.quiz, admin).await, 0);
 
     // An unenrolled student is forbidden and nothing is persisted.
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
     let resp = server
         .post(&format!(
             "/courses/{}/quizzes/{}/submissions",
-            f.course, second_id
+            f.course, f.quiz
         ))
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "outsider start: {}", resp.text());
-    assert_eq!(
-        db_count_quiz_submissions(&pool, second_id, outsider).await,
-        0
-    );
+    assert_eq!(db_count_quiz_submissions(&pool, f.quiz, outsider).await, 0);
 
     cleanup(&pool, &prefix).await;
 }

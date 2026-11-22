@@ -81,28 +81,6 @@ async fn create_course(client: &Client, token: &str, name: &str) -> i64 {
     body["id"].as_i64().expect("course id")
 }
 
-/// Create an announcement in a course; returns its id.
-async fn create_announcement(client: &Client, token: &str, course_id: i64, title: &str) -> i64 {
-    let resp = client
-        .post(format!(
-            "{}/api/v1/courses/{}/announcements",
-            api_base(),
-            course_id
-        ))
-        .bearer_auth(token)
-        .json(&json!({ "title": title, "message": "<p>read-state parity</p>" }))
-        .send()
-        .await
-        .expect("create announcement request");
-    assert!(
-        resp.status().is_success(),
-        "create announcement failed: {}",
-        resp.status()
-    );
-    let body: Value = resp.json().await.expect("announcement json");
-    body["id"].as_i64().expect("announcement id")
-}
-
 /// Best-effort unique suffix (no uuid crate; nanos are enough).
 fn uuid_like() -> u128 {
     use std::time::{SystemTime, UNIX_EPOCH};

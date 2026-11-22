@@ -1343,7 +1343,7 @@ async fn my_submission_without_submission_is_synthesized_unsubmitted() {
         .await;
 
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let body: serde_json::Value = resp.into_json();
+    let body: Value = resp.json();
     assert_eq!(body["workflow_state"], "unsubmitted");
     assert_eq!(body["user_id"], f.student);
     assert_eq!(body["assignment_id"], f.assignment);

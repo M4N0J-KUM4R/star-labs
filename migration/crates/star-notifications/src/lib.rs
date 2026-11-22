@@ -980,7 +980,10 @@ const NOTIFICATION_CATEGORIES: [&str; 9] = [
 /// upserts a policy for every notification `Notification.where(category:)`
 /// returns; without a catalog table this static map defines that membership,
 /// built from `derive_category`'s keyword sets (every listed name derives
-/// back to its category — see the round-trip unit test).
+/// back to its category — see the round-trip unit test). Canvas' real
+/// `update_preferences_by_category` is served by star-users, so nothing here
+/// reads this map; it survives as test-support for `derive_category`.
+#[cfg(test)]
 fn category_notifications(category: &str) -> Option<&'static [&'static str]> {
     match category {
         "announcement" => Some(&["new_announcement", "announcement_created_by_student"]),
