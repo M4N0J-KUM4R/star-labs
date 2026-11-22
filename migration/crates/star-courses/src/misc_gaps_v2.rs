@@ -720,7 +720,7 @@ async fn live_assessment_results_index(
     if !teacher_or_admin(&state.db, &auth, course_id).await? {
         return Err(ApiError::Forbidden);
     }
-    let rows: Vec<(i64, i64, bool, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+    let rows: Vec<(i64, i64, bool, chrono::NaiveDateTime)> = sqlx::query_as(
         "SELECT id, user_id, passed, assessed_at FROM live_assessments_results \
          WHERE assessment_id = $1 ORDER BY id",
     )
@@ -731,7 +731,7 @@ async fn live_assessment_results_index(
         rows.into_iter()
             .map(|(id, user_id, passed, assessed_at)| {
                 json!({ "id": id, "user_id": user_id, "passed": passed,
-                        "assessed_at": assessed_at.to_rfc3339() })
+                        "assessed_at": assessed_at.and_utc().to_rfc3339() })
             })
             .collect(),
     ))
