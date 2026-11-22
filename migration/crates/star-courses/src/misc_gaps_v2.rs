@@ -697,8 +697,8 @@ async fn live_assessments_create(
         return Err(ApiError::Validation("name can't be blank".into()));
     }
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO live_assessments_assessments (key, title, context_type, context_id) \
-         VALUES ($3, $2, 'Course', $1) RETURNING id",
+        "INSERT INTO live_assessments_assessments (key, title, context_type, context_id, updated_at) \
+         VALUES ($3, $2, 'Course', $1, now()) RETURNING id",
     )
     .bind(course_id)
     .bind(name)

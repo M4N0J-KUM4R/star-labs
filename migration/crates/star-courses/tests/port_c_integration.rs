@@ -366,7 +366,9 @@ async fn section_users_roster_and_crosslist() {
     seed_enrollment(&pool, teacher, course, "teacher", None).await;
     seed_enrollment(&pool, teacher, target, "teacher", None).await;
     seed_enrollment(&pool, student, course, "student", Some(section)).await;
-    seed_enrollment(&pool, stranger, course, "student", None).await;
+    // The stranger stays UNENROLLED anywhere: Canvas sections#users serves
+    // course participants (read_roster), so a genuinely outside caller is
+    // the one that must draw the 403.
 
     // Section roster: one row for the section-enrolled student.
     let (status, roster) = req(
@@ -392,8 +394,6 @@ async fn section_users_roster_and_crosslist() {
     )
     .await;
     assert_eq!(status, 403, "stranger must not read the roster");
-    // (stranger IS enrolled in `course` — enroll in the other course only
-    // to prove the gate; use a fresh user for the 404 instead.)
     let (status, _) = req(
         &server,
         "GET",

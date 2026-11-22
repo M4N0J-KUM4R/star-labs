@@ -20,7 +20,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -94,9 +94,9 @@ type MsGroupRow = (
     i64,                   // course_id
     Option<String>,        // ms_group_id
     String,                // workflow_state
-    Option<DateTime<Utc>>, // last_synced_at
-    DateTime<Utc>,         // created_at
-    DateTime<Utc>,         // updated_at
+    Option<NaiveDateTime>, // last_synced_at (plain timestamp column)
+    NaiveDateTime,         // created_at
+    NaiveDateTime,         // updated_at
 );
 
 const MS_GROUP_COLUMNS: &str =
@@ -109,9 +109,9 @@ fn ms_group_json(row: MsGroupRow) -> Value {
         "course_id": course_id,
         "ms_group_id": ms_group_id,
         "workflow_state": workflow_state,
-        "last_synced_at": last_synced_at,
-        "created_at": created_at,
-        "updated_at": updated_at,
+        "last_synced_at": last_synced_at.map(|t| t.and_utc()),
+        "created_at": created_at.and_utc(),
+        "updated_at": updated_at.and_utc(),
     })
 }
 

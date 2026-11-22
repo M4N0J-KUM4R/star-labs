@@ -12,7 +12,6 @@
 //! DATABASE_URL=postgres://... cargo test -p star-pages
 
 use axum_test::TestServer;
-use serde_json::Value;
 use sqlx::PgPool;
 use star_common::AppState;
 
@@ -189,7 +188,6 @@ async fn group_page_revision_routes_decline_without_group_wiki() {
             .add_header(axum::http::header::AUTHORIZATION, admin_bearer.clone())
             .await;
         assert_eq!(resp.status_code(), 404, "{url}; body: {}", resp.text());
-        let _ = &resp.json::<Value>();
     }
     let resp = server
         .post("/groups/999999999/pages/x/revisions/1")
