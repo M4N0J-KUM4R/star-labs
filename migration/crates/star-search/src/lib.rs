@@ -623,7 +623,7 @@ async fn recipients(
                 .bind(group_id)
                 .fetch_optional(&state.db)
                 .await?;
-                effective_course = course.map(|(course_id,)| course_id);
+                effective_course = course.and_then(|(course_id,)| course_id);
             }
         }
     }

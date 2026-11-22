@@ -480,7 +480,7 @@ fn user_json(
     sortable_name: &str,
     email: &str,
     role: &str,
-    created_at: NaiveDateTime,
+    created_at: DateTime<Utc>,
 ) -> Value {
     json!({
         "id": id,
@@ -488,7 +488,7 @@ fn user_json(
         "sortable_name": sortable_name,
         "email": email,
         "role": role,
-        "created_at": created_at.and_utc().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "created_at": created_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
     })
 }
 
