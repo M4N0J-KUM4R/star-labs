@@ -121,21 +121,33 @@ impl Module {
     }
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct ModuleItemRow {
+    id: i64,
+    module_id: i64,
+    title: Option<String>,
+    position: Option<i32>,
+    indent: Option<i32>,
+    item_type: String,
+    item_id: Option<i64>,
+    workflow_state: Option<String>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct StreamItemRow {
+    id: i64,
+    item_type: Option<String>,
+    title: Option<String>,
+    context_code: Option<String>,
+    created_at: Option<DateTime<Utc>>,
+}
+
 /// Fetch a module's items (position order; deleted filtered).
 async fn fetch_module_items(
     pool: &PgPool,
     module_id: i64,
 ) -> Result<Vec<ModuleItem>, async_graphql::Error> {
-    let rows: Vec<(
-        i64,
-        i64,
-        Option<String>,
-        Option<i32>,
-        Option<i32>,
-        String,
-        Option<i64>,
-        Option<String>,
-    )> = sqlx::query_as(
+    let rows: Vec<ModuleItemRow> = sqlx::query_as(
         r#"
             SELECT id, module_id, title, position, indent, item_type,
                    item_id, workflow_state
@@ -152,14 +164,14 @@ async fn fetch_module_items(
     Ok(rows
         .into_iter()
         .map(|r| ModuleItem {
-            id: ID(r.0.to_string()),
-            module_id: ID(r.1.to_string()),
-            title: r.2,
-            position: r.3,
-            indent: r.4,
-            r#type: r.5,
-            content_id: r.6.map(|v| ID(v.to_string())),
-            workflow_state: r.7,
+            id: ID(r.id.to_string()),
+            module_id: ID(r.module_id.to_string()),
+            title: r.title,
+            position: r.position,
+            indent: r.indent,
+            r#type: r.item_type,
+            content_id: r.item_id.map(|v| ID(v.to_string())),
+            workflow_state: r.workflow_state,
             // requirement metadata not carried by the star-db shape
             completion_requirement: None,
             master_course_restrictions: None,
@@ -754,13 +766,7 @@ impl ActivityStream {
         if gctx.auth_user.id != self.user_id && !gctx.is_admin() {
             return Ok(Vec::new());
         }
-        let rows: Vec<(
-            i64,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<DateTime<Utc>>,
-        )> = sqlx::query_as(
+        let rows: Vec<StreamItemRow> = sqlx::query_as(
             r#"
                 SELECT id, item_type, title, context_code, created_at
                 FROM stream_items
@@ -776,11 +782,11 @@ impl ActivityStream {
         Ok(rows
             .into_iter()
             .map(|r| StreamSummaryItem {
-                id: ID(r.0.to_string()),
-                item_type: r.1,
-                title: r.2,
-                context_code: r.3,
-                created_at: r.4,
+                id: ID(r.id.to_string()),
+                item_type: r.item_type,
+                title: r.title,
+                context_code: r.context_code,
+                created_at: r.created_at,
             })
             .collect())
     }
