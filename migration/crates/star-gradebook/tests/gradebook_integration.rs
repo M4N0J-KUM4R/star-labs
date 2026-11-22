@@ -788,8 +788,11 @@ async fn late_policy_show_create_and_duplicate() {
         resp.text()
     );
 
-    // Validation failure → 422 (percent out of 0..100).
+    // Validation failure → 422 (percent out of 0..100). The teacher must be
+    // enrolled in the target course: Canvas gates manage_grades BEFORE
+    // validation, so an unenrolled teacher would correctly get 403 first.
     let other = seed_course(&pool, &format!("{prefix}-v")).await;
+    seed_enrollment(&pool, teacher, other, "teacher").await;
     let resp = server
         .post(&format!("/courses/{other}/late_policy"))
         .add_header("Authorization", hdr.clone())
@@ -803,6 +806,7 @@ async fn late_policy_show_create_and_duplicate() {
 
     // Bad interval → 422.
     let other2 = seed_course(&pool, &format!("{prefix}-v2")).await;
+    seed_enrollment(&pool, teacher, other2, "teacher").await;
     let resp = server
         .post(&format!("/courses/{other2}/late_policy"))
         .add_header("Authorization", hdr)
