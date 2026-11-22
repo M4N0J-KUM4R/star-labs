@@ -84,13 +84,14 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
             .await
             .expect("take the repair advisory lock");
         for statement in REPAIR_DDL {
+            sqlx::query("SET lock_timeout = '5s'")
+                .execute(&pool)
+                .await
+                .expect("set the repair lock timeout");
             let mut attempt = 0;
             loop {
                 attempt += 1;
-                match sqlx::query(&format!("SET lock_timeout = '5s'; {statement}"))
-                    .execute(&pool)
-                    .await
-                {
+                match sqlx::query(statement).execute(&pool).await {
                     Ok(_) => break,
                     Err(error) if attempt < 6 => {
                         let message = error.to_string();
