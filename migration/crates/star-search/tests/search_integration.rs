@@ -576,7 +576,7 @@ async fn all_courses_public_catalog_gating_and_filters() {
         .filter(|c| {
             c["name"]
                 .as_str()
-                .map_or(false, |n| n.starts_with(prefix.as_str()))
+                .is_some_and(|n| n.starts_with(prefix.as_str()))
         })
         .collect();
     let own_ids: Vec<i64> = own.iter().map(|c| c["id"].as_i64().unwrap()).collect();
