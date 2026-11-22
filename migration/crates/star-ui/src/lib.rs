@@ -159,6 +159,31 @@ pub fn router() -> Router<AppState> {
             "/courses/{id}/gradebook.csv",
             get(handlers::grades::gradebook_csv),
         )
+        // Settings + people journey (issue #73) — BEFORE the generic tab
+        // route. The people page is the tabs API "people" html_url
+        // (`/courses/{id}/users`); add/conclude/reactivate are the
+        // teacher-only mutation forms.
+        .route(
+            "/courses/{id}/settings",
+            get(handlers::settings::course_settings).post(handlers::settings::course_settings_save),
+        )
+        .route(
+            "/courses/{id}/users",
+            get(handlers::settings::course_people),
+        )
+        .route(
+            "/courses/{id}/users/add",
+            get(handlers::settings::course_people_add)
+                .post(handlers::settings::course_people_add_submit),
+        )
+        .route(
+            "/courses/{id}/users/{user_id}/conclude",
+            post(handlers::settings::course_people_conclude),
+        )
+        .route(
+            "/courses/{id}/users/{user_id}/reactivate",
+            post(handlers::settings::course_people_reactivate),
+        )
         // SpeedGrader grading workflow (issue #108) — BEFORE the generic tab
         // route, sibling of the gradebook list view (#71).
         .route(
