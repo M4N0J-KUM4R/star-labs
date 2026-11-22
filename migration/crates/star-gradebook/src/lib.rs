@@ -1111,11 +1111,13 @@ async fn update_late_policy(
 // Router
 // ---------------------------------------------------------------------------
 
+mod gradebooks_mutations;
 mod settings_what_if;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(settings_what_if::gradebook_settings_routes())
+        .merge(gradebooks_mutations::gradebooks_mutation_routes())
         .route(
             "/courses/{courseId}/custom_gradebook_columns",
             get(index_columns).post(create_column),
