@@ -26,6 +26,7 @@ pub struct DateTime {
 /// Canvas `URL` scalar — a string carrying a URL (Canvas
 /// `Types::UrlType`), materialized as a wrapper object (same
 /// deviation class as DateTime).
+#[allow(clippy::upper_case_acronyms)]
 #[derive(Debug, Clone, SimpleObject)]
 pub struct URL {
     pub text: String,
@@ -392,6 +393,7 @@ pub enum GradeState {
 
 /// Canvas `EnrollmentType` enum (Canvas Enrollment::Type).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
+#[allow(clippy::enum_variant_names)]
 pub enum EnrollmentType {
     StudentEnrollment,
     TeacherEnrollment,
