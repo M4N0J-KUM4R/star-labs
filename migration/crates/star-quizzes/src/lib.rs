@@ -48,6 +48,7 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 mod assessment_question_banks;
+mod quiz_family;
 use std::collections::{HashMap, HashSet};
 
 // ---------------------------------------------------------------------------
@@ -2521,6 +2522,7 @@ async fn validate_access_code(
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(assessment_question_banks::question_banks_routes())
+        .merge(quiz_family::quiz_family_routes())
         // Course-level
         .route("/courses/{courseId}/quizzes", get(list_course_quizzes))
         .route("/courses/{courseId}/quizzes", post(create_quiz))
