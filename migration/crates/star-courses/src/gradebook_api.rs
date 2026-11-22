@@ -742,8 +742,8 @@ async fn update_column(
         .unwrap_or(current.teacher_notes);
     let read_only = fields.read_only.unwrap_or(current.read_only);
     let workflow_state = match fields.hidden {
-        Some(true) => "hidden",
-        Some(false) => "active",
+        Some(true) => "hidden".to_string(),
+        Some(false) => "active".to_string(),
         None => current.workflow_state.clone(),
     };
 
