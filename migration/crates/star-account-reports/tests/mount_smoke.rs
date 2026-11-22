@@ -49,6 +49,11 @@ async fn unknown_path_is_404() {
     assert_eq!(
         resp.status_code(),
         404,
+    );
+    let resp = server.get("/accounts/1/reports_extra").await;
+    assert_eq!(
+        resp.status_code(),
+        404,
         "scaffold must 404 on unimplemented paths; body: {}",
         resp.text()
     );

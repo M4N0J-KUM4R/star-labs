@@ -59,6 +59,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
     Some((server, pool, run_prefix()))
 }
 
+#[allow(dead_code)]
 fn auth(user_id: i64, role: &str) -> String {
     format!(
         "Bearer {}",
@@ -116,7 +117,7 @@ async fn cleanup(pool: &PgPool, prefix: &str, consumer_key: &str) {
 /// The OAuth 1.0a header of a signed request.
 fn oauth_header(path: &str, consumer_key: &str, nonce: &str) -> String {
     let timestamp = chrono::Utc::now().timestamp();
-    let mut normalized = vec![
+    let mut normalized = [
         percent_encode(consumer_key),
         percent_encode(nonce),
         percent_encode("HMAC-SHA1"),
@@ -249,11 +250,11 @@ async fn a_missing_tool_is_a_not_found() {
 
     let path = "/api/lti/v1/tools/unknown-tool/grade_passback";
     let resp = server
-        .post(&path)
+        .post(path)
         .add_header(axum::http::header::HOST, "canvas.test")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            oauth_header(&path, &consumer_key, "nonce-missing"),
+            oauth_header(path, &consumer_key, "nonce-missing"),
         )
         .add_header(axum::http::header::CONTENT_TYPE, "application/xml")
         .bytes("{}".into())

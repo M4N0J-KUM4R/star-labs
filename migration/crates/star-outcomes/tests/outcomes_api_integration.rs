@@ -114,11 +114,12 @@ async fn setup() -> Option<TestApp> {
     // Serialize the one-shot DDL across the parallel tests of this binary:
     // concurrent `CREATE INDEX IF NOT EXISTS` statements race on the catalog
     // check and can both try to insert the same pg_class row.
-    static DDL_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static DDL_MUTEX: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
     {
-        let _ddl_guard = DDL_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // tokio Mutex: the guard may span the awaited DDL statements (the
+        // std::sync guard held across await was clippy await_holding_lock).
+        let _ddl_guard = DDL_MUTEX.lock().await;
         for statement in OUTCOMES_DDL {
             sqlx::query(statement)
                 .execute(&pool)
@@ -1148,13 +1149,12 @@ async fn enqueue_outcome_rollup_calculation_honours_the_feature_flag() {
     .await
     .expect("disable the feature flag");
 
+    let student_uuid = format!("{prefix}-student-uuid");
     let response = app
         .client
         .post(format!(
             "{}/api/v1/enqueue_outcome_rollup_calculation?course_id={}&student_uuid={}",
-            app.base_url,
-            fixture.course_id,
-            format!("{prefix}-student-uuid")
+            app.base_url, fixture.course_id, student_uuid
         ))
         .header(
             "Authorization",
@@ -1212,13 +1212,12 @@ async fn enqueue_outcome_rollup_calculation_honours_the_feature_flag() {
     let missing: Value = missing.json().await.expect("decode the body");
     assert_eq!(missing["error"], "Invalid course or student");
 
+    let student_uuid = format!("{prefix}-student-uuid");
     let enqueued = app
         .client
         .post(format!(
             "{}/api/v1/enqueue_outcome_rollup_calculation?course_id={}&student_uuid={}",
-            app.base_url,
-            fixture.course_id,
-            format!("{prefix}-student-uuid")
+            app.base_url, fixture.course_id, student_uuid
         ))
         .header(
             "Authorization",

@@ -2119,8 +2119,7 @@ async fn install_template_for_account(
         .bind(&template.configuration)
         .bind(user_id)
         .execute(db)
-        .await?;
-    Ok(())
+        .await?;    Ok(())
 }
 
 /// `DELETE /accounts/{account_id}/lti_registrations/{id}/bind` — remove an

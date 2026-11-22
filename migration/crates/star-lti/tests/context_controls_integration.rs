@@ -74,11 +74,12 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
     // table locks (40P01 deadlock, one binary seeding rows while another
     // repairs). A Postgres advisory lock serializes the DDL across
     // PROCESSES; a lock timeout + retry keeps a straggler from wedging.
-    static REPAIR_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    static REPAIR_MUTEX: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
     {
-        let _repair_guard = REPAIR_MUTEX
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // tokio Mutex: the guard spans the awaited repair DDL (the std
+        // guard held across await was clippy await_holding_lock).
+        let _repair_guard = REPAIR_MUTEX.lock().await;
         sqlx::query("SELECT pg_advisory_lock(4231177)")
             .execute(&pool)
             .await

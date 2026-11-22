@@ -89,6 +89,7 @@ async fn seed_account(pool: &PgPool, prefix: &str, name: &str, parent: Option<i6
     .expect("seed account")
 }
 
+#[allow(dead_code)]
 async fn seed_account_admin(pool: &PgPool, account_id: i64, user_id: i64) {
     sqlx::query(
         "INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, 'admin') \
