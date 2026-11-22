@@ -1,5 +1,15 @@
 {
   "controllers": {
+    "accessibility_course_scans": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
+    "accessibility_course_statistics": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
     "account_notifications": {
       "implemented": 8,
       "pct": 100.0,
@@ -24,6 +34,11 @@
       "implemented": 1,
       "pct": 100.0,
       "total": 1
+    },
+    "app_center": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
     },
     "appointment_groups": {
       "implemented": 6,
@@ -95,6 +110,11 @@
       "pct": 66.7,
       "total": 15
     },
+    "canvadoc_sessions": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
     "canvas_career/user_experiences": {
       "implemented": 2,
       "pct": 100.0,
@@ -109,6 +129,11 @@
       "implemented": 7,
       "pct": 100.0,
       "total": 7
+    },
+    "comm_messages_api": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
     },
     "communication_channels": {
       "implemented": 12,
@@ -160,6 +185,11 @@
       "pct": 100.0,
       "total": 3
     },
+    "course_tag_conversion": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
     "courses": {
       "implemented": 36,
       "pct": 94.7,
@@ -185,10 +215,20 @@
       "pct": 100.0,
       "total": 5
     },
+    "developer_key_account_bindings": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
     "developer_keys": {
       "implemented": 2,
       "pct": 40.0,
       "total": 5
+    },
+    "disable_post_to_sis_api": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
     },
     "discovery_pages_api": {
       "implemented": 3,
@@ -265,6 +305,11 @@
       "pct": 100.0,
       "total": 12
     },
+    "gradebook_filters_api": {
+      "implemented": 4,
+      "pct": 80.0,
+      "total": 5
+    },
     "gradebook_history_api": {
       "implemented": 4,
       "pct": 100.0,
@@ -310,6 +355,16 @@
       "pct": 100.0,
       "total": 17
     },
+    "history": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
+    "immersive_reader": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
     "inst_access_tokens": {
       "implemented": 1,
       "pct": 100.0,
@@ -340,10 +395,35 @@
       "pct": 100.0,
       "total": 6
     },
+    "learning_mastery_gradebook_settings_api": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
     "learning_object_dates": {
       "implemented": 8,
       "pct": 53.3,
       "total": 15
+    },
+    "live_assessments/assessments": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "live_assessments/results": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "lmgb_user_details": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
+    "login": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
     },
     "lti/account_external_tools": {
       "implemented": 4,
@@ -354,6 +434,16 @@
       "implemented": 1,
       "pct": 100.0,
       "total": 1
+    },
+    "lti/asset_processor": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "lti/asset_processor_tii_migrations_api": {
+      "implemented": 3,
+      "pct": 100.0,
+      "total": 3
     },
     "lti/context_controls": {
       "implemented": 6,
@@ -369,6 +459,21 @@
       "implemented": 5,
       "pct": 100.0,
       "total": 5
+    },
+    "lti/feature_flags": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "lti/ims/asset_processor": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "lti/ims/asset_processor_eula": {
+      "implemented": 3,
+      "pct": 100.0,
+      "total": 3
     },
     "lti/ims/authentication": {
       "implemented": 3,
@@ -395,6 +500,16 @@
       "pct": 100.0,
       "total": 2
     },
+    "lti/ims/notice_handlers": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "lti/ims/progress": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
     "lti/ims/results": {
       "implemented": 2,
       "pct": 100.0,
@@ -420,6 +535,21 @@
       "pct": 100.0,
       "total": 4
     },
+    "lti/membership_service": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "lti/plagiarism_assignments_api": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
+    "lti/public_jwk": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
     "lti/registrations": {
       "implemented": 20,
       "pct": 100.0,
@@ -430,10 +560,25 @@
       "pct": 100.0,
       "total": 6
     },
+    "lti/submissions_api": {
+      "implemented": 3,
+      "pct": 100.0,
+      "total": 3
+    },
+    "lti/token": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
     "lti/tool_proxy": {
       "implemented": 8,
       "pct": 100.0,
       "total": 8
+    },
+    "lti/users_api": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
     },
     "master_courses/master_templates": {
       "implemented": 13,
@@ -449,6 +594,11 @@
       "implemented": 6,
       "pct": 100.0,
       "total": 6
+    },
+    "microfrontends_release_tag_override": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
     },
     "migration_issues": {
       "implemented": 16,
@@ -495,6 +645,16 @@
       "pct": 100.0,
       "total": 9
     },
+    "permissions_help": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "planner": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
     "planner_notes": {
       "implemented": 5,
       "pct": 100.0,
@@ -504,6 +664,11 @@
       "implemented": 5,
       "pct": 100.0,
       "total": 5
+    },
+    "plugins": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
     },
     "polling/poll_choices": {
       "implemented": 5,
@@ -540,10 +705,35 @@
       "pct": 100.0,
       "total": 4
     },
+    "quizzes/course_quiz_extensions": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
+    "quizzes/outstanding_quiz_submissions": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "quizzes/quiz_assignment_overrides": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "quizzes/quiz_extensions": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
     "quizzes/quiz_groups": {
       "implemented": 6,
       "pct": 100.0,
       "total": 6
+    },
+    "quizzes/quiz_ip_filters": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
     },
     "quizzes/quiz_questions": {
       "implemented": 5,
@@ -560,6 +750,26 @@
       "pct": 100.0,
       "total": 1
     },
+    "quizzes/quiz_submission_events_api": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "quizzes/quiz_submission_files": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
+    "quizzes/quiz_submission_questions": {
+      "implemented": 1,
+      "pct": 16.7,
+      "total": 6
+    },
+    "quizzes/quiz_submission_users": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
     "quizzes/quiz_submissions_api": {
       "implemented": 7,
       "pct": 100.0,
@@ -569,6 +779,11 @@
       "implemented": 7,
       "pct": 100.0,
       "total": 7
+    },
+    "quizzes_next/quizzes_api": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
     },
     "release_notes": {
       "implemented": 6,
@@ -600,6 +815,11 @@
       "pct": 100.0,
       "total": 15
     },
+    "scopes_api": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
+    },
     "search": {
       "implemented": 4,
       "pct": 100.0,
@@ -625,10 +845,20 @@
       "pct": 100.0,
       "total": 3
     },
+    "sis_import_errors_api": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
     "smart_search": {
       "implemented": 3,
       "pct": 100.0,
       "total": 3
+    },
+    "study_assist": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
     },
     "sub_accounts": {
       "implemented": 2,
@@ -649,6 +879,21 @@
       "implemented": 44,
       "pct": 100.0,
       "total": 44
+    },
+    "support_helpers/asset_processor": {
+      "implemented": 3,
+      "pct": 100.0,
+      "total": 3
+    },
+    "support_helpers/plagiarism_platform": {
+      "implemented": 2,
+      "pct": 100.0,
+      "total": 2
+    },
+    "support_helpers/submission_lifecycle_manage": {
+      "implemented": 1,
+      "pct": 100.0,
+      "total": 1
     },
     "support_helpers/turnitin": {
       "implemented": 7,
@@ -1555,6 +1800,30 @@
       "verb": "GET"
     },
     {
+      "action": "create",
+      "controller": "study_assist",
+      "normalized_path": "courses/{}/study_assist",
+      "path": "/api/v1/courses/:course_id/study_assist",
+      "ui_referenced": true,
+      "verb": "POST"
+    },
+    {
+      "action": "create",
+      "controller": "microfrontends_release_tag_override",
+      "normalized_path": "microfrontends/release_tag_override",
+      "path": "/api/v1/microfrontends/release_tag_override",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "destroy",
+      "controller": "microfrontends_release_tag_override",
+      "normalized_path": "microfrontends/release_tag_override",
+      "path": "/api/v1/microfrontends/release_tag_override",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
       "action": "show",
       "controller": "discovery_pages_api",
       "normalized_path": "discovery_pages",
@@ -1713,6 +1982,46 @@
       "path": "/api/v1/courses/:course_id/tabs/:tab_id",
       "ui_referenced": false,
       "verb": "PUT"
+    },
+    {
+      "action": "index",
+      "controller": "gradebook_filters_api",
+      "normalized_path": "courses/{}/gradebook_filters",
+      "path": "/api/v1/courses/:course_id/gradebook_filters",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "gradebook_filters_api",
+      "normalized_path": "courses/{}/gradebook_filters",
+      "path": "/api/v1/courses/:course_id/gradebook_filters",
+      "ui_referenced": true,
+      "verb": "POST"
+    },
+    {
+      "action": "update",
+      "controller": "gradebook_filters_api",
+      "normalized_path": "courses/{}/gradebook_filters/{}",
+      "path": "/api/v1/courses/:course_id/gradebook_filters/:id",
+      "ui_referenced": true,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "gradebook_filters_api",
+      "normalized_path": "courses/{}/gradebook_filters/{}",
+      "path": "/api/v1/courses/:course_id/gradebook_filters/:id",
+      "ui_referenced": true,
+      "verb": "DELETE"
+    },
+    {
+      "action": "index",
+      "controller": "scopes_api",
+      "normalized_path": "accounts/{}/scopes",
+      "path": "/api/v1/accounts/:account_id/scopes",
+      "ui_referenced": true,
+      "verb": "GET"
     },
     {
       "action": "index",
@@ -4091,6 +4400,22 @@
       "verb": "PUT"
     },
     {
+      "action": "index",
+      "controller": "sis_import_errors_api",
+      "normalized_path": "accounts/{}/sis_imports/{}/errors",
+      "path": "/api/v1/accounts/:account_id/sis_imports/:id/errors",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "sis_import_errors_api",
+      "normalized_path": "accounts/{}/sis_import_errors",
+      "path": "/api/v1/accounts/:account_id/sis_import_errors",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
       "action": "create",
       "controller": "outcome_proficiency_api",
       "normalized_path": "accounts/{}/outcome_proficiency",
@@ -4611,6 +4936,30 @@
       "verb": "PUT"
     },
     {
+      "action": "convert_tag_overrides_to_adhoc_overrides",
+      "controller": "course_tag_conversion",
+      "normalized_path": "courses/{}/convert_tag_overrides",
+      "path": "/api/v1/courses/:course_id/convert_tag_overrides",
+      "ui_referenced": true,
+      "verb": "PUT"
+    },
+    {
+      "action": "conversion_job_status",
+      "controller": "course_tag_conversion",
+      "normalized_path": "courses/{}/convert_tag_overrides/status",
+      "path": "/api/v1/courses/:course_id/convert_tag_overrides/status",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "session_token",
+      "controller": "login",
+      "normalized_path": "login/session_token",
+      "path": "/api/v1/login/session_token",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
       "action": "alerts_count",
       "controller": "observer_alerts_api",
       "normalized_path": "users/{}/observer_alerts/unread_count",
@@ -4827,6 +5176,22 @@
       "verb": "GET"
     },
     {
+      "action": "index",
+      "controller": "accessibility_course_statistics",
+      "normalized_path": "users/{}/educator_accessibility_course_statistics",
+      "path": "/api/v1/users/:user_id/educator_accessibility_course_statistics",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "accessibility_course_scans",
+      "normalized_path": "users/{}/educator_accessibility_course_scan",
+      "path": "/api/v1/users/:user_id/educator_accessibility_course_scan",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
       "action": "create",
       "controller": "sub_accounts",
       "normalized_path": "accounts/{}/sub_accounts",
@@ -4904,6 +5269,22 @@
       "normalized_path": "accounts/{}/permissions/{}",
       "path": "/api/v1/accounts/:account_id/permissions/:permission",
       "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "groups",
+      "controller": "permissions_help",
+      "normalized_path": "permissions/groups",
+      "path": "/api/v1/permissions/groups",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "help",
+      "controller": "permissions_help",
+      "normalized_path": "permissions/{}/{}/help",
+      "path": "/api/v1/permissions/:context_type/:permission/help",
+      "ui_referenced": true,
       "verb": "GET"
     },
     {
@@ -5313,6 +5694,14 @@
       "path": "/api/v1/users/self/communication_channels/:communication_channel_id/notification_preferences",
       "ui_referenced": false,
       "verb": "PUT"
+    },
+    {
+      "action": "index",
+      "controller": "comm_messages_api",
+      "normalized_path": "comm_messages",
+      "path": "/api/v1/comm_messages",
+      "ui_referenced": true,
+      "verb": "GET"
     },
     {
       "action": "show_kaltura_config",
@@ -5739,6 +6128,14 @@
       "verb": "GET"
     },
     {
+      "action": "create_or_update",
+      "controller": "developer_key_account_bindings",
+      "normalized_path": "accounts/{}/developer_keys/{}/developer_key_account_bindings",
+      "path": "/api/v1/accounts/:account_id/developer_keys/:developer_key_id/developer_key_account_bindings",
+      "ui_referenced": true,
+      "verb": "POST"
+    },
+    {
       "action": "destroy",
       "controller": "developer_keys",
       "normalized_path": "developer_keys/{}",
@@ -6049,6 +6446,38 @@
       "path": "/api/v1/courses/:course_id/lti_resource_links/:id",
       "ui_referenced": false,
       "verb": "DELETE"
+    },
+    {
+      "action": "index",
+      "controller": "lti/asset_processor_tii_migrations_api",
+      "normalized_path": "accounts/{}/asset_processors/tii_migrations",
+      "path": "/api/v1/accounts/:account_id/asset_processors/tii_migrations",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "lti/asset_processor_tii_migrations_api",
+      "normalized_path": "accounts/{}/asset_processors/tii_migrations",
+      "path": "/api/v1/accounts/:account_id/asset_processors/tii_migrations",
+      "ui_referenced": true,
+      "verb": "POST"
+    },
+    {
+      "action": "migrate_all",
+      "controller": "lti/asset_processor_tii_migrations_api",
+      "normalized_path": "accounts/{}/asset_processors/tii_migrations/migrate_all",
+      "path": "/api/v1/accounts/:account_id/asset_processors/tii_migrations/migrate_all",
+      "ui_referenced": true,
+      "verb": "POST"
+    },
+    {
+      "action": "authenticate",
+      "controller": "immersive_reader",
+      "normalized_path": "immersive_reader/authenticate",
+      "path": "/api/v1/immersive_reader/authenticate",
+      "ui_referenced": true,
+      "verb": "GET"
     },
     {
       "action": "rubrics",
@@ -6676,6 +7105,22 @@
     },
     {
       "action": "index",
+      "controller": "quizzes/quiz_assignment_overrides",
+      "normalized_path": "courses/{}/quizzes/assignment_overrides",
+      "path": "/api/v1/courses/:course_id/quizzes/assignment_overrides",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "new_quizzes",
+      "controller": "quizzes/quiz_assignment_overrides",
+      "normalized_path": "courses/{}/new_quizzes/assignment_overrides",
+      "path": "/api/v1/courses/:course_id/new_quizzes/assignment_overrides",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
       "controller": "quizzes/quizzes_api",
       "normalized_path": "courses/{}/quizzes",
       "path": "/api/v1/courses/:course_id/quizzes",
@@ -6727,6 +7172,30 @@
       "controller": "quizzes/quizzes_api",
       "normalized_path": "courses/{}/quizzes/{}/validate_access_code",
       "path": "/api/v1/courses/:course_id/quizzes/:id/validate_access_code",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "index",
+      "controller": "quizzes_next/quizzes_api",
+      "normalized_path": "courses/{}/all_quizzes",
+      "path": "/api/v1/courses/:course_id/all_quizzes",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "quizzes/quiz_submission_users",
+      "normalized_path": "courses/{}/quizzes/{}/submission_users",
+      "path": "/api/v1/courses/:course_id/quizzes/:id/submission_users",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "message",
+      "controller": "quizzes/quiz_submission_users",
+      "normalized_path": "courses/{}/quizzes/{}/submission_users/message",
+      "path": "/api/v1/courses/:course_id/quizzes/:id/submission_users/message",
       "ui_referenced": false,
       "verb": "POST"
     },
@@ -6851,6 +7320,14 @@
       "verb": "GET"
     },
     {
+      "action": "create",
+      "controller": "quizzes/quiz_submission_files",
+      "normalized_path": "courses/{}/quizzes/{}/submissions/self/files",
+      "path": "/api/v1/courses/:course_id/quizzes/:quiz_id/submissions/self/files",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
       "action": "submission",
       "controller": "quizzes/quiz_submissions_api",
       "normalized_path": "courses/{}/quizzes/{}/submission",
@@ -6905,6 +7382,70 @@
       "path": "/api/v1/courses/:course_id/quizzes/:quiz_id/submissions/:id/complete",
       "ui_referenced": false,
       "verb": "POST"
+    },
+    {
+      "action": "index",
+      "controller": "quizzes/outstanding_quiz_submissions",
+      "normalized_path": "courses/{}/quizzes/{}/outstanding_quiz_submissions",
+      "path": "/api/v1/courses/:course_id/quizzes/:quiz_id/outstanding_quiz_submissions",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "grade",
+      "controller": "quizzes/outstanding_quiz_submissions",
+      "normalized_path": "courses/{}/quizzes/{}/outstanding_quiz_submissions",
+      "path": "/api/v1/courses/:course_id/quizzes/:quiz_id/outstanding_quiz_submissions",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "create",
+      "controller": "quizzes/quiz_extensions",
+      "normalized_path": "courses/{}/quizzes/{}/extensions",
+      "path": "/api/v1/courses/:course_id/quizzes/:quiz_id/extensions",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "create",
+      "controller": "quizzes/course_quiz_extensions",
+      "normalized_path": "courses/{}/quiz_extensions",
+      "path": "/api/v1/courses/:course_id/quiz_extensions",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "index",
+      "controller": "quizzes/quiz_submission_events_api",
+      "normalized_path": "courses/{}/quizzes/{}/submissions/{}/events",
+      "path": "/api/v1/courses/:course_id/quizzes/:quiz_id/submissions/:id/events",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "quizzes/quiz_submission_events_api",
+      "normalized_path": "courses/{}/quizzes/{}/submissions/{}/events",
+      "path": "/api/v1/courses/:course_id/quizzes/:quiz_id/submissions/:id/events",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "index",
+      "controller": "quizzes/quiz_submission_questions",
+      "normalized_path": "quiz_submissions/{}/questions",
+      "path": "/quiz_submissions/:quiz_submission_id/questions",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "quizzes/quiz_ip_filters",
+      "normalized_path": "courses/{}/quizzes/{}/ip_filters",
+      "path": "/api/v1/courses/:course_id/quizzes/:quiz_id/ip_filters",
+      "ui_referenced": false,
+      "verb": "GET"
     },
     {
       "action": "index",
@@ -7084,6 +7625,38 @@
     },
     {
       "action": "index",
+      "controller": "live_assessments/assessments",
+      "normalized_path": "courses/{}/live_assessments",
+      "path": "/api/v1/courses/:course_id/live_assessments",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "live_assessments/assessments",
+      "normalized_path": "courses/{}/live_assessments",
+      "path": "/api/v1/courses/:course_id/live_assessments",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "index",
+      "controller": "live_assessments/results",
+      "normalized_path": "courses/{}/live_assessments/{}/results",
+      "path": "/api/v1/courses/:course_id/live_assessments/:assessment_id/results",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "live_assessments/results",
+      "normalized_path": "courses/{}/live_assessments/{}/results",
+      "path": "/api/v1/courses/:course_id/live_assessments/:assessment_id/results",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "index",
       "controller": "assessment_question_banks",
       "normalized_path": "question_banks",
       "path": "/api/v1/question_banks",
@@ -7161,6 +7734,54 @@
       "path": "/api/v1/support_helpers/turnitin/refresh_lti_attachment",
       "ui_referenced": false,
       "verb": "GET"
+    },
+    {
+      "action": "add_service",
+      "controller": "support_helpers/plagiarism_platform",
+      "normalized_path": "support_helpers/plagiarism_platform/add_service",
+      "path": "/api/v1/support_helpers/plagiarism_platform/add_service",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "resubmit_for_assignment",
+      "controller": "support_helpers/plagiarism_platform",
+      "normalized_path": "support_helpers/plagiarism_platform/resubmit_for_assignment/{}",
+      "path": "/api/v1/support_helpers/plagiarism_platform/resubmit_for_assignment/:assignment_id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "course",
+      "controller": "support_helpers/submission_lifecycle_manage",
+      "normalized_path": "support_helpers/submission_lifecycle_manage/course",
+      "path": "/api/v1/support_helpers/submission_lifecycle_manage/course",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "submission_details",
+      "controller": "support_helpers/asset_processor",
+      "normalized_path": "support_helpers/asset_processor/submission_details",
+      "path": "/api/v1/support_helpers/asset_processor/submission_details",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "bulk_resubmit",
+      "controller": "support_helpers/asset_processor",
+      "normalized_path": "support_helpers/asset_processor/bulk_resubmit",
+      "path": "/api/v1/support_helpers/asset_processor/bulk_resubmit",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "bulk_resubmit_discussion",
+      "controller": "support_helpers/asset_processor",
+      "normalized_path": "support_helpers/asset_processor_discussion/bulk_resubmit",
+      "path": "/api/v1/support_helpers/asset_processor_discussion/bulk_resubmit",
+      "ui_referenced": false,
+      "verb": "POST"
     },
     {
       "action": "index",
@@ -7500,6 +8121,14 @@
     },
     {
       "action": "show",
+      "controller": "lmgb_user_details",
+      "normalized_path": "courses/{}/users/{}/lmgb_user_details",
+      "path": "/api/v1/courses/:course_id/users/:id/lmgb_user_details",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "show",
       "controller": "group_categories",
       "normalized_path": "group_categories/{}",
       "path": "/api/v1/group_categories/:id",
@@ -7641,6 +8270,22 @@
       "path": "/api/v1/progress/:id/cancel",
       "ui_referenced": true,
       "verb": "POST"
+    },
+    {
+      "action": "index",
+      "controller": "app_center",
+      "normalized_path": "courses/{}/app_center/apps",
+      "path": "/api/v1/courses/:course_id/app_center/apps",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "app_center",
+      "normalized_path": "accounts/{}/app_center/apps",
+      "path": "/api/v1/accounts/:account_id/app_center/apps",
+      "ui_referenced": true,
+      "verb": "GET"
     },
     {
       "action": "index",
@@ -8131,6 +8776,22 @@
       "verb": "DELETE"
     },
     {
+      "action": "show",
+      "controller": "canvadoc_sessions",
+      "normalized_path": "canvadoc_session",
+      "path": "/canvadoc_session",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "canvadoc_sessions",
+      "normalized_path": "canvadoc_session",
+      "path": "/canvadoc_session",
+      "ui_referenced": true,
+      "verb": "POST"
+    },
+    {
       "action": "index",
       "controller": "grading_period_sets",
       "normalized_path": "accounts/{}/grading_period_sets",
@@ -8327,6 +8988,22 @@
       "controller": "gradebook_settings",
       "normalized_path": "courses/{}/gradebook_settings",
       "path": "/api/v1/courses/:course_id/gradebook_settings",
+      "ui_referenced": true,
+      "verb": "PUT"
+    },
+    {
+      "action": "show",
+      "controller": "learning_mastery_gradebook_settings_api",
+      "normalized_path": "courses/{}/learning_mastery_gradebook_settings",
+      "path": "/api/v1/courses/:course_id/learning_mastery_gradebook_settings",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "update",
+      "controller": "learning_mastery_gradebook_settings_api",
+      "normalized_path": "courses/{}/learning_mastery_gradebook_settings",
+      "path": "/api/v1/courses/:course_id/learning_mastery_gradebook_settings",
       "ui_referenced": true,
       "verb": "PUT"
     },
@@ -8740,6 +9417,22 @@
     },
     {
       "action": "index",
+      "controller": "planner",
+      "normalized_path": "planner/items",
+      "path": "/api/v1/planner/items",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "planner",
+      "normalized_path": "users/{}/planner/items",
+      "path": "/api/v1/users/:user_id/planner/items",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
       "controller": "planner_overrides",
       "normalized_path": "planner/overrides",
       "path": "/api/v1/planner/overrides",
@@ -9027,6 +9720,14 @@
       "verb": "POST"
     },
     {
+      "action": "index",
+      "controller": "history",
+      "normalized_path": "users/{}/history",
+      "path": "/api/v1/users/:user_id/history",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
       "action": "update_final_grade_overrides",
       "controller": "gradebooks",
       "normalized_path": "courses/{}/update_final_grade_overrides",
@@ -9243,6 +9944,22 @@
       "verb": "PUT"
     },
     {
+      "action": "update",
+      "controller": "plugins",
+      "normalized_path": "plugins/{}",
+      "path": "/api/v1/plugins/:id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "show",
+      "controller": "plugins",
+      "normalized_path": "plugins/{}",
+      "path": "/api/v1/plugins/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
       "action": "index",
       "controller": "block_editor_templates_api",
       "normalized_path": "courses/{}/block_editor_templates",
@@ -9416,6 +10133,30 @@
       "normalized_path": "jobs2/throttle/check",
       "path": "/api/v1/jobs2/throttle/check",
       "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "lti/users_api",
+      "normalized_path": "api/lti/users/{}",
+      "path": "/api/lti/users/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "group_index",
+      "controller": "lti/users_api",
+      "normalized_path": "api/lti/groups/{}/users",
+      "path": "/api/lti/groups/:group_id/users",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "lti/plagiarism_assignments_api",
+      "normalized_path": "api/lti/assignments/{}",
+      "path": "/api/lti/assignments/:assignment_id",
+      "ui_referenced": false,
       "verb": "GET"
     },
     {
@@ -9611,6 +10352,46 @@
       "verb": "GET"
     },
     {
+      "action": "course_index",
+      "controller": "lti/membership_service",
+      "normalized_path": "api/lti/courses/{}/membership_service",
+      "path": "/api/lti/courses/:course_id/membership_service",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "group_index",
+      "controller": "lti/membership_service",
+      "normalized_path": "api/lti/groups/{}/membership_service",
+      "path": "/api/lti/groups/:group_id/membership_service",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "lti/submissions_api",
+      "normalized_path": "api/lti/assignments/{}/submissions/{}",
+      "path": "/api/lti/assignments/:assignment_id/submissions/:submission_id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "history",
+      "controller": "lti/submissions_api",
+      "normalized_path": "api/lti/assignments/{}/submissions/{}/history",
+      "path": "/api/lti/assignments/:assignment_id/submissions/:submission_id/history",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "attachment",
+      "controller": "lti/submissions_api",
+      "normalized_path": "api/lti/assignments/{}/submissions/{}/attachment/{}",
+      "path": "/api/lti/assignments/:assignment_id/submissions/:submission_id/attachment/:attachment_id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
       "action": "create",
       "controller": "lti/ims/line_items",
       "normalized_path": "api/lti/courses/{}/line_items",
@@ -9673,6 +10454,70 @@
       "path": "/api/lti/courses/:course_id/line_items/:line_item_id/results",
       "ui_referenced": false,
       "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "lti/ims/progress",
+      "normalized_path": "api/lti/courses/{}/progress/{}",
+      "path": "/api/lti/courses/:course_id/progress/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "create_report",
+      "controller": "lti/ims/asset_processor",
+      "normalized_path": "api/lti/asset_processors/{}/reports",
+      "path": "/api/lti/asset_processors/:asset_processor_id/reports",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "lti_asset_show",
+      "controller": "lti/ims/asset_processor",
+      "normalized_path": "api/lti/asset_processors/{}/assets/{}",
+      "path": "/api/lti/asset_processors/:asset_processor_id/assets/:asset_id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "update_tool_eula",
+      "controller": "lti/ims/asset_processor_eula",
+      "normalized_path": "api/lti/asset_processor_eulas/{}/deployment",
+      "path": "/api/lti/asset_processor_eulas/:context_external_tool_id/deployment",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "delete_acceptances",
+      "controller": "lti/ims/asset_processor_eula",
+      "normalized_path": "api/lti/asset_processor_eulas/{}/user",
+      "path": "/api/lti/asset_processor_eulas/:context_external_tool_id/user",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "create_acceptance",
+      "controller": "lti/ims/asset_processor_eula",
+      "normalized_path": "api/lti/asset_processor_eulas/{}/user",
+      "path": "/api/lti/asset_processor_eulas/:context_external_tool_id/user",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "resubmit_notice",
+      "controller": "lti/asset_processor",
+      "normalized_path": "api/lti/asset_processors/{}/notices/{}/attempts/{}",
+      "path": "/api/lti/asset_processors/:asset_processor_id/notices/:student_id/attempts/:attempt",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "resubmit_discussion_notices_all",
+      "controller": "lti/asset_processor",
+      "normalized_path": "api/lti/asset_processors/discussion_notices/{}/{}/resubmit_all",
+      "path": "/api/lti/asset_processors/discussion_notices/:assignment_id/:student_id/resubmit_all",
+      "ui_referenced": false,
+      "verb": "POST"
     },
     {
       "action": "registration_token",
@@ -9761,6 +10606,14 @@
       "path": "/api/lti/registrations/:registration_id",
       "ui_referenced": false,
       "verb": "GET"
+    },
+    {
+      "action": "update",
+      "controller": "lti/public_jwk",
+      "normalized_path": "developer_key/update_public_jwk",
+      "path": "/developer_key/update_public_jwk",
+      "ui_referenced": false,
+      "verb": "PUT"
     },
     {
       "action": "create",
@@ -9859,6 +10712,22 @@
       "verb": "GET"
     },
     {
+      "action": "index",
+      "controller": "lti/ims/notice_handlers",
+      "normalized_path": "api/lti/notice-handlers/{}",
+      "path": "/api/lti/notice-handlers/:context_external_tool_id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "update",
+      "controller": "lti/ims/notice_handlers",
+      "normalized_path": "api/lti/notice-handlers/{}",
+      "path": "/api/lti/notice-handlers/:context_external_tool_id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
       "action": "jwks",
       "controller": "security",
       "normalized_path": "api/lti/security/jwks",
@@ -9873,6 +10742,46 @@
       "path": "/api/lti/security/openid-configuration",
       "ui_referenced": false,
       "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "lti/feature_flags",
+      "normalized_path": "courses/{}/feature_flags/{}",
+      "path": "/courses/:course_id/feature_flags/:feature",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "lti/feature_flags",
+      "normalized_path": "accounts/{}/feature_flags/{}",
+      "path": "/accounts/:account_id/feature_flags/:feature",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "lti_2_token",
+      "controller": "lti/token",
+      "normalized_path": "api/lti/lti_2_token",
+      "path": "/api/lti/lti_2_token",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "advantage_access_token",
+      "controller": "lti/token",
+      "normalized_path": "api/lti/advantage_token",
+      "path": "/api/lti/advantage_token",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "disable_post_to_sis",
+      "controller": "disable_post_to_sis_api",
+      "normalized_path": "api/sis/courses/{}/disable_post_to_sis",
+      "path": "/api/sis/courses/:course_id/disable_post_to_sis",
+      "ui_referenced": false,
+      "verb": "PUT"
     }
   ],
   "summary": {
@@ -9887,22 +10796,22 @@
     "graphql_mutations_implemented": 2,
     "graphql_types": 170,
     "graphql_types_implemented": 28,
-    "implemented_rest_pct": 78.0,
-    "implemented_rest_routes": 1095,
+    "implemented_rest_pct": 84.0,
+    "implemented_rest_routes": 1178,
     "js_env_call_sites": 490,
     "js_env_files": 124,
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
-    "star_extras": 214,
-    "star_route_calls": 1081,
-    "star_route_registrations": 1313,
-    "star_tables": 375,
+    "star_extras": 219,
+    "star_route_calls": 1155,
+    "star_route_registrations": 1401,
+    "star_tables": 379,
     "star_unparsed_calls": 0,
     "ui_feature_dirs": 232,
     "ui_feature_dirs_implemented": 0,
-    "ui_referenced_implemented": 397,
-    "ui_referenced_pct": 78.9,
+    "ui_referenced_implemented": 420,
+    "ui_referenced_pct": 83.5,
     "ui_referenced_routes": 503
   },
   "unmatched_star_routes": [
@@ -10023,6 +10932,20 @@
       "normalized_path": "api/audit/course/courses/{}",
       "path": "/api/audit/course/courses/{courseId}",
       "source": "crates/star-auth/src/small_controllers.rs",
+      "verb": "GET"
+    },
+    {
+      "crate": "star-lti",
+      "normalized_path": "api/lti/{}/{}/tool_consumer_profile",
+      "path": "/api/lti/{context}/{contextId}/tool_consumer_profile",
+      "source": "crates/star-lti/src/lti_gaps.rs",
+      "verb": "GET"
+    },
+    {
+      "crate": "star-lti",
+      "normalized_path": "api/lti/{}/{}/tool_consumer_profile/{}",
+      "path": "/api/lti/{context}/{contextId}/tool_consumer_profile/{profileId}",
+      "source": "crates/star-lti/src/lti_gaps.rs",
       "verb": "GET"
     },
     {
@@ -10444,6 +11367,13 @@
       "path": "/courses/{courseId}/groups",
       "source": "crates/star-groups/src/lib.rs",
       "verb": "POST"
+    },
+    {
+      "crate": "star-courses",
+      "normalized_path": "courses/{}/mastery_paths/stats/{}",
+      "path": "/courses/{courseId}/mastery_paths/stats/{stat}",
+      "source": "crates/star-courses/src/misc_gaps.rs",
+      "verb": "GET"
     },
     {
       "crate": "star-modules",
@@ -11038,6 +11968,20 @@
       "normalized_path": "pages/{}",
       "path": "/pages/{id}",
       "source": "crates/star-pages/src/lib.rs",
+      "verb": "PUT"
+    },
+    {
+      "crate": "star-courses",
+      "normalized_path": "planner/items",
+      "path": "/planner/items",
+      "source": "crates/star-courses/src/misc_gaps.rs",
+      "verb": "POST"
+    },
+    {
+      "crate": "star-quizzes",
+      "normalized_path": "quiz_submissions/{}/questions/{}",
+      "path": "/quiz_submissions/{quizSubmissionId}/questions/{questionId}",
+      "source": "crates/star-quizzes/src/quiz_family.rs",
       "verb": "PUT"
     },
     {
