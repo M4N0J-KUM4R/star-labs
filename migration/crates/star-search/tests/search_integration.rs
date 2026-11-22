@@ -561,28 +561,44 @@ async fn all_courses_public_catalog_gating_and_filters() {
         .await
         .expect("enable catalog");
 
-    // Anonymous 200: available + indexed, created_at order.
-    let resp = server.get("/search/all_courses").await;
+    // Anonymous 200: available + indexed, created_at order. The catalog
+    // lists every available+indexed course of the account — the shared CI
+    // database carries other tests' courses too, so scope to this test's
+    // prefix before comparing (Canvas lists the whole account, not just
+    // this test's rows).
+    let resp = server.get("/search/all_courses?per_page=100").await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
     let items = body.as_array().expect("bare array");
     let ids: Vec<i64> = items.iter().map(|c| c["id"].as_i64().unwrap()).collect();
+    let own: Vec<&Value> = items
+        .iter()
+        .filter(|c| {
+            c["name"]
+                .as_str()
+                .map_or(false, |n| n.starts_with(prefix.as_str()))
+        })
+        .collect();
+    let own_ids: Vec<i64> = own.iter().map(|c| c["id"].as_i64().unwrap()).collect();
     assert_eq!(
-        ids,
-        vec![c_ok, c_public, c_open],
-        "available+indexed only: {body}"
+        own_ids, vec![c_ok, c_public, c_open],
+        "available+indexed only (own courses): {body}"
     );
-    let first = &items[0];
+    assert!(!ids.contains(&c_unpublished), "unpublished leaked: {body}");
+    assert!(!ids.contains(&c_unindexed), "unindexed leaked: {body}");
+    let first = own[0];
     assert_eq!(first["name"], format!("{prefix}-AOk"));
     assert_eq!(first["course_code"], format!("{prefix}-AOk"));
     assert_eq!(first["account_id"], 1);
     assert_eq!(first["is_public"], false);
     assert!(first["created_at"].is_string());
 
-    // search filter: name substring.
+    // search filter: name substring (Canvas name_like is a single
+    // coalesced ILIKE pattern across name/sis/course_code — the seed name
+    // is "{prefix}-AOk", so the pattern uses the hyphen).
     let body = get_ok_anon(
         &server,
-        &format!("/search/all_courses?search={prefix}%20AOk"),
+        &format!("/search/all_courses?search={prefix}-AOk"),
     )
     .await;
     let ids: Vec<i64> = body

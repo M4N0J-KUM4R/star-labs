@@ -235,6 +235,60 @@ fn per_page_of(params: &[(String, String)]) -> i64 {
         .clamp(1, 100)
 }
 
+/// Common contexts between the caller and one recipient, in the Canvas
+/// conversation_recipients_json shape: common_courses maps a shared course
+/// id to the recipient's roles there ({course_id: [role]}); common_groups
+/// maps a shared group id to ["Member"] (Canvas GroupMembership role for
+/// students). Used by both the search path and the user_id exact lookup.
+async fn common_contexts(
+    pool: &PgPool,
+    caller: i64,
+    target: i64,
+) -> Result<(Map<String, Value>, Map<String, Value>), SearchError> {
+    let courses: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT DISTINCT c.id, e2.role FROM courses c \
+         JOIN enrollments e2 ON e2.course_id = c.id \
+         JOIN enrollments e1 ON e1.course_id = c.id \
+         WHERE e1.user_id = $1 AND e2.user_id = $2 \
+           AND e1.workflow_state <> 'deleted' AND e2.workflow_state <> 'deleted' \
+           AND c.workflow_state <> 'deleted'",
+    )
+    .bind(caller)
+    .bind(target)
+    .fetch_all(pool)
+    .await?;
+    let mut common_courses = Map::new();
+    for (course_id, role) in courses {
+        let key = course_id.to_string();
+        match common_courses.get_mut(&key) {
+            Some(Value::Array(arr)) => {
+                if !arr.iter().any(|r| r.as_str() == Some(role.as_str())) {
+                    arr.push(json!(role));
+                }
+            }
+            _ => {
+                common_courses.insert(key, json!([role]));
+            }
+        }
+    }
+    let groups: Vec<(i64,)> = sqlx::query_as(
+        "SELECT DISTINCT g.id FROM groups g \
+         JOIN group_memberships m2 ON m2.group_id = g.id \
+         JOIN group_memberships m1 ON m1.group_id = g.id \
+         WHERE m1.user_id = $1 AND m2.user_id = $2 \
+           AND m1.workflow_state = 'accepted' AND m2.workflow_state = 'accepted'",
+    )
+    .bind(caller)
+    .bind(target)
+    .fetch_all(pool)
+    .await?;
+    let mut common_groups = Map::new();
+    for (group_id,) in groups {
+        common_groups.insert(group_id.to_string(), json!(["Member"]));
+    }
+    Ok((common_courses, common_groups))
+}
+
 // ---------------------------------------------------------------------------
 // GET /search/recipients + /conversations/find_recipients (search#recipients)
 // ---------------------------------------------------------------------------
@@ -486,51 +540,9 @@ async fn user_recipients(
     let rows = q.fetch_all(pool).await?;
     let mut out = Vec::with_capacity(rows.len());
     for (id, name) in rows {
-        // common_courses: shared courses with the caller's roles for that
-        // user (Canvas common_courses → {course_id: [role]}).
-        let courses: Vec<(i64, String)> = sqlx::query_as(
-            "SELECT DISTINCT c.id, e2.role FROM courses c \
-             JOIN enrollments e2 ON e2.course_id = c.id \
-             JOIN enrollments e1 ON e1.course_id = c.id \
-             WHERE e1.user_id = $1 AND e2.user_id = $2 \
-               AND e1.workflow_state <> 'deleted' AND e2.workflow_state <> 'deleted' \
-               AND c.workflow_state <> 'deleted'",
-        )
-        .bind(caller)
-        .bind(id)
-        .fetch_all(pool)
-        .await?;
-        let mut common_courses = Map::new();
-        for (course_id, role) in courses {
-            let key = course_id.to_string();
-            match common_courses.get_mut(&key) {
-                Some(Value::Array(arr)) => {
-                    if !arr.iter().any(|r| r.as_str() == Some(role.as_str())) {
-                        arr.push(json!(role));
-                    }
-                }
-                _ => {
-                    common_courses.insert(key, json!([role]));
-                }
-            }
-        }
-        // common_groups: shared groups, membership role "Member" (Canvas
-        // GroupMembership role for students).
-        let groups: Vec<(i64,)> = sqlx::query_as(
-            "SELECT DISTINCT g.id FROM groups g \
-             JOIN group_memberships m2 ON m2.group_id = g.id \
-             JOIN group_memberships m1 ON m1.group_id = g.id \
-             WHERE m1.user_id = $1 AND m2.user_id = $2 \
-               AND m1.workflow_state = 'accepted' AND m2.workflow_state = 'accepted'",
-        )
-        .bind(caller)
-        .bind(id)
-        .fetch_all(pool)
-        .await?;
-        let mut common_groups = Map::new();
-        for (group_id,) in groups {
-            common_groups.insert(group_id.to_string(), json!(["Member"]));
-        }
+        // common_courses / common_groups: shared contexts with the caller
+        // (Canvas common_courses → {course_id: [role]}).
+        let (common_courses, common_groups) = common_contexts(pool, caller, id).await?;
         out.push(json!({
             "id": id,
             "name": name,
@@ -588,19 +600,25 @@ async fn recipients(
         .bind(from_conversation)
         .fetch_optional(&state.db)
         .await?;
-        let items = known
-            .map(|(id, name)| {
-                json!({
+        let items = match known {
+            Some((id, name)) => {
+                // Same recipient JSON shape as the search path: the known
+                // user's shared courses/groups with the caller populate
+                // common_courses / common_groups (Canvas known_user goes
+                // through conversation_recipients_json too).
+                let (common_courses, common_groups) =
+                    common_contexts(&state.db, auth.id, id).await?;
+                vec![json!({
                     "id": id,
                     "name": name,
                     "full_name": name,
                     "avatar_url": Value::Null,
-                    "common_courses": {},
-                    "common_groups": {},
-                })
-            })
-            .into_iter()
-            .collect();
+                    "common_courses": Value::Object(common_courses),
+                    "common_groups": Value::Object(common_groups),
+                })]
+            }
+            None => Vec::new(),
+        };
         return Ok(Json(items));
     }
 

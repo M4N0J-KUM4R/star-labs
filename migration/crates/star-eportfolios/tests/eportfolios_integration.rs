@@ -534,15 +534,17 @@ async fn moderation_and_moderate_all() {
         .await;
     assert_eq!(resp.status_code(), 404);
 
-    // moderate_all: admin rewrites every ACTIVE portfolio of the user and
-    // gets the JSON literal "success".
+    // moderate_all: admin rewrites every ACTIVE portfolio of the user.
+    // Upstream `render json: :success` (eportfolios_api_controller.rb
+    // moderate_all) — the Symbol :success serializes to the JSON string,
+    // so the raw body is "success" WITH the quotes.
     let resp = server
         .put(&format!("/users/{owner}/eportfolios"))
         .add_header(axum::http::header::AUTHORIZATION, admin_bearer.clone())
         .json(&json!({ "spam_status": "marked_as_spam" }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.text(), "success");
+    assert_eq!(resp.text(), "\"success\"");
     for id in [eport, keepline] {
         let (status,): (Option<String>,) =
             sqlx::query_as("SELECT spam_status FROM eportfolios WHERE id = $1")

@@ -30,6 +30,6 @@ CREATE TABLE IF NOT EXISTS smart_search_indexes (
     course_id  BIGINT PRIMARY KEY REFERENCES courses(id) ON DELETE CASCADE,
     status     TEXT NOT NULL DEFAULT 'indexing'
                CHECK (status IN ('indexed', 'indexing')),
-    progress   REAL NOT NULL DEFAULT 0,
+    progress   DOUBLE PRECISION NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
