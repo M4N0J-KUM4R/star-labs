@@ -681,7 +681,7 @@ async fn start_quiz(
     State(state): State<AppState>,
     Path(quiz_id): Path<i64>,
     auth: AuthUser,
-) -> Result<(StatusCode, Json<QuizSubmission>), ApiError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Verify quiz exists and the caller is a student in its course
     let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM quizzes WHERE id = $1"#)
         .bind(quiz_id)
@@ -718,6 +718,7 @@ async fn start_quiz(
         return Err(ApiError::Conflict("quiz already started".into()));
     }
 
+    let validation_token = generate_validation_token();
     let submission: QuizSubmission = sqlx::query_as(
         r#"
         INSERT INTO quiz_submissions (quiz_id, user_id, started_at, validation_token)
@@ -727,11 +728,17 @@ async fn start_quiz(
     )
     .bind(quiz_id)
     .bind(auth.id)
-    .bind(generate_validation_token())
+    .bind(&validation_token)
     .fetch_one(&state.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(submission)))
+    // `QuizSubmission` carries no token field, but Canvas' take response does
+    // (`API::V1::QuizSubmission::QUIZ_SUBMISSION_JSON_FIELDS`), so the value
+    // just inserted is attached to the object returned to the student.
+    let mut value =
+        serde_json::to_value(&submission).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    value["validation_token"] = serde_json::Value::String(validation_token);
+    Ok((StatusCode::CREATED, Json(value)))
 }
 
 /// Start (or resume) the caller's single submission for a quiz.
@@ -915,7 +922,7 @@ async fn start_course_quiz_submission(
     State(state): State<AppState>,
     Path((course_id, quiz_id)): Path<(i64, i64)>,
     auth: AuthUser,
-) -> Result<(StatusCode, Json<QuizSubmission>), ApiError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_quiz_in_course(&state.db, quiz_id, course_id).await?;
     start_quiz(State(state), Path::<i64>(quiz_id), auth).await
 }

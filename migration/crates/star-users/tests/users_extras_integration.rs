@@ -1033,10 +1033,9 @@ async fn custom_data_nested_scope_round_trip() {
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
-    assert_eq!(
-        resp.json::<Value>(),
-        serde_json::json!({ "message": "invalid scope for hash" })
-    );
+    // The workspace's shared ApiError contract renders the message as plain
+    // text (`star-common/src/lib.rs:63`), not a JSON envelope.
+    assert_eq!(resp.text(), "invalid scope for hash");
 
     let _ = sqlx::query("DELETE FROM custom_data WHERE user_id = $1")
         .bind(student)
@@ -1061,10 +1060,7 @@ async fn custom_data_requires_a_namespace_and_a_readable_scope() {
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
-    assert_eq!(
-        resp.json::<Value>(),
-        serde_json::json!({ "message": "invalid namespace" })
-    );
+    assert_eq!(resp.text(), "invalid namespace");
 
     // A missing row is Canvas' require_custom_data halt.
     let resp = server
@@ -1074,10 +1070,7 @@ async fn custom_data_requires_a_namespace_and_a_readable_scope() {
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
-    assert_eq!(
-        resp.json::<Value>(),
-        serde_json::json!({ "message": "no data for scope" })
-    );
+    assert_eq!(resp.text(), "no data for scope");
 
     // :read is self-or-admin, so another user's data is 403.
     let resp = server
