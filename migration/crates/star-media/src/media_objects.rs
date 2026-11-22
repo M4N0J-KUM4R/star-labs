@@ -747,13 +747,12 @@ fn scope_parts(scope: MediaScope, base: &str) -> (String, String) {
             format!("{base}/api/v1/media_attachments"),
         ),
         MediaScope::Course(id) => (
-            // Canvas scopes the course listing through the video
-            // attachments of the context (media_objects_api#index ->
-            // media_objects_for_context), not the object's own context
-            // columns: an object belongs to a course when one of its
-            // video attachments does. The attachment carries the Kaltura
-            // entry id (media_id), the IN-list wants the numeric id.
-            "id IN (SELECT m.id FROM attachments a \
+            // Canvas scopes a context listing two ways: objects created
+            // with the context (context columns) and objects linked to the
+            // context through one of its video attachments
+            // (media_objects_for_context). Either way in.
+            "(context_type = 'Course' AND context_id = $1) \
+             OR id IN (SELECT m.id FROM attachments a \
                  JOIN media_objects m ON m.media_id = a.media_entry_id \
                  WHERE a.context_type = 'Course' AND a.context_id = $1 \
                    AND a.content_type LIKE 'video/%' \
@@ -762,7 +761,8 @@ fn scope_parts(scope: MediaScope, base: &str) -> (String, String) {
             format!("{base}/api/v1/courses/{id}/media_attachments"),
         ),
         MediaScope::Group(id) => (
-            "id IN (SELECT m.id FROM attachments a \
+            "(context_type = 'Group' AND context_id = $1) \
+             OR id IN (SELECT m.id FROM attachments a \
                  JOIN media_objects m ON m.media_id = a.media_entry_id \
                  WHERE a.context_type = 'Group' AND a.context_id = $1 \
                    AND a.content_type LIKE 'video/%' \
@@ -879,9 +879,10 @@ async fn list_media_objects(
 
     // `$2` is bound to NULL when there is no search term, which makes the
     // filter a no-op — the same result as Canvas returning the scope
-    // unchanged when `search_term` is blank.
+    // unchanged when `search_term` is blank. The predicate is parenthesized
+    // because the context scopes are OR-unions.
     let where_sql = format!(
-        "WHERE workflow_state <> 'deleted' AND {predicate} \
+        "WHERE workflow_state <> 'deleted' AND ({predicate}) \
          AND ($2::text IS NULL OR LOWER(title) LIKE $2 ESCAPE '\\')"
     );
 
@@ -1457,6 +1458,7 @@ async fn create_media_object_route(
         }),
     );
 
+    // Canvas `render json:` — the default 200 (media_objects_controller.rb:255).
     Ok(Json(serde_json::Value::Object(payload)).into_response())
 }
 

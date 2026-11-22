@@ -1195,7 +1195,8 @@ async fn media_object_create_with_context_and_owner_only_update() {
             "context_code": format!("course_{course}")
         }))
         .await;
-    assert_eq!(contextual.status_code(), 201, "body: {}", contextual.text());
+    // Canvas `render json:` — the default 200 (media_objects_controller.rb:255).
+    assert_eq!(contextual.status_code(), 200, "body: {}", contextual.text());
 
     // Unknown course in the context code: 404.
     let unknown = server
