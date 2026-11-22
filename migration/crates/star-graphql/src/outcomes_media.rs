@@ -17,9 +17,9 @@
 //! Canvas shape (subset, camelCase):
 //! - LearningOutcome: `id`, `title`, `description`, `displayName`,
 //!   `createdAt`, `updatedAt`;
-//! - LearningOutcomeGroup: `id`, `title`, `description`,
-//!   `vendorGuid`, `createdAt`, `updatedAt` (Canvas nests outcomes
-//!   under the group through its links);
+//! - LearningOutcomeGroup: `id`, `title`, `createdAt`, `updatedAt`
+//!   (Canvas's `description`/`vendorGuid` need columns the 0022 table
+//!   does not carry — documented omission) with its linked outcomes;
 //! - MediaObject: `id`, `mediaId`, `mediaType`, `title`,
 //!   `userEnteredTitle`, `createdAt` + nested `mediaTracks`;
 //! - MediaTrack: `id`, `kind`, `locale`, `content`, `workflowState`.
@@ -57,8 +57,6 @@ struct OutcomeRow {
 struct OutcomeGroupRow {
     id: i64,
     title: String,
-    description: Option<String>,
-    vendor_guid: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -108,8 +106,6 @@ pub struct LearningOutcome {
 pub struct LearningOutcomeGroup {
     pub id: i64,
     pub title: String,
-    pub description: Option<String>,
-    pub vendor_guid: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -122,15 +118,6 @@ impl LearningOutcomeGroup {
 
     async fn title(&self) -> &str {
         &self.title
-    }
-
-    async fn description(&self) -> Option<&str> {
-        self.description.as_deref()
-    }
-
-    /// Canvas `vendorGuid` (0044 column).
-    async fn vendor_guid(&self) -> Option<&str> {
-        self.vendor_guid.as_deref()
     }
 
     /// The outcomes linked to this group (active links only, id
@@ -245,7 +232,7 @@ pub(crate) async fn fetch_course_outcome_groups(
 ) -> Result<Vec<LearningOutcomeGroup>, async_graphql::Error> {
     let rows: Vec<OutcomeGroupRow> = sqlx::query_as(
         r#"
-        SELECT id, title, description, vendor_guid, created_at, updated_at
+        SELECT id, title, created_at, updated_at
         FROM learning_outcome_groups
         WHERE course_id = $1 AND workflow_state <> 'deleted'
         ORDER BY id
@@ -261,8 +248,6 @@ pub(crate) async fn fetch_course_outcome_groups(
         .map(|r| LearningOutcomeGroup {
             id: r.id,
             title: r.title,
-            description: r.description,
-            vendor_guid: r.vendor_guid,
             created_at: r.created_at,
             updated_at: r.updated_at,
         })

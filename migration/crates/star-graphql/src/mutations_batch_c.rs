@@ -198,7 +198,6 @@ pub struct LearningOutcomeGroupPayload {
 pub struct BatchCLearningOutcomeGroup {
     pub id: ID,
     pub title: String,
-    pub description: Option<String>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -206,14 +205,12 @@ pub struct BatchCLearningOutcomeGroup {
 pub struct CreateLearningOutcomeGroupInput {
     pub course_id: ID,
     pub title: String,
-    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, InputObject)]
 pub struct UpdateLearningOutcomeGroupInput {
     pub outcome_group_id: ID,
     pub title: Option<String>,
-    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, InputObject)]
@@ -462,14 +459,12 @@ struct OutcomeUpdateRow {
 struct OutcomeGroupInsertRow {
     id: i64,
     title: String,
-    description: Option<String>,
     updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct OutcomeGroupUpdateRow {
     title: String,
-    description: Option<String>,
     updated_at: DateTime<Utc>,
 }
 
@@ -890,14 +885,13 @@ async fn create_learning_outcome_group(
     }
     let row: Option<OutcomeGroupInsertRow> = sqlx::query_as(
         r#"
-        INSERT INTO learning_outcome_groups (course_id, title, description)
-        VALUES ($1, $2, $3)
-        RETURNING id, title, description, updated_at
+        INSERT INTO learning_outcome_groups (course_id, title)
+        VALUES ($1, $2)
+        RETURNING id, title, updated_at
         "#,
     )
     .bind(course_id)
     .bind(input.title.trim())
-    .bind(&input.description)
     .fetch_optional(&gctx.pool)
     .await
     .map_err(crate::db_err)?;
@@ -908,7 +902,6 @@ async fn create_learning_outcome_group(
         learning_outcome_group: Some(BatchCLearningOutcomeGroup {
             id: ID(row.id.to_string()),
             title: row.title,
-            description: row.description,
             updated_at: row.updated_at,
         }),
         errors: Vec::new(),
@@ -949,15 +942,13 @@ async fn update_learning_outcome_group(
         r#"
         UPDATE learning_outcome_groups SET
             title = COALESCE($2, title),
-            description = COALESCE($3, description),
             updated_at = now()
         WHERE id = $1
-        RETURNING title, description, updated_at
+        RETURNING title, updated_at
         "#,
     )
     .bind(gid)
     .bind(input.title.as_deref().map(str::trim))
-    .bind(&input.description)
     .fetch_optional(&gctx.pool)
     .await
     .map_err(crate::db_err)?;
@@ -968,7 +959,6 @@ async fn update_learning_outcome_group(
         learning_outcome_group: Some(BatchCLearningOutcomeGroup {
             id: input.outcome_group_id.clone(),
             title: row.title,
-            description: row.description,
             updated_at: row.updated_at,
         }),
         errors: Vec::new(),

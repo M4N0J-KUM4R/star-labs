@@ -122,8 +122,8 @@ async fn outcomes_and_groups_nested_shape() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
 
     let group: i64 = sqlx::query_scalar(
-        "INSERT INTO learning_outcome_groups (course_id, title, description, vendor_guid) \
-         VALUES ($1, 'Core Skills', 'Critical thinking', 'guid-1') RETURNING id",
+        "INSERT INTO learning_outcome_groups (course_id, title) \
+         VALUES ($1, 'Core Skills') RETURNING id",
     )
     .bind(course)
     .fetch_one(&pool)
@@ -171,7 +171,7 @@ async fn outcomes_and_groups_nested_shape() {
     let body = gql_post(
         &server,
         &auth(teacher, "teacher"),
-        "query ($id: ID!) { course(id: $id) { outcomeGroups { id title description vendorGuid \
+        "query ($id: ID!) { course(id: $id) { outcomeGroups { id title \
          outcomes { id title description displayName createdAt updatedAt } } \
          outcomesConnection(first: 10) { edges { node { id title } } \
          pageInfo { hasNextPage } } } }",
@@ -186,7 +186,6 @@ async fn outcomes_and_groups_nested_shape() {
     let g = &groups[0];
     assert_eq!(g["id"], group.to_string(), "{body}");
     assert_eq!(g["title"], "Core Skills", "{body}");
-    assert_eq!(g["vendorGuid"], "guid-1", "{body}");
     let outcomes = g["outcomes"].as_array().expect("outcomes");
     assert_eq!(outcomes.len(), 2, "deleted link filtered: {body}");
     assert_eq!(outcomes[0]["id"], o1.to_string(), "{body}");

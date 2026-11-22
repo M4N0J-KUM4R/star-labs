@@ -8,6 +8,10 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use star_common::AppState;
 
+fn ts(s: &str) -> chrono::DateTime<chrono::Utc> {
+    s.parse().expect("parse RFC3339 timestamp")
+}
+
 fn run_prefix() -> String {
     use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(0);
@@ -113,9 +117,9 @@ async fn seed_period(
     pool: &PgPool,
     group_id: i64,
     title: &str,
-    start: &str,
-    end: &str,
-    close: &str,
+    start: chrono::DateTime<chrono::Utc>,
+    end: chrono::DateTime<chrono::Utc>,
+    close: chrono::DateTime<chrono::Utc>,
     weight: Option<f64>,
 ) -> i64 {
     sqlx::query_scalar(
@@ -192,9 +196,9 @@ async fn grading_periods_returns_canvas_field_names() {
         &pool,
         group,
         "Q2",
-        "2026-01-01",
-        "2026-03-31",
-        "2026-04-05",
+        ts("2026-01-01T00:00:00Z"),
+        ts("2026-03-31T00:00:00Z"),
+        ts("2026-04-05T00:00:00Z"),
         Some(50.0),
     )
     .await;
@@ -202,9 +206,9 @@ async fn grading_periods_returns_canvas_field_names() {
         &pool,
         group,
         "Q1",
-        "2025-09-01",
-        "2025-12-15",
-        "2025-12-20",
+        ts("2025-09-01T00:00:00Z"),
+        ts("2025-12-15T00:00:00Z"),
+        ts("2025-12-20T00:00:00Z"),
         Some(50.0),
     )
     .await;
@@ -285,9 +289,9 @@ async fn grading_periods_null_without_group_and_deleted_filtered() {
         &pool,
         group,
         "Live",
-        "2026-01-01",
-        "2026-02-01",
-        "2026-02-05",
+        ts("2026-01-01T00:00:00Z"),
+        ts("2026-02-01T00:00:00Z"),
+        ts("2026-02-05T00:00:00Z"),
         None,
     )
     .await;
@@ -295,9 +299,9 @@ async fn grading_periods_null_without_group_and_deleted_filtered() {
         &pool,
         group,
         "Dead",
-        "2026-03-01",
-        "2026-04-01",
-        "2026-04-05",
+        ts("2026-03-01T00:00:00Z"),
+        ts("2026-04-01T00:00:00Z"),
+        ts("2026-04-05T00:00:00Z"),
         None,
     )
     .await;

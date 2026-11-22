@@ -1057,7 +1057,7 @@ async fn delete_conversation(
     let conv_id = parse_id(&input.conversation_id, "conversation")?;
     let result = sqlx::query(
         r#"UPDATE conversation_participants SET workflow_state = 'deleted'
-           WHERE conversation_id = $1 AND user_id = $2"#,
+           WHERE conversation_id = $1 AND user_id = $2 AND workflow_state = 'active'"#,
     )
     .bind(conv_id)
     .bind(gctx.auth_user.id)

@@ -277,11 +277,10 @@ async fn outcome_group_and_outcome_crud() {
         &auth(teacher, "teacher"),
         "mutation ($input: CreateLearningOutcomeGroupInput!) \
          { createLearningOutcomeGroup(input: $input) \
-         { learningOutcomeGroup { id title description updatedAt } errors { message } } }",
+         { learningOutcomeGroup { id title updatedAt } errors { message } } }",
         json!({ "input": {
             "courseId": course.to_string(),
-            "title": "Skills",
-            "description": "Core skills"
+            "title": "Skills"
         } }),
     )
     .await;
