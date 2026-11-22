@@ -42,27 +42,41 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 mod assignment;
+mod assignment_group;
 mod conversations;
 mod course_user_fields;
+mod discussion_entries;
 mod discussion_topic;
+mod external_tools;
 mod files;
+mod grading_periods;
+mod grading_standards_account_notifications;
 mod groups;
 mod modules;
 mod mutations;
+mod mutations_batch_b;
+mod mutations_batch_c;
+mod outcomes_media;
 mod pages;
 mod quiz;
+mod rubrics;
 mod submission;
 mod terms_sections;
+mod user_channels;
 
 use assignment::AssignmentConnection;
+use assignment_group::AssignmentGroupConnection;
 use conversations::ConversationParticipantConnection;
 use course_user_fields::{CoursePermissions, UserConnection};
 use discussion_topic::DiscussionTopicConnection;
+use external_tools::ExternalToolConnection;
 use files::FolderConnection;
+use grading_periods::GradingPeriodGroup;
 use groups::{GroupConnection, GroupSetConnection};
 use modules::ModuleConnection;
 use pages::PageConnection;
 use quiz::QuizConnection;
+use rubrics::RubricConnection;
 use terms_sections::{CourseSection, EnrollmentTerm};
 
 // ---------------------------------------------------------------------------
@@ -324,6 +338,74 @@ impl Course {
         ))
     }
 
+    /// Paginated assignment groups in this course (LIMIT first+1, ORDER BY
+    /// position then id — Canvas `AssignmentGroup.natural_order`). Includes
+    /// the 0049 grading rules via LEFT JOIN; groups without a rules row
+    /// resolve `rules` to null. Everyone who can resolve the course sees
+    /// its groups — parity with the star-assignment-groups REST index;
+    /// deleted groups are filtered (Canvas `AssignmentGroup.active`).
+    async fn assignment_groups_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<AssignmentGroupConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            assignment_group::fetch_assignment_group_page(
+                &gctx.pool,
+                self.id,
+                first,
+                after.as_deref(),
+            )
+            .await?,
+        ))
+    }
+
+    /// The course's grading period set with its periods, or null when the
+    /// course has none (Canvas resolves through
+    /// `GradingPeriodGroup.for_course`). Periods are sorted by start
+    /// date; deleted rows are filtered (Canvas `active` scopes).
+    async fn grading_periods(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<GradingPeriodGroup>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        grading_periods::fetch_course_grading_period_group(&gctx.pool, self.id).await
+    }
+
+    /// The course's own grading standards with their scheme rows
+    /// (position-ordered; deleted filtered). Canvas course_type.rb
+    /// gradingStandards — account-level fallbacks are not included.
+    /// Visibility inherited from course(id), parity with the
+    /// star-grading-standards REST list.
+    async fn grading_standards(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Vec<grading_standards_account_notifications::GradingStandard>, async_graphql::Error>
+    {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        grading_standards_account_notifications::fetch_course_grading_standards(&gctx.pool, self.id)
+            .await
+    }
+
+    /// Paginated rubrics in this course (LIMIT first+1, ORDER BY id), each
+    /// hydrated with its criteria and nested ratings (position-ordered —
+    /// Canvas `Rubric#rubric_criteria`). Deleted rubrics are filtered
+    /// (Canvas `Rubric.active`). Visibility inherited from `course(id)` —
+    /// parity with the star-search rubrics REST handler.
+    async fn rubrics_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<RubricConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            rubrics::fetch_rubric_page(&gctx.pool, self.id, first, after.as_deref()).await?,
+        ))
+    }
+
     /// Paginated quizzes in this course (LIMIT first+1, ORDER BY id).
     /// Everyone who can resolve the course sees its quizzes — parity with
     /// the star-quizzes REST list handler; unpublished quizzes are included
@@ -363,6 +445,54 @@ impl Course {
                 after.as_deref(),
             )
             .await?,
+        ))
+    }
+
+    /// Paginated learning outcomes linked to this course's groups
+    /// (LIMIT first+1, ORDER BY id). Canvas scopes outcomesConnection
+    /// through the account tree; star-lms has no account tree, so the
+    /// course's linked outcomes are the set (documented deviation).
+    /// Visibility inherited from course(id) — parity with the
+    /// star-outcomes REST handlers.
+    async fn outcomes_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<outcomes_media::LearningOutcomeConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            outcomes_media::fetch_course_outcome_page(&gctx.pool, self.id, first, after.as_deref())
+                .await?,
+        ))
+    }
+
+    /// The course's outcome groups (0022 learning_outcome_groups, id
+    /// order), each carrying its linked outcomes. Visibility inherited
+    /// from course(id).
+    async fn outcome_groups(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Vec<outcomes_media::LearningOutcomeGroup>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        outcomes_media::fetch_course_outcome_groups(&gctx.pool, self.id).await
+    }
+
+    /// Paginated enabled external tools in this course (LIMIT first+1,
+    /// ORDER BY id) with their configured placements (from the 0085
+    /// `tool_configuration` JSONB). Deleted/disabled filtered. Visibility
+    /// inherited from course(id) — parity with the star-lti REST tool
+    /// listing.
+    async fn external_tools_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<ExternalToolConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(Some(
+            external_tools::fetch_external_tool_page(&gctx.pool, self.id, first, after.as_deref())
+                .await?,
         ))
     }
 
@@ -548,6 +678,54 @@ impl User {
             .await?,
         ))
     }
+
+    /// The user's non-retired communication channels (Canvas
+    /// `user_type.rb` communicationChannels). Self-or-admin: anyone else
+    /// gets null (Canvas gates private channel data on self).
+    async fn communication_channels(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<Vec<user_channels::CommunicationChannel>>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        if !user_channels::is_self_or_admin(gctx, self.id) {
+            return Ok(None);
+        }
+        Ok(Some(
+            user_channels::fetch_communication_channels(&gctx.pool, self.id).await?,
+        ))
+    }
+
+    /// The user's non-deleted notifications, newest first (Canvas
+    /// `user_type.rb` notifications). Self-or-admin: anyone else gets
+    /// null.
+    async fn notifications(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<Vec<user_channels::Notification>>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        if !user_channels::is_self_or_admin(gctx, self.id) {
+            return Ok(None);
+        }
+        Ok(Some(
+            user_channels::fetch_notifications(&gctx.pool, self.id).await?,
+        ))
+    }
+
+    /// The user's notification policies on non-retired channels (Canvas
+    /// `user_type.rb` notificationPreferences). Self-or-admin: anyone
+    /// else gets null.
+    async fn notification_preferences(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<Vec<user_channels::NotificationPolicy>>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        if !user_channels::is_self_or_admin(gctx, self.id) {
+            return Ok(None);
+        }
+        Ok(Some(
+            user_channels::fetch_notification_policies(&gctx.pool, self.id).await?,
+        ))
+    }
 }
 
 /// Canvas GraphQL `Enrollment` (subset of `enrollment_type.rb`). Field names
@@ -728,6 +906,46 @@ impl Query {
         }))
     }
 
+    /// `accountNotifications(accountId)` — an account's window-valid
+    /// announcements (start_at <= now < end_at), like Canvas's
+    /// account notification resolver. Global admins only: star-lms has
+    /// no account-role model, so the REST admin gate collapses to
+    /// global admin (documented deviation).
+    async fn account_notifications(
+        &self,
+        ctx: &Context<'_>,
+        account_id: ID,
+    ) -> Result<
+        Option<Vec<grading_standards_account_notifications::AccountNotification>>,
+        async_graphql::Error,
+    > {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        if !gctx.is_admin() {
+            return Ok(None);
+        }
+        let raw: i64 = account_id
+            .0
+            .parse()
+            .map_err(|_| async_graphql::Error::new(format!("invalid account: {}", account_id.0)))?;
+        Ok(Some(
+            grading_standards_account_notifications::fetch_account_notifications(&gctx.pool, raw)
+                .await?,
+        ))
+    }
+
+    /// `mediaObject(mediaId)` — a media object by its string id with
+    /// nested tracks (0098). Owner-scoped: null for missing/deleted
+    /// objects and for other users' media (self-or-admin, like the
+    /// user-scoped REST listing).
+    async fn media_object(
+        &self,
+        ctx: &Context<'_>,
+        media_id: String,
+    ) -> Result<Option<outcomes_media::MediaObject>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        outcomes_media::fetch_media_object_for_caller(&gctx.pool, gctx, &media_id).await
+    }
+
     /// `enrollmentTerm(id: ID!)` — any authenticated caller may read the
     /// basic term shape; unknown ids resolve to null, like Canvas.
     async fn enrollment_term(
@@ -825,13 +1043,21 @@ impl Query {
 /// `state: deleted` — Canvas has no `deleteAssignment` mutation and neither
 /// do we (spec §2.1). Batches B–E land with their own issues.
 #[derive(MergedObject, Default)]
-pub struct Mutation(mutations::AssignmentMutations);
+pub struct Mutation(
+    mutations::AssignmentMutations,
+    mutations_batch_b::BatchBMutations,
+    mutations_batch_c::BatchCMutations,
+);
 
 impl Mutation {
     fn new() -> Self {
-        // `AssignmentMutations` is a unit struct; clippy's
+        // The mutation containers are unit structs; clippy's
         // default_constructed_unit_structs rejects `::default()` under -D warnings.
-        Mutation(mutations::AssignmentMutations)
+        Mutation(
+            mutations::AssignmentMutations,
+            mutations_batch_b::BatchBMutations,
+            mutations_batch_c::BatchCMutations,
+        )
     }
 }
 
