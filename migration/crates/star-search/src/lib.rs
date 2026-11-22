@@ -454,7 +454,7 @@ async fn user_recipients(
                WHERE g.course_id = {course_id} AND m.workflow_state = 'accepted'))"
         ));
     }
-    for (i, term) in terms.iter().enumerate() {
+    for (i, _term) in terms.iter().enumerate() {
         let param = format!("${}", i + 2);
         conditions.push_str(&format!(
             " AND (LOWER(u.name) LIKE {param} \
@@ -623,7 +623,7 @@ async fn recipients(
                 .bind(group_id)
                 .fetch_optional(&state.db)
                 .await?;
-                effective_course = course.flatten();
+                effective_course = course.map(|(course_id,)| course_id);
             }
         }
     }
@@ -1082,6 +1082,7 @@ async fn smart_search(
         results.sort_by(|a, b| {
             a["distance"]
                 .as_f64()
+                .unwrap_or(f64::MAX)
                 .partial_cmp(&b["distance"].as_f64().unwrap_or(f64::MAX))
                 .unwrap_or(std::cmp::Ordering::Equal)
                 .then_with(|| a["content_id"].as_i64().cmp(&b["content_id"].as_i64()))
@@ -1122,7 +1123,7 @@ fn search_result_json(
     hash.insert("distance".to_string(), json!(distance));
     hash.insert(
         "relevance".to_string(),
-        json!((100.0 * (1.0 - distance)).round() as i64),
+        json!((100.0f64 * (1.0 - distance)).round() as i64),
     );
     if includes.iter().any(|i| i == "modules") {
         hash.insert("modules".to_string(), json!([]));

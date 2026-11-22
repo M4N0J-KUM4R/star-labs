@@ -50,7 +50,7 @@ use axum::{
     routing::get,
     Json, Router,
 };
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -500,14 +500,12 @@ fn user_json(
 /// (api_index). Guard order: 401 (AuthUser) → 404 context → 403 :read →
 /// 404 tab-disabled → 200 bare array.
 async fn api_index(
-    State(state): State<AppState>,
+    pool: &PgPool,
     auth: AuthUser,
-    Path((ctx_id,)): Path<(i64,)>,
-    Query(page): Query<PaginationParams>,
+    page: PaginationParams,
     ctx: ContextRef,
 ) -> Result<Response, CollabError> {
-    let pool = &state.db;
-    let ctx = verify(ctx, pool, ctx_id).await?;
+    let ctx = verify(ctx, pool, ctx.id).await?;
     if !context_read(pool, &auth, ctx).await? {
         return Err(CollabError::Forbidden);
     }
@@ -683,14 +681,12 @@ async fn members(
 /// participating members + parent-course active admins. Ordered by
 /// sortable_name, `[User]` shape.
 async fn potential_collaborators(
-    State(state): State<AppState>,
+    pool: &PgPool,
     auth: AuthUser,
-    Path((ctx_id,)): Path<(i64,)>,
-    Query(page): Query<PaginationParams>,
+    page: PaginationParams,
     ctx: ContextRef,
 ) -> Result<Response, CollabError> {
-    let pool = &state.db;
-    let ctx = verify(ctx, pool, ctx_id).await?;
+    let ctx = verify(ctx, pool, ctx.id).await?;
     if !context_read_roster(pool, &auth, ctx).await? {
         return Err(CollabError::Forbidden);
     }
@@ -775,14 +771,13 @@ async fn potential_collaborators(
 /// (destroy). Scoped lookup (cross-context id → 404) → :delete → soft
 /// delete → 200 + row JSON.
 async fn destroy(
-    State(state): State<AppState>,
+    pool: &PgPool,
     auth: AuthUser,
-    Path((ctx_id, collaboration_id)): Path<(i64, i64)>,
-    Query(page): Query<QueryParams>,
+    collaboration_id: i64,
+    delete_doc: Option<bool>,
     ctx: ContextRef,
 ) -> Result<Response, CollabError> {
-    let pool = &state.db;
-    let ctx = verify(ctx, pool, ctx_id).await?;
+    let ctx = verify(ctx, pool, ctx.id).await?;
     let row: Option<CollaborationRow> = sqlx::query_as(&format!(
         "SELECT {COLLABORATION_COLUMNS} FROM collaborations \
          WHERE id = $1 AND context_id = $2 AND LOWER(context_type) = LOWER($3)"
@@ -800,7 +795,7 @@ async fn destroy(
     }
     // delete_doc: Canvas calls collaboration.delete_document when truthy —
     // external-service boundary, stubbed no-op in star-lms (spec §4).
-    let _ = bool_param(page.delete_doc.as_deref());
+    let _ = delete_doc;
 
     let now = Utc::now();
     sqlx::query(
@@ -844,7 +839,7 @@ macro_rules! context_twin {
         ) -> Result<Response, CollabError> {
             let pool = &state.db;
             let ctx = $load(pool, ctx_id).await?;
-            $inner(state, auth, Path((ctx_id,)), Query(page), ctx).await
+            $inner(pool, auth, page, ctx).await
         }
     };
 }
@@ -860,18 +855,12 @@ macro_rules! destroy_twin {
             State(state): State<AppState>,
             auth: AuthUser,
             Path((ctx_id, collaboration_id)): Path<(i64, i64)>,
-            Query(page): Query<QueryParams>,
+            Query(params): Query<QueryParams>,
         ) -> Result<Response, CollabError> {
             let pool = &state.db;
             let ctx = $load(pool, ctx_id).await?;
-            destroy(
-                state,
-                auth,
-                Path((ctx_id, collaboration_id)),
-                Query(page),
-                ctx,
-            )
-            .await
+            let delete_doc = bool_param(params.delete_doc.as_deref());
+            destroy(pool, auth, collaboration_id, delete_doc, ctx).await
         }
     };
 }

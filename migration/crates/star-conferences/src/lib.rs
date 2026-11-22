@@ -883,7 +883,7 @@ async fn member_ids(
             .await?;
             return Ok(rows.into_iter().map(|(id,)| id).collect());
         }
-        return context_user_ids(pool, context).await?;
+        return context_user_ids(pool, context).await;
     }
 
     if let Some(Value::Object(map)) = body.get("user") {
