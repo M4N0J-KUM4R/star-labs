@@ -50,7 +50,6 @@ struct CourseReportRow {
     report_type: String,
     workflow_state: String,
     parameters: Option<String>,
-    attachment_id: Option<i64>,
     start_at: Option<chrono::NaiveDateTime>,
     end_at: Option<chrono::NaiveDateTime>,
     created_at: chrono::NaiveDateTime,
@@ -122,7 +121,7 @@ async fn last_report(
 
     let row: Option<CourseReportRow> = sqlx::query_as(
         "SELECT id, course_id, user_id, report_type, workflow_state, parameters, \
-                attachment_id, start_at, end_at, created_at \
+                start_at, end_at, created_at \
          FROM course_reports \
          WHERE course_id = $1 AND user_id = $2 AND report_type = $3 \
            AND workflow_state <> 'deleted' \
@@ -180,7 +179,7 @@ async fn create_report(
              (course_id, user_id, report_type, workflow_state, parameters, progress) \
          VALUES ($1, $2, $3, 'created', $4, 0) \
          RETURNING id, course_id, user_id, report_type, workflow_state, parameters, \
-                   attachment_id, start_at, end_at, created_at",
+                   start_at, end_at, created_at",
     )
     .bind(course_id)
     .bind(auth.id)
@@ -215,7 +214,7 @@ async fn show_report(
 
     let row: Option<CourseReportRow> = sqlx::query_as(
         "SELECT id, course_id, user_id, report_type, workflow_state, parameters, \
-                attachment_id, start_at, end_at, created_at \
+                start_at, end_at, created_at \
          FROM course_reports \
          WHERE course_id = $1 AND id = $2 AND report_type = $3 \
            AND workflow_state <> 'deleted'",
@@ -305,6 +304,6 @@ fn parse_parameters(content_type: &str, body: &[u8]) -> Option<Value> {
                 }
             }
         }
-        (!map.is_empty()).then(|| Value::Object(map))
+        (!map.is_empty()).then_some(Value::Object(map))
     }
 }

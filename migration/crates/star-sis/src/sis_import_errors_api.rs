@@ -23,7 +23,6 @@ use axum::{
     Router,
 };
 use serde_json::{json, Value};
-use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::AppState;
 
