@@ -1,4 +1,4 @@
--- Migration 0229: the AI experiences, their conversations and their context
+-- Migration 0236: the AI experiences, their conversations and their context
 -- files.
 --
 -- Canvas `AiExperience` is the course scoped configuration an AI tool reads

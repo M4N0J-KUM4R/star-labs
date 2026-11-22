@@ -1,4 +1,4 @@
--- Migration 0230: web conference tails for the star-conferences crate.
+-- Migration 0229: web conference tails for the star-conferences crate.
 --
 -- Numbering note: the coordinator ledger had reserved a 012x number for the
 -- conferences crate (spec p5-rest-conferences.md §5 says "010x,

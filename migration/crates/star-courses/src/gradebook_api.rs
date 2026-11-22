@@ -56,10 +56,10 @@
 //! this port accepts the flat body as well.
 
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{delete, get},
     Json, Router,
 };
 use chrono::NaiveDateTime;

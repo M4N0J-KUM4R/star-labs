@@ -1,8 +1,7 @@
 {
  "comment": "Coordinator-owned ledger of migration number reservations (protocol: issue #20). Agents never self-assign a number; the coordinator reserves one at dispatch time. Additive migrations only, no renumbering, no DROP/TRUNCATE. status 'merged' = a NNNN_*.sql file exists in migration/crates/star-db/migrations/ on main; status 'open' = reserved for an open issue (verify the issue is still open before reuse). 'issue' is the GitHub issue number; null marks pre-protocol merges that predate issue-linked PRs. 'free' lists unallocated holes below next_available (0011 never existed; 0111/0115 were released; 0100 was a hole until PR #212 took it). Validate with: python3 orchestration/check-migration-ledger.py",
  "free": [
-  "0111",
-  "0236"
+  "0111"
  ],
  "max_merged": "0240",
  "next_available": "0241",
@@ -584,12 +583,12 @@
   },
   "0117": {
    "issue": 67,
-   "note": "feature flags tail (#67 merged via PR#152 WITHOUT migration; number never used \u2014 coordinator may release or reuse)",
+   "note": "feature flags tail (#67 merged via PR#152 WITHOUT migration; number never used — coordinator may release or reuse)",
    "status": "open"
   },
   "0118": {
    "issue": 55,
-   "note": "assignments tail (#55 merged via PR#139 without adding 0118; number never used \u2014 coordinator may release)",
+   "note": "assignments tail (#55 merged via PR#139 without adding 0118; number never used — coordinator may release)",
    "status": "merged"
   },
   "0119": {
@@ -635,6 +634,16 @@
   "0127": {
    "issue": null,
    "note": "merged by wave (no issue)",
+   "status": "merged"
+  },
+  "0128": {
+   "issue": null,
+   "note": "star-collaborations (re-registered via PR #213 merge)",
+   "status": "merged"
+  },
+  "0131": {
+   "issue": null,
+   "note": "star-search smart_search (re-registered via PR #213 merge)",
    "status": "merged"
   },
   "0141": {
@@ -742,11 +751,6 @@
    "note": "star-courses: the AI experiences and their conversations",
    "status": "merged"
   },
-  "0230": {
-   "issue": null,
-   "note": "star-conferences: the web conference tails (renumbered from 0229 after the assessments lane took 0229)",
-   "status": "merged"
-  },
   "0231": {
    "issue": null,
    "note": "star-media: the media object columns, the tracks and the media files",
@@ -772,6 +776,11 @@
    "note": "star-users: the course nicknames",
    "status": "merged"
   },
+  "0236": {
+   "issue": null,
+   "note": "star-courses: the AI experiences and their conversations (moved off 0229; main's conferences lane owns 0229)",
+   "status": "merged"
+  },
   "0237": {
    "issue": null,
    "note": "star-calendar: the account calendar settings",
@@ -790,16 +799,6 @@
   "0240": {
    "issue": null,
    "note": "star-lti: update-request columns (batch-3, commit fd0fbe3)",
-   "status": "merged"
-  },
-  "0128": {
-   "issue": null,
-   "note": "star-collaborations (re-registered via PR #213 merge)",
-   "status": "merged"
-  },
-  "0131": {
-   "issue": null,
-   "note": "star-search smart_search (re-registered via PR #213 merge)",
    "status": "merged"
   }
  }
