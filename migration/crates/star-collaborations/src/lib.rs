@@ -701,7 +701,8 @@ async fn potential_collaborators(
                 "SELECT DISTINCT u.id, u.name, u.sortable_name, u.email, u.role, u.created_at \
                  FROM users u JOIN enrollments e ON e.user_id = u.id \
                  WHERE e.course_id = $1 AND e.workflow_state = 'active' \
-                 ORDER BY COALESCE(u.sortable_name, u.name), u.id ASC LIMIT $2 OFFSET $3",
+                 ORDER BY u.sortable_name NULLS LAST, u.name, u.id ASC \
+                 LIMIT $2 OFFSET $3",
             )
             .bind(ctx.id)
             .bind(per_page)
@@ -719,7 +720,8 @@ async fn potential_collaborators(
                  LEFT JOIN enrollments e ON e.course_id = g.course_id AND e.user_id = u.id \
                      AND e.workflow_state = 'active' AND e.role IN ('teacher','ta','designer') \
                  WHERE gm.id IS NOT NULL OR e.id IS NOT NULL \
-                 ORDER BY COALESCE(u.sortable_name, u.name), u.id ASC LIMIT $2 OFFSET $3",
+                 ORDER BY u.sortable_name NULLS LAST, u.name, u.id ASC \
+                 LIMIT $2 OFFSET $3",
             )
             .bind(ctx.id)
             .bind(per_page)

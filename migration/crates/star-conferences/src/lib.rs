@@ -810,8 +810,9 @@ async fn create_inner(
     for uid in &invitee_ids {
         sqlx::query(
             "INSERT INTO web_conference_participants \
-             (user_id, web_conference_id, participation_type, root_account_id) \
-             VALUES ($1, $2, 'invitee', 1)",
+             (user_id, web_conference_id, participation_type, root_account_id, \
+              created_at, updated_at) \
+             VALUES ($1, $2, 'invitee', 1, now(), now())",
         )
         .bind(uid)
         .bind(row.id)
@@ -820,8 +821,9 @@ async fn create_inner(
     }
     sqlx::query(
         "INSERT INTO web_conference_participants \
-         (user_id, web_conference_id, participation_type, root_account_id) \
-         VALUES ($1, $2, 'initiator', 1)",
+         (user_id, web_conference_id, participation_type, root_account_id, \
+          created_at, updated_at) \
+         VALUES ($1, $2, 'initiator', 1, now(), now())",
     )
     .bind(auth.id)
     .bind(row.id)
@@ -866,6 +868,7 @@ async fn create_inner(
 /// - `user` present without a truthy `user[all]` → only the checked ids
 ///   (`user[id] = "1"`);
 /// - otherwise (no `user` param, or `user[all]`) → the whole context.
+///
 /// The initiator row is added separately by add_initiator.
 async fn member_ids(
     pool: &PgPool,
