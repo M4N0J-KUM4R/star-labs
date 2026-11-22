@@ -1284,8 +1284,11 @@ async fn for_course_assignment_grader_student(
 // Router
 // ---------------------------------------------------------------------------
 
+mod authentication_audit;
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(authentication_audit::authentication_audit_routes())
         .merge(gradebook_history_router())
         .route("/audit/grade_change", get(advanced_query))
         .route("/audit/grade_change/assignments/{assignment_id}", get(for_assignment))
