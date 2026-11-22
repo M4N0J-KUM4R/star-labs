@@ -2099,14 +2099,12 @@ async fn install_template_for_account(
     if existing.is_some() {
         return Ok(());
     }
-    let sql = format!(
-        "INSERT INTO lti_registrations \
+    let sql = "INSERT INTO lti_registrations \
          (account_id, root_account_id, name, admin_nickname, vendor, description, icon_url, \
           lti_version, dynamic_registration, lock_deploying, template_registration_id, \
           workflow_state, configuration, created_by_id, updated_by_id) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13, $13)"
-    );
-    sqlx::query(&sql)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'active', $12, $13, $13)";
+    sqlx::query(sql)
         .bind(account_id)
         .bind(root_id)
         .bind(&template.name)
