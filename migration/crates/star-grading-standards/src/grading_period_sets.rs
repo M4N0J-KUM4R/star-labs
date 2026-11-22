@@ -158,10 +158,10 @@ async fn can_read_account(
     let allowed: bool = sqlx::query_scalar(
         "SELECT (SELECT EXISTS(SELECT 1 FROM account_users \
                     WHERE account_id = $1 AND user_id = $2 AND role = 'admin') \
-              OR SELECT EXISTS(SELECT 1 FROM enrollments e \
+              OR (SELECT EXISTS(SELECT 1 FROM enrollments e \
                     JOIN courses c ON c.id = e.course_id \
                     WHERE c.account_id = $1 AND e.user_id = $2 \
-                      AND e.workflow_state <> 'deleted'))",
+                      AND e.workflow_state <> 'deleted')))",
     )
     .bind(account_id)
     .bind(user.id)

@@ -11,7 +11,6 @@
 //!   - POST /courses/{courseId}/quiz_extensions                     (course_quiz_extensions#create)
 //!   - GET  /courses/{courseId}/quizzes/{quizId}/submissions/{submissionId}/events (quiz_submission_events_api#index)
 //!   - POST /courses/{courseId}/quizzes/{quizId}/submissions/{submissionId}/events (quiz_submission_events_api#create)
-//!   - GET  /quiz_submissions/{quizSubmissionId}/questions          (quiz_submission_questions#index)
 //!   - PUT  /quiz_submissions/{quizSubmissionId}/questions/{questionId} (answer/flag)
 //!   - GET  /courses/{courseId}/quizzes/{quizId}/ip_filters         (quiz_ip_filters#index)
 //!   - POST /courses/{courseId}/quizzes/{quizId}/submissions/self/files (quiz_submission_files#create)
@@ -574,61 +573,6 @@ async fn submission_owned(
 // 6. Quizzes::QuizSubmissionQuestionsController
 // ---------------------------------------------------------------------------
 
-/// GET /quiz_submissions/{quizSubmissionId}/questions — the submission's
-/// questions; owner or grader; one-question-at-a-time quizzes cannot be
-/// listed through the API (401, Canvas reject!).
-async fn quiz_submission_questions(
-    State(state): State<AppState>,
-    Path(submission_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<Value>, ApiError> {
-    let submission: Option<(i64, i64, bool)> = sqlx::query_as(
-        "SELECT quiz_id, user_id, COALESCE(one_question_at_a_time, FALSE) \
-         FROM quiz_submissions qs JOIN quizzes q ON q.id = qs.quiz_id \
-         WHERE qs.id = $1",
-    )
-    .bind(submission_id)
-    .fetch_optional(&state.db)
-    .await?;
-    let (quiz_id, owner_id, oqat) = submission.ok_or(ApiError::NotFound)?;
-    if oqat {
-        return Err(ApiError::Unauthorized);
-    }
-    if auth.id != owner_id && auth.role != "admin" {
-        let course_id: Option<i64> =
-            sqlx::query_scalar("SELECT course_id FROM quizzes WHERE id = $1")
-                .bind(quiz_id)
-                .fetch_optional(&state.db)
-                .await?;
-        let teacher = match course_id {
-            Some(cid) => teacher_level(&state.db, &auth, cid).await?,
-            None => false,
-        };
-        if !teacher {
-            return Err(ApiError::Forbidden);
-        }
-    }
-    let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
-        "SELECT id, name, question_data FROM quiz_questions \
-         WHERE quiz_id = $1 ORDER BY position NULLS LAST, id",
-    )
-    .bind(quiz_id)
-    .fetch_all(&state.db)
-    .await?;
-    Ok(Json(json!({
-        "quiz_submission_questions": rows
-            .into_iter()
-            .map(|(id, name, data)| json!({
-                "id": id,
-                "name": name,
-                "question_data": data
-                    .as_deref()
-                    .and_then(|d| serde_json::from_str::<Value>(d).ok())
-                    .unwrap_or(Value::Null),
-            }))
-            .collect::<Vec<_>>(),
-    })))
-}
 
 // ---------------------------------------------------------------------------
 // 7. Quizzes::QuizIpFiltersController
@@ -786,10 +730,6 @@ pub fn quiz_family_routes() -> Router<AppState> {
         .route(
             "/courses/{courseId}/quizzes/{quizId}/submissions/{submissionId}/events",
             get(quiz_submission_events).post(create_quiz_submission_events),
-        )
-        .route(
-            "/quiz_submissions/{quizSubmissionId}/questions",
-            get(quiz_submission_questions),
         )
         .route(
             "/courses/{courseId}/quizzes/{quizId}/ip_filters",
