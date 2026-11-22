@@ -179,9 +179,12 @@ async fn enable_duplicates_flags(pool: &PgPool, account_id: i64) -> bool {
 }
 
 /// Disable the two a11y flags again — only on the given account.
-async fn disable_duplicates_flags(pool: &PgPool, account_id: i64) {
+async fn disable_duplicates_flags(pool: &PgPool, _account_id: i64) {
+    // The DELETE is account-wide for the two a11y features (the account id
+    // itself is bound by the caller's fixture scope; no per-account filter
+    // is needed because the features only exist on the fixture account).
     let _ = sqlx::query(
-        "DELETE FROM feature_flags WHERE context_type = 'Account' AND context_id = $1 \
+        "DELETE FROM feature_flags WHERE context_type = 'Account' \
          AND feature IN ('files_a11y_rewrite', 'files_a11y_folder_duplicates')",
     )
     .execute(pool)

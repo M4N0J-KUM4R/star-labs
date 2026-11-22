@@ -3,7 +3,7 @@
  "free": [
   "0111"
  ],
- "max_merged": "0240",
+ "max_merged": "0242",
  "next_available": "0243",
  "reservations": {
   "0001": {
@@ -804,12 +804,12 @@
   "0241": {
    "issue": null,
    "note": "star-account-reports: course_reports table (CourseReportsController, batch-3 parity tail)",
-   "status": "open"
+   "status": "merged"
   },
   "0242": {
    "issue": null,
    "note": "star-sis: sis_import_errors table (SisImportsErrorsApiController, batch-3 parity tail)",
-   "status": "open"
+   "status": "merged"
   }
  }
 }
