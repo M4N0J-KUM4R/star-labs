@@ -106,6 +106,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Canvas serves the LTI Advantage family at /api/lti (outside
         // /api/v1), so the router carries the prefix and is merged here.
         .merge(star_lti::lti_advantage_router())
+        // Canvas serves the login/oauth2 family (auth, token, revoke, jwks)
+        // at the top level, outside /api/v1 (config/routes.rb:3087-3094).
+        .merge(star_auth::login_router())
         .nest("/api/v1", api_router)
         // Canvas serves its GraphQL API at /api/graphql (outside /api/v1).
         .nest("/api/graphql", star_graphql::router())

@@ -68,13 +68,23 @@ use star_common::{ApiError, AppState};
 mod ags_auth;
 mod ags_results;
 mod ags_scores;
+mod authentication;
 mod context_controls;
 mod data_services;
+mod deep_linking;
 mod dynamic_registration;
 mod external_tools;
+pub mod launch_cache;
 mod line_items;
 mod lti_apps;
+mod lti_authorization;
 mod nrps;
+mod resource_links;
+
+/// Issue #95 — the opaque per-user LTI login_hint (Canvas
+/// `Lti::V1p1::Asset.opaque_identifier_for`), exposed so launch-flow callers
+/// and tests can construct hints the platform will accept.
+pub use authentication::opaque_login_hint;
 mod support_helpers;
 mod tool_proxy;
 mod tool_setting;
@@ -741,6 +751,9 @@ pub fn router() -> Router<AppState> {
         .merge(data_services::router())
         .merge(tool_proxy::router())
         .merge(support_helpers::router())
+        // Issue #95 — LTI resource links API (resource_links_controller.rb),
+        // served under /api/v1 like the other course-scoped routes.
+        .merge(resource_links::router())
 }
 
 /// Router for the Canvas `/api/lti` family (LTI Advantage services).
@@ -758,9 +771,18 @@ pub fn lti_advantage_router() -> Router<AppState> {
         .merge(tool_proxy::advantage_router())
         .merge(tool_setting::router())
         .merge(external_tools::advantage_router())
+        // Issue #94 — LTI AGS scores/results and NRPS memberships.
         .merge(ags_scores::router())
         .merge(ags_results::router())
         .merge(nrps::router())
+        // Issue #95 — LTI 1.3 launch flows: OIDC login initiation and
+        // authentication request (authentication_controller.rb), the LTI 2
+        // authorization server (authorization_controller.rb) and the deep
+        // linking content selection (deep_linking_controller.rb, served at
+        // the root like Canvas' default route set).
+        .merge(authentication::advantage_router())
+        .merge(lti_authorization::advantage_router())
+        .merge(deep_linking::advantage_router())
 }
 
 // ---------------------------------------------------------------------------
