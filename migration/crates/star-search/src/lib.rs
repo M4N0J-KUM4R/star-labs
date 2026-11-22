@@ -201,10 +201,19 @@ fn bool_query(params: &[(String, String)], key: &str) -> bool {
 fn one(params: &[(String, String)], key: &str) -> Option<String> {
     params
         .iter()
-        .filter(|(k, _)| k == key)
-        .last()
+        .rev()
+        .find(|(k, _)| k == key)
         .map(|(_, v)| v.clone())
 }
+
+/// Catalog row before the settings-derived flags are attached (all_courses).
+type CatalogRow = (i64, String, String, Option<i64>, DateTime<Utc>);
+
+/// Catalog row with the settings-derived (is_public, open_enrollment) flags.
+type FlaggedCatalogRow = (i64, String, String, Option<i64>, DateTime<Utc>, bool);
+
+/// Assignment row for the smartsearch content sweep.
+type AssignmentRow = (i64, String, Option<String>, String, Option<DateTime<Utc>>);
 
 /// All values of an array query param (`exclude[]`, `filter[]`, ...).
 fn all(params: &[(String, String)], key: &str, array_key: &str) -> Vec<String> {
@@ -352,7 +361,7 @@ async fn context_recipients(
                 continue;
             }
         }
-        if exclude_contexts.iter().any(|x| *x == context.asset_string) {
+        if exclude_contexts.contains(&context.asset_string) {
             continue;
         }
         let lower = context.name.to_lowercase();
@@ -697,7 +706,7 @@ async fn all_courses(
         .max(1);
     let offset = page.saturating_sub(1).saturating_mul(per_page);
 
-    let rows: Vec<(i64, String, String, Option<i64>, DateTime<Utc>)> = sqlx::query_as(
+    let rows: Vec<CatalogRow> = sqlx::query_as(
         "SELECT id, name, course_code, account_id, created_at FROM courses \
          WHERE workflow_state = 'available' AND account_id = $1 \
          ORDER BY created_at ASC, id ASC",
@@ -706,7 +715,7 @@ async fn all_courses(
     .fetch_all(&state.db)
     .await?;
     let catalog_cfg = settings.get("course_catalog").cloned().unwrap_or(json!({}));
-    let courses: Vec<(i64, String, String, Option<i64>, DateTime<Utc>, bool)> = rows
+    let courses: Vec<FlaggedCatalogRow> = rows
         .into_iter()
         .filter_map(|(id, name, course_code, account_id, created_at)| {
             let cfg = catalog_cfg.get(id.to_string());
@@ -728,37 +737,35 @@ async fn all_courses(
         .filter(|c| !public_only || c.5)
         .collect();
     // search: Canvas name_like — name/course_code substring or exact id.
-    let filtered: Vec<&(i64, String, String, Option<i64>, DateTime<Utc>, bool)> =
-        if !search.trim().is_empty() {
-            let q = search.trim().to_lowercase();
-            let by_id = search.trim().parse::<i64>().ok();
-            courses
-                .iter()
-                .filter(|(id, name, code, _, _, _)| {
-                    Some(*id) == by_id
-                        || name.to_lowercase().contains(&q)
-                        || code.to_lowercase().contains(&q)
-                })
-                .collect()
-        } else {
-            courses.iter().collect()
-        };
-    let open_filtered: Vec<&&(i64, String, String, Option<i64>, DateTime<Utc>, bool)> =
-        if open_enrollment_only {
-            // open_enrollment flag (settings map, same stand-in as is_public).
-            filtered
-                .iter()
-                .filter(|c| {
-                    catalog_cfg
-                        .get(c.0.to_string())
-                        .and_then(|cfg| cfg.get("open_enrollment"))
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                })
-                .collect()
-        } else {
-            filtered.iter().collect()
-        };
+    let filtered: Vec<&FlaggedCatalogRow> = if !search.trim().is_empty() {
+        let q = search.trim().to_lowercase();
+        let by_id = search.trim().parse::<i64>().ok();
+        courses
+            .iter()
+            .filter(|(id, name, code, _, _, _)| {
+                Some(*id) == by_id
+                    || name.to_lowercase().contains(&q)
+                    || code.to_lowercase().contains(&q)
+            })
+            .collect()
+    } else {
+        courses.iter().collect()
+    };
+    let open_filtered: Vec<&&FlaggedCatalogRow> = if open_enrollment_only {
+        // open_enrollment flag (settings map, same stand-in as is_public).
+        filtered
+            .iter()
+            .filter(|c| {
+                catalog_cfg
+                    .get(c.0.to_string())
+                    .and_then(|cfg| cfg.get("open_enrollment"))
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            })
+            .collect()
+    } else {
+        filtered.iter().collect()
+    };
     let items: Vec<Value> = open_filtered
         .iter()
         .skip(offset as usize)
@@ -995,16 +1002,15 @@ async fn smart_search(
             }
         }
         if allowed("assignments") {
-            let rows: Vec<(i64, String, Option<String>, String, Option<DateTime<Utc>>)> =
-                sqlx::query_as(
-                    "SELECT id, title, description, workflow_state, due_at FROM assignments \
+            let rows: Vec<AssignmentRow> = sqlx::query_as(
+                "SELECT id, title, description, workflow_state, due_at FROM assignments \
                      WHERE course_id = $1 AND workflow_state <> 'deleted' \
                        AND (LOWER(title) LIKE $2 OR LOWER(COALESCE(description, '')) LIKE $2)",
-                )
-                .bind(course_id)
-                .bind(&pattern)
-                .fetch_all(&state.db)
-                .await?;
+            )
+            .bind(course_id)
+            .bind(&pattern)
+            .fetch_all(&state.db)
+            .await?;
             for (id, title, body, wf, due_at) in rows {
                 let title_hit = title.to_lowercase().contains(&q.trim().to_lowercase());
                 results.push(search_result_json(
