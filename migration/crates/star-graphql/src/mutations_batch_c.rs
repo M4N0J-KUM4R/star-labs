@@ -48,6 +48,7 @@
 use async_graphql::{Context, InputObject, Object, SimpleObject, ID};
 use chrono::{DateTime, Utc};
 
+use crate::mutations_batch_b::SuccessPayload;
 use crate::GraphQLContext;
 
 // ---------------------------------------------------------------------------
@@ -99,18 +100,13 @@ fn validation_errors(attribute: Option<&str>, message: &str) -> Vec<BatchCError>
 }
 
 #[derive(Debug, Clone, SimpleObject)]
-pub struct SuccessPayload {
-    pub success: bool,
-}
-
-#[derive(Debug, Clone, SimpleObject)]
-pub struct DiscussionTopicPayload {
-    pub discussion_topic: Option<BatchCDiscussionTopic>,
+pub struct UpdateDiscussionTopicPayload {
+    pub discussion_topic: Option<UpdatedDiscussionTopic>,
     pub errors: Vec<BatchCError>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
-pub struct BatchCDiscussionTopic {
+pub struct UpdatedDiscussionTopic {
     pub id: ID,
     pub title: String,
     pub message: Option<String>,
@@ -132,13 +128,13 @@ pub struct DeleteDiscussionTopicInput {
 }
 
 #[derive(Debug, Clone, SimpleObject)]
-pub struct DiscussionEntryPayload {
-    pub discussion_entry: Option<BatchCDiscussionEntry>,
+pub struct UpdateDiscussionEntryPayload {
+    pub discussion_entry: Option<UpdatedDiscussionEntry>,
     pub errors: Vec<BatchCError>,
 }
 
 #[derive(Debug, Clone, SimpleObject)]
-pub struct BatchCDiscussionEntry {
+pub struct UpdatedDiscussionEntry {
     pub id: ID,
     pub discussion_topic_id: ID,
     pub message: Option<String>,
@@ -299,7 +295,7 @@ impl BatchCMutations {
         &self,
         ctx: &Context<'_>,
         input: UpdateDiscussionTopicInput,
-    ) -> Result<DiscussionTopicPayload, async_graphql::Error> {
+    ) -> Result<UpdateDiscussionTopicPayload, async_graphql::Error> {
         update_discussion_topic(ctx.data::<GraphQLContext>()?, input).await
     }
 
@@ -319,7 +315,7 @@ impl BatchCMutations {
         &self,
         ctx: &Context<'_>,
         input: UpdateDiscussionEntryInput,
-    ) -> Result<DiscussionEntryPayload, async_graphql::Error> {
+    ) -> Result<UpdateDiscussionEntryPayload, async_graphql::Error> {
         update_discussion_entry(ctx.data::<GraphQLContext>()?, input).await
     }
 
@@ -500,7 +496,7 @@ struct PreferenceUpsertRow {
 async fn update_discussion_topic(
     gctx: &GraphQLContext,
     input: UpdateDiscussionTopicInput,
-) -> Result<DiscussionTopicPayload, async_graphql::Error> {
+) -> Result<UpdateDiscussionTopicPayload, async_graphql::Error> {
     let topic_id = parse_id(&input.discussion_topic_id, "discussion topic")?;
     let topic: Option<(i64,)> = sqlx::query_as(
         "SELECT course_id FROM discussion_topics \
@@ -521,7 +517,7 @@ async fn update_discussion_topic(
     }
     if let Some(t) = &input.title {
         if t.trim().is_empty() {
-            return Ok(DiscussionTopicPayload {
+            return Ok(UpdateDiscussionTopicPayload {
                 discussion_topic: None,
                 errors: validation_errors(Some("title"), "title cannot be blank"),
             });
@@ -549,8 +545,8 @@ async fn update_discussion_topic(
     let Some(row) = row else {
         return Err(async_graphql::Error::new("discussion topic not found"));
     };
-    Ok(DiscussionTopicPayload {
-        discussion_topic: Some(BatchCDiscussionTopic {
+    Ok(UpdateDiscussionTopicPayload {
+        discussion_topic: Some(UpdatedDiscussionTopic {
             id: input.discussion_topic_id.clone(),
             title: row.title,
             message: row.message,
@@ -598,7 +594,7 @@ async fn delete_discussion_topic(
 async fn update_discussion_entry(
     gctx: &GraphQLContext,
     input: UpdateDiscussionEntryInput,
-) -> Result<DiscussionEntryPayload, async_graphql::Error> {
+) -> Result<UpdateDiscussionEntryPayload, async_graphql::Error> {
     let entry_id = parse_id(&input.discussion_entry_id, "discussion entry")?;
     let entry: Option<(i64, Option<i64>)> = sqlx::query_as(
         "SELECT topic_id, user_id FROM discussion_entries \
@@ -619,7 +615,7 @@ async fn update_discussion_entry(
         return Err(async_graphql::Error::new("insufficient permission"));
     }
     if input.message.trim().is_empty() {
-        return Ok(DiscussionEntryPayload {
+        return Ok(UpdateDiscussionEntryPayload {
             discussion_entry: None,
             errors: validation_errors(Some("message"), "message cannot be blank"),
         });
@@ -636,8 +632,8 @@ async fn update_discussion_entry(
     let Some(row) = row else {
         return Err(async_graphql::Error::new("discussion entry not found"));
     };
-    Ok(DiscussionEntryPayload {
-        discussion_entry: Some(BatchCDiscussionEntry {
+    Ok(UpdateDiscussionEntryPayload {
+        discussion_entry: Some(UpdatedDiscussionEntry {
             id: input.discussion_entry_id.clone(),
             discussion_topic_id: ID(topic_id.to_string()),
             message: row.message,
