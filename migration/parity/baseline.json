@@ -1,4 +1,4 @@
 {
-  "implemented_rest_routes": 990,
+  "implemented_rest_routes": 1002,
   "policy": "report fails when implemented REST routes fall below this number"
 }

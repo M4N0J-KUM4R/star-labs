@@ -6,7 +6,7 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 990 | 1403 | 70.6% |
+| REST API routes | 1002 | 1403 | 71.4% |
 | REST routes referenced from `ui/` | 361 | 503 | 71.8% |
 | GraphQL files | 1 | 390 | 0.3% |
 | GraphQL object types | 28 | 170 | 16.5% |
@@ -17,9 +17,9 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | js_env files | 0 | 124 | 0.0% |
 | Schema tables (vs 688 Canvas models) | 370 | 688 | n/a |
 
-Implemented REST route count: **990 / 1403** (70.6%).
+Implemented REST route count: **1002 / 1403** (71.4%).
 
-Star registrations: 1200 route/method pairs from 991 `.route(...)` calls (0 unparsed); 208 have no Canvas match and are listed as extras below.
+Star registrations: 1212 route/method pairs from 1003 `.route(...)` calls (0 unparsed); 208 have no Canvas match and are listed as extras below.
 
 Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 
@@ -58,6 +58,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `assignment_overrides` | 10 | 10 | 100.0% |
 | `calendar_events_api` | 10 | 15 | 66.7% |
 | `discussion_topics` | 10 | 10 | 100.0% |
+| `media_objects` | 10 | 10 | 100.0% |
 | `peer_reviews_api` | 9 | 9 | 100.0% |
 | `polling/poll_sessions` | 9 | 9 | 100.0% |
 | `account_notifications` | 8 | 8 | 100.0% |
@@ -80,6 +81,7 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `learn_platform` | 6 | 6 | 100.0% |
 | `lti/context_controls` | 6 | 6 | 100.0% |
 | `lti/resource_links` | 6 | 6 | 100.0% |
+| `media_tracks` | 6 | 6 | 100.0% |
 | `quizzes/quiz_groups` | 6 | 6 | 100.0% |
 | `release_notes` | 6 | 8 | 75.0% |
 | `sections` | 6 | 9 | 66.7% |
@@ -111,7 +113,6 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `epub_exports` | 3 | 3 | 100.0% |
 | `jobs` | 3 | 3 | 100.0% |
 | `lti/ims/authentication` | 3 | 3 | 100.0% |
-| `media_objects` | 3 | 10 | 30.0% |
 | `rubric_assessments` | 3 | 3 | 100.0% |
 | `rubric_associations` | 3 | 3 | 100.0% |
 | `rubrics` | 3 | 3 | 100.0% |
@@ -138,7 +139,6 @@ Canvas source sizes: 390 GraphQL files (170 object types, 110 mutations), 688 mo
 | `inst_access_tokens` | 1 | 1 | 100.0% |
 | `lti/account_lookup` | 1 | 1 | 100.0% |
 | `lti/ims/scores` | 1 | 1 | 100.0% |
-| `media_tracks` | 1 | 6 | 16.7% |
 | `profile` | 1 | 2 | 50.0% |
 | `quizzes/quiz_statistics` | 1 | 1 | 100.0% |
 | `search` | 1 | 4 | 25.0% |

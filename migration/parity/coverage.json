@@ -356,13 +356,13 @@
       "total": 13
     },
     "media_objects": {
-      "implemented": 3,
-      "pct": 30.0,
+      "implemented": 10,
+      "pct": 100.0,
       "total": 10
     },
     "media_tracks": {
-      "implemented": 1,
-      "pct": 16.7,
+      "implemented": 6,
+      "pct": 100.0,
       "total": 6
     },
     "migration_issues": {
@@ -1254,9 +1254,49 @@
     {
       "action": "index",
       "controller": "media_objects",
+      "normalized_path": "media_objects",
+      "path": "/api/v1/media_objects",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "media_objects",
+      "normalized_path": "courses/{}/media_objects",
+      "path": "/api/v1/courses/:course_id/media_objects",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "media_objects",
+      "normalized_path": "groups/{}/media_objects",
+      "path": "/api/v1/groups/:group_id/media_objects",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "media_objects",
       "normalized_path": "media_attachments",
       "path": "/api/v1/media_attachments",
       "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "media_objects",
+      "normalized_path": "courses/{}/media_attachments",
+      "path": "/api/v1/courses/:course_id/media_attachments",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "media_objects",
+      "normalized_path": "groups/{}/media_attachments",
+      "path": "/api/v1/groups/:group_id/media_attachments",
+      "ui_referenced": false,
       "verb": "GET"
     },
     {
@@ -8158,6 +8198,22 @@
     {
       "action": "update_media_object",
       "controller": "media_objects",
+      "normalized_path": "media_objects/{}",
+      "path": "/api/v1/media_objects/:media_object_id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "create_media_object",
+      "controller": "media_objects",
+      "normalized_path": "media_objects",
+      "path": "/api/v1/media_objects",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "update_media_object",
+      "controller": "media_objects",
       "normalized_path": "media_attachments/{}",
       "path": "/api/v1/media_attachments/:attachment_id",
       "ui_referenced": true,
@@ -8178,6 +8234,46 @@
       "path": "/api/v1/media_objects/:media_object_id/media_tracks",
       "ui_referenced": false,
       "verb": "GET"
+    },
+    {
+      "action": "update",
+      "controller": "media_tracks",
+      "normalized_path": "media_objects/{}/media_tracks",
+      "path": "/api/v1/media_objects/:media_object_id/media_tracks",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "create_asr",
+      "controller": "media_tracks",
+      "normalized_path": "media_objects/{}/asr",
+      "path": "/api/v1/media_objects/:media_object_id/asr",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "index",
+      "controller": "media_tracks",
+      "normalized_path": "media_attachments/{}/media_tracks",
+      "path": "/api/v1/media_attachments/:attachment_id/media_tracks",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "update",
+      "controller": "media_tracks",
+      "normalized_path": "media_attachments/{}/media_tracks",
+      "path": "/api/v1/media_attachments/:attachment_id/media_tracks",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "create_asr",
+      "controller": "media_tracks",
+      "normalized_path": "media_attachments/{}/asr",
+      "path": "/api/v1/media_attachments/:attachment_id/asr",
+      "ui_referenced": false,
+      "verb": "POST"
     },
     {
       "action": "index",
@@ -8912,16 +9008,16 @@
     "graphql_mutations_implemented": 2,
     "graphql_types": 170,
     "graphql_types_implemented": 28,
-    "implemented_rest_pct": 70.6,
-    "implemented_rest_routes": 990,
+    "implemented_rest_pct": 71.4,
+    "implemented_rest_routes": 1002,
     "js_env_call_sites": 490,
     "js_env_files": 124,
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
     "star_extras": 208,
-    "star_route_calls": 991,
-    "star_route_registrations": 1200,
+    "star_route_calls": 1003,
+    "star_route_registrations": 1212,
     "star_tables": 370,
     "star_unparsed_calls": 0,
     "ui_feature_dirs": 232,
