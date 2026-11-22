@@ -3454,6 +3454,7 @@ dependencies = [
  "star-common",
  "star-db",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

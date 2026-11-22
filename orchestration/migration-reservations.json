@@ -4,7 +4,7 @@
   "0111"
  ],
  "max_merged": "0240",
- "next_available": "0241",
+ "next_available": "0242",
  "reservations": {
   "0001": {
    "issue": null,
@@ -583,12 +583,12 @@
   },
   "0117": {
    "issue": 67,
-   "note": "feature flags tail (#67 merged via PR#152 WITHOUT migration; number never used — coordinator may release or reuse)",
+   "note": "feature flags tail (#67 merged via PR#152 WITHOUT migration; number never used \u2014 coordinator may release or reuse)",
    "status": "open"
   },
   "0118": {
    "issue": 55,
-   "note": "assignments tail (#55 merged via PR#139 without adding 0118; number never used — coordinator may release)",
+   "note": "assignments tail (#55 merged via PR#139 without adding 0118; number never used \u2014 coordinator may release)",
    "status": "merged"
   },
   "0119": {
@@ -800,6 +800,11 @@
    "issue": null,
    "note": "star-lti: update-request columns (batch-3, commit fd0fbe3)",
    "status": "merged"
+  },
+  "0241": {
+   "issue": null,
+   "note": "star-account-reports: course_reports table (CourseReportsController, batch-3 parity tail)",
+   "status": "open"
   }
  }
 }

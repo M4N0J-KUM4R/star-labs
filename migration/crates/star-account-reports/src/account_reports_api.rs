@@ -100,7 +100,7 @@ pub fn router() -> Router<AppState> {
 /// perform that action"}]}`. `star_common::ApiError` renders a plain text body,
 /// so the JSON shapes are restored here.
 #[derive(Debug)]
-enum ReportError {
+pub(crate) enum ReportError {
     Api(ApiError),
 }
 
