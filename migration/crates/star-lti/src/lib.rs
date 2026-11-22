@@ -78,6 +78,7 @@ pub mod launch_cache;
 mod line_items;
 mod lti_apps;
 mod lti_authorization;
+mod lti_gaps;
 mod nrps;
 mod resource_links;
 
@@ -657,6 +658,7 @@ fn resolve_workflow_state(value: Option<&str>) -> Result<(&'static str, &'static
 /// Build the LTI router (mounted under `/api/v1` by star-http).
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(lti_gaps::lti_gaps_routes())
         .route(
             "/accounts/{account_id}/lti_registrations",
             get(list_registrations).post(create_registration),
