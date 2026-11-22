@@ -290,10 +290,12 @@ pub fn verify_token(token: &str, secret: &str) -> Option<Claims> {
 // ---------------------------------------------------------------------------
 
 mod progress_jwts;
+mod small_controllers;
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(progress_jwts::progress_jwt_routes())
+        .merge(small_controllers::small_controllers_routes())
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
         .route("/auth/me", get(me))
@@ -2580,6 +2582,24 @@ struct JwksQuery {
 /// (security_controller.rb:75-95, route routes.rb:3094): the public keyset
 /// in JWKS shape with a Cache-Control header, or — with `rotation_check` — a
 /// report of whether each key's kid-encoded date is from the current month.
+/// The platform JWKS as plain JSON (shared by the OAuth2 and LTI security
+/// endpoints).
+pub(crate) async fn oauth2_jwks_json() -> Json<serde_json::Value> {
+    match oauth_signing_key() {
+        Ok(key) => Json(serde_json::json!({
+            "keys": [{
+                "kty": "RSA",
+                "alg": "RS256",
+                "use": "sig",
+                "kid": key.kid,
+                "n": key.n,
+                "e": key.e,
+            }]
+        })),
+        Err(_) => Json(serde_json::json!({ "keys": [] })),
+    }
+}
+
 async fn oauth2_jwks(Query(params): Query<JwksQuery>) -> Response {
     if params.rotation_check.is_some() {
         let today = Utc::now();
