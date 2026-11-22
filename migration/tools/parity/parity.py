@@ -39,7 +39,14 @@ STAR_METHOD_RE = re.compile(r"\b(get|post|put|delete|patch|head|options)\s*\(")
 EACH_RE = re.compile(r"^\s*(.+?)\.each\s+do\s*\|([^|]*)\|\s*$")
 WORD_ARRAY_RE = re.compile(r"%w\[([^\]]*)\]")
 RESOURCES_RE = re.compile(r"^\s*resources\s+:([a-z_][a-z0-9_]*)\b(.*)$")
-PATH_OPT_RE = re.compile(r"\bpath:\s*[\"']([^\"']*)[\"']")
+CONCERN_DEF_RE = re.compile(
+    r"^\s*concern\s+:([a-z_][a-z0-9_]*)\b[^\n]*\bdo\b\s*(?:#.*)?$")
+CONCERN_USE_RE = re.compile(
+    r"^\s*concerns?\s+:([a-z_][a-z0-9_]*(?:\s*,\s*:[a-z_][a-z0-9_]*)*)"
+    r"(?!\s+do\b)(.*)$")
+MEMBER_BLOCK_RE = re.compile(r"^\s*(member|collection)\s+do\b")
+PATH_OPT_RE = re.compile(
+    r"\bpath:\s*(?:[\"']([^\"']*)[\"']|:([a-z_][a-z0-9_]*))")
 ONLY_OPT_RE = re.compile(r"\bonly:\s*(%i\[([^\]]*)\]|\[([^\]]*)\]|:([A-Za-z0-9_]+))")
 EXCEPT_OPT_RE = re.compile(r"\bexcept:\s*(%i\[([^\]]*)\]|\[([^\]]*)\]|:([A-Za-z0-9_]+))")
 INTERP_RE = re.compile(r"#\{([^{}]*)\}")
@@ -157,14 +164,28 @@ def _join_statement(lines, index):
 
 
 def _frame(indent, controller=None, variables=None, bindings=None,
-           resource=None):
+           resource=None, base=None):
     return {
         "indent": indent,
         "controller": controller,
         "variables": variables if variables is not None else {},
         "bindings": bindings if bindings is not None else [{}],
         "resource": resource,
+        "base": base,
     }
+
+
+def _route_base(stack, prefix):
+    """The path prefix Rails appends a relative route to.
+
+    A `resources ... do` frame rebinds it to the collection path, and a
+    `member`/`collection` frame inside that rebinds it again; every other
+    block (scope, constraints, if) inherits whatever the enclosing frame set.
+    """
+    for frame in reversed(stack):
+        if frame["base"]:
+            return frame["base"]
+    return prefix
 
 
 def _pluralize(word):
@@ -273,21 +294,33 @@ def _build_resource_routes(name, options, stack, prefix):
         controller = _scope_controller(stack) or name
     only = _action_set(ONLY_OPT_RE.search(options))
     except_ = _action_set(EXCEPT_OPT_RE.search(options))
-    segment = path_match.group(1) if path_match else name
+    segment = (path_match.group(1) or path_match.group(2)) \
+        if path_match else name
 
     parent = None
     for frame in reversed(stack):
         if frame["resource"]:
             parent = frame["resource"]
             break
+    base = _route_base(stack, prefix).rstrip("/")
     if parent:
-        collection = parent["nested"] + "/" + segment.lstrip("/")
+        inherited = {parent["collection"].rstrip("/"): parent["nested"],
+                     parent["nested"].rstrip("/"): parent["nested"],
+                     parent["member"].rstrip("/"): parent["member"]}.get(base)
     else:
-        collection = segment
-    collection = re.sub(r"/{2,}", "/", collection).strip("/")
+        inherited = None
+    # `resources :y` inside `resources :x` nests under :x_id (Rails' parent
+    # segment); inside `member do` it hangs off /:id; anywhere else it is
+    # relative to whatever base the enclosing block established.
+    collection = re.sub(
+        r"/{2,}", "/",
+        (inherited if inherited is not None else base)
+        + "/" + segment.lstrip("/"))
     member = collection + "/:id"
     resource = {
         "name": name,
+        "collection": collection,
+        "member": member,
         "nested": collection + "/:" + _singularize(name) + "_id",
         "controller": controller,
     }
@@ -319,9 +352,177 @@ def _build_resource_routes(name, options, stack, prefix):
     return routes, resource
 
 
+def _block_body(lines, start, start_indent):
+    """Lines strictly between a Ruby block opener and its matching `end`."""
+    body = []
+    i = start
+    while i < len(lines):
+        line = lines[i]
+        indent = len(line) - len(line.lstrip())
+        if END_RE.match(line) and indent <= start_indent:
+            return body, i + 1
+        body.append(line)
+        i += 1
+    return body, i
+
+
+def _extract_concerns(lines):
+    """`concern :name do ... end` bodies, keyed by name.
+
+    Rails shares route groups between API scopes this way; the same body is
+    re-read in the enclosing scope of every `concerns :name` use, so a
+    definition contributes nothing on its own.
+    """
+    concerns = {}
+    i = 0
+    while i < len(lines):
+        m = CONCERN_DEF_RE.match(lines[i])
+        if m:
+            indent = len(lines[i]) - len(lines[i].lstrip())
+            body, i = _block_body(lines, i + 1, indent)
+            concerns[m.group(1)] = body
+            continue
+        i += 1
+    return concerns
+
+
+def _scan_lines(lines, i, end_index, stop_indent, prefix, stack, routes,
+                concerns, skip_draw=False):
+    """Route statements in `lines[i:end_index]` under `prefix`/`stack`.
+
+    `stop_indent` ends a real Ruby block; concern bodies are slices with the
+    closing `end` removed, so they pass None and run to `end_index`.
+    `skip_draw` is the web-route pass: nested `ApiRouteSet.draw` blocks belong
+    to the API manifest and must not be counted twice.
+    """
+    while i < end_index:
+        line = lines[i]
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+
+        if skip_draw and DRAW_RE.match(line):
+            _, i = _block_body(lines, i + 1, indent)
+            continue
+
+        if END_RE.match(line):
+            if stop_indent is not None and indent <= stop_indent:
+                break
+            while len(stack) > 1 and stack[-1]["indent"] >= indent:
+                stack.pop()
+            i += 1
+            continue
+
+        if not stripped or stripped.startswith("#"):
+            i += 1
+            continue
+
+        concern_use = CONCERN_USE_RE.match(line)
+        if concern_use:
+            names = [name.strip().lstrip(":") for name in
+                     concern_use.group(1).split(",")]
+            i += 1
+            for name in names:
+                body = concerns.get(name)
+                if body is None:
+                    continue
+                _scan_lines(body, 0, len(body), None, prefix,
+                            [dict(frame, bindings=list(frame["bindings"]),
+                                  variables=dict(frame["variables"]))
+                             for frame in stack],
+                            routes, concerns, skip_draw)
+            continue
+
+        if VERB_RE.match(line):
+            statement, i = _join_statement(lines, i)
+            i += 1
+            routes.extend(
+                _parse_route_statement(statement, prefix, stack))
+            continue
+
+        loop_values = _parse_each_values(stripped)
+        if loop_values is not None:
+            stack.append(_frame(
+                indent, None, dict(stack[-1]["variables"]),
+                _combine_bindings(stack[-1]["bindings"], loop_values)))
+            i += 1
+            continue
+
+        member_block = MEMBER_BLOCK_RE.match(line)
+        if member_block and stack[-1]["resource"] is not None:
+            resource = stack[-1]["resource"]
+            kind = member_block.group(1)
+            stack.append(_frame(
+                indent, resource["controller"], dict(stack[-1]["variables"]),
+                stack[-1]["bindings"], resource,
+                base=resource["member"] if kind == "member"
+                else resource["collection"]))
+            i += 1
+            continue
+
+        if RESOURCES_RE.match(line):
+            statement, i = _join_statement(lines, i)
+            i += 1
+            match = RESOURCES_RE.match(statement)
+            resource_routes, resource = _build_resource_routes(
+                match.group(1), match.group(2), stack, prefix)
+            routes.extend(resource_routes)
+            if BLOCK_RE.search(statement):
+                # Rails nests a `resources :x do ... end` block's own route
+                # strings under the parent segment (`/courses/:course_id/
+                # grading_schemes` in Canvas' web roster tabs), so the frame
+                # base is the nested path, not the collection.
+                stack.append(_frame(
+                    indent, resource["controller"],
+                    dict(stack[-1]["variables"]), stack[-1]["bindings"],
+                    resource, base=resource["nested"]))
+            continue
+
+        conditional = COND_ASSIGN_RE.match(line)
+        if conditional:
+            target, var, equals, then_var, else_template = \
+                conditional.groups()
+            stack[-1]["variables"][target] = {
+                "var": var,
+                "equals": equals,
+                "then": then_var,
+                "else": else_template,
+            }
+            i += 1
+            continue
+
+        assign = ASSIGN_RE.match(line)
+        if assign:
+            stack[-1]["variables"][assign.group(1)] = assign.group(2)
+            i += 1
+            continue
+
+        condition = COND_EQ_RE.match(line)
+        if condition:
+            kind, var, equals = condition.groups()
+            kept = [
+                binding for binding in stack[-1]["bindings"]
+                if (binding.get(var) == equals) == (kind == "if")
+            ]
+            stack.append(_frame(indent, None, dict(stack[-1]["variables"]),
+                                kept))
+            i += 1
+            continue
+
+        if BLOCK_RE.search(line) or COND_RE.match(line):
+            ctrl = None
+            m = SCOPE_CTRL_RE.search(line)
+            if m:
+                ctrl = m.group(1) or m.group(2)
+            stack.append(_frame(indent, ctrl, dict(stack[-1]["variables"]),
+                                stack[-1]["bindings"]))
+        i += 1
+    return i
+
+
 def parse_canvas_routes(routes_file):
     lines = routes_file.read_text(encoding="utf-8", errors="replace").splitlines()
     routes = []
+    concerns = _extract_concerns(lines)
     i = 0
     while i < len(lines):
         prefix = _draw_prefix(lines[i])
@@ -332,94 +533,42 @@ def parse_canvas_routes(routes_file):
         start_indent = len(lines[i]) - len(lines[i].lstrip())
         stack = [_frame(start_indent)]
         i += 1
-        while i < len(lines):
-            line = lines[i]
-            stripped = line.strip()
-            indent = len(line) - len(line.lstrip())
-
-            if END_RE.match(line):
-                if indent <= start_indent:
-                    break
-                while len(stack) > 1 and stack[-1]["indent"] >= indent:
-                    stack.pop()
-                i += 1
-                continue
-
-            if not stripped or stripped.startswith("#"):
-                i += 1
-                continue
-
-            if VERB_RE.match(line):
-                statement, i = _join_statement(lines, i)
-                i += 1
-                routes.extend(
-                    _parse_route_statement(statement, prefix, stack))
-                continue
-
-            loop_values = _parse_each_values(stripped)
-            if loop_values is not None:
-                stack.append(_frame(
-                    indent, None, dict(stack[-1]["variables"]),
-                    _combine_bindings(stack[-1]["bindings"], loop_values)))
-                i += 1
-                continue
-
-            if RESOURCES_RE.match(line):
-                statement, i = _join_statement(lines, i)
-                i += 1
-                match = RESOURCES_RE.match(statement)
-                resource_routes, resource = _build_resource_routes(
-                    match.group(1), match.group(2), stack, prefix)
-                routes.extend(resource_routes)
-                if BLOCK_RE.search(statement):
-                    stack.append(_frame(
-                        indent, resource["controller"],
-                        dict(stack[-1]["variables"]), stack[-1]["bindings"],
-                        resource))
-                continue
-
-            conditional = COND_ASSIGN_RE.match(line)
-            if conditional:
-                target, var, equals, then_var, else_template = \
-                    conditional.groups()
-                stack[-1]["variables"][target] = {
-                    "var": var,
-                    "equals": equals,
-                    "then": then_var,
-                    "else": else_template,
-                }
-                i += 1
-                continue
-
-            assign = ASSIGN_RE.match(line)
-            if assign:
-                stack[-1]["variables"][assign.group(1)] = assign.group(2)
-                i += 1
-                continue
-
-            condition = COND_EQ_RE.match(line)
-            if condition:
-                kind, var, equals = condition.groups()
-                kept = [
-                    binding for binding in stack[-1]["bindings"]
-                    if (binding.get(var) == equals) == (kind == "if")
-                ]
-                stack.append(_frame(indent, None, dict(stack[-1]["variables"]),
-                                    kept))
-                i += 1
-                continue
-
-            if BLOCK_RE.search(line) or COND_RE.match(line):
-                ctrl = None
-                m = SCOPE_CTRL_RE.search(line)
-                if m:
-                    ctrl = m.group(1) or m.group(2)
-                stack.append(_frame(indent, ctrl, dict(stack[-1]["variables"]),
-                                    stack[-1]["bindings"]))
-            i += 1
+        i = _scan_lines(lines, i, len(lines), start_indent, prefix, stack,
+                        routes, concerns)
         i += 1
 
     return routes
+
+
+# The application route set: everything in here that is not inside an
+# ApiRouteSet block is a Canvas *web* route (HTML/JS-facing), which the UI
+# shell and some star crates answer with JSON.
+WEB_DRAW_RE = re.compile(
+    r"^\s*[A-Za-z0-9_:]+\.routes\.draw\b[^\n]*\bdo\b\s*$")
+
+
+def parse_canvas_web_routes(routes_file):
+    """Canvas routes outside ApiRouteSet: the same file, the opposite filter."""
+    lines = routes_file.read_text(encoding="utf-8", errors="replace").splitlines()
+    concerns = _extract_concerns(lines)
+    routes = []
+    for index, line in enumerate(lines):
+        if not WEB_DRAW_RE.match(line):
+            continue
+        indent = len(line) - len(line.lstrip())
+        stack = [_frame(indent)]
+        _scan_lines(lines, index + 1, len(lines), indent, "", stack, routes,
+                    concerns, skip_draw=True)
+        break
+    seen = set()
+    unique = []
+    for route in routes:
+        key = (route["verb"], route["path"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(route)
+    return unique
 
 
 def _parse_route_statement(statement, prefix, stack):
@@ -435,12 +584,24 @@ def _parse_route_statement(statement, prefix, stack):
         verbs = [token.upper()]
 
     rest = statement[m.end():].lstrip()
+    base = _route_base(stack, prefix)
+    symbol_action = None
     if rest[:1] in ("\"", "'"):
         sm = STR_RE.match(rest)
         raw_path = sm.group(1) if sm else None
     else:
         var = re.match(r"([A-Za-z_][A-Za-z0-9_]*)(?:\.to_s)?\s*[,)]", rest)
         raw_path = stack[-1]["variables"].get(var.group(1)) if var else None
+        if raw_path is None:
+            # Rails' shorthand: `get :questions` inside a `resources` block is
+            # a MEMBER route at <collection>/:id/questions answered by the
+            # block's controller. A quoted path never takes this branch.
+            sym = re.match(r":([A-Za-z_][A-Za-z0-9_]*)\s*(?:[,)]|$)", rest)
+            if sym and stack[-1]["resource"] is not None:
+                symbol_action = sym.group(1)
+                raw_path = stack[-1]["resource"]["member"] + "/" + symbol_action
+            else:
+                return []
     if not raw_path:
         return []
 
@@ -457,6 +618,8 @@ def _parse_route_statement(statement, prefix, stack):
 
     am = ACTION_RE.search(statement)
     action = (am.group(1) or am.group(2)) if am else None
+    if action is None and symbol_action:
+        action = symbol_action
     if action is None or controller is None:
         tm = TO_RE.search(statement)
         if tm:
@@ -472,7 +635,7 @@ def _parse_route_statement(statement, prefix, stack):
             if path.startswith("/"):
                 original = path
             else:
-                original = prefix.rstrip("/") + "/" + path.lstrip("/")
+                original = base.rstrip("/") + "/" + path.lstrip("/")
             original = re.sub(r"/{2,}", "/", original)
             key = (verb, original, controller, action)
             if key in seen:
@@ -530,8 +693,11 @@ def count_canvas_sources(canvas_src):
 
     return {
         "graphql_files": len(graphql),
-        "graphql_types": len(types),
-        "graphql_mutations": len(mutations),
+        # FILE counts, not the parity denominators. One *_type.rb can declare
+        # several types, so the denominators are the name inventories
+        # (graphql_type_names / graphql_mutation_names), never these.
+        "graphql_type_files": len(types),
+        "graphql_mutation_files": len(mutations),
         "models": len(_walk_files(canvas_src / "app" / "models", {".rb"})),
         "ui_feature_dirs": len(feature_dirs),
         "js_tsx_files": len(ui_files),
@@ -910,21 +1076,27 @@ def build_manifest(canvas_src):
         raise SystemExit("not a Canvas checkout: %s" % routes_file)
 
     routes = parse_canvas_routes(routes_file)
+    web = parse_canvas_web_routes(routes_file)
     ui_refs, ui_literals = scan_ui_api_references(canvas_src)
     for route in routes:
         route["ui_referenced"] = route_referenced(route["normalized_path"], ui_refs)
 
     counts = count_canvas_sources(canvas_src)
     counts["api_routes"] = len(routes)
+    counts["web_routes"] = len(web)
     counts["controllers"] = len({r["controller"] for r in routes if r["controller"]})
     counts["ui_api_ref_strings"] = ui_literals
     counts["ui_api_ref_paths"] = len(ui_refs)
 
     return {
         "source": "canvas-lms config/routes.rb (ApiRouteSet blocks; resources "
-                  "and %w context loops expanded)",
+                  "and %w context loops expanded; concerns and member/collection "
+                  "blocks expanded)",
         "normalization": "strip /api/v1; :param, {param}, #{...} -> {}",
         "routes": routes,
+        # Canvas' non-API route set. Star endpoints that match here are web/UI
+        # ports, not REST parity items; see classify_extras.
+        "web_routes": web,
         "counts": counts,
         "graphql_type_names": canvas_graphql_type_names(canvas_src),
         "graphql_mutation_names": canvas_graphql_mutation_names(canvas_src),
@@ -950,6 +1122,63 @@ def cmd_manifest(args):
 # report
 # ---------------------------------------------------------------------------
 
+EXTRA_CLASSES = (
+    "api_verb_mismatch",   # Canvas' API has this path, star binds another verb
+    "web_exact",           # Canvas has this path+verb, but as a WEB route
+    "web_verb_mismatch",   # Canvas has the path as a web route, other verb
+    "web_nested",          # Canvas has it nested under a parent (web)
+    "api_nested",          # manifest has it nested under a parent (API)
+    "absent",              # nowhere in Canvas: invented or intentional custom
+)
+
+
+def classify_extras(extras, canvas_routes, web_routes):
+    """Say WHY each unmatched star registration is unmatched.
+
+    Before this existed every one of them was reported as a bare "extra", which
+    conflated three different jobs: fix the verb, port a Canvas web endpoint,
+    or delete a route Canvas never had.
+    """
+    api_verbs = {}
+    for route in canvas_routes:
+        api_verbs.setdefault(route["normalized_path"], set()).add(route["verb"])
+    web_verbs = {}
+    for route in web_routes:
+        web_verbs.setdefault(route["normalized_path"], set()).add(route["verb"])
+    # endswith("/" + path) is the nesting test: Canvas nests most member
+    # routes under a context, star registers them at the top level.
+    api_paths = sorted(api_verbs, key=len, reverse=True)
+    web_paths = sorted(web_verbs, key=len, reverse=True)
+
+    web_keys = {(r["verb"], r["normalized_path"]) for r in web_routes}
+    counts = {name: 0 for name in EXTRA_CLASSES}
+    for extra in extras:
+        path, verb = extra["normalized_path"], extra["verb"]
+        if path in api_verbs:
+            kind = "api_verb_mismatch"
+            closest = sorted(api_verbs[path])
+        elif (verb, path) in web_keys:
+            kind = "web_exact"
+            closest = ["WEB " + verb]
+        elif path in web_verbs:
+            kind = "web_verb_mismatch"
+            closest = sorted(web_verbs[path])
+        elif any(wp == path or wp.endswith("/" + path) for wp in web_paths):
+            kind = "web_nested"
+            closest = [wp for wp in web_paths
+                       if wp.endswith("/" + path)][:1]
+        elif any(ap == path or ap.endswith("/" + path) for ap in api_paths):
+            kind = "api_nested"
+            closest = [ap for ap in api_paths if ap.endswith("/" + path)][:1]
+        else:
+            kind = "absent"
+            closest = []
+        extra["classification"] = kind
+        extra["canvas_closest"] = closest
+        counts[kind] += 1
+    return counts
+
+
 def build_coverage(manifest, star_src):
     canvas_routes = manifest["routes"]
     star_routes, calls, unparsed = parse_star_routes(star_src)
@@ -961,6 +1190,7 @@ def build_coverage(manifest, star_src):
 
     canvas_keys = {(r["verb"], r["normalized_path"]) for r in canvas_routes}
     extras = [r for r in star_routes if (r["verb"], r["normalized_path"]) not in canvas_keys]
+    extras_classes = classify_extras(extras, canvas_routes, manifest.get("web_routes") or [])
 
     controllers = {}
     for route in canvas_routes:
@@ -995,6 +1225,7 @@ def build_coverage(manifest, star_src):
     return {
         "summary": {
             "canvas_api_routes": len(canvas_routes),
+            "canvas_web_routes": len(manifest.get("web_routes") or []),
             "canvas_controllers": counts["controllers"],
             "implemented_rest_routes": len(implemented),
             "implemented_rest_pct": pct(len(implemented), len(canvas_routes)),
@@ -1005,11 +1236,16 @@ def build_coverage(manifest, star_src):
             "star_route_calls": calls,
             "star_unparsed_calls": unparsed,
             "star_extras": len(extras),
+            "star_extras_by_class": extras_classes,
             "graphql_files": counts["graphql_files"],
             "graphql_files_implemented": star_impl["graphql_files"],
-            "graphql_types": counts["graphql_types"],
+            # Denominators are the NAME inventories the matcher actually
+            # compares against, not count_canvas_sources' file-level scan
+            # (170/110 there vs 246/100 names): mixing the two printed an
+            # impossible 246/170.
+            "graphql_types": len(canvas_types),
             "graphql_types_implemented": len(impl_type_names),
-            "graphql_mutations": counts["graphql_mutations"],
+            "graphql_mutations": len(canvas_mutations),
             "graphql_mutations_implemented": len(impl_mutation_names),
             "ui_feature_dirs": counts["ui_feature_dirs"],
             "ui_feature_dirs_implemented": star_impl["ui_feature_dirs"],
@@ -1153,13 +1389,36 @@ def render_report(coverage):
         add("")
 
     extras = coverage["unmatched_star_routes"]
-    add("## Star routes with no Canvas match (%d)" % len(extras))
+    add("## Star routes with no Canvas API match (%d)" % len(extras))
     add("")
-    add("| Verb | Path | Crate |")
-    add("|---|---|---|")
-    for route in extras:
-        add("| %s | `%s` | `%s` |" %
-            (route["verb"], route["path"], route["crate"]))
+    add("Classified, because the fix differs by class: `api_verb_mismatch` is a "
+        "one-line verb change, `web_*` means Canvas answers that path as a **web** "
+        "(HTML/JS) route rather than an API route — a port, not a REST parity item — "
+        "and `absent` means Canvas has nothing like it.")
+    add("")
+    classes = s.get("star_extras_by_class") or {}
+    add("| Class | Count | Action |")
+    add("|---|---:|---|")
+    for name in EXTRA_CLASSES:
+        action = {
+            "api_verb_mismatch": "change the registered verb to Canvas'",
+            "web_exact": "port of a Canvas web route: keep, label as web/UI",
+            "web_verb_mismatch": "web port with the wrong verb",
+            "web_nested": "web route flattened to top level: re-nest or label",
+            "api_nested": "API route missing its parent segment: re-nest",
+            "absent": "delete, or document as an intentional custom endpoint",
+        }[name]
+        add("| `%s` | %d | %s |" % (name, classes.get(name, 0), action))
+    add("")
+    add("| Verb | Path | Crate | Class | Canvas closest |")
+    add("|---|---|---|---|---|")
+    for route in sorted(extras, key=lambda r: (r.get("classification", "absent"),
+                                               r["normalized_path"], r["verb"])):
+        add("| %s | `%s` | `%s` | %s | %s |" %
+            (route["verb"], route["path"], route["crate"],
+             route.get("classification", "unclassified"),
+             ", ".join("`%s`" % c for c in route.get("canvas_closest") or [])
+             or "-"))
     add("")
     add("## Parser scope and limitations")
     add("")
