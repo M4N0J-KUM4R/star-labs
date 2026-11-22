@@ -18,6 +18,8 @@
 //!   - GET /api/lti/groups/{groupId}/membership_service     (…#group_index)
 //!   - GET /api/lti/courses/{courseId}/tool_consumer_profile  (Lti::Ims::ToolConsumerProfileController#show)
 //!   - GET /api/lti/accounts/{accountId}/tool_consumer_profile
+//!   - GET /api/lti/courses/{courseId}/tool_consumer_profile/{toolConsumerProfileId} (…#show, profile-id form)
+//!   - GET /api/lti/accounts/{accountId}/tool_consumer_profile/{toolConsumerProfileId} (…#show, profile-id form)
 //!   - GET/PUT /api/lti/notice-handlers/{toolId}    (Lti::Ims::NoticeHandlersController index/update)
 //!   - GET /api/lti/courses/{courseId}/progress/{id}(Lti::Ims::ProgressController#show)
 //!   - POST /api/lti/asset_processors/{id}/reports (Lti::Ims::AssetProcessorController#create_report)
@@ -452,6 +454,42 @@ async fn tool_consumer_profile(Path((context, context_id)): Path<(String, i64)>)
         ],
     });
     Json(profile)
+}
+
+/// GET /api/lti/courses/{courseId}/tool_consumer_profile — Canvas:
+/// Lti::Ims::ToolConsumerProfileController#show (courses context, bare
+/// form). Thin adapter over the generic TCP document builder.
+async fn tool_consumer_profile_course(Path(course_id): Path<i64>) -> Json<Value> {
+    tool_consumer_profile(Path(("courses".to_string(), course_id))).await
+}
+
+/// GET /api/lti/accounts/{accountId}/tool_consumer_profile — Canvas:
+/// Lti::Ims::ToolConsumerProfileController#show (accounts context, bare
+/// form). Thin adapter over the generic TCP document builder.
+async fn tool_consumer_profile_account(Path(account_id): Path<i64>) -> Json<Value> {
+    tool_consumer_profile(Path(("accounts".to_string(), account_id))).await
+}
+
+/// GET /api/lti/courses/{courseId}/tool_consumer_profile/{toolConsumerProfileId}
+/// — Canvas: Lti::Ims::ToolConsumerProfileController#show —
+/// GET /api/lti/courses/:course_id/tool_consumer_profile(/:tool_consumer_profile_id)
+/// (courses context, optional profile-id form: any profile id resolves to
+/// the default platform profile). The handler reuses the generic TCP
+/// document builder above.
+async fn tool_consumer_profile_course_with_profile(
+    Path((course_id, _profile_id)): Path<(i64, String)>,
+) -> Json<Value> {
+    tool_consumer_profile(Path(("courses".to_string(), course_id))).await
+}
+
+/// GET /api/lti/accounts/{accountId}/tool_consumer_profile/{toolConsumerProfileId}
+/// — Canvas: Lti::Ims::ToolConsumerProfileController#show —
+/// GET /api/lti/accounts/:account_id/tool_consumer_profile(/:tool_consumer_profile_id)
+/// (accounts context, optional profile-id form).
+async fn tool_consumer_profile_account_with_profile(
+    Path((account_id, _profile_id)): Path<(i64, String)>,
+) -> Json<Value> {
+    tool_consumer_profile(Path(("accounts".to_string(), account_id))).await
 }
 
 // ---------------------------------------------------------------------------
@@ -898,6 +936,22 @@ pub fn lti_gaps_advantage_routes() -> Router<AppState> {
         .route(
             "/api/lti/{context}/{contextId}/tool_consumer_profile",
             get(tool_consumer_profile),
+        )
+        .route(
+            "/api/lti/courses/{courseId}/tool_consumer_profile/{toolConsumerProfileId}",
+            get(tool_consumer_profile_course_with_profile),
+        )
+        .route(
+            "/api/lti/accounts/{accountId}/tool_consumer_profile/{toolConsumerProfileId}",
+            get(tool_consumer_profile_account_with_profile),
+        )
+        .route(
+            "/api/lti/courses/{courseId}/tool_consumer_profile",
+            get(tool_consumer_profile_course),
+        )
+        .route(
+            "/api/lti/accounts/{accountId}/tool_consumer_profile",
+            get(tool_consumer_profile_account),
         )
         // Lti::Ims::NoticeHandlersController.
         .route(

@@ -17,7 +17,17 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 mod ai_experiences;
+mod ai_paces_gaps_v2;
 mod gradebook_api;
+mod misc_gaps_v2;
+
+/// Root-mounted routes Canvas serves OUTSIDE /api/v1 — /canvadoc_session
+/// (canvadoc_sessions_controller show/create) and
+/// /api/sis/courses/{courseId}/disable_post_to_sis
+/// (disable_post_to_sis_api_controller). Merged by star-http next to
+/// `star_auth::small_controllers_root_routes()`; the route strings carry
+/// their full paths.
+pub use misc_gaps_v2::root_routes;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -4674,6 +4684,11 @@ pub fn router() -> Router<AppState> {
         .merge(ai_experiences::router())
         // Canvas CustomGradebookColumnsController + gradebook filters.
         .merge(gradebook_api::router())
+        // Microsoft Teams sync groups, section crosslisting and the
+        // account-scoped course batch endpoints (port-C gaps).
+        .merge(ai_paces_gaps_v2::ai_paces_gaps_routes())
+        // The cited misc_gaps v2 revival (port-C gaps).
+        .merge(misc_gaps_v2::misc_gaps_routes())
         .route("/courses", get(list_courses))
         .route("/courses", post(create_course))
         .route("/accounts/{id}/courses", post(create_course_in_account))

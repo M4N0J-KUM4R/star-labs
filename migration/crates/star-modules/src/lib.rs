@@ -26,6 +26,7 @@ use star_auth::AuthUser;
 
 mod conditional_release;
 mod course_pacing;
+mod module_gaps;
 mod pace_apis;
 mod pace_contexts;
 
@@ -1272,6 +1273,10 @@ pub fn router() -> Router<AppState> {
         .merge(pace_contexts::router())
         // The pace of a section and the pace of a student enrollment.
         .merge(pace_apis::router())
+        // The PORT-B parity-gap routes (module item redirect/sequence,
+        // mark_read, select_mastery_path, batch_update, duplicate, relock,
+        // concrete mastery-paths stats).
+        .merge(module_gaps::module_gaps_routes())
         .route("/courses/{courseId}/modules", get(list_modules))
         .route("/courses/{courseId}/modules", post(create_module))
         .route(

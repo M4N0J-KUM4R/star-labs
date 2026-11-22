@@ -16,6 +16,7 @@ use std::collections::HashMap;
 
 pub mod learn_platform;
 
+mod account_gaps;
 mod shared_brand_configs;
 
 use star_auth::AuthUser;
@@ -1991,6 +1992,9 @@ pub fn router() -> Router<AppState> {
         .merge(career::router())
         .merge(error_reports::router())
         .merge(learn_platform::router())
+        // P5 account gap routes (developer_keys, release_notes publish,
+        // authentication_providers restore).
+        .merge(account_gaps::account_gaps_routes())
 }
 
 // --------------------------------------------------------------------------

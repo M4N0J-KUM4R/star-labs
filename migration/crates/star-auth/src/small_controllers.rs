@@ -120,6 +120,33 @@ async fn sis_assignment_gate(
     Ok(())
 }
 
+/// GET /api/sis/accounts/{accountId}/assignments — Canvas:
+/// SisApiController#sis_assignments (accounts context, concrete form).
+/// Thin adapter over the shared SIS grade-export list.
+async fn sis_assignments_account(
+    State(state): State<AppState>,
+    Path(account_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    sis_assignments(
+        State(state),
+        Path(("accounts".to_string(), account_id)),
+        auth,
+    )
+    .await
+}
+
+/// GET /api/sis/courses/{courseId}/assignments — Canvas:
+/// SisApiController#sis_assignments (courses context, concrete form).
+/// Thin adapter over the shared SIS grade-export list.
+async fn sis_assignments_course(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Value>, ApiError> {
+    sis_assignments(State(state), Path(("courses".to_string(), course_id)), auth).await
+}
+
 /// GET /api/sis/{accounts|courses}/{id}/assignments — the SIS grade-export
 /// assignment list.
 async fn sis_assignments(
@@ -337,5 +364,13 @@ pub fn small_controllers_root_routes() -> Router<AppState> {
         .route(
             "/api/sis/{context}/{contextId}/assignments",
             get(sis_assignments),
+        )
+        .route(
+            "/api/sis/accounts/{accountId}/assignments",
+            get(sis_assignments_account),
+        )
+        .route(
+            "/api/sis/courses/{courseId}/assignments",
+            get(sis_assignments_course),
         )
 }

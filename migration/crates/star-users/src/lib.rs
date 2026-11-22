@@ -15,6 +15,7 @@ use sqlx::PgPool;
 
 mod custom_data;
 mod observer_alerts_api;
+mod user_gaps;
 use star_auth::{hash_password, AuthUser};
 use star_common::{ApiError, AppState};
 use std::collections::BTreeMap;
@@ -846,6 +847,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(custom_data::custom_data_routes())
         .merge(observer_alerts_api::observer_alerts_routes())
+        .merge(user_gaps::user_gaps_routes())
         .merge(users_api::router())
         .route("/users", get(list_users))
         .route("/users/self", get(get_self))

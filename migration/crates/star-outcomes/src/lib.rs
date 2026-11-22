@@ -40,6 +40,7 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod outcome_gaps;
 mod outcome_proficiency;
 mod outcomes_api;
 mod outcomes_direct_api;
@@ -2117,7 +2118,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/accounts/{accountId}/outcome_groups/{id}/subgroups",
-            get(list_account_outcome_subgroups),
+            get(list_account_outcome_subgroups).post(outcome_gaps::create_account_outcome_subgroup),
         )
         // global root redirect
         .route("/global/root_outcome_group", get(global_root_outcome_group))
@@ -2205,6 +2206,9 @@ pub fn router() -> Router<AppState> {
             "/outcomes/{outcomeId}/results",
             get(list_outcome_results).post(create_outcome_result),
         )
+        // P5 gap routes (account root redirect, account subgroup create,
+        // global AB outcomes import family).
+        .merge(outcome_gaps::outcome_gaps_routes())
 }
 
 #[cfg(test)]
