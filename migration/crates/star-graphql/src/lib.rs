@@ -47,6 +47,7 @@ mod conversations;
 mod course_user_fields;
 mod discussion_topic;
 mod files;
+mod grading_periods;
 mod groups;
 mod modules;
 mod mutations;
@@ -61,6 +62,7 @@ use conversations::ConversationParticipantConnection;
 use course_user_fields::{CoursePermissions, UserConnection};
 use discussion_topic::DiscussionTopicConnection;
 use files::FolderConnection;
+use grading_periods::GradingPeriodGroup;
 use groups::{GroupConnection, GroupSetConnection};
 use modules::ModuleConnection;
 use pages::PageConnection;
@@ -348,6 +350,20 @@ impl Course {
             )
             .await?,
         ))
+    }
+
+    /// The course's grading period set with its periods, or null when the
+    /// course has none (Canvas resolves through
+    /// `GradingPeriodGroup.for_course`). Periods are sorted by start
+    /// date; deleted rows are filtered (Canvas `active` scopes).
+    async fn grading_periods(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<GradingPeriodGroup>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        Ok(
+            grading_periods::fetch_course_grading_period_group(&gctx.pool, self.id).await?,
+        )
     }
 
     /// Paginated quizzes in this course (LIMIT first+1, ORDER BY id).
