@@ -24,6 +24,12 @@ use star_common::{ApiError, AppState};
 /// Authenticated user — role must be looked up from DB in handlers.
 use star_auth::AuthUser;
 
+mod conditional_release;
+mod course_pacing;
+mod module_gaps;
+mod pace_apis;
+mod pace_contexts;
+
 // --------------------------------------------------------------------------
 // Data types
 // --------------------------------------------------------------------------
@@ -1259,6 +1265,18 @@ async fn delete_course_module_item(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // The course pacing plans of a course, a section or an enrollment.
+        .merge(course_pacing::router())
+        // The conditional release rules of a course.
+        .merge(conditional_release::router())
+        // The contexts of a course that can be paced.
+        .merge(pace_contexts::router())
+        // The pace of a section and the pace of a student enrollment.
+        .merge(pace_apis::router())
+        // The PORT-B parity-gap routes (module item redirect/sequence,
+        // mark_read, select_mastery_path, batch_update, duplicate, relock,
+        // concrete mastery-paths stats).
+        .merge(module_gaps::module_gaps_routes())
         .route("/courses/{courseId}/modules", get(list_modules))
         .route("/courses/{courseId}/modules", post(create_module))
         .route(

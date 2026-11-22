@@ -16,10 +16,15 @@ use std::collections::HashMap;
 
 pub mod learn_platform;
 
+mod account_gaps;
+mod shared_brand_configs;
+
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+pub mod brand_configs_api;
 pub mod career;
+pub mod discovery_pages_api;
 pub mod error_reports;
 
 // --------------------------------------------------------------------------
@@ -1873,6 +1878,10 @@ async fn close_user_account_notification(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(brand_configs_api::brand_configs_routes())
+        .merge(discovery_pages_api::discovery_pages_routes())
+        // The shared brand configurations of an account.
+        .merge(shared_brand_configs::router())
         .route("/accounts", get(list_accounts))
         .route("/accounts/{id}", get(get_account).put(update_account))
         .route(
@@ -1983,6 +1992,9 @@ pub fn router() -> Router<AppState> {
         .merge(career::router())
         .merge(error_reports::router())
         .merge(learn_platform::router())
+        // P5 account gap routes (developer_keys, release_notes publish,
+        // authentication_providers restore).
+        .merge(account_gaps::account_gaps_routes())
 }
 
 // --------------------------------------------------------------------------

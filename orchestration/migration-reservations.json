@@ -3,8 +3,8 @@
   "free": [
     "0111"
   ],
-  "max_merged": "0231",
-  "next_available": "0232",
+  "max_merged": "0256",
+  "next_available": "0257",
   "reservations": {
     "0001": {
       "issue": null,
@@ -636,6 +636,16 @@
       "note": "merged by wave (no issue)",
       "status": "merged"
     },
+    "0128": {
+      "issue": 91,
+      "note": "collaborations domain tail (guarded; snapshot 0223 owns the tables) \u2014 reserved at #91 dispatch",
+      "status": "merged"
+    },
+    "0131": {
+      "issue": 91,
+      "note": "smart_search_indexes for the smartsearch routes \u2014 reserved at #91 dispatch",
+      "status": "merged"
+    },
     "0141": {
       "issue": null,
       "note": "merged by wave (no issue)",
@@ -736,19 +746,119 @@
       "note": "LTI registrations deep: context controls, overlay versions, registration history",
       "status": "merged"
     },
-    "0128": {
-      "issue": 91,
-      "note": "collaborations domain tail (guarded; snapshot 0223 owns the tables) \u2014 reserved at #91 dispatch",
-      "status": "merged"
-    },
-    "0131": {
-      "issue": 91,
-      "note": "smart_search_indexes for the smartsearch routes \u2014 reserved at #91 dispatch",
-      "status": "merged"
-    },
     "0229": {
       "issue": 91,
       "note": "web_conferences tails (recordings JSONB, calendar_events FK); 0129 reserved number unusable (snapshot ordering) so the post-snapshot hole 0229 was used per PR #212 precedent",
+      "status": "merged"
+    },
+    "0231": {
+      "issue": null,
+      "note": "Canvas column parity for the authored cohort (0001-0222 tables PR #200 skipped): 447 ADD COLUMN IF NOT EXISTS across 33 tables \u2014 reference tools/parity/canvas_authored_tables_reference.json, backlog tools/parity/authored_column_backlog.py \u2014 PR #228",
+      "status": "merged"
+    },
+    "0232": {
+      "issue": null,
+      "note": "star-lti and star-search: the LTI registration history and the page views",
+      "status": "merged"
+    },
+    "0233": {
+      "issue": null,
+      "note": "star-modules: the course paces and their module items",
+      "status": "merged"
+    },
+    "0234": {
+      "issue": null,
+      "note": "star-lti: the LTI context controls get nullable owner columns",
+      "status": "merged"
+    },
+    "0235": {
+      "issue": null,
+      "note": "star-users: the course nicknames",
+      "status": "merged"
+    },
+    "0236": {
+      "issue": null,
+      "note": "star-courses: the AI experiences and their conversations (moved off 0229; main's conferences lane owns 0229)",
+      "status": "merged"
+    },
+    "0237": {
+      "issue": null,
+      "note": "star-calendar: the account calendar settings",
+      "status": "merged"
+    },
+    "0238": {
+      "issue": null,
+      "note": "star-lti: the nonces of the LTI 1.1 requests",
+      "status": "merged"
+    },
+    "0239": {
+      "issue": null,
+      "note": "star-lti: the tool setting of an originality report",
+      "status": "merged"
+    },
+    "0240": {
+      "issue": null,
+      "note": "star-lti: update-request columns (batch-3, commit fd0fbe3)",
+      "status": "merged"
+    },
+    "0241": {
+      "issue": null,
+      "note": "star-account-reports: course_reports table (CourseReportsController, batch-3 parity tail)",
+      "status": "merged"
+    },
+    "0242": {
+      "issue": null,
+      "note": "star-sis: sis_import_errors table (SisImportsErrorsApiController, batch-3 parity tail)",
+      "status": "merged"
+    },
+    "0243": {
+      "issue": null,
+      "note": "accounts.allow_sis_import backfill (sis_imports_api, batch-3 CI)",
+      "status": "merged"
+    },
+    "0244": {
+      "issue": 228,
+      "note": "star-grading-standards: grading_period_sets API (parity gap)",
+      "status": "merged"
+    },
+    "0245": {
+      "issue": 228,
+      "note": "star-outcomes: outcomes_api columns (parity gap)",
+      "status": "merged"
+    },
+    "0246": {
+      "issue": 228,
+      "note": "star-audit: authentication_events (parity gap)",
+      "status": "merged"
+    },
+    "0247": {
+      "issue": 228,
+      "note": "star-assignments: module assignment overrides (parity gap)",
+      "status": "merged"
+    },
+    "0248": {
+      "issue": 228,
+      "note": "star-gradebook: user_preferences + what-if scores (parity gap)",
+      "status": "merged"
+    },
+    "0249": {
+      "issue": 228,
+      "note": "star-gradebook: score_overrides (parity gap)",
+      "status": "merged"
+    },
+    "0250": {
+      "issue": 228,
+      "note": "star-auth: course_events audit table (parity gap)",
+      "status": "merged"
+    },
+    "0251": {
+      "issue": 228,
+      "note": "star-quizzes: quiz family tables (parity gap)",
+      "status": "merged"
+    },
+    "0252": {
+      "issue": 228,
+      "note": "star-courses: misc gap tables (parity gap)",
       "status": "merged"
     },
     "0230": {
@@ -756,9 +866,24 @@
       "note": "GraphQL parity completion backing tables (peer_reviews, sub_assignments, audit_events, internal_settings, speed_grader_settings, checkpoints, gradebook_user_filters, widget_dashboards, user_inbox_labels, learner_dashboard_tab_selections, account_user_dismissals, submission_histories, discussion_entry_reports) \u2014 PR #228",
       "status": "merged"
     },
-    "0231": {
+    "0253": {
       "issue": null,
-      "note": "Canvas column parity for the authored cohort (0001-0222 tables PR #200 skipped): 447 ADD COLUMN IF NOT EXISTS across 33 tables \u2014 reference tools/parity/canvas_authored_tables_reference.json, backlog tools/parity/authored_column_backlog.py \u2014 PR #228",
+      "note": "star-media: the media object columns, the tracks and the media files (renumbered from the pre-merge 0231 after main took the number in PR #228)",
+      "status": "merged"
+    },
+    "0254": {
+      "issue": null,
+      "note": "star-pages/calendar/accounts/outcomes/lti: page revisions, reservations, dev keys, release notes, AB import (parity gaps)",
+      "status": "merged"
+    },
+    "0255": {
+      "issue": null,
+      "note": "star-users/modules/files: favorites, notification prefs, pairing codes, avatars, module items, usage rights (parity gaps)",
+      "status": "merged"
+    },
+    "0256": {
+      "issue": null,
+      "note": "star-courses: ms sync, crosslist, account batch, misc gaps revival (parity gaps)",
       "status": "merged"
     }
   }

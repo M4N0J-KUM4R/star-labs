@@ -313,7 +313,10 @@ async fn get_assignment_group(
     row.map(Json).ok_or(ApiError::NotFound)
 }
 
-/// PUT /courses/{courseId}/assignment_groups/{id} — update (teacher)
+/// PUT/PATCH /courses/{courseId}/assignment_groups/{id} — Canvas
+/// assignment_groups_controller#update —
+/// PUT|PATCH /api/v1/courses/:course_id/assignment_groups/:id (both verbs
+/// route to `update` in Canvas' routes.rb).
 async fn update_assignment_group(
     State(state): State<AppState>,
     Path((course_id, group_id)): Path<(i64, i64)>,
@@ -569,7 +572,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/assignment_groups/{id}",
-            put(update_assignment_group),
+            put(update_assignment_group).patch(update_assignment_group),
         )
         .route(
             "/courses/{courseId}/assignment_groups/{id}",

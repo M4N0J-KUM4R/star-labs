@@ -109,6 +109,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Canvas serves the login/oauth2 family (auth, token, revoke, jwks)
         // at the top level, outside /api/v1 (config/routes.rb:3087-3094).
         .merge(star_auth::login_router())
+        // The sis/lti-security gap routes Canvas serves outside /api/v1
+        // (the "/api/sis" and "/api/lti" route sets) — root-mounted like
+        // the LTI Advantage family above.
+        .merge(star_auth::small_controllers_root_routes())
+        // The port-C gap routes Canvas serves outside /api/v1:
+        // /canvadoc_session (canvadoc_sessions_controller show/create) and
+        // /api/sis/courses/:course_id/disable_post_to_sis
+        // (disable_post_to_sis_api_controller) — root-mounted like the sets
+        // above; the route strings carry their full paths.
+        .merge(star_courses::root_routes())
         .nest("/api/v1", api_router)
         // Canvas serves its GraphQL API at /api/graphql (outside /api/v1).
         .nest("/api/graphql", star_graphql::router())
@@ -176,4 +186,8 @@ fn build_api_router() -> Router<AppState> {
         .merge(star_polling::router())
         .merge(star_search::router())
         .merge(star_sis::router())
+    // NOTE: star_pages / star_modules / star_announcements are NOT merged
+    // here — star-content/src/lib.rs already merges their routers (lines
+    // 56-58). Merging them here as well panics axum at startup with
+    // "Overlapping method route" (e.g. GET /pages/{id} registered twice).
 }

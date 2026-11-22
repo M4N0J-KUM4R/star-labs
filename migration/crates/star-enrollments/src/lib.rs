@@ -16,6 +16,9 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod observer_alert_thresholds;
+mod temporary_enrollment_pairings;
+
 /// Pub loaders for the server-rendered people/admin pages (star-ui, #73).
 pub mod ui;
 
@@ -431,6 +434,10 @@ async fn insert_enrollment(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // The alert thresholds of an observer.
+        .merge(observer_alert_thresholds::router())
+        // The temporary enrollment pairings of an account.
+        .merge(temporary_enrollment_pairings::router())
         .route("/enrollments", post(create_enrollment))
         .route("/enrollments", get(list_enrollments))
         .route("/enrollments/{id}", delete(delete_enrollment))

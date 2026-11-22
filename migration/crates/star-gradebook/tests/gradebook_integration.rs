@@ -279,14 +279,14 @@ async fn column_create_defaults_and_bad_request_validation() {
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
 
-    // Create with defaults → 201, position bottom, hidden=false.
+    // Create with defaults → 200 (Canvas renders the saved column), position bottom, hidden=false.
     let resp = server
         .post(&path)
         .add_header("Authorization", hdr.clone())
         .content_type("application/json")
         .json(&json!({"column": {"title": format!("{prefix}-New")}}))
         .await;
-    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let col: Value = resp.json();
     assert_eq!(col["title"], format!("{prefix}-New"));
     assert_eq!(col["position"], 1, "first column lands at bottom = 1");
@@ -304,7 +304,7 @@ async fn column_create_defaults_and_bad_request_validation() {
                                   "teacher_notes": true, "hidden": true}}),
         )
         .await;
-    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let col: Value = resp.json();
     assert_eq!(
         col["hidden"], true,
@@ -1173,7 +1173,7 @@ async fn admin_without_enrollment_passes_every_gate() {
         .content_type("application/json")
         .json(&json!({"column": {"title": format!("{prefix}-adm2")}}))
         .await;
-    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
 
     let resp = server
         .put(&format!("/courses/{course}/custom_gradebook_columns/{col}"))

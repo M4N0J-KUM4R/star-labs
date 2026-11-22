@@ -262,6 +262,17 @@ pub fn create_token(user_id: i64, role: &str, secret: &str) -> Result<String, St
     .map_err(|e| format!("failed to create token: {e}"))
 }
 
+/// Create an HS256 JWT with arbitrary claims (service tokens, scoped
+/// preview tokens). The payload's `exp` (if present) is respected.
+pub fn create_custom_token(claims: &serde_json::Value, secret: &str) -> Result<String, String> {
+    encode(
+        &Header::default(),
+        claims,
+        &EncodingKey::from_secret(secret.as_bytes()),
+    )
+    .map_err(|e| format!("failed to create token: {e}"))
+}
+
 /// Verify a JWT and return the claims if valid.
 pub fn verify_token(token: &str, secret: &str) -> Option<Claims> {
     let validation = Validation::default();
@@ -278,8 +289,15 @@ pub fn verify_token(token: &str, secret: &str) -> Option<Claims> {
 // Router + handlers
 // ---------------------------------------------------------------------------
 
+mod progress_jwts;
+mod small_controllers;
+
+pub use small_controllers::small_controllers_root_routes;
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(progress_jwts::progress_jwt_routes())
+        .merge(small_controllers::small_controllers_routes())
         .route("/auth/register", post(register))
         .route("/auth/login", post(login))
         .route("/auth/me", get(me))
@@ -2566,6 +2584,24 @@ struct JwksQuery {
 /// (security_controller.rb:75-95, route routes.rb:3094): the public keyset
 /// in JWKS shape with a Cache-Control header, or — with `rotation_check` — a
 /// report of whether each key's kid-encoded date is from the current month.
+/// The platform JWKS as plain JSON (shared by the OAuth2 and LTI security
+/// endpoints).
+pub(crate) async fn oauth2_jwks_json() -> Json<serde_json::Value> {
+    match oauth_signing_key() {
+        Ok(key) => Json(serde_json::json!({
+            "keys": [{
+                "kty": "RSA",
+                "alg": "RS256",
+                "use": "sig",
+                "kid": key.kid,
+                "n": key.n,
+                "e": key.e,
+            }]
+        })),
+        Err(_) => Json(serde_json::json!({ "keys": [] })),
+    }
+}
+
 async fn oauth2_jwks(Query(params): Query<JwksQuery>) -> Response {
     if params.rotation_check.is_some() {
         let today = Utc::now();

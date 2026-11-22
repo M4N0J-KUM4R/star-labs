@@ -15,6 +15,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
+
+mod module_assignment_overrides;
 use std::collections::{HashMap, HashSet};
 
 // Server-rendered UI loaders + the shared grading write (star-ui, issue
@@ -9156,6 +9158,7 @@ async fn section_submission_summary(
 /// Build the assignments router.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(module_assignment_overrides::module_assignment_overrides_routes())
         // Course-level assignment routes
         .route(
             "/courses/{courseId}/assignments",

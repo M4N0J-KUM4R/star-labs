@@ -5,11 +5,9 @@
 //! - `GET /api/v1/jobs2/:bucket/by_:group`         → grouped_info
 //! - `GET /api/v1/jobs2/:bucket/by_:group/search` → search
 //!
-//! Canvas embeds the group in a `by_:group` path segment (Rails partial
-//! segments); axum cannot express that, so the routes are
-//! `/jobs2/{id}/{group}` with the `by_` prefix parsed in the handlers (the
-//! `{id}` name matches the other `/jobs2/*` routes for matchit
-//! compatibility).
+//! Canvas embeds the group in a `by_:group` path segment (a Rails partial
+//! segment); axum supports a static prefix before a parameter, so the
+//! routes keep Canvas' exact shape: `/jobs2/{bucket}/by_{group}`.
 
 use axum::{
     extract::{Path, Query, State},
@@ -34,10 +32,12 @@ pub enum Group {
 }
 
 impl Group {
-    /// Parse the group name out of a `by_{group}` path segment.
+    /// Parse the group name out of the path segment.
+    ///
+    /// The route is `/jobs2/{bucket}/by_{group}`, so the segment carries the
+    /// bare group name.
     fn parse(raw: &str) -> Option<Self> {
-        let name = raw.strip_prefix("by_")?;
-        match name {
+        match raw {
             "tag" => Some(Self::Tag),
             "strand" => Some(Self::Strand),
             "singleton" => Some(Self::Singleton),
@@ -193,7 +193,7 @@ pub async fn grouped_info(
                MIN(run_at) AS earliest_run_at,
                MIN(locked_at) AS earliest_locked_at,
                MAX(failed_at) AS latest_failed_at,
-               BOOL_OR(CASE WHEN next_in_strand THEN FALSE ELSE TRUE END) AS has_orphaned
+               BOOL_OR(next_in_strand) AS any_next
         FROM jobs
         WHERE {where_clause}
         "#,
@@ -210,7 +210,7 @@ pub async fn grouped_info(
 
     sql.push_str(&format!(
         " GROUP BY {col} ORDER BY {} LIMIT {} OFFSET {}",
-        group_order_clause(order, group),
+        group_order_clause(order, group, &bucket),
         limit,
         offset
     ));
@@ -236,7 +236,9 @@ pub async fn grouped_info(
                 row.latest_failed_at,
             );
             let orphaned = if include_orphaned {
-                Some(row.has_orphaned)
+                // Canvas `get_group_statuses`: a strand/singleton is orphaned
+                // when NO job of the group is next in strand.
+                Some(!row.any_next)
             } else {
                 None
             };
@@ -280,7 +282,7 @@ struct GroupedRowDb {
     earliest_run_at: Option<DateTime<Utc>>,
     earliest_locked_at: Option<DateTime<Utc>>,
     latest_failed_at: Option<DateTime<Utc>>,
-    has_orphaned: bool,
+    any_next: bool,
 }
 
 /// Compute the `info` field for a grouped row given the bucket.
@@ -326,20 +328,33 @@ fn compute_group_info(
     }
 }
 
-/// ORDER BY clause for grouped queries.
-fn group_order_clause(order: &str, group: Group) -> &'static str {
+/// ORDER BY clause for grouped queries — Canvas
+/// `JobsV2Controller#grouped_order_clause`.
+///
+/// - `count` sorts by the group size (descending);
+/// - `tag`/`strand`/`singleton` sort by that column, case insensitively;
+/// - `group` sorts by the grouped column;
+/// - anything else (the default, including `info`) sorts by the bucket's
+///   info column: the oldest `run_at` (queued), the earliest `locked_at`
+///   (running), the next `run_at` (future), or the last failure (failed,
+///   newest first).
+fn group_order_clause(order: &str, group: Group, bucket: &Bucket) -> String {
     match order {
-        "count" => "count DESC",
-        "tag" if group == Group::Tag => "count DESC",
-        "strand" if group == Group::Strand => "count DESC",
-        "singleton" if group == Group::Singleton => "count DESC",
-        _ => "count DESC",
+        "count" => "count DESC".to_string(),
+        "tag" | "strand" | "singleton" => format!("LOWER({order})"),
+        "group" => format!("LOWER({})", group.column()),
+        _ => match bucket {
+            Bucket::Queued => "earliest_run_at ASC".to_string(),
+            Bucket::Running => "earliest_locked_at ASC".to_string(),
+            Bucket::Future => "earliest_run_at ASC".to_string(),
+            Bucket::Failed => "latest_failed_at DESC".to_string(),
+        },
     }
 }
 
 /// Build the grouped routes sub-router.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/jobs2/{id}/{group}/search", get(search_jobs))
-        .route("/jobs2/{id}/{group}", get(grouped_info))
+        .route("/jobs2/{bucket}/by_{group}/search", get(search_jobs))
+        .route("/jobs2/{bucket}/by_{group}", get(grouped_info))
 }

@@ -16,6 +16,10 @@
 //! - GET/POST /groups/{groupId}/pages                          (group wiki; declined)
 //! - GET/PUT/DELETE /groups/{groupId}/pages/{urlOrId}          (group wiki; declined)
 //! - GET/PUT /groups/{groupId}/front_page                      (group wiki; declined)
+//! - GET  /groups/{groupId}/pages/{urlOrId}/revisions          (group wiki; declined)
+//! - GET  /groups/{groupId}/pages/{urlOrId}/revisions/latest   (group wiki; declined)
+//! - GET/POST /groups/{groupId}/pages/{urlOrId}/revisions/{revisionId}
+//!   (group wiki; declined)
 //!
 //! Canvas parity notes (wiki_page.rb, wiki_pages_api_controller.rb):
 //! - pages carry `url` (slug derived from title), `workflow_state`
@@ -50,6 +54,8 @@ use sqlx::PgPool;
 use star_common::{ApiError, AppState};
 
 use star_auth::AuthUser;
+
+mod page_revisions_gaps;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -1963,6 +1969,8 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/pages/{urlOrId}/accessibility/queue_scan",
             post(accessibility_queue_scan),
         )
+        // Group-context revision routes (P5 gap; declined group wiki).
+        .merge(page_revisions_gaps::page_revisions_gaps_routes())
 }
 
 // ---------------------------------------------------------------------------

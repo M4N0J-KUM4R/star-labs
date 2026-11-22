@@ -58,6 +58,9 @@ use star_common::{ApiError, AppState};
 
 use star_auth::AuthUser;
 
+mod account_calendars_api;
+mod calendar_gaps;
+
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
@@ -3586,6 +3589,9 @@ async fn delete_planner_override(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // The calendars of the accounts (faithful port of
+        // AccountCalendarsApiController — supersedes the first-cut module).
+        .merge(account_calendars_api::router())
         // Planner overrides
         .route("/planner/overrides", get(list_planner_overrides))
         .route("/planner/overrides", post(create_planner_override))
@@ -3651,6 +3657,10 @@ pub fn router() -> Router<AppState> {
             "/calendar_events/{id}/reservations",
             post(reserve_appointment),
         )
+        // Calendar parity gaps (P5): the path-participant reserve spelling,
+        // participants, the feature-off course timetable endpoints and the
+        // appointment_groups next_appointment/groups routes.
+        .merge(calendar_gaps::calendar_gaps_routes())
 }
 
 #[cfg(test)]
