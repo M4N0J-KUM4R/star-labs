@@ -85,10 +85,20 @@
       "pct": 100.0,
       "total": 4
     },
+    "collaborations": {
+      "implemented": 7,
+      "pct": 100.0,
+      "total": 7
+    },
     "communication_channels": {
       "implemented": 12,
       "pct": 100.0,
       "total": 12
+    },
+    "conferences": {
+      "implemented": 7,
+      "pct": 100.0,
+      "total": 7
     },
     "content_exports_api": {
       "implemented": 14,
@@ -174,6 +184,11 @@
       "implemented": 14,
       "pct": 100.0,
       "total": 14
+    },
+    "eportfolios_api": {
+      "implemented": 7,
+      "pct": 100.0,
+      "total": 7
     },
     "epub_exports": {
       "implemented": 3,
@@ -506,8 +521,8 @@
       "total": 15
     },
     "search": {
-      "implemented": 1,
-      "pct": 25.0,
+      "implemented": 4,
+      "pct": 100.0,
       "total": 4
     },
     "sections": {
@@ -516,6 +531,11 @@
       "total": 9
     },
     "shared_brand_configs": {
+      "implemented": 3,
+      "pct": 100.0,
+      "total": 3
+    },
+    "smart_search": {
       "implemented": 3,
       "pct": 100.0,
       "total": 3
@@ -1073,6 +1093,22 @@
       "path": "/api/v1/courses/:course_id/users",
       "ui_referenced": true,
       "verb": "GET"
+    },
+    {
+      "action": "api_index",
+      "controller": "collaborations",
+      "normalized_path": "courses/{}/collaborations",
+      "path": "/api/v1/courses/:course_id/collaborations",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "destroy",
+      "controller": "collaborations",
+      "normalized_path": "courses/{}/collaborations/{}",
+      "path": "/api/v1/courses/:course_id/collaborations/:id",
+      "ui_referenced": false,
+      "verb": "DELETE"
     },
     {
       "action": "new_quizzes_selection_update",
@@ -3579,6 +3615,30 @@
       "verb": "GET"
     },
     {
+      "action": "members",
+      "controller": "collaborations",
+      "normalized_path": "collaborations/{}/members",
+      "path": "/api/v1/collaborations/:id/members",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "potential_collaborators",
+      "controller": "collaborations",
+      "normalized_path": "courses/{}/potential_collaborators",
+      "path": "/api/v1/courses/:course_id/potential_collaborators",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "potential_collaborators",
+      "controller": "collaborations",
+      "normalized_path": "groups/{}/potential_collaborators",
+      "path": "/api/v1/groups/:group_id/potential_collaborators",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
       "action": "mark_rce_favorite",
       "controller": "external_tools",
       "normalized_path": "accounts/{}/external_tools/rce_favorites/{}",
@@ -5235,6 +5295,22 @@
       "verb": "GET"
     },
     {
+      "action": "api_index",
+      "controller": "collaborations",
+      "normalized_path": "groups/{}/collaborations",
+      "path": "/api/v1/groups/:group_id/collaborations",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "destroy",
+      "controller": "collaborations",
+      "normalized_path": "groups/{}/collaborations/{}",
+      "path": "/api/v1/groups/:group_id/collaborations/:id",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
       "action": "bulk_user_tags",
       "controller": "groups",
       "normalized_path": "courses/{}/bulk_user_tags",
@@ -5673,6 +5749,30 @@
       "path": "/api/v1/courses/:course_id/lti_resource_links/:id",
       "ui_referenced": false,
       "verb": "DELETE"
+    },
+    {
+      "action": "rubrics",
+      "controller": "search",
+      "normalized_path": "search/rubrics",
+      "path": "/api/v1/search/rubrics",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "recipients",
+      "controller": "search",
+      "normalized_path": "search/recipients",
+      "path": "/api/v1/search/recipients",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "all_courses",
+      "controller": "search",
+      "normalized_path": "search/all_courses",
+      "path": "/api/v1/search/all_courses",
+      "ui_referenced": false,
+      "verb": "GET"
     },
     {
       "action": "api_create_success",
@@ -7332,6 +7432,62 @@
     },
     {
       "action": "index",
+      "controller": "conferences",
+      "normalized_path": "courses/{}/conferences",
+      "path": "/api/v1/courses/:course_id/conferences",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
+      "controller": "conferences",
+      "normalized_path": "groups/{}/conferences",
+      "path": "/api/v1/groups/:group_id/conferences",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "create",
+      "controller": "conferences",
+      "normalized_path": "courses/{}/conferences",
+      "path": "/api/v1/courses/:course_id/conferences",
+      "ui_referenced": true,
+      "verb": "POST"
+    },
+    {
+      "action": "create",
+      "controller": "conferences",
+      "normalized_path": "groups/{}/conferences",
+      "path": "/api/v1/groups/:group_id/conferences",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "recording_ready",
+      "controller": "conferences",
+      "normalized_path": "courses/{}/conferences/{}/recording_ready",
+      "path": "/api/v1/courses/:course_id/conferences/:conference_id/recording_ready",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "recording_ready",
+      "controller": "conferences",
+      "normalized_path": "groups/{}/conferences/{}/recording_ready",
+      "path": "/api/v1/groups/:group_id/conferences/:conference_id/recording_ready",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "for_user",
+      "controller": "conferences",
+      "normalized_path": "conferences",
+      "path": "/api/v1/conferences",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
       "controller": "custom_gradebook_columns_api",
       "normalized_path": "courses/{}/custom_gradebook_columns",
       "path": "/api/v1/courses/:course_id/custom_gradebook_columns",
@@ -8484,6 +8640,86 @@
     },
     {
       "action": "index",
+      "controller": "eportfolios_api",
+      "normalized_path": "users/{}/eportfolios",
+      "path": "/api/v1/users/:user_id/eportfolios",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "eportfolios_api",
+      "normalized_path": "eportfolios/{}",
+      "path": "/api/v1/eportfolios/:id",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "delete",
+      "controller": "eportfolios_api",
+      "normalized_path": "eportfolios/{}",
+      "path": "/api/v1/eportfolios/:id",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "pages",
+      "controller": "eportfolios_api",
+      "normalized_path": "eportfolios/{}/pages",
+      "path": "/api/v1/eportfolios/:eportfolio_id/pages",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "moderate",
+      "controller": "eportfolios_api",
+      "normalized_path": "eportfolios/{}/moderate",
+      "path": "/api/v1/eportfolios/:eportfolio_id/moderate",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "moderate_all",
+      "controller": "eportfolios_api",
+      "normalized_path": "users/{}/eportfolios",
+      "path": "/api/v1/users/:user_id/eportfolios",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "restore",
+      "controller": "eportfolios_api",
+      "normalized_path": "eportfolios/{}/restore",
+      "path": "/api/v1/eportfolios/:eportfolio_id/restore",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "search",
+      "controller": "smart_search",
+      "normalized_path": "courses/{}/smartsearch",
+      "path": "/api/v1/courses/:course_id/smartsearch",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "log",
+      "controller": "smart_search",
+      "normalized_path": "courses/{}/smartsearch/log",
+      "path": "/api/v1/courses/:course_id/smartsearch/log",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "index_status",
+      "controller": "smart_search",
+      "normalized_path": "courses/{}/smartsearch/index_status",
+      "path": "/api/v1/courses/:course_id/smartsearch/index_status",
+      "ui_referenced": true,
+      "verb": "GET"
+    },
+    {
+      "action": "index",
       "controller": "block_editor_templates_api",
       "normalized_path": "courses/{}/block_editor_templates",
       "path": "/api/v1/courses/:course_id/block_editor_templates",
@@ -9111,22 +9347,22 @@
     "graphql_mutations_implemented": 2,
     "graphql_types": 170,
     "graphql_types_implemented": 28,
-    "implemented_rest_pct": 72.2,
-    "implemented_rest_routes": 1013,
+    "implemented_rest_pct": 74.1,
+    "implemented_rest_routes": 1040,
     "js_env_call_sites": 490,
     "js_env_files": 124,
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
     "star_extras": 208,
-    "star_route_calls": 1010,
-    "star_route_registrations": 1223,
-    "star_tables": 370,
+    "star_route_calls": 1033,
+    "star_route_registrations": 1250,
+    "star_tables": 372,
     "star_unparsed_calls": 0,
     "ui_feature_dirs": 232,
     "ui_feature_dirs_implemented": 0,
-    "ui_referenced_implemented": 369,
-    "ui_referenced_pct": 73.4,
+    "ui_referenced_implemented": 374,
+    "ui_referenced_pct": 74.4,
     "ui_referenced_routes": 503
   },
   "unmatched_star_routes": [
