@@ -317,11 +317,14 @@ async fn the_course_and_horizon_account_lists_answer_the_accounts_of_the_caller(
     assert!(resp.json::<Value>().as_array().expect("array").is_empty());
 
     // The horizon accounts are the accounts of the horizon sub tree of the
-    // root account (Canvas `adminable_horizon_accounts_scope`).
+    // root account (Canvas `adminable_horizon_accounts_scope`). The route
+    // reads horizon_account_ids from the ROOTS OF THE CALLER'S adminable
+    // accounts — for this teacher that is the dedicated account itself
+    // (issue #75: seed it there, never on the shared global root).
     sqlx::query(
         "UPDATE accounts SET settings = settings || \
-            jsonb_build_object('horizon_account_ids', jsonb_build_array($1::bigint)) \
-         WHERE id = (SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1)",
+            jsonb_build_object('horizon_account_ids', jsonb_build_array(id::bigint)) \
+         WHERE id = $1",
     )
     .bind(account)
     .execute(&pool)
