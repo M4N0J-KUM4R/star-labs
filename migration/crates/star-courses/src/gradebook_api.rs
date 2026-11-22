@@ -74,42 +74,13 @@ use star_common::{ApiError, AppState};
 // Constants
 // ---------------------------------------------------------------------------
 
-/// `GradebookImporter::GRADEBOOK_IMPORTER_RESERVED_NAMES` — the titles the
-/// gradebook importer owns; a custom column may not use one of them.
-const GRADEBOOK_IMPORTER_RESERVED_NAMES: &[&str] = &[
-    "Student",
-    "LastName",
-    "FirstName",
-    "ID",
-    "SIS User ID",
-    "SIS Login ID",
-    "Section",
-    "Integration ID",
-    "Root Account",
-];
-
 /// `ActiveRecord::Base.maximum_string_length` — the Canvas maximum length of
 /// the `title` and `name` columns.
 const MAXIMUM_STRING_LENGTH: usize = 255;
 
-/// `Api::PER_PAGE` — the default page size of a Canvas API collection.
-const DEFAULT_PER_PAGE: i64 = 10;
-
-/// `Api::MAX_PER_PAGE` — the maximum page size of a Canvas API collection.
-const MAX_PER_PAGE: i64 = 100;
-
-/// The columns of the `custom_gradebook_columns` row, in the order the port
-/// reads them.
-const COLUMN_COLUMNS: &str = "id, title, position, workflow_state, course_id, \
-     teacher_notes, read_only, root_account_id";
-
 /// The columns of the `gradebook_filters` row, in the order the port reads
 /// them.
 const FILTER_COLUMNS: &str = "id, course_id, user_id, name, payload, created_at, updated_at";
-
-/// Guard against a circular account hierarchy while the root account of a
-/// course is resolved.
-const MAX_ACCOUNT_DEPTH: usize = 10;
 
 // ---------------------------------------------------------------------------
 // Canvas-shaped error bodies
@@ -143,17 +114,6 @@ fn validation_errors(errors: Map<String, Value>) -> Response {
     (StatusCode::BAD_REQUEST, Json(Value::Object(errors))).into_response()
 }
 
-/// The Rails `500` of an unhandled Ruby exception — the `order` parameter of
-/// the reorder route is required, and the Ruby raises a `NoMethodError`
-/// without it.
-fn internal_error() -> Response {
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({ "status": 500, "error": "Internal Server Error" })),
-    )
-        .into_response()
-}
-
 // ---------------------------------------------------------------------------
 // Domain rows
 // ---------------------------------------------------------------------------
@@ -184,26 +144,11 @@ struct FilterRow {
     updated_at: NaiveDateTime,
 }
 
-/// The path parameters of the custom gradebook column routes.
-#[derive(Debug, Deserialize)]
-struct ColumnPath {
-    course_id: i64,
-    id: i64,
-}
-
 /// The path parameters of the gradebook filter routes.
 #[derive(Debug, Deserialize)]
 struct FilterPath {
     course_id: i64,
     id: i64,
-}
-
-/// The query parameters of the custom gradebook column index.
-#[derive(Debug, Default, Deserialize)]
-struct ColumnListQuery {
-    include_hidden: Option<String>,
-    page: Option<String>,
-    per_page: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -219,79 +164,9 @@ async fn course_exists(pool: &PgPool, course_id: i64) -> Result<bool, ApiError> 
     Ok(row.is_some())
 }
 
-/// Canvas `course.grants_any_right?(user, :view_all_grades, :manage_grades)`.
-///
-/// Canvas grants `manage_grades` to `TeacherEnrollment` and `view_all_grades`
-/// to teachers and TAs, so a course teacher, TA or designer passes; a
-/// global admin passes as well.
-async fn can_manage_grades(
-    pool: &PgPool,
-    auth: &AuthUser,
-    course_id: i64,
-) -> Result<bool, ApiError> {
-    if crate::is_admin(auth) {
-        return Ok(true);
-    }
-    let row: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM enrollments \
-         WHERE user_id = $1 AND course_id = $2 \
-           AND role IN ('teacher', 'ta', 'designer') \
-           AND workflow_state <> 'deleted' LIMIT 1",
-    )
-    .bind(auth.id)
-    .bind(course_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row.is_some())
-}
-
-/// Canvas `CustomGradebookColumn#set_root_account_id` — the root account of
-/// the owning course.
-async fn course_root_account_id(pool: &PgPool, course_id: i64) -> Result<Option<i64>, ApiError> {
-    let row: Option<(Option<i64>,)> =
-        sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
-            .bind(course_id)
-            .fetch_optional(pool)
-            .await?;
-    let Some((Some(account_id),)) = row else {
-        return Ok(None);
-    };
-
-    let mut current = account_id;
-    let mut root = account_id;
-    for _ in 0..MAX_ACCOUNT_DEPTH {
-        let parent: Option<(Option<i64>,)> =
-            sqlx::query_as("SELECT parent_account_id FROM accounts WHERE id = $1")
-                .bind(current)
-                .fetch_optional(pool)
-                .await?;
-        match parent {
-            Some((Some(parent_id),)) => {
-                root = parent_id;
-                current = parent_id;
-            }
-            _ => break,
-        }
-    }
-    Ok(Some(root))
-}
-
 // ---------------------------------------------------------------------------
 // Serialization
 // ---------------------------------------------------------------------------
-
-/// Canvas `custom_gradebook_column_json` — the `api_json` field set plus the
-/// `hidden` flag of the workflow state.
-fn column_json(row: &ColumnRow) -> Value {
-    json!({
-        "id": row.id,
-        "title": row.title,
-        "position": row.position,
-        "teacher_notes": row.teacher_notes,
-        "read_only": row.read_only,
-        "hidden": row.workflow_state == "hidden",
-    })
-}
 
 /// Canvas renders a `timestamp` column as an ISO 8601 instant.
 fn format_timestamp(value: NaiveDateTime) -> String {
@@ -319,77 +194,6 @@ fn filter_json(row: &FilterRow) -> Value {
 // ---------------------------------------------------------------------------
 // Parameters and validation
 // ---------------------------------------------------------------------------
-
-/// The permitted fields of a custom gradebook column request.
-///
-/// `None` means "the parameter was not sent"; the value is the Ruby cast of
-/// the parameter.
-#[derive(Debug, Default)]
-struct ColumnFields {
-    title: Option<String>,
-    position: Option<i64>,
-    teacher_notes: Option<Option<bool>>,
-    hidden: Option<bool>,
-    read_only: Option<bool>,
-}
-
-/// Read the permitted column fields out of the request body.
-fn read_column_fields(body: &Value) -> ColumnFields {
-    let source = match body.get("column") {
-        Some(inner) if inner.is_object() => inner.clone(),
-        _ => body.clone(),
-    };
-
-    ColumnFields {
-        title: read_string(&source, "title"),
-        position: read_i64(&source, "position"),
-        teacher_notes: read_boolean(&source, "teacher_notes"),
-        hidden: read_hidden(&source),
-        read_only: read_boolean(&source, "read_only").flatten(),
-    }
-}
-
-/// The Rails error hash of the `CustomGradebookColumn` validations.
-///
-/// `title` is required, at most 255 characters and may not be one of the
-/// gradebook importer reserved names. `teacher_notes` has to be `true` or
-/// `false` — a value the Rails boolean cast turns into `nil` fails.
-fn validate_column(title: Option<&str>, teacher_notes_nil: bool) -> Map<String, Value> {
-    let mut errors = Map::new();
-
-    match title {
-        None => {
-            errors.insert("title".into(), json!(["can't be blank"]));
-        }
-        Some(title) if title.trim().is_empty() => {
-            errors.insert("title".into(), json!(["can't be blank"]));
-        }
-        Some(title) if title.chars().count() > MAXIMUM_STRING_LENGTH => {
-            errors.insert(
-                "title".into(),
-                json!([format!(
-                    "is too long (maximum is {MAXIMUM_STRING_LENGTH} characters)"
-                )]),
-            );
-        }
-        Some(title) if GRADEBOOK_IMPORTER_RESERVED_NAMES.contains(&title) => {
-            errors.insert(
-                "title".into(),
-                json!(["cannot use gradebook importer reserved names"]),
-            );
-        }
-        Some(_) => {}
-    }
-
-    if teacher_notes_nil {
-        errors.insert(
-            "teacher_notes".into(),
-            json!(["teacher_notes must be true or false"]),
-        );
-    }
-
-    errors
-}
 
 /// The fields of a gradebook filter request.
 #[derive(Debug, Default)]
@@ -478,27 +282,7 @@ fn read_string(source: &Value, key: &str) -> Option<String> {
     })
 }
 
-/// Read an integer parameter. `None` means "not sent" or "not a number".
-fn read_i64(source: &Value, key: &str) -> Option<i64> {
-    let value = source.get(key)?;
-    match value {
-        Value::Number(number) => number
-            .as_i64()
-            .or_else(|| number.as_f64().map(|f| f as i64)),
-        Value::String(text) => Some(ruby_to_i(text)),
-        _ => None,
-    }
-}
-
-/// Read a boolean parameter with the Rails boolean cast.
-///
-/// `Some(None)` is a parameter the Rails cast turns into `nil` — the
-/// `teacher_notes` inclusion validation fails for such a value.
-fn read_boolean(source: &Value, key: &str) -> Option<Option<bool>> {
-    let value = source.get(key)?;
-    Some(rails_boolean(value))
-}
-
+#[cfg(test)]
 /// The Rails boolean cast of a value.
 ///
 /// `""` and `nil` cast to `nil`, the Rails false values cast to `false`,
@@ -522,26 +306,7 @@ fn rails_boolean(value: &Value) -> Option<bool> {
     }
 }
 
-/// Read the `hidden` parameter.
-///
-/// `CustomGradebookColumn#hidden=` casts the value with
-/// `Canvas::Plugin.value_to_boolean`, not with the Rails boolean cast — so
-/// "no" is `false` and "yes" is `true`.
-fn read_hidden(source: &Value) -> Option<bool> {
-    let value = source.get("hidden")?;
-    Some(value_to_boolean(value))
-}
-
-/// Canvas `Canvas::Plugin.value_to_boolean`.
-fn value_to_boolean(value: &Value) -> bool {
-    match value {
-        Value::Bool(flag) => *flag,
-        Value::String(text) => value_to_boolean_str(text),
-        Value::Number(number) => number.as_f64().map(|f| f != 0.0).unwrap_or(false),
-        _ => false,
-    }
-}
-
+#[cfg(test)]
 /// Canvas `Canvas::Plugin.value_to_boolean` for a string.
 fn value_to_boolean_str(text: &str) -> bool {
     let lower = text.trim().to_ascii_lowercase();
@@ -554,6 +319,7 @@ fn value_to_boolean_str(text: &str) -> bool {
     ruby_to_i(text) != 0
 }
 
+#[cfg(test)]
 /// Ruby's `String#to_i` — the leading integer of the string, `0` when there
 /// is none.
 fn ruby_to_i(text: &str) -> i64 {
@@ -569,6 +335,7 @@ fn ruby_to_i(text: &str) -> i64 {
     trimmed[..end].parse::<i64>().unwrap_or(0)
 }
 
+#[cfg(test)]
 /// The Ruby `to_i` of a JSON value.
 fn ruby_to_i_value(value: &Value) -> i64 {
     match value {
@@ -578,6 +345,12 @@ fn ruby_to_i_value(value: &Value) -> i64 {
     }
 }
 
+#[cfg(test)]
+const DEFAULT_PER_PAGE: i64 = 10;
+#[cfg(test)]
+const MAX_PER_PAGE: i64 = 100;
+
+#[cfg(test)]
 /// Canvas `Api.per_page_for` and the will_paginate page resolution.
 fn resolve_pagination(page: Option<&str>, per_page: Option<&str>) -> (i64, i64) {
     let per_page = per_page
@@ -588,244 +361,69 @@ fn resolve_pagination(page: Option<&str>, per_page: Option<&str>) -> (i64, i64) 
     (page, per_page)
 }
 
+#[cfg(test)]
+/// The Rails error hash of the `CustomGradebookColumn` validations.
+///
+/// `title` is required, at most 255 characters and may not be one of the
+/// gradebook importer reserved names. `teacher_notes` has to be `true` or
+/// `false` — a value the Rails boolean cast turns into `nil` fails.
+fn validate_column(title: Option<&str>, teacher_notes_nil: bool) -> Map<String, Value> {
+    let mut errors = Map::new();
+
+    match title {
+        None => {
+            errors.insert("title".into(), json!(["can't be blank"]));
+        }
+        Some(title) if title.trim().is_empty() => {
+            errors.insert("title".into(), json!(["can't be blank"]));
+        }
+        Some(title) if title.chars().count() > MAXIMUM_STRING_LENGTH => {
+            errors.insert(
+                "title".into(),
+                json!([format!(
+                    "is too long (maximum is {MAXIMUM_STRING_LENGTH} characters)"
+                )]),
+            );
+        }
+        Some(title) if GRADEBOOK_IMPORTER_RESERVED_NAMES.contains(&title) => {
+            errors.insert(
+                "title".into(),
+                json!(["cannot use gradebook importer reserved names"]),
+            );
+        }
+        Some(_) => {}
+    }
+
+    if teacher_notes_nil {
+        errors.insert(
+            "teacher_notes".into(),
+            json!(["teacher_notes must be true or false"]),
+        );
+    }
+
+    errors
+}
+
+#[cfg(test)]
+/// `GradebookImporter::GRADEBOOK_IMPORTER_RESERVED_NAMES` — the titles the
+/// gradebook importer owns; a custom column may not use one of them.
+const GRADEBOOK_IMPORTER_RESERVED_NAMES: &[&str] = &[
+    "Student",
+    "LastName",
+    "FirstName",
+    "ID",
+    "SIS User ID",
+    "SIS Login ID",
+    "Section",
+    "Integration ID",
+    "Root Account",
+];
+
 // ---------------------------------------------------------------------------
-// Handlers — custom gradebook columns
+// Handlers — gradebook filters
 // ---------------------------------------------------------------------------
 
-/// `GET /courses/{course_id}/custom_gradebook_columns` — Canvas `index`.
-///
-/// Without `include_hidden` only the `active` columns are listed; with it
-/// every column that is not deleted is listed.
-async fn index_columns(
-    State(state): State<AppState>,
-    Path(course_id): Path<i64>,
-    auth: AuthUser,
-    Query(query): Query<ColumnListQuery>,
-) -> Result<Response, ApiError> {
-    if !course_exists(&state.db, course_id).await? {
-        return Ok(resource_not_found());
-    }
-    if !can_manage_grades(&state.db, &auth, course_id).await? {
-        return Ok(unauthorized());
-    }
-
-    let include_hidden = query
-        .include_hidden
-        .as_deref()
-        .map(value_to_boolean_str)
-        .unwrap_or(false);
-
-    let sql = if include_hidden {
-        format!(
-            "SELECT {COLUMN_COLUMNS} FROM custom_gradebook_columns \
-             WHERE course_id = $1 AND workflow_state <> 'deleted' \
-             ORDER BY position, title"
-        )
-    } else {
-        format!(
-            "SELECT {COLUMN_COLUMNS} FROM custom_gradebook_columns \
-             WHERE course_id = $1 AND workflow_state = 'active' \
-             ORDER BY position, title"
-        )
-    };
-    let rows: Vec<ColumnRow> = sqlx::query_as(&sql)
-        .bind(course_id)
-        .fetch_all(&state.db)
-        .await?;
-
-    let (page, per_page) = resolve_pagination(query.page.as_deref(), query.per_page.as_deref());
-    if page < 1 {
-        // Canvas turns an out of range page into a 404.
-        return Ok(resource_not_found());
-    }
-    let offset = ((page - 1) * per_page) as usize;
-
-    let columns: Vec<Value> = rows
-        .iter()
-        .skip(offset)
-        .take(per_page as usize)
-        .map(column_json)
-        .collect();
-
-    Ok(Json(columns).into_response())
-}
-
-/// `POST /courses/{course_id}/custom_gradebook_columns` — Canvas `create`.
-async fn create_column(
-    State(state): State<AppState>,
-    Path(course_id): Path<i64>,
-    auth: AuthUser,
-    Json(body): Json<Value>,
-) -> Result<Response, ApiError> {
-    if !course_exists(&state.db, course_id).await? {
-        return Ok(resource_not_found());
-    }
-    if !can_manage_grades(&state.db, &auth, course_id).await? {
-        return Ok(unauthorized());
-    }
-
-    let fields = read_column_fields(&body);
-    let title = fields.title.clone();
-    let errors = validate_column(title.as_deref(), matches!(fields.teacher_notes, Some(None)));
-    if !errors.is_empty() {
-        return Ok(validation_errors(errors));
-    }
-
-    let position = match fields.position {
-        Some(position) => position,
-        // Canvas `acts_as_list` `add_to_list_bottom` puts a new column at the
-        // bottom of the list of the course.
-        None => next_position(&state.db, course_id).await?,
-    };
-    let workflow_state = match fields.hidden {
-        Some(true) => "hidden",
-        _ => "active",
-    };
-    let teacher_notes = fields.teacher_notes.flatten().unwrap_or(false);
-    let read_only = fields.read_only.unwrap_or(false);
-    let root_account_id = course_root_account_id(&state.db, course_id).await?;
-
-    let row: ColumnRow = sqlx::query_as(&format!(
-        "INSERT INTO custom_gradebook_columns \
-         (title, position, workflow_state, course_id, teacher_notes, read_only, \
-          root_account_id, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now()) \
-         RETURNING {COLUMN_COLUMNS}"
-    ))
-    .bind(title.unwrap_or_default())
-    .bind(position as i32)
-    .bind(workflow_state)
-    .bind(course_id)
-    .bind(teacher_notes)
-    .bind(read_only)
-    .bind(root_account_id)
-    .fetch_one(&state.db)
-    .await?;
-
-    Ok(Json(column_json(&row)).into_response())
-}
-
-/// `PUT /courses/{course_id}/custom_gradebook_columns/{id}` — Canvas
-/// `update`.
-async fn update_column(
-    State(state): State<AppState>,
-    Path(path): Path<ColumnPath>,
-    auth: AuthUser,
-    Json(body): Json<Value>,
-) -> Result<Response, ApiError> {
-    if !course_exists(&state.db, path.course_id).await? {
-        return Ok(resource_not_found());
-    }
-    // Canvas loads the column before it authorizes the caller, so a missing
-    // column is a 404 and not a 403.
-    let Some(current) = load_column(&state.db, path.course_id, path.id).await? else {
-        return Ok(resource_not_found());
-    };
-    if !can_manage_grades(&state.db, &auth, path.course_id).await? {
-        return Ok(unauthorized());
-    }
-
-    let fields = read_column_fields(&body);
-    let title = fields
-        .title
-        .clone()
-        .unwrap_or_else(|| current.title.clone());
-    let errors = validate_column(Some(&title), matches!(fields.teacher_notes, Some(None)));
-    if !errors.is_empty() {
-        return Ok(validation_errors(errors));
-    }
-
-    let position = fields.position.unwrap_or(i64::from(current.position)) as i32;
-    let teacher_notes = fields
-        .teacher_notes
-        .flatten()
-        .unwrap_or(current.teacher_notes);
-    let read_only = fields.read_only.unwrap_or(current.read_only);
-    let workflow_state = match fields.hidden {
-        Some(true) => "hidden".to_string(),
-        Some(false) => "active".to_string(),
-        None => current.workflow_state.clone(),
-    };
-
-    let row: ColumnRow = sqlx::query_as(&format!(
-        "UPDATE custom_gradebook_columns SET \
-           title = $1, position = $2, workflow_state = $3, teacher_notes = $4, \
-           read_only = $5, updated_at = now() \
-         WHERE id = $6 RETURNING {COLUMN_COLUMNS}"
-    ))
-    .bind(title)
-    .bind(position)
-    .bind(workflow_state)
-    .bind(teacher_notes)
-    .bind(read_only)
-    .bind(current.id)
-    .fetch_one(&state.db)
-    .await?;
-
-    Ok(Json(column_json(&row)).into_response())
-}
-
-/// `DELETE /courses/{course_id}/custom_gradebook_columns/{id}` — Canvas
-/// `destroy`.
-///
-/// The delete is a soft delete — the row keeps existing with the `deleted`
-/// workflow state.
-async fn destroy_column(
-    State(state): State<AppState>,
-    Path(path): Path<ColumnPath>,
-    auth: AuthUser,
-) -> Result<Response, ApiError> {
-    if !course_exists(&state.db, path.course_id).await? {
-        return Ok(resource_not_found());
-    }
-    let Some(current) = load_column(&state.db, path.course_id, path.id).await? else {
-        return Ok(resource_not_found());
-    };
-    if !can_manage_grades(&state.db, &auth, path.course_id).await? {
-        return Ok(unauthorized());
-    }
-
-    let row: ColumnRow = sqlx::query_as(&format!(
-        "UPDATE custom_gradebook_columns SET workflow_state = 'deleted', updated_at = now() \
-         WHERE id = $1 RETURNING {COLUMN_COLUMNS}"
-    ))
-    .bind(current.id)
-    .fetch_one(&state.db)
-    .await?;
-
-    Ok(Json(column_json(&row)).into_response())
-}
-
-/// `POST /courses/{course_id}/custom_gradebook_columns/reorder` — Canvas
-/// `reorder`.
-///
-/// The Ruby action has no permission check — it only reorders the columns of
-/// the course and answers `200 {}`.
-async fn reorder_columns(
-    State(state): State<AppState>,
-    Path(course_id): Path<i64>,
-    _auth: AuthUser,
-    Json(body): Json<Value>,
-) -> Result<Response, ApiError> {
-    if !course_exists(&state.db, course_id).await? {
-        return Ok(resource_not_found());
-    }
-
-    let Some(order) = body.get("order").and_then(Value::as_array) else {
-        // Ruby: `params[:order]` is nil and `update_order` raises.
-        return Ok(internal_error());
-    };
-
-    let ids = dedup_ids(order);
-    if ids.is_empty() {
-        return Ok(Json(json!({})).into_response());
-    }
-
-    apply_reorder(&state.db, course_id, &ids).await?;
-
-    Ok(Json(json!({})).into_response())
-}
-
+#[cfg(test)]
 /// Canvas `acts_as_list` `update_order` — the ids of the columns to move, in
 /// their new order.
 ///
@@ -841,80 +439,6 @@ fn dedup_ids(order: &[Value]) -> Vec<i64> {
         ids.push(id);
     }
     ids
-}
-
-/// The Canvas `acts_as_list` `update_order` algorithm.
-///
-/// The listed columns get the position of their rank in the new order, the
-/// remaining columns of the course are pushed down.
-async fn apply_reorder(pool: &PgPool, course_id: i64, ids: &[i64]) -> Result<(), ApiError> {
-    let rows: Vec<(i64, i32)> = sqlx::query_as(
-        "SELECT id, position FROM custom_gradebook_columns \
-         WHERE course_id = $1 ORDER BY position, id",
-    )
-    .bind(course_id)
-    .fetch_all(pool)
-    .await?;
-
-    let moving_positions: Vec<i32> = rows
-        .iter()
-        .filter(|(id, _)| ids.contains(id))
-        .map(|(_, position)| *position)
-        .collect();
-    let moving_count = moving_positions.len() as i64;
-
-    for (id, position) in rows {
-        let new_position = match ids.iter().position(|candidate| *candidate == id) {
-            Some(rank) => rank as i64 + 1,
-            None => {
-                let mut shifted = i64::from(position);
-                for (index, moving) in moving_positions.iter().enumerate() {
-                    if position <= *moving {
-                        shifted = i64::from(position) + (moving_count - index as i64);
-                        break;
-                    }
-                }
-                shifted
-            }
-        };
-        if new_position != i64::from(position) {
-            sqlx::query("UPDATE custom_gradebook_columns SET position = $1 WHERE id = $2")
-                .bind(new_position as i32)
-                .bind(id)
-                .execute(pool)
-                .await?;
-        }
-    }
-    Ok(())
-}
-
-/// Canvas `@context.custom_gradebook_columns.not_deleted.find(params[:id])`.
-async fn load_column(
-    pool: &PgPool,
-    course_id: i64,
-    id: i64,
-) -> Result<Option<ColumnRow>, ApiError> {
-    let row: Option<ColumnRow> = sqlx::query_as(&format!(
-        "SELECT {COLUMN_COLUMNS} FROM custom_gradebook_columns \
-         WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'"
-    ))
-    .bind(id)
-    .bind(course_id)
-    .fetch_optional(pool)
-    .await?;
-    Ok(row)
-}
-
-/// Canvas `acts_as_list` `add_to_list_bottom` — the position of a new column
-/// at the bottom of the list of the course.
-async fn next_position(pool: &PgPool, course_id: i64) -> Result<i64, ApiError> {
-    let max_position: Option<i32> = sqlx::query_scalar(
-        "SELECT MAX(position) FROM custom_gradebook_columns WHERE course_id = $1",
-    )
-    .bind(course_id)
-    .fetch_one(pool)
-    .await?;
-    Ok(i64::from(max_position.unwrap_or(0)) + 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -1091,19 +615,10 @@ async fn load_filter(
 
 /// The router of the custom gradebook column and gradebook filter routes.
 pub fn router() -> Router<AppState> {
+    // The custom_gradebook_columns resource lives in star-gradebook (the
+    // assessments lane merged first); only the gradebook filters are
+    // served here.
     Router::new()
-        .route(
-            "/courses/{course_id}/custom_gradebook_columns",
-            get(index_columns).post(create_column),
-        )
-        .route(
-            "/courses/{course_id}/custom_gradebook_columns/reorder",
-            post(reorder_columns),
-        )
-        .route(
-            "/courses/{course_id}/custom_gradebook_columns/{id}",
-            put(update_column).delete(destroy_column),
-        )
         .route(
             "/courses/{course_id}/gradebook_filters",
             get(index_filters).post(create_filter),

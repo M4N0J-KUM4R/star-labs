@@ -1665,67 +1665,6 @@ async fn create_rubric_import(
     Ok(RubricImportResponse::from_row(row))
 }
 
-/// Shared upload-status lookup.
-///
-/// Canvas `RubricsApiController#upload_status` accepts the literal `latest`
-/// or a numeric import id; anything else fails the lookup with a 404.
-async fn load_upload_status(
-    db: &PgPool,
-    context_id: i64,
-    context_type: &str,
-    id: &str,
-) -> Result<RubricImportResponse, ApiError> {
-    let import_id: Option<i64> = if id == "latest" {
-        sqlx::query_scalar(
-            r#"
-            SELECT id FROM rubric_imports
-            WHERE context_id = $1 AND context_type = $2
-            ORDER BY created_at DESC LIMIT 1
-            "#,
-        )
-        .bind(context_id)
-        .bind(context_type)
-        .fetch_optional(db)
-        .await?
-    } else {
-        id.parse::<i64>().ok()
-    };
-
-    let import_id = import_id.ok_or(ApiError::NotFound)?;
-
-    let row: Option<RubricImportRow> = sqlx::query_as(
-        r#"
-        SELECT id, user_id, attachment_id, workflow_state,
-               progress, error_count, error_data, created_at, updated_at
-        FROM rubric_imports
-        WHERE id = $1 AND context_id = $2 AND context_type = $3
-        "#,
-    )
-    .bind(import_id)
-    .bind(context_id)
-    .bind(context_type)
-    .fetch_optional(db)
-    .await?;
-    let row = row.ok_or(ApiError::NotFound)?;
-
-    let mut import = RubricImportResponse::from_row(row);
-
-    if import.user_id.is_some() {
-        let user_row: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")
-            .bind(import.user_id)
-            .fetch_optional(db)
-            .await?;
-        if let Some((name,)) = user_row {
-            import.user = Some(serde_json::json!({
-                "id": import.user_id,
-                "display_name": name,
-            }));
-        }
-    }
-
-    Ok(import)
-}
-
 /// POST /courses/{courseId}/rubrics/upload  → 201
 ///
 /// Accepts a JSON body with `attachment_id` referencing an already-uploaded
@@ -1771,77 +1710,6 @@ async fn upload_rubric(
     }));
 
     Ok((StatusCode::CREATED, Json(import)))
-}
-
-/// GET /courses/{courseId}/rubrics/upload/{id}
-///
-/// Canvas nests the status under the upload path; `{id}` is the import id or
-/// the literal `latest`.
-async fn get_upload_status(
-    State(state): State<AppState>,
-    Path((course_id, id)): Path<(i64, String)>,
-    auth: AuthUser,
-) -> Result<Json<RubricImportResponse>, ApiError> {
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    Ok(Json(
-        load_upload_status(&state.db, course_id, "Course", &id).await?,
-    ))
-}
-
-/// GET /accounts/{accountId}/rubrics/upload/{id}
-async fn get_account_upload_status(
-    State(state): State<AppState>,
-    Path((account_id, id)): Path<(i64, String)>,
-    auth: AuthUser,
-) -> Result<Json<RubricImportResponse>, ApiError> {
-    check_admin_on_account(&state.db, &auth, account_id).await?;
-
-    Ok(Json(
-        load_upload_status(&state.db, account_id, "Account", &id).await?,
-    ))
-}
-
-/// GET /courses/{courseId}/rubrics/upload/{id}/rubrics
-///
-/// Canvas `#rubrics_by_import_id`: returns all rubrics created by a specific
-/// import, nested under the upload path.
-async fn get_rubrics_by_import_id(
-    State(state): State<AppState>,
-    Path((course_id, import_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-) -> Result<Json<Vec<Rubric>>, ApiError> {
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let import_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM rubric_imports WHERE id = $1 AND context_id = $2)",
-    )
-    .bind(import_id)
-    .bind(course_id)
-    .fetch_one(&state.db)
-    .await?;
-
-    if !import_exists {
-        return Err(ApiError::NotFound);
-    }
-
-    let rubrics: Vec<Rubric> = sqlx::query_as(
-        r#"
-        SELECT id, course_id, title, points_possible, workflow_state, created_at, updated_at
-        FROM rubrics
-        WHERE rubric_imports_id = $1 AND workflow_state != 'deleted'
-        ORDER BY created_at ASC
-        "#,
-    )
-    .bind(import_id)
-    .fetch_all(&state.db)
-    .await?;
-
-    Ok(Json(rubrics))
 }
 
 // -----------------------------------------------------------------------------
@@ -1996,85 +1864,6 @@ async fn list_account_used_locations(
     }
 
     Ok(Json(locations))
-}
-
-/// POST /accounts/{accountId}/rubrics/upload  → 201
-///
-/// Canvas `#upload` for an account context: creates the RubricImport record
-/// (`rubric_imports.context_type = 'Account'`).
-async fn upload_account_rubric(
-    State(state): State<AppState>,
-    Path(account_id): Path<i64>,
-    auth: AuthUser,
-    Json(payload): Json<UploadRubricRequest>,
-) -> Result<(StatusCode, Json<RubricImportResponse>), ApiError> {
-    check_admin_on_account(&state.db, &auth, account_id).await?;
-
-    let attachment_id = payload
-        .attachment_id
-        .ok_or_else(|| ApiError::Validation("attachment_id is required".into()))?;
-
-    let mut import = create_rubric_import(
-        &state.db,
-        account_id,
-        "Account",
-        Some(auth.id),
-        attachment_id,
-    )
-    .await?;
-
-    let user_row: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")
-        .bind(auth.id)
-        .fetch_optional(&state.db)
-        .await?;
-    let display_name = user_row.map(|(name,)| name);
-    import.user = Some(serde_json::json!({
-        "id": auth.id,
-        "display_name": display_name,
-    }));
-    import.attachment = Some(serde_json::json!({
-        "id": attachment_id,
-    }));
-
-    Ok((StatusCode::CREATED, Json(import)))
-}
-
-/// GET /accounts/{accountId}/rubrics/upload/{id}/rubrics
-///
-/// Canvas `#rubrics_by_import_id` for an account context.
-async fn get_account_rubrics_by_import_id(
-    State(state): State<AppState>,
-    Path((account_id, import_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-) -> Result<Json<Vec<Rubric>>, ApiError> {
-    check_admin_on_account(&state.db, &auth, account_id).await?;
-
-    let import_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM rubric_imports \
-         WHERE id = $1 AND context_id = $2 AND context_type = 'Account')",
-    )
-    .bind(import_id)
-    .bind(account_id)
-    .fetch_one(&state.db)
-    .await?;
-
-    if !import_exists {
-        return Err(ApiError::NotFound);
-    }
-
-    let rubrics: Vec<Rubric> = sqlx::query_as(
-        r#"
-        SELECT id, course_id, title, points_possible, workflow_state, created_at, updated_at
-        FROM rubrics
-        WHERE rubric_imports_id = $1 AND workflow_state != 'deleted'
-        ORDER BY created_at ASC
-        "#,
-    )
-    .bind(import_id)
-    .fetch_all(&state.db)
-    .await?;
-
-    Ok(Json(rubrics))
 }
 
 // -----------------------------------------------------------------------------
@@ -2464,16 +2253,9 @@ pub fn router() -> Router<AppState> {
         )
         .route("/rubrics/upload_template", get(upload_template))
         .route("/courses/{courseId}/rubrics/upload", post(upload_rubric))
-        // Canvas paths: upload status and imported rubrics are nested under
-        // `/rubrics/upload/:id` (`:id` may be the literal `latest`).
-        .route(
-            "/courses/{courseId}/rubrics/upload/{id}",
-            get(get_upload_status),
-        )
-        .route(
-            "/courses/{courseId}/rubrics/upload/{id}/rubrics",
-            get(get_rubrics_by_import_id),
-        )
+        // The upload status / imported-rubric reads live in
+        // `rubrics_api::router()` below (the assessments lane); only the
+        // course POST upload and the CSV template stay here.
         .route(
             "/accounts/{accountId}/rubrics",
             get(list_account_rubrics),
@@ -2482,18 +2264,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/accounts/{accountId}/rubrics/{id}/used_locations",
             get(list_account_used_locations),
-        )
-        .route(
-            "/accounts/{accountId}/rubrics/upload",
-            post(upload_account_rubric),
-        )
-        .route(
-            "/accounts/{accountId}/rubrics/upload/{id}",
-            get(get_account_upload_status),
-        )
-        .route(
-            "/accounts/{accountId}/rubrics/upload/{id}/rubrics",
-            get(get_account_rubrics_by_import_id),
         )
         .route(
             "/courses/{courseId}/rubrics/download_rubrics",

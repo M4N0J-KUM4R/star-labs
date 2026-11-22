@@ -76,6 +76,9 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
     let server = TestServer::new(
         axum::Router::new()
             .merge(star_courses::router())
+            // The custom_gradebook_columns resource lives in star-gradebook
+            // (the assessments lane) — the same router star-http mounts.
+            .merge(star_gradebook::router())
             .with_state(state),
     )
     .expect("build TestServer");
