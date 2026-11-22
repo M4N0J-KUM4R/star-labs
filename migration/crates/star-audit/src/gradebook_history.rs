@@ -67,8 +67,6 @@ impl FeedQuery {
 /// One grade change event shaped as a Canvas "submission version".
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct HistoryEventRow {
-    /// The audit event uuid (version surrogate id).
-    uuid: String,
     /// The submission the event belongs to.
     submission_id: Option<i64>,
     student_id: Option<i64>,
@@ -77,10 +75,9 @@ struct HistoryEventRow {
     grade_after: Option<String>,
     score_after: Option<f64>,
     /// Canvas `SubmissionVersion#version_id` surrogate: the audit
-    /// `version_number` (falling back to the event row id keeps ordering
-    /// stable when the auditor did not record one).
+    /// `version_number` (ordering ties are broken by the event row id
+    /// in SQL).
     version_number: Option<i32>,
-    id: i64,
     created_at: DateTime<Utc>,
 }
 
@@ -107,10 +104,10 @@ async fn history_events(
     // storing the actual (possibly negative) grader id.
     let rows: Vec<HistoryEventRow> = sqlx::query_as(
         r#"
-        SELECT e.uuid, sub.id AS submission_id, e.student_id, e.grader_id,
+        SELECT sub.id AS submission_id, e.student_id, e.grader_id,
                e.assignment_id, e.grade_after,
                e.score_after::double precision AS score_after,
-               e.version_number, e.id, e.created_at
+               e.version_number, e.created_at
         FROM grade_change_events e
         LEFT JOIN submissions sub
           ON sub.assignment_id = e.assignment_id AND sub.user_id = e.student_id
@@ -241,7 +238,7 @@ async fn graders_for_events(
     }
     let names = grader_names(pool, &graders.keys().copied().collect::<Vec<_>>()).await?;
     let mut assignment_ids: Vec<i64> = Vec::new();
-    for (_, (_, set)) in &graders {
+    for (_, set) in graders.values() {
         assignment_ids.extend(set.iter().copied());
     }
     let assignments = load_assignments(pool, &assignment_ids).await?;
@@ -326,6 +323,15 @@ async fn gradebook_history_day_details(
 // submissions (nested version list)
 // ---------------------------------------------------------------------------
 
+/// (grade, score, graded_at, grader_name) of the prior kept version in
+/// `gradebook_history_submissions` collation.
+type PriorKeptVersion = (
+    Option<String>,
+    Option<f64>,
+    Option<DateTime<Utc>>,
+    Option<String>,
+);
+
 /// GET .../gradebook_history/{date}/graders/{graderId}/assignments/{assignmentId}/submissions
 /// — Canvas `submissions`.
 ///
@@ -399,12 +405,7 @@ async fn gradebook_history_submissions(
         let rows = grouped.remove(&submission_id).unwrap_or_default();
         let mut versions: Vec<Value> = Vec::new();
         // (grade, score, graded_at, grader_name) of the prior kept version.
-        let mut prior: Option<(
-            Option<String>,
-            Option<f64>,
-            Option<DateTime<Utc>>,
-            Option<String>,
-        )> = None;
+        let mut prior: Option<PriorKeptVersion> = None;
         for row in rows {
             let Some(score) = row.score_after else {
                 continue;
@@ -504,10 +505,10 @@ async fn gradebook_history_feed(
 
     let rows: Vec<HistoryEventRow> = sqlx::query_as(&format!(
         r#"
-        SELECT e.uuid, sub.id AS submission_id, e.student_id, e.grader_id,
+        SELECT sub.id AS submission_id, e.student_id, e.grader_id,
                e.assignment_id, e.grade_after,
                e.score_after::double precision AS score_after,
-               e.version_number, e.id, e.created_at
+               e.version_number, e.created_at
         FROM grade_change_events e
         LEFT JOIN submissions sub
           ON sub.assignment_id = e.assignment_id AND sub.user_id = e.student_id
