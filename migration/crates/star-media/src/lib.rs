@@ -120,14 +120,6 @@ pub struct UpdateMediaObject {
     pub user_entered_title: Option<String>,
 }
 
-/// One entry of the `PUT .../media_tracks` batch body (Canvas `update` reads
-/// a JSON array of tracks).
-#[derive(Debug, Deserialize)]
-/// `POST .../asr` body.
-#[derive(Debug, Deserialize)]
-/// `POST /media_objects` context reference (Canvas `context_code`, e.g.
-/// `course_123` or `group_45`).
-#[derive(Debug, Deserialize)]
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------

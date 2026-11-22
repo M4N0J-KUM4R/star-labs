@@ -77,12 +77,11 @@ pub fn router() -> Router<AppState> {
 /// (Canvas `get_context`).
 async fn load_course(pool: &PgPool, raw_course_id: &str) -> Result<i64, ReportError> {
     let course_id: i64 = raw_course_id.parse().map_err(|_| ApiError::NotFound)?;
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT id FROM courses WHERE id = $1 AND workflow_state <> 'deleted'",
-    )
-    .bind(course_id)
-    .fetch_optional(pool)
-    .await?;
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
+            .bind(course_id)
+            .fetch_optional(pool)
+            .await?;
     row.map(|(id,)| id).ok_or(ApiError::NotFound.into())
 }
 
@@ -156,9 +155,12 @@ async fn create_report(
     // Canvas answers `{"error": "invalid report type <t>"}` with 400 for
     // every type outside the registry.
     if !COURSE_REPORT_TYPES.contains(&report_type.as_str()) {
-        return Ok((StatusCode::BAD_REQUEST, Json(json!({
-            "error": format!("invalid report type {report_type}")
-        })))
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(json!({
+                "error": format!("invalid report type {report_type}")
+            })),
+        )
             .into_response());
     }
 
@@ -245,10 +247,7 @@ fn course_report_json(row: &CourseReportRow) -> Value {
             .unwrap_or_else(|| json!({})),
     );
     map.insert("status".into(), Value::String(row.workflow_state.clone()));
-    map.insert(
-        "report_type".into(),
-        Value::String(row.report_type.clone()),
-    );
+    map.insert("report_type".into(), Value::String(row.report_type.clone()));
     map.insert("course_id".into(), Value::from(row.course_id));
     map.insert("created_at".into(), iso8601(row.created_at));
     map.insert("started_at".into(), iso8601_opt(row.start_at));
@@ -258,7 +257,11 @@ fn course_report_json(row: &CourseReportRow) -> Value {
     map.insert("file_url".into(), Value::Null);
     map.insert(
         "progress".into(),
-        Value::from(if row.workflow_state == "complete" { 100 } else { 0 }),
+        Value::from(if row.workflow_state == "complete" {
+            100
+        } else {
+            0
+        }),
     );
     Value::Object(map)
 }
@@ -276,10 +279,7 @@ fn iso8601_opt(value: Option<chrono::NaiveDateTime>) -> Value {
 
 /// Read the `parameters` of the request body — the same parsing the
 /// account-report routes use (JSON body or form parameters).
-fn parse_parameters(
-    content_type: &str,
-    body: &[u8],
-) -> Option<Value> {
+fn parse_parameters(content_type: &str, body: &[u8]) -> Option<Value> {
     let text = String::from_utf8_lossy(body);
     if content_type.starts_with("application/json") || text.trim_start().starts_with('{') {
         serde_json::from_str::<Value>(&text).ok()

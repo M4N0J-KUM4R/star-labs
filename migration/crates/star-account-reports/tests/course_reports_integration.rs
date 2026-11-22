@@ -146,20 +146,26 @@ fn auth(user_id: i64, role: &str) -> String {
 
 async fn cleanup(pool: &PgPool, prefix: &str) {
     let pattern = format!("{prefix}%");
-    let _ = sqlx::query("DELETE FROM course_reports WHERE course_id IN \
-         (SELECT id FROM courses WHERE course_code LIKE $1)")
-        .bind(&pattern)
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("DELETE FROM jobs WHERE tag = 'course_report#run_report' \
-         AND context_id NOT IN (SELECT id FROM course_reports)")
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("DELETE FROM enrollments WHERE course_id IN \
-         (SELECT id FROM courses WHERE course_code LIKE $1)")
-        .bind(&pattern)
-        .execute(pool)
-        .await;
+    let _ = sqlx::query(
+        "DELETE FROM course_reports WHERE course_id IN \
+         (SELECT id FROM courses WHERE course_code LIKE $1)",
+    )
+    .bind(&pattern)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        "DELETE FROM jobs WHERE tag = 'course_report#run_report' \
+         AND context_id NOT IN (SELECT id FROM course_reports)",
+    )
+    .execute(pool)
+    .await;
+    let _ = sqlx::query(
+        "DELETE FROM enrollments WHERE course_id IN \
+         (SELECT id FROM courses WHERE course_code LIKE $1)",
+    )
+    .bind(&pattern)
+    .execute(pool)
+    .await;
     let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1")
         .bind(&pattern)
         .execute(pool)
@@ -261,10 +267,7 @@ async fn create_validates_the_type_and_the_permission_and_queues_the_job() {
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
     let body: Value = resp.json();
-    assert_eq!(
-        body["error"],
-        json!("invalid report type zero_gravity_pdf")
-    );
+    assert_eq!(body["error"], json!("invalid report type zero_gravity_pdf"));
 
     // A student (no `read_reports`) is a 403 for a valid type.
     let resp = server
@@ -356,7 +359,9 @@ async fn show_returns_the_report_of_the_course() {
 
     // An unknown id is a 404, an anonymous caller a 401.
     let resp = server
-        .get(&format!("/courses/{course}/reports/course_pace_docx/99999999"))
+        .get(&format!(
+            "/courses/{course}/reports/course_pace_docx/99999999"
+        ))
         .add_header("Authorization", auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
