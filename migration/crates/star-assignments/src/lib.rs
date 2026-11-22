@@ -3300,8 +3300,12 @@ async fn course_grade_submission(
     .fetch_one(&state.db)
     .await?;
 
-    let value =
+    // `Submission` has no workflow_state column of its own, but Canvas'
+    // grading response always carries the state it just wrote, so the value
+    // is attached from the same string bound above.
+    let mut value =
         serde_json::to_value(&submission).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    value["workflow_state"] = serde_json::Value::String(workflow_state.to_string());
     Ok(Json(value))
 }
 
