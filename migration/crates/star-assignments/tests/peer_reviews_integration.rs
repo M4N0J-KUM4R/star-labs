@@ -668,7 +668,7 @@ async fn section_twins_reuse_course_peer_review_logic() {
     let submission = seed_submission(&pool, assignment, alice, "my essay").await;
 
     // Section-scoped index lists reviews like the course route.
-    let seeded = seed_review(&pool, assignment, submission, alice, bob).await;
+    seed_review(&pool, assignment, submission, alice, bob).await;
     let listed = server
         .get(&format!(
             "/sections/{section}/assignments/{assignment}/peer_reviews"
@@ -677,7 +677,10 @@ async fn section_twins_reuse_course_peer_review_logic() {
         .await;
     assert_eq!(listed.status_code(), 200, "{}", listed.text());
     let rows: Vec<Value> = listed.json();
-    assert!(rows.iter().any(|r| r["id"].as_i64() == Some(seeded)));
+    assert!(rows
+        .iter()
+        .any(|r| r["asset_id"].as_i64() == Some(submission)
+            && r["assessor_id"].as_i64() == Some(bob)));
 
     // The submission-scoped twin narrows to one submission.
     let narrowed = server
