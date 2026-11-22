@@ -3467,6 +3467,7 @@ dependencies = [
  "star-dashboard",
  "star-db",
  "star-discussions",
+ "star-enrollments",
  "star-grading-standards",
  "star-modules",
  "star-pages",

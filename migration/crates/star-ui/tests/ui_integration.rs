@@ -2588,6 +2588,427 @@ async fn gradebook_grid_and_csv() {
 }
 
 // ---------------------------------------------------------------------------
+// Course settings + people journey (issue #73)
+// ---------------------------------------------------------------------------
+
+/// Settings: teacher GET renders the form; student GET is 403.
+#[tokio::test]
+async fn settings_teacher_opens_student_403() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "setteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "setstudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Settings Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    let resp = server
+        .get(&format!("/courses/{course}/settings"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(body.contains("course_settings_form"), "settings form");
+    assert!(body.contains("Course is Published"), "publish state shown");
+
+    let resp = server
+        .get(&format!("/courses/{course}/settings"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student settings GET -> 403");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Settings save round-trips name + syllabus + workflow_state into the DB
+/// (PRG redirect with the success notice); student POST is 403; a blank
+/// name re-renders 422.
+#[tokio::test]
+async fn settings_save_round_trip_and_gates() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "saveteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "savestudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Save Course", "unpublished").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    let (csrf_cookie, csrf) = csrf_pair();
+
+    // Student POST -> 403 before any write.
+    let resp = server
+        .post(&format!("/courses/{course}/settings"))
+        .add_cookie(session_cookie(student, "student"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({
+            "name": "Hacked Course", "_csrf": csrf.clone(), "published": "published"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student settings POST -> 403");
+
+    // Teacher saves: name, course_code, syllabus_body, published.
+    let resp = server
+        .post(&format!("/courses/{course}/settings"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({
+            "name": "Renamed Course",
+            "course_code": "RC-101",
+            "description": "A description",
+            "syllabus_body": "Read the textbook",
+            "_csrf": csrf.clone(),
+            "published": "published"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 303, "save PRG: {}", resp.text());
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/settings?saved=1").as_str()
+    );
+
+    let row: (String, String, Option<String>, String) = sqlx::query_as(
+        "SELECT name, course_code, syllabus_body, workflow_state FROM courses WHERE id = $1",
+    )
+    .bind(course)
+    .fetch_one(&pool)
+    .await
+    .expect("course row");
+    assert_eq!(row.0, "Renamed Course");
+    assert_eq!(row.1, "RC-101");
+    assert_eq!(row.2.as_deref(), Some("Read the textbook"));
+    assert_eq!(row.3, "available", "publish checkbox persisted");
+
+    // Unpublish round trip (checkbox absent).
+    let resp = server
+        .post(&format!("/courses/{course}/settings"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie.clone())
+        .form(
+            &serde_json::json!({"name": "Renamed Course", "course_code": "RC-101", "_csrf": csrf}),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 303);
+    let state: String = sqlx::query_scalar("SELECT workflow_state FROM courses WHERE id = $1")
+        .bind(course)
+        .fetch_one(&pool)
+        .await
+        .expect("state");
+    assert_eq!(state, "unpublished", "unpublish persisted");
+
+    // Blank name -> 422 re-render with the error.
+    let (csrf_cookie, csrf) = csrf_pair();
+    let resp = server
+        .post(&format!("/courses/{course}/settings"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie)
+        .form(&serde_json::json!({"name": "   ", "_csrf": csrf}))
+        .await;
+    assert_eq!(resp.status_code(), 422, "blank name -> 422");
+    assert!(resp.text().contains("Name is required."));
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// People page lists the seeded enrollments with role + state; teacher sees
+/// Add People, student does not.
+#[tokio::test]
+async fn people_page_lists_roster() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "pteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "pstudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "People Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    let resp = server
+        .get(&format!("/courses/{course}/users"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(body.contains("roster_table"), "roster table present");
+    assert!(body.contains("pstudent"), "student name listed");
+    assert!(body.contains("Teacher"), "role shown");
+    assert!(body.contains("Active"), "state shown");
+    assert!(body.contains("enrollment-active"), "state styling class");
+    assert!(
+        !body.contains("add_people_link"),
+        "student must not see Add People"
+    );
+
+    let resp = server
+        .get(&format!("/courses/{course}/users"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    assert!(
+        resp.text().contains("add_people_link"),
+        "teacher sees Add People"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Add People: teacher creates an enrollment (assert DB) + PRG; student
+/// blocked on GET and POST; unknown login re-renders 422.
+#[tokio::test]
+async fn add_people_creates_enrollment_and_gates() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "atteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "atstudent", "student", "not-a-real-hash").await;
+    let outsider = seed_user(&pool, &prefix, "atoutsider", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Add Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    // Student GET -> 403.
+    let resp = server
+        .get(&format!("/courses/{course}/users/add"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student GET add -> 403");
+
+    // Teacher loads the form.
+    let resp = server
+        .get(&format!("/courses/{course}/users/add"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    let (csrf_cookie, csrf) = csrf_pair();
+
+    // Student POST -> 403 (no row created).
+    let resp = server
+        .post(&format!("/courses/{course}/users/add"))
+        .add_cookie(session_cookie(student, "student"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({
+            "login": format!("{prefix}-atoutsider@test.local"),
+            "role": "student",
+            "_csrf": csrf.clone()
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student POST add -> 403");
+
+    // Teacher adds the outsider as a student.
+    let resp = server
+        .post(&format!("/courses/{course}/users/add"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({
+            "login": format!("{prefix}-atoutsider@test.local"),
+            "role": "student",
+            "_csrf": csrf.clone()
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 303, "add PRG: {}", resp.text());
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/users?added=1").as_str()
+    );
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM enrollments WHERE course_id = $1 AND user_id = $2 AND role = 'student'",
+    )
+    .bind(course)
+    .bind(outsider)
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(count, 1, "enrollment created in DB");
+
+    // The roster now lists the outsider.
+    let resp = server
+        .get(&format!("/courses/{course}/users"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert!(resp.text().contains("atoutsider"), "roster row added");
+
+    // Duplicate -> 422 with the conflict message.
+    let resp = server
+        .post(&format!("/courses/{course}/users/add"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({
+            "login": format!("{prefix}-atoutsider@test.local"),
+            "role": "student",
+            "_csrf": csrf.clone()
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 422, "duplicate -> 422");
+    assert!(resp.text().contains("already enrolled"));
+
+    // Unknown login -> 422.
+    let resp = server
+        .post(&format!("/courses/{course}/users/add"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie)
+        .form(&serde_json::json!({
+            "login": format!("{prefix}-nobody@test.local"),
+            "role": "student",
+            "_csrf": csrf
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 422, "unknown login -> 422");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Conclude flips the enrollment to inactive; reactivate flips it back; a
+/// student POST on either is 403.
+#[tokio::test]
+async fn conclude_and_reactivate_toggle_state() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "cnteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "cnstudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Conclude Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    let (csrf_cookie, csrf) = csrf_pair();
+
+    // Student cannot conclude.
+    let resp = server
+        .post(&format!("/courses/{course}/users/{student}/conclude"))
+        .add_cookie(session_cookie(student, "student"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({"_csrf": csrf.clone()}))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student conclude -> 403");
+
+    // Teacher concludes the student.
+    let resp = server
+        .post(&format!("/courses/{course}/users/{student}/conclude"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({"_csrf": csrf.clone()}))
+        .await;
+    assert_eq!(resp.status_code(), 303, "conclude PRG: {}", resp.text());
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/users?concluded=1").as_str()
+    );
+
+    let state: String = sqlx::query_scalar(
+        "SELECT workflow_state FROM enrollments WHERE course_id = $1 AND user_id = $2",
+    )
+    .bind(course)
+    .bind(student)
+    .fetch_one(&pool)
+    .await
+    .expect("state");
+    assert_eq!(state, "inactive", "concluded -> inactive");
+
+    // The roster row now shows Inactive + the reactivate action.
+    let resp = server
+        .get(&format!("/courses/{course}/users"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    let body = resp.text();
+    assert!(body.contains("Inactive"), "Inactive label rendered");
+    assert!(body.contains("reactivate"), "reactivate action offered");
+
+    // Teacher reactivates.
+    let resp = server
+        .post(&format!("/courses/{course}/users/{student}/reactivate"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({"_csrf": csrf}))
+        .await;
+    assert_eq!(resp.status_code(), 303, "reactivate PRG");
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/users?reactivated=1").as_str()
+    );
+
+    let state: String = sqlx::query_scalar(
+        "SELECT workflow_state FROM enrollments WHERE course_id = $1 AND user_id = $2",
+    )
+    .bind(course)
+    .bind(student)
+    .fetch_one(&pool)
+    .await
+    .expect("state");
+    assert_eq!(state, "active", "reactivated -> active");
+
+    // Student cannot reactivate either.
+    let (csrf_cookie, csrf) = csrf_pair();
+    let resp = server
+        .post(&format!("/courses/{course}/users/{student}/reactivate"))
+        .add_cookie(session_cookie(student, "student"))
+        .add_cookie(csrf_cookie)
+        .form(&serde_json::json!({"_csrf": csrf}))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student reactivate -> 403");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// An unenrolled non-admin gets no settings/people data at all (course gate:
+/// 404 before 403 — the shell cannot bypass API authorization).
+#[tokio::test]
+async fn unenrolled_user_gets_no_settings_or_people_data() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let outsider = seed_user(&pool, &prefix, "soutsider", "student", "not-a-real-hash").await;
+    let teacher = seed_user(&pool, &prefix, "steacher", "teacher", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Gate Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+
+    for path in [
+        format!("/courses/{course}/settings"),
+        format!("/courses/{course}/users"),
+        format!("/courses/{course}/users/add"),
+    ] {
+        let resp = server
+            .get(&path)
+            .add_cookie(session_cookie(outsider, "student"))
+            .await;
+        // The course gate hides the course entirely (404); when the course
+        // is visible to the viewer, the teacher gate 403s — both prove no
+        // settings/people data leaks (same convention as the discussions test).
+        assert!(
+            resp.status_code() == 403 || resp.status_code() == 404,
+            "unenrolled GET {path} -> 403/404, got {}",
+            resp.status_code()
+        );
+        assert!(!resp.text().contains("Gate Course"), "no course data leaks");
+    }
+
+    // Mutations for a nonexistent course also 404 (before the teacher gate).
+    let (csrf_cookie, csrf) = csrf_pair();
+    let resp = server
+        .post("/courses/999999/settings")
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie)
+        .form(&serde_json::json!({"name": "X", "_csrf": csrf}))
+        .await;
+    assert_eq!(resp.status_code(), 404, "missing course -> 404");
+
+    cleanup(&pool, &prefix).await;
+}
+// ---------------------------------------------------------------------------
 // SpeedGrader grading workflow (issue #108)
 // ---------------------------------------------------------------------------
 
