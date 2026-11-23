@@ -149,6 +149,7 @@ async fn register_pages_are_get_only_and_submit_to_users() {
         );
 
         let csrf = get_csrf(&server, path).await;
+        let email = format!("{prefix}-rejected@test.local");
         let post = server
             .post(path)
             .add_cookie(axum_extra::extract::cookie::Cookie::new(
@@ -156,23 +157,24 @@ async fn register_pages_are_get_only_and_submit_to_users() {
                 csrf.clone(),
             ))
             .form(&serde_json::json!({
-                "name": "Wrong Path",
-                "email": format!("{prefix}-wrong@test.local"),
+                "name": "Rejected Path",
+                "email": email,
                 "password": "Password123!",
                 "password_confirmation": "Password123!",
                 "_csrf": csrf
             }))
             .await;
         assert_eq!(post.status_code(), 405, "{path} must not accept POST");
-    }
 
-    // The user is not created by the rejected POST.
-    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE name = $1")
-        .bind("Wrong Path")
-        .fetch_one(&pool)
-        .await
-        .expect("count");
-    assert_eq!(count, 0, "405 must not create a user");
+        // Keyed on the run-prefixed email so a concurrent test binary's rows
+        // can never satisfy this count.
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE email = $1")
+            .bind(&email)
+            .fetch_one(&pool)
+            .await
+            .expect("count");
+        assert_eq!(count, 0, "405 on {path} must not create a user");
+    }
 
     cleanup(&pool, &prefix).await;
 }
