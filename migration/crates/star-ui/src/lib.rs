@@ -16,21 +16,24 @@
 //!
 //! Auth is the `star_session` cookie (HttpOnly, SameSite=Lax) verified by
 //! the exact same path as the API's Bearer `AuthUser`; shell POSTs are CSRF
-//! double-submit protected; `/api/v1` is untouched.
+//! double-submit protected and honour Rails' hidden `_method` field the way
+//! Rack::MethodOverride does (`method_override`); `/api/v1` is untouched.
 
 pub mod assets;
 pub mod env;
 pub mod handlers;
+pub mod method_override;
 pub mod queries;
 pub mod session;
 
+use axum::middleware;
 use axum::routing::{get, post};
 use axum::Router;
 
 use star_common::AppState;
 
-/// The shell router. Mounted via `.merge(star_ui::router())` at the top level
-/// of the app router in star-http.
+/// The shell's page table. Serve it with [`app`], which adds the `_method`
+/// override; star-http and the integration tests all go through `app`.
 ///
 /// Route-order note: axum 0.8 matches STATIC segments before path parameters
 /// at the same depth, so `/courses/{id}/discussions` (and the quiz routes)
@@ -142,11 +145,12 @@ pub fn router() -> Router<AppState> {
         // (config/routes.rb:270) with no `only:`/`except:`, i.e. the full 7:
         // GET ..../assignments/new and GET ..../assignments/:id/edit are form
         // PAGES, while create is POST ..../assignments and update is
-        // PATCH/PUT ..../assignments/:id. The ported forms therefore post to
-        // the collection, not to /new (the invented POST-on-/new is gone).
-        // Update still posts to /edit: submitting PATCH from HTML needs
-        // Rack's `_method` override, which this workspace has not ported
-        // (tracked as the method-override lane).
+        // PATCH/PUT ..../assignments/:id. An HTML form cannot submit PATCH, so
+        // Rails' helpers post to the member path with a hidden `_method`
+        // field and Rack::MethodOverride rewrites the verb before routing —
+        // that shim is `method_override`, applied by `app` ahead of this
+        // table, and it is why no verb here is invented: `/new` and `/edit`
+        // answer GET only, and a POST to either is a method mismatch.
         .route(
             "/courses/{id}/assignments",
             get(handlers::assignments::assignments_index)
@@ -158,12 +162,13 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{id}/assignments/{aid}",
-            get(handlers::assignments::assignment_show),
+            get(handlers::assignments::assignment_show)
+                .patch(handlers::assignments::assignment_update)
+                .put(handlers::assignments::assignment_update),
         )
         .route(
             "/courses/{id}/assignments/{aid}/edit",
-            get(handlers::assignments::assignment_edit)
-                .post(handlers::assignments::assignment_update),
+            get(handlers::assignments::assignment_edit),
         )
         .route(
             "/courses/{id}/assignments/{aid}/submit",
@@ -215,19 +220,32 @@ pub fn router() -> Router<AppState> {
         // tab route. Canvas' web routes: `concerns :announcements`
         // (config/routes.rb:266/:702/:796) expands `resources :announcements`
         // (:154-156, no `only:`/`except:`) under the course scope, giving
-        // GET/POST /courses/:cours_id/announcements plus GET .../new and GET
-        // .../:id; the syllabus page is the `collection { get :syllabus }`
-        // inside `resources :assignments` (:344-346). Write verbs Canvas
-        // reserves for those rows (DELETE .../:id, plus PUT/PATCH) go through
-        // Rack's `_method` override, which these server-rendered forms do not
-        // speak, so they are not registered.
+        // GET/POST /courses/:cours_id/announcements and GET .../:id; the
+        // syllabus page is the `collection { get :syllabus }` inside
+        // `resources :assignments` (:344-346). Write verbs Canvas reserves for
+        // those rows (DELETE .../:id, plus PUT/PATCH) now reach this port
+        // through `crate::method_override`, but these server-rendered forms do
+        // not offer them, so they are not registered.
         //
-        // Two of these paths surface as `absent` in the parity extras list for
-        // tool reasons, not because Canvas lacks them: parity.py records only
-        // one `/new` web route across 1359 (it does not expand the `/new` and
-        // `/edit` routes `resources` generates), and it expands
-        // `collection { get :syllabus }` into the member spelling
-        // `/assignments/:id/syllabus`. Both rows are Canvas-real — keep them.
+        // `GET .../announcements/new` is NOT Canvas. parity.py expands the
+        // `/new` and `/edit` routes `resources` draws (see its
+        // SERVED_FORM_PAGES) but gates each on the controller action and what
+        // it renders, and AnnouncementsController (app/controllers/
+        // announcements_controller.rb:21) defines only `index` (:64) and
+        // `show` (:105) — app/views/announcements holds only index.html.erb.
+        // So a request to Canvas' /courses/:id/announcements/new is a 500, and
+        // this row reads `absent` in the extras list for the real reason: it
+        // is our page, not a port. Canvas edits an announcement through
+        // `discussion_topics#new`/`#edit` with `params[:is_announcement]`
+        // (discussion_topics_controller.rb:578/:585); carrying that model over
+        // — which would replace this page — is the discussion-topics lane.
+        // `POST .../announcements` is the same story one verb over: Rails
+        // draws the create route, `AnnouncementsController#create` does not
+        // exist, so the scoreboard's `web_exact` there proves routing, not a
+        // served page.
+        // `/assignments/syllabus` and `/files/quota` did look unmatched only
+        // because the extractor drew `collection do` symbols on the member
+        // path; both are Canvas-real collection routes and now read web_exact.
         .route(
             "/courses/{id}/announcements",
             get(handlers::announcements::announcements_index)
@@ -266,6 +284,22 @@ pub fn router() -> Router<AppState> {
         // not at `/calendar` — so no create or delete is registered here.
         .route("/calendar", get(handlers::calendar::calendar_index))
         .route("/static/{hash}/{file}", get(assets::serve_static))
+}
+
+/// The shell as it is actually served: the page table behind Rack's `_method`
+/// override.
+///
+/// The override is NOT a `.layer()` on [`router`]. axum's `Router::layer`
+/// forwards to `MethodRouter::layer`, which wraps each per-verb handler and so
+/// runs *after* the verb has been selected — a `POST` to a `PATCH`-only member
+/// path is answered with 405 before such a layer ever sees the request. Passing
+/// the table to `fallback_service` makes it one whole-router service, and a
+/// layer over that runs before any routing, which is where
+/// `Rack::MethodOverride` sits in Canvas' stack (`config/application.rb`).
+pub fn app(state: AppState) -> Router {
+    Router::new()
+        .fallback_service(router().with_state(state))
+        .layer(middleware::from_fn(method_override::method_override))
 }
 
 /// Request origin for `ENV.DEEP_LINKING_POST_MESSAGE_ORIGIN`.

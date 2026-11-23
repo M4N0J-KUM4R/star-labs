@@ -38,7 +38,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
         db: pool.clone(),
         jwt_secret: JWT_SECRET.to_string(),
     };
-    let server = TestServer::new(star_ui::router().with_state(state)).expect("build TestServer");
+    let server = TestServer::new(star_ui::app(state)).expect("build TestServer");
     Some((server, pool, run_prefix()))
 }
 
@@ -485,10 +485,12 @@ async fn announcements_create_show_and_mark_read() {
     .await;
     assert_eq!(resp.status_code(), 403, "student create must be forbidden");
 
-    // Deleting a row is a member DELETE in Canvas (`resources :announcements`,
-    // config/routes.rb:154-155) sent through Rack's `_method` override, not a
-    // form POST. Neither verb exists here: the old `/delete` path is unrouted
-    // and the member route only answers GET. The show page offers no control.
+    // Deleting a row is a member DELETE in Canvas' route table (`resources
+    // :announcements`, config/routes.rb:154-155) — the shell's `_method`
+    // shim could reach that verb — but AnnouncementsController implements no
+    // destroy action, so Canvas 500s there and this port registers neither
+    // verb: the old `/delete` path is unrouted and the member route only
+    // answers GET. The show page offers no control.
     let resp = authed_post(
         &server,
         &t_session,

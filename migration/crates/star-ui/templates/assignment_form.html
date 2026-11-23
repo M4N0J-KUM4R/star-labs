@@ -10,6 +10,11 @@
     {% endif %}
     <form id="assignment_edit_form" class="assignment-edit-form" method="post" action="{{ form_action }}">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      {# Canvas' form_for(method: :patch) writes this hidden field and
+         Rack::MethodOverride turns the POST into PATCH on the member path;
+         star_ui::method_override does the same rewriting here. New records
+         post to the collection with no override, exactly like Rails. #}
+      {% if is_edit %}<input type="hidden" name="_method" value="patch">{% endif %}
 
       <div class="ic-Form-control">
         <label class="ic-Label" for="assignment_name">Name</label>

@@ -13004,15 +13004,15 @@
       "absent": 25,
       "api_alias": 5,
       "api_extra_nested": 18,
-      "api_extra_verb": 18,
+      "api_extra_verb": 19,
       "api_nested": 0,
       "api_verb_mismatch": 0,
       "web_exact": 52,
       "web_nested": 26,
-      "web_verb_mismatch": 16
+      "web_verb_mismatch": 15
     },
     "star_route_calls": 1286,
-    "star_route_registrations": 1575,
+    "star_route_registrations": 1576,
     "star_tables": 397,
     "star_test_calls_excluded": 3,
     "star_unparsed_calls": 0,
@@ -13435,6 +13435,19 @@
     },
     {
       "canvas_closest": [
+        "DELETE",
+        "GET",
+        "PUT"
+      ],
+      "classification": "api_extra_verb",
+      "crate": "star-ui",
+      "normalized_path": "courses/{}/assignments/{}",
+      "path": "/courses/{id}/assignments/{aid}",
+      "source": "crates/star-ui/src/lib.rs",
+      "verb": "PATCH"
+    },
+    {
+      "canvas_closest": [
         "WEB GET"
       ],
       "classification": "web_exact",
@@ -13443,17 +13456,6 @@
       "path": "/courses/{id}/assignments/{aid}/edit",
       "source": "crates/star-ui/src/lib.rs",
       "verb": "GET"
-    },
-    {
-      "canvas_closest": [
-        "GET"
-      ],
-      "classification": "web_verb_mismatch",
-      "crate": "star-ui",
-      "normalized_path": "courses/{}/assignments/{}/edit",
-      "path": "/courses/{id}/assignments/{aid}/edit",
-      "source": "crates/star-ui/src/lib.rs",
-      "verb": "POST"
     },
     {
       "canvas_closest": [

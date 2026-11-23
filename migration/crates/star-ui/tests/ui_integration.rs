@@ -37,7 +37,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
         db: pool.clone(),
         jwt_secret: JWT_SECRET.to_string(),
     };
-    let server = TestServer::new(star_ui::router().with_state(state)).expect("build TestServer");
+    let server = TestServer::new(star_ui::app(state)).expect("build TestServer");
     Some((server, pool, run_prefix()))
 }
 
@@ -2015,6 +2015,188 @@ async fn new_assignment_create_and_gates() {
         }))
         .await;
     assert_eq!(resp.status_code(), 422, "empty name -> 422");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Canvas' edit form posts `POST /courses/:id/assignments/:id` with a hidden
+/// `_method=patch` field and Rack::MethodOverride turns that into the PATCH
+/// the route table carries (`resources :assignments`, config/routes.rb:270).
+/// `star_ui::method_override` is that shim, so the verbs on this journey are
+/// Canvas' verbs: PATCH/PUT on the member path, GET on `/edit`, and nothing
+/// routable as POST on either.
+#[tokio::test]
+async fn assignment_edit_form_uses_the_method_override() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "eteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "estudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Override Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let group = seed_assignment_group(&pool, course, "Weekly", 1).await;
+    let hw = seed_assignment(
+        &pool,
+        course,
+        Some(group),
+        "Old Title",
+        None,
+        5.0,
+        "published",
+    )
+    .await;
+
+    // The form page: Canvas' /edit page, GET only, and it points at the
+    // member path with the override field — not at /edit, and not at PATCH
+    // (which no HTML form can submit).
+    let resp = server
+        .get(&format!("/courses/{course}/assignments/{hw}/edit"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(
+        body.contains(&format!("action=\"/courses/{course}/assignments/{hw}\"")),
+        "form action must be the Canvas member path, got: {body}"
+    );
+    assert!(
+        body.contains("name=\"_method\" value=\"patch\""),
+        "hidden _method field: {body}"
+    );
+    assert!(
+        !body.contains(&format!("/courses/{course}/assignments/{hw}/edit")),
+        "the form must not post to /edit"
+    );
+    let csrf = resp
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+
+    // POST + `_method=patch` on the member path updates the row.
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/{hw}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_method": "patch",
+            "name": "New Title",
+            "points_possible": "8",
+            "assignment_group_id": group.to_string(),
+            "_csrf": csrf.clone(),
+            "published": "published"
+        }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        303,
+        "override PATCH must update: {}",
+        resp.text()
+    );
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/assignments/{hw}").as_str()
+    );
+    let (title, points): (String, f64) =
+        sqlx::query_as("SELECT title, points_possible::float8 FROM assignments WHERE id = $1")
+            .bind(hw)
+            .fetch_one(&pool)
+            .await
+            .expect("read assignment");
+    assert_eq!(title, "New Title");
+    assert_eq!(points, 8.0);
+
+    // Without the override field the same request is a bare POST, and Canvas
+    // has no POST on the member path: 405, row untouched.
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/{hw}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "name": "Bare Post",
+            "points_possible": "1",
+            "_csrf": csrf.clone()
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 405, "member POST must not be routable");
+    let title: String = sqlx::query_scalar("SELECT title FROM assignments WHERE id = $1")
+        .bind(hw)
+        .fetch_one(&pool)
+        .await
+        .expect("read title");
+    assert_eq!(title, "New Title", "bare POST must not write");
+
+    // The invented verb on the form PAGE is gone.
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/{hw}/edit"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "name": "Via /edit",
+            "points_possible": "1",
+            "_csrf": csrf.clone()
+        }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        405,
+        "POST /assignments/:id/edit must not be routable"
+    );
+
+    // A verb outside PATCH/PUT/DELETE is not honoured (see the module docs),
+    // so this stays the POST the router has no route for.
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/{hw}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_method": "get",
+            "name": "Tunneled",
+            "points_possible": "1",
+            "_csrf": csrf.clone()
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 405, "_method=get must not be honoured");
+
+    // The gate runs on the overridden verb too: a student's PATCH-shaped
+    // form is 403 before any update.
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/{hw}"))
+        .add_cookie(session_cookie(student, "student"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_method": "patch",
+            "name": "Hacked",
+            "points_possible": "1",
+            "_csrf": csrf
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student override PATCH -> 403");
+    let title: String = sqlx::query_scalar("SELECT title FROM assignments WHERE id = $1")
+        .bind(hw)
+        .fetch_one(&pool)
+        .await
+        .expect("read title");
+    assert_eq!(title, "New Title", "student write must not land");
 
     cleanup(&pool, &prefix).await;
 }
