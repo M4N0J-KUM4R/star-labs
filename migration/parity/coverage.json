@@ -12983,7 +12983,7 @@
     "canvas_api_routes": 1410,
     "canvas_controllers": 222,
     "canvas_models": 688,
-    "canvas_web_routes": 1359,
+    "canvas_web_routes": 1385,
     "erb_views": 475,
     "erb_views_implemented": 0,
     "graphql_files": 390,
@@ -13001,15 +13001,15 @@
     "js_tsx_files_implemented": 0,
     "star_extras": 160,
     "star_extras_by_class": {
-      "absent": 29,
+      "absent": 25,
       "api_alias": 5,
-      "api_extra_nested": 19,
+      "api_extra_nested": 18,
       "api_extra_verb": 18,
       "api_nested": 0,
       "api_verb_mismatch": 0,
-      "web_exact": 48,
+      "web_exact": 52,
       "web_nested": 26,
-      "web_verb_mismatch": 15
+      "web_verb_mismatch": 16
     },
     "star_route_calls": 1286,
     "star_route_registrations": 1575,
@@ -13412,8 +13412,10 @@
       "verb": "GET"
     },
     {
-      "canvas_closest": [],
-      "classification": "absent",
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-ui",
       "normalized_path": "courses/{}/assignments/new",
       "path": "/courses/{id}/assignments/new",
@@ -13421,8 +13423,10 @@
       "verb": "GET"
     },
     {
-      "canvas_closest": [],
-      "classification": "absent",
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-ui",
       "normalized_path": "courses/{}/assignments/syllabus",
       "path": "/courses/{id}/assignments/syllabus",
@@ -13430,8 +13434,10 @@
       "verb": "GET"
     },
     {
-      "canvas_closest": [],
-      "classification": "absent",
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-ui",
       "normalized_path": "courses/{}/assignments/{}/edit",
       "path": "/courses/{id}/assignments/{aid}/edit",
@@ -13439,8 +13445,10 @@
       "verb": "GET"
     },
     {
-      "canvas_closest": [],
-      "classification": "absent",
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-ui",
       "normalized_path": "courses/{}/assignments/{}/edit",
       "path": "/courses/{id}/assignments/{aid}/edit",
@@ -13902,11 +13910,9 @@
     },
     {
       "canvas_closest": [
-        "GET courses/{}/files/quota",
-        "GET groups/{}/files/quota",
-        "GET users/{}/files/quota"
+        "WEB GET"
       ],
-      "classification": "api_extra_nested",
+      "classification": "web_exact",
       "crate": "star-files",
       "normalized_path": "files/quota",
       "path": "/files/quota",

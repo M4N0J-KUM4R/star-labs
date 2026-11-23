@@ -285,12 +285,12 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | `api_verb_mismatch` | 0 | Canvas verb at this path is unimplemented: add it |
 | `api_extra_verb` | 18 | Canvas serves other verbs here, not this one: extra API surface, verify in routes.rb |
 | `api_alias` | 5 | Canvas' `self` id alias (lib/api.rb): keep, parity-exact |
-| `web_exact` | 48 | port of a Canvas web route: keep, label as web/UI |
-| `web_verb_mismatch` | 15 | web port with the wrong verb |
+| `web_exact` | 52 | port of a Canvas web route: keep, label as web/UI |
+| `web_verb_mismatch` | 16 | web port with the wrong verb |
 | `web_nested` | 26 | web route flattened to top level: re-nest or label |
 | `api_nested` | 0 | Canvas serves the nested form and star does not: re-nest |
-| `api_extra_nested` | 19 | nested form already served: this flat twin is extra surface, verify in routes.rb |
-| `absent` | 29 | no Canvas path or tail: a renamed alias, a custom endpoint, or unused -- check before deleting |
+| `api_extra_nested` | 18 | nested form already served: this flat twin is extra surface, verify in routes.rb |
+| `absent` | 25 | no Canvas path or tail: a renamed alias, a custom endpoint, or unused -- check before deleting |
 
 | Verb | Path | Crate | Class | Canvas closest |
 |---|---|---|---|---|
@@ -301,10 +301,6 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | GET | `/conversations/compose` | `star-ui` | absent | - |
 | POST | `/conversations/mark_all_read` | `star-ui` | absent | - |
 | GET | `/courses/{id}/announcements/new` | `star-ui` | absent | - |
-| GET | `/courses/{id}/assignments/new` | `star-ui` | absent | - |
-| GET | `/courses/{id}/assignments/syllabus` | `star-ui` | absent | - |
-| GET | `/courses/{id}/assignments/{aid}/edit` | `star-ui` | absent | - |
-| POST | `/courses/{id}/assignments/{aid}/edit` | `star-ui` | absent | - |
 | POST | `/courses/{id}/assignments/{aid}/submit` | `star-ui` | absent | - |
 | GET | `/courses/{id}/discussions` | `star-ui` | absent | - |
 | POST | `/courses/{id}/discussions` | `star-ui` | absent | - |
@@ -332,7 +328,6 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | GET | `/content_migrations/{id}` | `star-content` | api_extra_nested | `GET accounts/{}/content_migrations/{}`, `PUT accounts/{}/content_migrations/{}`, `GET courses/{}/content_migrations/{}` |
 | GET | `/enrollments` | `star-enrollments` | api_extra_nested | `GET sections/{}/enrollments`, `POST sections/{}/enrollments`, `GET courses/{}/enrollments` |
 | POST | `/enrollments` | `star-enrollments` | api_extra_nested | `GET sections/{}/enrollments`, `POST sections/{}/enrollments`, `GET courses/{}/enrollments` |
-| GET | `/files/quota` | `star-files` | api_extra_nested | `GET courses/{}/files/quota`, `GET groups/{}/files/quota`, `GET users/{}/files/quota` |
 | DELETE | `/grading_periods/{id}` | `star-grading-standards` | api_extra_nested | `DELETE accounts/{}/grading_periods/{}`, `GET courses/{}/grading_periods/{}`, `PUT courses/{}/grading_periods/{}` |
 | GET | `/grading_periods/{id}` | `star-grading-standards` | api_extra_nested | `DELETE accounts/{}/grading_periods/{}`, `GET courses/{}/grading_periods/{}`, `PUT courses/{}/grading_periods/{}` |
 | PUT | `/grading_periods/{id}` | `star-grading-standards` | api_extra_nested | `DELETE accounts/{}/grading_periods/{}`, `GET courses/{}/grading_periods/{}`, `PUT courses/{}/grading_periods/{}` |
@@ -382,6 +377,9 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | POST | `/courses/{courseId}/announcements` | `star-announcements` | web_exact | `WEB POST` |
 | POST | `/courses/{id}/announcements` | `star-ui` | web_exact | `WEB POST` |
 | GET | `/courses/{id}/announcements/{aid}` | `star-ui` | web_exact | `WEB GET` |
+| GET | `/courses/{id}/assignments/new` | `star-ui` | web_exact | `WEB GET` |
+| GET | `/courses/{id}/assignments/syllabus` | `star-ui` | web_exact | `WEB GET` |
+| GET | `/courses/{id}/assignments/{aid}/edit` | `star-ui` | web_exact | `WEB GET` |
 | GET | `/courses/{courseId}/calendar_events` | `star-calendar` | web_exact | `WEB GET` |
 | POST | `/courses/{courseId}/calendar_events` | `star-calendar` | web_exact | `WEB POST` |
 | POST | `/courses/{id}/deep_linking_response` | `star-lti` | web_exact | `WEB POST` |
@@ -397,6 +395,7 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | GET | `/dashboard` | `star-dashboard` | web_exact | `WEB GET` |
 | GET | `/dashboard` | `star-ui` | web_exact | `WEB GET` |
 | GET | `/deep_linking_cancel` | `star-lti` | web_exact | `WEB GET` |
+| GET | `/files/quota` | `star-files` | web_exact | `WEB GET` |
 | GET | `/folders` | `star-files` | web_exact | `WEB GET` |
 | POST | `/folders` | `star-files` | web_exact | `WEB POST` |
 | POST | `/groups/{group_id}/deep_linking_response` | `star-lti` | web_exact | `WEB POST` |
@@ -443,6 +442,7 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | PUT | `/accounts/{accountId}/role_overrides` | `star-permissions` | web_verb_mismatch | `GET`, `POST` |
 | DELETE | `/assignments/{id}` | `star-assignments` | web_verb_mismatch | `GET` |
 | PUT | `/assignments/{id}` | `star-assignments` | web_verb_mismatch | `GET` |
+| POST | `/courses/{id}/assignments/{aid}/edit` | `star-ui` | web_verb_mismatch | `GET` |
 | GET | `/courses/{id}/quizzes/{qid}/take` | `star-ui` | web_verb_mismatch | `MATCH` |
 | POST | `/courses/{id}/quizzes/{qid}/take` | `star-ui` | web_verb_mismatch | `MATCH` |
 | DELETE | `/enrollments/{id}` | `star-enrollments` | web_verb_mismatch | `GET` |
