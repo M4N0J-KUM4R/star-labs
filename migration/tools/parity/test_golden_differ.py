@@ -159,6 +159,59 @@ def test_empty_list_is_not_a_silent_pass(tmp_path):
                     "--capture-dir", str(captured), "--require-capture"]) == 1
 
 
+def test_include_reuses_another_goldens_shape(tmp_path):
+    """``$include`` makes one golden the single definition of a body shape.
+
+    ``GET /api/v1/courses`` and ``PUT /api/v1/courses/:id`` both return the
+    ``course_json`` body (canvas-src/lib/api/v1/course.rb:73-75, :106-116), so
+    the index and the update must not maintain two copies that can drift.
+    """
+    canvas, captured = tmp_path / "canvas", tmp_path / "captured"
+    single = "GET__api_v1_courses_param.json"
+    golden_file(canvas, shape=ACCOUNT_SHAPE, name=single,
+                route="GET /api/v1/courses/:id")
+    golden_file(canvas, shape={"$list": {"$include": single}},
+                route="GET /api/v1/courses")
+
+    capture_file(captured, [FULL_RECORD], route="GET /api/v1/courses")
+    assert gd.main(["diff", "--canvas-dir", str(canvas),
+                    "--capture-dir", str(captured)]) == 0
+
+    # A key required by the *included* golden is still a miss on the outer one,
+    # reported at the captured element so the finding names this route.
+    broken = dict(FULL_RECORD)
+    del broken["uuid"]
+    capture_file(captured, [broken], route="GET /api/v1/courses")
+    findings = gd.compare(gd.load_corpus(canvas, captured, None))
+    misses = [f for f in findings if f.kind == "FieldMiss"]
+    assert [f.path for f in misses] == ["[0].uuid"]
+    assert misses[0].route == "GET /api/v1/courses"
+
+
+def test_include_cycle_and_unknown_target_are_corpus_errors(tmp_path):
+    """An unresolvable include is exit 2, never a silently empty comparison."""
+    canvas = tmp_path / "canvas"
+    golden_file(canvas, shape={"$include": "GET__api_v1_courses.json"},
+                name="GET__api_v1_courses_param.json",
+                route="GET /api/v1/courses/:id")
+    golden_file(canvas, shape={"$include": "GET__api_v1_courses_param.json"},
+                name="GET__api_v1_courses.json", route="GET /api/v1/courses")
+    assert gd.main(["selfcheck", "--canvas-dir", str(canvas)]) == 2
+
+    dangling = tmp_path / "dangling"
+    golden_file(dangling, shape={"$include": "GET__never_written.json"},
+                name="GET__api_v1_courses.json", route="GET /api/v1/courses")
+    assert gd.main(["selfcheck", "--canvas-dir", str(dangling)]) == 2
+
+
+def test_committed_canvas_corpus_passes_selfcheck():
+    """The goldens shipped in this repo are the ones the gate actually reads."""
+    root = Path(__file__).resolve().parents[2]
+    canvas = root / "parity" / "behavior" / "golden" / "canvas"
+    assert canvas.is_dir(), f"no canvas golden corpus under {root}"
+    assert gd.main(["selfcheck", "--canvas-dir", str(canvas)]) == 0
+
+
 def test_selfcheck_validates_citations_and_rejects_bad_goldens(tmp_path):
     canvas = tmp_path / "canvas"
     golden_file(canvas)

@@ -40,6 +40,10 @@ A shape is one of:
 * ``{"$optional": <shape>}`` -- under an object key, the key may be absent
 * ``{"$nullable": <shape>}``  -- the value may be JSON ``null``
 * ``{"$list": <shape>}``      -- an array whose elements all match ``<shape>``
+* ``{"$include": "<golden>.json"}`` -- the referenced golden's ``shape``,
+  inline. Resolved while the corpus loads, so a golden that reuses the course
+  shape is checked against the same keys, not a paraphrase of them. A missing
+  target or a cycle invalidates the corpus (exit 2), never silently passes.
 * a JSON object -- every key is required unless wrapped in ``$optional``
 
 Findings
@@ -83,6 +87,11 @@ from typing import Any
 
 TYPE_TOKENS = {"string", "integer", "number", "boolean", "null", "any"}
 WRAPPERS = {"$optional", "$nullable", "$list"}
+
+# A shape node of exactly ``{"$include": "<golden>.json"}`` stands for the whole
+# ``shape`` of that golden. Course-shaped routes (index, account-scoped lists,
+# created/updated echoes) otherwise restate 30+ keys, and the copies drift.
+INCLUDE_KEY = "$include"
 
 # Findings that fail the gate on their own. NoElements and MissingCapture are
 # evidence gaps rather than shape disagreements, so they only gate when the
@@ -286,6 +295,31 @@ def _walk_validate(node: Any, at: str) -> None:
     raise ValueError(f"malformed shape node at {at}: {node!r}")
 
 
+def resolve_includes(node: Any, shapes: dict[str, Any], stack: tuple[str, ...] = ()) -> Any:
+    """Substitute every ``{"$include": name}`` with that golden's shape.
+
+    ``shapes`` maps golden file name to its already-parsed ``shape``. Raises
+    ValueError for an unknown target or a reference cycle, which load_corpus
+    turns into a corpus error (exit 2) rather than a parity verdict.
+    """
+    if isinstance(node, dict):
+        if list(node) == [INCLUDE_KEY]:
+            target = node[INCLUDE_KEY]
+            if not isinstance(target, str):
+                raise ValueError(f"{INCLUDE_KEY} target must be a file name")
+            if target in stack:
+                raise ValueError(
+                    f"$include cycle: {' -> '.join(stack)} -> {target}")
+            if target not in shapes:
+                raise ValueError(f"$include target not in corpus: {target}")
+            return resolve_includes(shapes[target], shapes, (*stack, target))
+        return {key: resolve_includes(child, shapes, stack)
+                for key, child in node.items()}
+    if isinstance(node, list):
+        return [resolve_includes(child, shapes, stack) for child in node]
+    return node
+
+
 def load_corpus(canvas_dir: Path, capture_dir: Path | None,
                 deviations_path: Path | None) -> Corpus:
     corpus = Corpus()
@@ -293,17 +327,34 @@ def load_corpus(canvas_dir: Path, capture_dir: Path | None,
         corpus.errors.append(f"canvas golden dir not found: {canvas_dir}")
         return corpus
 
+    raw: dict[str, Any] = {}
     for path in sorted(canvas_dir.glob("*.json")):
         try:
-            doc = json.loads(path.read_text())
+            raw[path.name] = json.loads(path.read_text())
         except json.JSONDecodeError as exc:
             corpus.errors.append(f"{path.name}: invalid JSON ({exc})")
+
+    shapes = {name: doc["shape"]
+              for name, doc in raw.items()
+              if isinstance(doc, dict) and "shape" in doc}
+
+    for name in sorted(raw):
+        doc = raw[name]
+        if not isinstance(doc, dict) or "shape" not in doc:
+            error = validate_golden(name, doc)
+            if error:
+                corpus.errors.append(error)
             continue
-        error = validate_golden(path.name, doc)
+        try:
+            doc = {**doc, "shape": resolve_includes(doc["shape"], shapes)}
+        except ValueError as exc:
+            corpus.errors.append(f"{name}: {exc}")
+            continue
+        error = validate_golden(name, doc)
         if error:
             corpus.errors.append(error)
             continue
-        corpus.canvas[path.name] = doc
+        corpus.canvas[name] = doc
 
     if capture_dir and capture_dir.is_dir():
         for path in sorted(capture_dir.glob("*.json")):

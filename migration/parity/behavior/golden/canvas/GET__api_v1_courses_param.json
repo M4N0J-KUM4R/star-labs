@@ -1,6 +1,6 @@
 {
   "route": "GET /api/v1/courses/:id",
-  "source": "canvas-src/lib/api/v1/course.rb:106-116 (course_json -> Api::V1::CourseJson), canvas-src/lib/api/v1/course_json.rb:9-24 (BASE_ATTRIBUTES), :49-52 (unconditional methods), :75-90 (to_hash), :95-97 (clear_unneeded_fields); columns canvas-src/db/migrate/20101210192618_init_canvas_db.rb create_table :courses",
+  "source": "canvas-src/lib/api/v1/course.rb:106-186 (course_json block: :128 apply_assignment_group_weights, :151 locale only when set, :163 template, :157 apply_nickname -> :241-249 original_name, :162 apply_master_course_settings -> :251-263 blueprint) + :204-211 (add_helper_dependant_entries: :206 calendar.ics, :209 time_zone); canvas-src/lib/api/v1/course_json.rb:22-35 (BASE_ATTRIBUTES), :65-72 (methods_to_send), :74-93 (to_hash: :80 hide_final_grades, :81 workflow_state, :82 course_format only when present, :83 restrict_enrollments_to_course_dates, :84-86 overridden_course_visibility, :92/:99-101 clears needs_grading_count/public_description/enrollments when nil), :117-130 (SIS permission gate); columns canvas-src/db/migrate/20101210192618_init_canvas_db.rb:176-235 (name/course_code/is_public/storage_quota/uuid/license/locale/grade_passback_setting/time_zone nullable; workflow_state, template, homeroom_course NOT NULL); name stays nullable because canvas-src/app/models/course.rb:389 validates it with allow_blank; feed_code canvas-src/config/initializers/active_record.rb:105-108; api_state canvas-src/app/models/course.rb:1934-1938; uuid canvas-src/app/models/course.rb:345 + :2077-2080; enrollment_term_id canvas-src/app/models/course.rb:346 + :1556 with account.rb:1807-1814; default_view canvas-src/app/models/course.rb:1561 + :4388-4390; friendly_name canvas-src/app/models/course.rb:4226-4228",
   "shape": {
     "id": "integer",
     "name": {
@@ -10,15 +10,14 @@
       "$nullable": "string"
     },
     "account_id": "integer",
-    "created_at": {
-      "$nullable": "string"
-    },
+    "created_at": "string",
     "start_at": {
       "$nullable": "string"
     },
-    "default_view": {
+    "end_at": {
       "$nullable": "string"
     },
+    "default_view": "string",
     "enrollment_term_id": "integer",
     "is_public": {
       "$nullable": "boolean"
@@ -27,24 +26,25 @@
       "$nullable": "integer"
     },
     "root_account_id": "integer",
-    "uuid": {
-      "$nullable": "string"
-    },
+    "uuid": "string",
     "license": {
       "$nullable": "string"
     },
     "grade_passback_setting": {
       "$nullable": "string"
     },
-    "end_at": {
-      "$nullable": "string"
+    "public_syllabus": {
+      "$nullable": "boolean"
     },
-    "public_syllabus": "boolean",
-    "public_syllabus_to_auth": "boolean",
+    "public_syllabus_to_auth": {
+      "$nullable": "boolean"
+    },
     "storage_quota_mb": {
       "$nullable": "number"
     },
-    "is_public_to_auth_users": "boolean",
+    "is_public_to_auth_users": {
+      "$nullable": "boolean"
+    },
     "homeroom_course": "boolean",
     "course_color": {
       "$nullable": "string"
@@ -56,17 +56,46 @@
     "hide_final_grades": "boolean",
     "workflow_state": "string",
     "restrict_enrollments_to_course_dates": "boolean",
+    "calendar": {
+      "ics": "string"
+    },
+    "time_zone": {
+      "$nullable": "string"
+    },
+    "blueprint": "boolean",
+    "template": "boolean",
     "course_format": {
       "$optional": "string"
     },
     "overridden_course_visibility": {
       "$optional": "string"
     },
-    "sis_course_id": {
+    "locale": {
       "$optional": "string"
     },
-    "integration_id": {
+    "original_name": {
       "$optional": "string"
+    },
+    "sis_course_id": {
+      "$optional": {
+        "$nullable": "string"
+      }
+    },
+    "sis_import_id": {
+      "$optional": {
+        "$nullable": "integer"
+      }
+    },
+    "integration_id": {
+      "$optional": {
+        "$nullable": "string"
+      }
+    },
+    "permissions": {
+      "$optional": {
+        "create_discussion_topic": "boolean",
+        "create_announcement": "boolean"
+      }
     },
     "enrollments": {
       "$optional": {
@@ -77,6 +106,50 @@
       "$optional": "integer"
     },
     "public_description": {
+      "$optional": "string"
+    },
+    "syllabus_body": {
+      "$optional": "string"
+    },
+    "html_url": {
+      "$optional": "string"
+    },
+    "term": {
+      "$optional": "any"
+    },
+    "sections": {
+      "$optional": {
+        "$list": "any"
+      }
+    },
+    "tabs": {
+      "$optional": {
+        "$list": "any"
+      }
+    },
+    "grading_periods": {
+      "$optional": {
+        "$list": "any"
+      }
+    },
+    "total_students": {
+      "$optional": "integer"
+    },
+    "teachers": {
+      "$optional": {
+        "$list": "any"
+      }
+    },
+    "is_favorite": {
+      "$optional": "boolean"
+    },
+    "account": {
+      "$optional": "any"
+    },
+    "image_download_url": {
+      "$optional": "string"
+    },
+    "banner_image_download_url": {
       "$optional": "string"
     }
   }
