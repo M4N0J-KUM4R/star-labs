@@ -1,0 +1,23 @@
+{% extends "layouts/course.html" %}
+{# File show — metadata page with a Download action. Deviation: there is no
+   byte storage in this workspace, so Download 302s to the REST public_url
+   endpoint rather than streaming bytes. #}
+{% block content %}
+  <div id="file_show" class="file-show">
+    <div class="ic-Action-header">
+      <div class="ic-Action-header__Primary">
+        <h1 class="file-show__title">{{ file_name }}</h1>
+      </div>
+      <div class="ic-Action-header__Secondary">
+        <a href="/courses/{{ course_id }}/files" class="Button">Back to Files</a>
+        <a href="/courses/{{ course_id }}/files/{{ file_id }}/download" class="Button Button--primary" rel="nofollow">Download</a>
+      </div>
+    </div>
+
+    <dl class="file-show__meta">
+      <dt>Type</dt><dd>{{ content_type }}</dd>
+      <dt>Size</dt><dd>{{ size }} bytes</dd>
+      <dt>Modified</dt><dd>{{ updated_at }}</dd>
+    </dl>
+  </div>
+{% endblock content %}

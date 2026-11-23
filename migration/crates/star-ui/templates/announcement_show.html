@@ -1,0 +1,29 @@
+{% extends "layouts/course.html" %}
+{# Announcement show — Canvas announcements#show. Marks the announcement read
+   on view (loader-side). Teachers get the Delete button (soft delete, PRG
+   back to the index). #}
+{% block content %}
+  <div id="announcement_show" class="announcement-show">
+    <div class="ic-Action-header">
+      <div class="ic-Action-header__Primary">
+        <h1 class="announcement-show__title">{{ announcement_title }}</h1>
+      </div>
+      <div class="ic-Action-header__Secondary">
+        <a href="/courses/{{ course_id }}/announcements" class="Button">Back to Announcements</a>
+      </div>
+    </div>
+
+    <p class="announcement-show__meta">
+      {% if let Some(at) = posted_at %}Posted {{ at }}{% else %}Not posted yet{% endif %}
+    </p>
+
+    <div class="announcement-show__message" id="announcement_message">{{ message }}</div>
+
+    {% if can_delete %}
+    <form class="announcement-show__actions" method="post" action="/courses/{{ course_id }}/announcements/{{ announcement_id }}/delete">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <button type="submit" class="Button Button--danger">Delete Announcement</button>
+    </form>
+    {% endif %}
+  </div>
+{% endblock content %}

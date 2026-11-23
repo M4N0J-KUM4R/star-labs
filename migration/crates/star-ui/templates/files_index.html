@@ -1,0 +1,90 @@
+{% extends "layouts/course.html" %}
+{# Files index — Canvas files#index (left folder tree, breadcrumb of folder
+   names, file table: name link, size, type, updated). Teachers get the
+   New Folder and Upload forms. Deviation: files are metadata records (no
+   byte storage), so Upload posts metadata fields; no hidden/locked icons. #}
+{% block content %}
+  <div id="files_index" class="files-index">
+    <div class="ic-Action-header">
+      <div class="ic-Action-header__Primary">
+        <h1 class="files-index__title">Files</h1>
+      </div>
+    </div>
+
+    <div class="files-layout">
+      <aside class="files-tree" aria-label="Folders">
+        <ul class="files-tree__list">
+          {% for folder in folders %}
+          <li class="files-tree__item">
+            <a href="/courses/{{ course_id }}/files?folder_id={{ folder.id }}" class="files-tree__link">{{ folder.name }}</a>
+          </li>
+          {% endfor %}
+          {% if folders.is_empty() %}
+          <li class="files-tree__empty">No subfolders</li>
+          {% endif %}
+        </ul>
+      </aside>
+
+      <section class="files-main">
+        <nav class="files-breadcrumb" aria-label="Folder path">
+          {% for crumb in trail %}
+          {% if !loop.first %} / {% endif %}
+          <a href="/courses/{{ course_id }}/files?folder_id={{ crumb.id }}">{{ crumb.name }}</a>
+          {% endfor %}
+        </nav>
+
+        {% if can_manage %}
+        <div class="files-quota">
+          <span class="files-quota__label">Storage used: {{ quota_used_mb }} MB of {{ quota_mb }} MB</span>
+          <progress class="files-quota__bar" value="{{ quota_used_mb }}" max="{{ quota_mb }}" aria-label="Storage used"></progress>
+        </div>
+
+        <div class="files-manage">
+          <form class="files-manage__folder" method="post" action="/courses/{{ course_id }}/files">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <input type="hidden" name="upload_folder_id" value="{{ current_folder_id }}">
+            <input type="text" class="ic-Input" name="new_folder" placeholder="New folder name" aria-label="New folder name" required>
+            <button type="submit" class="Button">New Folder</button>
+          </form>
+
+          <form class="files-manage__upload" method="post" action="/courses/{{ course_id }}/files">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <input type="hidden" name="upload_folder_id" value="{{ current_folder_id }}">
+            <input type="text" class="ic-Input" name="filename" placeholder="File name" aria-label="File name" required>
+            <input type="text" class="ic-Input" name="content_type" placeholder="Type, e.g. application/pdf" aria-label="Content type">
+            <input type="number" class="ic-Input" name="size" min="0" placeholder="Size (bytes)" aria-label="File size in bytes">
+            <button type="submit" class="Button Button--primary">Upload</button>
+          </form>
+        </div>
+        {% endif %}
+
+        <table class="files-table" id="files_table">
+          <caption class="screenreader-only">Files in {{ course_name }}</caption>
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Size</th>
+              <th scope="col">Type</th>
+              <th scope="col">Modified</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% if files.is_empty() %}
+            <tr class="files-table__empty">
+              <td colspan="4">No files have been added to this folder yet.</td>
+            </tr>
+            {% endif %}
+            {% for file in files %}
+            <tr class="file-row" id="file_{{ file.id }}">
+              <td class="file-name"><a href="/courses/{{ course_id }}/files/{{ file.id }}">{{ file.name }}</a></td>
+              <td class="file-size">{{ file.size }}</td>
+              <td class="file-type">{{ file.content_type }}</td>
+              <td class="file-updated">{{ file.updated_at }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  </div>
+{% endblock content %}

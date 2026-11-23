@@ -100,7 +100,18 @@ pub async fn login_form(
         error: String::new(),
         session_expired: query.expired.as_deref().is_some_and(|v| v == "1"),
     };
-    (jar, page).into_response()
+    // no-store: a cached login page would embed a CSRF token that no longer
+    // matches the browser's `star_csrf` cookie, failing the double-submit
+    // check with 403 on an otherwise valid login.
+    (
+        jar,
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::PRAGMA, "no-cache"),
+        ],
+        page,
+    )
+        .into_response()
 }
 
 /// POST /login — form-decode, CSRF check, password verify, cookie set, 303.

@@ -1,0 +1,112 @@
+{% extends "layouts/authenticated.html" %}
+{# Calendar — Canvas month view, server-rendered port (issue #111).
+   Sunday-first month grid with event chips colored per context, the context
+   checkbox sidebar (GET form), and the create-event form. Deviation: week
+   view, mini-calendar, drag-drop, scheduler and .ics feed are deferred. #}
+{% block content %}
+  <div id="calendar" class="calendar-page">
+    <div class="ic-Action-header">
+      <div class="ic-Action-header__Primary">
+        <h1 class="calendar-page__month">{{ month_label }}</h1>
+      </div>
+      <div class="ic-Action-header__Secondary">
+        <a class="Button" href="/calendar?month={{ prev_month }}" rel="prev">&laquo; Prev</a>
+        <a class="Button" href="/calendar?month={{ this_month }}">Today</a>
+        <a class="Button" href="/calendar?month={{ next_month }}" rel="next">Next &raquo;</a>
+        {% if can_create %}
+        <a class="Button Button--primary" href="#calendar_event_form">+ Event</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="calendar-layout">
+      <aside class="calendar-contexts">
+        <form method="get" action="/calendar" aria-label="Filter calendars">
+          <input type="hidden" name="month" value="{{ this_month }}">
+          <fieldset>
+            <legend>Calendars</legend>
+            {% for context in contexts %}
+            <label class="calendar-context">
+              <input type="checkbox" name="contexts" value="{{ context.course_id }}"
+                     {% if context.checked %}checked{% endif %}>
+              <span class="calendar-context__swatch" data-course="{{ context.course_id }}"></span>
+              {{ context.course_name }}
+            </label>
+            {% endfor %}
+          </fieldset>
+          <button type="submit" class="Button">Apply</button>
+        </form>
+      </aside>
+
+      <section class="calendar-main">
+        <div class="calendar-grid-wrapper">
+        <table class="calendar-grid" id="calendar_month_grid">
+          <caption class="screenreader-only">{{ month_label }}</caption>
+          <thead>
+            <tr>
+              <th scope="col">Sun</th><th scope="col">Mon</th><th scope="col">Tue</th>
+              <th scope="col">Wed</th><th scope="col">Thu</th><th scope="col">Fri</th>
+              <th scope="col">Sat</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for week in weeks %}
+            <tr class="calendar-week">
+              {% for cell in week %}
+              <td class="calendar-day{% if !cell.in_month %} outside-month{% endif %}{% if cell.today %} today{% endif %}">
+                <span class="calendar-day__number">{{ cell.day }}</span>
+                <ul class="calendar-day__events">
+                  {% for chip in cell.chips %}
+                  <li class="calendar-event-chip" data-course="{{ chip.course_id }}">
+                    <a href="/courses/{{ chip.course_id }}" class="calendar-event-chip__link"
+                       title="{{ chip.course_name }}{% if let Some(loc) = chip.location_name %} — {{ loc }}{% endif %}">{{ chip.title }}</a>
+                  </li>
+                  {% endfor %}
+                </ul>
+              </td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        </div>
+
+        {% if can_create %}
+        <h2 class="calendar-page__form-title">Create Event</h2>
+        <form id="calendar_event_form" method="post" action="/calendar" class="calendar-event-form">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <div class="ic-Form-control">
+            <label class="ic-Label" for="event_context">Calendar</label>
+            <select class="ic-Input" id="event_context" name="context_code" required>
+              {% for context in contexts %}
+              <option value="course_{{ context.course_id }}">{{ context.course_name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="ic-Form-control">
+            <label class="ic-Label" for="event_title">Title</label>
+            <input class="ic-Input" type="text" id="event_title" name="title" required maxlength="255">
+          </div>
+          <div class="ic-Form-control">
+            <label class="ic-Label" for="event_start">Date</label>
+            <input class="ic-Input" type="date" id="event_start" name="start_date" required>
+          </div>
+          <div class="ic-Form-control">
+            <label class="ic-Label" for="event_end">End date (optional)</label>
+            <input class="ic-Input" type="date" id="event_end" name="end_date">
+          </div>
+          <div class="ic-Form-control">
+            <label class="ic-Label" for="event_location">Location</label>
+            <input class="ic-Input" type="text" id="event_location" name="location" maxlength="255">
+          </div>
+          <div class="ic-Form-control">
+            <label class="ic-Label" for="event_description">Details</label>
+            <textarea class="ic-Input" id="event_description" name="description" rows="4"></textarea>
+          </div>
+          <button type="submit" class="Button Button--primary">Create Event</button>
+        </form>
+        {% endif %}
+      </section>
+    </div>
+  </div>
+{% endblock content %}
