@@ -19,7 +19,7 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 Implemented REST route count: **1410 / 1410** (100.0%).
 
-Star registrations: 1575 route/method pairs from 1286 `.route(...)` calls (0 unparsed); 160 have no Canvas match and are listed as extras below.
+Star registrations: 1576 route/method pairs from 1286 `.route(...)` calls (0 unparsed); 160 have no Canvas match and are listed as extras below.
 
 Excluded before counting: 3 `.route(...)` calls inside `#[cfg(test)]` or `#[test]` bodies, 0 calls in `.rs` files no `mod` declaration reaches (not compiled, so not registered).
 
@@ -283,10 +283,10 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | Class | Count | Action |
 |---|---:|---|
 | `api_verb_mismatch` | 0 | Canvas verb at this path is unimplemented: add it |
-| `api_extra_verb` | 18 | Canvas serves other verbs here, not this one: extra API surface, verify in routes.rb |
+| `api_extra_verb` | 19 | Canvas serves other verbs here, not this one: extra API surface, verify in routes.rb |
 | `api_alias` | 5 | Canvas' `self` id alias (lib/api.rb): keep, parity-exact |
 | `web_exact` | 52 | port of a Canvas web route: keep, label as web/UI |
-| `web_verb_mismatch` | 16 | web port with the wrong verb |
+| `web_verb_mismatch` | 15 | web port with the wrong verb |
 | `web_nested` | 26 | web route flattened to top level: re-nest or label |
 | `api_nested` | 0 | Canvas serves the nested form and star does not: re-nest |
 | `api_extra_nested` | 18 | nested form already served: this flat twin is extra surface, verify in routes.rb |
@@ -345,6 +345,7 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | POST | `/accounts/{accountId}/grading_periods` | `star-grading-standards` | api_extra_verb | `GET` |
 | PUT | `/accounts/{id}/settings` | `star-accounts` | api_extra_verb | `GET` |
 | POST | `/accounts/{id}/users/{userId}` | `star-accounts` | api_extra_verb | `DELETE` |
+| PATCH | `/courses/{id}/assignments/{aid}` | `star-ui` | api_extra_verb | `DELETE`, `GET`, `PUT` |
 | GET | `/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}` | `star-submission-comments` | api_extra_verb | `DELETE`, `PUT` |
 | GET | `/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}` | `star-discussions` | api_extra_verb | `DELETE`, `PUT` |
 | POST | `/courses/{courseId}/groups` | `star-groups` | api_extra_verb | `GET` |
@@ -442,7 +443,6 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | PUT | `/accounts/{accountId}/role_overrides` | `star-permissions` | web_verb_mismatch | `GET`, `POST` |
 | DELETE | `/assignments/{id}` | `star-assignments` | web_verb_mismatch | `GET` |
 | PUT | `/assignments/{id}` | `star-assignments` | web_verb_mismatch | `GET` |
-| POST | `/courses/{id}/assignments/{aid}/edit` | `star-ui` | web_verb_mismatch | `GET` |
 | GET | `/courses/{id}/quizzes/{qid}/take` | `star-ui` | web_verb_mismatch | `MATCH` |
 | POST | `/courses/{id}/quizzes/{qid}/take` | `star-ui` | web_verb_mismatch | `MATCH` |
 | DELETE | `/enrollments/{id}` | `star-enrollments` | web_verb_mismatch | `GET` |
