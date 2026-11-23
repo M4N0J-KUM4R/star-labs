@@ -57,13 +57,13 @@ fn is_urlencoded(content_type: Option<&HeaderValue>) -> bool {
 /// router picks a `MethodRouter` — which is the whole point: the verb the
 /// route table carries is the verb the request ends up matching.
 pub async fn method_override(req: Request, next: Next) -> Response {
-    let (mut parts, mut body) = req.into_parts();
+    let (mut parts, body) = req.into_parts();
 
     if parts.method != Method::POST || !is_urlencoded(parts.headers.get(CONTENT_TYPE)) {
         return next.run(Request::from_parts(parts, body)).await;
     }
 
-    let raw = match to_bytes(&mut body, MAX_BODY).await {
+    let raw = match to_bytes(body, MAX_BODY).await {
         Ok(raw) => raw,
         Err(_) => {
             return (
