@@ -13,7 +13,7 @@
     "ui_api_ref_paths": 559,
     "ui_api_ref_strings": 2660,
     "ui_feature_dirs": 232,
-    "web_routes": 1359
+    "web_routes": 1364
   },
   "graphql_mutation_names": [
     "acceptEnrollmentInvitation",
@@ -12297,15 +12297,15 @@
     {
       "action": "quota",
       "controller": "files",
-      "normalized_path": "files/{}/quota",
-      "path": "/files/:id/quota",
+      "normalized_path": "files/quota",
+      "path": "/files/quota",
       "verb": "GET"
     },
     {
       "action": "reorder",
       "controller": "files",
-      "normalized_path": "files/{}/reorder",
-      "path": "/files/:id/reorder",
+      "normalized_path": "files/reorder",
+      "path": "/files/reorder",
       "verb": "POST"
     },
     {
@@ -13345,10 +13345,24 @@
       "verb": "POST"
     },
     {
+      "action": "new",
+      "controller": "assignments",
+      "normalized_path": "courses/{}/assignments/new",
+      "path": "/courses/:cours_id/assignments/new",
+      "verb": "GET"
+    },
+    {
       "action": "show",
       "controller": "assignments",
       "normalized_path": "courses/{}/assignments/{}",
       "path": "/courses/:cours_id/assignments/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "edit",
+      "controller": "assignments",
+      "normalized_path": "courses/{}/assignments/{}/edit",
+      "path": "/courses/:cours_id/assignments/:id/edit",
       "verb": "GET"
     },
     {
@@ -13634,8 +13648,8 @@
     {
       "action": "export",
       "controller": "rubric_assessments",
-      "normalized_path": "courses/{}/assignments/{}/rubric/assessments/{}/export",
-      "path": "/courses/:cours_id/assignments/:assignment_id/rubric/assessments/:id/export",
+      "normalized_path": "courses/{}/assignments/{}/rubric/assessments/export",
+      "path": "/courses/:cours_id/assignments/:assignment_id/rubric/assessments/export",
       "verb": "GET"
     },
     {
@@ -13683,8 +13697,8 @@
     {
       "action": "syllabus",
       "controller": "assignments",
-      "normalized_path": "courses/{}/assignments/{}/syllabus",
-      "path": "/courses/:cours_id/assignments/:id/syllabus",
+      "normalized_path": "courses/{}/assignments/syllabus",
+      "path": "/courses/:cours_id/assignments/syllabus",
       "verb": "GET"
     },
     {
@@ -13949,8 +13963,8 @@
     {
       "action": "reorder",
       "controller": "assignment_groups",
-      "normalized_path": "courses/{}/assignment_groups/{}/reorder",
-      "path": "/courses/:cours_id/assignment_groups/:id/reorder",
+      "normalized_path": "courses/{}/assignment_groups/reorder",
+      "path": "/courses/:cours_id/assignment_groups/reorder",
       "verb": "POST"
     },
     {
@@ -14026,8 +14040,8 @@
     {
       "action": "retrieve",
       "controller": "external_tools",
-      "normalized_path": "courses/{}/external_tools/{}/retrieve",
-      "path": "/courses/:cours_id/external_tools/:id/retrieve",
+      "normalized_path": "courses/{}/external_tools/retrieve",
+      "path": "/courses/:cours_id/external_tools/retrieve",
       "verb": "GET"
     },
     {
@@ -14243,15 +14257,15 @@
     {
       "action": "quota",
       "controller": "files",
-      "normalized_path": "courses/{}/files/{}/quota",
-      "path": "/courses/:cours_id/files/:id/quota",
+      "normalized_path": "courses/{}/files/quota",
+      "path": "/courses/:cours_id/files/quota",
       "verb": "GET"
     },
     {
       "action": "reorder",
       "controller": "files",
-      "normalized_path": "courses/{}/files/{}/reorder",
-      "path": "/courses/:cours_id/files/:id/reorder",
+      "normalized_path": "courses/{}/files/reorder",
+      "path": "/courses/:cours_id/files/reorder",
       "verb": "POST"
     },
     {
@@ -14766,6 +14780,13 @@
       "verb": "GET"
     },
     {
+      "action": "edit",
+      "controller": "quizzes/quizzes",
+      "normalized_path": "courses/{}/quizzes/{}/edit",
+      "path": "/courses/:cours_id/quizzes/:id/edit",
+      "verb": "GET"
+    },
+    {
       "action": "update",
       "controller": "quizzes/quizzes",
       "normalized_path": "courses/{}/quizzes/{}",
@@ -14873,15 +14894,15 @@
     {
       "action": "backup",
       "controller": "quizzes/quiz_submissions",
-      "normalized_path": "courses/{}/quizzes/{}/submissions/{}/backup",
-      "path": "/courses/:cours_id/quizzes/:quizz_id/submissions/:id/backup",
+      "normalized_path": "courses/{}/quizzes/{}/submissions/backup",
+      "path": "/courses/:cours_id/quizzes/:quizz_id/submissions/backup",
       "verb": "PUT"
     },
     {
       "action": "backup",
       "controller": "quizzes/quiz_submissions",
-      "normalized_path": "courses/{}/quizzes/{}/submissions/{}/backup",
-      "path": "/courses/:cours_id/quizzes/:quizz_id/submissions/:id/backup",
+      "normalized_path": "courses/{}/quizzes/{}/submissions/backup",
+      "path": "/courses/:cours_id/quizzes/:quizz_id/submissions/backup",
       "verb": "POST"
     },
     {
@@ -15398,15 +15419,15 @@
     {
       "action": "list",
       "controller": "outcomes",
-      "normalized_path": "courses/{}/outcomes/{}/list",
-      "path": "/courses/:cours_id/outcomes/:id/list",
+      "normalized_path": "courses/{}/outcomes/list",
+      "path": "/courses/:cours_id/outcomes/list",
       "verb": "GET"
     },
     {
       "action": "add_outcome",
       "controller": "outcomes",
-      "normalized_path": "courses/{}/outcomes/{}/add_outcome",
-      "path": "/courses/:cours_id/outcomes/:id/add_outcome",
+      "normalized_path": "courses/{}/outcomes/add_outcome",
+      "path": "/courses/:cours_id/outcomes/add_outcome",
       "verb": "POST"
     },
     {
@@ -15538,15 +15559,15 @@
     {
       "action": "reorder",
       "controller": "context_modules",
-      "normalized_path": "courses/{}/modules/{}/reorder",
-      "path": "/courses/:cours_id/modules/:id/reorder",
+      "normalized_path": "courses/{}/modules/reorder",
+      "path": "/courses/:cours_id/modules/reorder",
       "verb": "POST"
     },
     {
       "action": "progressions",
       "controller": "context_modules",
-      "normalized_path": "courses/{}/modules/{}/progressions",
-      "path": "/courses/:cours_id/modules/:id/progressions",
+      "normalized_path": "courses/{}/modules/progressions",
+      "path": "/courses/:cours_id/modules/progressions",
       "verb": "GET"
     },
     {
@@ -16637,15 +16658,15 @@
     {
       "action": "quota",
       "controller": "files",
-      "normalized_path": "assessment_questions/{}/files/{}/quota",
-      "path": "/assessment_questions/:assessment_question_id/files/:id/quota",
+      "normalized_path": "assessment_questions/{}/files/quota",
+      "path": "/assessment_questions/:assessment_question_id/files/quota",
       "verb": "GET"
     },
     {
       "action": "reorder",
       "controller": "files",
-      "normalized_path": "assessment_questions/{}/files/{}/reorder",
-      "path": "/assessment_questions/:assessment_question_id/files/:id/reorder",
+      "normalized_path": "assessment_questions/{}/files/reorder",
+      "path": "/assessment_questions/:assessment_question_id/files/reorder",
       "verb": "POST"
     },
     {
@@ -17176,15 +17197,15 @@
     {
       "action": "quota",
       "controller": "files",
-      "normalized_path": "groups/{}/files/{}/quota",
-      "path": "/groups/:group_id/files/:id/quota",
+      "normalized_path": "groups/{}/files/quota",
+      "path": "/groups/:group_id/files/quota",
       "verb": "GET"
     },
     {
       "action": "reorder",
       "controller": "files",
-      "normalized_path": "groups/{}/files/{}/reorder",
-      "path": "/groups/:group_id/files/:id/reorder",
+      "normalized_path": "groups/{}/files/reorder",
+      "path": "/groups/:group_id/files/reorder",
       "verb": "POST"
     },
     {
@@ -17260,8 +17281,8 @@
     {
       "action": "retrieve",
       "controller": "external_tools",
-      "normalized_path": "groups/{}/external_tools/{}/retrieve",
-      "path": "/groups/:group_id/external_tools/:id/retrieve",
+      "normalized_path": "groups/{}/external_tools/retrieve",
+      "path": "/groups/:group_id/external_tools/retrieve",
       "verb": "GET"
     },
     {
@@ -17785,15 +17806,15 @@
     {
       "action": "add_role",
       "controller": "role_overrides",
-      "normalized_path": "accounts/{}/permissions/{}/add_role",
-      "path": "/accounts/:account_id/permissions/:id/add_role",
+      "normalized_path": "accounts/{}/permissions/add_role",
+      "path": "/accounts/:account_id/permissions/add_role",
       "verb": "POST"
     },
     {
       "action": "remove_role",
       "controller": "role_overrides",
-      "normalized_path": "accounts/{}/permissions/{}/remove_role",
-      "path": "/accounts/:account_id/permissions/:id/remove_role",
+      "normalized_path": "accounts/{}/permissions/remove_role",
+      "path": "/accounts/:account_id/permissions/remove_role",
       "verb": "DELETE"
     },
     {
@@ -17876,15 +17897,15 @@
     {
       "action": "add_role",
       "controller": "role_overrides",
-      "normalized_path": "accounts/{}/role_overrides/{}/add_role",
-      "path": "/accounts/:account_id/role_overrides/:id/add_role",
+      "normalized_path": "accounts/{}/role_overrides/add_role",
+      "path": "/accounts/:account_id/role_overrides/add_role",
       "verb": "POST"
     },
     {
       "action": "remove_role",
       "controller": "role_overrides",
-      "normalized_path": "accounts/{}/role_overrides/{}/remove_role",
-      "path": "/accounts/:account_id/role_overrides/:id/remove_role",
+      "normalized_path": "accounts/{}/role_overrides/remove_role",
+      "path": "/accounts/:account_id/role_overrides/remove_role",
       "verb": "DELETE"
     },
     {
@@ -18068,6 +18089,13 @@
       "normalized_path": "accounts/{}/users/{}",
       "path": "/accounts/:account_id/users/:user_id",
       "verb": "DELETE"
+    },
+    {
+      "action": "new",
+      "controller": "users",
+      "normalized_path": "accounts/{}/users/new",
+      "path": "/accounts/:account_id/users/new",
+      "verb": "GET"
     },
     {
       "action": "show",
@@ -18387,8 +18415,8 @@
     {
       "action": "retrieve",
       "controller": "external_tools",
-      "normalized_path": "accounts/{}/external_tools/{}/retrieve",
-      "path": "/accounts/:account_id/external_tools/:id/retrieve",
+      "normalized_path": "accounts/{}/external_tools/retrieve",
+      "path": "/accounts/:account_id/external_tools/retrieve",
       "verb": "GET"
     },
     {
@@ -18520,15 +18548,15 @@
     {
       "action": "list",
       "controller": "outcomes",
-      "normalized_path": "accounts/{}/outcomes/{}/list",
-      "path": "/accounts/:account_id/outcomes/:id/list",
+      "normalized_path": "accounts/{}/outcomes/list",
+      "path": "/accounts/:account_id/outcomes/list",
       "verb": "GET"
     },
     {
       "action": "add_outcome",
       "controller": "outcomes",
-      "normalized_path": "accounts/{}/outcomes/{}/add_outcome",
-      "path": "/accounts/:account_id/outcomes/:id/add_outcome",
+      "normalized_path": "accounts/{}/outcomes/add_outcome",
+      "path": "/accounts/:account_id/outcomes/add_outcome",
       "verb": "POST"
     },
     {
@@ -18779,15 +18807,15 @@
     {
       "action": "quota",
       "controller": "files",
-      "normalized_path": "accounts/{}/files/{}/quota",
-      "path": "/accounts/:account_id/files/:id/quota",
+      "normalized_path": "accounts/{}/files/quota",
+      "path": "/accounts/:account_id/files/quota",
       "verb": "GET"
     },
     {
       "action": "reorder",
       "controller": "files",
-      "normalized_path": "accounts/{}/files/{}/reorder",
-      "path": "/accounts/:account_id/files/:id/reorder",
+      "normalized_path": "accounts/{}/files/reorder",
+      "path": "/accounts/:account_id/files/reorder",
       "verb": "POST"
     },
     {
@@ -19785,6 +19813,13 @@
       "verb": "POST"
     },
     {
+      "action": "new",
+      "controller": "users",
+      "normalized_path": "users/new",
+      "path": "/users/new",
+      "verb": "GET"
+    },
+    {
       "action": "update",
       "controller": "users",
       "normalized_path": "users/{}",
@@ -19906,15 +19941,15 @@
     {
       "action": "quota",
       "controller": "files",
-      "normalized_path": "users/{}/files/{}/quota",
-      "path": "/users/:user_id/files/:id/quota",
+      "normalized_path": "users/{}/files/quota",
+      "path": "/users/:user_id/files/quota",
       "verb": "GET"
     },
     {
       "action": "reorder",
       "controller": "files",
-      "normalized_path": "users/{}/files/{}/reorder",
-      "path": "/users/:user_id/files/:id/reorder",
+      "normalized_path": "users/{}/files/reorder",
+      "path": "/users/:user_id/files/reorder",
       "verb": "POST"
     },
     {

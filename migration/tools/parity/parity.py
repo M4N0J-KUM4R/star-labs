@@ -58,23 +58,55 @@ ONLY_OPT_RE = re.compile(r"\bonly:\s*(%i\[([^\]]*)\]|\[([^\]]*)\]|:([A-Za-z0-9_]
 EXCEPT_OPT_RE = re.compile(r"\bexcept:\s*(%i\[([^\]]*)\]|\[([^\]]*)\]|:([A-Za-z0-9_]+))")
 INTERP_RE = re.compile(r"#\{([^{}]*)\}")
 
-# Rails' API resource defaults: no new/edit forms.
+# Rails' seven RESTful actions, each with the path it is drawn on: the
+# collection, the member, or the form suffix Rails appends for `new`
+# (<collection>/new) and `edit` (<member>/edit).
 RESOURCE_ACTIONS = (
-    ("index", "GET", False),
-    ("create", "POST", False),
-    ("show", "GET", True),
-    ("update", "PATCH", True),
-    ("update", "PUT", True),
-    ("destroy", "DELETE", True),
+    ("index", "GET", "collection"),
+    ("create", "POST", "collection"),
+    ("new", "GET", "new"),
+    ("show", "GET", "member"),
+    ("edit", "GET", "edit"),
+    ("update", "PATCH", "member"),
+    ("update", "PUT", "member"),
+    ("destroy", "DELETE", "member"),
 )
-# Singular `resource` has no index; everything else hangs off one path.
+# Singular `resource` has no index; everything else hangs off one path, and
+# its form suffixes are <path>/new and <path>/edit (no :id segment).
 SINGULAR_RESOURCE_ACTIONS = (
-    ("show", "GET", True),
-    ("create", "POST", False),
-    ("update", "PATCH", True),
-    ("update", "PUT", True),
-    ("destroy", "DELETE", True),
+    ("show", "GET", "member"),
+    ("create", "POST", "collection"),
+    ("new", "GET", "new"),
+    ("edit", "GET", "edit"),
+    ("update", "PATCH", "member"),
+    ("update", "PUT", "member"),
+    ("destroy", "DELETE", "member"),
 )
+# `resources` registers the form verbs unconditionally, so reading the route
+# table alone over-reports: Canvas' controllers implement only some of them,
+# and the rest raise AbstractController::ActionNotFound (no such action) or
+# ActionView::MissingTemplate (action with no view). A form page is a parity
+# target only when the action exists AND what it renders exists, verified
+# against canvas-src:
+#   assignments#new       calls `edit` (assignments_controller.rb:900-913),
+#                         which renders app/views/assignments/edit.html.erb
+#   assignments#edit      assignments_controller.rb:915 -> edit.html.erb
+#   quizzes/quizzes#edit  quizzes_controller.rb:359, ends `render :new`
+#                         (:432) -> app/views/quizzes/quizzes/new.html.erb
+#   users#new             users_controller.rb:1577, `render layout: "bare"`
+#                         -> app/views/users/new.html.erb
+# Dead surface deliberately excluded: groups#new (action at
+# groups_controller.rb:596, but app/views/groups has no new.html.erb),
+# pseudonyms#new/#edit (same — app/views/pseudonyms has only
+# confirm_change_password), and every controller with no action at all
+# (announcements, files, folders, submissions, external_tools, rubrics,
+# question_banks, alerts, calendar_events, conferences, …).
+SERVED_FORM_PAGES = frozenset({
+    ("assignments", "new"),
+    ("assignments", "edit"),
+    ("quizzes/quizzes", "edit"),
+    ("users", "new"),
+})
 JS_ENV_RE = re.compile(r"\bjs_env\b")
 UI_API_RE = re.compile(r"[\"'`](/api/v1/[^\"'`\s]*)")
 
@@ -351,13 +383,23 @@ def _build_resource_routes(name, options, stack, prefix, singular=False):
     seen = set()
     bindings = stack[-1]["bindings"]
     actions = SINGULAR_RESOURCE_ACTIONS if singular else RESOURCE_ACTIONS
-    for action, verb, is_member in actions:
+    for action, verb, path_kind in actions:
         if only is not None and action not in only:
             continue
         if except_ is not None and action in except_:
             continue
+        if path_kind in ("new", "edit"):
+            # Rails still registers the verb; Canvas only serves the handful
+            # of form pages whose controller action and view both exist.
+            if (controller, action) not in SERVED_FORM_PAGES:
+                continue
+            target = collection + "/new" if path_kind == "new" else member + "/edit"
+        elif path_kind == "member":
+            target = member
+        else:
+            target = collection
         for binding in bindings:
-            path = _expand(member if is_member else collection, binding, {})
+            path = _expand(target, binding, {})
             original = path if path.startswith("/") else \
                 prefix.rstrip("/") + "/" + path.lstrip("/")
             original = re.sub(r"/{2,}", "/", original)
@@ -620,11 +662,21 @@ def _parse_route_statement(statement, prefix, stack):
         if raw_path is None:
             # Rails' shorthand: `get :questions` inside a `resources` block is
             # a MEMBER route at <collection>/:id/questions answered by the
-            # block's controller. A quoted path never takes this branch.
+            # block's controller. Inside an explicit `collection do` block the
+            # same shorthand is a COLLECTION route: Canvas'
+            # `resources :assignments { collection { get :syllabus } }`
+            # (config/routes.rb:344-346) is /courses/:course_id/assignments/
+            # syllabus, not .../assignments/:id/syllabus. A quoted path never
+            # takes this branch.
             sym = re.match(r":([A-Za-z_][A-Za-z0-9_]*)\s*(?:[,)]|$)", rest)
             if sym and stack[-1]["resource"] is not None:
                 symbol_action = sym.group(1)
-                raw_path = stack[-1]["resource"]["member"] + "/" + symbol_action
+                resource = stack[-1]["resource"]
+                frame_base = _route_base(stack, prefix).rstrip("/")
+                if frame_base and frame_base == resource["collection"].rstrip("/"):
+                    raw_path = frame_base + "/" + symbol_action
+                else:
+                    raw_path = resource["member"] + "/" + symbol_action
             else:
                 return []
     if not raw_path:
