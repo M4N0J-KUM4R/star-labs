@@ -680,71 +680,49 @@ fn validate_create_course(payload: &CreateCourse) -> Result<(), ApiError> {
 
 /// Create a course and auto-enroll its creator as teacher.
 ///
-/// Shared by POST /courses and the account-scoped alias. `account_id` is the
-/// owning account for the alias route; `None` keeps the column default (root
-/// account) exactly as POST /courses always has.
+/// Canvas creates a course through the API at exactly one place —
+/// `post "accounts/:account_id/courses", action: :create`
+/// (`canvas-src/config/routes.rb:1231`, inside the `ApiRouteSet::V1.draw`
+/// block that starts at `:1225`). There is no bare `post "courses"` in that
+/// block, so `account_id` is not optional here: a course is always born inside
+/// an account, and the account must exist.
 async fn create_course_record(
     pool: &PgPool,
     auth: &AuthUser,
     payload: CreateCourse,
-    account_id: Option<i64>,
+    account_id: i64,
 ) -> Result<Course, ApiError> {
     if !is_teacher(auth) {
         return Err(ApiError::Forbidden);
     }
 
-    if let Some(account_id) = account_id {
-        let account_exists: Option<(i32,)> =
-            sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
-                .bind(account_id)
-                .fetch_optional(pool)
-                .await?;
-        if account_exists.is_none() {
-            return Err(ApiError::NotFound);
-        }
+    let account_exists: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
+        .bind(account_id)
+        .fetch_optional(pool)
+        .await?;
+    if account_exists.is_none() {
+        return Err(ApiError::NotFound);
     }
 
     validate_create_course(&payload)?;
 
-    let course: Course = match account_id {
-        Some(account_id) => {
-            sqlx::query_as(
-                r#"
-                INSERT INTO courses (name, course_code, description, workflow_state, start_at, end_at, syllabus_body, account_id)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                RETURNING id, name, course_code, description, workflow_state, start_at, end_at, syllabus_body, created_at, updated_at
-                "#,
-            )
-            .bind(&payload.name)
-            .bind(&payload.course_code)
-            .bind(&payload.description)
-            .bind(&payload.workflow_state)
-            .bind(payload.start_at)
-            .bind(payload.end_at)
-            .bind(&payload.syllabus_body)
-            .bind(account_id)
-            .fetch_one(pool)
-            .await?
-        }
-        None => {
-            sqlx::query_as(
-                r#"
-                INSERT INTO courses (name, course_code, description, workflow_state, start_at, end_at, syllabus_body)
-                VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING id, name, course_code, description, workflow_state, start_at, end_at, syllabus_body, created_at, updated_at
-                "#,
-            )
-            .bind(&payload.name)
-            .bind(&payload.course_code)
-            .bind(&payload.description)
-            .bind(&payload.workflow_state)
-            .bind(payload.start_at)
-            .bind(payload.end_at)
-            .bind(&payload.syllabus_body)
-            .fetch_one(pool)
-            .await?
-        }
-    };
+    let course: Course = sqlx::query_as(
+        r#"
+        INSERT INTO courses (name, course_code, description, workflow_state, start_at, end_at, syllabus_body, account_id)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id, name, course_code, description, workflow_state, start_at, end_at, syllabus_body, created_at, updated_at
+        "#,
+    )
+    .bind(&payload.name)
+    .bind(&payload.course_code)
+    .bind(&payload.description)
+    .bind(&payload.workflow_state)
+    .bind(payload.start_at)
+    .bind(payload.end_at)
+    .bind(&payload.syllabus_body)
+    .bind(account_id)
+    .fetch_one(pool)
+    .await?;
 
     // Auto-create teacher enrollment for the creator
     sqlx::query(
@@ -781,8 +759,9 @@ const COURSE_ACCOUNT_CHAIN_DEPTH: usize = 20;
 /// both. Canvas also validates `account_id`, `root_account_id` and
 /// `enrollment_term_id` present (`course.rb:387`); without this the two keys
 /// `GET /courses/:id` reports as plain integers would be null on every course
-/// created through the API. No-ops when the row has no account to walk from --
-/// star's `POST /courses` (Canvas has no such route) is exactly that case.
+/// created through the API. The early return is left for rows that were
+/// inserted without an account (test fixtures write `courses` directly); every
+/// API path now supplies one, because Canvas has no unscoped course create.
 async fn assign_course_root_and_term(pool: &PgPool, course_id: i64) -> Result<(), ApiError> {
     let (account_id,): (Option<i64>,) =
         sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
@@ -845,25 +824,10 @@ async fn assign_course_root_and_term(pool: &PgPool, course_id: i64) -> Result<()
     Ok(())
 }
 
-/// POST /courses — create a course (teacher or admin only)
-/// Auto-creates a teacher enrollment for the creator.
-async fn create_course(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    auth: AuthUser,
-    Json(payload): Json<CreateCourse>,
-) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let course = create_course_record(&state.db, &auth, payload, None).await?;
-    let row = course_json_row_by_id(&state.db, course.id).await?;
-    Ok((
-        StatusCode::CREATED,
-        Json(course_json(&row, &request_base_url(&headers))),
-    ))
-}
-
-/// POST /accounts/{id}/courses — Canvas-compatible account-scoped alias for
-/// course creation. The account must exist (404 otherwise); teacher/admin
-/// authorization and payload validation match POST /courses.
+/// POST /accounts/{id}/courses — Canvas' API course-creation route
+/// (`canvas-src/config/routes.rb:1231`). The account must exist (404
+/// otherwise); teacher/admin authorization and payload validation follow
+/// `Api::V1::CoursesController#create`.
 ///
 /// The path parameter is named `id` to match star-accounts'
 /// GET /accounts/{id}/courses: axum's merged router rejects the same route
@@ -875,7 +839,7 @@ async fn create_course_in_account(
     auth: AuthUser,
     Json(payload): Json<CreateCourse>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
-    let course = create_course_record(&state.db, &auth, payload, Some(account_id)).await?;
+    let course = create_course_record(&state.db, &auth, payload, account_id).await?;
     let row = course_json_row_by_id(&state.db, course.id).await?;
     Ok((
         StatusCode::CREATED,
@@ -4969,7 +4933,8 @@ pub fn router() -> Router<AppState> {
         // The cited misc_gaps v2 revival (port-C gaps).
         .merge(misc_gaps_v2::misc_gaps_routes())
         .route("/courses", get(list_courses))
-        .route("/courses", post(create_course))
+        // Canvas has no bare `post "courses"` in its API-v1 block — course
+        // creation is account-scoped only (routes.rb:1231), registered below.
         .route("/accounts/{id}/courses", post(create_course_in_account))
         .route("/courses/{id}", get(get_course))
         .route("/courses/{id}", put(update_course))

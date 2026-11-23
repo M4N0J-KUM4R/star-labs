@@ -47,7 +47,7 @@ fn parity_created_enrollment_has_workflow_state_active() {
         .unwrap()
         .as_nanos();
     let course = client
-        .post(format!("{BASE}/api/v1/courses"))
+        .post(format!("{BASE}/api/v1/accounts/1/courses"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&serde_json::json!({
             "name": format!("Parity Enroll {uniq}"),
@@ -99,7 +99,7 @@ fn parity_deleted_enrollment_vanishes_from_list() {
         .unwrap()
         .as_nanos();
     let course = client
-        .post(format!("{BASE}/api/v1/courses"))
+        .post(format!("{BASE}/api/v1/accounts/1/courses"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&serde_json::json!({
             "name": format!("Parity Del {uniq}"),
@@ -166,7 +166,7 @@ fn parity_duplicate_active_enrollment_conflicts() {
         .unwrap()
         .as_nanos();
     let course = client
-        .post(format!("{BASE}/api/v1/courses"))
+        .post(format!("{BASE}/api/v1/accounts/1/courses"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&serde_json::json!({
             "name": format!("Parity Dup {uniq}"),

@@ -58,7 +58,7 @@ async fn authed() -> Result<(Client, String), String> {
 /// Create a course to host test pages/modules; returns its id.
 async fn create_course(client: &Client, token: &str, name: &str) -> i64 {
     let resp = client
-        .post(format!("{}/api/v1/courses", api_base()))
+        .post(format!("{}/api/v1/accounts/1/courses", api_base()))
         .bearer_auth(token)
         .json(&json!({
             "name": name,

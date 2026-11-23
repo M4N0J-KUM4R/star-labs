@@ -12999,20 +12999,20 @@
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
-    "star_extras": 157,
+    "star_extras": 156,
     "star_extras_by_class": {
       "absent": 28,
       "api_alias": 5,
       "api_extra_nested": 19,
-      "api_extra_verb": 19,
+      "api_extra_verb": 18,
       "api_nested": 0,
       "api_verb_mismatch": 0,
       "web_exact": 44,
       "web_nested": 26,
       "web_verb_mismatch": 16
     },
-    "star_route_calls": 1280,
-    "star_route_registrations": 1569,
+    "star_route_calls": 1279,
+    "star_route_registrations": 1568,
     "star_tables": 397,
     "star_test_calls_excluded": 3,
     "star_unparsed_calls": 0,
@@ -13334,17 +13334,6 @@
       "normalized_path": "conversations/mark_all_read",
       "path": "/conversations/mark_all_read",
       "source": "crates/star-ui/src/lib.rs",
-      "verb": "POST"
-    },
-    {
-      "canvas_closest": [
-        "GET"
-      ],
-      "classification": "api_extra_verb",
-      "crate": "star-courses",
-      "normalized_path": "courses",
-      "path": "/courses",
-      "source": "crates/star-courses/src/lib.rs",
       "verb": "POST"
     },
     {
