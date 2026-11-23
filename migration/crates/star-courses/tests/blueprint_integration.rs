@@ -323,6 +323,11 @@ async fn blueprint_associated_courses_and_update_associations() {
     assert_eq!(courses[0]["id"].as_i64(), Some(child_id));
     assert!(courses[0].get("name").is_some());
     assert!(courses[0].get("course_code").is_some());
+    // master_courses.rb:115 sets hash["term_name"] with no guard, so the key is
+    // always present. seed_course inserts the row directly, bypassing
+    // assign_course_root_and_term, so the term id is still NULL and the value
+    // here is null rather than "Default Term".
+    assert!(courses[0].get("term_name").is_some());
 
     // Remove it again -> success and the list empties.
     let remove = server
@@ -532,6 +537,15 @@ async fn blueprint_migration_lifecycle_and_subscriptions() {
     assert!(subscriptions[0]["blueprint_course"]
         .get("course_code")
         .is_some());
+    // subscriptions_index has no include_teachers, so the summary is exactly the
+    // course_summary_json keys with term_name unconditional
+    // (master_courses.rb:115, :117-122 not reached).
+    assert!(subscriptions[0]["blueprint_course"]
+        .get("term_name")
+        .is_some());
+    assert!(subscriptions[0]["blueprint_course"]
+        .get("teachers")
+        .is_none());
 
     // The subscription was re-created after the earlier delete; re-read it.
     let subscription_id: i64 = sqlx::query_scalar(

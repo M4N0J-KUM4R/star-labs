@@ -1,0 +1,77 @@
+{
+  "route": "GET /api/v1/accounts/:id",
+  "source": "canvas-src/app/controllers/accounts_controller.rb:511-516 (account_json, read_only: !grants_right?(:manage)); canvas-src/lib/api/v1/account.rb:38-84",
+  "shape": {
+    "id": "integer",
+    "name": {
+      "$nullable": "string"
+    },
+    "parent_account_id": {
+      "$nullable": "integer"
+    },
+    "root_account_id": {
+      "$nullable": "integer"
+    },
+    "workflow_state": "string",
+    "uuid": {
+      "$nullable": "string"
+    },
+    "default_time_zone": "string",
+    "default_storage_quota_mb": {
+      "$optional": {
+        "$nullable": "number"
+      }
+    },
+    "default_user_storage_quota_mb": {
+      "$optional": {
+        "$nullable": "number"
+      }
+    },
+    "default_group_storage_quota_mb": {
+      "$optional": {
+        "$nullable": "number"
+      }
+    },
+    "course_template_id": {
+      "$optional": {
+        "$nullable": "integer"
+      }
+    },
+    "sis_account_id": {
+      "$optional": "string"
+    },
+    "sis_import_id": {
+      "$optional": {
+        "$nullable": "integer"
+      }
+    },
+    "integration_id": {
+      "$optional": "string"
+    },
+    "lti_guid": {
+      "$optional": "string"
+    },
+    "site_admin": {
+      "$optional": "boolean"
+    },
+    "course_count": {
+      "$optional": "integer"
+    },
+    "sub_account_count": {
+      "$optional": "integer"
+    },
+    "global_id": {
+      "$optional": {
+        "$nullable": "string"
+      }
+    },
+    "registration_settings": {
+      "$optional": {
+        "login_handle_name": {
+          "$nullable": "string"
+        },
+        "require_email": "boolean"
+      }
+    }
+  }
+}
