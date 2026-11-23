@@ -27,8 +27,23 @@
 //!
 //! Writes parity/behavior/report.json and prints a scorecard.
 
-use axum_test::TestServer;
+use axum::Router;
 use serde_json::{json, Value};
+use tower::ServiceExt;
+
+async fn probe_call(app: &Router, verb: &str, url: &str) -> (u16, String) {
+    let req = axum::http::Request::builder()
+        .method(verb.parse::<axum::http::Method>().expect("valid verb"))
+        .uri(url)
+        .body(axum::body::Body::empty())
+        .expect("build probe request");
+    let resp = app.clone().oneshot(req).await.expect("router responds");
+    let status = resp.status().as_u16();
+    let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .expect("read probe body");
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
 use star_common::AppState;
 
 const MANIFEST: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../parity/canvas_manifest.json");
@@ -122,8 +137,7 @@ async fn main() {
         db: pool,
         jwt_secret: "behavior-parity-probe-secret".to_string(),
     };
-    let server = TestServer::new(star_http::build_app().with_state(state))
-        .expect("build TestServer");
+    let app: Router = star_http::build_app().with_state(state);
 
     let manifest: Value =
         serde_json::from_str(&std::fs::read_to_string(MANIFEST).expect("read manifest"))
@@ -174,11 +188,7 @@ async fn main() {
         let key = format!("{verb} {path}");
 
         for probe in probes_for(route) {
-            let resp = server
-                .method(verb.parse().expect("valid verb"), &probe.url)
-                .await;
-            let status = resp.status_code().as_u16();
-            let body = resp.text();
+            let (status, body) = probe_call(&app, &verb, &probe.url).await;
 
             if is_fallthrough_404(status, &body) {
                 registration.fail += 1;
@@ -256,8 +266,7 @@ async fn main() {
         let path = exp["path"].as_str().unwrap_or_default();
         specified.push(format!("{verb} {path}"));
         let url = instantiate_path(&path, NONEXISTENT_ID);
-        let resp = server.method(verb.parse().expect("valid verb"), &url).await;
-        let status = resp.status_code().as_u16();
+        let (status, _body) = probe_call(&app, verb, &url).await;
         let want = exp["authz"].as_str().unwrap_or("401");
         let ok = match want {
             "401" => status == 401,
