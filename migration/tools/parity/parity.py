@@ -83,29 +83,49 @@ SINGULAR_RESOURCE_ACTIONS = (
     ("destroy", "DELETE", "member"),
 )
 # `resources` registers the form verbs unconditionally, so reading the route
-# table alone over-reports: Canvas' controllers implement only some of them,
-# and the rest raise AbstractController::ActionNotFound (no such action) or
-# ActionView::MissingTemplate (action with no view). A form page is a parity
-# target only when the action exists AND what it renders exists, verified
-# against canvas-src:
-#   assignments#new       calls `edit` (assignments_controller.rb:900-913),
-#                         which renders app/views/assignments/edit.html.erb
-#   assignments#edit      assignments_controller.rb:915 -> edit.html.erb
-#   quizzes/quizzes#edit  quizzes_controller.rb:359, ends `render :new`
-#                         (:432) -> app/views/quizzes/quizzes/new.html.erb
-#   users#new             users_controller.rb:1577, `render layout: "bare"`
-#                         -> app/views/users/new.html.erb
-# Dead surface deliberately excluded: groups#new (action at
-# groups_controller.rb:596, but app/views/groups has no new.html.erb),
-# pseudonyms#new/#edit (same — app/views/pseudonyms has only
-# confirm_change_password), and every controller with no action at all
-# (announcements, files, folders, submissions, external_tools, rubrics,
-# question_banks, alerts, calendar_events, conferences, …).
+# table alone over-reports: of the 164 web + 10 API candidates Canvas'
+# `resources`/`resource` declarations draw, most are dead surface -- the
+# controller has no such action (AbstractController::ActionNotFound), or it
+# has one with nothing to render (ActionView::MissingTemplate). A candidate
+# is a parity target when the action exists AND its render path completes,
+# by any of the four shapes Canvas uses:
+#   a) an implicit template app/views/<controller_path>/<action>.*
+#   b) an explicit `render :sym` whose template exists
+#   c) a React/InstUI mount: `render html: "", layout: ...`
+#   d) delegation to another action that renders (calls `edit`)
+# Verified pair by pair against canvas-src (line numbers of the `def`):
+#   assignments#new 900 (d -> edit), assignments#edit 915 (a: edit.html.erb)
+#   quizzes/quizzes#edit 359 (b: `render :new` at :432)
+#   users#new 1577 (a + `render layout: "bare"`)
+#   discussion_topics#new 578 (d -> edit),#edit 585 (c: render html: "", layout:)
+#   wiki_pages#edit 167 (a: edit.html.erb; drawn as /pages/... by path: :pages)
+#   calendar_events#new 51 (a), #edit 77 (b: `render :new`)
+#   ai_experiences#new 166 (a), #edit 182 (a)
+#   appointment_groups#edit 442 (c: render html: "".html_safe, layout: true)
+#   gradebook_uploads#new 34 (a: new.html.erb)
+# Excluded although the action exists, because nothing is there to render and
+# no render/redirect runs: groups#new (groups_controller.rb:596 --
+# app/views/groups has no new.html.erb) and pseudonyms#new 247 / #edit 370
+# (app/views/pseudonyms holds only confirm_change_password). Excluded because
+# the action does not exist at all: announcements (only index 64 / show 105),
+# files, folders, submissions, external_tools, rubrics, rubric_associations,
+# question_banks, assessment_questions, alerts, conferences, collaborations,
+# communication_channels, eportfolios, modules, outcome* and account/child
+# rows -- Canvas drives those forms from React on the show/index page instead.
 SERVED_FORM_PAGES = frozenset({
-    ("assignments", "new"),
+    ("ai_experiences", "edit"),
+    ("ai_experiences", "new"),
+    ("appointment_groups", "edit"),
     ("assignments", "edit"),
+    ("assignments", "new"),
+    ("calendar_events", "edit"),
+    ("calendar_events", "new"),
+    ("discussion_topics", "edit"),
+    ("discussion_topics", "new"),
+    ("gradebook_uploads", "new"),
     ("quizzes/quizzes", "edit"),
     ("users", "new"),
+    ("wiki_pages", "edit"),
 })
 JS_ENV_RE = re.compile(r"\bjs_env\b")
 UI_API_RE = re.compile(r"[\"'`](/api/v1/[^\"'`\s]*)")

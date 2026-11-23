@@ -13,7 +13,7 @@
     "ui_api_ref_paths": 559,
     "ui_api_ref_strings": 2660,
     "ui_feature_dirs": 232,
-    "web_routes": 1364
+    "web_routes": 1385
   },
   "graphql_mutation_names": [
     "acceptEnrollmentInvitation",
@@ -12456,10 +12456,24 @@
       "verb": "GET"
     },
     {
+      "action": "new",
+      "controller": "discussion_topics",
+      "normalized_path": "discussion_topics/new",
+      "path": "/discussion_topics/new",
+      "verb": "GET"
+    },
+    {
       "action": "show",
       "controller": "discussion_topics",
       "normalized_path": "discussion_topics/{}",
       "path": "/discussion_topics/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "edit",
+      "controller": "discussion_topics",
+      "normalized_path": "discussion_topics/{}/edit",
+      "path": "/discussion_topics/:id/edit",
       "verb": "GET"
     },
     {
@@ -12544,6 +12558,13 @@
       "controller": "wiki_pages",
       "normalized_path": "pages/{}",
       "path": "/pages/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "edit",
+      "controller": "wiki_pages",
+      "normalized_path": "pages/{}/edit",
+      "path": "/pages/:id/edit",
       "verb": "GET"
     },
     {
@@ -13261,10 +13282,24 @@
       "verb": "GET"
     },
     {
+      "action": "new",
+      "controller": "discussion_topics",
+      "normalized_path": "courses/{}/discussion_topics/new",
+      "path": "/courses/:cours_id/discussion_topics/new",
+      "verb": "GET"
+    },
+    {
       "action": "show",
       "controller": "discussion_topics",
       "normalized_path": "courses/{}/discussion_topics/{}",
       "path": "/courses/:cours_id/discussion_topics/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "edit",
+      "controller": "discussion_topics",
+      "normalized_path": "courses/{}/discussion_topics/{}/edit",
+      "path": "/courses/:cours_id/discussion_topics/:id/edit",
       "verb": "GET"
     },
     {
@@ -14136,10 +14171,24 @@
       "verb": "POST"
     },
     {
+      "action": "new",
+      "controller": "calendar_events",
+      "normalized_path": "courses/{}/calendar_events/new",
+      "path": "/courses/:cours_id/calendar_events/new",
+      "verb": "GET"
+    },
+    {
       "action": "show",
       "controller": "calendar_events",
       "normalized_path": "courses/{}/calendar_events/{}",
       "path": "/courses/:cours_id/calendar_events/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "edit",
+      "controller": "calendar_events",
+      "normalized_path": "courses/{}/calendar_events/{}/edit",
+      "path": "/courses/:cours_id/calendar_events/:id/edit",
       "verb": "GET"
     },
     {
@@ -14427,6 +14476,13 @@
       "controller": "wiki_pages",
       "normalized_path": "courses/{}/pages/{}",
       "path": "/courses/:cours_id/pages/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "edit",
+      "controller": "wiki_pages",
+      "normalized_path": "courses/{}/pages/{}/edit",
+      "path": "/courses/:cours_id/pages/:id/edit",
       "verb": "GET"
     },
     {
@@ -15149,6 +15205,13 @@
       "normalized_path": "courses/{}/gradebook_uploads",
       "path": "/courses/:cours_id/gradebook_uploads",
       "verb": "POST"
+    },
+    {
+      "action": "new",
+      "controller": "gradebook_uploads",
+      "normalized_path": "courses/{}/gradebook_uploads/new",
+      "path": "/courses/:cours_id/gradebook_uploads/new",
+      "verb": "GET"
     },
     {
       "action": "show",
@@ -16082,10 +16145,24 @@
       "verb": "POST"
     },
     {
+      "action": "new",
+      "controller": "ai_experiences",
+      "normalized_path": "courses/{}/ai_experiences/new",
+      "path": "/courses/:cours_id/ai_experiences/new",
+      "verb": "GET"
+    },
+    {
       "action": "show",
       "controller": "ai_experiences",
       "normalized_path": "courses/{}/ai_experiences/{}",
       "path": "/courses/:cours_id/ai_experiences/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "edit",
+      "controller": "ai_experiences",
+      "normalized_path": "courses/{}/ai_experiences/{}/edit",
+      "path": "/courses/:cours_id/ai_experiences/:id/edit",
       "verb": "GET"
     },
     {
@@ -16992,10 +17069,24 @@
       "verb": "GET"
     },
     {
+      "action": "new",
+      "controller": "discussion_topics",
+      "normalized_path": "groups/{}/discussion_topics/new",
+      "path": "/groups/:group_id/discussion_topics/new",
+      "verb": "GET"
+    },
+    {
       "action": "show",
       "controller": "discussion_topics",
       "normalized_path": "groups/{}/discussion_topics/{}",
       "path": "/groups/:group_id/discussion_topics/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "edit",
+      "controller": "discussion_topics",
+      "normalized_path": "groups/{}/discussion_topics/{}/edit",
+      "path": "/groups/:group_id/discussion_topics/:id/edit",
       "verb": "GET"
     },
     {
@@ -17076,10 +17167,24 @@
       "verb": "POST"
     },
     {
+      "action": "new",
+      "controller": "calendar_events",
+      "normalized_path": "groups/{}/calendar_events/new",
+      "path": "/groups/:group_id/calendar_events/new",
+      "verb": "GET"
+    },
+    {
       "action": "show",
       "controller": "calendar_events",
       "normalized_path": "groups/{}/calendar_events/{}",
       "path": "/groups/:group_id/calendar_events/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "edit",
+      "controller": "calendar_events",
+      "normalized_path": "groups/{}/calendar_events/{}/edit",
+      "path": "/groups/:group_id/calendar_events/:id/edit",
       "verb": "GET"
     },
     {
@@ -17304,6 +17409,13 @@
       "controller": "wiki_pages",
       "normalized_path": "groups/{}/pages/{}",
       "path": "/groups/:group_id/pages/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "edit",
+      "controller": "wiki_pages",
+      "normalized_path": "groups/{}/pages/{}/edit",
+      "path": "/groups/:group_id/pages/:id/edit",
       "verb": "GET"
     },
     {
@@ -18000,10 +18112,24 @@
       "verb": "POST"
     },
     {
+      "action": "new",
+      "controller": "calendar_events",
+      "normalized_path": "accounts/{}/calendar_events/new",
+      "path": "/accounts/:account_id/calendar_events/new",
+      "verb": "GET"
+    },
+    {
       "action": "show",
       "controller": "calendar_events",
       "normalized_path": "accounts/{}/calendar_events/{}",
       "path": "/accounts/:account_id/calendar_events/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "edit",
+      "controller": "calendar_events",
+      "normalized_path": "accounts/{}/calendar_events/{}/edit",
+      "path": "/accounts/:account_id/calendar_events/:id/edit",
       "verb": "GET"
     },
     {
@@ -20030,10 +20156,24 @@
       "verb": "POST"
     },
     {
+      "action": "new",
+      "controller": "calendar_events",
+      "normalized_path": "users/{}/calendar_events/new",
+      "path": "/users/:user_id/calendar_events/new",
+      "verb": "GET"
+    },
+    {
       "action": "show",
       "controller": "calendar_events",
       "normalized_path": "users/{}/calendar_events/{}",
       "path": "/users/:user_id/calendar_events/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "edit",
+      "controller": "calendar_events",
+      "normalized_path": "users/{}/calendar_events/{}/edit",
+      "path": "/users/:user_id/calendar_events/:id/edit",
       "verb": "GET"
     },
     {
@@ -20734,6 +20874,13 @@
       "controller": "appointment_groups",
       "normalized_path": "appointment_groups/{}",
       "path": "/appointment_groups/:id",
+      "verb": "GET"
+    },
+    {
+      "action": "edit",
+      "controller": "appointment_groups",
+      "normalized_path": "appointment_groups/{}/edit",
+      "path": "/appointment_groups/:id/edit",
       "verb": "GET"
     },
     {

@@ -12983,7 +12983,7 @@
     "canvas_api_routes": 1410,
     "canvas_controllers": 222,
     "canvas_models": 688,
-    "canvas_web_routes": 1364,
+    "canvas_web_routes": 1385,
     "erb_views": 475,
     "erb_views_implemented": 0,
     "graphql_files": 390,
