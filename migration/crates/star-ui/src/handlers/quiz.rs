@@ -916,8 +916,8 @@ pub async fn quiz_create(
     .bind(form.description.trim())
     .bind(points)
     .bind(published)
-    .bind(parse_ts(&form.available_from))
-    .bind(parse_ts(&form.available_until))
+    .bind(parse_form_ts(&form.available_from))
+    .bind(parse_form_ts(&form.available_until))
     .fetch_one(&app.db)
     .await
     {
