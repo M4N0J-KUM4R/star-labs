@@ -37,7 +37,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
         db: pool.clone(),
         jwt_secret: JWT_SECRET.to_string(),
     };
-    let server = TestServer::new(star_ui::router().with_state(state)).expect("build TestServer");
+    let server = TestServer::new(star_ui::app(state)).expect("build TestServer");
     Some((server, pool, run_prefix()))
 }
 

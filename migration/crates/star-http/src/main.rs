@@ -102,7 +102,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/health", get(health))
         // Server-rendered UI shell (star-ui, spec p5): top level, NOT under
         // /api/v1 — /, /login, /logout, /dashboard, /courses/:id, /static.
-        .merge(star_ui::router())
+        // It is the app's fallback rather than a merge: `star_ui::app` carries
+        // Rails' `_method` override, which has to run ahead of routing, and
+        // none of the root-mounted routers below own a path the shell
+        // registers, so the two shapes answer the same requests.
+        .fallback_service(star_ui::app(state.clone()))
         // Canvas serves the LTI Advantage family at /api/lti (outside
         // /api/v1), so the router carries the prefix and is merged here.
         .merge(star_lti::lti_advantage_router())

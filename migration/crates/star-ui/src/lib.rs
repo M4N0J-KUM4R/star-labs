@@ -32,8 +32,8 @@ use axum::Router;
 
 use star_common::AppState;
 
-/// The shell router. Mounted via `.merge(star_ui::router())` at the top level
-/// of the app router in star-http.
+/// The shell's page table. Serve it with [`app`], which adds the `_method`
+/// override; star-http and the integration tests all go through `app`.
 ///
 /// Route-order note: axum 0.8 matches STATIC segments before path parameters
 /// at the same depth, so `/courses/{id}/discussions` (and the quiz routes)
@@ -148,9 +148,9 @@ pub fn router() -> Router<AppState> {
         // PATCH/PUT ..../assignments/:id. An HTML form cannot submit PATCH, so
         // Rails' helpers post to the member path with a hidden `_method`
         // field and Rack::MethodOverride rewrites the verb before routing —
-        // that shim is `method_override`, layered over this router below, and
-        // it is why no verb here is invented: `/new` and `/edit` answer GET
-        // only, and a POST to either is a method mismatch.
+        // that shim is `method_override`, applied by `app` ahead of this
+        // table, and it is why no verb here is invented: `/new` and `/edit`
+        // answer GET only, and a POST to either is a method mismatch.
         .route(
             "/courses/{id}/assignments",
             get(handlers::assignments::assignments_index)
@@ -284,9 +284,21 @@ pub fn router() -> Router<AppState> {
         // not at `/calendar` — so no create or delete is registered here.
         .route("/calendar", get(handlers::calendar::calendar_index))
         .route("/static/{hash}/{file}", get(assets::serve_static))
-        // Rails' `_method` override, for the whole shell: layered after every
-        // route above so the verb the router matches is the verb the form
-        // asked for. `/api/v1` is a different router and stays verb-strict.
+}
+
+/// The shell as it is actually served: the page table behind Rack's `_method`
+/// override.
+///
+/// The override is NOT a `.layer()` on [`router`]. axum's `Router::layer`
+/// forwards to `MethodRouter::layer`, which wraps each per-verb handler and so
+/// runs *after* the verb has been selected — a `POST` to a `PATCH`-only member
+/// path is answered with 405 before such a layer ever sees the request. Passing
+/// the table to `fallback_service` makes it one whole-router service, and a
+/// layer over that runs before any routing, which is where
+/// `Rack::MethodOverride` sits in Canvas' stack (`config/application.rb`).
+pub fn app(state: AppState) -> Router {
+    Router::new()
+        .fallback_service(router().with_state(state))
         .layer(middleware::from_fn(method_override::method_override))
 }
 

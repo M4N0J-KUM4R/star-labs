@@ -53,9 +53,10 @@ fn is_urlencoded(content_type: Option<&HeaderValue>) -> bool {
 
 /// Rewrite a form POST's method from its `_method` field, then route.
 ///
-/// Registered with `.layer()` on `star_ui::router()`, so it runs before the
-/// router picks a `MethodRouter` — which is the whole point: the verb the
-/// route table carries is the verb the request ends up matching.
+/// Applied by `star_ui::app` to the shell's whole-router service, so it runs
+/// before any path or verb is matched — which is the whole point: the verb the
+/// route table carries is the verb the request ends up matching. Layering it
+/// with `Router::layer` instead would be too late (see `app`).
 pub async fn method_override(req: Request, next: Next) -> Response {
     let (mut parts, body) = req.into_parts();
 
@@ -163,6 +164,6 @@ mod tests {
 
     // The routing half of the contract — a POST with `_method=patch` reaching
     // the PATCH handler, and a POST without it staying a POST — is covered
-    // end-to-end in tests/ui_integration.rs, because only the real
-    // star_ui::router() has the Canvas route table to match against.
+    // end-to-end in tests/ui_integration.rs, because only `star_ui::app()` has
+    // the Canvas route table and the override ahead of it to match against.
 }
