@@ -1,0 +1,59 @@
+{% extends "layouts/course.html" %}
+{# Announcements index — Canvas announcements#index (title, posted date,
+   unread dot, pagination). Teacher sees the "+ Announcement" button.
+   Deviation: no author column (no author field in this schema) and the RSS
+   link is a static placeholder (no feed route in the Rust API). #}
+{% block content %}
+  <div id="announcements_index" class="announcements-index">
+    <div class="ic-Action-header">
+      <div class="ic-Action-header__Primary">
+        <h1 class="screenreader-only">Announcements</h1>
+        <h2 class="announcements-index__title">Announcements</h2>
+      </div>
+      <div class="ic-Action-header__Secondary">
+        <a href="#" class="Button" title="RSS feed (not available yet)">RSS</a>
+        {% if can_create %}
+        <a href="/courses/{{ course_id }}/announcements/new" class="Button Button--primary" id="add_announcement">+ Announcement</a>
+        {% endif %}
+      </div>
+    </div>
+
+    <table class="announcements-index__table" id="announcements_table">
+      <caption class="screenreader-only">Announcements for {{ course_name }}</caption>
+      <thead>
+        <tr>
+          <th scope="col" class="announcement-unread-col"><span class="screenreader-only">Read state</span></th>
+          <th scope="col">Title</th>
+          <th scope="col">Posted</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if announcements.is_empty() %}
+        <tr class="announcements-index__empty">
+          <td colspan="3">No announcements have been posted to this course yet.</td>
+        </tr>
+        {% endif %}
+        {% for announcement in announcements %}
+        <tr class="announcement-row{% if announcement.unread %} unread{% endif %}" id="announcement_{{ announcement.id }}">
+          <td class="announcement-unread-col">
+            {% if announcement.unread %}<span class="unread-mark" title="Unread" aria-label="Unread announcement">●</span>{% endif %}
+          </td>
+          <td class="announcement-title-cell">
+            <a class="announcement-title" href="/courses/{{ course_id }}/announcements/{{ announcement.id }}">{{ announcement.title }}</a>
+          </td>
+          <td class="announcement-posted">{% if let Some(at) = announcement.posted_at %}{{ at }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <div class="announcements-index__pagination">
+      {% if has_prev %}
+      <a class="Button" href="/courses/{{ course_id }}/announcements?page={{ page - 1 }}">Previous</a>
+      {% endif %}
+      {% if has_next %}
+      <a class="Button" href="/courses/{{ course_id }}/announcements?page={{ page + 1 }}">Next</a>
+      {% endif %}
+    </div>
+  </div>
+{% endblock content %}

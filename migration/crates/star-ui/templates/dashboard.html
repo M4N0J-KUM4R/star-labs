@@ -5,6 +5,23 @@
   <div id="DashboardPage">
   <div id="dashboard" class="ic-dashboard-app">
     <h1 class="screenreader-only">Dashboard</h1>
+    <section class="today-panel" aria-labelledby="today-panel-heading">
+      <h2 id="today-panel-heading" class="today-panel__heading">Today</h2>
+      {% if today.is_empty() %}
+      <p class="today-panel__empty">Nothing due in the next two weeks.</p>
+      {% else %}
+      <ul class="today-panel__list">
+        {% for item in today %}
+        <li class="today-panel__item{% if item.overdue %} today-panel__item--overdue{% endif %}">
+          <a href="{{ item.href }}">{{ item.title }}</a>
+          <span class="today-panel__meta">{{ item.course_code }} —
+            {% if item.overdue %}overdue{% else %}due{% endif %}
+            {{ item.due_label }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+      {% endif %}
+    </section>
     <div id="DashboardCard_Container" class="ic-DashboardCard_Container">
       <div class="ic-DashboardCard__box">
         {% for card in cards %}
@@ -22,6 +39,18 @@
               <span class="ic-DashboardCard__term">{{ term }}</span>
               {% endif %}
             </div>
+            {% if let Some(badge) = badges.get(&card.id) %}
+            {% if badge.new_announcements > 0 || badge.recent_feedback > 0 %}
+            <div class="ic-DashboardCard__badges">
+              {% if badge.new_announcements > 0 %}
+              <span class="ic-DashboardCard__badge ic-DashboardCard__badge--announcements">{{ badge.new_announcements }} new announcement{% if badge.new_announcements != 1 %}s{% endif %}</span>
+              {% endif %}
+              {% if badge.recent_feedback > 0 %}
+              <span class="ic-DashboardCard__badge ic-DashboardCard__badge--feedback">{{ badge.recent_feedback }} new grade{% if badge.recent_feedback != 1 %}s{% endif %}</span>
+              {% endif %}
+            </div>
+            {% endif %}
+            {% endif %}
           </a>
           <div class="ic-DashboardCard__footer">
             <span class="ic-DashboardCard__subtitle">{{ card.subtitle }}</span>
