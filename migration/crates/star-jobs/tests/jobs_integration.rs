@@ -167,77 +167,6 @@ async fn admin_lists_and_shows_enqueued_job() {
 }
 
 #[tokio::test]
-async fn cancel_is_idempotent_and_rejects_completed_jobs() {
-    let Some((server, pool, prefix)) = setup().await else {
-        eprintln!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let admin = seed_user(&pool, &prefix, "admin", "admin").await;
-    let tag = format!("{prefix}-cancel");
-
-    let job = star_jobs::enqueue_job(&pool, None, &tag, None, None)
-        .await
-        .expect("enqueue job");
-
-    // First cancel: queued -> cancelled.
-    let resp = server
-        .post(&format!("/jobs/{}/cancel", job.id))
-        .add_header(AUTHORIZATION, auth(admin, "admin"))
-        .await;
-    assert_eq!(
-        resp.status_code(),
-        200,
-        "POST cancel queued job; body: {}",
-        resp.text()
-    );
-    let cancelled: Value = resp.json();
-    assert_eq!(cancelled["id"].as_i64(), Some(job.id));
-    assert_eq!(cancelled["workflow_state"], "cancelled");
-
-    // Retry: idempotent, updated_at is not bumped.
-    let resp = server
-        .post(&format!("/jobs/{}/cancel", job.id))
-        .add_header(AUTHORIZATION, auth(admin, "admin"))
-        .await;
-    assert_eq!(
-        resp.status_code(),
-        200,
-        "cancel is idempotent; body: {}",
-        resp.text()
-    );
-    let again: Value = resp.json();
-    assert_eq!(again["workflow_state"], "cancelled");
-    assert_eq!(
-        again["updated_at"], cancelled["updated_at"],
-        "re-cancelling must not touch updated_at"
-    );
-
-    // A completed job cannot be cancelled.
-    let done = star_jobs::enqueue_job(&pool, None, &format!("{prefix}-done"), None, None)
-        .await
-        .expect("enqueue job");
-    sqlx::query("UPDATE jobs SET workflow_state = 'completed', progress = 100 WHERE id = $1")
-        .bind(done.id)
-        .execute(&pool)
-        .await
-        .expect("mark job completed");
-
-    let resp = server
-        .post(&format!("/jobs/{}/cancel", done.id))
-        .add_header(AUTHORIZATION, auth(admin, "admin"))
-        .await;
-    assert_eq!(
-        resp.status_code(),
-        409,
-        "cancel of a completed job must conflict; body: {}",
-        resp.text()
-    );
-
-    cleanup(&pool, &prefix).await;
-}
-
-#[tokio::test]
 async fn list_filters_by_flavor_and_paginates() {
     let Some((server, pool, prefix)) = setup().await else {
         eprintln!("SKIP: DATABASE_URL not set");
@@ -327,8 +256,9 @@ async fn non_admin_is_forbidden_and_anonymous_is_unauthorized() {
             .add_header(AUTHORIZATION, bearer.clone())
             .await,
         server
-            .post(&format!("/jobs/{}/cancel", job.id))
+            .post("/jobs/batch_update")
             .add_header(AUTHORIZATION, bearer.clone())
+            .json(&serde_json::json!({"update_action": "unblock", "job_ids": [job.id]}))
             .await,
     ] {
         assert_eq!(
@@ -342,7 +272,7 @@ async fn non_admin_is_forbidden_and_anonymous_is_unauthorized() {
     // Anonymous callers are rejected by the auth extractor.
     let resp = server.get("/jobs").await;
     assert_eq!(resp.status_code(), 401);
-    let resp = server.post(&format!("/jobs/{}/cancel", job.id)).await;
+    let resp = server.post("/jobs/batch_update").await;
     assert_eq!(resp.status_code(), 401);
 
     cleanup(&pool, &prefix).await;

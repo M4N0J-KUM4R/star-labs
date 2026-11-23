@@ -910,10 +910,6 @@ pub fn router() -> axum::Router<AppState> {
         )
         .route("/courses/{courseId}/folders", get(list_course_folders))
         .route("/courses/{courseId}/folders", post(create_course_folder))
-        .route(
-            "/courses/{courseId}/folders/root",
-            get(get_course_root_folder),
-        )
         // Canvas deep folders/files endpoints.
         .route(
             "/courses/{courseId}/folders/{id}/duplicates",
@@ -982,7 +978,6 @@ pub fn router() -> axum::Router<AppState> {
             "/courses/{courseId}/folders/media",
             get(media_folder_course),
         )
-        .route("/users/{userId}/folders/media", get(media_folder_user))
         // context-scoped show — simple :id lookup in context
         .route("/courses/{courseId}/folders/{id}", get(show_course_folder))
         .route("/users/{userId}/folders/{id}", get(show_user_folder))
@@ -2022,22 +2017,6 @@ async fn get_folder(
     Ok(Json(FolderResponse::from_row(folder, can_manage)))
 }
 
-/// GET /courses/{courseId}/folders/root — Canvas folders#show with id=root.
-async fn get_course_root_folder(
-    State(state): State<AppState>,
-    Path(course_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<FolderResponse>, ApiError> {
-    let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
-    let allowed =
-        can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
-    if !allowed {
-        return Err(ApiError::Forbidden);
-    }
-    let folder = ensure_root_folder(&state.db, course_id).await?;
-    Ok(Json(FolderResponse::from_row(folder, can_manage)))
-}
-
 /// GET /folders/{id}/files — Canvas files#api_index for one folder.
 async fn list_folder_files(
     State(state): State<AppState>,
@@ -2805,12 +2784,25 @@ async fn resolve_path_group_named(
 
 // ── context-scoped show ──────────────────────────────────────────────────────
 
-/// GET /courses/{courseId}/folders/{id}
+/// GET /courses/{courseId}/folders/{id} — Canvas folders#show in the course
+/// context. Canvas also resolves the literal id `root` to the course's root
+/// folder (`folders_controller.rb#show`), so that spelling lives here rather
+/// than in a separate route.
 async fn show_course_folder(
     State(state): State<AppState>,
     Path((course_id, id)): Path<(i64, String)>,
     auth: AuthUser,
 ) -> Result<Json<FolderResponse>, ApiError> {
+    let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+    let allowed =
+        can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+    if id == "root" {
+        let folder = ensure_root_folder_for(&state.db, "Course", course_id).await?;
+        return Ok(Json(FolderResponse::from_row(folder, can_manage)));
+    }
     let folder_id: i64 = id.parse().map_err(|_| ApiError::NotFound)?;
     let folder = fetch_folder(&state.db, folder_id)
         .await?
@@ -2818,16 +2810,11 @@ async fn show_course_folder(
     if folder.context_type != "Course" || folder.context_id != course_id {
         return Err(ApiError::NotFound);
     }
-    let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
-    let allowed =
-        can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
-    if !allowed {
-        return Err(ApiError::Forbidden);
-    }
     Ok(Json(FolderResponse::from_row(folder, can_manage)))
 }
 
-/// GET /users/{userId}/folders/{id}
+/// GET /users/{userId}/folders/{id} — Canvas folders#show in the user context,
+/// including the literal id `root`.
 async fn show_user_folder(
     State(state): State<AppState>,
     Path((user_id, id)): Path<(i64, String)>,
@@ -2835,6 +2822,10 @@ async fn show_user_folder(
 ) -> Result<Json<FolderResponse>, ApiError> {
     if auth.id != user_id && !is_admin(&auth) {
         return Err(ApiError::Forbidden);
+    }
+    if id == "root" {
+        let folder = ensure_root_folder_for(&state.db, "User", user_id).await?;
+        return Ok(Json(FolderResponse::from_row(folder, true)));
     }
     let folder_id: i64 = id.parse().map_err(|_| ApiError::NotFound)?;
     let folder = fetch_folder(&state.db, folder_id)
@@ -2846,7 +2837,8 @@ async fn show_user_folder(
     Ok(Json(FolderResponse::from_row(folder, true)))
 }
 
-/// GET /groups/{groupId}/folders/{id}
+/// GET /groups/{groupId}/folders/{id} — Canvas folders#show in the group
+/// context, including the literal id `root`.
 async fn show_group_folder(
     State(state): State<AppState>,
     Path((group_id, id)): Path<(i64, String)>,
@@ -2855,6 +2847,10 @@ async fn show_group_folder(
     let can_view = is_admin(&auth) || user_in_group(&state.db, auth.id, group_id).await?;
     if !can_view {
         return Err(ApiError::Forbidden);
+    }
+    if id == "root" {
+        let folder = ensure_root_folder_for(&state.db, "Group", group_id).await?;
+        return Ok(Json(FolderResponse::from_row(folder, false)));
     }
     let folder_id: i64 = id.parse().map_err(|_| ApiError::NotFound)?;
     let folder = fetch_folder(&state.db, folder_id)
@@ -3047,56 +3043,6 @@ async fn media_folder_course(
     )
     .await?;
     Ok(Json(FolderResponse::from_row(folder, can_manage)))
-}
-
-/// GET /users/{userId}/folders/media
-async fn media_folder_user(
-    State(state): State<AppState>,
-    Path(user_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<FolderResponse>, ApiError> {
-    if auth.id != user_id && !is_admin(&auth) {
-        return Err(ApiError::Forbidden);
-    }
-    // Find or create user root.
-    let roots: Vec<FolderRow> = sqlx::query_as::<_, FolderRow>(
-        format!(
-            "{FOLDER_SELECT} WHERE f.context_type = 'User' AND f.context_id = $1 \
-             AND f.parent_folder_id IS NULL AND f.workflow_state <> 'deleted' LIMIT 1"
-        )
-        .as_str(),
-    )
-    .bind(user_id)
-    .fetch_all(&state.db)
-    .await?;
-    let root_id = if let Some(root) = roots.first() {
-        root.id
-    } else {
-        let new_root = NewFolder {
-            name: "my files".to_string(),
-            full_name: "my files".to_string(),
-            context_type: "User".to_string(),
-            context_id: user_id,
-            parent_id: 0,
-            workflow_state: "visible".to_string(),
-            position: 0,
-            locked: false,
-            lock_at: None,
-            unlock_at: None,
-            for_submissions: false,
-        };
-        insert_folder(&state.db, new_root).await?.id
-    };
-    let folder = find_or_create_unique_folder(
-        &state.db,
-        "User",
-        user_id,
-        root_id,
-        MEDIA_TYPE,
-        "Uploaded Media",
-    )
-    .await?;
-    Ok(Json(FolderResponse::from_row(folder, true)))
 }
 
 // ── user-scoped duplicates ──────────────────────────────────────────────────

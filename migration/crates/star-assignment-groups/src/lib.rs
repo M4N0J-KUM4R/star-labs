@@ -1,6 +1,10 @@
 //! star-assignment-groups: assignment group management for star-lms.
 //!
-//! Implements Canvas API v1 Assignment Groups endpoint.
+//! Implements Canvas API v1 Assignment Groups endpoint. Grading rules are not a
+//! sub-resource: Canvas permits `rules` on the create/update payload
+//! (`API_ALLOWED_ASSIGNMENT_GROUP_INPUT_FIELDS`) and serialises the parsed
+//! `assignment_groups.rules` string on every group JSON
+//! (`Api::V1::AssignmentGroup::assignment_group_json`).
 
 use axum::{
     extract::{Path, State},
@@ -19,7 +23,7 @@ use star_common::{ApiError, AppState};
 // ---------------------------------------------------------------------------
 
 /// AssignmentGroup record matching Canvas API v1 shape.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, Serialize)]
 pub struct AssignmentGroup {
     pub id: i64,
     pub course_id: i64,
@@ -29,6 +33,42 @@ pub struct AssignmentGroup {
     pub workflow_state: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    pub rules: RulesHash,
+}
+
+/// Grading rules as Canvas' `AssignmentGroup#rules_hash` serialises them: keys
+/// only appear when the stored rule string carries them.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct RulesHash {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drop_lowest: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drop_highest: Option<i32>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub never_drop: Vec<i64>,
+}
+
+impl RulesHash {
+    fn is_empty(&self) -> bool {
+        self.drop_lowest.is_none() && self.drop_highest.is_none() && self.never_drop.is_empty()
+    }
+}
+
+impl<'r> sqlx::FromRow<'r, sqlx::postgres::PgRow> for AssignmentGroup {
+    fn from_row(row: &'r sqlx::postgres::PgRow) -> Result<Self, sqlx::Error> {
+        use sqlx::Row;
+        Ok(Self {
+            id: row.try_get("id")?,
+            course_id: row.try_get("course_id")?,
+            name: row.try_get("name")?,
+            position: row.try_get("position")?,
+            group_weight: row.try_get("group_weight")?,
+            workflow_state: row.try_get("workflow_state")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+            rules: parse_rules(row.try_get("rules")?),
+        })
+    }
 }
 
 /// Request to create an assignment group.
@@ -39,6 +79,8 @@ pub struct CreateAssignmentGroup {
     pub group_weight: Option<f64>,
     #[serde(default = "default_position")]
     pub position: Option<i32>,
+    #[serde(default)]
+    pub rules: Option<GradingRulesPayload>,
 }
 
 fn default_position() -> Option<i32> {
@@ -51,6 +93,7 @@ pub struct UpdateAssignmentGroup {
     pub name: Option<String>,
     pub position: Option<i32>,
     pub group_weight: Option<f64>,
+    pub rules: Option<GradingRulesPayload>,
 }
 
 /// Assignment record returned when listing assignments in a group.
@@ -68,20 +111,6 @@ pub struct GroupAssignment {
     pub updated_at: DateTime<Utc>,
 }
 
-/// Grading rules for an assignment group, matching Canvas `GradingRules`.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct AssignmentGroupRules {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<i64>,
-    pub assignment_group_id: i64,
-    pub group_weight: f64,
-    pub drop_lowest: i32,
-    pub drop_highest: i32,
-    pub never_drop: Vec<i64>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
 /// Nested Canvas-style `rules` object
 /// (`{"rules": {"drop_lowest": 1, "never_drop": [33]}}`).
 #[derive(Debug, Deserialize)]
@@ -92,23 +121,6 @@ pub struct GradingRulesPayload {
     pub drop_highest: Option<i32>,
     #[serde(default)]
     pub never_drop: Option<Vec<i64>>,
-}
-
-/// Request to update the rules of an assignment group.
-///
-/// Accepts flat fields as well as the nested `rules` object used by Canvas.
-#[derive(Debug, Deserialize)]
-pub struct UpdateAssignmentGroupRules {
-    #[serde(default)]
-    pub group_weight: Option<f64>,
-    #[serde(default)]
-    pub drop_lowest: Option<i32>,
-    #[serde(default)]
-    pub drop_highest: Option<i32>,
-    #[serde(default)]
-    pub never_drop: Option<Vec<i64>>,
-    #[serde(default)]
-    pub rules: Option<GradingRulesPayload>,
 }
 
 // ---------------------------------------------------------------------------
@@ -165,44 +177,41 @@ async fn check_teacher_or_admin(
 // Rule helpers
 // ---------------------------------------------------------------------------
 
-/// Selects the rules row joined with the group so `group_weight` always comes
-/// from `assignment_groups` (Canvas keeps it on the group). A missing rules
-/// row yields Canvas defaults.
-const SELECT_RULES_SQL: &str = r#"
-    SELECT r.id,
-           g.id AS assignment_group_id,
-           g.group_weight,
-           COALESCE(r.drop_lowest, 0) AS drop_lowest,
-           COALESCE(r.drop_highest, 0) AS drop_highest,
-           COALESCE(r.never_drop, ARRAY[]::BIGINT[]) AS never_drop,
-           COALESCE(r.created_at, g.created_at) AS created_at,
-           COALESCE(r.updated_at, g.updated_at) AS updated_at
-    FROM assignment_groups g
-    LEFT JOIN assignment_group_rules r ON r.assignment_group_id = g.id
-    WHERE g.id = $1 AND g.course_id = $2 AND g.workflow_state <> 'deleted'
-"#;
+/// Canvas `AssignmentGroup#rules_hash=` — the incoming rules hash replaces the
+/// whole string, and keys the payload omits are not written at all.
+fn format_rules(rules: &GradingRulesPayload) -> String {
+    let mut out = String::new();
+    if let Some(drop_lowest) = rules.drop_lowest {
+        out.push_str(&format!("drop_lowest:{drop_lowest}\n"));
+    }
+    if let Some(drop_highest) = rules.drop_highest {
+        out.push_str(&format!("drop_highest:{drop_highest}\n"));
+    }
+    if let Some(never_drop) = &rules.never_drop {
+        for id in never_drop {
+            out.push_str(&format!("never_drop:{id}\n"));
+        }
+    }
+    out
+}
 
-/// Merge a rules update into the existing values. Flat fields win over the
-/// nested `rules` object; omitted fields keep the current value.
-fn merge_rule_values(
-    existing: (i32, i32, Vec<i64>),
-    payload: &UpdateAssignmentGroupRules,
-) -> (i32, i32, Vec<i64>) {
-    let nested = payload.rules.as_ref();
-    let drop_lowest = payload
-        .drop_lowest
-        .or_else(|| nested.and_then(|r| r.drop_lowest))
-        .unwrap_or(existing.0);
-    let drop_highest = payload
-        .drop_highest
-        .or_else(|| nested.and_then(|r| r.drop_highest))
-        .unwrap_or(existing.1);
-    let never_drop = payload
-        .never_drop
-        .clone()
-        .or_else(|| nested.and_then(|r| r.never_drop.clone()))
-        .unwrap_or(existing.2);
-    (drop_lowest, drop_highest, never_drop)
+/// Canvas `AssignmentGroup#rules_hash` — parses `key:value` lines; repeated
+/// `never_drop` lines accumulate into the id list.
+fn parse_rules(raw: Option<&str>) -> RulesHash {
+    let mut rules = RulesHash::default();
+    for line in raw.unwrap_or_default().lines() {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        let value = value.trim().parse::<i64>().unwrap_or_default();
+        match key.trim() {
+            "drop_lowest" => rules.drop_lowest = Some(value as i32),
+            "drop_highest" => rules.drop_highest = Some(value as i32),
+            "never_drop" => rules.never_drop.push(value),
+            _ => {}
+        }
+    }
+    rules
 }
 
 /// Canvas `AssignmentGroup#validate_assignment_group_rules`: drop rules must
@@ -223,6 +232,44 @@ fn validate_drop_rules(
             "Drop rules cannot be higher than the number of assignments".into(),
         ));
     }
+
+    Ok(())
+}
+
+/// Mirrors the parsed rules into `assignment_group_rules`, the projection
+/// `star-graphql`'s `assignmentGroupsConnection` reads. An empty hash removes
+/// the row so GraphQL resolves `rules` to null, like a nil Canvas `rules`.
+async fn project_rules(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    group_id: i64,
+    rules: &RulesHash,
+) -> Result<(), ApiError> {
+    if rules.is_empty() {
+        sqlx::query("DELETE FROM assignment_group_rules WHERE assignment_group_id = $1")
+            .bind(group_id)
+            .execute(&mut **tx)
+            .await?;
+        return Ok(());
+    }
+
+    sqlx::query(
+        r#"
+        INSERT INTO assignment_group_rules
+            (assignment_group_id, drop_lowest, drop_highest, never_drop)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (assignment_group_id) DO UPDATE
+        SET drop_lowest = EXCLUDED.drop_lowest,
+            drop_highest = EXCLUDED.drop_highest,
+            never_drop = EXCLUDED.never_drop,
+            updated_at = now()
+        "#,
+    )
+    .bind(group_id)
+    .bind(rules.drop_lowest.unwrap_or_default())
+    .bind(rules.drop_highest.unwrap_or_default())
+    .bind(&rules.never_drop)
+    .execute(&mut **tx)
+    .await?;
 
     Ok(())
 }
@@ -248,15 +295,16 @@ async fn create_assignment_group(
 
     let row: AssignmentGroup = sqlx::query_as(
         r#"
-        INSERT INTO assignment_groups (course_id, name, group_weight, position)
-        VALUES ($1, $2, COALESCE($3, 0), COALESCE($4, 1))
-        RETURNING id, course_id, name, position, group_weight, workflow_state, created_at, updated_at
+        INSERT INTO assignment_groups (course_id, name, group_weight, position, rules)
+        VALUES ($1, $2, COALESCE($3, 0), COALESCE($4, 1), $5)
+        RETURNING id, course_id, name, position, group_weight, workflow_state, created_at, updated_at, rules
         "#,
     )
     .bind(course_id)
     .bind(&payload.name)
     .bind(payload.group_weight)
     .bind(payload.position)
+    .bind(payload.rules.as_ref().map(format_rules).unwrap_or_default())
     .fetch_one(&state.db)
     .await?;
 
@@ -275,7 +323,7 @@ async fn list_assignment_groups(
 
     let rows: Vec<AssignmentGroup> = sqlx::query_as(
         r#"
-        SELECT id, course_id, name, position, group_weight, workflow_state, created_at, updated_at
+        SELECT id, course_id, name, position, group_weight, workflow_state, created_at, updated_at, rules
         FROM assignment_groups
         WHERE course_id = $1 AND workflow_state <> 'deleted'
         ORDER BY position ASC
@@ -300,7 +348,7 @@ async fn get_assignment_group(
 
     let row: Option<AssignmentGroup> = sqlx::query_as(
         r#"
-        SELECT id, course_id, name, position, group_weight, workflow_state, created_at, updated_at
+        SELECT id, course_id, name, position, group_weight, workflow_state, created_at, updated_at, rules
         FROM assignment_groups
         WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
         "#,
@@ -327,31 +375,64 @@ async fn update_assignment_group(
         return Err(ApiError::Forbidden);
     }
 
-    // Fetch existing to merge fields
-    let existing: Option<AssignmentGroup> = sqlx::query_as(
+    // Canvas replaces the whole rules string when the payload carries `rules`
+    // and leaves it untouched otherwise (`Api::V1::AssignmentGroup#update_assignment_group`).
+    let mut tx = state.db.begin().await?;
+
+    let existing: Option<(String, i32, f64, Option<String>)> = sqlx::query_as(
         r#"
-        SELECT id, course_id, name, position, group_weight, workflow_state, created_at, updated_at
+        SELECT name, position, group_weight, rules
         FROM assignment_groups
         WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
         "#,
     )
     .bind(group_id)
     .bind(course_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&mut *tx)
     .await?;
 
-    let existing = existing.ok_or(ApiError::NotFound)?;
+    let (current_name, current_position, current_weight, current_rules) =
+        existing.ok_or(ApiError::NotFound)?;
 
-    let name = payload.name.unwrap_or(existing.name);
-    let position = payload.position.unwrap_or(existing.position);
-    let group_weight = payload.group_weight.unwrap_or(existing.group_weight);
+    let name = payload.name.unwrap_or(current_name);
+    let position = payload.position.unwrap_or(current_position);
+    let group_weight = payload.group_weight.unwrap_or(current_weight);
+
+    let rules = match &payload.rules {
+        Some(incoming) => {
+            let rendered = format_rules(incoming);
+            let parsed = parse_rules(Some(rendered.as_str()));
+
+            let (assignment_count,): (i64,) = sqlx::query_as(
+                r#"
+                SELECT COUNT(*) FROM assignments
+                WHERE assignment_group_id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+                "#,
+            )
+            .bind(group_id)
+            .bind(course_id)
+            .fetch_one(&mut *tx)
+            .await?;
+
+            validate_drop_rules(
+                parsed.drop_lowest.unwrap_or_default(),
+                parsed.drop_highest.unwrap_or_default(),
+                assignment_count,
+            )?;
+
+            project_rules(&mut tx, group_id, &parsed).await?;
+
+            rendered
+        }
+        None => current_rules.unwrap_or_default(),
+    };
 
     let updated: AssignmentGroup = sqlx::query_as(
         r#"
         UPDATE assignment_groups
-        SET name = $3, position = $4, group_weight = $5, updated_at = now()
+        SET name = $3, position = $4, group_weight = $5, rules = $6, updated_at = now()
         WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
-        RETURNING id, course_id, name, position, group_weight, workflow_state, created_at, updated_at
+        RETURNING id, course_id, name, position, group_weight, workflow_state, created_at, updated_at, rules
         "#,
     )
     .bind(group_id)
@@ -359,8 +440,11 @@ async fn update_assignment_group(
     .bind(&name)
     .bind(position)
     .bind(group_weight)
-    .fetch_one(&state.db)
+    .bind(&rules)
+    .fetch_one(&mut *tx)
     .await?;
+
+    tx.commit().await?;
 
     Ok(Json(updated))
 }
@@ -432,126 +516,6 @@ async fn list_group_assignments(
 
     Ok(Json(rows))
 }
-
-/// GET /courses/{courseId}/assignment_groups/{id}/rules — grading rules (enrolled)
-async fn get_assignment_group_rules(
-    State(state): State<AppState>,
-    Path((course_id, group_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-) -> Result<Json<AssignmentGroupRules>, ApiError> {
-    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let row: Option<AssignmentGroupRules> = sqlx::query_as(SELECT_RULES_SQL)
-        .bind(group_id)
-        .bind(course_id)
-        .fetch_optional(&state.db)
-        .await?;
-
-    row.map(Json).ok_or(ApiError::NotFound)
-}
-
-/// PUT /courses/{courseId}/assignment_groups/{id}/rules — update rules (teacher)
-async fn update_assignment_group_rules(
-    State(state): State<AppState>,
-    Path((course_id, group_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-    Json(payload): Json<UpdateAssignmentGroupRules>,
-) -> Result<Json<AssignmentGroupRules>, ApiError> {
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let mut tx = state.db.begin().await?;
-
-    let group_weight: Option<(f64,)> = sqlx::query_as(
-        r#"
-        SELECT group_weight
-        FROM assignment_groups
-        WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
-        "#,
-    )
-    .bind(group_id)
-    .bind(course_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-
-    let group_weight = group_weight.ok_or(ApiError::NotFound)?.0;
-
-    let (assignment_count,): (i64,) = sqlx::query_as(
-        r#"
-        SELECT COUNT(*)
-        FROM assignments
-        WHERE assignment_group_id = $1 AND course_id = $2
-        "#,
-    )
-    .bind(group_id)
-    .bind(course_id)
-    .fetch_one(&mut *tx)
-    .await?;
-
-    let existing: Option<(i32, i32, Vec<i64>)> = sqlx::query_as(
-        r#"
-        SELECT drop_lowest, drop_highest, never_drop
-        FROM assignment_group_rules
-        WHERE assignment_group_id = $1
-        "#,
-    )
-    .bind(group_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-
-    let (drop_lowest, drop_highest, never_drop) =
-        merge_rule_values(existing.unwrap_or((0, 0, Vec::new())), &payload);
-
-    validate_drop_rules(drop_lowest, drop_highest, assignment_count)?;
-
-    let group_weight = payload.group_weight.unwrap_or(group_weight);
-
-    sqlx::query(
-        r#"
-        UPDATE assignment_groups
-        SET group_weight = $3, updated_at = now()
-        WHERE id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
-        "#,
-    )
-    .bind(group_id)
-    .bind(course_id)
-    .bind(group_weight)
-    .execute(&mut *tx)
-    .await?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO assignment_group_rules
-            (assignment_group_id, drop_lowest, drop_highest, never_drop)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (assignment_group_id) DO UPDATE
-        SET drop_lowest = EXCLUDED.drop_lowest,
-            drop_highest = EXCLUDED.drop_highest,
-            never_drop = EXCLUDED.never_drop,
-            updated_at = now()
-        "#,
-    )
-    .bind(group_id)
-    .bind(drop_lowest)
-    .bind(drop_highest)
-    .bind(&never_drop)
-    .execute(&mut *tx)
-    .await?;
-
-    let row: AssignmentGroupRules = sqlx::query_as(SELECT_RULES_SQL)
-        .bind(group_id)
-        .bind(course_id)
-        .fetch_one(&mut *tx)
-        .await?;
-
-    tx.commit().await?;
-
-    Ok(Json(row))
-}
-
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -582,52 +546,52 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/assignment_groups/{groupId}/assignments",
             get(list_group_assignments),
         )
-        .route(
-            "/courses/{courseId}/assignment_groups/{id}/rules",
-            get(get_assignment_group_rules).put(update_assignment_group_rules),
-        )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        merge_rule_values, validate_drop_rules, GradingRulesPayload, UpdateAssignmentGroupRules,
-    };
+    use super::{format_rules, parse_rules, validate_drop_rules, GradingRulesPayload};
 
-    fn empty_payload() -> UpdateAssignmentGroupRules {
-        UpdateAssignmentGroupRules {
-            group_weight: None,
-            drop_lowest: None,
-            drop_highest: None,
-            never_drop: None,
-            rules: None,
+    fn payload(
+        drop_lowest: Option<i32>,
+        drop_highest: Option<i32>,
+        never_drop: Option<Vec<i64>>,
+    ) -> GradingRulesPayload {
+        GradingRulesPayload {
+            drop_lowest,
+            drop_highest,
+            never_drop,
         }
     }
 
     #[test]
-    fn merge_keeps_existing_values_when_fields_are_omitted() {
-        let merged = merge_rule_values((2, 1, vec![33]), &empty_payload());
-        assert_eq!(merged, (2, 1, vec![33]));
+    fn format_writes_the_canvas_rule_string() {
+        assert_eq!(
+            format_rules(&payload(Some(1), None, Some(vec![33, 17]))),
+            "drop_lowest:1\nnever_drop:33\nnever_drop:17\n"
+        );
     }
 
     #[test]
-    fn merge_reads_nested_canvas_rules_payload() {
-        let payload = UpdateAssignmentGroupRules {
-            group_weight: Some(40.0),
-            drop_lowest: None,
-            drop_highest: Some(0),
-            never_drop: None,
-            rules: Some(GradingRulesPayload {
-                drop_lowest: Some(1),
-                drop_highest: None,
-                never_drop: Some(vec![17, 24]),
-            }),
-        };
-
+    fn format_writes_zero_and_omits_absent_keys() {
         assert_eq!(
-            merge_rule_values((0, 0, Vec::new()), &payload),
-            (1, 0, vec![17, 24])
+            format_rules(&payload(Some(0), None, None)),
+            "drop_lowest:0\n"
         );
+        assert_eq!(format_rules(&payload(None, None, None)), "");
+    }
+
+    #[test]
+    fn parse_round_trips_the_canvas_rule_string() {
+        let rules = parse_rules(Some(
+            "drop_lowest:2\ndrop_highest:1\nnever_drop:12\nnever_drop:14\n",
+        ));
+        assert_eq!(rules.drop_lowest, Some(2));
+        assert_eq!(rules.drop_highest, Some(1));
+        assert_eq!(rules.never_drop, vec![12, 14]);
+
+        assert!(parse_rules(None).is_empty());
+        assert!(parse_rules(Some("")).is_empty());
     }
 
     #[test]

@@ -263,23 +263,6 @@ fn test_parity_conversation_participants_add_recipients_and_read() {
     let created: serde_json::Value = resp.json().expect("create JSON");
     let conv_id = created["id"].as_i64().unwrap();
 
-    // GET participants returns Canvas user entries.
-    let resp = client
-        .get(format!(
-            "{}/conversations/{}/participants",
-            API_BASE, conv_id
-        ))
-        .header("Authorization", auth_header(&token1))
-        .send()
-        .expect("participants failed");
-    assert_eq!(resp.status().as_u16(), 200);
-    let participants: serde_json::Value = resp.json().expect("participants JSON");
-    let participants = participants.as_array().expect("participants array");
-    assert!(!participants.is_empty());
-    assert!(participants[0]["id"].is_number());
-    assert!(participants[0]["name"].is_string());
-    assert!(participants[0]["full_name"].is_string());
-
     // Add user 2 as a recipient.
     let resp = client
         .post(format!(
@@ -312,10 +295,12 @@ fn test_parity_conversation_participants_add_recipients_and_read() {
         .expect("add_recipients empty failed");
     assert_eq!(resp.status().as_u16(), 400, "empty recipients returned 400");
 
-    // Mark the conversation read for user 2.
+    // Canvas marks a conversation read through the conversation update itself
+    // (PUT /conversations/:id with workflow_state), so user 2 reads it that way.
     let resp = client
-        .put(format!("{}/conversations/{}/read", API_BASE, conv_id))
+        .put(format!("{}/conversations/{}", API_BASE, conv_id))
         .header("Authorization", auth_header(&token2))
+        .json(&json!({ "conversation": { "workflow_state": "read" } }))
         .send()
         .expect("mark read failed");
     assert_eq!(resp.status().as_u16(), 200, "read returned 200");

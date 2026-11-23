@@ -1,8 +1,9 @@
 //! Integration tests for star-quizzes.
 //!
-//! Exercises the real quizzes router (quiz CRUD, the POST /quizzes/{id}/start
-//! submission upsert, per-user "my submission", and the course-level
-//! submissions listing) through axum-test against a real Postgres.
+//! Exercises the real quizzes router (quiz CRUD, Canvas' nested
+//! `POST /courses/{courseId}/quizzes/{id}/submissions` attempt start, the
+//! singular "my submission" route, and the course-level submissions listing)
+//! through axum-test against a real Postgres.
 //!
 //! Conventions (mirrors star-assignments/tests/assignments_integration.rs):
 //! - Skipped cleanly when DATABASE_URL is not set (prints SKIP and returns).
@@ -15,7 +16,7 @@
 //!   (assignment | practice | survey | graded_survey); `published` is the
 //!   boolean workflow equivalent; DELETE is a HARD delete (Canvas soft-deletes
 //!   via workflow_state='deleted') so quiz_submissions cascade away.
-//! - POST /quizzes/{id}/start is students-only: the caller needs an enrollment
+//! - Starting an attempt is students-only: the caller needs an enrollment
 //!   row with role='student' in the quiz's course (teachers and admins without
 //!   a student enrollment get 403). It returns 409 Conflict when the user
 //!   already has a (quiz_id, user_id) submission row (UNIQUE constraint backs
@@ -233,13 +234,33 @@ async fn api_create_quiz(server: &TestServer, token: &str, course_id: i64, title
     resp.json()
 }
 
-/// Start a quiz through the API as the given token; asserts 201.
-async fn api_start_quiz(server: &TestServer, token: &str, quiz_id: i64) -> Value {
+/// Start a quiz attempt through Canvas' nested route as the given token;
+/// asserts 201.
+async fn api_start_quiz(server: &TestServer, token: &str, course_id: i64, quiz_id: i64) -> Value {
     let resp = server
-        .post(&format!("/quizzes/{quiz_id}/start"))
+        .post(&format!(
+            "/courses/{course_id}/quizzes/{quiz_id}/submissions"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, token)
         .await;
     assert_eq!(resp.status_code(), 201, "start quiz: {}", resp.text());
+    resp.json()
+}
+
+/// Read the caller's own submission through Canvas' singular route.
+async fn api_my_submission(
+    server: &TestServer,
+    token: &str,
+    course_id: i64,
+    quiz_id: i64,
+) -> Value {
+    let resp = server
+        .get(&format!(
+            "/courses/{course_id}/quizzes/{quiz_id}/submission"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, token)
+        .await;
+    assert_eq!(resp.status_code(), 200, "own submission: {}", resp.text());
     resp.json()
 }
 
@@ -893,7 +914,7 @@ async fn delete_quiz_as_teacher_is_204_and_cascades_submissions() {
     };
 
     let f = seed_fixture(&server, &pool, &prefix, "DeleteOk").await;
-    api_start_quiz(&server, &auth(f.student, "student"), f.quiz).await;
+    api_start_quiz(&server, &auth(f.student, "student"), f.course, f.quiz).await;
     assert_eq!(db_count_quiz_submissions(&pool, f.quiz, f.student).await, 1);
 
     let resp = server
@@ -966,7 +987,7 @@ async fn delete_quiz_missing_404_and_student_403() {
 }
 
 // ---------------------------------------------------------------------------
-// POST /quizzes/{id}/start  (quiz_submission upsert)
+// POST /courses/{courseId}/quizzes/{id}/submissions  (attempt start)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -979,7 +1000,10 @@ async fn start_quiz_returns_201_and_persists() {
     let f = seed_fixture(&server, &pool, &prefix, "StartOk").await;
 
     let resp = server
-        .post(&format!("/quizzes/{}/start", f.quiz))
+        .post(&format!(
+            "/courses/{}/quizzes/{}/submissions",
+            f.course, f.quiz
+        ))
         .add_header(
             axum::http::header::AUTHORIZATION,
             auth(f.student, "student"),
@@ -1019,11 +1043,14 @@ async fn start_quiz_twice_is_409_conflict() {
 
     let f = seed_fixture(&server, &pool, &prefix, "StartTwice").await;
 
-    api_start_quiz(&server, &auth(f.student, "student"), f.quiz).await;
+    api_start_quiz(&server, &auth(f.student, "student"), f.course, f.quiz).await;
 
     // Starting again is a 409 Conflict, not an upsert.
     let resp = server
-        .post(&format!("/quizzes/{}/start", f.quiz))
+        .post(&format!(
+            "/courses/{}/quizzes/{}/submissions",
+            f.course, f.quiz
+        ))
         .add_header(
             axum::http::header::AUTHORIZATION,
             auth(f.student, "student"),
@@ -1041,7 +1068,7 @@ async fn start_quiz_twice_is_409_conflict() {
     // A different enrolled student gets their own submission.
     let second = seed_user(&pool, &prefix, "SecondStudent", "student").await;
     seed_enrollment(&pool, second, f.course, "student").await;
-    let sub = api_start_quiz(&server, &auth(second, "student"), f.quiz).await;
+    let sub = api_start_quiz(&server, &auth(second, "student"), f.course, f.quiz).await;
     assert_eq!(sub["user_id"], second);
 
     cleanup(&pool, &prefix).await;
@@ -1063,7 +1090,7 @@ async fn start_quiz_missing_404_teacher_and_admin_403_student_201() {
 
     // Missing quiz is 404 (checked before authorization).
     let resp = server
-        .post("/quizzes/999999999/start")
+        .post("/courses/999999999/quizzes/999999999/submissions")
         .add_header(
             axum::http::header::AUTHORIZATION,
             auth(f.student, "student"),
@@ -1073,7 +1100,10 @@ async fn start_quiz_missing_404_teacher_and_admin_403_student_201() {
 
     // An unenrolled student is 403 and nothing is persisted.
     let resp = server
-        .post(&format!("/quizzes/{}/start", f.quiz))
+        .post(&format!(
+            "/courses/{}/quizzes/{}/submissions",
+            f.course, f.quiz
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -1081,7 +1111,10 @@ async fn start_quiz_missing_404_teacher_and_admin_403_student_201() {
 
     // An enrolled teacher is forbidden: only students take quizzes.
     let resp = server
-        .post(&format!("/quizzes/{}/start", f.quiz))
+        .post(&format!(
+            "/courses/{}/quizzes/{}/submissions",
+            f.course, f.quiz
+        ))
         .add_header(
             axum::http::header::AUTHORIZATION,
             auth(f.teacher, "teacher"),
@@ -1092,21 +1125,24 @@ async fn start_quiz_missing_404_teacher_and_admin_403_student_201() {
 
     // Admins get no bypass: without a student enrollment they are 403 too.
     let resp = server
-        .post(&format!("/quizzes/{}/start", f.quiz))
+        .post(&format!(
+            "/courses/{}/quizzes/{}/submissions",
+            f.course, f.quiz
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
     assert_eq!(db_count_quiz_submissions(&pool, f.quiz, admin).await, 0);
 
     // An enrolled student still starts the quiz.
-    let sub = api_start_quiz(&server, &auth(f.student, "student"), f.quiz).await;
+    let sub = api_start_quiz(&server, &auth(f.student, "student"), f.course, f.quiz).await;
     assert_eq!(sub["user_id"], f.student);
 
     cleanup(&pool, &prefix).await;
 }
 
 // ---------------------------------------------------------------------------
-// GET /quizzes/{id}/submissions/me
+// GET /courses/{courseId}/quizzes/{id}/submission
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -1123,14 +1159,14 @@ async fn my_submission_returns_own_row_and_404_when_absent() {
     seed_enrollment(&pool, no_start, f.course, "student").await;
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
 
-    let sub1 = api_start_quiz(&server, &auth(f.student, "student"), f.quiz).await;
-    let sub2 = api_start_quiz(&server, &auth(second, "student"), f.quiz).await;
+    let sub1 = api_start_quiz(&server, &auth(f.student, "student"), f.course, f.quiz).await;
+    let sub2 = api_start_quiz(&server, &auth(second, "student"), f.course, f.quiz).await;
 
     // Each enrolled user sees exactly their own submission.
     let mine1 = get_ok(
         &server,
         &auth(f.student, "student"),
-        &format!("/quizzes/{}/submissions/me", f.quiz),
+        &format!("/courses/{}/quizzes/{}/submission", f.course, f.quiz),
     )
     .await;
     assert_eq!(mine1["id"], sub1["id"]);
@@ -1140,7 +1176,7 @@ async fn my_submission_returns_own_row_and_404_when_absent() {
     let mine2 = get_ok(
         &server,
         &auth(second, "student"),
-        &format!("/quizzes/{}/submissions/me", f.quiz),
+        &format!("/courses/{}/quizzes/{}/submission", f.course, f.quiz),
     )
     .await;
     assert_eq!(mine2["id"], sub2["id"]);
@@ -1148,14 +1184,20 @@ async fn my_submission_returns_own_row_and_404_when_absent() {
 
     // Enrolled but never started: 404.
     let resp = server
-        .get(&format!("/quizzes/{}/submissions/me", f.quiz))
+        .get(&format!(
+            "/courses/{}/quizzes/{}/submission",
+            f.course, f.quiz
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(no_start, "student"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
     // Unenrolled: 403 even though submissions exist.
     let resp = server
-        .get(&format!("/quizzes/{}/submissions/me", f.quiz))
+        .get(&format!(
+            "/courses/{}/quizzes/{}/submission",
+            f.course, f.quiz
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
@@ -1178,8 +1220,8 @@ async fn list_quiz_submissions_teacher_view_newest_first_student_403() {
     let second = seed_user(&pool, &prefix, "SecondStudent", "student").await;
     seed_enrollment(&pool, second, f.course, "student").await;
 
-    api_start_quiz(&server, &auth(f.student, "student"), f.quiz).await;
-    api_start_quiz(&server, &auth(second, "student"), f.quiz).await;
+    api_start_quiz(&server, &auth(f.student, "student"), f.course, f.quiz).await;
+    api_start_quiz(&server, &auth(second, "student"), f.course, f.quiz).await;
 
     let listed = get_ok(
         &server,
@@ -1230,7 +1272,7 @@ async fn list_quiz_submissions_404_for_missing_or_wrong_course_quiz() {
     };
 
     let f = seed_fixture(&server, &pool, &prefix, "PathCourseOnly").await;
-    api_start_quiz(&server, &auth(f.student, "student"), f.quiz).await;
+    api_start_quiz(&server, &auth(f.student, "student"), f.course, f.quiz).await;
 
     let other_teacher = seed_user(&pool, &prefix, "OtherTeacher", "teacher").await;
     let other_course = seed_course(&pool, &prefix, "OtherCourse").await;
@@ -1496,7 +1538,7 @@ async fn nested_quiz_aliases_404_for_missing_or_cross_course() {
 }
 
 #[tokio::test]
-async fn nested_start_alias_matches_flat_and_enforces_student_only_and_409() {
+async fn nested_start_enforces_student_only_and_409() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -1506,11 +1548,6 @@ async fn nested_start_alias_matches_flat_and_enforces_student_only_and_409() {
     let student_auth = auth(f.student, "student");
     let teacher_auth = auth(f.teacher, "teacher");
 
-    // The flat start and the nested start produce the same 201 shape.
-    let second = api_create_quiz(&server, &teacher_auth, f.course, "Flat Start Quiz").await;
-    let second_id = second["id"].as_i64().expect("second quiz id");
-    let flat_start = api_start_quiz(&server, &student_auth, second_id).await;
-
     let resp = server
         .post(&format!(
             "/courses/{}/quizzes/{}/submissions",
@@ -1518,19 +1555,20 @@ async fn nested_start_alias_matches_flat_and_enforces_student_only_and_409() {
         ))
         .add_header(axum::http::header::AUTHORIZATION, &student_auth)
         .await;
-    assert_eq!(resp.status_code(), 201, "start alias: {}", resp.text());
+    assert_eq!(resp.status_code(), 201, "start: {}", resp.text());
     let started: Value = resp.json();
     assert_eq!(started["quiz_id"], f.quiz);
     assert_eq!(started["user_id"], f.student);
     assert!(started["started_at"].is_string());
-    assert_eq!(
-        started.as_object().unwrap().keys().collect::<Vec<_>>(),
-        flat_start.as_object().unwrap().keys().collect::<Vec<_>>(),
-        "alias response has the flat start shape"
-    );
+    for key in ["id", "quiz_id", "user_id", "started_at", "validation_token"] {
+        assert!(
+            started.as_object().unwrap().contains_key(key),
+            "start response carries {key}: {started}"
+        );
+    }
     assert_eq!(db_count_quiz_submissions(&pool, f.quiz, f.student).await, 1);
 
-    // Starting again through the alias is still 409 Conflict.
+    // Starting again is still 409 Conflict.
     let resp = server
         .post(&format!(
             "/courses/{}/quizzes/{}/submissions",
@@ -1554,7 +1592,7 @@ async fn nested_start_alias_matches_flat_and_enforces_student_only_and_409() {
         let resp = server
             .post(&format!(
                 "/courses/{}/quizzes/{}/submissions",
-                f.course, second_id
+                f.course, f.quiz
             ))
             .add_header(axum::http::header::AUTHORIZATION, &token)
             .await;
@@ -1565,26 +1603,20 @@ async fn nested_start_alias_matches_flat_and_enforces_student_only_and_409() {
             resp.text()
         );
     }
-    assert_eq!(
-        db_count_quiz_submissions(&pool, second_id, f.teacher).await,
-        0
-    );
-    assert_eq!(db_count_quiz_submissions(&pool, second_id, admin).await, 0);
+    assert_eq!(db_count_quiz_submissions(&pool, f.quiz, f.teacher).await, 0);
+    assert_eq!(db_count_quiz_submissions(&pool, f.quiz, admin).await, 0);
 
     // An unenrolled student is forbidden and nothing is persisted.
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
     let resp = server
         .post(&format!(
             "/courses/{}/quizzes/{}/submissions",
-            f.course, second_id
+            f.course, f.quiz
         ))
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "outsider start: {}", resp.text());
-    assert_eq!(
-        db_count_quiz_submissions(&pool, second_id, outsider).await,
-        0
-    );
+    assert_eq!(db_count_quiz_submissions(&pool, f.quiz, outsider).await, 0);
 
     cleanup(&pool, &prefix).await;
 }
@@ -1603,24 +1635,12 @@ async fn nested_singular_submission_alias_returns_callers_submission() {
     seed_enrollment(&pool, no_start, f.course, "student").await;
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
 
-    let sub1 = api_start_quiz(&server, &auth(f.student, "student"), f.quiz).await;
-    let sub2 = api_start_quiz(&server, &auth(second, "student"), f.quiz).await;
+    let sub1 = api_start_quiz(&server, &auth(f.student, "student"), f.course, f.quiz).await;
+    let sub2 = api_start_quiz(&server, &auth(second, "student"), f.course, f.quiz).await;
 
-    // The singular alias is byte-for-byte the flat "my submission" route.
-    let flat_me = get_ok(
-        &server,
-        &auth(f.student, "student"),
-        &format!("/quizzes/{}/submissions/me", f.quiz),
-    )
-    .await;
-    let nested_me = get_ok(
-        &server,
-        &auth(f.student, "student"),
-        &format!("/courses/{}/quizzes/{}/submission", f.course, f.quiz),
-    )
-    .await;
-    assert_eq!(nested_me, flat_me, "singular alias mirrors submissions/me");
-    assert_eq!(nested_me["id"], sub1["id"]);
+    // Canvas' singular route answers with the caller's own submission.
+    let mine1 = api_my_submission(&server, &auth(f.student, "student"), f.course, f.quiz).await;
+    assert_eq!(mine1["id"], sub1["id"]);
 
     // Each caller sees only their own submission.
     let mine2 = get_ok(
@@ -1697,10 +1717,10 @@ async fn full_quiz_lifecycle_create_start_list_update_delete() {
     assert_eq!(arr[0]["title"], "Lifecycle Quiz");
 
     // 3) Student opens it and starts; the second start is rejected.
-    let started = api_start_quiz(&server, student_auth, quiz_id).await;
+    let started = api_start_quiz(&server, student_auth, course, quiz_id).await;
     let submission_id = started["id"].as_i64().expect("submission id");
     let resp = server
-        .post(&format!("/quizzes/{quiz_id}/start"))
+        .post(&format!("/courses/{course}/quizzes/{quiz_id}/submissions"))
         .add_header(axum::http::header::AUTHORIZATION, student_auth)
         .await;
     assert_eq!(resp.status_code(), 409, "second start: {}", resp.text());
@@ -1709,7 +1729,7 @@ async fn full_quiz_lifecycle_create_start_list_update_delete() {
     let mine = get_ok(
         &server,
         student_auth,
-        &format!("/quizzes/{quiz_id}/submissions/me"),
+        &format!("/courses/{course}/quizzes/{quiz_id}/submission"),
     )
     .await;
     assert_eq!(mine["id"], submission_id);
@@ -1751,7 +1771,7 @@ async fn full_quiz_lifecycle_create_start_list_update_delete() {
     assert_eq!(resp.status_code(), 404, "quiz gone");
 
     let resp = server
-        .get(&format!("/quizzes/{quiz_id}/submissions/me"))
+        .get(&format!("/courses/{course}/quizzes/{quiz_id}/submission"))
         .add_header(axum::http::header::AUTHORIZATION, student_auth)
         .await;
     assert_eq!(resp.status_code(), 404, "submission gone with the quiz");
@@ -1800,10 +1820,10 @@ async fn unauthenticated_requests_are_401() {
     let resp = server.delete("/quizzes/1").await;
     assert_eq!(resp.status_code(), 401, "delete: {}", resp.text());
 
-    let resp = server.post("/quizzes/1/start").await;
+    let resp = server.post("/courses/1/quizzes/1/submissions").await;
     assert_eq!(resp.status_code(), 401, "start: {}", resp.text());
 
-    let resp = server.get("/quizzes/1/submissions/me").await;
+    let resp = server.get("/courses/1/quizzes/1/submission").await;
     assert_eq!(resp.status_code(), 401, "my submission: {}", resp.text());
 
     let resp = server.get("/courses/1/quizzes/1/submissions").await;

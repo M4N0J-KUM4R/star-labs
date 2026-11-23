@@ -1,10 +1,10 @@
 //! Custom data — Canvas `CustomDataController` (parity gap).
 //!
-//! Routes (canvas_manifest.json carries the scope-less paths; the
-//! `(*/*scope)` glob variants are not manifest routes):
-//!   - GET    /users/{userId}/custom_data  (get_data)
-//!   - PUT    /users/{userId}/custom_data  (set_data)
-//!   - DELETE /users/{userId}/custom_data  (delete_data)
+//! Routes (canvas_manifest.json carries both spellings of Canvas'
+//! `users/:user_id/custom_data(/*scope)` — the glob and its optional-segment
+//! empty form):
+//!   - GET/PUT/DELETE    /users/{userId}/custom_data          (scope = "")
+//!   - GET/PUT/DELETE    /users/{userId}/custom_data/{*scope}
 //!
 //! Canvas semantics (`custom_data` table, one row per user+namespace):
 //!   - `ns` query param is REQUIRED (`{message: "invalid namespace"}` 400
@@ -183,9 +183,10 @@ async fn load_row(
 // ---------------------------------------------------------------------------
 
 async fn custom_data(
-    State(state): State<AppState>,
-    Path((user_id, scope)): Path<(i64, String)>,
-    Query(query): Query<CustomDataQuery>,
+    state: &AppState,
+    user_id: i64,
+    scope: String,
+    query: CustomDataQuery,
     method: axum::http::Method,
     auth: AuthUser,
     body: Option<Json<SetDataPayload>>,
@@ -305,11 +306,51 @@ async fn custom_data(
     }
 }
 
+/// `users/:user_id/custom_data(/:scope)` with a scope: Canvas' glob form, so
+/// `body/measurements` walks two levels into the stored hash.
+async fn custom_data_scoped(
+    State(state): State<AppState>,
+    Path((raw_user_id, scope)): Path<(String, String)>,
+    Query(query): Query<CustomDataQuery>,
+    method: axum::http::Method,
+    auth: AuthUser,
+    body: Option<Json<SetDataPayload>>,
+) -> Result<axum::response::Response, ApiError> {
+    // Canvas documents `self` for `user_id` ("data associated with the
+    // calling user"), resolved before anything else.
+    let user_id = crate::resolve_path_user(&raw_user_id, auth.id)?;
+    custom_data(&state, user_id, scope, query, method, auth, body).await
+}
+
+/// The same actions with no scope — Canvas routes the empty form of the
+/// optional segment to the same controller actions (`params[:scope]` is nil,
+/// so the tree root `d` is the scope).
+async fn custom_data_root(
+    State(state): State<AppState>,
+    Path(raw_user_id): Path<String>,
+    Query(query): Query<CustomDataQuery>,
+    method: axum::http::Method,
+    auth: AuthUser,
+    body: Option<Json<SetDataPayload>>,
+) -> Result<axum::response::Response, ApiError> {
+    let user_id = crate::resolve_path_user(&raw_user_id, auth.id)?;
+    custom_data(&state, user_id, String::new(), query, method, auth, body).await
+}
+
 /// Mount the custom-data routes (wildcard scope; the bare path is also
 /// accepted with an empty scope — Canvas routes it the same way).
 pub fn custom_data_routes() -> Router<AppState> {
-    Router::new().route(
-        "/users/{userId}/custom_data",
-        get(custom_data).put(custom_data).delete(custom_data),
-    )
+    Router::new()
+        .route(
+            "/users/{userId}/custom_data",
+            get(custom_data_root)
+                .put(custom_data_root)
+                .delete(custom_data_root),
+        )
+        .route(
+            "/users/{userId}/custom_data/{*scope}",
+            get(custom_data_scoped)
+                .put(custom_data_scoped)
+                .delete(custom_data_scoped),
+        )
 }

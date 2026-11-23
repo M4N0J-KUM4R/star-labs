@@ -6,9 +6,8 @@
 //! - GET    /conversations/{id}         — get full conversation with messages
 //! - POST   /conversations/{id}/add_message — append message, update last_message_at
 //! - DELETE /conversations/{id}         — soft-delete for this user only
-//! - GET    /conversations/{id}/participants    — list active participants
 //! - POST   /conversations/{id}/add_recipients  — add users as participants
-//! - PUT    /conversations/{id}/read            — mark conversation read for this user
+
 //! - GET    /conversations/batches              — running bulk-message batches
 //! - POST   /conversations/{id}/remove_messages — hide messages for this user
 //! - GET    /conversations/unread_count         — unread conversation counter
@@ -72,17 +71,6 @@ pub struct ConversationParticipant {
     pub user_id: i64,
     pub workflow_state: String,
     pub last_message_at: Option<DateTime<Utc>>,
-}
-
-/// Participant user shape for GET /conversations/{id}/participants.
-/// Mirrors Canvas conversation `participants` entries ({id, name, full_name})
-/// and adds the per-participant read state for this conversation.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
-pub struct ConversationParticipantUser {
-    pub id: i64,
-    pub name: String,
-    pub full_name: String,
-    pub read_at: Option<DateTime<Utc>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -696,35 +684,6 @@ async fn delete_conversation(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// GET /conversations/{id}/participants — list active participants.
-/// Canvas conversation `participants` shape ({id, name, full_name}) plus the
-/// per-participant read state (read_at) for this conversation.
-async fn list_participants(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<Vec<ConversationParticipantUser>>, ApiError> {
-    // Verify participant.
-    if !is_participant(&state.db, id, auth.id).await? {
-        return Err(ApiError::NotFound);
-    }
-
-    let rows: Vec<ConversationParticipantUser> = sqlx::query_as(
-        r#"
-        SELECT u.id AS id, u.name AS name, u.name AS full_name, cp.read_at AS read_at
-        FROM conversation_participants cp
-        JOIN users u ON u.id = cp.user_id
-        WHERE cp.conversation_id = $1 AND cp.workflow_state = 'active'
-        ORDER BY u.id ASC
-        "#,
-    )
-    .bind(id)
-    .fetch_all(&state.db)
-    .await?;
-
-    Ok(Json(rows))
-}
-
 /// POST /conversations/{id}/add_recipients — add users to a conversation.
 /// Canvas request field: recipients[] (user ids). The response mirrors
 /// GET /conversations/{id} but only includes the latest message. Unknown user
@@ -791,35 +750,6 @@ async fn add_recipients(
     let mut detail = load_conversation_detail(&state.db, id, auth.id).await?;
     keep_latest_message(&mut detail.messages);
     Ok(Json(detail))
-}
-
-/// PUT /conversations/{id}/read — mark the conversation read for this user.
-/// Idempotent: sets read_at on the current user's participant row.
-async fn mark_read(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<ConversationDetail>, ApiError> {
-    // Verify participant.
-    if !is_participant(&state.db, id, auth.id).await? {
-        return Err(ApiError::NotFound);
-    }
-
-    sqlx::query(
-        r#"
-        UPDATE conversation_participants
-        SET read_at = now()
-        WHERE conversation_id = $1 AND user_id = $2 AND workflow_state = 'active'
-        "#,
-    )
-    .bind(id)
-    .bind(auth.id)
-    .execute(&state.db)
-    .await?;
-
-    Ok(Json(
-        load_conversation_detail(&state.db, id, auth.id).await?,
-    ))
 }
 
 /// GET /conversations/batches — running bulk-message batches for this user.
@@ -1480,10 +1410,8 @@ pub fn router() -> Router<AppState> {
         .route("/conversations/{id}", get(get_conversation))
         .route("/conversations/{id}", delete(delete_conversation))
         .route("/conversations/{id}/add_message", post(add_message))
-        .route("/conversations/{id}/participants", get(list_participants))
         .route("/conversations/{id}/add_recipients", post(add_recipients))
         .route("/conversations/{id}/remove_messages", post(remove_messages))
-        .route("/conversations/{id}/read", put(mark_read))
         // Conversations tail (#60, platform spec §5.1–5.7)
         .route("/conversations", put(batch_update_conversations))
         .route("/conversations/{id}", put(update_conversation))

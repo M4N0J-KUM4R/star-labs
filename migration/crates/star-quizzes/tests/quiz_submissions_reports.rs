@@ -181,9 +181,9 @@ async fn seed_fixture(
 }
 
 /// Start the quiz as the student and return the submission id.
-async fn start_submission(server: &TestServer, student: i64, quiz_id: i64) -> i64 {
+async fn start_submission(server: &TestServer, course: i64, student: i64, quiz_id: i64) -> i64 {
     let resp = server
-        .post(&format!("/quizzes/{quiz_id}/start"))
+        .post(&format!("/courses/{course}/quizzes/{quiz_id}/submissions"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 201, "start quiz: {}", resp.text());
@@ -226,7 +226,7 @@ async fn show_quiz_submission_canvas_shape_and_access_rules() {
     };
 
     let (teacher, student, course, quiz) = seed_fixture(&server, &pool, &prefix, "ShowSub").await;
-    let submission = start_submission(&server, student, quiz).await;
+    let submission = start_submission(&server, course, student, quiz).await;
 
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
     seed_enrollment(&pool, outsider, course, "student").await;
@@ -300,7 +300,7 @@ async fn update_quiz_submission_manual_scoring_and_validation() {
     };
 
     let (teacher, student, course, quiz) = seed_fixture(&server, &pool, &prefix, "ScoreSub").await;
-    let submission = start_submission(&server, student, quiz).await;
+    let submission = start_submission(&server, course, student, quiz).await;
     complete_submission(&pool, submission, 8.0).await;
 
     let teacher_token = auth(teacher, "teacher");
@@ -375,7 +375,7 @@ async fn update_quiz_submission_manual_scoring_and_validation() {
     // An untaken submission cannot be scored (Canvas requires a complete one).
     let second = seed_user(&pool, &prefix, "Second", "student").await;
     seed_enrollment(&pool, second, course, "student").await;
-    let pending = start_submission(&server, second, quiz).await;
+    let pending = start_submission(&server, course, second, quiz).await;
     let resp = server
         .put(&format!(
             "/courses/{course}/quizzes/{quiz}/submissions/{pending}"

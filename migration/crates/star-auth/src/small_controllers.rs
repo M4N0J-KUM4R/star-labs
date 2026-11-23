@@ -362,10 +362,6 @@ pub fn small_controllers_root_routes() -> Router<AppState> {
             get(lti_openid_configuration),
         )
         .route(
-            "/api/sis/{context}/{contextId}/assignments",
-            get(sis_assignments),
-        )
-        .route(
             "/api/sis/accounts/{accountId}/assignments",
             get(sis_assignments_account),
         )

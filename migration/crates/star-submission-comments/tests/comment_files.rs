@@ -275,7 +275,7 @@ async fn comment_files_link_to_comments_and_appear_in_detail() {
     let file_id = resp.json::<Value>()["id"].as_i64().unwrap();
 
     let resp = server
-        .post(&nested)
+        .post(&flat_path(submission))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "comment": "see attached", "file_ids": [file_id] }))
         .await;
@@ -334,7 +334,7 @@ async fn comment_files_link_to_comments_and_appear_in_detail() {
 
     // Unknown file ids are ignored (Canvas only keeps attachable files).
     let resp = server
-        .post(&nested)
+        .post(&flat_path(submission))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "comment": "no attachment", "file_ids": [9_000_000_001i64] }))
         .await;
@@ -370,7 +370,7 @@ async fn comment_update_edits_text_and_sets_edited_at() {
     let nested = nested_path(course, assignment, student);
 
     let resp = server
-        .post(&nested)
+        .post(&flat_path(submission))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "comment": "first draft" }))
         .await;
@@ -443,11 +443,11 @@ async fn comment_delete_soft_deletes_and_detail_is_404() {
     seed_enrollment(&pool, student, course, "student").await;
     seed_enrollment(&pool, classmate, course, "student").await;
     let assignment = seed_assignment(&pool, course, "Essay").await;
-    let _submission = seed_submission(&pool, assignment, student).await;
+    let submission = seed_submission(&pool, assignment, student).await;
     let nested = nested_path(course, assignment, student);
 
     let resp = server
-        .post(&nested)
+        .post(&flat_path(submission))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "comment": "to be deleted" }))
         .await;

@@ -6,7 +6,9 @@
 //! | Verb | Path | Ruby action |
 //! |---|---|---|
 //! | POST | `/accounts/{account_id}/outcome_imports` | `OutcomeImportsApiController#create` |
+//! | POST | `/accounts/{account_id}/outcome_imports/group/{learning_outcome_group_id}` | `OutcomeImportsApiController#create` |
 //! | POST | `/courses/{course_id}/outcome_imports` | `OutcomeImportsApiController#create` |
+//! | POST | `/courses/{course_id}/outcome_imports/group/{learning_outcome_group_id}` | `OutcomeImportsApiController#create` |
 //! | GET | `/accounts/{account_id}/outcome_imports/{id}` | `OutcomeImportsApiController#show` |
 //! | GET | `/courses/{course_id}/outcome_imports/{id}` | `OutcomeImportsApiController#show` |
 //! | GET | `/accounts/{account_id}/outcome_imports/{id}/created_group_ids` | `OutcomeImportsApiController#created_group_ids` |
@@ -112,6 +114,10 @@ pub fn router() -> Router<AppState> {
             post(create_account_outcome_import),
         )
         .route(
+            "/accounts/{account_id}/outcome_imports/group/{learning_outcome_group_id}",
+            post(create_account_outcome_import_in_group),
+        )
+        .route(
             "/accounts/{account_id}/outcome_imports/{id}",
             get(show_account_outcome_import),
         )
@@ -122,6 +128,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/courses/{course_id}/outcome_imports",
             post(create_course_outcome_import),
+        )
+        .route(
+            "/courses/{course_id}/outcome_imports/group/{learning_outcome_group_id}",
+            post(create_course_outcome_import_in_group),
         )
         .route(
             "/courses/{course_id}/outcome_imports/{id}",
@@ -705,6 +715,49 @@ async fn create_course_outcome_import(
     .await
 }
 
+/// `POST /accounts/{account_id}/outcome_imports/group/:learning_outcome_group_id`
+/// — Canvas' `(/group/:learning_outcome_group_id)` optional segment.
+async fn create_account_outcome_import_in_group(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((account_id, learning_outcome_group_id)): Path<(i64, i64)>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, OutcomeApiError> {
+    create_outcome_import(
+        &state,
+        &auth,
+        ImportContext::Account(account_id),
+        Some(learning_outcome_group_id),
+        raw,
+        headers,
+        body,
+    )
+    .await
+}
+
+/// `POST /courses/{course_id}/outcome_imports/group/:learning_outcome_group_id`.
+async fn create_course_outcome_import_in_group(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((course_id, learning_outcome_group_id)): Path<(i64, i64)>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, OutcomeApiError> {
+    create_outcome_import(
+        &state,
+        &auth,
+        ImportContext::Course(course_id),
+        Some(learning_outcome_group_id),
+        raw,
+        headers,
+        body,
+    )
+    .await
+}
+
 /// `OutcomeImportsApiController#create`.
 async fn create_outcome_import(
     state: &AppState,
@@ -759,6 +812,14 @@ async fn create_outcome_import(
         None => Vec::new(),
     };
     params.merge_multipart(&multipart);
+
+    // `params[:learning_outcome_group_id]` — the `/group/:id` route form wins,
+    // otherwise it arrives as a query or multipart field like any other param.
+    let learning_outcome_group_id = learning_outcome_group_id.or_else(|| {
+        params
+            .get("learning_outcome_group_id")
+            .and_then(|value| value.parse::<i64>().ok())
+    });
 
     // `params[:import_type] ||= "instructure_csv"` then the validity check.
     let import_type = params
