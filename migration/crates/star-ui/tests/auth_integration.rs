@@ -114,13 +114,71 @@ async fn register_form_renders() {
     };
     let body = server.get("/register").await.text();
     assert!(body.contains("register_form"));
+    assert!(
+        body.contains("action=\"/users\""),
+        "Canvas submits signup to POST /users, not /register: {body}"
+    );
     assert!(body.contains("name=\"password_confirmation\""));
     let env = star_ui::env::parse_env_from_html(&body).expect("ENV parses");
     assert!(env.get("current_user_id").is_none());
     cleanup(&pool, &prefix).await;
 }
 
-/// POST /register: valid → 303 + session cookie + student row; mismatched
+/// Canvas splits signup across two routes: `get "register" => "users#new"`
+/// (config/routes.rb:1009) and its alias `register_from_website` (:1010) render
+/// the page, while `resources :users` (:1016) owns the create verb. So both GET
+/// pages answer, and POSTing to either page path is a method mismatch.
+#[tokio::test]
+async fn register_pages_are_get_only_and_submit_to_users() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    for path in ["/register", "/register_from_website"] {
+        let page = server.get(path).await;
+        assert_eq!(
+            page.status_code(),
+            200,
+            "{path} must render: {}",
+            page.text()
+        );
+        assert!(
+            page.text().contains("register_form"),
+            "{path} must render the signup form"
+        );
+
+        let csrf = get_csrf(&server, path).await;
+        let post = server
+            .post(path)
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "star_csrf",
+                csrf.clone(),
+            ))
+            .form(&serde_json::json!({
+                "name": "Wrong Path",
+                "email": format!("{prefix}-wrong@test.local"),
+                "password": "Password123!",
+                "password_confirmation": "Password123!",
+                "_csrf": csrf
+            }))
+            .await;
+        assert_eq!(post.status_code(), 405, "{path} must not accept POST");
+    }
+
+    // The user is not created by the rejected POST.
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE name = $1")
+        .bind("Wrong Path")
+        .fetch_one(&pool)
+        .await
+        .expect("count");
+    assert_eq!(count, 0, "405 must not create a user");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// POST /users (Canvas' create verb, config/routes.rb:1016): valid → 303 +
+/// session cookie + student row; mismatched
 /// confirmation → 422 with field error; duplicate email → re-render error.
 #[tokio::test]
 async fn register_valid_mismatch_and_duplicate() {
@@ -133,7 +191,7 @@ async fn register_valid_mismatch_and_duplicate() {
     // Valid registration.
     let csrf = get_csrf(&server, "/register").await;
     let resp = server
-        .post("/register")
+        .post("/users")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
             csrf.clone(),
@@ -163,7 +221,7 @@ async fn register_valid_mismatch_and_duplicate() {
     // Mismatched confirmation → 422 re-render with the field error.
     let csrf = get_csrf(&server, "/register").await;
     let resp = server
-        .post("/register")
+        .post("/users")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
             csrf.clone(),
@@ -184,7 +242,7 @@ async fn register_valid_mismatch_and_duplicate() {
     // Duplicate email → re-render with the star-auth conflict message.
     let csrf = get_csrf(&server, "/register").await;
     let resp = server
-        .post("/register")
+        .post("/users")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
             csrf.clone(),
