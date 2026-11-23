@@ -197,12 +197,20 @@ pub fn router() -> Router<AppState> {
         // Announcements + syllabus journey (issue #111) — BEFORE the generic
         // tab route. Canvas' web routes: `concerns :announcements`
         // (config/routes.rb:266/:702/:796) expands `resources :announcements`
-        // (:155) under the course scope, giving GET/POST
-        // /courses/:cours_id/announcements and GET .../:id; the syllabus page is
-        // the `collection { get :syllabus }` member of `resources :assignments`
-        // (:344-346). Write verbs Canvas reserves for those rows (DELETE
-        // .../:id, plus PUT/PATCH) go through Rack's `_method` override, which
-        // these server-rendered forms do not speak, so they are not registered.
+        // (:154-156, no `only:`/`except:`) under the course scope, giving
+        // GET/POST /courses/:cours_id/announcements plus GET .../new and GET
+        // .../:id; the syllabus page is the `collection { get :syllabus }`
+        // inside `resources :assignments` (:344-346). Write verbs Canvas
+        // reserves for those rows (DELETE .../:id, plus PUT/PATCH) go through
+        // Rack's `_method` override, which these server-rendered forms do not
+        // speak, so they are not registered.
+        //
+        // Two of these paths surface as `absent` in the parity extras list for
+        // tool reasons, not because Canvas lacks them: parity.py records only
+        // one `/new` web route across 1359 (it does not expand the `/new` and
+        // `/edit` routes `resources` generates), and it expands
+        // `collection { get :syllabus }` into the member spelling
+        // `/assignments/:id/syllabus`. Both rows are Canvas-real — keep them.
         .route(
             "/courses/{id}/announcements",
             get(handlers::announcements::announcements_index)

@@ -11,18 +11,33 @@
 //!
 //! Canvas' web routes for these are `concerns :announcements`
 //! (`config/routes.rb:266/:702/:796`) expanding `resources :announcements`
-//! (`:154-155`), which gives GET/POST on the collection and GET/PATCH/PUT/DELETE
-//! on the member, plus the syllabus page as the `collection { get :syllabus }`
-//! member of `resources :assignments` (`:344-346`). The verbs this port does
-//! not register — member DELETE/PATCH/PUT, and any write to the syllabus body —
-//! go through Rack's `_method` override, which these server-rendered forms do
-//! not speak, so they are deliberately absent.
+//! (`:154-156`, with no `only:`/`except:`), which gives GET/POST on the
+//! collection, GET on the member and the `new` page, plus the syllabus page as
+//! the `collection { get :syllabus }` inside `resources :assignments`
+//! (`:344-346`). The verbs this port does not register — member
+//! DELETE/PATCH/PUT, and any write to the syllabus body — go through Rack's
+//! `_method` override, which these server-rendered forms do not speak, so they
+//! are deliberately absent.
 //!
 //! All data access goes through the `star_announcements::ui` pub loaders,
 //! which run the same enrolled-or-admin / teacher-or-admin gates as the REST
-//! API. Deviation (documented): the index has no author column (the schema
-//! has no announcements.author); the RSS/atom link is a static placeholder;
-//! the syllabus page renders the stored body only, with no inline editor.
+//! API. Deviations (documented, all three verified against the Ruby source):
+//! - The index has no author column (the schema has no announcements.author)
+//!   and the RSS/atom link is a static placeholder; Canvas renders that page
+//!   from a JS bundle (`announcements_controller.rb:78`) and publishes
+//!   `/announcements/:feed_code.:format` (`config/routes.rb:657-658`).
+//! - Canvas' `AnnouncementsController` implements only `index`, `show` and
+//!   `public_feed` (`:64/:105/:109`) — there is no `create`/`new` action, so
+//!   the routed collection POST would raise ActionNotFound there. This port
+//!   answers it, because announcements here are not discussion topics: Canvas
+//!   creates them as `discussion_topics` with `is_announcement`
+//!   (`discussion_topics_controller.rb:579`), a flag this workspace's
+//!   discussions port does not yet carry.
+//! - `announcement#show` renders instead of redirecting: Canvas 302s to the
+//!   topic URL (`announcements_controller.rb:105-107`, because an announcement
+//!   *is* a topic there), but our `announcements` table is standalone
+//!   (`star-db/migrations/0001_core_schema.sql`) with no topic id to point at.
+//! - The syllabus page renders the stored body only, with no inline editor.
 
 use askama::Template;
 use axum::extract::{Path, Query, State};
