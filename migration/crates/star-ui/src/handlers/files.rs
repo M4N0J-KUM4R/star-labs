@@ -139,9 +139,6 @@ pub struct FilesIndexQuery {
     pub folder_id: Option<i64>,
 }
 
-/// The files form payloads: exactly one of `new_folder` (name) or the upload
-/// fields is filled, matching the two forms on the page.
-#[derive(Deserialize)]
 /// GET /courses/{id}/files — the index (root folder or `?folder_id=N`).
 pub async fn files_index(
     State(app): State<AppState>,
