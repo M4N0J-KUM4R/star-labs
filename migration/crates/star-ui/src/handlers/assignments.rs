@@ -704,7 +704,9 @@ async fn render_form(
             0,
             true,
             "Add Assignment".to_string(),
-            format!("/courses/{course_id}/assignments/new"),
+            // Canvas' create is the collection POST from `resources
+            // :assignments` (config/routes.rb:270), not a POST on /new.
+            format!("/courses/{course_id}/assignments"),
         )
     };
 
@@ -786,7 +788,7 @@ pub async fn assignment_new(
     render_form(&app, &user, course_id, None, None, String::new(), jar).await
 }
 
-/// POST /courses/{id}/assignments/new — create from the form.
+/// POST /courses/{id}/assignments — create from the form.
 ///
 /// Teacher-or-admin only (403 otherwise, including CSRF failures); on
 /// validation error the form re-renders with the message (422), on success a
@@ -929,6 +931,13 @@ pub async fn assignment_edit(
 }
 
 /// POST /courses/{id}/assignments/{aid}/edit — update from the form.
+///
+/// Known deviation, deliberately still here: Canvas routes update as
+/// PATCH/PUT on `/courses/:id/assignments/:id` (`resources :assignments`,
+/// canvas config/routes.rb:270) and its form reaches those verbs only because
+/// Rack::MethodOverride rewrites the posted `_method` field before routing.
+/// This workspace has no equivalent, and an HTML form cannot submit PATCH, so
+/// the verb lives on the /edit path until the method-override lane lands.
 pub async fn assignment_update(
     State(app): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,

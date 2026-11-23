@@ -1,13 +1,19 @@
 {% extends "layouts/course.html" %}
 {# Quiz index — Canvas quizzes#index analogue. Students see published quizzes
    only (UI-layer filter; the REST list returns everything — documented
-   deviation); teachers get the "+ Quiz" link. #}
+   deviation); teachers get the "+ Quiz" creation button, which POSTs. #}
 {% block content %}
   <div id="quizzes" class="quizzes">
     <div class="header-bar">
       <h1 class="quizzes-title">Quizzes</h1>
       {% if is_teacher %}
-      <a id="new_quiz_link" class="btn btn-primary add-quiz" href="/courses/{{ course_id }}/quizzes/new">+ Quiz</a>
+      {# Canvas has no GET form page here: `resources :quizzes, except: :new`
+         plus `post "quizzes/new"` (config/routes.rb:446-447) makes "+ Quiz" a
+         POST that creates the draft, so this is a form, not a link. #}
+      <form id="new_quiz_form" class="add-quiz" method="post" action="/courses/{{ course_id }}/quizzes/new">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button id="new_quiz_link" type="submit" class="btn btn-primary add-quiz">+ Quiz</button>
+      </form>
       {% endif %}
     </div>
     {% if quizzes.is_empty() %}
