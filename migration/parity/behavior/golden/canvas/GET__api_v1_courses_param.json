@@ -1,0 +1,83 @@
+{
+  "route": "GET /api/v1/courses/:id",
+  "source": "canvas-src/lib/api/v1/course.rb:106-116 (course_json -> Api::V1::CourseJson), canvas-src/lib/api/v1/course_json.rb:9-24 (BASE_ATTRIBUTES), :49-52 (unconditional methods), :75-90 (to_hash), :95-97 (clear_unneeded_fields); columns canvas-src/db/migrate/20101210192618_init_canvas_db.rb create_table :courses",
+  "shape": {
+    "id": "integer",
+    "name": {
+      "$nullable": "string"
+    },
+    "course_code": {
+      "$nullable": "string"
+    },
+    "account_id": "integer",
+    "created_at": {
+      "$nullable": "string"
+    },
+    "start_at": {
+      "$nullable": "string"
+    },
+    "default_view": {
+      "$nullable": "string"
+    },
+    "enrollment_term_id": "integer",
+    "is_public": {
+      "$nullable": "boolean"
+    },
+    "grading_standard_id": {
+      "$nullable": "integer"
+    },
+    "root_account_id": "integer",
+    "uuid": {
+      "$nullable": "string"
+    },
+    "license": {
+      "$nullable": "string"
+    },
+    "grade_passback_setting": {
+      "$nullable": "string"
+    },
+    "end_at": {
+      "$nullable": "string"
+    },
+    "public_syllabus": "boolean",
+    "public_syllabus_to_auth": "boolean",
+    "storage_quota_mb": {
+      "$nullable": "number"
+    },
+    "is_public_to_auth_users": "boolean",
+    "homeroom_course": "boolean",
+    "course_color": {
+      "$nullable": "string"
+    },
+    "friendly_name": {
+      "$nullable": "string"
+    },
+    "apply_assignment_group_weights": "boolean",
+    "hide_final_grades": "boolean",
+    "workflow_state": "string",
+    "restrict_enrollments_to_course_dates": "boolean",
+    "course_format": {
+      "$optional": "string"
+    },
+    "overridden_course_visibility": {
+      "$optional": "string"
+    },
+    "sis_course_id": {
+      "$optional": "string"
+    },
+    "integration_id": {
+      "$optional": "string"
+    },
+    "enrollments": {
+      "$optional": {
+        "$list": "any"
+      }
+    },
+    "needs_grading_count": {
+      "$optional": "integer"
+    },
+    "public_description": {
+      "$optional": "string"
+    }
+  }
+}
