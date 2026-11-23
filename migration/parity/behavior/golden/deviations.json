@@ -1,0 +1,12 @@
+{
+  "$comment": "Accepted shape deviations. Each entry silences exactly one (route, shape position, finding class); it never silences a route or a field elsewhere. Entries must cite the Canvas source that makes the difference intentional -- see golden_differ.py.",
+  "deviations": [
+    {
+      "route": "GET /api/v1/course_accounts",
+      "field": "",
+      "class": "NoElements",
+      "reason": "The behavioral harness captures anonymously, and course_accounts is caller-scoped: with no @current_user Canvas renders the empty array, so an anonymous capture carries no element-shape evidence. Element shape lands with the seeded authenticated capture (issue #231, Phase 4).",
+      "source": "canvas-src/app/controllers/accounts_controller.rb:490-493 (else @accounts = []; render json: @accounts.map { account_json(..., read_only: true) })"
+    }
+  ]
+}

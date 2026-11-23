@@ -1,0 +1,23 @@
+{
+  "route": "GET /api/v1/course_accounts",
+  "source": "canvas-src/app/controllers/accounts_controller.rb:493 -> account_json(a, user, session, includes, read_only: true); read_only branch canvas-src/lib/api/v1/account.rb:38-44; columns canvas-src/db/migrate/20101210192618_init_canvas_db.rb:107-133",
+  "shape": {
+    "$list": {
+      "id": "integer",
+      "name": {
+        "$nullable": "string"
+      },
+      "parent_account_id": {
+        "$nullable": "integer"
+      },
+      "root_account_id": {
+        "$nullable": "integer"
+      },
+      "workflow_state": "string",
+      "uuid": {
+        "$nullable": "string"
+      },
+      "default_time_zone": "string"
+    }
+  }
+}

@@ -55,6 +55,52 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
+  # Shape parity (issue #231, Phase 2).
+  #
+  # The `parity` job above answers "is the route registered?". This one answers
+  # "does the body have the fields Canvas puts in it?", by diffing captured Star
+  # responses against golden shapes extracted from Canvas source.
+  #
+  # It is deliberately independent of the Rust build: the differ and the golden
+  # corpus are Python + JSON, so a shape regression cannot hide behind a
+  # compile failure. The capture side lives in the behavioral harness example
+  # (`star-http --example behavior_parity`, CAPTURE_GOLDEN_DIR) on the #231
+  # branch; until that writes captures, every golden reports MissingCapture,
+  # which this job lists but does not gate on.
+  # ---------------------------------------------------------------------------
+  golden-parity:
+    name: Response shape parity
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: migration
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pytest
+        run: python3 -m pip install --quiet pytest
+      - name: Unit-test the golden differ
+        run: python3 -m pytest tools/parity/test_golden_differ.py -q
+      - name: Validate the Canvas golden corpus
+        run: |
+          python3 tools/parity/golden_differ.py selfcheck \
+            --canvas-dir parity/behavior/golden/canvas
+      - name: Diff captures against Canvas goldens
+        run: |
+          python3 tools/parity/golden_differ.py diff \
+            --canvas-dir parity/behavior/golden/canvas \
+            --capture-dir parity/behavior/golden/captured \
+            --deviations parity/behavior/golden/deviations.json \
+            >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload golden corpus
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-parity
+          path: migration/parity/behavior/golden/
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
   # Commit the generated scoreboard so the numbers are versioned instead of
   # living only in an expiring artifact (issue #74).
   #
