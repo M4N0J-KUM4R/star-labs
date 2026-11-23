@@ -125,7 +125,7 @@ async fn seed_calendar_event(
     location_name: Option<&str>,
 ) -> i64 {
     sqlx::query_scalar(
-        "INSERT INTO calendar_events (course_id, title, start_at, workflow_state, location_name) \\
+        "INSERT INTO calendar_events (course_id, title, start_at, workflow_state, location_name) \
          VALUES ($1, $2, $3, 'active', $4) RETURNING id",
     )
     .bind(course_id)
@@ -321,6 +321,19 @@ async fn files_index_and_show_are_read_only() {
     )
     .await;
     assert_eq!(resp.status_code(), 404, "download must not be routed");
+
+    let outsider_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM enrollments WHERE user_id = $1 AND course_id = $2",
+    )
+    .bind(outsider)
+    .bind(course)
+    .fetch_one(&pool)
+    .await
+    .expect("outsider enrollment count");
+    assert_eq!(
+        outsider_rows, 0,
+        "the 403 below only means something if the viewer is unenrolled"
+    );
 
     // Non-enrolled viewer: 403 (the same gate the REST list applies).
     let (out_session, out_csrf) = login(
