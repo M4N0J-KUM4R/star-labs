@@ -73,7 +73,7 @@ fn parity_student_can_comment_on_own_submission() {
 
     // Create course
     let course = client
-        .post(format!("{BASE}/api/v1/courses"))
+        .post(format!("{BASE}/api/v1/accounts/1/courses"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
             "name": format!("SC Own {}", uniq),
@@ -234,7 +234,7 @@ fn parity_teacher_can_list_and_delete_comments() {
 
     // Create course
     let course = client
-        .post(format!("{BASE}/api/v1/courses"))
+        .post(format!("{BASE}/api/v1/accounts/1/courses"))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({
             "name": format!("SC Teacher {}", uniq),

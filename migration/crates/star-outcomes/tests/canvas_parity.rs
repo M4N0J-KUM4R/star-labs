@@ -63,7 +63,7 @@ fn assert_status(resp: &reqwest::blocking::Response, expected: reqwest::StatusCo
 fn setup_course(client: &Client, base_token: &str) -> (i64, String, String) {
     // Create course
     let resp = client
-        .post(format!("{}/courses", API_BASE))
+        .post(format!("{}/accounts/1/courses", API_BASE))
         .headers(auth_headers(base_token))
         .json(&serde_json::json!({ "name": "Outcomes Test Course" }))
         .send()

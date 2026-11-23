@@ -1656,7 +1656,12 @@ def render_report(coverage):
     add("Classified, because the fix differs by class: only `api_verb_mismatch` "
         "and `api_nested` are Canvas gaps (star misses a verb or the nested form "
         "entirely); `api_extra_*` means Canvas' own verbs at that path are all "
-        "implemented and the registration is additive; `web_*` means Canvas "
+        "implemented and this registration is *additive surface* -- Canvas does "
+        "not answer that (verb, path) through its API, so each row still needs a "
+        "routes.rb check before it is kept. It is not a clean bill of health: "
+        "`POST /courses` sat here until it was deleted, because Canvas' only API "
+        "course create is `post \"accounts/:account_id/courses\"` "
+        "(canvas-src/config/routes.rb:1231); `web_*` means Canvas "
         "answers that path as a **web** (HTML/JS) route rather than an API "
         "route -- a port, not a REST parity item; `api_alias` is Canvas' own "
         "`self` id spelling (canvas-src/lib/api.rb:51 maps the literal `self` "
@@ -1673,13 +1678,15 @@ def render_report(coverage):
     for name in EXTRA_CLASSES:
         action = {
             "api_verb_mismatch": "Canvas verb at this path is unimplemented: add it",
-            "api_extra_verb": "Canvas' verbs here are all served: keep, no change",
+            "api_extra_verb": "Canvas serves other verbs here, not this one: "
+                              "extra API surface, verify in routes.rb",
             "api_alias": "Canvas' `self` id alias (lib/api.rb): keep, parity-exact",
             "web_exact": "port of a Canvas web route: keep, label as web/UI",
             "web_verb_mismatch": "web port with the wrong verb",
             "web_nested": "web route flattened to top level: re-nest or label",
             "api_nested": "Canvas serves the nested form and star does not: re-nest",
-            "api_extra_nested": "nested form already served: keep, no change",
+            "api_extra_nested": "nested form already served: this flat twin is "
+                                "extra surface, verify in routes.rb",
             "absent": "no Canvas path or tail: a renamed alias, a custom "
                       "endpoint, or unused -- check before deleting",
         }[name]
