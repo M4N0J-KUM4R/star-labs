@@ -1,6 +1,11 @@
 {% extends "layouts/base.html" %}
 {# Registration page — Canvas users#new (layout "bare"), issue #70.
-   No-JS port of the JS signup dialogs: one server-rendered form. #}
+   No-JS port of the JS signup dialogs: one server-rendered form.
+   It submits to POST /users (canvas config/routes.rb:1016 ->
+   UsersController#create, users_controller.rb:1729), not to /register: in
+   Canvas /register is only the GET that renders this page (:1009).
+   Canvas nests its fields (`user[name]`, `pseudonym[unique_id]`); this shell's
+   forms are flat throughout, so the field names stay as they are. #}
 {% block shell %}
   <div class="ic-Login">
     <div class="ic-Login__container">
@@ -16,7 +21,7 @@
             <div class="ic-flash error" role="alert">{{ error }}</div>
             {% endif %}
             </div>
-            <form id="register_form" method="post" action="/register">
+            <form id="register_form" method="post" action="/users">
               <input type="hidden" name="_csrf" value="{{ csrf_token }}">
               <div class="ic-Form-control ic-Form-control--login">
                 <label class="ic-Label" for="user_name">Full Name</label>

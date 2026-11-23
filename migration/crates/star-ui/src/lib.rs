@@ -48,10 +48,18 @@ pub fn router() -> Router<AppState> {
             get(handlers::login::login_form).post(handlers::login::login_submit),
         )
         .route("/logout", post(handlers::login::logout))
-        .route(
-            "/register",
-            get(handlers::auth::register_form).post(handlers::auth::register_submit),
-        )
+        // Canvas' signup is two routes, not one. The page is
+        // `get "register" => "users#new"` (canvas config/routes.rb:1009) with
+        // `register_from_website` (:1010) as a second name for the same page;
+        // the form then submits to `POST /users`, from
+        // `resources :users, except: [:destroy, :index]` (:1016) —
+        // UsersController#create (users_controller.rb:1729), which is
+        // `create_user`, the same action the deprecated
+        // `create_self_registered_user` (:1771) delegates to. Canvas has no
+        // POST on /register itself, so this table registers none.
+        .route("/register", get(handlers::auth::register_form))
+        .route("/register_from_website", get(handlers::auth::register_form))
+        .route("/users", post(handlers::auth::register_submit))
         .route(
             "/forgot_password",
             get(handlers::auth::forgot_password_form).post(handlers::auth::forgot_password_submit),

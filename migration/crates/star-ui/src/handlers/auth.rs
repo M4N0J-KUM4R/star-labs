@@ -1,6 +1,9 @@
 //! Registration + password-reset handlers (issue #70, canvas-reference §2).
 //!
-//! * `GET/POST /register` — server-rendered self-registration. Reuses
+//! * `GET /register` (+ its alias `GET /register_from_website`) renders the
+//!   self-registration form and `POST /users` submits it — Canvas' split,
+//!   `get "register" => "users#new"` (config/routes.rb:1009-1010) with
+//!   `resources :users` (:1016) providing the create verb. Reuses
 //!   star-auth's public-register semantics verbatim: role forced to
 //!   `student`, email must contain `@`, password >= 8 chars, argon2 hashing
 //!   via `star_auth::hash_password`, and the same `INSERT ... sortable_name`
@@ -63,7 +66,7 @@ fn csrf_403() -> Response {
 }
 
 // ---------------------------------------------------------------------------
-// GET /register
+// GET /register — the form; POST /users — the submit
 // ---------------------------------------------------------------------------
 
 #[derive(Template)]
@@ -130,8 +133,15 @@ pub async fn register_form(Query(query): Query<RegisterQuery>, jar: CookieJar) -
     (jar, page).into_response()
 }
 
-/// POST /register — validate, hash with star-auth's argon2, insert (role
+/// POST /users — validate, hash with star-auth's argon2, insert (role
 /// forced to student), auto-login, 303 /dashboard.
+///
+/// Response-shape deviation, unchanged by the route move: Canvas' `create_user`
+/// answers every success with `render json: data` (users_controller.rb:3478,
+/// where the React signup page reads `data["destination"]`) and every failure
+/// with `render json: errors, status: :bad_request` (:3489). This page is the
+/// no-JS port, so the server completes the login and redirects instead of
+/// handing a destination to a client.
 pub async fn register_submit(
     State(app): State<AppState>,
     jar: CookieJar,
