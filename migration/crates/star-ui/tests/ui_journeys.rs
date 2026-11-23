@@ -126,7 +126,7 @@ async fn seed_calendar_event(
 ) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO calendar_events (course_id, title, start_at, workflow_state, location_name) \
-         VALUES ($1, $2, $3, 'active', $4) RETURNING id",
+         VALUES ($1, $2, $3::timestamptz, 'active', $4) RETURNING id",
     )
     .bind(course_id)
     .bind(title)
