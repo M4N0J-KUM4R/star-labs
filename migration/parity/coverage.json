@@ -12999,7 +12999,7 @@
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
-    "star_extras": 160,
+    "star_extras": 161,
     "star_extras_by_class": {
       "absent": 25,
       "api_alias": 5,
@@ -13007,12 +13007,12 @@
       "api_extra_verb": 19,
       "api_nested": 0,
       "api_verb_mismatch": 0,
-      "web_exact": 52,
+      "web_exact": 54,
       "web_nested": 26,
-      "web_verb_mismatch": 15
+      "web_verb_mismatch": 14
     },
-    "star_route_calls": 1286,
-    "star_route_registrations": 1576,
+    "star_route_calls": 1288,
+    "star_route_registrations": 1577,
     "star_tables": 397,
     "star_test_calls_excluded": 3,
     "star_unparsed_calls": 0,
@@ -14483,14 +14483,14 @@
     },
     {
       "canvas_closest": [
-        "GET"
+        "WEB GET"
       ],
-      "classification": "web_verb_mismatch",
+      "classification": "web_exact",
       "crate": "star-ui",
-      "normalized_path": "register",
-      "path": "/register",
+      "normalized_path": "register_from_website",
+      "path": "/register_from_website",
       "source": "crates/star-ui/src/lib.rs",
-      "verb": "POST"
+      "verb": "GET"
     },
     {
       "canvas_closest": [],
@@ -14665,6 +14665,17 @@
       "path": "/users",
       "source": "crates/star-users/src/lib.rs",
       "verb": "GET"
+    },
+    {
+      "canvas_closest": [
+        "WEB POST"
+      ],
+      "classification": "web_exact",
+      "crate": "star-ui",
+      "normalized_path": "users",
+      "path": "/users",
+      "source": "crates/star-ui/src/lib.rs",
+      "verb": "POST"
     },
     {
       "canvas_closest": [
