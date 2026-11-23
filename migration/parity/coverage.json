@@ -271,9 +271,9 @@
       "total": 8
     },
     "custom_data": {
-      "implemented": 3,
+      "implemented": 6,
       "pct": 100.0,
-      "total": 3
+      "total": 6
     },
     "custom_gradebook_column_data_api": {
       "implemented": 3,
@@ -596,9 +596,9 @@
       "total": 1
     },
     "lti/ims/tool_consumer_profile": {
-      "implemented": 2,
+      "implemented": 4,
       "pct": 100.0,
-      "total": 2
+      "total": 4
     },
     "lti/ims/tool_proxy": {
       "implemented": 5,
@@ -746,9 +746,9 @@
       "total": 40
     },
     "outcome_imports_api": {
-      "implemented": 6,
+      "implemented": 8,
       "pct": 100.0,
-      "total": 6
+      "total": 8
     },
     "outcome_proficiency_api": {
       "implemented": 4,
@@ -5190,7 +5190,15 @@
       "action": "create",
       "controller": "outcome_imports_api",
       "normalized_path": "accounts/{}/outcome_imports",
-      "path": "/api/v1/accounts/:account_id/outcome_imports(/group/:learning_outcome_group_id)",
+      "path": "/api/v1/accounts/:account_id/outcome_imports",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "create",
+      "controller": "outcome_imports_api",
+      "normalized_path": "accounts/{}/outcome_imports/group/{}",
+      "path": "/api/v1/accounts/:account_id/outcome_imports/group/:learning_outcome_group_id",
       "ui_referenced": false,
       "verb": "POST"
     },
@@ -5198,7 +5206,15 @@
       "action": "create",
       "controller": "outcome_imports_api",
       "normalized_path": "courses/{}/outcome_imports",
-      "path": "/api/v1/courses/:course_id/outcome_imports(/group/:learning_outcome_group_id)",
+      "path": "/api/v1/courses/:course_id/outcome_imports",
+      "ui_referenced": false,
+      "verb": "POST"
+    },
+    {
+      "action": "create",
+      "controller": "outcome_imports_api",
+      "normalized_path": "courses/{}/outcome_imports/group/{}",
+      "path": "/api/v1/courses/:course_id/outcome_imports/group/:learning_outcome_group_id",
       "ui_referenced": false,
       "verb": "POST"
     },
@@ -5918,7 +5934,15 @@
       "action": "get_data",
       "controller": "custom_data",
       "normalized_path": "users/{}/custom_data",
-      "path": "/api/v1/users/:user_id/custom_data(/*scope)",
+      "path": "/api/v1/users/:user_id/custom_data",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "get_data",
+      "controller": "custom_data",
+      "normalized_path": "users/{}/custom_data/{}",
+      "path": "/api/v1/users/:user_id/custom_data/*scope",
       "ui_referenced": false,
       "verb": "GET"
     },
@@ -5926,7 +5950,15 @@
       "action": "set_data",
       "controller": "custom_data",
       "normalized_path": "users/{}/custom_data",
-      "path": "/api/v1/users/:user_id/custom_data(/*scope)",
+      "path": "/api/v1/users/:user_id/custom_data",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "set_data",
+      "controller": "custom_data",
+      "normalized_path": "users/{}/custom_data/{}",
+      "path": "/api/v1/users/:user_id/custom_data/*scope",
       "ui_referenced": false,
       "verb": "PUT"
     },
@@ -5934,7 +5966,15 @@
       "action": "delete_data",
       "controller": "custom_data",
       "normalized_path": "users/{}/custom_data",
-      "path": "/api/v1/users/:user_id/custom_data(/*scope)",
+      "path": "/api/v1/users/:user_id/custom_data",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
+      "action": "delete_data",
+      "controller": "custom_data",
+      "normalized_path": "users/{}/custom_data/{}",
+      "path": "/api/v1/users/:user_id/custom_data/*scope",
       "ui_referenced": false,
       "verb": "DELETE"
     },
@@ -12270,7 +12310,15 @@
       "action": "show",
       "controller": "lti/ims/tool_consumer_profile",
       "normalized_path": "api/lti/courses/{}/tool_consumer_profile",
-      "path": "/api/lti/courses/:course_id/tool_consumer_profile(/:tool_consumer_profile_id)",
+      "path": "/api/lti/courses/:course_id/tool_consumer_profile",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "lti/ims/tool_consumer_profile",
+      "normalized_path": "api/lti/courses/{}/tool_consumer_profile/{}",
+      "path": "/api/lti/courses/:course_id/tool_consumer_profile/:tool_consumer_profile_id",
       "ui_referenced": false,
       "verb": "GET"
     },
@@ -12278,7 +12326,15 @@
       "action": "show",
       "controller": "lti/ims/tool_consumer_profile",
       "normalized_path": "api/lti/accounts/{}/tool_consumer_profile",
-      "path": "/api/lti/accounts/:account_id/tool_consumer_profile(/:tool_consumer_profile_id)",
+      "path": "/api/lti/accounts/:account_id/tool_consumer_profile",
+      "ui_referenced": false,
+      "verb": "GET"
+    },
+    {
+      "action": "show",
+      "controller": "lti/ims/tool_consumer_profile",
+      "normalized_path": "api/lti/accounts/{}/tool_consumer_profile/{}",
+      "path": "/api/lti/accounts/:account_id/tool_consumer_profile/:tool_consumer_profile_id",
       "ui_referenced": false,
       "verb": "GET"
     },
@@ -12924,29 +12980,43 @@
     }
   ],
   "summary": {
-    "canvas_api_routes": 1403,
+    "canvas_api_routes": 1410,
     "canvas_controllers": 222,
     "canvas_models": 688,
+    "canvas_web_routes": 1359,
     "erb_views": 475,
     "erb_views_implemented": 0,
     "graphql_files": 390,
     "graphql_files_implemented": 1,
-    "graphql_mutations": 110,
+    "graphql_mutations": 100,
     "graphql_mutations_implemented": 100,
-    "graphql_types": 170,
+    "graphql_types": 246,
     "graphql_types_implemented": 246,
     "implemented_rest_pct": 100.0,
-    "implemented_rest_routes": 1403,
+    "implemented_rest_routes": 1410,
     "js_env_call_sites": 490,
     "js_env_files": 124,
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
-    "star_extras": 208,
-    "star_route_calls": 1326,
-    "star_route_registrations": 1617,
+    "star_extras": 157,
+    "star_extras_by_class": {
+      "absent": 28,
+      "api_alias": 5,
+      "api_extra_nested": 19,
+      "api_extra_verb": 19,
+      "api_nested": 0,
+      "api_verb_mismatch": 0,
+      "web_exact": 44,
+      "web_nested": 26,
+      "web_verb_mismatch": 16
+    },
+    "star_route_calls": 1280,
+    "star_route_registrations": 1569,
     "star_tables": 397,
+    "star_test_calls_excluded": 3,
     "star_unparsed_calls": 0,
+    "star_unreachable_calls_excluded": 0,
     "ui_feature_dirs": 232,
     "ui_feature_dirs_implemented": 0,
     "ui_referenced_implemented": 503,
@@ -12955,6 +13025,10 @@
   },
   "unmatched_star_routes": [
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-graphql",
       "normalized_path": "",
       "path": "/",
@@ -12962,6 +13036,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-ui",
       "normalized_path": "",
       "path": "/",
@@ -12969,6 +13047,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-graphql",
       "normalized_path": "",
       "path": "/",
@@ -12976,6 +13058,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "WEB DELETE"
+      ],
+      "classification": "web_exact",
       "crate": "star-accounts",
       "normalized_path": "account_notifications/{}",
       "path": "/account_notifications/{id}",
@@ -12983,6 +13069,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "WEB POST"
+      ],
+      "classification": "web_exact",
       "crate": "star-lti",
       "normalized_path": "accounts/{}/deep_linking_response",
       "path": "/accounts/{account_id}/deep_linking_response",
@@ -12990,6 +13080,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-grading-standards",
       "normalized_path": "accounts/{}/grading_periods",
       "path": "/accounts/{accountId}/grading_periods",
@@ -12997,6 +13091,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-grading-standards",
       "normalized_path": "accounts/{}/grading_schemes",
       "path": "/accounts/{accountId}/grading_schemes",
@@ -13004,6 +13102,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB POST"
+      ],
+      "classification": "web_exact",
       "crate": "star-grading-standards",
       "normalized_path": "accounts/{}/grading_schemes",
       "path": "/accounts/{accountId}/grading_schemes",
@@ -13011,6 +13113,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-permissions",
       "normalized_path": "accounts/{}/role_overrides",
       "path": "/accounts/{accountId}/role_overrides",
@@ -13018,6 +13124,11 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET",
+        "POST"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-permissions",
       "normalized_path": "accounts/{}/role_overrides",
       "path": "/accounts/{accountId}/role_overrides",
@@ -13025,6 +13136,10 @@
       "verb": "PUT"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-accounts",
       "normalized_path": "accounts/{}/settings",
       "path": "/accounts/{id}/settings",
@@ -13032,6 +13147,10 @@
       "verb": "PUT"
     },
     {
+      "canvas_closest": [
+        "DELETE"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-accounts",
       "normalized_path": "accounts/{}/users/{}",
       "path": "/accounts/{id}/users/{userId}",
@@ -13039,6 +13158,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "WEB DELETE"
+      ],
+      "classification": "web_exact",
       "crate": "star-announcements",
       "normalized_path": "announcements/{}",
       "path": "/announcements/{id}",
@@ -13046,6 +13169,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-announcements",
       "normalized_path": "announcements/{}",
       "path": "/announcements/{id}",
@@ -13053,6 +13180,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB PUT"
+      ],
+      "classification": "web_exact",
       "crate": "star-announcements",
       "normalized_path": "announcements/{}",
       "path": "/announcements/{id}",
@@ -13060,55 +13191,10 @@
       "verb": "PUT"
     },
     {
-      "crate": "star-lti",
-      "normalized_path": "api/lti/accounts/{}/tool_consumer_profile/{}",
-      "path": "/api/lti/accounts/{accountId}/tool_consumer_profile/{toolConsumerProfileId}",
-      "source": "crates/star-lti/src/lti_gaps.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-lti",
-      "normalized_path": "api/lti/courses/{}/tool_consumer_profile/{}",
-      "path": "/api/lti/courses/{courseId}/tool_consumer_profile/{toolConsumerProfileId}",
-      "source": "crates/star-lti/src/lti_gaps.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-lti",
-      "normalized_path": "api/lti/{}/{}/tool_consumer_profile",
-      "path": "/api/lti/{context}/{contextId}/tool_consumer_profile",
-      "source": "crates/star-lti/src/lti_gaps.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-auth",
-      "normalized_path": "api/sis/{}/{}/assignments",
-      "path": "/api/sis/{context}/{contextId}/assignments",
-      "source": "crates/star-auth/src/small_controllers.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-assignments",
-      "normalized_path": "assignment_overrides/{}",
-      "path": "/assignment_overrides/{id}",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "DELETE"
-    },
-    {
-      "crate": "star-assignments",
-      "normalized_path": "assignment_overrides/{}",
-      "path": "/assignment_overrides/{id}",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-assignments",
-      "normalized_path": "assignment_overrides/{}",
-      "path": "/assignment_overrides/{id}",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-assignments",
       "normalized_path": "assignments/{}",
       "path": "/assignments/{id}",
@@ -13116,6 +13202,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-assignments",
       "normalized_path": "assignments/{}",
       "path": "/assignments/{id}",
@@ -13123,6 +13213,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-assignments",
       "normalized_path": "assignments/{}",
       "path": "/assignments/{id}",
@@ -13130,6 +13224,10 @@
       "verb": "PUT"
     },
     {
+      "canvas_closest": [
+        "courses/{}/assignments/{}/submissions"
+      ],
+      "classification": "web_nested",
       "crate": "star-assignments",
       "normalized_path": "assignments/{}/submissions",
       "path": "/assignments/{id}/submissions",
@@ -13137,6 +13235,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "courses/{}/assignments/{}/submissions"
+      ],
+      "classification": "web_nested",
       "crate": "star-assignments",
       "normalized_path": "assignments/{}/submissions",
       "path": "/assignments/{id}/submissions",
@@ -13144,13 +13246,8 @@
       "verb": "POST"
     },
     {
-      "crate": "star-assignments",
-      "normalized_path": "assignments/{}/submissions/me",
-      "path": "/assignments/{id}/submissions/me",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "GET"
-    },
-    {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-auth",
       "normalized_path": "auth/login",
       "path": "/auth/login",
@@ -13158,6 +13255,8 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-auth",
       "normalized_path": "auth/logout",
       "path": "/auth/logout",
@@ -13165,6 +13264,8 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-auth",
       "normalized_path": "auth/me",
       "path": "/auth/me",
@@ -13172,6 +13273,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-auth",
       "normalized_path": "auth/register",
       "path": "/auth/register",
@@ -13179,6 +13282,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "courses/{}/content_exports/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-content",
       "normalized_path": "content_exports/{}",
       "path": "/content_exports/{id}",
@@ -13186,6 +13293,12 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET accounts/{}/content_migrations/migrators",
+        "GET courses/{}/content_migrations/migrators",
+        "GET groups/{}/content_migrations/migrators"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-content",
       "normalized_path": "content_migrations/migrators",
       "path": "/content_migrations/migrators",
@@ -13193,6 +13306,12 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET accounts/{}/content_migrations/{}",
+        "PUT accounts/{}/content_migrations/{}",
+        "GET courses/{}/content_migrations/{}"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-content",
       "normalized_path": "content_migrations/{}",
       "path": "/content_migrations/{id}",
@@ -13200,6 +13319,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "conversations/compose",
       "path": "/conversations/compose",
@@ -13207,6 +13328,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "conversations/mark_all_read",
       "path": "/conversations/mark_all_read",
@@ -13214,20 +13337,10 @@
       "verb": "POST"
     },
     {
-      "crate": "star-conversations",
-      "normalized_path": "conversations/{}/participants",
-      "path": "/conversations/{id}/participants",
-      "source": "crates/star-conversations/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-conversations",
-      "normalized_path": "conversations/{}/read",
-      "path": "/conversations/{id}/read",
-      "source": "crates/star-conversations/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-courses",
       "normalized_path": "courses",
       "path": "/courses",
@@ -13235,6 +13348,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-announcements",
       "normalized_path": "courses/{}/announcements",
       "path": "/courses/{courseId}/announcements",
@@ -13242,6 +13359,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB POST"
+      ],
+      "classification": "web_exact",
       "crate": "star-announcements",
       "normalized_path": "courses/{}/announcements",
       "path": "/courses/{courseId}/announcements",
@@ -13249,55 +13370,8 @@
       "verb": "POST"
     },
     {
-      "crate": "star-announcements",
-      "normalized_path": "courses/{}/announcements/unread_count",
-      "path": "/courses/{courseId}/announcements/unread_count",
-      "source": "crates/star-announcements/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-announcements",
-      "normalized_path": "courses/{}/announcements/{}/read",
-      "path": "/courses/{courseId}/announcements/{id}/read",
-      "source": "crates/star-announcements/src/lib.rs",
-      "verb": "DELETE"
-    },
-    {
-      "crate": "star-announcements",
-      "normalized_path": "courses/{}/announcements/{}/read",
-      "path": "/courses/{courseId}/announcements/{id}/read",
-      "source": "crates/star-announcements/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
-      "crate": "star-assignments",
-      "normalized_path": "courses/{}/assignment_annotations/{}/read",
-      "path": "/courses/{courseId}/assignment_annotations/{id}/read",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "DELETE"
-    },
-    {
-      "crate": "star-assignments",
-      "normalized_path": "courses/{}/assignment_annotations/{}/read",
-      "path": "/courses/{courseId}/assignment_annotations/{id}/read",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
-      "crate": "star-assignment-groups",
-      "normalized_path": "courses/{}/assignment_groups/{}/rules",
-      "path": "/courses/{courseId}/assignment_groups/{id}/rules",
-      "source": "crates/star-assignment-groups/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-assignment-groups",
-      "normalized_path": "courses/{}/assignment_groups/{}/rules",
-      "path": "/courses/{courseId}/assignment_groups/{id}/rules",
-      "source": "crates/star-assignment-groups/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/assignments/new",
       "path": "/courses/{id}/assignments/new",
@@ -13305,6 +13379,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/assignments/new",
       "path": "/courses/{id}/assignments/new",
@@ -13312,6 +13388,8 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/assignments/{}/edit",
       "path": "/courses/{id}/assignments/{aid}/edit",
@@ -13319,6 +13397,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/assignments/{}/edit",
       "path": "/courses/{id}/assignments/{aid}/edit",
@@ -13326,27 +13406,11 @@
       "verb": "POST"
     },
     {
-      "crate": "star-assignments",
-      "normalized_path": "courses/{}/assignments/{}/submissions/self",
-      "path": "/courses/{courseId}/assignments/{id}/submissions/self",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-submission-comments",
-      "normalized_path": "courses/{}/assignments/{}/submissions/{}/comments",
-      "path": "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments",
-      "source": "crates/star-submission-comments/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-submission-comments",
-      "normalized_path": "courses/{}/assignments/{}/submissions/{}/comments",
-      "path": "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments",
-      "source": "crates/star-submission-comments/src/lib.rs",
-      "verb": "POST"
-    },
-    {
+      "canvas_closest": [
+        "DELETE",
+        "PUT"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-submission-comments",
       "normalized_path": "courses/{}/assignments/{}/submissions/{}/comments/{}",
       "path": "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}",
@@ -13354,6 +13418,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/assignments/{}/submit",
       "path": "/courses/{id}/assignments/{aid}/submit",
@@ -13361,6 +13427,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-calendar",
       "normalized_path": "courses/{}/calendar_events",
       "path": "/courses/{courseId}/calendar_events",
@@ -13368,6 +13438,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB POST"
+      ],
+      "classification": "web_exact",
       "crate": "star-calendar",
       "normalized_path": "courses/{}/calendar_events",
       "path": "/courses/{courseId}/calendar_events",
@@ -13375,6 +13449,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "WEB POST"
+      ],
+      "classification": "web_exact",
       "crate": "star-lti",
       "normalized_path": "courses/{}/deep_linking_response",
       "path": "/courses/{id}/deep_linking_response",
@@ -13382,6 +13460,11 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "DELETE",
+        "PUT"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-discussions",
       "normalized_path": "courses/{}/discussion_topics/{}/entries/{}",
       "path": "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}",
@@ -13389,6 +13472,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/discussions",
       "path": "/courses/{id}/discussions",
@@ -13396,6 +13481,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/discussions",
       "path": "/courses/{id}/discussions",
@@ -13403,6 +13490,8 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/discussions/new",
       "path": "/courses/{id}/discussions/new",
@@ -13410,6 +13499,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/discussions/{}",
       "path": "/courses/{id}/discussions/{topic_id}",
@@ -13417,6 +13508,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/discussions/{}/entries",
       "path": "/courses/{id}/discussions/{topic_id}/entries",
@@ -13424,6 +13517,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-lti",
       "normalized_path": "courses/{}/external_tools/{}/eula_launch",
       "path": "/courses/{course_id}/external_tools/{id}/eula_launch",
@@ -13431,27 +13528,10 @@
       "verb": "GET"
     },
     {
-      "crate": "star-grading-standards",
-      "normalized_path": "courses/{}/final_grade",
-      "path": "/courses/{courseId}/final_grade",
-      "source": "crates/star-grading-standards/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-files",
-      "normalized_path": "courses/{}/folders/root",
-      "path": "/courses/{courseId}/folders/root",
-      "source": "crates/star-files/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-assignments",
-      "normalized_path": "courses/{}/gradebook",
-      "path": "/courses/{courseId}/gradebook",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "GET"
-    },
-    {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-ui",
       "normalized_path": "courses/{}/gradebook",
       "path": "/courses/{id}/gradebook",
@@ -13459,6 +13539,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/gradebook.csv",
       "path": "/courses/{id}/gradebook.csv",
@@ -13466,6 +13548,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/gradebook/speedgrader",
       "path": "/courses/{id}/gradebook/speedgrader",
@@ -13473,6 +13557,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/gradebook/speedgrader/grade",
       "path": "/courses/{id}/gradebook/speedgrader/grade",
@@ -13480,6 +13566,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-ui",
       "normalized_path": "courses/{}/grades",
       "path": "/courses/{id}/grades",
@@ -13487,6 +13577,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-groups",
       "normalized_path": "courses/{}/groups",
       "path": "/courses/{courseId}/groups",
@@ -13494,13 +13588,10 @@
       "verb": "POST"
     },
     {
-      "crate": "star-modules",
-      "normalized_path": "courses/{}/mastery_paths/stats/{}",
-      "path": "/courses/{courseId}/mastery_paths/stats/{stat}",
-      "source": "crates/star-modules/src/module_gaps.rs",
-      "verb": "GET"
-    },
-    {
+      "canvas_closest": [
+        "WEB DELETE"
+      ],
+      "classification": "web_exact",
       "crate": "star-modules",
       "normalized_path": "courses/{}/modules/items/{}",
       "path": "/courses/{courseId}/modules/items/{itemId}",
@@ -13508,6 +13599,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-modules",
       "normalized_path": "courses/{}/modules/items/{}",
       "path": "/courses/{courseId}/modules/items/{itemId}",
@@ -13515,6 +13610,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB PUT"
+      ],
+      "classification": "web_exact",
       "crate": "star-modules",
       "normalized_path": "courses/{}/modules/items/{}",
       "path": "/courses/{courseId}/modules/items/{itemId}",
@@ -13522,6 +13621,10 @@
       "verb": "PUT"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-outcomes",
       "normalized_path": "courses/{}/outcome_groups",
       "path": "/courses/{courseId}/outcome_groups",
@@ -13529,6 +13632,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-outcomes",
       "normalized_path": "courses/{}/outcomes",
       "path": "/courses/{courseId}/outcomes",
@@ -13536,6 +13643,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB POST"
+      ],
+      "classification": "web_exact",
       "crate": "star-outcomes",
       "normalized_path": "courses/{}/outcomes",
       "path": "/courses/{courseId}/outcomes",
@@ -13543,6 +13654,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "POST"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-ui",
       "normalized_path": "courses/{}/quizzes/new",
       "path": "/courses/{id}/quizzes/new",
@@ -13550,6 +13665,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB POST"
+      ],
+      "classification": "web_exact",
       "crate": "star-ui",
       "normalized_path": "courses/{}/quizzes/new",
       "path": "/courses/{id}/quizzes/new",
@@ -13557,6 +13676,8 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/quizzes/{}/submissions/{}/submit",
       "path": "/courses/{id}/quizzes/{qid}/submissions/{sid}/submit",
@@ -13564,6 +13685,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "MATCH"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-ui",
       "normalized_path": "courses/{}/quizzes/{}/take",
       "path": "/courses/{id}/quizzes/{qid}/take",
@@ -13571,6 +13696,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "MATCH"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-ui",
       "normalized_path": "courses/{}/quizzes/{}/take",
       "path": "/courses/{id}/quizzes/{qid}/take",
@@ -13578,34 +13707,11 @@
       "verb": "POST"
     },
     {
-      "crate": "star-permissions",
-      "normalized_path": "courses/{}/role_overrides",
-      "path": "/courses/{courseId}/role_overrides",
-      "source": "crates/star-permissions/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-permissions",
-      "normalized_path": "courses/{}/role_overrides",
-      "path": "/courses/{courseId}/role_overrides",
-      "source": "crates/star-permissions/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
-      "crate": "star-assignments",
-      "normalized_path": "courses/{}/rubric_assessments/{}/read",
-      "path": "/courses/{courseId}/rubric_assessments/{id}/read",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "DELETE"
-    },
-    {
-      "crate": "star-assignments",
-      "normalized_path": "courses/{}/rubric_assessments/{}/read",
-      "path": "/courses/{courseId}/rubric_assessments/{id}/read",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
+      "canvas_closest": [
+        "GET",
+        "PUT"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-ui",
       "normalized_path": "courses/{}/settings",
       "path": "/courses/{id}/settings",
@@ -13613,13 +13719,8 @@
       "verb": "POST"
     },
     {
-      "crate": "star-assignments",
-      "normalized_path": "courses/{}/submissions/{}/read/{}",
-      "path": "/courses/{courseId}/submissions/{submissionId}/read/{item}",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/users/add",
       "path": "/courses/{id}/users/add",
@@ -13627,6 +13728,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/users/add",
       "path": "/courses/{id}/users/add",
@@ -13634,6 +13737,8 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/users/{}/conclude",
       "path": "/courses/{id}/users/{user_id}/conclude",
@@ -13641,6 +13746,8 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "courses/{}/users/{}/reactivate",
       "path": "/courses/{id}/users/{user_id}/reactivate",
@@ -13648,6 +13755,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "career/courses/{}/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-ui",
       "normalized_path": "courses/{}/{}",
       "path": "/courses/{id}/{tab}",
@@ -13655,6 +13766,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-dashboard",
       "normalized_path": "dashboard",
       "path": "/dashboard",
@@ -13662,6 +13777,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-ui",
       "normalized_path": "dashboard",
       "path": "/dashboard",
@@ -13669,6 +13788,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-lti",
       "normalized_path": "deep_linking_cancel",
       "path": "/deep_linking_cancel",
@@ -13676,6 +13799,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "accounts/{}/developer_keys"
+      ],
+      "classification": "web_nested",
       "crate": "star-auth",
       "normalized_path": "developer_keys",
       "path": "/developer_keys",
@@ -13683,6 +13810,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "accounts/{}/developer_keys"
+      ],
+      "classification": "web_nested",
       "crate": "star-auth",
       "normalized_path": "developer_keys",
       "path": "/developer_keys",
@@ -13690,6 +13821,11 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "DELETE",
+        "PUT"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-auth",
       "normalized_path": "developer_keys/{}",
       "path": "/developer_keys/{id}",
@@ -13697,6 +13833,12 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET sections/{}/enrollments",
+        "POST sections/{}/enrollments",
+        "GET courses/{}/enrollments"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-enrollments",
       "normalized_path": "enrollments",
       "path": "/enrollments",
@@ -13704,6 +13846,12 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET sections/{}/enrollments",
+        "POST sections/{}/enrollments",
+        "GET courses/{}/enrollments"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-enrollments",
       "normalized_path": "enrollments",
       "path": "/enrollments",
@@ -13711,6 +13859,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-enrollments",
       "normalized_path": "enrollments/{}",
       "path": "/enrollments/{id}",
@@ -13718,6 +13870,12 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "GET courses/{}/files/quota",
+        "GET groups/{}/files/quota",
+        "GET users/{}/files/quota"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-files",
       "normalized_path": "files/quota",
       "path": "/files/quota",
@@ -13725,6 +13883,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-files",
       "normalized_path": "folders",
       "path": "/folders",
@@ -13732,6 +13894,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB POST"
+      ],
+      "classification": "web_exact",
       "crate": "star-files",
       "normalized_path": "folders",
       "path": "/folders",
@@ -13739,6 +13905,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "MATCH"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-ui",
       "normalized_path": "forgot_password",
       "path": "/forgot_password",
@@ -13746,6 +13916,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "MATCH"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-ui",
       "normalized_path": "forgot_password",
       "path": "/forgot_password",
@@ -13753,6 +13927,12 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "DELETE accounts/{}/grading_periods/{}",
+        "GET courses/{}/grading_periods/{}",
+        "PUT courses/{}/grading_periods/{}"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-grading-standards",
       "normalized_path": "grading_periods/{}",
       "path": "/grading_periods/{id}",
@@ -13760,6 +13940,12 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "DELETE accounts/{}/grading_periods/{}",
+        "GET courses/{}/grading_periods/{}",
+        "PUT courses/{}/grading_periods/{}"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-grading-standards",
       "normalized_path": "grading_periods/{}",
       "path": "/grading_periods/{id}",
@@ -13767,6 +13953,12 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "DELETE accounts/{}/grading_periods/{}",
+        "GET courses/{}/grading_periods/{}",
+        "PUT courses/{}/grading_periods/{}"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-grading-standards",
       "normalized_path": "grading_periods/{}",
       "path": "/grading_periods/{id}",
@@ -13774,6 +13966,10 @@
       "verb": "PUT"
     },
     {
+      "canvas_closest": [
+        "accounts/{}/grading_schemes/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-grading-standards",
       "normalized_path": "grading_schemes/{}",
       "path": "/grading_schemes/{id}",
@@ -13781,6 +13977,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "accounts/{}/grading_schemes/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-grading-standards",
       "normalized_path": "grading_schemes/{}",
       "path": "/grading_schemes/{id}",
@@ -13788,6 +13988,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "accounts/{}/grading_schemes/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-grading-standards",
       "normalized_path": "grading_schemes/{}",
       "path": "/grading_schemes/{id}",
@@ -13795,6 +13999,10 @@
       "verb": "PUT"
     },
     {
+      "canvas_closest": [
+        "accounts/{}/grading_standards/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-grading-standards",
       "normalized_path": "grading_standards/{}",
       "path": "/grading_standards/{id}",
@@ -13802,6 +14010,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "accounts/{}/grading_standards/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-grading-standards",
       "normalized_path": "grading_standards/{}",
       "path": "/grading_standards/{id}",
@@ -13809,6 +14021,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB POST"
+      ],
+      "classification": "web_exact",
       "crate": "star-lti",
       "normalized_path": "groups/{}/deep_linking_response",
       "path": "/groups/{group_id}/deep_linking_response",
@@ -13816,6 +14032,11 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "DELETE",
+        "PUT"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-discussions",
       "normalized_path": "groups/{}/discussion_topics/{}/entries/{}",
       "path": "/groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}",
@@ -13823,6 +14044,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-lti",
       "normalized_path": "groups/{}/external_tools/{}",
       "path": "/groups/{group_id}/external_tools/{id}",
@@ -13830,6 +14055,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-files",
       "normalized_path": "groups/{}/files/{}",
       "path": "/groups/{groupId}/files/{id}",
@@ -13837,6 +14066,12 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "DELETE",
+        "GET",
+        "PUT"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-pages",
       "normalized_path": "groups/{}/pages/{}",
       "path": "/groups/{groupId}/pages/{urlOrId}",
@@ -13844,6 +14079,11 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "DELETE",
+        "GET"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-groups",
       "normalized_path": "groups/{}/users",
       "path": "/groups/{groupId}/users",
@@ -13851,6 +14091,8 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-http",
       "normalized_path": "health",
       "path": "/health",
@@ -13858,20 +14100,10 @@
       "verb": "GET"
     },
     {
-      "crate": "star-jobs",
-      "normalized_path": "jobs/{}/cancel",
-      "path": "/jobs/{id}/cancel",
-      "source": "crates/star-jobs/src/lib.rs",
-      "verb": "POST"
-    },
-    {
-      "crate": "star-jobs",
-      "normalized_path": "jobs2",
-      "path": "/jobs2",
-      "source": "crates/star-jobs/src/lib.rs",
-      "verb": "GET"
-    },
-    {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-ui",
       "normalized_path": "login",
       "path": "/login",
@@ -13879,6 +14111,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-ui",
       "normalized_path": "login",
       "path": "/login",
@@ -13886,6 +14122,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-auth",
       "normalized_path": "login/oauth2/auth",
       "path": "/login/oauth2/auth",
@@ -13893,6 +14133,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-auth",
       "normalized_path": "login/oauth2/jwks",
       "path": "/login/oauth2/jwks",
@@ -13900,6 +14144,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB DELETE"
+      ],
+      "classification": "web_exact",
       "crate": "star-auth",
       "normalized_path": "login/oauth2/token",
       "path": "/login/oauth2/token",
@@ -13907,6 +14155,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "WEB POST"
+      ],
+      "classification": "web_exact",
       "crate": "star-auth",
       "normalized_path": "login/oauth2/token",
       "path": "/login/oauth2/token",
@@ -13914,6 +14166,11 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "DELETE",
+        "GET"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-ui",
       "normalized_path": "logout",
       "path": "/logout",
@@ -13921,6 +14178,12 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "DELETE accounts/{}/lti_registrations/{}",
+        "GET accounts/{}/lti_registrations/{}",
+        "PUT accounts/{}/lti_registrations/{}"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-lti",
       "normalized_path": "lti_registrations/{}",
       "path": "/lti_registrations/{id}",
@@ -13928,6 +14191,12 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "DELETE accounts/{}/lti_registrations/{}",
+        "GET accounts/{}/lti_registrations/{}",
+        "PUT accounts/{}/lti_registrations/{}"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-lti",
       "normalized_path": "lti_registrations/{}",
       "path": "/lti_registrations/{id}",
@@ -13935,6 +14204,11 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET accounts/{}/lti_registrations/{}/deployments",
+        "POST accounts/{}/lti_registrations/{}/deployments"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-lti",
       "normalized_path": "lti_registrations/{}/deployments",
       "path": "/lti_registrations/{id}/deployments",
@@ -13942,6 +14216,11 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET accounts/{}/lti_registrations/{}/deployments",
+        "POST accounts/{}/lti_registrations/{}/deployments"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-lti",
       "normalized_path": "lti_registrations/{}/deployments",
       "path": "/lti_registrations/{id}/deployments",
@@ -13949,6 +14228,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "courses/{}/modules/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-modules",
       "normalized_path": "modules/{}",
       "path": "/modules/{id}",
@@ -13956,6 +14239,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "courses/{}/modules/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-modules",
       "normalized_path": "modules/{}",
       "path": "/modules/{id}",
@@ -13963,6 +14250,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "courses/{}/modules/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-modules",
       "normalized_path": "modules/{}",
       "path": "/modules/{id}",
@@ -13970,6 +14261,10 @@
       "verb": "PUT"
     },
     {
+      "canvas_closest": [
+        "courses/{}/modules/{}/items"
+      ],
+      "classification": "web_nested",
       "crate": "star-modules",
       "normalized_path": "modules/{}/items",
       "path": "/modules/{id}/items",
@@ -13977,6 +14272,12 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "GET courses/{}/modules/{}/items/{}",
+        "PUT courses/{}/modules/{}/items/{}",
+        "DELETE courses/{}/modules/{}/items/{}"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-modules",
       "normalized_path": "modules/{}/items/{}",
       "path": "/modules/{id}/items/{itemId}",
@@ -13984,27 +14285,10 @@
       "verb": "DELETE"
     },
     {
-      "crate": "star-notifications",
-      "normalized_path": "notifications/unread_count",
-      "path": "/notifications/unread_count",
-      "source": "crates/star-notifications/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-notifications",
-      "normalized_path": "notifications/{}",
-      "path": "/notifications/{id}",
-      "source": "crates/star-notifications/src/lib.rs",
-      "verb": "DELETE"
-    },
-    {
-      "crate": "star-notifications",
-      "normalized_path": "notifications/{}/read",
-      "path": "/notifications/{id}/read",
-      "source": "crates/star-notifications/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
+      "canvas_closest": [
+        "accounts/{}/outcome_groups/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-outcomes",
       "normalized_path": "outcome_groups/{}",
       "path": "/outcome_groups/{id}",
@@ -14012,6 +14296,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "accounts/{}/outcome_groups/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-outcomes",
       "normalized_path": "outcome_groups/{}",
       "path": "/outcome_groups/{id}",
@@ -14019,6 +14307,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "accounts/{}/outcome_groups/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-outcomes",
       "normalized_path": "outcome_groups/{}",
       "path": "/outcome_groups/{id}",
@@ -14026,6 +14318,12 @@
       "verb": "PUT"
     },
     {
+      "canvas_closest": [
+        "GET accounts/{}/outcome_groups/{}/outcomes",
+        "POST accounts/{}/outcome_groups/{}/outcomes",
+        "GET courses/{}/outcome_groups/{}/outcomes"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-outcomes",
       "normalized_path": "outcome_groups/{}/outcomes",
       "path": "/outcome_groups/{id}/outcomes",
@@ -14033,6 +14331,12 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET accounts/{}/outcome_groups/{}/outcomes",
+        "POST accounts/{}/outcome_groups/{}/outcomes",
+        "GET courses/{}/outcome_groups/{}/outcomes"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-outcomes",
       "normalized_path": "outcome_groups/{}/outcomes",
       "path": "/outcome_groups/{id}/outcomes",
@@ -14040,6 +14344,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "accounts/{}/outcomes/{}/results"
+      ],
+      "classification": "web_nested",
       "crate": "star-outcomes",
       "normalized_path": "outcomes/{}/results",
       "path": "/outcomes/{outcomeId}/results",
@@ -14047,6 +14355,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "accounts/{}/outcomes/{}/results"
+      ],
+      "classification": "web_nested",
       "crate": "star-outcomes",
       "normalized_path": "outcomes/{}/results",
       "path": "/outcomes/{outcomeId}/results",
@@ -14054,6 +14366,10 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-pages",
       "normalized_path": "pages/{}",
       "path": "/pages/{id}",
@@ -14061,6 +14377,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-pages",
       "normalized_path": "pages/{}",
       "path": "/pages/{id}",
@@ -14068,6 +14388,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-pages",
       "normalized_path": "pages/{}",
       "path": "/pages/{id}",
@@ -14075,6 +14399,10 @@
       "verb": "PUT"
     },
     {
+      "canvas_closest": [
+        "courses/{}/quizzes/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-quizzes",
       "normalized_path": "quizzes/{}",
       "path": "/quizzes/{id}",
@@ -14082,6 +14410,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "courses/{}/quizzes/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-quizzes",
       "normalized_path": "quizzes/{}",
       "path": "/quizzes/{id}",
@@ -14089,6 +14421,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "courses/{}/quizzes/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-quizzes",
       "normalized_path": "quizzes/{}",
       "path": "/quizzes/{id}",
@@ -14096,20 +14432,10 @@
       "verb": "PUT"
     },
     {
-      "crate": "star-quizzes",
-      "normalized_path": "quizzes/{}/start",
-      "path": "/quizzes/{id}/start",
-      "source": "crates/star-quizzes/src/lib.rs",
-      "verb": "POST"
-    },
-    {
-      "crate": "star-quizzes",
-      "normalized_path": "quizzes/{}/submissions/me",
-      "path": "/quizzes/{id}/submissions/me",
-      "source": "crates/star-quizzes/src/lib.rs",
-      "verb": "GET"
-    },
-    {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-ui",
       "normalized_path": "register",
       "path": "/register",
@@ -14117,6 +14443,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-ui",
       "normalized_path": "register",
       "path": "/register",
@@ -14124,6 +14454,8 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "reset_password/{}",
       "path": "/reset_password/{token}",
@@ -14131,6 +14463,8 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "reset_password/{}",
       "path": "/reset_password/{token}",
@@ -14138,6 +14472,11 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "PUT courses/{}/rubric_associations/{}/rubric_assessments/{}",
+        "DELETE courses/{}/rubric_associations/{}/rubric_assessments/{}"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-rubrics",
       "normalized_path": "rubric_assessments/{}",
       "path": "/rubric_assessments/{id}",
@@ -14145,6 +14484,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB DELETE"
+      ],
+      "classification": "web_exact",
       "crate": "star-rubrics",
       "normalized_path": "rubrics/{}",
       "path": "/rubrics/{id}",
@@ -14152,6 +14495,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-rubrics",
       "normalized_path": "rubrics/{}",
       "path": "/rubrics/{id}",
@@ -14159,6 +14506,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB PUT"
+      ],
+      "classification": "web_exact",
       "crate": "star-rubrics",
       "normalized_path": "rubrics/{}",
       "path": "/rubrics/{id}",
@@ -14166,34 +14517,8 @@
       "verb": "PUT"
     },
     {
-      "crate": "star-assignments",
-      "normalized_path": "sections/{}/assignment_annotations/{}/read",
-      "path": "/sections/{sectionId}/assignment_annotations/{id}/read",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "DELETE"
-    },
-    {
-      "crate": "star-assignments",
-      "normalized_path": "sections/{}/assignment_annotations/{}/read",
-      "path": "/sections/{sectionId}/assignment_annotations/{id}/read",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
-      "crate": "star-assignments",
-      "normalized_path": "sections/{}/rubric_assessments/{}/read",
-      "path": "/sections/{sectionId}/rubric_assessments/{id}/read",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "DELETE"
-    },
-    {
-      "crate": "star-assignments",
-      "normalized_path": "sections/{}/rubric_assessments/{}/read",
-      "path": "/sections/{sectionId}/rubric_assessments/{id}/read",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
+      "canvas_closest": [],
+      "classification": "absent",
       "crate": "star-ui",
       "normalized_path": "static/{}/{}",
       "path": "/static/{hash}/{file}",
@@ -14201,6 +14526,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-submission-comments",
       "normalized_path": "submissions/{}/comments",
       "path": "/submissions/{submissionId}/comments",
@@ -14208,6 +14537,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "web_verb_mismatch",
       "crate": "star-submission-comments",
       "normalized_path": "submissions/{}/comments",
       "path": "/submissions/{submissionId}/comments",
@@ -14215,20 +14548,11 @@
       "verb": "POST"
     },
     {
-      "crate": "star-submission-comments",
-      "normalized_path": "submissions/{}/comments/read",
-      "path": "/submissions/{submissionId}/comments/read",
-      "source": "crates/star-submission-comments/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
-      "crate": "star-submission-comments",
-      "normalized_path": "submissions/{}/comments/unread_count",
-      "path": "/submissions/{submissionId}/comments/unread_count",
-      "source": "crates/star-submission-comments/src/lib.rs",
-      "verb": "GET"
-    },
-    {
+      "canvas_closest": [
+        "PUT courses/{}/assignments/{}/submissions/{}/comments/{}",
+        "DELETE courses/{}/assignments/{}/submissions/{}/comments/{}"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-submission-comments",
       "normalized_path": "submissions/{}/comments/{}",
       "path": "/submissions/{submissionId}/comments/{commentId}",
@@ -14236,6 +14560,11 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "PUT courses/{}/assignments/{}/submissions/{}/comments/{}",
+        "DELETE courses/{}/assignments/{}/submissions/{}/comments/{}"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-submission-comments",
       "normalized_path": "submissions/{}/comments/{}",
       "path": "/submissions/{submissionId}/comments/{commentId}",
@@ -14243,6 +14572,11 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "PUT courses/{}/assignments/{}/submissions/{}/comments/{}",
+        "DELETE courses/{}/assignments/{}/submissions/{}/comments/{}"
+      ],
+      "classification": "api_extra_nested",
       "crate": "star-submission-comments",
       "normalized_path": "submissions/{}/comments/{}",
       "path": "/submissions/{submissionId}/comments/{commentId}",
@@ -14250,13 +14584,10 @@
       "verb": "PUT"
     },
     {
-      "crate": "star-assignments",
-      "normalized_path": "submissions/{}/grade",
-      "path": "/submissions/{id}/grade",
-      "source": "crates/star-assignments/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
+      "canvas_closest": [
+        "accounts/{}/terms/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-courses",
       "normalized_path": "terms/{}",
       "path": "/terms/{id}",
@@ -14264,6 +14595,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "accounts/{}/terms/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-courses",
       "normalized_path": "terms/{}",
       "path": "/terms/{id}",
@@ -14271,6 +14606,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "accounts/{}/terms/{}"
+      ],
+      "classification": "web_nested",
       "crate": "star-courses",
       "normalized_path": "terms/{}",
       "path": "/terms/{id}",
@@ -14278,6 +14617,10 @@
       "verb": "PUT"
     },
     {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
       "crate": "star-users",
       "normalized_path": "users",
       "path": "/users",
@@ -14285,6 +14628,12 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "DELETE users/{}",
+        "GET users/{}",
+        "PUT users/{}"
+      ],
+      "classification": "api_alias",
       "crate": "star-users",
       "normalized_path": "users/self",
       "path": "/users/self",
@@ -14292,6 +14641,11 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET users/{}/communication_channels",
+        "POST users/{}/communication_channels"
+      ],
+      "classification": "api_alias",
       "crate": "star-notifications",
       "normalized_path": "users/self/communication_channels",
       "path": "/users/self/communication_channels",
@@ -14299,6 +14653,11 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET users/{}/communication_channels",
+        "POST users/{}/communication_channels"
+      ],
+      "classification": "api_alias",
       "crate": "star-notifications",
       "normalized_path": "users/self/communication_channels",
       "path": "/users/self/communication_channels",
@@ -14306,6 +14665,11 @@
       "verb": "POST"
     },
     {
+      "canvas_closest": [
+        "DELETE users/{}/communication_channels/{}",
+        "POST users/{}/communication_channels/{}"
+      ],
+      "classification": "api_alias",
       "crate": "star-notifications",
       "normalized_path": "users/self/communication_channels/{}",
       "path": "/users/self/communication_channels/{id}",
@@ -14313,6 +14677,10 @@
       "verb": "DELETE"
     },
     {
+      "canvas_closest": [
+        "PUT"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-notifications",
       "normalized_path": "users/self/communication_channels/{}/notification_preferences",
       "path": "/users/self/communication_channels/{communication_channel_id}/notification_preferences",
@@ -14320,6 +14688,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "PUT"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-notifications",
       "normalized_path": "users/self/communication_channels/{}/notification_preferences/{}",
       "path": "/users/self/communication_channels/{communication_channel_id}/notification_preferences/{notification}",
@@ -14327,27 +14699,10 @@
       "verb": "GET"
     },
     {
-      "crate": "star-notifications",
-      "normalized_path": "users/self/notification_preferences",
-      "path": "/users/self/notification_preferences",
-      "source": "crates/star-notifications/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-notifications",
-      "normalized_path": "users/self/notification_preferences",
-      "path": "/users/self/notification_preferences",
-      "source": "crates/star-notifications/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
-      "crate": "star-notifications",
-      "normalized_path": "users/self/notifications",
-      "path": "/users/self/notifications",
-      "source": "crates/star-notifications/src/lib.rs",
-      "verb": "GET"
-    },
-    {
+      "canvas_closest": [
+        "GET users/{}/profile"
+      ],
+      "classification": "api_alias",
       "crate": "star-users",
       "normalized_path": "users/self/profile",
       "path": "/users/self/profile",
@@ -14355,6 +14710,10 @@
       "verb": "GET"
     },
     {
+      "canvas_closest": [
+        "GET users/{}/profile"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-users",
       "normalized_path": "users/self/profile",
       "path": "/users/self/profile",
@@ -14362,6 +14721,10 @@
       "verb": "PUT"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-notifications",
       "normalized_path": "users/{}/communication_channels/{}/{}/notification_preferences",
       "path": "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences",
@@ -14369,44 +14732,13 @@
       "verb": "PUT"
     },
     {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "api_extra_verb",
       "crate": "star-notifications",
       "normalized_path": "users/{}/communication_channels/{}/{}/notification_preferences/{}",
       "path": "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}",
-      "source": "crates/star-notifications/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
-      "crate": "star-files",
-      "normalized_path": "users/{}/folders/media",
-      "path": "/users/{userId}/folders/media",
-      "source": "crates/star-files/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-notifications",
-      "normalized_path": "users/{}/notification_preference_categories",
-      "path": "/users/{user_id}/notification_preference_categories",
-      "source": "crates/star-notifications/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-notifications",
-      "normalized_path": "users/{}/notification_preference_categories/{}",
-      "path": "/users/{user_id}/notification_preference_categories/{category}",
-      "source": "crates/star-notifications/src/lib.rs",
-      "verb": "PUT"
-    },
-    {
-      "crate": "star-notifications",
-      "normalized_path": "users/{}/notification_preferences",
-      "path": "/users/{user_id}/notification_preferences",
-      "source": "crates/star-notifications/src/lib.rs",
-      "verb": "GET"
-    },
-    {
-      "crate": "star-notifications",
-      "normalized_path": "users/{}/notification_preferences",
-      "path": "/users/{user_id}/notification_preferences",
       "source": "crates/star-notifications/src/lib.rs",
       "verb": "PUT"
     }
