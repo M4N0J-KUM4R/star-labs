@@ -3617,12 +3617,19 @@ pub struct ChildSubscriptionJson {
     pub blueprint_course: BlueprintCourseSummary,
 }
 
-/// `course_summary_json` subset: id, name, course_code.
+/// Canvas `MasterCourses#course_summary_json`
+/// (`canvas-src/lib/api/v1/master_courses.rb:111-116`): `id`, `name`,
+/// `course_code` from `api_json`, then the unconditional
+/// `hash["term_name"] = course.enrollment_term.name`. `sis_course_id` needs a
+/// `:read_sis`/`:manage_sis` right and `concluded` needs the
+/// `ux_list_concluded_courses_in_bp` site-admin feature flag
+/// (`:114-116`), so both are absent rather than null, as elsewhere in star.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct BlueprintCourseSummary {
     pub id: i64,
     pub name: String,
     pub course_code: String,
+    pub term_name: Option<String>,
 }
 
 /// Body of PUT .../update_associations: `course_ids_to_add[]` and
@@ -3893,7 +3900,14 @@ async fn show_blueprint_template(
 }
 
 /// GET /courses/{courseId}/blueprint_templates/{templateId}/associated_courses
-/// — Canvas `#associated_courses` (`course_summary_json` with teachers).
+/// — Canvas `#associated_courses`, which renders `course_summary_json(course,
+/// can_read_sis:, include_teachers: true)`
+/// (`canvas-src/app/controllers/master_courses/master_templates_controller.rb:286`).
+/// With `include_teachers` Canvas adds `teacher_count` when the course caches
+/// it, else a `teachers` array of `user_display_json`
+/// (`canvas-src/lib/api/v1/master_courses.rb:117-122`); star has neither the
+/// counter column nor a display-name rollup, so that key is the remaining gap
+/// on this body.
 async fn blueprint_associated_courses(
     State(state): State<AppState>,
     Path((course_id, template_segment)): Path<(i64, String)>,
@@ -3906,9 +3920,10 @@ async fn blueprint_associated_courses(
     let (_, per_page, offset) = pag.resolve();
     let courses: Vec<BlueprintCourseSummary> = sqlx::query_as(
         r#"
-        SELECT c.id, c.name, c.course_code
+        SELECT c.id, c.name, c.course_code, et.name AS term_name
         FROM master_course_subscriptions s
         JOIN courses c ON c.id = s.child_course_id
+        LEFT JOIN enrollment_terms et ON et.id = c.enrollment_term_id
         WHERE s.master_template_id = $1 AND s.workflow_state = 'active'
         ORDER BY c.id ASC
         LIMIT $2 OFFSET $3
@@ -4394,7 +4409,11 @@ async fn blueprint_restrict_item(
 }
 
 /// GET /courses/{courseId}/blueprint_subscriptions — Canvas
-/// `#subscriptions_index` (`child_subscription_json`), newest first.
+/// `#subscriptions_index` (`child_subscription_json`). That action paginates
+/// `@course.master_course_subscriptions.active` with no `order`, so
+/// `Api.ordered_collection` (`canvas-src/lib/api.rb:421-426`) adds
+/// `order(primary_key)` — ascending. The migration lists either side are
+/// explicitly `order(id: :desc)`; this one is not.
 async fn list_blueprint_subscriptions(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
@@ -4411,16 +4430,18 @@ async fn list_blueprint_subscriptions(
         course_id: i64,
         name: String,
         course_code: String,
+        term_name: Option<String>,
     }
     let rows: Vec<SubscriptionRow> = sqlx::query_as(
         r#"
         SELECT s.id, s.master_template_id AS template_id,
-               c.id AS course_id, c.name, c.course_code
+               c.id AS course_id, c.name, c.course_code, et.name AS term_name
         FROM master_course_subscriptions s
         JOIN master_templates t ON t.id = s.master_template_id
         JOIN courses c ON c.id = t.course_id
+        LEFT JOIN enrollment_terms et ON et.id = c.enrollment_term_id
         WHERE s.child_course_id = $1 AND s.workflow_state = 'active'
-        ORDER BY s.id DESC
+        ORDER BY s.id ASC
         LIMIT $2 OFFSET $3
         "#,
     )
@@ -4439,6 +4460,7 @@ async fn list_blueprint_subscriptions(
                 id: row.course_id,
                 name: row.name,
                 course_code: row.course_code,
+                term_name: row.term_name,
             },
         })
         .collect();
@@ -5238,7 +5260,8 @@ mod tests {
             .collect();
         required.sort_unstable();
 
-        let mut built: Vec<&str> = course_json(&row(), "http://star.example")
+        let body = course_json(&row(), "http://star.example");
+        let mut built: Vec<&str> = body
             .as_object()
             .expect("course_json builds an object")
             .keys()
