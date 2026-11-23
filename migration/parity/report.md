@@ -21,7 +21,7 @@ Implemented REST route count: **1410 / 1410** (100.0%).
 
 Star registrations: 1569 route/method pairs from 1280 `.route(...)` calls (0 unparsed); 157 have no Canvas match and are listed as extras below.
 
-Excluded before counting: 3 `.route(...)` calls inside `#[cfg(test)]` or `#[test]` bodies, 2 calls in `.rs` files no `mod` declaration reaches (not compiled, so not registered).
+Excluded before counting: 3 `.route(...)` calls inside `#[cfg(test)]` or `#[test]` bodies, 0 calls in `.rs` files no `mod` declaration reaches (not compiled, so not registered).
 
 Canvas source sizes: 390 GraphQL files (246 object types, 100 mutations), 688 models, 232 UI feature dirs, 5459 JS/TSX files, 475 ERB views, 124 js_env files (490 call sites).
 

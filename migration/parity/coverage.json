@@ -13016,7 +13016,7 @@
     "star_tables": 397,
     "star_test_calls_excluded": 3,
     "star_unparsed_calls": 0,
-    "star_unreachable_calls_excluded": 2,
+    "star_unreachable_calls_excluded": 0,
     "ui_feature_dirs": 232,
     "ui_feature_dirs_implemented": 0,
     "ui_referenced_implemented": 503,
