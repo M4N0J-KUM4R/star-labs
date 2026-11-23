@@ -194,7 +194,60 @@ pub fn router() -> Router<AppState> {
             "/courses/{id}/gradebook/speedgrader/grade",
             post(handlers::speedgrader::speedgrader_grade),
         )
+        // Announcements + syllabus journey (issue #111) — BEFORE the generic
+        // tab route. Canvas' web routes: `concerns :announcements`
+        // (config/routes.rb:266/:702/:796) expands `resources :announcements`
+        // (:154-156, no `only:`/`except:`) under the course scope, giving
+        // GET/POST /courses/:cours_id/announcements plus GET .../new and GET
+        // .../:id; the syllabus page is the `collection { get :syllabus }`
+        // inside `resources :assignments` (:344-346). Write verbs Canvas
+        // reserves for those rows (DELETE .../:id, plus PUT/PATCH) go through
+        // Rack's `_method` override, which these server-rendered forms do not
+        // speak, so they are not registered.
+        //
+        // Two of these paths surface as `absent` in the parity extras list for
+        // tool reasons, not because Canvas lacks them: parity.py records only
+        // one `/new` web route across 1359 (it does not expand the `/new` and
+        // `/edit` routes `resources` generates), and it expands
+        // `collection { get :syllabus }` into the member spelling
+        // `/assignments/:id/syllabus`. Both rows are Canvas-real — keep them.
+        .route(
+            "/courses/{id}/announcements",
+            get(handlers::announcements::announcements_index)
+                .post(handlers::announcements::announcement_create),
+        )
+        .route(
+            "/courses/{id}/announcements/new",
+            get(handlers::announcements::announcement_new),
+        )
+        .route(
+            "/courses/{id}/announcements/{aid}",
+            get(handlers::announcements::announcement_show),
+        )
+        .route(
+            "/courses/{id}/assignments/syllabus",
+            get(handlers::announcements::syllabus_show),
+        )
+        // Files journey (issue #110) — BEFORE the generic tab route. Canvas
+        // serves the course files list and one file's page at these web paths
+        // (the `:files` concern, `resources :files`, config/routes.rb:114-129).
+        // Its POST sibling targets `files#create`, which FilesController does
+        // not implement — uploads really go through
+        // `POST /api/v1/courses/:course_id/files` => `courses#create_file` with
+        // a multipart attachment — and `/download` streams the stored bytes.
+        // This workspace keeps file metadata with no byte store, so neither
+        // could answer the way Canvas does; the views stay read-only and the
+        // templates carry no upload or download control.
+        .route("/courses/{id}/files", get(handlers::files::files_index))
+        .route("/courses/{id}/files/{fid}", get(handlers::files::file_show))
         .route("/courses/{id}/{tab}", get(handlers::course::course_tab))
+        // Calendar journey (issue #111) — global page, sibling of /dashboard.
+        // Canvas' web calendar is read-only at this path
+        // (`get "calendar" => "calendars#show"`, config/routes.rb:1103); event
+        // writes live under `resources :calendar_events` in the per-context
+        // scopes (`/users/:user_id/calendar_events`, `/courses/:cours_id/...`),
+        // not at `/calendar` — so no create or delete is registered here.
+        .route("/calendar", get(handlers::calendar::calendar_index))
         .route("/static/{hash}/{file}", get(assets::serve_static))
 }
 

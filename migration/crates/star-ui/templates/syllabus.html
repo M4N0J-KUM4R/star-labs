@@ -1,0 +1,55 @@
+{% extends "layouts/course.html" %}
+{# Syllabus — port of Canvas courses#syllabus / _syllabus_content.html.erb:
+   the #course_syllabus body div (server-rendered, not the React app) plus
+   the Course Summary table (assignment groups with their assignments).
+   Read-only: Canvas saves the syllabus through the assignment-edit form
+   (`update` on `resources :assignments`), not a POST to this collection
+   route (config/routes.rb:344-346 registers only `get :syllabus`). #}
+{% block content %}
+  <div id="syllabus" class="syllabus">
+    <div class="ic-Action-header">
+      <div class="ic-Action-header__Primary">
+        <h1 class="syllabus__title">Syllabus</h1>
+      </div>
+      <div class="ic-Action-header__Secondary">
+        <a href="/courses/{{ course_id }}" class="Button">Back to Course</a>
+      </div>
+    </div>
+
+    <div id="course_syllabus" class="syllabus__body">
+      {% if !syllabus_body.is_empty() %}
+      <div class="syllabus_presented">{{ syllabus_body }}</div>
+      {% else %}
+      <p class="syllabus__empty">No syllabus has been added to this course yet.</p>
+      {% endif %}
+    </div>
+
+    <h2 class="syllabus__summary-title">Course Summary</h2>
+    <table class="syllabus__summary" id="course_summary_table">
+      <caption class="screenreader-only">Assignments for {{ course_name }}</caption>
+      <thead>
+        <tr>
+          <th scope="col">Assignment</th>
+          <th scope="col">Group</th>
+          <th scope="col">Due</th>
+          <th scope="col">Points</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if summary.is_empty() %}
+        <tr class="syllabus__summary-empty">
+          <td colspan="4">No assignments have been created in this course yet.</td>
+        </tr>
+        {% endif %}
+        {% for row in summary %}
+        <tr>
+          <td><a href="/courses/{{ course_id }}/assignments/{{ row.id }}">{{ row.title }}</a></td>
+          <td>{{ row.group_name }}</td>
+          <td>{% if let Some(due) = row.due_at %}{{ due }}{% else %}—{% endif %}</td>
+          <td>{% if let Some(pts) = row.points_possible %}{{ pts }}{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock content %}

@@ -496,6 +496,41 @@ textarea.ic-Input { width: 100%; font-family: inherit; }
 .comment-body { margin: 4px 0 0; }
 .speedgrader-empty { color: #73858c; }
 
+/* ---- Precision Workspace: dashboard Today panel ---- */
+.today-panel {
+  background: #f7f8fa; border: 1px solid #e8ebee; border-radius: 8px;
+  padding: 12px 16px; margin-bottom: 20px;
+}
+.today-panel__heading { margin: 0 0 8px; font-size: 16px; color: #111418; }
+.today-panel__list { list-style: none; margin: 0; padding: 0; }
+.today-panel__item { padding: 6px 0; border-top: 1px solid #e8ebee; }
+.today-panel__item:first-child { border-top: none; }
+.today-panel__item a { color: #1a1d21; font-weight: 600; text-decoration: none; }
+.today-panel__item a:hover { text-decoration: underline; }
+.today-panel__meta { display: block; font-size: 13px; color: #55666d; }
+.today-panel__item--overdue a { color: #b32d2d; }
+.today-panel__item--overdue .today-panel__meta { color: #b32d2d; }
+.today-panel__empty { margin: 0; color: #73858c; }
+.ic-DashboardCard__badges { display: flex; gap: 8px; padding: 0 16px 12px; flex-wrap: wrap; }
+.ic-DashboardCard__badge {
+  font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 8px;
+  background: #eef2fd; color: #2f5fe0;
+}
+.ic-DashboardCard__badge--feedback { background: #e8f5ee; color: #1d6b41; }
+
+
+/* ---- Precision Workspace: calendar month grid ---- */
+.calendar-grid { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.calendar-grid-wrapper { overflow-x: auto; }
+.calendar-layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); align-items: start; }
+.calendar-contexts, .calendar-main { min-width: 0; }
+.calendar-contexts fieldset { min-width: 0; }
+@media (max-width: 768px) {
+  .calendar-layout { grid-template-columns: minmax(0, 1fr); }
+}
+.calendar-day { vertical-align: top; text-align: center; }
+.calendar-day__events { list-style: none; margin: 0; padding: 0; text-align: left; }
+.calendar-event-chip__link { overflow-wrap: anywhere; }
 /* ---- Error page ---- */
 .ic-Error { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
 .ic-Error__content { text-align: center; }
@@ -505,10 +540,15 @@ textarea.ic-Input { width: 100%; font-family: inherit; }
 /* ---- Responsive ---- */
 @media (max-width: 768px) {
   .ic-app-header { position: static; width: 100%; height: auto; flex-direction: row; }
-  .ic-app-header__main-navigation { overflow-x: auto; }
-  ul.ic-app-header__menu-list { display: flex; }
+  .ic-app-header__main-navigation { overflow-x: auto; min-width: 0; flex: 1 1 0; }
+  ul.ic-app-header__menu-list { display: flex; flex-wrap: wrap; }
   .ic-Layout-wrapper { margin-left: 0; }
   .ic-Layout-columns { flex-direction: column; }
+  .ic-Layout-contentMain { padding: 16px; }
+  .ic-Action-header { flex-wrap: wrap; }
+  .ic-Action-header__Primary, .ic-Action-header__Secondary { min-width: 0; flex-shrink: 1; }
+  .ic-Action-header h1 { overflow-wrap: anywhere; }
+  .calendar-layout { grid-template-columns: minmax(0, 1fr); }
   #left-side.ic-app-course-menu {
     width: 100%; flex: none; border-right: none; border-bottom: 1px solid #c7cdd1;
   }

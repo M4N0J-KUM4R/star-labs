@@ -15,6 +15,9 @@ star-assignments = { path = "../star-assignments" }
 star-grading-standards = { path = "../star-grading-standards" }
 star-discussions = { path = "../star-discussions" }
 star-conversations = { path = "../star-conversations" }
+star-files = { path = "../star-files" }
+star-announcements = { path = "../star-announcements" }
+star-calendar = { path = "../star-calendar" }
 star-enrollments = { path = "../star-enrollments" }
 star-submission-comments = { path = "../star-submission-comments" }
 star-rubrics = { path = "../star-rubrics" }

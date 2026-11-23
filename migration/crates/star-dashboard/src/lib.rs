@@ -732,6 +732,84 @@ async fn dashboard_cards_handler(
     ))
 }
 
+/// One row of the dashboard's Today panel: a published assignment in one of
+/// the user's courses, due within the next 14 days or overdue in the last 30.
+#[derive(Debug, serde::Serialize, sqlx::FromRow)]
+pub struct TodayItem {
+    pub assignment_id: i64,
+    pub title: String,
+    pub course_id: i64,
+    pub course_code: String,
+    pub due_at: DateTime<Utc>,
+    pub overdue: bool,
+}
+
+/// Per-course counts for the dashboard cards: announcements posted in the
+/// last 7 days and submissions graded in the last 7 days.
+#[derive(Debug, serde::Serialize, sqlx::FromRow)]
+pub struct CourseBadge {
+    pub course_id: i64,
+    pub new_announcements: i64,
+    pub recent_feedback: i64,
+}
+
+/// Load the Today panel rows for a user (due-soon + overdue, soonest first).
+pub async fn load_today_items(db: &sqlx::PgPool, user_id: i64) -> Result<Vec<TodayItem>, ApiError> {
+    let rows: Vec<TodayItem> = sqlx::query_as(
+        r#"
+        SELECT a.id AS assignment_id, a.title, c.id AS course_id, c.course_code, a.due_at,
+               (a.due_at < now()) AS overdue
+        FROM assignments a
+        JOIN courses c ON c.id = a.course_id
+        JOIN enrollments e
+          ON e.course_id = c.id
+         AND e.user_id = $1
+         AND e.workflow_state <> 'deleted'
+        WHERE a.workflow_state = 'published'
+          AND a.due_at IS NOT NULL
+          AND a.due_at < now() + interval '14 days'
+          AND a.due_at > now() - interval '30 days'
+        ORDER BY a.due_at ASC
+        LIMIT 10
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
+/// Load per-course announcement/feedback counts for the dashboard cards.
+pub async fn load_course_badges(
+    db: &sqlx::PgPool,
+    user_id: i64,
+) -> Result<Vec<CourseBadge>, ApiError> {
+    let rows: Vec<CourseBadge> = sqlx::query_as(
+        r#"
+        SELECT c.id AS course_id,
+          (SELECT count(*) FROM announcements an
+            WHERE an.course_id = c.id
+              AND an.workflow_state <> 'deleted'
+              AND an.created_at > now() - interval '7 days') AS new_announcements,
+          (SELECT count(*) FROM submissions s
+            JOIN assignments a ON a.id = s.assignment_id
+            WHERE a.course_id = c.id
+              AND s.user_id = $1
+              AND s.score IS NOT NULL
+              AND s.graded_at > now() - interval '7 days') AS recent_feedback
+        FROM courses c
+        JOIN enrollments e
+          ON e.course_id = c.id
+         AND e.user_id = $1
+         AND e.workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows)
+}
+
 /// Load the current user's dashboard cards (same query and shape the
 /// `/dashboard/dashboard_cards` API returns). Extracted as a pub loader so the
 /// server-rendered UI shell (star-ui) renders exactly what the API serves

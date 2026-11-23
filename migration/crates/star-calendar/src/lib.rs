@@ -60,6 +60,7 @@ use star_auth::AuthUser;
 
 mod account_calendars_api;
 mod calendar_gaps;
+pub mod ui;
 
 // ---------------------------------------------------------------------------
 // Domain types
