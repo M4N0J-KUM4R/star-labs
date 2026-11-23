@@ -58,6 +58,8 @@ pub fn router() -> Router<AppState> {
             get(handlers::auth::reset_password_form).post(handlers::auth::reset_password_submit),
         )
         .route("/dashboard", get(handlers::dashboard::dashboard))
+        // Precision Workspace quick-jump command bar.
+        .route("/quick-jump", get(handlers::quick_jump::quick_jump))
         // Discussions journey (#72) — the specific tab routes come before
         // the generic `/courses/{id}/{tab}` catch-all below. Both
         // /discussions and /discussion_topics serve the index: the latter is
@@ -194,7 +196,50 @@ pub fn router() -> Router<AppState> {
             "/courses/{id}/gradebook/speedgrader/grade",
             post(handlers::speedgrader::speedgrader_grade),
         )
+        // Announcements + syllabus journey (issue #111) — BEFORE the generic
+        // tab route.
+        .route(
+            "/courses/{id}/announcements",
+            get(handlers::announcements::announcements_index)
+                .post(handlers::announcements::announcement_create),
+        )
+        .route(
+            "/courses/{id}/announcements/new",
+            get(handlers::announcements::announcement_new),
+        )
+        .route(
+            "/courses/{id}/announcements/{aid}",
+            get(handlers::announcements::announcement_show),
+        )
+        .route(
+            "/courses/{id}/announcements/{aid}/delete",
+            post(handlers::announcements::announcement_delete),
+        )
+        .route(
+            "/courses/{id}/assignments/syllabus",
+            get(handlers::announcements::syllabus_show)
+                .post(handlers::announcements::syllabus_update),
+        )
+        // Files journey (issue #110) — BEFORE the generic tab route.
+        .route(
+            "/courses/{id}/files",
+            get(handlers::files::files_index).post(handlers::files::files_create),
+        )
+        .route(
+            "/courses/{id}/files/{fid}/download",
+            get(handlers::files::file_download),
+        )
+        .route("/courses/{id}/files/{fid}", get(handlers::files::file_show))
         .route("/courses/{id}/{tab}", get(handlers::course::course_tab))
+        // Calendar journey (issue #111) — global page, sibling of /dashboard.
+        .route(
+            "/calendar",
+            get(handlers::calendar::calendar_index).post(handlers::calendar::calendar_create),
+        )
+        .route(
+            "/calendar/{eid}/delete",
+            post(handlers::calendar::calendar_delete),
+        )
         .route("/static/{hash}/{file}", get(assets::serve_static))
 }
 

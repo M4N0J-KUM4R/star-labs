@@ -26,6 +26,7 @@ use star_common::{ApiError, AppState};
 use star_auth::AuthUser;
 
 mod external_feeds;
+pub mod ui;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -91,12 +92,12 @@ impl Pagination {
 // Permission helpers
 // ---------------------------------------------------------------------------
 
-fn is_admin(auth: &AuthUser) -> bool {
+pub(crate) fn is_admin(auth: &AuthUser) -> bool {
     auth.role == "admin"
 }
 
 /// Check if user is enrolled in a course (as any role) or is admin.
-async fn check_enrolled_or_admin(
+pub(crate) async fn check_enrolled_or_admin(
     pool: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -118,7 +119,7 @@ async fn check_enrolled_or_admin(
 }
 
 /// Check if user is a teacher in a course or admin.
-async fn check_teacher_or_admin(
+pub(crate) async fn check_teacher_or_admin(
     pool: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -142,7 +143,7 @@ async fn check_teacher_or_admin(
 /// Ensure the announcement exists, belongs to the course in the path, and has
 /// not been soft-deleted. Canvas scopes announcement read-state changes to the
 /// course, so a mismatch is a 404 (not a 403).
-async fn ensure_announcement_in_course(
+pub(crate) async fn ensure_announcement_in_course(
     pool: &PgPool,
     course_id: i64,
     announcement_id: i64,

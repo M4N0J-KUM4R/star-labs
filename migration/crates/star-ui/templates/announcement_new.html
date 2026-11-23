@@ -1,0 +1,36 @@
+{% extends "layouts/course.html" %}
+{# New announcement form — Canvas announcements#new. Teacher-gated upstream
+   (students get the 403 page before this renders). Posts to
+   POST /courses/{id}/announcements (PRG redirect to the new announcement). #}
+{% block content %}
+  <div id="announcement_new" class="announcement-new">
+    <div class="ic-Action-header">
+      <div class="ic-Action-header__Primary">
+        <h1 class="announcement-new__title">New Announcement</h1>
+      </div>
+      <div class="ic-Action-header__Secondary">
+        <a href="/courses/{{ course_id }}/announcements" class="Button">Back to Announcements</a>
+      </div>
+    </div>
+
+    {% if !error.is_empty() %}
+    <div class="ic-flash error" role="alert">{{ error }}</div>
+    {% endif %}
+
+    <form id="new_announcement_form" method="post" action="/courses/{{ course_id }}/announcements" class="announcement-new__form">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="announcement_title">Title</label>
+        <input class="ic-Input" type="text" id="announcement_title" name="title" required maxlength="255" autofocus>
+      </div>
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="announcement_message">Message</label>
+        <textarea class="ic-Input announcement-message" id="announcement_message" name="message" rows="10" placeholder="Write the announcement…"></textarea>
+      </div>
+      <div class="announcement-new__actions">
+        <button type="submit" class="Button Button--primary">Post Announcement</button>
+        <a href="/courses/{{ course_id }}/announcements" class="Button button-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock content %}

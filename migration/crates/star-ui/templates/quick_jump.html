@@ -1,0 +1,38 @@
+{% extends "layouts/authenticated.html" %}
+{# Quick jump — command-bar results page: matches in the user's courses and
+   their published assignments; a single match redirects from the handler. #}
+{% block content %}
+  <div id="QuickJumpPage" class="quick-jump-page__main">
+    <h1 class="quick-jump-page__heading">Quick jump</h1>
+    <form class="quick-jump" role="search" method="get" action="/quick-jump">
+      <label class="screenreader-only" for="quick-jump-page-input">Search</label>
+      <input id="quick-jump-page-input" class="quick-jump__input" type="search" name="q"
+             value="{{ query }}" placeholder="Jump to course or assignment…" autocomplete="off">
+      <button class="quick-jump__submit Button Button--primary" type="submit">Jump</button>
+    </form>
+    {% if query.is_empty() %}
+    <p class="quick-jump-page__hint">Type the name of a course or assignment.</p>
+    {% else if courses.is_empty() && assignments.is_empty() %}
+    <p class="quick-jump-page__empty">No matches for “{{ query }}”.</p>
+    {% else %}
+    {% if !courses.is_empty() %}
+    <h2 class="quick-jump-page__section">Courses</h2>
+    <ul class="quick-jump-page__list">
+      {% for course in courses %}
+      <li><a href="{{ course.href }}">{{ course.name }}</a>
+        <span class="quick-jump-page__meta">{{ course.course_code }}</span></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% if !assignments.is_empty() %}
+    <h2 class="quick-jump-page__section">Assignments</h2>
+    <ul class="quick-jump-page__list">
+      {% for assignment in assignments %}
+      <li><a href="{{ assignment.href }}">{{ assignment.title }}</a>
+        <span class="quick-jump-page__meta">{{ assignment.course_code }}</span></li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+    {% endif %}
+  </div>
+{% endblock content %}

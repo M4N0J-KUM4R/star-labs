@@ -301,6 +301,9 @@ async fn login_sets_session_cookie_and_rejects_bad_credentials() {
 }
 
 /// AC2/CSRF: POST /login with a mismatched _csrf token answers 403.
+/// Regression (2026-11-23 403 reports): a request with no `star_csrf` cookie
+/// at all must also be rejected, and `GET /login` must be `no-store` so a
+/// cached page can never embed a token that no longer matches the cookie.
 #[tokio::test]
 async fn login_csrf_mismatch_is_403() {
     let Some((server, _pool, _prefix)) = setup().await else {
@@ -312,6 +315,71 @@ async fn login_csrf_mismatch_is_403() {
         .form(&serde_json::json!({"email": "a@b.c", "password": "x", "_csrf": "deadbeef"}))
         .await;
     assert_eq!(resp.status_code(), 403);
+}
+
+/// Regression (2026-11-23 403 reports): a POST with no `star_csrf` cookie at
+/// all (stale/cleared cookie) is rejected 403 even when a token is present.
+#[tokio::test]
+async fn login_csrf_missing_cookie_is_403() {
+    let Some((server, _pool, _prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let resp = server
+        .post("/login")
+        .form(&serde_json::json!({"email": "a@b.c", "password": "x", "_csrf": "deadbeef"}))
+        .await;
+    assert_eq!(resp.status_code(), 403);
+}
+
+/// Regression (2026-11-23 403 reports): the login page must not be cacheable,
+/// so a cached form can never pair a stale CSRF token with a newer cookie.
+#[tokio::test]
+async fn login_page_is_no_store() {
+    let Some((server, _pool, _prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let resp = server.get("/login").await;
+    assert_eq!(resp.status_code(), 200);
+    let cache = resp
+        .headers()
+        .get("cache-control")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(cache, "no-store", "login page must send Cache-Control: no-store");
+}
+
+/// Regression: the global nav Calendar link must point at the global
+/// /calendar page (it previously linked /dashboard).
+#[tokio::test]
+async fn global_nav_calendar_link_points_to_calendar() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let user = seed_user(&pool, &prefix, "navcaluser", "student", "not-a-real-hash").await;
+    let token = star_auth::create_token(user, "student", JWT_SECRET).expect("mint");
+    let resp = server
+        .get("/dashboard")
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            token.clone(),
+        ))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    let link = body
+        .split("global_nav_calendar_link")
+        .nth(1)
+        .expect("global nav calendar link present");
+    let link = &link[..link.len().min(400)];
+    assert!(
+        link.contains("href=\"/calendar\""),
+        "global_nav_calendar_link must href /calendar, got: {link}"
+    );
 }
 
 /// AC3 + AC4 + AC8: dashboard renders 200 with the 18 phase-1 ENV keys of the

@@ -65,6 +65,7 @@ use star_auth::AuthUser;
 
 mod file_gaps;
 mod folders_api;
+pub mod ui;
 
 // ─── folder constants ──────────────────────────────────────────────────────
 
@@ -75,16 +76,16 @@ const UNFILED_FOLDER_NAME: &str = "unfiled";
 /// Canvas fallback when the folder name is blank (infer_full_name).
 const DEFAULT_FOLDER_NAME: &str = "New Folder";
 /// Canvas Attachment::CONTEXT_DEFAULT_QUOTA (50 decimal megabytes).
-const DEFAULT_STORAGE_QUOTA: i64 = 50_000_000;
+pub(crate) const DEFAULT_STORAGE_QUOTA: i64 = 50_000_000;
 /// Canvas Attachment::MINIMUM_SIZE_FOR_QUOTA.
-const MINIMUM_SIZE_FOR_QUOTA: i64 = 512;
+pub(crate) const MINIMUM_SIZE_FOR_QUOTA: i64 = 512;
 /// Canvas folders_and_files pagination default (Api.per_page default: 25).
 const MIXED_LIST_PER_PAGE: i64 = 25;
 
 // ─── auth helpers ───────────────────────────────────────────────────────────
 
 /// Check if user is enrolled in the course or is admin.
-async fn user_enrolled_or_admin(
+pub(crate) async fn user_enrolled_or_admin(
     db: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -133,7 +134,7 @@ async fn user_has_granular_file_perm(
 }
 
 /// Check if user is the teacher of the course or is admin.
-async fn user_teacher_of_course(
+pub(crate) async fn user_teacher_of_course(
     db: &PgPool,
     user_id: i64,
     course_id: i64,
