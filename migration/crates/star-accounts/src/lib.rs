@@ -1205,9 +1205,10 @@ async fn account_json(pool: &PgPool, account_id: i64) -> Result<Option<Value>, A
         "default_storage_quota_mb": default_storage_quota_mb,
         "default_user_storage_quota_mb": default_user_storage_quota_mb,
         "default_group_storage_quota_mb": default_group_storage_quota_mb,
-        "sis_account_id": Value::Null,
-        "sis_import_id": Value::Null,
-        "integration_id": Value::Null,
+        // Canvas adds these three only when the caller's root account grants
+        // :read_sis/:manage_sis (canvas-src/lib/api/v1/account.rb:55-57); with
+        // no rights the keys are absent, not null. Star has no SIS-rights model
+        // yet, so we answer the no-rights shape instead of inventing nulls.
         "course_template_id": Value::Null,
     })))
 }

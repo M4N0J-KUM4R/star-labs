@@ -1,0 +1,7 @@
+{
+  "route": "PUT /api/v1/courses/:id",
+  "source": "canvas-src/config/routes.rb:1228 (scope(controller: :courses) put \"courses/:id\", action: :update); the update action renders course_json (canvas-src/lib/api/v1/course.rb:106-186), i.e. one course object, the same shape GET /courses/:id returns.",
+  "shape": {
+    "$include": "GET__api_v1_courses_param.json"
+  }
+}

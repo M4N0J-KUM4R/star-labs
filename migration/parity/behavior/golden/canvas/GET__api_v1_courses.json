@@ -1,0 +1,9 @@
+{
+  "route": "GET /api/v1/courses",
+  "source": "canvas-src/config/routes.rb:1226-1228 (ApiRouteSet::V1, scope(controller: :courses) get \"courses\", action: :index); the index serializer is courses_json in canvas-src/lib/api/v1/course.rb:73-75, which is `courses.map { |course| course_json(...) }` -- a bare ARRAY of the element shape reused below, not an object with data/page/total. (The Api::V1 controller itself is not part of this canvas-src checkout: app/controllers/api does not exist.)",
+  "shape": {
+    "$list": {
+      "$include": "GET__api_v1_courses_param.json"
+    }
+  }
+}
