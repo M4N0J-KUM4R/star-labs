@@ -663,27 +663,6 @@ pub struct QuizzesPage {
     pub is_teacher: bool,
 }
 
-/// GET /courses/{id}/quizzes/new — the teacher-only creation form.
-#[derive(Template)]
-#[template(path = "quiz_new.html")]
-pub struct QuizNewPage {
-    pub title: String,
-    pub body_class: String,
-    pub css_url: String,
-    pub env_json: String,
-    pub notices: Vec<String>,
-    pub user_name: String,
-    pub active_path: &'static str,
-    pub breadcrumb: Vec<(String, String)>,
-    pub csrf_token: String,
-    pub unread_badge: i64,
-    pub tabs: Vec<star_courses::CourseTab>,
-    pub active_context_tab: String,
-    pub course_name: String,
-    pub course_id: i64,
-    pub error: String,
-}
-
 /// GET /courses/{id}/quizzes/{qid} — the show page (both roles).
 #[derive(Template)]
 #[template(path = "quiz_show.html")]
@@ -848,61 +827,12 @@ pub async fn quiz_list(
     (jar, html_response(page.render(), "quiz list")).into_response()
 }
 
-/// GET /courses/{id}/quizzes/new — teacher-only minimal creation form.
-///
-/// Phase 1 has NO question editor: questions are added through the seed or
-/// the REST question endpoints (documented deviation).
-pub async fn quiz_new(
-    State(app): State<AppState>,
-    Path(course_id): Path<i64>,
-    user: SessionUser,
-    jar: CookieJar,
-) -> Response {
-    let origin = crate::request_origin();
-
-    let ctx = match course_context(&app, &user, course_id, &origin).await {
-        Ok(ctx) => ctx,
-        Err(resp) => return *resp,
-    };
-    let env = course_env(&ctx, &user, &origin, "quizzes", course_id);
-    let (jar, csrf_token) = ensure_csrf(jar);
-
-    if !ctx.is_teacher {
-        return from_api_error(&ApiError::Forbidden, &crate::request_origin()).into_response();
-    }
-
-    let page = QuizNewPage {
-        title: format!("{} - New Quiz", ctx.course.name),
-        body_class: format!(
-            "with-left-side course-menu-expanded context-course_{course_id} quizzes"
-        ),
-        css_url: assets::app_css_url(),
-        env_json: env.to_json_string(),
-        notices: Vec::new(),
-        user_name: ctx.user_name,
-        active_path: "courses",
-        breadcrumb: vec![
-            ("Dashboard".to_string(), "/dashboard".to_string()),
-            (ctx.course.name.clone(), format!("/courses/{course_id}")),
-            (
-                "Quizzes".to_string(),
-                format!("/courses/{course_id}/quizzes"),
-            ),
-        ],
-        csrf_token: csrf_token.clone(),
-        unread_badge: ctx.unread_badge,
-        tabs: ctx.tabs,
-        active_context_tab: "quizzes".to_string(),
-        course_name: ctx.course.name,
-        course_id,
-        error: String::new(),
-    };
-    (jar, html_response(page.render(), "quiz new")).into_response()
-}
-
 #[derive(Deserialize)]
 pub struct QuizNewForm {
     pub _csrf: String,
+    /// Optional, exactly as Canvas: `POST quizzes/new` from the index button
+    /// sends no title at all and the model names the row "Unnamed Quiz".
+    #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub description: String,
@@ -916,9 +846,19 @@ pub struct QuizNewForm {
     pub published: String,
 }
 
-/// POST /courses/{id}/quizzes/new — create from the minimal form (teacher
-/// only). Mirrors the REST create's validation (non-blank title, default
-/// points 0) and redirects 303 to the new quiz's show page.
+/// POST /courses/{id}/quizzes/new — Canvas' `quizzes#new`, which CREATES.
+///
+/// The route is POST-only on purpose (`post "quizzes/new"`,
+/// canvas config/routes.rb:446, with `resources :quizzes, except: :new` at
+/// :447) because creating the draft is not idempotent, and the action saves
+/// the row and redirects (app/controllers/quizzes/quizzes_controller.rb:343).
+/// A blank title is not an error there — `validates :title, allow_nil: true`
+/// and `self.title = "Unnamed Quiz" if title.blank?`
+/// (app/models/quizzes/quiz.rb:58, :161).
+///
+/// Deviation kept on purpose: Canvas redirects to the quiz *edit* url
+/// (`:edit_context_quiz_url`); this workspace has no quiz question editor, so
+/// the redirect lands on the show page instead.
 pub async fn quiz_create(
     State(app): State<AppState>,
     Path(course_id): Path<i64>,
@@ -941,47 +881,21 @@ pub async fn quiz_create(
         Ok(ctx) => ctx,
         Err(resp) => return *resp,
     };
-    let env = course_env(&ctx, &user, &origin, "quizzes", course_id);
-    let (_jar, csrf_token) = ensure_csrf(jar);
+    let (_jar, _csrf_token) = ensure_csrf(jar);
 
     if !ctx.is_teacher {
         return from_api_error(&ApiError::Forbidden, &origin).into_response();
     }
 
-    // Same validation as the REST create handler.
-    if form.title.trim().is_empty() {
-        let page = QuizNewPage {
-            title: format!("{} - New Quiz", ctx.course.name),
-            body_class: format!(
-                "with-left-side course-menu-expanded context-course_{course_id} quizzes"
-            ),
-            css_url: assets::app_css_url(),
-            env_json: env.to_json_string(),
-            notices: Vec::new(),
-            user_name: ctx.user_name,
-            active_path: "courses",
-            breadcrumb: vec![
-                ("Dashboard".to_string(), "/dashboard".to_string()),
-                (ctx.course.name.clone(), format!("/courses/{course_id}")),
-                (
-                    "Quizzes".to_string(),
-                    format!("/courses/{course_id}/quizzes"),
-                ),
-            ],
-            csrf_token: csrf_token.clone(),
-            unread_badge: ctx.unread_badge,
-            tabs: ctx.tabs,
-            active_context_tab: "quizzes".to_string(),
-            course_name: ctx.course.name,
-            course_id,
-            error: "Title is required.".to_string(),
-        };
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            html_response(page.render(), "quiz new"),
-        )
-            .into_response();
-    }
+    // Canvas' default title, not a validation failure (quiz.rb:161).
+    let title = {
+        let raw = form.title.trim();
+        if raw.is_empty() {
+            "Unnamed Quiz".to_string()
+        } else {
+            raw.to_string()
+        }
+    };
 
     let points: f64 = form.points_possible.trim().parse().unwrap_or(0.0);
     let parse_ts = |raw: &str| -> Option<chrono::DateTime<chrono::Utc>> {
@@ -1008,7 +922,7 @@ pub async fn quiz_create(
         "#,
     )
     .bind(course_id)
-    .bind(form.title.trim())
+    .bind(&title)
     .bind(form.description.trim())
     .bind(points)
     .bind(published)

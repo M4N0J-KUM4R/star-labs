@@ -1299,7 +1299,11 @@ async fn assignments_index_roles_and_grouping() {
     cleanup(&pool, &prefix).await;
 }
 
-/// New quiz form: teacher POST creates (redirects to show); student POST 403.
+/// Canvas' `quizzes/new` is POST-only (`post "quizzes/new"`, canvas
+/// config/routes.rb:446, under `resources :quizzes, except: :new` at :447), so
+/// GET is a method mismatch, teacher POST creates (redirects to show), a
+/// title-less POST gets Canvas' "Unnamed Quiz" (app/models/quizzes/quiz.rb:161),
+/// and a student POST is 403.
 #[tokio::test]
 async fn quiz_new_teacher_creates_student_forbidden() {
     let Some((server, pool, prefix)) = setup().await else {
@@ -1313,13 +1317,24 @@ async fn quiz_new_teacher_creates_student_forbidden() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
 
-    // Teacher GET renders the form.
+    // No GET on this path, for anyone: Canvas never generated the form page.
     let page = server
         .get(&format!("/courses/{course}/quizzes/new"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .await;
-    assert_eq!(page.status_code(), 200);
-    assert!(page.text().contains("new_quiz_form"));
+    assert_eq!(page.status_code(), 405, "GET /quizzes/new must not exist");
+
+    // The "+ Quiz" control lives on the index as a POST form.
+    let index = server
+        .get(&format!("/courses/{course}/quizzes"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(index.status_code(), 200);
+    let index_body = index.text();
+    assert!(
+        index_body.contains("new_quiz_form"),
+        "index must carry the + Quiz POST form: {index_body}"
+    );
 
     // Teacher POST creates and 303s to the show page.
     let (csrf_cookie, csrf) = csrf_pair();
@@ -1373,6 +1388,41 @@ async fn quiz_new_teacher_creates_student_forbidden() {
     assert_eq!(show.status_code(), 200);
     assert!(show.text().contains("Created By Form"));
 
+    // A POST with no title is Canvas' index-button request: it creates a
+    // draft, it does not 422.
+    let (csrf_cookie, csrf) = csrf_pair();
+    let resp = server
+        .post(&format!("/courses/{course}/quizzes/new"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie)
+        .form(&serde_json::json!({"_csrf": csrf}))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        303,
+        "blank title must create: {}",
+        resp.text()
+    );
+    let bare_location = resp
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let bare_id: i64 = bare_location
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .parse()
+        .expect("quiz id in location");
+    let bare_title: String = sqlx::query_scalar("SELECT title FROM quizzes WHERE id = $1")
+        .bind(bare_id)
+        .fetch_one(&pool)
+        .await
+        .expect("unnamed quiz");
+    assert_eq!(bare_title, "Unnamed Quiz");
+
     // Student POST is 403.
     let (csrf_cookie, csrf) = csrf_pair();
     let resp = server
@@ -1382,15 +1432,6 @@ async fn quiz_new_teacher_creates_student_forbidden() {
         .form(&serde_json::json!({"_csrf": csrf, "title": "Nope", "published": ""}))
         .await;
     assert_eq!(resp.status_code(), 403);
-
-    // Student GET is 403 too.
-    let resp = server
-        .get(&format!("/courses/{course}/quizzes/new"))
-        .add_cookie(session_cookie(student, "student"))
-        .await;
-    assert_eq!(resp.status_code(), 403);
-
-    cleanup(&pool, &prefix).await;
 }
 
 /// Take: student start creates an in-progress submission; the take page
@@ -1829,8 +1870,10 @@ async fn quiz_submit_csrf_mismatch_is_403() {
     cleanup(&pool, &prefix).await;
 }
 
-/// Issue #71: teacher POST /assignments/new creates the row (it appears in
-/// the list); a student POST is 403.
+/// Issue #71: teacher POST /assignments creates the row (it appears in the
+/// list); a student POST is 403. `/assignments/new` is Canvas' form PAGE, so
+/// a POST there must stay a method mismatch (`resources :assignments`, canvas
+/// config/routes.rb:270 — create is the collection POST).
 #[tokio::test]
 async fn new_assignment_create_and_gates() {
     let Some((server, pool, prefix)) = setup().await else {
@@ -1868,9 +1911,30 @@ async fn new_assignment_create_and_gates() {
         .value()
         .to_string();
 
-    // Student POST -> 403 (before any insert).
+    // POST on the form page is not a Canvas route: 405, no row.
     let resp = server
         .post(&format!("/courses/{course}/assignments/new"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "name": "Should Not Exist",
+            "points_possible": "1",
+            "_csrf": csrf.clone(),
+            "published": "published"
+        }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        405,
+        "POST /assignments/new must not be routable"
+    );
+
+    // Student POST -> 403 (before any insert).
+    let resp = server
+        .post(&format!("/courses/{course}/assignments"))
         .add_cookie(session_cookie(student, "student"))
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
@@ -1887,7 +1951,7 @@ async fn new_assignment_create_and_gates() {
 
     // Teacher POST creates the assignment.
     let resp = server
-        .post(&format!("/courses/{course}/assignments/new"))
+        .post(&format!("/courses/{course}/assignments"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
@@ -1938,7 +2002,7 @@ async fn new_assignment_create_and_gates() {
     // The CSRF cookie and the form token must match (the handler checks the
     // token pair before validating the fields).
     let resp = server
-        .post(&format!("/courses/{course}/assignments/new"))
+        .post(&format!("/courses/{course}/assignments"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",

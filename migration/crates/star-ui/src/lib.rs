@@ -109,9 +109,17 @@ pub fn router() -> Router<AppState> {
         .route("/courses/{id}", get(handlers::course::course_home))
         // Quiz-taking journey (issue #109) — specific before generic.
         .route("/courses/{id}/quizzes", get(handlers::quiz::quiz_list))
+        // Canvas has NO GET on this path. `resources :quizzes, except: :new`
+        // (config/routes.rb:447) drops the Rails-generated form page and the
+        // line right above it replaces it with `post "quizzes/new" =>
+        // quizzes#new` (:446, comment: "use POST instead of GET (not
+        // idempotent)"), and QuizzesController#new really does create
+        // (`@context.quizzes.build` .. `quiz.save!`, then redirect to the quiz
+        // edit url — app/controllers/quizzes/quizzes_controller.rb:343-357).
+        // So the index "+ Quiz" affordance is a POST form, not a link.
         .route(
             "/courses/{id}/quizzes/new",
-            get(handlers::quiz::quiz_new).post(handlers::quiz::quiz_create),
+            post(handlers::quiz::quiz_create),
         )
         .route(
             "/courses/{id}/quizzes/{qid}",
@@ -130,14 +138,23 @@ pub fn router() -> Router<AppState> {
             post(handlers::quiz::quiz_submit),
         )
         // Assignments journey (issue #71) — BEFORE the generic tab route.
+        // Canvas' web assignments routes come from `resources :assignments do`
+        // (config/routes.rb:270) with no `only:`/`except:`, i.e. the full 7:
+        // GET ..../assignments/new and GET ..../assignments/:id/edit are form
+        // PAGES, while create is POST ..../assignments and update is
+        // PATCH/PUT ..../assignments/:id. The ported forms therefore post to
+        // the collection, not to /new (the invented POST-on-/new is gone).
+        // Update still posts to /edit: submitting PATCH from HTML needs
+        // Rack's `_method` override, which this workspace has not ported
+        // (tracked as the method-override lane).
         .route(
             "/courses/{id}/assignments",
-            get(handlers::assignments::assignments_index),
+            get(handlers::assignments::assignments_index)
+                .post(handlers::assignments::assignment_create),
         )
         .route(
             "/courses/{id}/assignments/new",
-            get(handlers::assignments::assignment_new)
-                .post(handlers::assignments::assignment_create),
+            get(handlers::assignments::assignment_new),
         )
         .route(
             "/courses/{id}/assignments/{aid}",
