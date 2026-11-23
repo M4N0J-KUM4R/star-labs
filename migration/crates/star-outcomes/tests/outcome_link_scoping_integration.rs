@@ -250,8 +250,10 @@ async fn account_scoped_link_list_and_create_answer() {
     assert_eq!(rows.len(), 1, "rows: {rows:?}");
     assert_eq!(rows[0]["outcome_id"], json!(outcome));
 
-    // The account in the URL owns the group: another account's URL must not
-    // list it (Canvas 404s through `context_outcome_groups.find`).
+    // The account in the URL must own the group. The caller has rights in
+    // *both* accounts, so this reaches Canvas' `context_outcome_groups.find`
+    // and 404s there — the account check passed, the context scope did not.
+    seed_account_admin(&pool, other, admin).await;
     let resp = server
         .get(&format!(
             "/accounts/{other}/outcome_groups/{group}/outcomes"
@@ -269,7 +271,8 @@ async fn account_scoped_link_list_and_create_answer() {
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
-    // Then the rights check: an account the caller does not administer is 403.
+    // Then the rights check: `can_read_outcomes` runs before the group lookup,
+    // so an account the caller does not administer is 403, not 404.
     let outsider = seed_user(&pool, &prefix, "Outsider", "teacher").await;
     let resp = server
         .get(&format!(
