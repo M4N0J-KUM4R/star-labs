@@ -498,7 +498,12 @@ async fn tool_consumer_profile_account_with_profile(
 
 /// GET /api/lti/notice-handlers/{toolId} — Canvas lists the tool's notice
 /// handlers; none are configured in this workspace.
-async fn notice_handlers_index(Path(_tool_id): Path<i64>) -> Json<Value> {
+///
+/// Canvas requires an LTI Advantage token for the whole Notice Handlers API
+/// (`canvas-src/app/controllers/lti/ims/notice_handlers_controller.rb:26-27`:
+/// "Requires LTI Advantage (JWT OAuth2) tokens with the ... noticehandlers
+/// scope"), so the handler takes `AuthUser` like the EULA routes beside it.
+async fn notice_handlers_index(Path(_tool_id): Path<i64>, _auth: AuthUser) -> Json<Value> {
     Json(json!([]))
 }
 
@@ -513,6 +518,7 @@ pub struct NoticeHandlerUpdate {
 /// honest (no dispatch pipeline here).
 async fn notice_handlers_update(
     Path(_tool_id): Path<i64>,
+    _auth: AuthUser,
     payload: Option<Json<NoticeHandlerUpdate>>,
 ) -> Json<Value> {
     let Json(p) = payload.unwrap_or_default();
@@ -585,8 +591,14 @@ async fn delete_eula_acceptances(Path(_tool_id): Path<i64>, auth: AuthUser) -> S
 }
 
 /// PUT /api/lti/asset_processor_eulas/{toolId}/deployment — update the
-/// tool's EULA (echo shape).
-async fn update_tool_eula(Path(_tool_id): Path<i64>, payload: Option<Json<Value>>) -> Json<Value> {
+/// tool's EULA (echo shape). Canvas' `AssetProcessorEulaController#update_tool_eula`
+/// (routes.rb:3228) is an authenticated endpoint, so this takes the same
+/// `AuthUser` as its POST/DELETE siblings on `.../user`.
+async fn update_tool_eula(
+    Path(_tool_id): Path<i64>,
+    _auth: AuthUser,
+    payload: Option<Json<Value>>,
+) -> Json<Value> {
     Json(payload.map(|Json(v)| v).unwrap_or_else(|| json!({})))
 }
 
@@ -896,6 +908,19 @@ fn err_to_api(resp: Response) -> ApiError {
 // Router
 // ---------------------------------------------------------------------------
 
+/// The /api/v1-served half of the gap family.
+///
+/// Everything registered here has a bare path (no `/api/lti`-style prefix)
+/// because Canvas declares it inside `ApiRouteSet::V1.draw`
+/// (`canvas-src/config/routes.rb:1225`), and star-http nests this crate's
+/// `router()` at `/api/v1`. The TII-migration and support-helper routes below
+/// were previously registered in `lti_gaps_advantage_routes()`, which is
+/// merged at the application root -- so they answered
+/// `/accounts/1/asset_processors/tii_migrations` and were unreachable at the
+/// URL Canvas actually serves (`/api/v1/...`). The parity scoreboard could
+/// not see that: `tools/parity/parity.py::normalize_path` strips a leading
+/// `/api/v1` from both sides before matching, so it only compares the path
+/// tail, never the mount.
 pub fn lti_gaps_routes() -> Router<AppState> {
     Router::new()
         // Lti::FeatureFlagsController.
@@ -909,12 +934,52 @@ pub fn lti_gaps_routes() -> Router<AppState> {
         )
         // Lti::PublicJwkController.
         .route("/developer_key/update_public_jwk", put(update_public_jwk))
+        // TII migrations (admin diagnostics).
+        // routes.rb:2217-2219 (`get`/`post` + `post .../migrate_all`).
+        .route(
+            "/accounts/{accountId}/asset_processors/tii_migrations",
+            get(tii_migrations_index).post(tii_migrations_create),
+        )
+        .route(
+            "/accounts/{accountId}/asset_processors/tii_migrations/migrate_all",
+            axum::routing::post(tii_migrations_migrate_all),
+        )
+        // Support helpers — Canvas' `support_helpers/*` scopes inside the
+        // V1 route set (routes.rb:2510-2532), not the /api/lti set. The
+        // turnitin family is registered by `support_helpers::router()`,
+        // which is likewise mounted under /api/v1.
+        .route(
+            "/support_helpers/asset_processor/submission_details",
+            get(support_submission_details),
+        )
+        .route(
+            "/support_helpers/asset_processor/bulk_resubmit",
+            axum::routing::post(support_bulk_resubmit),
+        )
+        .route(
+            "/support_helpers/asset_processor_discussion/bulk_resubmit",
+            axum::routing::post(support_bulk_resubmit_discussion),
+        )
+        .route(
+            "/support_helpers/plagiarism_platform/add_service",
+            get(support_add_service),
+        )
+        .route(
+            "/support_helpers/plagiarism_platform/resubmit_for_assignment/{assignmentId}",
+            get(support_resubmit_for_assignment),
+        )
+        .route(
+            "/support_helpers/submission_lifecycle_manage/course",
+            get(support_lifecycle_course),
+        )
 }
 
 /// The /api/lti-served half of the gap family — Canvas mounts these
 /// through the "/api/lti" route set (config/routes.rb:3109), outside
 /// /api/v1, so this router is merged into `lti_advantage_router()`
 /// (root-mounted in star-http), NOT into the /api/v1-nested crate router.
+/// Every path here therefore carries its own `/api/lti` prefix; a bare path
+/// in this router is a mis-mount, not a route.
 pub fn lti_gaps_advantage_routes() -> Router<AppState> {
     Router::new()
         // Lti::TokenController.
@@ -985,15 +1050,6 @@ pub fn lti_gaps_advantage_routes() -> Router<AppState> {
             "/api/lti/asset_processors/discussion_notices/{assignmentId}/{studentId}/resubmit_all",
             axum::routing::post(resubmit_discussion_notices_all),
         )
-        // TII migrations (admin diagnostics).
-        .route(
-            "/accounts/{accountId}/asset_processors/tii_migrations",
-            get(tii_migrations_index).post(tii_migrations_create),
-        )
-        .route(
-            "/accounts/{accountId}/asset_processors/tii_migrations/migrate_all",
-            axum::routing::post(tii_migrations_migrate_all),
-        )
         // Lti::SubmissionsApiController + plagiarism assignment.
         .route(
             "/api/lti/assignments/{assignmentId}/submissions/{submissionId}",
@@ -1008,29 +1064,4 @@ pub fn lti_gaps_advantage_routes() -> Router<AppState> {
             get(lti_submission_attachment),
         )
         .route("/api/lti/assignments/{assignmentId}", get(lti_assignment_show))
-        // Support helpers.
-        .route(
-            "/support_helpers/asset_processor/submission_details",
-            get(support_submission_details),
-        )
-        .route(
-            "/support_helpers/asset_processor/bulk_resubmit",
-            axum::routing::post(support_bulk_resubmit),
-        )
-        .route(
-            "/support_helpers/asset_processor_discussion/bulk_resubmit",
-            axum::routing::post(support_bulk_resubmit_discussion),
-        )
-        .route(
-            "/support_helpers/plagiarism_platform/add_service",
-            get(support_add_service),
-        )
-        .route(
-            "/support_helpers/plagiarism_platform/resubmit_for_assignment/{assignmentId}",
-            get(support_resubmit_for_assignment),
-        )
-        .route(
-            "/support_helpers/submission_lifecycle_manage/course",
-            get(support_lifecycle_course),
-        )
 }

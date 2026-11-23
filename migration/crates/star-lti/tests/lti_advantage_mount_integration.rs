@@ -86,3 +86,98 @@ async fn the_lti_advantage_routes_are_served_under_api_lti() {
         );
     }
 }
+
+/// The other half of the same axis: routes Canvas declares *inside*
+/// `ApiRouteSet::V1.draw` must answer under `/api/v1`, and must not be
+/// reachable at the bare path the root mount would give them.
+///
+/// Canvas: `get`/`post "accounts/:account_id/asset_processors/tii_migrations"`
+/// and `.../migrate_all` (`canvas-src/config/routes.rb:2217-2219`), plus the
+/// `support_helpers/asset_processor`, `.../asset_processor_discussion`,
+/// `.../plagiarism_platform` and `.../submission_lifecycle_manage` scopes
+/// (`:2510-2532`). The TII-migration and support-helper registrations used to
+/// sit in `lti_gaps_advantage_routes()` — merged at the application root, the
+/// mount for the `/api/lti` family — so they answered `/accounts/1/...` and
+/// `/support_helpers/...` and nothing at the Canvas URL.
+#[tokio::test]
+async fn the_api_v1_served_gap_routes_answer_under_api_v1_only() {
+    let Some((server, _pool, _prefix)) = setup_v1_and_root().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    // (verb, tail) with the tail Canvas uses, `/api/v1` prefix added below.
+    let served = [
+        ("get", "/accounts/1/asset_processors/tii_migrations"),
+        ("post", "/accounts/1/asset_processors/tii_migrations"),
+        (
+            "post",
+            "/accounts/1/asset_processors/tii_migrations/migrate_all",
+        ),
+        ("get", "/support_helpers/asset_processor/submission_details"),
+        ("post", "/support_helpers/asset_processor/bulk_resubmit"),
+        (
+            "post",
+            "/support_helpers/asset_processor_discussion/bulk_resubmit",
+        ),
+        ("get", "/support_helpers/plagiarism_platform/add_service"),
+        (
+            "get",
+            "/support_helpers/plagiarism_platform/resubmit_for_assignment/1",
+        ),
+        ("get", "/support_helpers/submission_lifecycle_manage/course"),
+    ];
+
+    for (verb, tail) in served {
+        let path = format!("/api/v1{tail}");
+        let resp = match verb {
+            "post" => server.post(&path).await,
+            _ => server.get(&path).await,
+        };
+        // Reaching the handler and being refused (401 without a token) still
+        // proves the route exists; only an unrouted path is an empty 404.
+        assert!(
+            resp.status_code() != 404 || !resp.text().is_empty(),
+            "{path} is not routed under /api/v1"
+        );
+
+        let bare = server.get(tail).await;
+        assert_eq!(
+            bare.status_code(),
+            404,
+            "{tail} is reachable at the root; Canvas serves it under /api/v1"
+        );
+        assert!(
+            bare.text().is_empty(),
+            "{tail} answered a body, so a route exists at the root"
+        );
+    }
+}
+
+/// The mount `star-http` actually builds: the crate router nested at `/api/v1`
+/// and the Advantage router merged at the application root.
+async fn setup_v1_and_root() -> Option<(TestServer, PgPool, String)> {
+    let db_url = std::env::var("DATABASE_URL").ok()?;
+
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(5)
+        .acquire_timeout(std::time::Duration::from_secs(10))
+        .connect(&db_url)
+        .await
+        .expect("connect to Postgres");
+
+    star_db::MIGRATOR.run(&pool).await.expect("run migrations");
+
+    let state = AppState {
+        db: pool.clone(),
+        jwt_secret: JWT_SECRET.to_string(),
+    };
+    let server = TestServer::new(
+        axum::Router::new()
+            .merge(star_lti::lti_advantage_router())
+            .nest("/api/v1", star_lti::router())
+            .with_state(state),
+    )
+    .expect("build TestServer");
+    Some((server, pool, run_prefix()))
+}
