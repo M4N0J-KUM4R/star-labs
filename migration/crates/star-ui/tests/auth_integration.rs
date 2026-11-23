@@ -158,7 +158,7 @@ async fn register_pages_are_get_only_and_submit_to_users() {
             ))
             .form(&serde_json::json!({
                 "name": "Rejected Path",
-                "email": email,
+                "email": &email,
                 "password": "Password123!",
                 "password_confirmation": "Password123!",
                 "_csrf": csrf
