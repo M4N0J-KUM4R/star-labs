@@ -780,7 +780,7 @@ async fn live_assessment_results_create(
 ///
 /// The EduAppCenter list; no app center configured → the Canvas empty
 /// shape.
-async fn app_center_apps() -> Json<Value> {
+async fn app_center_apps(_auth: AuthUser) -> Json<Value> {
     Json(json!({ "objects": [], "meta": { "total_count": 0, "current_page": 1, "page_count": 0 } }))
 }
 

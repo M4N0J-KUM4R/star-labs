@@ -1,0 +1,42 @@
+{
+ "public": [
+  "POST /api/v1/auth/login",
+  "POST /api/v1/auth/register",
+  "GET /api/lti/security/jwks",
+  "GET /api/lti/security/openid-configuration",
+  "GET /api/lti/accounts/:account_id/tool_consumer_profile(/:tool_consumer_profile_id)",
+  "GET /api/lti/courses/:course_id/tool_consumer_profile(/:tool_consumer_profile_id)",
+  "GET /api/v1/permissions/groups",
+  "GET /api/v1/release_notes/latest",
+  "GET /api/v1/release_notes/unread_count",
+  "GET /api/v1/acceptable_use_policy",
+  "GET /api/v1/course_accounts",
+  "GET /api/v1/horizon_accounts",
+  "POST /api/v1/error_reports",
+  "GET /api/v1/microfrontends/release_tag_override",
+  "DELETE /api/v1/microfrontends/release_tag_override",
+  "OPTIONS /api/v1/files/:id/create_success"
+ ],
+ "_comment": "Routes that Canvas itself serves without authentication. Every 'VERB path' listed here is allowed to answer 2xx to an anonymous request in the behavior_parity harness; anything returning 2xx anonymously that is NOT listed is scored as an authz failure. Extend only with a Canvas routes.rb citation.",
+ "_citations": {
+  "GET /api/lti/security/jwks": "canvas-lms config/routes.rb: get \"internal/services/jwks\" => \"security#jwks\" — public JWKS tools fetch to validate Canvas signatures (Canvas LTI docs, sso.canvaslms.com/api/lti/security/jwks)",
+  "GET /api/lti/security/openid-configuration": "canvas-lms config/routes.rb: OIDC discovery for LTI 1.3 launch flow, consumed by tools before any user session exists",
+  "GET /api/lti/*/tool_consumer_profile(/:id)": "canvas-lms config/routes.rb: Lti::Ims::ToolConsumerProfileController — IMS spec requires unauthenticated capability discovery",
+  "GET /api/v1/permissions/groups": "canvas-lms config/routes.rb: 'get 'permissions/groups' => 'api_v1::permissions_controller...' — permission metadata catalog, no auth in routes.rb",
+  "GET /api/v1/release_notes/latest": "canvas-lms config/routes.rb: release notes are surfaced on the login screen, pre-auth",
+  "GET /api/v1/release_notes/unread_count": "canvas-lms config/routes.rb: unread_count degrades to 'all unread' pre-auth; handler uses optional_user",
+  "GET /api/v1/acceptable_use_policy": "canvas-lms config/routes.rb: policy text shown at sign-up, pre-auth",
+  "GET /api/v1/course_accounts": "canvas-lms config/routes.rb: public account catalog used pre-auth",
+  "GET /api/v1/horizon_accounts": "same controller family as course_accounts, pre-auth catalog",
+  "POST /api/v1/error_reports": "canvas-lms config/routes.rb: error reporting must work for anonymous users hitting a failure",
+  "*/microfrontends/release_tag_override": "canvas-lms config/routes.rb: front-end release-tag cache hint, called before auth; no data returned",
+  "OPTIONS /api/v1/files/:id/create_success": "CORS preflight must answer 2xx without auth by HTTP semantics (preflight carries no credentials)"
+ },
+ "_known_gaps_fixed_in_code": [
+  "GET /api/v1/accounts/:account_id/app_center/apps",
+  "GET /api/v1/courses/:course_id/app_center/apps",
+  "GET /api/v1/accounts/:account_id/learn_platform/*",
+  "GET|PUT /api/lti/notice-handlers/:context_external_tool_id",
+  "PUT /api/lti/asset_processor_eulas/:context_external_tool_id/deployment"
+ ]
+}

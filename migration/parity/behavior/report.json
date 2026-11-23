@@ -1,0 +1,70 @@
+{
+  "dimensions": {
+    "authz_anonymous": {
+      "fail": 0,
+      "pass": 1403,
+      "pct": 100
+    },
+    "error_body_shape_4xx": {
+      "json": 34,
+      "text": 1354
+    },
+    "expectations": {
+      "fail": 0,
+      "note": "field names, nullability and soft-delete visibility are measured only for routes with an entry in expectations.json; all others are unspecified, not passing",
+      "pass": 5,
+      "specified_of_total": "5 / 1403",
+      "specified_routes": 5
+    },
+    "pagination_index": {
+      "fail": 0,
+      "pass": 300,
+      "pct": 100
+    },
+    "registration": {
+      "fail": 0,
+      "pass": 4217,
+      "pct": 100
+    },
+    "robustness_malformed_id": {
+      "fail": 0,
+      "pass": 2514,
+      "pct": 100
+    }
+  },
+  "expectation_failures": [],
+  "failures": [],
+  "generated_by": "cargo run -p star-http --example behavior_parity",
+  "measured_dims": [
+    "registration",
+    "authz_anonymous",
+    "robustness_malformed_id",
+    "pagination_index"
+  ],
+  "public_allowlist": [
+    "POST /api/v1/auth/login",
+    "POST /api/v1/auth/register",
+    "GET /api/lti/security/jwks",
+    "GET /api/lti/security/openid-configuration",
+    "GET /api/lti/accounts/:account_id/tool_consumer_profile(/:tool_consumer_profile_id)",
+    "GET /api/lti/courses/:course_id/tool_consumer_profile(/:tool_consumer_profile_id)",
+    "GET /api/v1/permissions/groups",
+    "GET /api/v1/release_notes/latest",
+    "GET /api/v1/release_notes/unread_count",
+    "GET /api/v1/acceptable_use_policy",
+    "GET /api/v1/course_accounts",
+    "GET /api/v1/horizon_accounts",
+    "POST /api/v1/error_reports",
+    "GET /api/v1/microfrontends/release_tag_override",
+    "DELETE /api/v1/microfrontends/release_tag_override",
+    "OPTIONS /api/v1/files/:id/create_success"
+  ],
+  "routes_probed": 1403,
+  "unmeasured_dims": [
+    "field_names",
+    "nullability",
+    "soft_delete_visibility",
+    "permission_order_with_seeded_users"
+  ],
+  "unregistered": []
+}

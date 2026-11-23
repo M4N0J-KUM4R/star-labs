@@ -29,6 +29,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  # Static registration-parity report (route/path analysis, no database).
   parity:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -52,6 +53,81 @@ jobs:
         with:
           name: parity-report
           path: migration/parity/
+          if-no-files-found: error
+
+  # -----------------------------------------------------------------------
+  # Behavioral parity harness (issue #231): drives the full production
+  # router against a real, migrated Postgres and probes every Canvas
+  # manifest route. Runs in parallel with the static report job above —
+  # the two measure different things and share no work.
+  #
+  # Gate: the four measured dimensions (registration, anonymous authz,
+  # robustness, pagination) and the specified behavioral contracts must
+  # stay at zero failures; `expectations.specified_routes` grows over
+  # time, so the number specified is reported, not gated.
+  # -----------------------------------------------------------------------
+  behavior-parity:
+    name: Behavioral parity (issue #231)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: migration
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: star
+          POSTGRES_PASSWORD: star-test-only
+          POSTGRES_DB: star_lms_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U star -d star_lms_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://star:star-test-only@localhost:5432/star_lms_test
+      STAR_JWT_SECRET: github-actions-test-secret
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: migration -> target
+          shared-key: behavior-parity
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Run the behavioral parity harness
+        run: cargo run --locked -p star-http --example behavior_parity
+      - name: Scorecard
+        if: always()
+        run: cat parity/behavior/report.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Gate on measured-dimension regressions
+        run: |
+          set -euo pipefail
+          python3 - <<'EOF'
+          import json, sys
+          report = json.load(open("parity/behavior/report.json"))
+          dims = report["dimensions"]
+          gated = ["registration", "authz_anonymous", "robustness_malformed_id",
+                   "pagination_index", "expectations"]
+          failed = {k: dims[k]["fail"] for k in gated if dims[k].get("fail", 0) > 0}
+          for k in gated:
+              d = dims[k]
+              print(f"{k}: {d.get('pass', 0)} pass / {d.get('fail', 0)} fail")
+          if failed:
+              print("::error::behavioral parity regressed: " +
+                    ", ".join(f"{k}={v} fail" for k, v in failed.items()))
+              sys.exit(1)
+          print("all measured behavioral-parity dimensions at zero failures")
+          EOF
+      - name: Upload behavioral parity report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: behavior-parity-report
+          path: migration/parity/behavior/
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------

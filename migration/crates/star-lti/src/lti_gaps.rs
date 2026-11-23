@@ -498,7 +498,7 @@ async fn tool_consumer_profile_account_with_profile(
 
 /// GET /api/lti/notice-handlers/{toolId} — Canvas lists the tool's notice
 /// handlers; none are configured in this workspace.
-async fn notice_handlers_index(Path(_tool_id): Path<i64>) -> Json<Value> {
+async fn notice_handlers_index(Path(_tool_id): Path<i64>, _auth: AuthUser) -> Json<Value> {
     Json(json!([]))
 }
 
@@ -513,6 +513,7 @@ pub struct NoticeHandlerUpdate {
 /// honest (no dispatch pipeline here).
 async fn notice_handlers_update(
     Path(_tool_id): Path<i64>,
+    _auth: AuthUser,
     payload: Option<Json<NoticeHandlerUpdate>>,
 ) -> Json<Value> {
     let Json(p) = payload.unwrap_or_default();
@@ -586,7 +587,11 @@ async fn delete_eula_acceptances(Path(_tool_id): Path<i64>, auth: AuthUser) -> S
 
 /// PUT /api/lti/asset_processor_eulas/{toolId}/deployment — update the
 /// tool's EULA (echo shape).
-async fn update_tool_eula(Path(_tool_id): Path<i64>, payload: Option<Json<Value>>) -> Json<Value> {
+async fn update_tool_eula(
+    Path(_tool_id): Path<i64>,
+    _auth: AuthUser,
+    payload: Option<Json<Value>>,
+) -> Json<Value> {
     Json(payload.map(|Json(v)| v).unwrap_or_else(|| json!({})))
 }
 
@@ -909,6 +914,40 @@ pub fn lti_gaps_routes() -> Router<AppState> {
         )
         // Lti::PublicJwkController.
         .route("/developer_key/update_public_jwk", put(update_public_jwk))
+        // TII migrations (admin diagnostics).
+        .route(
+            "/accounts/{accountId}/asset_processors/tii_migrations",
+            get(tii_migrations_index).post(tii_migrations_create),
+        )
+        .route(
+            "/accounts/{accountId}/asset_processors/tii_migrations/migrate_all",
+            axum::routing::post(tii_migrations_migrate_all),
+        )
+        // Support helpers.
+        .route(
+            "/support_helpers/asset_processor/submission_details",
+            get(support_submission_details),
+        )
+        .route(
+            "/support_helpers/asset_processor/bulk_resubmit",
+            axum::routing::post(support_bulk_resubmit),
+        )
+        .route(
+            "/support_helpers/asset_processor_discussion/bulk_resubmit",
+            axum::routing::post(support_bulk_resubmit_discussion),
+        )
+        .route(
+            "/support_helpers/plagiarism_platform/add_service",
+            get(support_add_service),
+        )
+        .route(
+            "/support_helpers/plagiarism_platform/resubmit_for_assignment/{assignmentId}",
+            get(support_resubmit_for_assignment),
+        )
+        .route(
+            "/support_helpers/submission_lifecycle_manage/course",
+            get(support_lifecycle_course),
+        )
 }
 
 /// The /api/lti-served half of the gap family — Canvas mounts these
@@ -989,15 +1028,6 @@ pub fn lti_gaps_advantage_routes() -> Router<AppState> {
             "/api/lti/asset_processors/discussion_notices/{assignmentId}/{studentId}/resubmit_all",
             axum::routing::post(resubmit_discussion_notices_all),
         )
-        // TII migrations (admin diagnostics).
-        .route(
-            "/accounts/{accountId}/asset_processors/tii_migrations",
-            get(tii_migrations_index).post(tii_migrations_create),
-        )
-        .route(
-            "/accounts/{accountId}/asset_processors/tii_migrations/migrate_all",
-            axum::routing::post(tii_migrations_migrate_all),
-        )
         // Lti::SubmissionsApiController + plagiarism assignment.
         .route(
             "/api/lti/assignments/{assignmentId}/submissions/{submissionId}",
@@ -1012,29 +1042,4 @@ pub fn lti_gaps_advantage_routes() -> Router<AppState> {
             get(lti_submission_attachment),
         )
         .route("/api/lti/assignments/{assignmentId}", get(lti_assignment_show))
-        // Support helpers.
-        .route(
-            "/support_helpers/asset_processor/submission_details",
-            get(support_submission_details),
-        )
-        .route(
-            "/support_helpers/asset_processor/bulk_resubmit",
-            axum::routing::post(support_bulk_resubmit),
-        )
-        .route(
-            "/support_helpers/asset_processor_discussion/bulk_resubmit",
-            axum::routing::post(support_bulk_resubmit_discussion),
-        )
-        .route(
-            "/support_helpers/plagiarism_platform/add_service",
-            get(support_add_service),
-        )
-        .route(
-            "/support_helpers/plagiarism_platform/resubmit_for_assignment/{assignmentId}",
-            get(support_resubmit_for_assignment),
-        )
-        .route(
-            "/support_helpers/submission_lifecycle_manage/course",
-            get(support_lifecycle_course),
-        )
 }

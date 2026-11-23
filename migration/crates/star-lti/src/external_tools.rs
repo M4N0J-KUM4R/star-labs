@@ -1610,13 +1610,15 @@ async fn create_tool_verified(
 // New handlers: sessionless_launch (routes 7-8, stub 503)
 // --------------------------------------------------------------------------
 
-/// `GET /courses/{course_id}/external_tools/sessionless_launch` — stub 503.
-async fn course_sessionless_launch() -> StatusCode {
+/// `GET /courses/{course_id}/external_tools/sessionless_launch` — stub 503
+/// behind session auth (Canvas' SessionScopedLaunch; anonymous → 401).
+async fn course_sessionless_launch(_auth: AuthUser) -> StatusCode {
     StatusCode::SERVICE_UNAVAILABLE
 }
 
-/// `GET /accounts/{account_id}/external_tools/sessionless_launch` — stub 503.
-async fn account_sessionless_launch() -> StatusCode {
+/// `GET /accounts/{account_id}/external_tools/sessionless_launch` — stub 503
+/// behind session auth (anonymous → 401).
+async fn account_sessionless_launch(_auth: AuthUser) -> StatusCode {
     StatusCode::SERVICE_UNAVAILABLE
 }
 
