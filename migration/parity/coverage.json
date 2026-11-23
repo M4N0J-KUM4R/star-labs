@@ -12999,9 +12999,9 @@
     "js_env_files_implemented": 0,
     "js_tsx_files": 5459,
     "js_tsx_files_implemented": 0,
-    "star_extras": 162,
+    "star_extras": 160,
     "star_extras_by_class": {
-      "absent": 30,
+      "absent": 29,
       "api_alias": 5,
       "api_extra_nested": 19,
       "api_extra_verb": 18,
@@ -13009,10 +13009,10 @@
       "api_verb_mismatch": 0,
       "web_exact": 48,
       "web_nested": 26,
-      "web_verb_mismatch": 16
+      "web_verb_mismatch": 15
     },
     "star_route_calls": 1286,
-    "star_route_registrations": 1576,
+    "star_route_registrations": 1575,
     "star_tables": 397,
     "star_test_calls_excluded": 3,
     "star_unparsed_calls": 0,
@@ -13424,15 +13424,6 @@
       "canvas_closest": [],
       "classification": "absent",
       "crate": "star-ui",
-      "normalized_path": "courses/{}/assignments/new",
-      "path": "/courses/{id}/assignments/new",
-      "source": "crates/star-ui/src/lib.rs",
-      "verb": "POST"
-    },
-    {
-      "canvas_closest": [],
-      "classification": "absent",
-      "crate": "star-ui",
       "normalized_path": "courses/{}/assignments/syllabus",
       "path": "/courses/{id}/assignments/syllabus",
       "source": "crates/star-ui/src/lib.rs",
@@ -13703,17 +13694,6 @@
       "path": "/courses/{courseId}/outcomes",
       "source": "crates/star-outcomes/src/lib.rs",
       "verb": "POST"
-    },
-    {
-      "canvas_closest": [
-        "POST"
-      ],
-      "classification": "web_verb_mismatch",
-      "crate": "star-ui",
-      "normalized_path": "courses/{}/quizzes/new",
-      "path": "/courses/{id}/quizzes/new",
-      "source": "crates/star-ui/src/lib.rs",
-      "verb": "GET"
     },
     {
       "canvas_closest": [
