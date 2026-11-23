@@ -3,8 +3,8 @@
   "free": [
     "0111"
   ],
-  "max_merged": "0256",
-  "next_available": "0257",
+  "max_merged": "0257",
+  "next_available": "0258",
   "reservations": {
     "0001": {
       "issue": null,
@@ -884,6 +884,11 @@
     "0256": {
       "issue": null,
       "note": "star-courses: ms sync, crosslist, account batch, misc gaps revival (parity gaps)",
+      "status": "merged"
+    },
+    "0257": {
+      "issue": 231,
+      "note": "star-courses: the Api::V1::CourseJson columns (uuid, license, integration_id, grade_passback_setting, locale, template) plus the Canvas root-account chain and Default Term backfill (PR #241)",
       "status": "merged"
     }
   }
