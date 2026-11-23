@@ -16,6 +16,17 @@
       {{ instructions_html|safe }}
     </div>
     {% if is_teacher %}
+    {# Canvas' show header puts the Edit affordance behind
+       `can_do(@quiz, @current_user, :update)` (show.html.erb:149-155); our
+       course gate exposes that right as `is_teacher`. #}
+    <div class="header-bar">
+      <div class="header-bar-right">
+        <div class="header-group-right">
+          <a class="btn edit_assignment_link quiz-edit-button" id="quiz_edit_link"
+             href="/courses/{{ course_id }}/quizzes/{{ quiz_id }}/edit">Edit</a>
+        </div>
+      </div>
+    </div>
     <div class="quiz-submissions-summary">
       <h2>Submissions</h2>
       {% if submissions.is_empty() %}
