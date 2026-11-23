@@ -1,0 +1,10 @@
+{
+  "checks": [
+    { "verb": "GET", "path": "/api/v1/users/self", "authz": "401" },
+    { "verb": "GET", "path": "/api/v1/courses", "authz": "401" },
+    { "verb": "GET", "path": "/api/v1/courses/:id", "authz": "401" },
+    { "verb": "GET", "path": "/api/v1/accounts", "authz": "401" },
+    { "verb": "GET", "path": "/api/v1/announcements", "authz": "401" }
+  ],
+  "_comment": "Per-route behavioral contracts for issue #231. authz: expected status for an anonymous request ('401' | '404' | 'public'). Extend entries with 'fields' (required response field names), 'nullable' (fields Canvas returns null), 'soft_delete' ('hidden'|'visible') once seeded-fixture checks are implemented; the harness counts only specified routes as measured."
+}

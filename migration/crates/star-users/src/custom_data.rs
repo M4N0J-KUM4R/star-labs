@@ -190,6 +190,18 @@ async fn custom_data(
     auth: AuthUser,
     body: Option<Json<SetDataPayload>>,
 ) -> Result<axum::response::Response, ApiError> {
+    custom_data_with_scope(State(state), user_id, scope, Query(query), method, auth, body).await
+}
+
+async fn custom_data_with_scope(
+    state: State<AppState>,
+    user_id: i64,
+    scope: String,
+    query: Query<CustomDataQuery>,
+    method: axum::http::Method,
+    auth: AuthUser,
+    body: Option<Json<SetDataPayload>>,
+) -> Result<axum::response::Response, ApiError> {
     load_user(&state.db, user_id).await?;
 
     // require_namespace: blank ns → 400 {message}.
@@ -308,8 +320,26 @@ async fn custom_data(
 /// Mount the custom-data routes (wildcard scope; the bare path is also
 /// accepted with an empty scope — Canvas routes it the same way).
 pub fn custom_data_routes() -> Router<AppState> {
-    Router::new().route(
-        "/users/{userId}/custom_data",
-        get(custom_data).put(custom_data).delete(custom_data),
-    )
+    Router::new()
+        .route(
+            "/users/{userId}/custom_data",
+            get(custom_data_root).put(custom_data_root).delete(custom_data_root),
+        )
+        .route(
+            "/users/{userId}/custom_data/{*scope}",
+            get(custom_data).put(custom_data).delete(custom_data),
+        )
+}
+
+/// `/users/{userId}/custom_data` with no `(/:scope)` suffix — Canvas treats a
+/// missing scope as the empty scope path (same handler, empty key list).
+async fn custom_data_root(
+    State(state): State<AppState>,
+    Path(user_id): Path<i64>,
+    Query(query): Query<CustomDataQuery>,
+    method: axum::http::Method,
+    auth: AuthUser,
+    body: Option<Json<SetDataPayload>>,
+) -> Result<axum::response::Response, ApiError> {
+    custom_data_with_scope(State(state), user_id, String::new(), Query(query), method, auth, body).await
 }

@@ -736,6 +736,9 @@ async fn client_id_utid_domain_and_install_status() {
     // runs the sibling suites in parallel against the shared database and
     // the lookup matches on the configuration alone.
     let client_id = format!("client-{prefix}");
+    // utid must be prefix-unique too: the shared shard database keeps rows
+    // from prior runs, and by_utid matches on unified_tool_id alone.
+    let utid = format!("utid-{prefix}");
     let mut configuration = sample_configuration();
     configuration["client_id"] = json!(client_id);
     let response = server
@@ -744,7 +747,7 @@ async fn client_id_utid_domain_and_install_status() {
         .json(&json!({
             "name": format!("{prefix}-tool"),
             "vendor": "Example Vendor",
-            "unified_tool_id": "utid-123",
+            "unified_tool_id": utid,
             "configuration": configuration,
         }))
         .await;
@@ -776,7 +779,7 @@ async fn client_id_utid_domain_and_install_status() {
     // by_utid (:1502-1541).
     let response = server
         .get(&format!(
-            "/accounts/{account_id}/lti_registrations/by_utid/utid-123"
+            "/accounts/{account_id}/lti_registrations/by_utid/{utid}"
         ))
         .add_header(AUTHORIZATION, auth(admin_id, "admin"))
         .await;

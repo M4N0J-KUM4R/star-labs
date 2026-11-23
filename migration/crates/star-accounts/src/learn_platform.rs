@@ -22,6 +22,7 @@
 use axum::{extract::Path, http::StatusCode, routing::get, Json, Router};
 use serde_json::{json, Value};
 
+use star_auth::AuthUser;
 use star_common::ApiError;
 
 /// The empty answer of the unconfigured Learn Platform service.
@@ -32,6 +33,7 @@ fn empty_response() -> (StatusCode, Json<Value>) {
 /// GET /accounts/{accountId}/learn_platform/products — Canvas `index`.
 async fn list_learn_platform_products(
     Path(_account_id): Path<i64>,
+    _auth: AuthUser,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     Ok(empty_response())
 }
@@ -40,6 +42,7 @@ async fn list_learn_platform_products(
 /// `index_by_category`.
 async fn list_learn_platform_product_categories(
     Path(_account_id): Path<i64>,
+    _auth: AuthUser,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     Ok(empty_response())
 }
@@ -47,6 +50,7 @@ async fn list_learn_platform_product_categories(
 /// GET /accounts/{accountId}/learn_platform/products/{id} — Canvas `show`.
 async fn show_learn_platform_product(
     Path((_account_id, _id)): Path<(i64, i64)>,
+    _auth: AuthUser,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     Ok(empty_response())
 }
@@ -54,6 +58,7 @@ async fn show_learn_platform_product(
 /// GET /accounts/{accountId}/learn_platform/filters — Canvas `filters`.
 async fn list_learn_platform_filters(
     Path(_account_id): Path<i64>,
+    _auth: AuthUser,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     Ok(empty_response())
 }
@@ -62,6 +67,7 @@ async fn list_learn_platform_filters(
 /// — Canvas `index_by_organization`.
 async fn list_learn_platform_organization_products(
     Path((_account_id, _organization_id)): Path<(i64, i64)>,
+    _auth: AuthUser,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     Ok(empty_response())
 }
@@ -70,6 +76,7 @@ async fn list_learn_platform_organization_products(
 /// `custom_filters`.
 async fn list_learn_platform_custom_filters(
     Path(_account_id): Path<i64>,
+    _auth: AuthUser,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     Ok(empty_response())
 }

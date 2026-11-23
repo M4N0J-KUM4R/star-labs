@@ -589,11 +589,15 @@ async fn misc_gaps_v2_shapes() {
     // Immersive reader + app center + microfrontends disabled shapes.
     let (status, _) = req(&server, "GET", "/immersive_reader/authenticate", None, None).await;
     assert_eq!(status, 400, "immersive reader not configured");
+    // app_center is auth-required in our port (Canvas serves it behind the
+    // session); anonymous callers get 401.
+    let (status, _) = req(&server, "GET", "/courses/1/app_center/apps", None, None).await;
+    assert_eq!(status, 401);
     let (status, apps) = req(
         &server,
         "GET",
         &format!("/courses/{course}/app_center/apps"),
-        None,
+        Some(&auth(teacher, "teacher")),
         None,
     )
     .await;

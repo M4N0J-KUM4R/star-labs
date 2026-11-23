@@ -62,5 +62,6 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
+axum-test = { workspace = true }
 libc = "0.2"
 wait-timeout = "0.2"
