@@ -15,9 +15,15 @@
 //! collection, GET on the member and the `new` page, plus the syllabus page as
 //! the `collection { get :syllabus }` inside `resources :assignments`
 //! (`:344-346`). The verbs this port does not register — member
-//! DELETE/PATCH/PUT, and any write to the syllabus body — go through Rack's
-//! `_method` override, which these server-rendered forms do not speak, so they
-//! are deliberately absent.
+//! DELETE/PATCH/PUT, any write to the syllabus body, and the `new` PAGE — are
+//! not Canvas' served surface either: `AnnouncementsController`
+//! (app/controllers/announcements_controller.rb:21) defines only `index`
+//! (:64), `show` (:105) and `public_feed` (:109), so those routed-but-
+//! unimplemented actions answer 500, and the syllabus block draws a GET only.
+//! This shell is therefore not missing a verb it could have reached through
+//! `crate::method_override`; it is missing nothing Canvas has. (Creating and
+//! editing an announcement really happens in `discussion_topics#new`/`#edit`
+//! with `params[:is_announcement]` — that port is the discussion-topics lane.)
 //!
 //! All data access goes through the `star_announcements::ui` pub loaders,
 //! which run the same enrolled-or-admin / teacher-or-admin gates as the REST
