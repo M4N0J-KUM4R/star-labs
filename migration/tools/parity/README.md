@@ -94,6 +94,18 @@ still writes `coverage.json` and `report.md` but leaves the baseline untouched.
   nesting. Context loops expand every value with `#{context}`,
   `#{context.pluralize}`, `:#{context}_id`, and `#{path_prefix}`
   substitutions (including the tuple form).
+- Rails also registers the form verbs (`GET <collection>/new`,
+  `GET <member>/edit`) for every `resources`/`resource`, but Canvas only
+  *serves* the ones whose controller action and view both exist, so the
+  extractor keeps those through `SERVED_FORM_PAGES` and drops the rest as
+  dead surface (the constant's comment carries the file:line proof for each
+  kept and each dropped page). This is why the API denominator is unchanged
+  by the rule: `/api/v1/groups/new` has an action but no template.
+- A bare symbol route inside an explicit `collection do` block (`get
+  :syllabus`, `post :reorder`) lands on the collection path, not the member
+  path — Canvas has both shapes, and mixing them up misplaces ~30 web rows
+  such as `courses/:course_id/assignments/syllabus`
+  (canvas-src/config/routes.rb:344-346).
 - Conditional context prefixes of the form
   `prefix = ((context == "global") ? context : "#{context}s/:#{context}_id")`
   are evaluated per loop binding, and `if`/`unless context == "literal"` guards

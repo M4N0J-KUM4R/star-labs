@@ -58,23 +58,75 @@ ONLY_OPT_RE = re.compile(r"\bonly:\s*(%i\[([^\]]*)\]|\[([^\]]*)\]|:([A-Za-z0-9_]
 EXCEPT_OPT_RE = re.compile(r"\bexcept:\s*(%i\[([^\]]*)\]|\[([^\]]*)\]|:([A-Za-z0-9_]+))")
 INTERP_RE = re.compile(r"#\{([^{}]*)\}")
 
-# Rails' API resource defaults: no new/edit forms.
+# Rails' seven RESTful actions, each with the path it is drawn on: the
+# collection, the member, or the form suffix Rails appends for `new`
+# (<collection>/new) and `edit` (<member>/edit).
 RESOURCE_ACTIONS = (
-    ("index", "GET", False),
-    ("create", "POST", False),
-    ("show", "GET", True),
-    ("update", "PATCH", True),
-    ("update", "PUT", True),
-    ("destroy", "DELETE", True),
+    ("index", "GET", "collection"),
+    ("create", "POST", "collection"),
+    ("new", "GET", "new"),
+    ("show", "GET", "member"),
+    ("edit", "GET", "edit"),
+    ("update", "PATCH", "member"),
+    ("update", "PUT", "member"),
+    ("destroy", "DELETE", "member"),
 )
-# Singular `resource` has no index; everything else hangs off one path.
+# Singular `resource` has no index; everything else hangs off one path, and
+# its form suffixes are <path>/new and <path>/edit (no :id segment).
 SINGULAR_RESOURCE_ACTIONS = (
-    ("show", "GET", True),
-    ("create", "POST", False),
-    ("update", "PATCH", True),
-    ("update", "PUT", True),
-    ("destroy", "DELETE", True),
+    ("show", "GET", "member"),
+    ("create", "POST", "collection"),
+    ("new", "GET", "new"),
+    ("edit", "GET", "edit"),
+    ("update", "PATCH", "member"),
+    ("update", "PUT", "member"),
+    ("destroy", "DELETE", "member"),
 )
+# `resources` registers the form verbs unconditionally, so reading the route
+# table alone over-reports: of the 164 web + 10 API candidates Canvas'
+# `resources`/`resource` declarations draw, most are dead surface -- the
+# controller has no such action (AbstractController::ActionNotFound), or it
+# has one with nothing to render (ActionView::MissingTemplate). A candidate
+# is a parity target when the action exists AND its render path completes,
+# by any of the four shapes Canvas uses:
+#   a) an implicit template app/views/<controller_path>/<action>.*
+#   b) an explicit `render :sym` whose template exists
+#   c) a React/InstUI mount: `render html: "", layout: ...`
+#   d) delegation to another action that renders (calls `edit`)
+# Verified pair by pair against canvas-src (line numbers of the `def`):
+#   assignments#new 900 (d -> edit), assignments#edit 915 (a: edit.html.erb)
+#   quizzes/quizzes#edit 359 (b: `render :new` at :432)
+#   users#new 1577 (a + `render layout: "bare"`)
+#   discussion_topics#new 578 (d -> edit),#edit 585 (c: render html: "", layout:)
+#   wiki_pages#edit 167 (a: edit.html.erb; drawn as /pages/... by path: :pages)
+#   calendar_events#new 51 (a), #edit 77 (b: `render :new`)
+#   ai_experiences#new 166 (a), #edit 182 (a)
+#   appointment_groups#edit 442 (c: render html: "".html_safe, layout: true)
+#   gradebook_uploads#new 34 (a: new.html.erb)
+# Excluded although the action exists, because nothing is there to render and
+# no render/redirect runs: groups#new (groups_controller.rb:596 --
+# app/views/groups has no new.html.erb) and pseudonyms#new 247 / #edit 370
+# (app/views/pseudonyms holds only confirm_change_password). Excluded because
+# the action does not exist at all: announcements (only index 64 / show 105),
+# files, folders, submissions, external_tools, rubrics, rubric_associations,
+# question_banks, assessment_questions, alerts, conferences, collaborations,
+# communication_channels, eportfolios, modules, outcome* and account/child
+# rows -- Canvas drives those forms from React on the show/index page instead.
+SERVED_FORM_PAGES = frozenset({
+    ("ai_experiences", "edit"),
+    ("ai_experiences", "new"),
+    ("appointment_groups", "edit"),
+    ("assignments", "edit"),
+    ("assignments", "new"),
+    ("calendar_events", "edit"),
+    ("calendar_events", "new"),
+    ("discussion_topics", "edit"),
+    ("discussion_topics", "new"),
+    ("gradebook_uploads", "new"),
+    ("quizzes/quizzes", "edit"),
+    ("users", "new"),
+    ("wiki_pages", "edit"),
+})
 JS_ENV_RE = re.compile(r"\bjs_env\b")
 UI_API_RE = re.compile(r"[\"'`](/api/v1/[^\"'`\s]*)")
 
@@ -351,13 +403,23 @@ def _build_resource_routes(name, options, stack, prefix, singular=False):
     seen = set()
     bindings = stack[-1]["bindings"]
     actions = SINGULAR_RESOURCE_ACTIONS if singular else RESOURCE_ACTIONS
-    for action, verb, is_member in actions:
+    for action, verb, path_kind in actions:
         if only is not None and action not in only:
             continue
         if except_ is not None and action in except_:
             continue
+        if path_kind in ("new", "edit"):
+            # Rails still registers the verb; Canvas only serves the handful
+            # of form pages whose controller action and view both exist.
+            if (controller, action) not in SERVED_FORM_PAGES:
+                continue
+            target = collection + "/new" if path_kind == "new" else member + "/edit"
+        elif path_kind == "member":
+            target = member
+        else:
+            target = collection
         for binding in bindings:
-            path = _expand(member if is_member else collection, binding, {})
+            path = _expand(target, binding, {})
             original = path if path.startswith("/") else \
                 prefix.rstrip("/") + "/" + path.lstrip("/")
             original = re.sub(r"/{2,}", "/", original)
@@ -620,11 +682,21 @@ def _parse_route_statement(statement, prefix, stack):
         if raw_path is None:
             # Rails' shorthand: `get :questions` inside a `resources` block is
             # a MEMBER route at <collection>/:id/questions answered by the
-            # block's controller. A quoted path never takes this branch.
+            # block's controller. Inside an explicit `collection do` block the
+            # same shorthand is a COLLECTION route: Canvas'
+            # `resources :assignments { collection { get :syllabus } }`
+            # (config/routes.rb:344-346) is /courses/:course_id/assignments/
+            # syllabus, not .../assignments/:id/syllabus. A quoted path never
+            # takes this branch.
             sym = re.match(r":([A-Za-z_][A-Za-z0-9_]*)\s*(?:[,)]|$)", rest)
             if sym and stack[-1]["resource"] is not None:
                 symbol_action = sym.group(1)
-                raw_path = stack[-1]["resource"]["member"] + "/" + symbol_action
+                resource = stack[-1]["resource"]
+                frame_base = _route_base(stack, prefix).rstrip("/")
+                if frame_base and frame_base == resource["collection"].rstrip("/"):
+                    raw_path = frame_base + "/" + symbol_action
+                else:
+                    raw_path = resource["member"] + "/" + symbol_action
             else:
                 return []
     if not raw_path:
