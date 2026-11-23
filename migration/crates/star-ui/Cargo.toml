@@ -12,7 +12,6 @@ star-pages = { path = "../star-pages" }
 star-modules = { path = "../star-modules" }
 star-quizzes = { path = "../star-quizzes" }
 star-assignments = { path = "../star-assignments" }
-star-assignment-groups = { path = "../star-assignment-groups" }
 star-grading-standards = { path = "../star-grading-standards" }
 star-discussions = { path = "../star-discussions" }
 star-conversations = { path = "../star-conversations" }
