@@ -3508,7 +3508,6 @@ dependencies = [
  "sha2",
  "sqlx",
  "star-announcements",
- "star-assignment-groups",
  "star-assignments",
  "star-auth",
  "star-calendar",
