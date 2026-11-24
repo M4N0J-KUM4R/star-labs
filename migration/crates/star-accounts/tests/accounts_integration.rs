@@ -1265,7 +1265,7 @@ async fn all_routes_without_token_are_401() {
             "/accounts/999999999/sub_accounts",
             Some(json!({ "name": "unauthenticated" })),
         ),
-        ("/accounts/999999999/users/2", Some(json!({}))),
+        ("/accounts/999999999/admins", Some(json!({ "user_id": 2 }))),
     ];
 
     for (path, body) in post_cases {
@@ -1278,6 +1278,24 @@ async fn all_routes_without_token_are_401() {
             resp.status_code(),
             401,
             "POST {path} without token must be 401: {}",
+            resp.text()
+        );
+    }
+
+    // DELETE routes: the account user member route is Canvas'
+    // `delete "accounts/:account_id/users/:user_id"` (config/routes.rb:1938)
+    // and the admin member is `delete "accounts/:account_id/admins/:user_id"`.
+    // Both had their POST twins removed (collection-level in Canvas), so the
+    // unauthenticated probe now runs on the verb they actually serve.
+    for path in [
+        "/accounts/999999999/users/2",
+        "/accounts/999999999/admins/2",
+    ] {
+        let resp = server.delete(path).await;
+        assert_eq!(
+            resp.status_code(),
+            401,
+            "DELETE {path} without token must be 401: {}",
             resp.text()
         );
     }

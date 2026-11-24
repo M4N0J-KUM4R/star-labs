@@ -213,6 +213,7 @@ async fn create_enrollment_as_teacher_returns_201_and_body() {
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let course = seed_course(&pool, &prefix, "CreateCourse").await;
     let section = seed_section(&pool, course, "Section").await;
+    seed_course_teacher(&pool, teacher, course).await;
 
     let resp = server
         .post(&format!("/sections/{section}/enrollments"))
@@ -251,6 +252,7 @@ async fn create_enrollment_defaults_role_to_student() {
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let course = seed_course(&pool, &prefix, "DefaultRole").await;
     let section = seed_section(&pool, course, "Section").await;
+    seed_course_teacher(&pool, teacher, course).await;
 
     let resp = server
         .post(&format!("/sections/{section}/enrollments"))
@@ -301,6 +303,7 @@ async fn create_enrollment_duplicate_is_409() {
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let course = seed_course(&pool, &prefix, "DupCourse").await;
     let section = seed_section(&pool, course, "Section").await;
+    seed_course_teacher(&pool, teacher, course).await;
 
     let payload = json!({ "user_id": student, "course_id": course, "role": "student" });
     let first = server
@@ -341,7 +344,7 @@ async fn create_enrollment_missing_section_is_404() {
     // Canvas derives the course from the section, so an unknown section is
     // the 404 (the flat body `course_id` no longer exists).
     let resp = server
-        .post("/sections/999_999_999/enrollments")
+        .post("/sections/999999999/enrollments")
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "role": "student" }))
         .await;
@@ -361,6 +364,7 @@ async fn create_enrollment_missing_user_is_404() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let course = seed_course(&pool, &prefix, "NoUser").await;
     let section = seed_section(&pool, course, "Section").await;
+    seed_course_teacher(&pool, teacher, course).await;
 
     let resp = server
         .post(&format!("/sections/{section}/enrollments"))
@@ -384,6 +388,7 @@ async fn create_enrollment_invalid_role_is_422() {
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let course = seed_course(&pool, &prefix, "BadRole").await;
     let section = seed_section(&pool, course, "Section").await;
+    seed_course_teacher(&pool, teacher, course).await;
 
     let resp = server
         .post(&format!("/sections/{section}/enrollments"))
