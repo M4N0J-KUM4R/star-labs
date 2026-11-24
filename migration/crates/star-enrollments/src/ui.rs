@@ -63,11 +63,14 @@ pub async fn find_user_id_by_login(db: &PgPool, login: &str) -> Result<Option<i6
     Ok(row.map(|(id,)| id))
 }
 
-/// Enroll a user in a course behind the exact gate + validation of the REST
-/// `POST /api/v1/enrollments` (`create_enrollment`): the actor must be a
+/// Enroll a user in a course behind the gate + validation order of the REST
+/// `POST /api/v1/courses/:course_id/enrollments` (canvas-src/config/routes.rb:1402,
+/// served by `star_courses::create_enrollment`): the actor must be a
 /// teacher/admin (role reloaded from the DB, never trusted from the caller),
-/// course and user must exist (404), the role must be student/teacher/ta,
-/// and a duplicate (user, course, role) triple is a 409.
+/// course and user must exist (404), the role must be valid, and a duplicate
+/// (user, course, role) triple is a 409. One deliberate difference: this
+/// helper takes Canvas' full role set (student/teacher/ta), while
+/// `create_enrollment` narrows to student/teacher.
 pub async fn enroll_user_in_course(
     db: &PgPool,
     actor: &AuthUser,

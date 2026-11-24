@@ -554,7 +554,9 @@ async fn create_or_update_item(
     Ok(Json(item))
 }
 
-/// DELETE /modules/{id}/items/{itemId}
+/// Body of `DELETE /courses/{courseId}/modules/{moduleId}/items/{itemId}`
+/// (canvas-src/config/routes.rb:2351 — Canvas declares item destroy only
+/// inside the course+module nest, so there is no flat `/modules/{id}/items`).
 async fn delete_module_item(
     State(state): State<AppState>,
     Path((module_id, item_id)): Path<(i64, i64)>,
@@ -1236,8 +1238,8 @@ async fn create_course_module_item(
     create_or_update_item(State(state), Path(module_id), auth, Json(body)).await
 }
 
-/// DELETE /courses/{courseId}/modules/{moduleId}/items/{itemId} — Canvas v1 alias
-/// for DELETE /modules/{id}/items/{itemId}.
+/// DELETE /courses/{courseId}/modules/{moduleId}/items/{itemId} — Canvas' only
+/// item-destroy route (canvas-src/config/routes.rb:2351).
 async fn delete_course_module_item(
     State(state): State<AppState>,
     Path((course_id, module_id, item_id)): Path<(i64, i64, i64)>,
@@ -1336,7 +1338,6 @@ pub fn router() -> Router<AppState> {
             get(get_module_scoped_item),
         )
         .route("/modules/{id}/items", post(create_or_update_item))
-        .route("/modules/{id}/items/{itemId}", delete(delete_module_item))
         .route("/modules/{id}", get(get_module))
         .route("/modules/{id}", put(update_module))
         .route("/modules/{id}", delete(delete_module))

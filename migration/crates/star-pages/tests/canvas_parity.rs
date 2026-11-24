@@ -177,7 +177,12 @@ async fn parity_unpublished_page_echoes_workflow_state() {
     // Single GET (by id) still returns body + state
     let id = page["id"].as_i64().expect("page id");
     let resp = client
-        .get(format!("{}/api/v1/pages/{}", api_base(), id))
+        .get(format!(
+            "{}/api/v1/courses/{}/pages/{}",
+            api_base(),
+            course_id,
+            id
+        ))
         .bearer_auth(&token)
         .send()
         .await
@@ -213,7 +218,12 @@ async fn parity_page_lookup_by_url_slug() {
     // GET by url slug returns the same page
     let slug = page["url"].as_str().expect("url slug");
     let resp = client
-        .get(format!("{}/api/v1/pages/{}", api_base(), slug))
+        .get(format!(
+            "{}/api/v1/courses/{}/pages/{}",
+            api_base(),
+            course_id,
+            slug
+        ))
         .bearer_auth(&token)
         .send()
         .await
@@ -248,7 +258,12 @@ async fn parity_deleted_page_excluded_from_list() {
     let id = page["id"].as_i64().expect("page id");
 
     let resp = client
-        .delete(format!("{}/api/v1/pages/{}", api_base(), id))
+        .delete(format!(
+            "{}/api/v1/courses/{}/pages/{}",
+            api_base(),
+            course_id,
+            id
+        ))
         .bearer_auth(&token)
         .send()
         .await
@@ -273,7 +288,12 @@ async fn parity_deleted_page_excluded_from_list() {
 
     // ...and no longer fetchable by id
     let resp = client
-        .get(format!("{}/api/v1/pages/{}", api_base(), id))
+        .get(format!(
+            "{}/api/v1/courses/{}/pages/{}",
+            api_base(),
+            course_id,
+            id
+        ))
         .bearer_auth(&token)
         .send()
         .await

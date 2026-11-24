@@ -1083,7 +1083,9 @@ async fn create_item_valid_payload_upserts_and_repost_updates_position() {
 }
 
 // ---------------------------------------------------------------------------
-// DELETE /modules/{id}/items/{itemId}
+// DELETE /courses/{courseId}/modules/{moduleId}/items/{itemId}
+// (canvas-src/config/routes.rb:2351 — Canvas declares item destroy only under
+// the course+module nest; there is no flat /modules/{id}/items/{itemId}.)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -1103,27 +1105,31 @@ async fn delete_module_item_lifecycle_and_authz() {
 
     // Anonymous -> 401.
     let resp = server
-        .delete(&format!("/modules/{module}/items/{item}"))
+        .delete(&format!("/courses/{course}/modules/{module}/items/{item}"))
         .await;
     assert_eq!(resp.status_code(), 401);
 
     // Student -> 403.
     let resp = server
-        .delete(&format!("/modules/{module}/items/{item}"))
+        .delete(&format!("/courses/{course}/modules/{module}/items/{item}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "student item delete is 403");
 
     // Missing module -> 404 even for the teacher.
     let resp = server
-        .delete(&format!("/modules/{MISSING_ID}/items/{item}"))
+        .delete(&format!(
+            "/courses/{course}/modules/{MISSING_ID}/items/{item}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 404);
 
     // Item belonging to a different module -> 404 (module_id must match).
     let resp = server
-        .delete(&format!("/modules/{other_module}/items/{item}"))
+        .delete(&format!(
+            "/courses/{course}/modules/{other_module}/items/{item}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(
@@ -1134,7 +1140,7 @@ async fn delete_module_item_lifecycle_and_authz() {
 
     // Teacher deletes the real item -> 204, row gone.
     let resp = server
-        .delete(&format!("/modules/{module}/items/{item}"))
+        .delete(&format!("/courses/{course}/modules/{module}/items/{item}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 204, "teacher item delete");
@@ -1147,7 +1153,7 @@ async fn delete_module_item_lifecycle_and_authz() {
 
     // Repeat delete -> 404 (0 rows affected).
     let resp = server
-        .delete(&format!("/modules/{module}/items/{item}"))
+        .delete(&format!("/courses/{course}/modules/{module}/items/{item}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 404, "deleting a gone item is 404");

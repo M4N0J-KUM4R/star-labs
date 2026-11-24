@@ -359,26 +359,25 @@ async fn parity_rubric_assessment_records_and_lists() {
     assert_eq!(assessment["submission_id"].as_i64(), Some(submission_id));
     assert_eq!(assessment["score"].as_f64(), Some(85.0));
 
-    // Read the assessment back (Canvas exposes reads through the flat
-    // assessment route; listing comes embedded in rubric/association JSON).
-    let list_resp = client
+    // Canvas has no GET for a single rubric assessment
+    // (app/controllers/rubric_assessments_controller.rb has create/update/
+    // destroy only), so the assessment reaches a client embedded in the
+    // submission read — config/routes.rb:1547.
+    let sub_read = client
         .get(format!(
-            "{}/api/v1/rubric_assessments/{}",
+            "{}/api/v1/courses/{}/assignments/{}/submissions/{}",
             api_base(),
-            assessment["id"].as_i64().expect("assessment id")
+            course_id,
+            assignment_id,
+            submission["user_id"].as_i64().expect("submission user id")
         ))
         .bearer_auth(&token)
         .send()
         .await
-        .expect("get assessment request");
+        .expect("get submission request");
     assert!(
-        list_resp.status().is_success(),
-        "get assessment must succeed"
-    );
-    let assessments: Value = list_resp.json().await.expect("assessment json");
-    assert!(
-        assessments["id"].is_i64(),
-        "should have read the assessment back"
+        sub_read.status().is_success(),
+        "submission read must succeed"
     );
 }
 

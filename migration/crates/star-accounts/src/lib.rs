@@ -5,7 +5,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    routing::{delete, get, post, put},
+    routing::{delete, get, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -94,12 +94,6 @@ pub struct AccountUserWithUser {
 #[derive(Debug, Deserialize)]
 pub struct CreateSubAccount {
     pub name: String,
-}
-
-/// Request to grant account admin.
-#[derive(Debug, Deserialize)]
-pub struct GrantAccountAdmin {
-    pub role: Option<String>,
 }
 
 /// Pagination params.
@@ -1889,15 +1883,20 @@ pub fn router() -> Router<AppState> {
             "/accounts/{id}/sub_accounts",
             get(list_sub_accounts).post(create_sub_account),
         )
-        .route(
-            "/accounts/{id}/settings",
-            get(get_account_settings).put(update_account_settings),
-        )
+        // Canvas declares the account settings endpoint as a read only
+        // (`get "accounts/:account_id/settings", action: :show_settings`,
+        // canvas-src/config/routes.rb:1935). Account updates go through
+        // `put "accounts/:id", action: :update` (canvas-src/config/routes.rb:1929),
+        // so there is no PUT at /accounts/{id}/settings.
+        .route("/accounts/{id}/settings", get(get_account_settings))
         .route("/accounts/{id}/courses", get(list_account_courses))
-        .route(
-            "/accounts/{id}/users/{userId}",
-            post(grant_account_admin).delete(remove_account_user),
-        )
+        // Canvas removes a user here
+        // (`delete "accounts/:account_id/users/:user_id"`,
+        // canvas-src/config/routes.rb:1938); granting an admin role is its own
+        // endpoint (`post "accounts/:account_id/admins"`,
+        // canvas-src/config/routes.rb:1996), so there is no POST at
+        // /accounts/{id}/users/{userId}.
+        .route("/accounts/{id}/users/{userId}", delete(remove_account_user))
         // Canvas Api::V1::Accounts#manually_created_courses_account /
         // #acceptable_use_policy
         .route(
@@ -2238,63 +2237,6 @@ async fn list_account_users(
     }))
 }
 
-/// POST /accounts/{id}/users/{userId} — grant account admin role (admin only).
-async fn grant_account_admin(
-    State(state): State<AppState>,
-    Path((account_id, user_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-    Json(payload): Json<GrantAccountAdmin>,
-) -> Result<(StatusCode, Json<AccountUser>), ApiError> {
-    if !is_admin(&auth) {
-        return Err(ApiError::Forbidden);
-    }
-
-    // Verify account exists
-    let account_exists: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
-        .bind(account_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(ApiError::from)?;
-
-    if account_exists.is_none() {
-        return Err(ApiError::NotFound);
-    }
-
-    // Verify user exists
-    let user_exists: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM users WHERE id = $1"#)
-        .bind(user_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(ApiError::from)?;
-
-    if user_exists.is_none() {
-        return Err(ApiError::NotFound);
-    }
-
-    let role = payload.role.as_deref().unwrap_or("admin");
-    if role != "admin" {
-        return Err(ApiError::Validation("role must be 'admin'".into()));
-    }
-
-    // Upsert: insert or update on conflict
-    let account_user: AccountUser = sqlx::query_as(
-        r#"
-        INSERT INTO account_users (account_id, user_id, role)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (account_id, user_id) DO UPDATE SET role = EXCLUDED.role, updated_at = now()
-        RETURNING id, account_id, user_id, role, created_at, updated_at
-        "#,
-    )
-    .bind(account_id)
-    .bind(user_id)
-    .bind(role)
-    .fetch_one(&state.db)
-    .await
-    .map_err(ApiError::from)?;
-
-    Ok((StatusCode::CREATED, Json(account_user)))
-}
-
 // --------------------------------------------------------------------------
 // Account notification handlers
 // --------------------------------------------------------------------------
@@ -2548,9 +2490,14 @@ async fn delete_account_admin(
 // Account admin deep handlers (Phase 4)
 // --------------------------------------------------------------------------
 
-/// PUT /accounts/{id} — Canvas `Accounts#update_api`. Renames the account,
-/// shallow-merges `settings`, and moves the account to a new parent. Returns
-/// the `account_json` subset.
+/// PUT /accounts/{id} — Canvas `Accounts#update`
+/// (canvas-src/config/routes.rb:1929). Renames the account, shallow-merges
+/// `settings`, and moves the account to a new parent. Returns the
+/// `account_json` subset.
+///
+/// This is the only account settings write path: `accounts/:account_id/settings`
+/// is declared as GET only (canvas-src/config/routes.rb:1935), so a settings
+/// change must be posted as `{"account": {"settings": {...}}}` here.
 async fn update_account(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
@@ -2840,7 +2787,9 @@ async fn get_acceptable_use_policy(State(state): State<AppState>) -> Result<Json
 /// GET /accounts/{id}/settings — Canvas `Accounts#show_settings`. Returns the
 /// settings object directly (Canvas renders `settings_hash` without a
 /// wrapper) and `{}` when nothing is set. Requires `manage_account_settings`,
-/// approximated here by the crate's account-admin gate.
+/// approximated here by the crate's account-admin gate. Read-only: Canvas
+/// declares no write verb at this path, so settings changes go through
+/// `PUT /accounts/{id}`.
 async fn get_account_settings(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
@@ -2858,44 +2807,6 @@ async fn get_account_settings(
             .map_err(ApiError::from)?;
     let stored = stored.ok_or(ApiError::NotFound)?;
     Ok(Json(Value::Object(parse_account_settings(&stored))))
-}
-
-/// PUT /accounts/{id}/settings — shallow-merge the posted settings object into
-/// `accounts.settings` (Canvas account settings update semantics) and echo the
-/// merged object.
-async fn update_account_settings(
-    State(state): State<AppState>,
-    Path(account_id): Path<i64>,
-    auth: AuthUser,
-    Json(payload): Json<Value>,
-) -> Result<Json<Value>, ApiError> {
-    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-    if !account_exists(&state.db, account_id).await? {
-        return Err(ApiError::NotFound);
-    }
-    if !payload.is_object() {
-        return Err(ApiError::BadRequest(
-            "account settings must be a JSON object".into(),
-        ));
-    }
-
-    let updated: Option<String> = sqlx::query_scalar(
-        r#"
-        UPDATE accounts
-        SET settings = settings || $2::jsonb, updated_at = now()
-        WHERE id = $1
-        RETURNING settings::text
-        "#,
-    )
-    .bind(account_id)
-    .bind(payload.to_string())
-    .fetch_optional(&state.db)
-    .await
-    .map_err(ApiError::from)?;
-    let updated = updated.ok_or(ApiError::NotFound)?;
-    Ok(Json(Value::Object(parse_account_settings(&updated))))
 }
 
 /// GET /accounts/{id}/sub_accounts — Canvas `Accounts#sub_accounts`: a bare

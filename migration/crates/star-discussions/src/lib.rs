@@ -10,7 +10,6 @@
 //! - GET    /courses/{courseId}/discussion_topics/{topicId}/entries — list with nested replies
 //! - PUT    /courses/{courseId}/discussion_topics/{topicId}/read    — mark topic read (enrolled)
 //! - DELETE /courses/{courseId}/discussion_topics/{topicId}/read    — mark topic unread (enrolled)
-//! - GET    /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId} — get one entry (enrolled)
 //! - PUT    /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId} — update entry (author/moderator)
 //! - DELETE /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId} — soft-delete entry (author/moderator)
 //! - POST   /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/replies — reply to entry (enrolled)
@@ -27,7 +26,7 @@
 //! - PUT    /courses/{courseId}/discussion_topics/migrate_disallow — migrate side comments (teacher/admin)
 //! - GET    /groups/{groupId}/discussion_topics/{topicId} — group topic show (group read access)
 //! - GET/POST /groups/{groupId}/discussion_topics/{topicId}/entries — group entry list / create
-//! - GET/PUT/DELETE /groups/{groupId}/discussion_topics/{topicId}/entries/{entryId} — group entry CRUD
+//! - PUT/DELETE /groups/{groupId}/discussion_topics/{topicId}/entries/{entryId} — group entry update / soft-delete
 //! - GET/POST /groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}/replies — group replies
 //! - GET    /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/replies — flat replies (course)
 //! - PUT/DELETE .../read, POST .../rating, PUT/DELETE .../subscribed — group read-state / rating / subscription
@@ -685,29 +684,6 @@ async fn check_entry_editor(
         return Ok(true);
     }
     check_teacher_or_admin(pool, auth.id, course_id, auth).await
-}
-
-/// GET /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}.
-async fn get_entry(
-    State(state): State<AppState>,
-    Path((course_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
-    auth: AuthUser,
-) -> Result<Json<DiscussionEntry>, ApiError> {
-    ensure_entry_in_topic(&state.db, course_id, topic_id, entry_id, &auth).await?;
-
-    let row: Option<DiscussionEntryRow> = sqlx::query_as(
-        r#"
-        SELECT id, topic_id, parent_id, user_id, message, workflow_state, created_at, updated_at
-        FROM discussion_entries
-        WHERE id = $1 AND topic_id = $2 AND workflow_state <> 'deleted'
-        "#,
-    )
-    .bind(entry_id)
-    .bind(topic_id)
-    .fetch_optional(&state.db)
-    .await?;
-    row.map(|row| Json(DiscussionEntry::from(row)))
-        .ok_or(ApiError::NotFound)
 }
 
 /// PUT /courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}.
@@ -2362,35 +2338,6 @@ async fn group_create_entry(
     .fetch_one(&state.db)
     .await?;
     Ok((StatusCode::CREATED, Json(DiscussionEntry::from(row))))
-}
-
-/// GET /groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}.
-async fn group_get_entry(
-    State(state): State<AppState>,
-    Path((group_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
-    auth: AuthUser,
-) -> Result<Json<DiscussionEntry>, ApiError> {
-    ensure_ctx_entry(
-        &state.db,
-        TopicContext::Group(group_id),
-        topic_id,
-        entry_id,
-        &auth,
-    )
-    .await?;
-    let row: Option<DiscussionEntryRow> = sqlx::query_as(
-        r#"
-        SELECT id, topic_id, parent_id, user_id, message, workflow_state, created_at, updated_at
-        FROM discussion_entries
-        WHERE id = $1 AND topic_id = $2 AND workflow_state <> 'deleted'
-        "#,
-    )
-    .bind(entry_id)
-    .bind(topic_id)
-    .fetch_optional(&state.db)
-    .await?;
-    row.map(|row| Json(DiscussionEntry::from(row)))
-        .ok_or(ApiError::NotFound)
 }
 
 /// PUT /groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}.
@@ -4135,7 +4082,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}",
-            get(get_entry).put(update_entry).delete(delete_entry),
+            put(update_entry).delete(delete_entry),
         )
         .route(
             "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/replies",
@@ -4192,9 +4139,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}",
-            get(group_get_entry)
-                .put(group_update_entry)
-                .delete(group_delete_entry),
+            put(group_update_entry).delete(group_delete_entry),
         )
         .route(
             "/groups/{groupId}/discussion_topics/{topicId}/entries/{entryId}/replies",

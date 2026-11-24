@@ -129,7 +129,7 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// PUT /pages/{id} hidden/published toggles
+// PUT /courses/{courseId}/pages/{id} hidden/published toggles
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -152,7 +152,7 @@ async fn update_page_hidden_and_published_toggles() {
     )
     .await;
     let bearer = auth(teacher, "teacher");
-    let url = format!("/pages/{page}");
+    let url = format!("/courses/{course}/pages/{page}");
 
     // `published` is the boolean form of workflow_state.
     let resp = server
@@ -268,14 +268,14 @@ async fn revert_restores_prior_revision() {
     let page_id = page["id"].as_i64().expect("page id");
 
     let resp = server
-        .put(&format!("/pages/{page_id}"))
+        .put(&format!("/courses/{course}/pages/{page_id}"))
         .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
         .json(&json!({ "title": "Revert Page Two", "body": "v2" }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
 
     let resp = server
-        .put(&format!("/pages/{page_id}"))
+        .put(&format!("/courses/{course}/pages/{page_id}"))
         .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
         .json(&json!({ "body": "v3" }))
         .await;
@@ -299,7 +299,7 @@ async fn revert_restores_prior_revision() {
 
     // The live page carries the restored state (title, body AND url slug).
     let resp = server
-        .get(&format!("/pages/{page_id}"))
+        .get(&format!("/courses/{course}/pages/{page_id}"))
         .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -402,16 +402,31 @@ async fn group_page_routes_decline_without_group_wiki() {
     }
 
     // Writes: the parent-course teacher holds manage rights — declined too.
-    for url in [
-        format!("/groups/{group_id}/pages"),
-        format!("/groups/{group_id}/pages/{prefix}-irrelevant"),
-    ] {
-        let resp = server
-            .post(&url)
-            .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
-            .await;
-        assert_eq!(resp.status_code(), 403, "{url}; body: {}", resp.text());
-    }
+    let resp = server
+        .post(&format!("/groups/{group_id}/pages"))
+        .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        403,
+        "group page create must be declined; body: {}",
+        resp.text()
+    );
+
+    // Canvas creates a page only on the wiki's collection, so the group
+    // member path carries no POST verb at all; axum answers the unmatched
+    // verb with 405 (the same "not routable" signal the course pages tests
+    // expect).
+    let resp = server
+        .post(&format!("/groups/{group_id}/pages/{prefix}-irrelevant"))
+        .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        405,
+        "the member path must not accept POST; body: {}",
+        resp.text()
+    );
     for url in [
         format!("/groups/{group_id}/pages/{prefix}-irrelevant"),
         format!("/groups/{group_id}/front_page"),

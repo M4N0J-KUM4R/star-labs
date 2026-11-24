@@ -9,11 +9,16 @@
 //! STAR_PARITY_TESTS=1 gate required (matches other Canvas parity suites).
 //!
 //! Parity targets (Canvas: app/models/submission_comment.rb,
-//! submissions_api_controller.rb):
-//! - POST /submissions/{id}/comments {comment} → 201 {id, submission_id,
-//!   author_id, comment, workflow_state, created_at, updated_at}
-//! - GET  /submissions/{id}/comments → [active comments], ordered by created_at
-//! - DELETE /submissions/{id}/comments/{commentId} → 204, soft-delete
+//! submissions_api_controller.rb).  Canvas declares no comments collection
+//! index/create in the API route set (routes.rb:1580-1583 declare only
+//! create_file, PUT and DELETE on the nested member path), so the thread is
+//! exercised through the Canvas-real pair:
+//! - PUT  .../courses/{id}/assignments/{assignmentId}/submissions/{userId}
+//!   {comment} writes the comment (routes.rb:1551)
+//! - GET  same path with `include[]=submission_comments` → [active comments],
+//!   ordered by created_at, each {id, submission_id, author_id, comment,
+//!   workflow_state, created_at, updated_at}
+//! - DELETE /courses/{id}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId} → 204, soft-delete
 
 use serde_json::{json, Value};
 
@@ -52,6 +57,40 @@ fn uuid_like() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_nanos()
+}
+
+/// The id of a comment carrying `text`, read through Canvas'
+/// `include[]=submission_comments` on the submission
+/// (submissions_api_controller.rb:231); `None` once the comment is gone from
+/// the thread (Canvas soft-deletes keep the row but drop it from the include).
+fn thread_comment_id(
+    client: &reqwest::blocking::Client,
+    token: &str,
+    course_id: i64,
+    assignment_id: i64,
+    student_id: i64,
+    text: &str,
+) -> Option<i64> {
+    let resp = client
+        .get(format!(
+            "{BASE}/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions/{student_id}?include[]=submission_comments"
+        ))
+        .header("Authorization", format!("Bearer {token}"))
+        .send()
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "submission read: {}",
+        resp.status()
+    );
+    let body: Value = resp.json().unwrap();
+    let list = body["submission_comments"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    list.iter()
+        .find(|c| c["comment"].as_str() == Some(text))
+        .and_then(|c| c["id"].as_i64())
 }
 
 // ---------------------------------------------------------------------------
@@ -150,7 +189,7 @@ fn parity_student_can_comment_on_own_submission() {
     // Student submits
     let submission = client
         .post(format!(
-            "{BASE}/api/v1/assignments/{assignment_id}/submissions"
+            "{BASE}/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions"
         ))
         .header("Authorization", format!("Bearer {student_token}"))
         .json(&json!({ "body": "my work" }))
@@ -164,10 +203,12 @@ fn parity_student_can_comment_on_own_submission() {
     );
     let submission_id: i64 = submission.json::<Value>().unwrap()["id"].as_i64().unwrap();
 
-    // Student posts a comment
+    // Canvas writes the thread through the submission update
+    // (routes.rb:1551, `comment` argument); there is no comments collection
+    // create route in the API route set (routes.rb:1580-1583).
     let resp = client
-        .post(format!(
-            "{BASE}/api/v1/submissions/{submission_id}/comments"
+        .put(format!(
+            "{BASE}/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions/{student_id}"
         ))
         .header("Authorization", format!("Bearer {student_token}"))
         .json(&json!({ "comment": "great work!" }))
@@ -175,11 +216,35 @@ fn parity_student_can_comment_on_own_submission() {
         .unwrap();
     assert!(
         resp.status().is_success(),
-        "student comment: {} — {:?}",
+        "student comment write: {} — {:?}",
         resp.status(),
         resp.text().map(|t| t[..t.len().min(200)].to_string())
     );
-    let comment: Value = resp.json().unwrap();
+
+    // The thread is read back as the submission's
+    // `include[]=submission_comments` (submissions_api_controller.rb:231),
+    // ordered by created_at, active comments only.
+    let resp = client
+        .get(format!(
+            "{BASE}/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions/{student_id}?include[]=submission_comments"
+        ))
+        .header("Authorization", format!("Bearer {student_token}"))
+        .send()
+        .unwrap();
+    assert!(
+        resp.status().is_success(),
+        "submission read: {}",
+        resp.status()
+    );
+    let submission_json: Value = resp.json().unwrap();
+    let list: Vec<Value> = submission_json["submission_comments"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    let comment = list
+        .iter()
+        .find(|c| c["comment"].as_str() == Some("great work!"))
+        .unwrap_or_else(|| panic!("newly written comment must appear in the include: {list:?}"));
     assert_eq!(
         comment["submission_id"].as_i64(),
         Some(submission_id),
@@ -191,37 +256,12 @@ fn parity_student_can_comment_on_own_submission() {
         "author must be student"
     );
     assert_eq!(
-        comment["comment"].as_str(),
-        Some("great work!"),
-        "comment text must match"
-    );
-    assert_eq!(
         comment["workflow_state"].as_str(),
         Some("active"),
         "new comment must be active"
     );
     assert!(comment["created_at"].is_string(), "created_at must be set");
     assert!(comment["updated_at"].is_string(), "updated_at must be set");
-
-    // Verify it shows in list
-    let resp = client
-        .get(format!(
-            "{BASE}/api/v1/submissions/{submission_id}/comments"
-        ))
-        .header("Authorization", format!("Bearer {student_token}"))
-        .send()
-        .unwrap();
-    assert!(
-        resp.status().is_success(),
-        "list comments: {}",
-        resp.status()
-    );
-    let list: Vec<Value> = resp.json().unwrap();
-    assert!(
-        list.iter()
-            .any(|c| c["id"].as_i64() == comment["id"].as_i64()),
-        "newly created comment must appear in list: {list:?}"
-    );
 }
 
 #[test]
@@ -289,7 +329,7 @@ fn parity_teacher_can_list_and_delete_comments() {
 
     let submission = client
         .post(format!(
-            "{BASE}/api/v1/assignments/{assignment_id}/submissions"
+            "{BASE}/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions"
         ))
         .header("Authorization", format!("Bearer {student_token}"))
         .json(&json!({ "body": "submission body" }))
@@ -301,12 +341,13 @@ fn parity_teacher_can_list_and_delete_comments() {
         submission.status(),
         submission.text().map(|t| t[..t.len().min(200)].to_string())
     );
-    let submission_id: i64 = submission.json::<Value>().unwrap()["id"].as_i64().unwrap();
+    let _submission_id: i64 = submission.json::<Value>().unwrap()["id"].as_i64().unwrap();
 
-    // Teacher posts a comment
+    // Teacher writes the comment through the submission update
+    // (routes.rb:1551) — Canvas has no comments collection create.
     let resp = client
-        .post(format!(
-            "{BASE}/api/v1/submissions/{submission_id}/comments"
+        .put(format!(
+            "{BASE}/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions/{_student_id}"
         ))
         .header("Authorization", format!("Bearer {token}"))
         .json(&json!({ "comment": "needs revision" }))
@@ -314,31 +355,26 @@ fn parity_teacher_can_list_and_delete_comments() {
         .unwrap();
     assert!(
         resp.status().is_success(),
-        "teacher comment: {} — {:?}",
+        "teacher comment write: {} — {:?}",
         resp.status(),
         resp.text().map(|t| t[..t.len().min(200)].to_string())
     );
-    let comment_id: i64 = resp.json::<Value>().unwrap()["id"].as_i64().unwrap();
 
-    // Teacher can list and see it
-    let resp = client
-        .get(format!(
-            "{BASE}/api/v1/submissions/{submission_id}/comments"
-        ))
-        .header("Authorization", format!("Bearer {token}"))
-        .send()
-        .unwrap();
-    assert!(resp.status().is_success());
-    let list: Vec<Value> = resp.json().unwrap();
-    assert!(
-        list.iter().any(|c| c["id"].as_i64() == Some(comment_id)),
-        "teacher comment must appear in list: {list:?}"
-    );
+    // The teacher reads the thread back through the submission include.
+    let comment_id: i64 = thread_comment_id(
+        &client,
+        &token,
+        course_id,
+        assignment_id,
+        _student_id,
+        "needs revision",
+    )
+    .unwrap_or_else(|| panic!("teacher comment must appear in the include"));
 
-    // Author deletes it
+    // Author deletes it through the nested member route (routes.rb:1583).
     let resp = client
         .delete(format!(
-            "{BASE}/api/v1/submissions/{submission_id}/comments/{comment_id}"
+            "{BASE}/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions/{_student_id}/comments/{comment_id}"
         ))
         .header("Authorization", format!("Bearer {token}"))
         .send()
@@ -351,18 +387,18 @@ fn parity_teacher_can_list_and_delete_comments() {
         resp.text().map(|t| t[..t.len().min(200)].to_string())
     );
 
-    // It must vanish
-    let resp = client
-        .get(format!(
-            "{BASE}/api/v1/submissions/{submission_id}/comments"
-        ))
-        .header("Authorization", format!("Bearer {token}"))
-        .send()
-        .unwrap();
-    assert!(resp.status().is_success());
-    let list: Vec<Value> = resp.json().unwrap();
-    assert!(
-        !list.iter().any(|c| c["id"].as_i64() == Some(comment_id)),
-        "deleted comment must NOT appear in list: {list:?}"
+    // It must vanish from the thread (soft-deleted, so `workflow_state`
+    // 'deleted' rows are not part of the include).
+    assert_eq!(
+        thread_comment_id(
+            &client,
+            &token,
+            course_id,
+            assignment_id,
+            _student_id,
+            "needs revision",
+        ),
+        None,
+        "deleted comment must NOT appear in the include"
     );
 }
