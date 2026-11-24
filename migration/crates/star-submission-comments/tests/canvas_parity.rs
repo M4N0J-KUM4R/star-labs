@@ -13,7 +13,7 @@
 //! - POST /submissions/{id}/comments {comment} → 201 {id, submission_id,
 //!   author_id, comment, workflow_state, created_at, updated_at}
 //! - GET  /submissions/{id}/comments → [active comments], ordered by created_at
-//! - DELETE /submissions/{id}/comments/{commentId} → 204, soft-delete
+//! - DELETE /courses/{id}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId} → 204, soft-delete
 
 use serde_json::{json, Value};
 
@@ -150,7 +150,7 @@ fn parity_student_can_comment_on_own_submission() {
     // Student submits
     let submission = client
         .post(format!(
-            "{BASE}/api/v1/assignments/{assignment_id}/submissions"
+            "{BASE}/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions"
         ))
         .header("Authorization", format!("Bearer {student_token}"))
         .json(&json!({ "body": "my work" }))
@@ -289,7 +289,7 @@ fn parity_teacher_can_list_and_delete_comments() {
 
     let submission = client
         .post(format!(
-            "{BASE}/api/v1/assignments/{assignment_id}/submissions"
+            "{BASE}/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions"
         ))
         .header("Authorization", format!("Bearer {student_token}"))
         .json(&json!({ "body": "submission body" }))
@@ -338,7 +338,7 @@ fn parity_teacher_can_list_and_delete_comments() {
     // Author deletes it
     let resp = client
         .delete(format!(
-            "{BASE}/api/v1/submissions/{submission_id}/comments/{comment_id}"
+            "{BASE}/api/v1/courses/{course_id}/assignments/{assignment_id}/submissions/{_student_id}/comments/{comment_id}"
         ))
         .header("Authorization", format!("Bearer {token}"))
         .send()

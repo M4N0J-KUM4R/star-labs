@@ -179,7 +179,8 @@ async fn list_enrollments(server: &TestServer, token: &str, query: &str) -> Valu
 }
 
 // ---------------------------------------------------------------------------
-// POST /enrollments
+// POST /sections/{sectionId}/enrollments (Canvas EnrollmentsApiController#create,
+// routes.rb:1403) — the Canvas-real spelling of the removed flat POST /enrollments
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -192,9 +193,10 @@ async fn create_enrollment_as_teacher_returns_201_and_body() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let course = seed_course(&pool, &prefix, "CreateCourse").await;
+    let section = seed_section(&pool, course, "Section").await;
 
     let resp = server
-        .post("/enrollments")
+        .post(&format!("/sections/{section}/enrollments"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "course_id": course, "role": "student" }))
         .await;
@@ -229,9 +231,10 @@ async fn create_enrollment_defaults_role_to_student() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let course = seed_course(&pool, &prefix, "DefaultRole").await;
+    let section = seed_section(&pool, course, "Section").await;
 
     let resp = server
-        .post("/enrollments")
+        .post(&format!("/sections/{section}/enrollments"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "course_id": course }))
         .await;
@@ -253,9 +256,10 @@ async fn create_enrollment_as_admin_succeeds() {
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let course = seed_course(&pool, &prefix, "AdminCreate").await;
+    let section = seed_section(&pool, course, "Section").await;
 
     let resp = server
-        .post("/enrollments")
+        .post(&format!("/sections/{section}/enrollments"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "user_id": student, "course_id": course, "role": "teacher" }))
         .await;
@@ -277,17 +281,18 @@ async fn create_enrollment_duplicate_is_409() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let course = seed_course(&pool, &prefix, "DupCourse").await;
+    let section = seed_section(&pool, course, "Section").await;
 
     let payload = json!({ "user_id": student, "course_id": course, "role": "student" });
     let first = server
-        .post("/enrollments")
+        .post(&format!("/sections/{section}/enrollments"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&payload)
         .await;
     assert_eq!(first.status_code(), 201, "first insert: {}", first.text());
 
     let second = server
-        .post("/enrollments")
+        .post(&format!("/sections/{section}/enrollments"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&payload)
         .await;
@@ -295,7 +300,7 @@ async fn create_enrollment_duplicate_is_409() {
 
     // Same user+course but different role is a different row — allowed.
     let other_role = server
-        .post("/enrollments")
+        .post(&format!("/sections/{section}/enrollments"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "course_id": course, "role": "teacher" }))
         .await;
@@ -305,7 +310,7 @@ async fn create_enrollment_duplicate_is_409() {
 }
 
 #[tokio::test]
-async fn create_enrollment_missing_course_is_404() {
+async fn create_enrollment_missing_section_is_404() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -314,10 +319,12 @@ async fn create_enrollment_missing_course_is_404() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
 
+    // Canvas derives the course from the section, so an unknown section is
+    // the 404 (the flat body `course_id` no longer exists).
     let resp = server
-        .post("/enrollments")
+        .post("/sections/999_999_999/enrollments")
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "user_id": student, "course_id": 999_999_999, "role": "student" }))
+        .json(&json!({ "user_id": student, "role": "student" }))
         .await;
 
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
@@ -334,9 +341,10 @@ async fn create_enrollment_missing_user_is_404() {
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let course = seed_course(&pool, &prefix, "NoUser").await;
+    let section = seed_section(&pool, course, "Section").await;
 
     let resp = server
-        .post("/enrollments")
+        .post(&format!("/sections/{section}/enrollments"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": 999_999_999, "course_id": course, "role": "student" }))
         .await;
@@ -356,9 +364,10 @@ async fn create_enrollment_invalid_role_is_422() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let course = seed_course(&pool, &prefix, "BadRole").await;
+    let section = seed_section(&pool, course, "Section").await;
 
     let resp = server
-        .post("/enrollments")
+        .post(&format!("/sections/{section}/enrollments"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "user_id": student, "course_id": course, "role": "guardian" }))
         .await;
@@ -378,9 +387,10 @@ async fn create_enrollment_as_student_is_403() {
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let other = seed_user(&pool, &prefix, "Other", "student").await;
     let course = seed_course(&pool, &prefix, "ForbiddenCreate").await;
+    let section = seed_section(&pool, course, "Section").await;
 
     let resp = server
-        .post("/enrollments")
+        .post(&format!("/sections/{section}/enrollments"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "user_id": other, "course_id": course, "role": "student" }))
         .await;
@@ -406,7 +416,7 @@ async fn create_enrollment_without_token_is_401() {
     };
 
     let resp = server
-        .post("/enrollments")
+        .post(&format!("/sections/{section}/enrollments"))
         .json(&json!({ "user_id": 1, "course_id": 1, "role": "student" }))
         .await;
 

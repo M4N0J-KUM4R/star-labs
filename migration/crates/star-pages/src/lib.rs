@@ -2,7 +2,7 @@
 //!
 //! Exposes `pub fn router() -> Router<AppState>` with endpoints:
 //! - GET/POST /courses/{courseId}/pages
-//! - GET/PUT/DELETE /pages/{id}   (id may be numeric id or url slug)
+//! - GET/PUT/DELETE /courses/{courseId}/pages/{id}  (id may be numeric id or url slug)
 //! - GET/PUT/DELETE /courses/{courseId}/pages/{id}
 //!   (Canvas v1 aliases for the flat routes; the page must belong to
 //!   {courseId}, otherwise 404)
@@ -1649,17 +1649,6 @@ async fn create_group_page(
     Err(ApiError::Forbidden)
 }
 
-/// POST /groups/{groupId}/pages/{urlOrId} — same decline as the collection
-/// create; registered so the method is authorized (403) rather than a bare
-/// 405 from the router.
-async fn create_group_page_at(
-    state: State<AppState>,
-    Path((group_id, _page_ref)): Path<(i64, String)>,
-    auth: AuthUser,
-) -> Result<(StatusCode, Json<PageDetail>), ApiError> {
-    create_group_page(state, Path(group_id), auth).await
-}
-
 /// GET /groups/{groupId}/pages/{urlOrId} — Canvas group wiki pages#show
 /// (declined: no page can live in a group context in this schema).
 async fn show_group_page(
@@ -1901,10 +1890,6 @@ pub fn router() -> Router<AppState> {
             get(list_pages).post(create_page),
         )
         .route(
-            "/pages/{id}",
-            get(get_page).put(update_page).delete(delete_page),
-        )
-        .route(
             "/courses/{courseId}/pages/{id}",
             get(get_course_page)
                 .put(update_course_page)
@@ -1941,7 +1926,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/groups/{groupId}/pages/{urlOrId}",
             get(show_group_page)
-                .post(create_group_page_at)
                 .put(update_group_page)
                 .delete(delete_group_page),
         )

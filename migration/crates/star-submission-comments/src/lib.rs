@@ -3,21 +3,21 @@
 //! Endpoints (Canvas API v1 parity):
 //! - POST   /submissions/{submissionId}/comments  {comment} → 201
 //! - GET    /submissions/{submissionId}/comments → [comments], active only, ordered by created_at
-//! - DELETE /submissions/{submissionId}/comments/{commentId} → 204, soft-delete
 //!
 //! Canvas comment write/read paths (config/routes.rb has no comments index or
 //! create route — the thread arrives through `include[]=submission_comments`
 //! on the submission and is written through `PUT .../submissions/{userId}`,
 //! both in star-assignments):
+//! - PUT    /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
 //! - DELETE /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
 //!
-//! Single comment + attachments (Canvas SubmissionCommentsApiController):
+//! Single comment attachments (Canvas SubmissionCommentsApiController):
 //! - POST /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/files
 //!   → 201, metadata-only attachment record (no binary upload/storage)
-//! - GET /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
-//!   → CommentDetail (also available flat: /submissions/{submissionId}/comments/{commentId})
-//! - PUT   same paths → 200, edit the comment text (sets `edited_at` when it changes)
-//! - DELETE nested path → 204, soft-delete (existing behavior)
+//! - PUT    .../comments/{commentId} → 200, edit the comment text (sets
+//!   `edited_at` when it changes); Canvas declares only PUT and DELETE there
+//!   (routes.rb:1582-1583), so no single-comment GET is served.
+//! - DELETE .../comments/{commentId} → 204, soft-delete (existing behavior)
 //!
 //! Access control (Canvas-style):
 //! - POST: course teacher/admin OR the submission's own student
@@ -429,15 +429,6 @@ async fn delete_comment_for(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// DELETE /submissions/{submissionId}/comments/{commentId}
-async fn delete_comment(
-    State(state): State<AppState>,
-    Path((submission_id, comment_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-) -> Result<StatusCode, ApiError> {
-    delete_comment_for(&state, submission_id, comment_id, auth).await
-}
-
 /// DELETE /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
 async fn delete_comment_nested(
     State(state): State<AppState>,
@@ -510,39 +501,6 @@ async fn load_comment_detail(
     })
 }
 
-/// Shared single-comment read logic for the flat and Canvas-nested routes.
-/// Course teacher/admin OR the submission's own student → comment detail.
-async fn get_comment_for(
-    state: &AppState,
-    submission_id: i64,
-    comment_id: i64,
-    auth: AuthUser,
-) -> Result<Json<CommentDetail>, ApiError> {
-    authorize_comment_thread(state, submission_id, &auth).await?;
-    Ok(Json(
-        load_comment_detail(&state.db, submission_id, comment_id).await?,
-    ))
-}
-
-/// GET /submissions/{submissionId}/comments/{commentId}
-async fn get_comment(
-    State(state): State<AppState>,
-    Path((submission_id, comment_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-) -> Result<Json<CommentDetail>, ApiError> {
-    get_comment_for(&state, submission_id, comment_id, auth).await
-}
-
-/// GET /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
-async fn get_comment_nested(
-    State(state): State<AppState>,
-    Path((course_id, assignment_id, user_id, comment_id)): Path<(i64, i64, i64, i64)>,
-    auth: AuthUser,
-) -> Result<Json<CommentDetail>, ApiError> {
-    let submission_id = resolve_submission_id(&state.db, course_id, assignment_id, user_id).await?;
-    get_comment_for(&state, submission_id, comment_id, auth).await
-}
-
 /// Shared comment edit logic for the flat and Canvas-nested routes.
 /// Canvas only lets the comment author edit it; star-lms also allows admin,
 /// matching the crate's existing delete rule. `edited_at` is stamped whenever
@@ -595,16 +553,6 @@ async fn update_comment_for(
     Ok(Json(
         load_comment_detail(&state.db, submission_id, comment_id).await?,
     ))
-}
-
-/// PUT /submissions/{submissionId}/comments/{commentId}
-async fn update_comment(
-    State(state): State<AppState>,
-    Path((submission_id, comment_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-    Json(payload): Json<UpdateComment>,
-) -> Result<Json<CommentDetail>, ApiError> {
-    update_comment_for(&state, submission_id, comment_id, auth, payload).await
 }
 
 /// PUT /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
@@ -822,22 +770,13 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/submissions/{submissionId}/comments", post(create_comment))
         .route("/submissions/{submissionId}/comments", get(list_comments))
-        .route(
-            "/submissions/{submissionId}/comments/{commentId}",
-            get(get_comment),
-        )
-        .route(
-            "/submissions/{submissionId}/comments/{commentId}",
-            put(update_comment),
-        )
-        .route(
-            "/submissions/{submissionId}/comments/{commentId}",
-            delete(delete_comment),
-        )
         // Canvas nested member routes — resolve submission by course/assignment/user.
         // Canvas has no comments index/create here: the thread is read through
         // `include[]=submission_comments` and written through `PUT
-        // .../submissions/{userId}` (star-assignments).
+        // .../submissions/{userId}` (star-assignments).  Canvas declares only
+        // PUT and DELETE on the member path (routes.rb:1582-1583), so the flat
+        // `/submissions/{submissionId}/comments/{commentId}` twin and a GET on
+        // the member path are not registered.
         // Metadata-only comment file upload (Canvas SubmissionCommentsApiController#create_file)
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/files",
@@ -845,15 +784,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}",
-            get(get_comment_nested),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}",
-            put(update_comment_nested),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}",
-            delete(delete_comment_nested),
+            put(update_comment_nested).delete(delete_comment_nested),
         )
         // Annotation notification (Canvas SubmissionCommentsApiController
         // #annotation_notification, issue #55). Canvas declares this route

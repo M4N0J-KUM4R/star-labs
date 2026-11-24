@@ -1,9 +1,9 @@
 //! Integration tests for star-pages.
 //!
 //! Exercises the real pages router against a real Postgres: the Canvas v1
-//! nested aliases (GET/PUT/DELETE /courses/{courseId}/pages/{id}) must match
-//! the flat /pages/{id} behavior, 404 when the page belongs to another
-//! course, and keep the flat authorization rules. Revision coverage:
+//! nested routes (GET/PUT/DELETE /courses/{courseId}/pages/{id}) return the
+//! page, 404 when the page belongs to another course, and enforce the
+//! authorization rules. Revision coverage:
 //! GET /courses/{courseId}/pages/{url}/revisions[/latest|/{revisionId}],
 //! revisions appended on create/update, course scoping, and the legacy
 //! no-history fallback for `latest`.
@@ -111,7 +111,7 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
 }
 
 #[tokio::test]
-async fn alias_get_put_delete_match_flat_behavior() {
+async fn nested_page_routes_get_put_delete() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -128,26 +128,20 @@ async fn alias_get_put_delete_match_flat_behavior() {
     )
     .await;
     let bearer = auth(teacher, "teacher");
-    let flat = format!("/pages/{page}");
+    // Canvas serves pages only under a course context (routes.rb:2305-2307,
+    // 2317-2321); the bare `/pages/{id}` twin was dropped as extra surface.
     let alias = format!("/courses/{course}/pages/{page}");
 
-    // GET alias returns exactly the flat route's payload.
-    let resp = server
-        .get(&flat)
-        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
-        .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let flat_body: Value = resp.json();
+    // GET the nested route returns the page.
     let resp = server
         .get(&alias)
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let alias_body: Value = resp.json();
-    assert_eq!(alias_body, flat_body);
     assert_eq!(alias_body["id"].as_i64(), Some(page));
 
-    // Canvas url_or_id: the alias also resolves the page's url slug.
+    // Canvas url_or_id: the route also resolves the page's url slug.
     let resp = server
         .get(&format!("/courses/{course}/pages/{prefix}-alias"))
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
@@ -155,7 +149,7 @@ async fn alias_get_put_delete_match_flat_behavior() {
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     assert_eq!(resp.json::<Value>()["id"].as_i64(), Some(page));
 
-    // PUT alias updates the same row with flat-route merge semantics.
+    // PUT updates the row with merge semantics.
     let resp = server
         .put(&alias)
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
@@ -167,7 +161,7 @@ async fn alias_get_put_delete_match_flat_behavior() {
     assert_eq!(updated["title"], "Alias Renamed");
     assert_eq!(updated["body"], "v1", "unset fields must be preserved");
 
-    // DELETE alias soft-deletes, and both routes hide the page afterwards.
+    // DELETE soft-deletes and the route hides the page afterwards.
     let resp = server
         .delete(&alias)
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
@@ -180,13 +174,11 @@ async fn alias_get_put_delete_match_flat_behavior() {
         .expect("page row survives soft delete");
     assert_eq!(state.0, "deleted");
 
-    for url in [&flat, &alias] {
-        let resp = server
-            .get(url)
-            .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
-            .await;
-        assert_eq!(resp.status_code(), 404, "{url}; body: {}", resp.text());
-    }
+    let resp = server
+        .get(&alias)
+        .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }
@@ -261,34 +253,29 @@ async fn alias_authz_matches_flat_routes() {
     seed_enrollment(&pool, student, course, "student").await;
     let page = seed_page(&pool, course, &format!("{prefix}-Guarded"), "guarded", "b").await;
     let alias = format!("/courses/{course}/pages/{page}");
-    let flat = format!("/pages/{page}");
 
-    // Enrolled students may read through either route.
+    // Enrolled students may read through the course-nested route.
     let student_bearer = auth(student, "student");
-    for url in [&alias, &flat] {
-        let resp = server
-            .get(url)
-            .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
-            .await;
-        assert_eq!(resp.status_code(), 200, "{url}; body: {}", resp.text());
-    }
+    let resp = server
+        .get(&alias)
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "{alias}; body: {}", resp.text());
 
-    // ...but may not mutate through either route (teacher-only, as before).
-    for url in [&alias, &flat] {
-        let resp = server
-            .put(url)
-            .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
-            .json(&json!({ "title": "hijack" }))
-            .await;
-        assert_eq!(resp.status_code(), 403, "{url}; body: {}", resp.text());
-        assert_eq!(resp.text(), "forbidden");
+    // ...but may not mutate through it (teacher-only, as before).
+    let resp = server
+        .put(&alias)
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .json(&json!({ "title": "hijack" }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "{alias}; body: {}", resp.text());
+    assert_eq!(resp.text(), "forbidden");
 
-        let resp = server
-            .delete(url)
-            .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
-            .await;
-        assert_eq!(resp.status_code(), 403, "{url}; body: {}", resp.text());
-    }
+    let resp = server
+        .delete(&alias)
+        .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
+        .await;
+    assert_eq!(resp.status_code(), 403, "{alias}; body: {}", resp.text());
 
     // Unenrolled users are still rejected on reads.
     let resp = server
@@ -338,7 +325,7 @@ async fn revisions_are_recorded_on_create_and_update() {
 
     for body in ["v2", "v3"] {
         let resp = server
-            .put(&format!("/pages/{page_id}"))
+            .put(&format!("/courses/{course}/pages/{page_id}"))
             .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
             .json(&json!({ "body": body }))
             .await;

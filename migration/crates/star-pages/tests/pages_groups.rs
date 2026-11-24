@@ -129,7 +129,7 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
 }
 
 // ---------------------------------------------------------------------------
-// PUT /pages/{id} hidden/published toggles
+// PUT /courses/{courseId}/pages/{id} hidden/published toggles
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -152,7 +152,7 @@ async fn update_page_hidden_and_published_toggles() {
     )
     .await;
     let bearer = auth(teacher, "teacher");
-    let url = format!("/pages/{page}");
+    let url = format!("/courses/{course}/pages/{page}");
 
     // `published` is the boolean form of workflow_state.
     let resp = server
@@ -268,14 +268,14 @@ async fn revert_restores_prior_revision() {
     let page_id = page["id"].as_i64().expect("page id");
 
     let resp = server
-        .put(&format!("/pages/{page_id}"))
+        .put(&format!("/courses/{course}/pages/{page_id}"))
         .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
         .json(&json!({ "title": "Revert Page Two", "body": "v2" }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
 
     let resp = server
-        .put(&format!("/pages/{page_id}"))
+        .put(&format!("/courses/{course}/pages/{page_id}"))
         .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
         .json(&json!({ "body": "v3" }))
         .await;
@@ -299,7 +299,7 @@ async fn revert_restores_prior_revision() {
 
     // The live page carries the restored state (title, body AND url slug).
     let resp = server
-        .get(&format!("/pages/{page_id}"))
+        .get(&format!("/courses/{course}/pages/{page_id}"))
         .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());

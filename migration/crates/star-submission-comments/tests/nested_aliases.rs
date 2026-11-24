@@ -248,13 +248,6 @@ async fn nested_member_cross_course_or_wrong_user_is_404() {
     let wrong_course = nested_path(other_course, assignment, student);
     for (label, resp) in [
         (
-            "get",
-            server
-                .get(&format!("{wrong_course}/{comment_id}"))
-                .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-                .await,
-        ),
-        (
             "put",
             server
                 .put(&format!("{wrong_course}/{comment_id}"))
@@ -281,7 +274,7 @@ async fn nested_member_cross_course_or_wrong_user_is_404() {
     // `other` has no submission for this assignment.
     let wrong_user = nested_path(course, assignment, other);
     let resp = server
-        .get(&format!("{wrong_user}/{comment_id}"))
+        .delete(&format!("{wrong_user}/{comment_id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 404, "wrong user: {}", resp.text());
@@ -323,23 +316,23 @@ async fn nested_member_keeps_existing_authorization() {
     assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
     let comment_id = resp.json::<Value>()["id"].as_i64().unwrap();
 
-    // A non-enrolled outsider cannot reach the thread on either spelling.
+    // A non-enrolled outsider cannot reach the thread.
     let resp = server
         .get(&flat_path(submission))
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "flat list: {}", resp.text());
     let resp = server
-        .get(&format!("{nested}/{comment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
-        .await;
-    assert_eq!(resp.status_code(), 403, "nested get: {}", resp.text());
-    let resp = server
         .put(&format!("{nested}/{comment_id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .json(&json!({ "comment": "not allowed" }))
         .await;
     assert_eq!(resp.status_code(), 403, "nested edit: {}", resp.text());
+    let resp = server
+        .delete(&format!("{nested}/{comment_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "nested delete: {}", resp.text());
 
     // Only the comment author (or admin) may edit or delete.
     for (label, resp) in [
@@ -358,16 +351,6 @@ async fn nested_member_keeps_existing_authorization() {
             "classmate delete",
             server
                 .delete(&format!("{nested}/{comment_id}"))
-                .add_header(
-                    axum::http::header::AUTHORIZATION,
-                    auth(classmate, "student"),
-                )
-                .await,
-        ),
-        (
-            "flat delete",
-            server
-                .delete(&format!("{}/{}", flat_path(submission), comment_id))
                 .add_header(
                     axum::http::header::AUTHORIZATION,
                     auth(classmate, "student"),
