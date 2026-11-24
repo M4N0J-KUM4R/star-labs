@@ -1,0 +1,51 @@
+# The shell's stylesheet + body-class table. Read by build.rs at compile time.
+#
+# Canvas decides both per request, in the controller:
+#   * `include_common_stylesheets` + `content_for(:stylesheets)` emit the <link>s
+#     (app/views/layouts/_head.html.erb), and
+#   * `body_classes` (app/controllers/application_controller.rb:3086) builds <body
+#     class="…"> (app/views/layouts/application.html.erb:83-110).
+# This file is the same decision for the pages this port serves as a client-rendered
+# shell, so the HTML the browser gets on first paint already carries both.
+#
+# Format — one record per line, fields split on `|`, `#` starts a comment:
+#
+#   <path pattern>|<bundle names, comma separated>|<body classes, comma separated>
+#
+# * `**` in the pattern column means "every page": its bundles are always emitted,
+#   before any record's own, and its class column is ignored. This is Canvas'
+#   `include_common_stylesheets` — tokens, then fonts, then common, in that order,
+#   because `common` resolves the `--ic-*` custom properties `tokens.css` defines.
+# * `*` in a pattern matches exactly one path segment (`/courses/*` matches
+#   `/courses/42`, not `/courses/42/grades`).
+# * The record with the most literal segments wins; ties break by longer pattern.
+#   Exactly one record applies, the way one controller action renders one page.
+# * Bundle names are the filenames under `migration/ui/static/canvas/<variant>/`,
+#   compiled from `canvas-src/app/stylesheets/bundles/<name>.scss` by
+#   `scripts/build-canvas-css.sh`. A name listed here with no compiled sheet fails
+#   the build, because the browser would otherwise get a silent 404 <link>.
+# * Body classes are load-bearing, not decoration: `primary-nav-expanded` is what
+#   gives `header#header.ic-app-header` its 84px rail and `.ic-Layout-wrapper` its
+#   left margin, and `ic-Login-Body` paints the dark backdrop behind the login card.
+#
+# A path has a record here only when `src/lib.rs` registers it. `/courses` (All
+# Courses) is in the Svelte app but has no Rust route: Canvas' global nav hard-codes
+# `href="/courses"` (app/views/shared/_new_nav_header.html.erb:167) and
+# CoursesController#index exists (app/controllers/courses_controller.rb:530), yet
+# config/routes.rb has no web `get "courses"` row, so parity.py cannot classify it
+# and registering it would read as an invented extra. Tracked in MIGRATION.md.
+# `/calendar` and the quiz/discussion detail pages likewise have no sheet until
+# `calendar2` compiles — see CANVAS_CSS.md "Known gap".
+
+**                              |tokens,fonts,common|
+/login                          |login              |full-width,ic-Login-Body
+/register                       |registration       |full-width,ic-Login-Body
+/forgot_password                |login_confirm      |full-width,ic-Login-Body
+/reset_password/*               |login_confirm      |full-width,ic-Login-Body
+/dashboard                      |dashboard,dashboard_card|primary-nav-expanded,with-right-side
+/profile                        |profile_show       |primary-nav-expanded
+/courses/*                      |discussions,wiki_page|primary-nav-expanded
+/courses/*/assignments          |assignments        |primary-nav-expanded
+/courses/*/grades               |user_grades,grade_summary|primary-nav-expanded
+/courses/*/quizzes              |quizzes,canvas_quizzes|primary-nav-expanded
+/courses/*/discussions          |discussions_index,announcements_index|primary-nav-expanded

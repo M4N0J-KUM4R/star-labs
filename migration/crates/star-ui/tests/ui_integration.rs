@@ -356,6 +356,13 @@ async fn login_page_is_no_store() {
 
 /// Regression: the global nav Calendar link must point at the global
 /// /calendar page (it previously linked /dashboard).
+///
+/// It asks for `/calendar` rather than `/dashboard` because `/dashboard` is now the
+/// shell boot document and its nav comes from the bundle at runtime
+/// (`ui/src/lib/components/AppHeader.svelte:98-103`), so no server-rendered nav exists
+/// there to read. `browser-smoke/tests/dashboard-shell-styles` covers the bundle's own
+/// link; this covers every Askama page, which still renders
+/// `templates/layouts/authenticated.html:19`.
 #[tokio::test]
 async fn global_nav_calendar_link_points_to_calendar() {
     let Some((server, pool, prefix)) = setup().await else {
@@ -366,7 +373,7 @@ async fn global_nav_calendar_link_points_to_calendar() {
     let user = seed_user(&pool, &prefix, "navcaluser", "student", "not-a-real-hash").await;
     let token = star_auth::create_token(user, "student", JWT_SECRET).expect("mint");
     let resp = server
-        .get("/dashboard")
+        .get("/calendar?month=2026-11")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_session",
             token.clone(),
@@ -385,9 +392,16 @@ async fn global_nav_calendar_link_points_to_calendar() {
     );
 }
 
-/// AC3 + AC4 + AC8: dashboard renders 200 with the 18 phase-1 ENV keys of the
-/// right types, one card per enrolled course linking /courses/{id}, an
-/// unpublished style for unpublished courses, and only hashed asset links.
+/// AC3 + AC4 + AC8: `/dashboard` is the shell boot document with the 18 phase-1 ENV
+/// keys of the right types, Canvas' own dashboard sheets linked in cascade order, and
+/// only hashed asset links.
+///
+/// The card grid and the To Do list are no longer in this document: Canvas renders them
+/// from `GET /api/v1/dashboard/dashboard_cards` and `GET /api/v1/users/self/todo`, and
+/// those payloads are asserted in `star-dashboard/tests/dashboard_integration.rs`
+/// (`dashboard_cards_return_menu_cards_ordered_by_position`,
+/// `todo_lists_grading_and_submitting_items_with_canvas_shape`) and their DOM in
+/// `browser-smoke/tests/dashboard-shell-styles.spec.ts`.
 #[tokio::test]
 async fn dashboard_renders_cards_and_env_contract() {
     let Some((server, pool, prefix)) = setup().await else {
@@ -396,10 +410,6 @@ async fn dashboard_renders_cards_and_env_contract() {
     };
 
     let user = seed_user(&pool, &prefix, "dashuser", "student", "not-a-real-hash").await;
-    let published = seed_course(&pool, &prefix, "Published Course", "available").await;
-    let unpublished = seed_course(&pool, &prefix, "Draft Course", "unpublished").await;
-    seed_enrollment(&pool, user, published, "student").await;
-    seed_enrollment(&pool, user, unpublished, "student").await;
 
     let token = star_auth::create_token(user, "student", JWT_SECRET).expect("mint");
     let resp = server
@@ -453,42 +463,47 @@ async fn dashboard_renders_cards_and_env_contract() {
     assert!(env["files_domain"].is_string());
     assert!(env["notices"].is_array());
 
-    // Global nav.
-    assert!(body.contains("ic-app-header"));
-    assert!(body.contains("global_nav_dashboard_link"));
-
-    // One card per enrolled course, linking /courses/{id}.
-    assert!(body.contains(&format!("data-course-id=\"{published}\"")));
-    assert!(body.contains(&format!("href=\"/courses/{published}\"")));
-    assert!(body.contains(&format!("data-course-id=\"{unpublished}\"")));
-    // Unpublished style per the API's published flag.
-    assert!(body.contains("ic-DashboardCard__unpublished"));
-
-    // AC8: hashed asset link present; sole inline <script> is the ENV block.
-    let hash = star_ui::assets::app_css_hash();
+    // AC8: the boot document, then Canvas' dashboard sheets on top of the common set.
     assert!(
-        body.contains(&format!("/static/{hash}/app.css")),
-        "hashed CSS link missing"
+        body.contains("kit.start(app, element)"),
+        "boot script missing"
     );
+    assert!(
+        body.contains("/_app/immutable/entry/start."),
+        "entry link missing"
+    );
+    for bundle in ["tokens", "common", "dashboard", "dashboard_card"] {
+        assert!(
+            body.contains(&format!("data-canvas-bundle=\"{bundle}\"")),
+            "Canvas sheet {bundle} missing from the cascade"
+        );
+    }
+    // `with-right-side` is what Canvas' layout adds because user_dashboard provides
+    // :right_side (app/views/users/user_dashboard.html.erb:84); the To Do panel sits in
+    // that aside and `.with-right-side` sizes it (app/stylesheets/base/_layout.scss:78).
+    assert!(
+        body.contains("<body class=\"primary-nav-expanded with-right-side\""),
+        "body class missing: {:?}",
+        body.chars().take(300).collect::<String>()
+    );
+
+    // Two inline <script> tags and no more: the one `shell::render` injects with this
+    // user's `window.ENV`, and SvelteKit's own boot block, which is a bare `<script>`
+    // too (`ui/build/index.html`: `__sveltekit_… = { base }` plus `kit.start(…)`).
+    // A third would mean per-request data reached the cacheable bundle.
     let script_count = body.matches("<script>").count();
     let env_block_count = body.matches("window.ENV = ").count();
     assert_eq!(
-        script_count, 1,
-        "exactly one inline <script> (the ENV block)"
+        script_count, 2,
+        "the ENV block and the boot block, nothing else"
     );
     assert_eq!(env_block_count, 1);
 
-    // Static asset serves with immutable caching; wrong hash 404s.
-    let asset = server.get(&format!("/static/{hash}/app.css")).await;
-    assert_eq!(asset.status_code(), 200);
-    let cache_control = asset
-        .headers()
-        .get("cache-control")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    assert!(cache_control.contains("immutable"));
-    let bad = server.get("/static/wrong-hash/app.css").await;
-    assert_eq!(bad.status_code(), 404);
+    // One user's document must never be cached.
+    assert!(resp.headers()["cache-control"]
+        .to_str()
+        .unwrap_or_default()
+        .contains("no-store"));
 
     cleanup(&pool, &prefix).await;
 }
@@ -1301,9 +1316,9 @@ async fn assignments_index_roles_and_grouping() {
 
 /// Canvas' `quizzes/new` is POST-only (`post "quizzes/new"`, canvas
 /// config/routes.rb:446, under `resources :quizzes, except: :new` at :447), so
-/// GET is a method mismatch, teacher POST creates (redirects to show), a
-/// title-less POST gets Canvas' "Unnamed Quiz" (app/models/quizzes/quiz.rb:161),
-/// and a student POST is 403.
+/// GET is a method mismatch, teacher POST creates (redirects to the editor,
+/// quizzes_controller.rb:352-355), a title-less POST gets Canvas' "Unnamed Quiz"
+/// (app/models/quizzes/quiz.rb:161), and a student POST is 403.
 #[tokio::test]
 async fn quiz_new_teacher_creates_student_forbidden() {
     let Some((server, pool, prefix)) = setup().await else {
@@ -1336,7 +1351,7 @@ async fn quiz_new_teacher_creates_student_forbidden() {
         "index must carry the + Quiz POST form: {index_body}"
     );
 
-    // Teacher POST creates and 303s to the show page.
+    // Teacher POST creates and 303s to the editor.
     let (csrf_cookie, csrf) = csrf_pair();
     let resp = server
         .post(&format!("/courses/{course}/quizzes/new"))
@@ -1360,7 +1375,14 @@ async fn quiz_new_teacher_creates_student_forbidden() {
         .to_str()
         .unwrap()
         .to_string();
+    // Canvas' `new` redirects to the editor url (quizzes_controller.rb:352-355),
+    // so the location must be `.../quizzes/:id/edit`.
+    assert!(
+        location.ends_with("/edit"),
+        "create must hand off to the editor: {location}"
+    );
     let new_id: i64 = location
+        .trim_end_matches("/edit")
         .rsplit('/')
         .next()
         .unwrap()
@@ -1380,13 +1402,34 @@ async fn quiz_new_teacher_creates_student_forbidden() {
     assert!(published);
     assert_eq!(points, 12.5);
 
-    // Show page renders for the teacher.
-    let show = server
+    // The handoff target — the editor — renders for the teacher.
+    let edit = server
         .get(&location)
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(edit.status_code(), 200, "body: {}", edit.text());
+    let edit_body = edit.text();
+    assert!(
+        edit_body.contains(&format!("action=\"/courses/{course}/quizzes/{new_id}\"")),
+        "the editor form must post to the Canvas member path: {edit_body}"
+    );
+    assert!(
+        edit_body.contains("value=\"Created By Form\""),
+        "the saved title must be prefilled: {edit_body}"
+    );
+
+    // Show page renders for the teacher, with the Edit affordance.
+    let show = server
+        .get(&format!("/courses/{course}/quizzes/{new_id}"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .await;
     assert_eq!(show.status_code(), 200);
     assert!(show.text().contains("Created By Form"));
+    assert!(
+        show.text()
+            .contains(&format!("/courses/{course}/quizzes/{new_id}/edit")),
+        "teacher show page must link to the editor"
+    );
 
     // A POST with no title is Canvas' index-button request: it creates a
     // draft, it does not 422.
@@ -1411,6 +1454,7 @@ async fn quiz_new_teacher_creates_student_forbidden() {
         .unwrap()
         .to_string();
     let bare_id: i64 = bare_location
+        .trim_end_matches("/edit")
         .rsplit('/')
         .next()
         .unwrap()
@@ -1432,6 +1476,163 @@ async fn quiz_new_teacher_creates_student_forbidden() {
         .form(&serde_json::json!({"_csrf": csrf, "title": "Nope", "published": ""}))
         .await;
     assert_eq!(resp.status_code(), 403);
+}
+
+/// The quiz editor journey: `GET .../quizzes/:id/edit` (Canvas' `quizzes#edit`,
+/// quizzes_controller.rb:359, which `render :new` at :431) is teacher-only;
+/// saving it reaches Canvas' `PATCH` member route (`resources :quizzes`,
+/// config/routes.rb:447) through the `_method` shim, and `quizzes#update`
+/// flashes "Quiz successfully updated" while redirecting to the show url
+/// (:612-613).
+#[tokio::test]
+async fn quiz_editor_save_uses_member_patch() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "eteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "estudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Editor Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let quiz = seed_quiz(&pool, course, "Midterm", true, 10.0).await;
+
+    // Students have no `:update` right on the quiz -> 403, like Canvas.
+    let denied = server
+        .get(&format!("/courses/{course}/quizzes/{quiz}/edit"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(denied.status_code(), 403, "body: {}", denied.text());
+
+    // Teacher GET renders the form and posts to the member path, never /edit.
+    let page = server
+        .get(&format!("/courses/{course}/quizzes/{quiz}/edit"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(page.status_code(), 200, "body: {}", page.text());
+    let body = page.text();
+    assert!(
+        body.contains(&format!("action=\"/courses/{course}/quizzes/{quiz}\"")),
+        "form action must be the Canvas member path: {body}"
+    );
+    assert!(
+        body.contains("name=\"_method\" value=\"patch\""),
+        "hidden _method field: {body}"
+    );
+    assert!(
+        !body.contains(&format!("/courses/{course}/quizzes/{quiz}/edit\"")),
+        "the form must not post to /edit: {body}"
+    );
+    assert!(
+        body.contains("value=\"Midterm\"") && body.contains("value=\"10\""),
+        "stored title and points are prefilled: {body}"
+    );
+    let csrf = page
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+
+    // POST + `_method=patch` on the member path saves and PRGs to show.
+    let resp = server
+        .post(&format!("/courses/{course}/quizzes/{quiz}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_csrf": csrf.clone(),
+            "_method": "patch",
+            "title": "Midterm v2",
+            "description": "<p>Bring a pen</p>",
+            "points_possible": "25",
+            "available_from": "2027-03-01T09:30",
+            "available_until": "2027-03-05T17:00",
+            "published": "true"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 303, "body: {}", resp.text());
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/quizzes/{quiz}?saved=1").as_str(),
+        "update redirects to the show url (quizzes_controller.rb:613)"
+    );
+
+    let row: (String, String, f64, bool, Option<String>, Option<String>) = sqlx::query_as(
+        r#"SELECT title, COALESCE(description, ''), points_possible::float8, published,
+                  to_char(available_from AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI'),
+                  to_char(available_until AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI')
+             FROM quizzes WHERE id = $1"#,
+    )
+    .bind(quiz)
+    .fetch_one(&pool)
+    .await
+    .expect("read quiz");
+    assert_eq!(row.0, "Midterm v2");
+    assert_eq!(row.1, "<p>Bring a pen</p>");
+    assert_eq!(row.2, 25.0);
+    assert!(row.3);
+    // `datetime-local` values have no offset, and the port reads them as UTC.
+    assert_eq!(row.4.as_deref(), Some("2027-03-01T09:30"));
+    assert_eq!(row.5.as_deref(), Some("2027-03-05T17:00"));
+
+    // The redirect target renders Canvas' flash text.
+    let show = server
+        .get(&format!("/courses/{course}/quizzes/{quiz}?saved=1"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(show.status_code(), 200);
+    assert!(
+        show.text().contains("Quiz successfully updated"),
+        "PRG notice must render: {}",
+        show.text()
+    );
+
+    // A bare POST on the member path is not a Canvas route: 405, row untouched.
+    let resp = server
+        .post(&format!("/courses/{course}/quizzes/{quiz}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_csrf": csrf.clone(),
+            "title": "Bare Post",
+            "points_possible": "1"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 405, "member POST must not be routable");
+    let title: String = sqlx::query_scalar("SELECT title FROM quizzes WHERE id = $1")
+        .bind(quiz)
+        .fetch_one(&pool)
+        .await
+        .expect("quiz still there");
+    assert_eq!(title, "Midterm v2", "405 must not write");
+
+    // `?title=` overrides the form value only — Canvas assigns the param to the
+    // unsaved quiz (:369) after pushing the stored title onto the crumb (:367).
+    let page = server
+        .get(&format!(
+            "/courses/{course}/quizzes/{quiz}/edit?title=Draft%20Handoff"
+        ))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(page.status_code(), 200);
+    let body = page.text();
+    assert!(
+        body.contains("value=\"Draft Handoff\""),
+        "?title= must fill the form: {body}"
+    );
+    assert!(
+        body.contains("Midterm v2"),
+        "the crumb keeps the stored title: {body}"
+    );
+
+    cleanup(&pool, &prefix).await;
 }
 
 /// Take: student start creates an in-progress submission; the take page

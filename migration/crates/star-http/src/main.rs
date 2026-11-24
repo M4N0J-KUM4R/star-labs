@@ -2,7 +2,7 @@
 //!
 //! Owns main(), router assembly, auth middleware, and graceful shutdown.
 
-use axum::{routing::get, Json, Router};
+use axum::{middleware, routing::get, Json, Router};
 use sqlx::postgres::PgPoolOptions;
 use star_common::AppState;
 use std::{env, net::SocketAddr};
@@ -123,7 +123,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // (disable_post_to_sis_api_controller) — root-mounted like the sets
         // above; the route strings carry their full paths.
         .merge(star_courses::root_routes())
-        .nest("/api/v1", api_router)
+        // Canvas' browser code authenticates the web session, not an API token:
+        // `AnnouncementsApiController < ApplicationController`
+        // (app/controllers/announcements_api_controller.rb:26) and `window.ENV`
+        // carries no access token (app/controllers/application_controller.rb:264-309).
+        // This layer gives the Svelte shell the same shape — it rewrites the
+        // `star_session` cookie into the `Authorization` header `AuthUser` already
+        // verifies, behind an origin check plus the CSRF double-submit on unsafe
+        // methods. Bearer clients are untouched: an existing header short-circuits it.
+        .nest(
+            "/api/v1",
+            api_router.layer(middleware::from_fn(
+                star_ui::session_bridge::bridge_session_to_bearer,
+            )),
+        )
         // Canvas serves its GraphQL API at /api/graphql (outside /api/v1).
         .nest("/api/graphql", star_graphql::router())
         .with_state(state)

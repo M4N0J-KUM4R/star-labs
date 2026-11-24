@@ -20,11 +20,14 @@
 //! Rack::MethodOverride does (`method_override`); `/api/v1` is untouched.
 
 pub mod assets;
+pub mod embed;
 pub mod env;
 pub mod handlers;
 pub mod method_override;
 pub mod queries;
 pub mod session;
+pub mod session_bridge;
+pub mod shell;
 
 use axum::middleware;
 use axum::routing::{get, post};
@@ -117,6 +120,10 @@ pub fn router() -> Router<AppState> {
             "/conversations/{id}/add_message",
             post(handlers::conversations::conversation_reply),
         )
+        // Canvas: `resource :profile, only: [:show, :update]` (config/routes.rb:1045)
+        // → GET /profile. Served as the Svelte shell (see `shell`), the first lane on
+        // this branch to do so; the tabs API already emits this html_url.
+        .route("/profile", get(handlers::profile::profile))
         .route("/courses/{id}", get(handlers::course::course_home))
         // Quiz-taking journey (issue #109) — specific before generic.
         .route("/courses/{id}/quizzes", get(handlers::quiz::quiz_list))
@@ -134,7 +141,27 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{id}/quizzes/{qid}",
-            get(handlers::quiz::quiz_show),
+            get(handlers::quiz::quiz_show)
+                .patch(handlers::quiz::quiz_update)
+                .put(handlers::quiz::quiz_update),
+        )
+        // The verbs above are Canvas' `resources :quizzes` member set
+        // (config/routes.rb:447): GET is the show page, PATCH/PUT is the
+        // editor save (`quizzes#update`, quizzes_controller.rb:493 — gated by
+        // `authorized_action(@quiz, @current_user, :update)`, HTML branch
+        // flashes then redirects to the show url at :612-613). The browser
+        // form reaches PATCH through Rails' hidden `_method` field, which
+        // `method_override` rewrites, so no POST verb is registered here.
+        //
+        // `/edit` is the editor page itself: `quizzes#edit` (:359) is gated by
+        // the same :update right and ends in `render :new` (:431), whose
+        // template app/views/quizzes/quizzes/new.html.erb exists — so Canvas
+        // really does serve it, and `quiz_create` redirects to it (:352-355).
+        // Our page is the server-rendered equivalent of the React mount that
+        // template boots (`js_bundle :quizzes`, :429).
+        .route(
+            "/courses/{id}/quizzes/{qid}/edit",
+            get(handlers::quiz::quiz_edit),
         )
         .route(
             "/courses/{id}/quizzes/{qid}/take",
@@ -292,6 +319,14 @@ pub fn router() -> Router<AppState> {
         // not at `/calendar` — so no create or delete is registered here.
         .route("/calendar", get(handlers::calendar::calendar_index))
         .route("/static/{hash}/{file}", get(assets::serve_static))
+        // Everything the front end ships that is not a page: the Vite bundle under
+        // /_app, the Canvas sheets under /canvas, and the fonts and images those
+        // sheets reference by root-relative path. A fallback rather than a route
+        // because these are assets, not pages — parity.py counts `.route()` calls as
+        // the app's route table, and `/fonts/**` has no business in it. Unmatched
+        // paths still 404 (`assets::serve_embedded` answers a bare 404, byte-identical
+        // to axum's default fallback).
+        .fallback(assets::serve_embedded)
 }
 
 /// The shell as it is actually served: the page table behind Rack's `_method`

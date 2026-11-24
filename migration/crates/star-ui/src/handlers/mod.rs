@@ -13,6 +13,7 @@ pub mod error;
 pub mod files;
 pub mod grades;
 pub mod login;
+pub mod profile;
 pub mod quiz;
 pub mod settings;
 pub mod speedgrader;

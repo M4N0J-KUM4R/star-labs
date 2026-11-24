@@ -3514,7 +3514,6 @@ dependencies = [
  "star-common",
  "star-conversations",
  "star-courses",
- "star-dashboard",
  "star-db",
  "star-discussions",
  "star-enrollments",
