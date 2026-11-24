@@ -116,8 +116,32 @@ fn files_path(course: i64, assignment: i64, user: i64) -> String {
     format!("{}/files", nested_path(course, assignment, user))
 }
 
-fn flat_path(submission: i64) -> String {
-    format!("/submissions/{submission}/comments")
+/// Seed a comment the way Canvas writes the thread: through the submission
+/// update (`PUT /courses/:course_id/assignments/:assignment_id/submissions/:user_id`,
+/// canvas-src/config/routes.rb:1578). There is no comments collection route.
+async fn seed_comment(pool: &PgPool, submission_id: i64, author_id: i64, text: &str) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO submission_comments (submission_id, author_id, comment) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(submission_id)
+    .bind(author_id)
+    .bind(text)
+    .fetch_one(pool)
+    .await
+    .expect("seed comment")
+}
+
+/// `(workflow_state, comment, edited_at is set)` of a stored comment — the
+/// shape the removed flat list used to return, read from its source table.
+async fn comment_state(pool: &PgPool, comment_id: i64) -> (String, String, bool) {
+    let row: (String, String, bool) = sqlx::query_as(
+        "SELECT workflow_state, comment, edited_at IS NOT NULL FROM submission_comments WHERE id = $1",
+    )
+    .bind(comment_id)
+    .fetch_one(pool)
+    .await
+    .expect("comment row");
+    row
 }
 
 /// Attachment ids linked to a comment, oldest first.
@@ -275,41 +299,29 @@ async fn comment_files_link_to_comments_and_appear_in_detail() {
     let assignment = seed_assignment(&pool, course, "Essay").await;
     let submission = seed_submission(&pool, assignment, student).await;
 
-    // Upload, then reference the record when writing the comment.
+    // Canvas declares no comments create route, so the thread row is seeded
+    // the way the submission write makes it and the upload links to it through
+    // its own `comment_id` field.
+    let comment_id = seed_comment(&pool, submission, student, "see attached").await;
+
     let resp = server
         .post(&files_path(course, assignment, student))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "filename": "rubric.pdf", "content_type": "application/pdf" }))
+        .json(&json!({
+            "filename": "rubric.pdf",
+            "content_type": "application/pdf",
+            "comment_id": comment_id
+        }))
         .await;
     assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
     let file_id = resp.json::<Value>()["id"].as_i64().unwrap();
 
-    let resp = server
-        .post(&flat_path(submission))
-        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
-        .json(&json!({ "comment": "see attached", "file_ids": [file_id] }))
-        .await;
-    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
-    let comment_id = resp.json::<Value>()["id"].as_i64().unwrap();
-
     // Canvas declares no single-comment GET (routes.rb:1582-1583 is PUT +
-    // DELETE only), so the comment shape is read through the thread list and
-    // the attachment link straight from the table the detail endpoint joins.
-    let list: Vec<Value> = server
-        .get(&flat_path(submission))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .await
-        .json();
-    assert_eq!(list.len(), 1, "list: {list:?}");
-    assert_eq!(list[0]["id"].as_i64(), Some(comment_id));
-    assert_eq!(list[0]["submission_id"].as_i64(), Some(submission));
-    assert_eq!(list[0]["author_id"].as_i64(), Some(student));
-    assert_eq!(list[0]["comment"].as_str(), Some("see attached"));
-    assert_eq!(list[0]["workflow_state"].as_str(), Some("active"));
-    assert!(
-        list[0]["edited_at"].is_null(),
-        "new comment is not edited"
-    );
+    // DELETE only), so the comment shape is read from its table.
+    let (state, text, was_edited) = comment_state(&pool, comment_id).await;
+    assert_eq!(state, "active");
+    assert_eq!(text, "see attached");
+    assert!(!was_edited, "new comment is not edited");
 
     let attached: Vec<(i64, Option<i64>)> = sqlx::query_as(
         "SELECT id, comment_id FROM submission_comment_attachments \
@@ -332,15 +344,16 @@ async fn comment_files_link_to_comments_and_appear_in_detail() {
     let ids: Vec<i64> = attached_ids(&pool, comment_id).await;
     assert_eq!(ids, vec![file_id, late_id]);
 
-    // Unknown file ids are ignored (Canvas only keeps attachable files).
+    // Without `comment_id` the record stays unattached — nothing else attaches
+    // it, because Canvas' link happens on the submission write in
+    // star-assignments, not on a comments collection route.
     let resp = server
-        .post(&flat_path(submission))
+        .post(&files_path(course, assignment, student))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "comment": "no attachment", "file_ids": [9_000_000_001i64] }))
+        .json(&json!({ "filename": "loose.pdf" }))
         .await;
     assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
-    let other_id = resp.json::<Value>()["id"].as_i64().unwrap();
-    assert!(attached_ids(&pool, other_id).await.is_empty());
+    assert!(resp.json::<Value>()["comment_id"].is_null());
 
     cleanup(&pool, &prefix).await;
 }
@@ -360,13 +373,7 @@ async fn comment_update_edits_text_and_sets_edited_at() {
     let submission = seed_submission(&pool, assignment, student).await;
     let nested = nested_path(course, assignment, student);
 
-    let resp = server
-        .post(&flat_path(submission))
-        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
-        .json(&json!({ "comment": "first draft" }))
-        .await;
-    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
-    let comment_id = resp.json::<Value>()["id"].as_i64().unwrap();
+    let comment_id = seed_comment(&pool, submission, student, "first draft").await;
 
     // The author edits the text; edited_at is stamped.
     let resp = server
@@ -393,14 +400,10 @@ async fn comment_update_edits_text_and_sets_edited_at() {
         "unchanged text must not restamp edited_at"
     );
 
-    // List reflects the edit; only the author (or admin) may edit.
-    let list: Vec<Value> = server
-        .get(&flat_path(submission))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .await
-        .json();
-    assert_eq!(list.len(), 1);
-    assert_eq!(list[0]["comment"].as_str(), Some("final draft"));
+    // The stored thread reflects the edit; only the author (or admin) may edit.
+    let (state, text, _) = comment_state(&pool, comment_id).await;
+    assert_eq!(state, "active");
+    assert_eq!(text, "final draft");
 
     let resp = server
         .put(&format!("{nested}/{comment_id}"))
@@ -437,25 +440,11 @@ async fn comment_delete_soft_deletes_and_detail_is_404() {
     let submission = seed_submission(&pool, assignment, student).await;
     let nested = nested_path(course, assignment, student);
 
-    let resp = server
-        .post(&flat_path(submission))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "comment": "to be deleted" }))
-        .await;
-    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
-    let comment_id = resp.json::<Value>()["id"].as_i64().unwrap();
+    let comment_id = seed_comment(&pool, submission, teacher, "to be deleted").await;
 
-    // The comment is in the thread before the delete (Canvas reads the thread
-    // through the submission, there is no single-comment GET route).
-    let list: Vec<Value> = server
-        .get(&flat_path(submission))
-        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
-        .await
-        .json();
-    assert!(
-        list.iter().any(|c| c["id"].as_i64() == Some(comment_id)),
-        "list: {list:?}"
-    );
+    // The comment is active before the delete (Canvas reads the thread through
+    // the submission, there is no single-comment GET route).
+    assert_eq!(comment_state(&pool, comment_id).await.0, "active");
 
     // Only the author (or admin) may delete; unchanged via the alias.
     let resp = server
@@ -473,15 +462,11 @@ async fn comment_delete_soft_deletes_and_detail_is_404() {
         .await;
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
 
-    // Soft-deleted comments are not listed any more and not editable.
-    let list: Vec<Value> = server
-        .get(&flat_path(submission))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .await
-        .json();
-    assert!(
-        !list.iter().any(|c| c["id"].as_i64() == Some(comment_id)),
-        "deleted comment must disappear: {list:?}"
+    // Soft-deleted comments leave the active feed and are not editable.
+    assert_eq!(
+        comment_state(&pool, comment_id).await.0,
+        "deleted",
+        "deleted comment must leave the active feed"
     );
     let resp = server
         .put(&format!("{nested}/{comment_id}"))

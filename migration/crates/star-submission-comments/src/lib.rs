@@ -1,15 +1,14 @@
 //! star-submission-comments: Canvas API v1 submission comments for star-lms.
 //!
-//! Endpoints (Canvas API v1 parity):
-//! - POST   /submissions/{submissionId}/comments  {comment} → 201
-//! - GET    /submissions/{submissionId}/comments → [comments], active only, ordered by created_at
-//!
-//! Canvas comment write/read paths (config/routes.rb has no comments index or
-//! create route — the thread arrives through `include[]=submission_comments`
-//! on the submission and is written through `PUT .../submissions/{userId}`,
-//! both in star-assignments):
+//! Endpoints (Canvas API v1 parity, canvas-src/config/routes.rb:1580-1586):
 //! - PUT    /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
 //! - DELETE /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
+//!
+//! Canvas declares no comments index or create route: the thread is read
+//! through `include[]=submission_comments` on the submission and written
+//! through `PUT .../submissions/{userId}` (both served by star-assignments),
+//! so the flat `/submissions/{submissionId}/comments` GET/POST twins are not
+//! registered here either.
 //!
 //! Single comment attachments (Canvas SubmissionCommentsApiController):
 //! - POST /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/files
@@ -20,17 +19,15 @@
 //! - DELETE .../comments/{commentId} → 204, soft-delete (existing behavior)
 //!
 //! Access control (Canvas-style):
-//! - POST: course teacher/admin OR the submission's own student
-//! - GET:  course teacher/admin OR the submission's own student
 //! - DELETE: author of the comment or admin
 //! - PUT (edit): author of the comment or admin
-//! - comment files upload: same audience as POST (teacher/admin or own student)
+//! - comment files upload: teacher/admin or the submission's own student
 
 use axum::{
     body::Bytes,
     extract::{Path, RawQuery, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{delete, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -61,16 +58,6 @@ pub struct SubmissionComment {
     pub edited_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-/// Request body for creating a comment.
-#[derive(Debug, Deserialize)]
-pub struct CreateComment {
-    pub comment: String,
-    /// Optional metadata-only attachments (from the comments/files upload) to
-    /// link to the new comment. Canvas attaches comment files the same way.
-    #[serde(default)]
-    pub file_ids: Vec<i64>,
 }
 
 /// Request body for editing a comment (Canvas permits `comment` only).
@@ -253,76 +240,6 @@ async fn check_can_view_or_comment(
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// Shared create logic for the flat route.
-/// Course teacher/admin OR the submission's own student → 201
-async fn create_comment_for(
-    state: &AppState,
-    submission_id: i64,
-    auth: AuthUser,
-    payload: CreateComment,
-) -> Result<(StatusCode, Json<SubmissionComment>), ApiError> {
-    // Verify the submission exists (404 if not)
-    let _course_id = get_course_id_for_submission(&state.db, submission_id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-
-    // Access check
-    if !check_can_view_or_comment(&state.db, auth.id, submission_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    if payload.comment.trim().is_empty() {
-        return Err(ApiError::Validation("comment cannot be empty".into()));
-    }
-
-    let row: SubmissionComment = sqlx::query_as(
-        r#"
-        INSERT INTO submission_comments (submission_id, author_id, comment)
-        VALUES ($1, $2, $3)
-        RETURNING id, submission_id, author_id, comment, workflow_state, edited_at, created_at, updated_at
-        "#,
-    )
-    .bind(submission_id)
-    .bind(auth.id)
-    .bind(&payload.comment)
-    .fetch_one(&state.db)
-    .await?;
-
-    // Link any metadata-only uploads the caller references (Canvas attaches
-    // comment files the same way). Unknown/foreign ids are ignored, matching
-    // Canvas, which only keeps attachments the author may attach.
-    link_attachments(&state.db, submission_id, row.id, &payload.file_ids).await?;
-
-    Ok((StatusCode::CREATED, Json(row)))
-}
-
-/// Attach unattached comment-file records of this submission to a comment.
-async fn link_attachments(
-    pool: &PgPool,
-    submission_id: i64,
-    comment_id: i64,
-    file_ids: &[i64],
-) -> Result<(), ApiError> {
-    if file_ids.is_empty() {
-        return Ok(());
-    }
-
-    sqlx::query(
-        r#"
-        UPDATE submission_comment_attachments
-        SET comment_id = $1, updated_at = now()
-        WHERE id = ANY($2) AND submission_id = $3 AND comment_id IS NULL
-        "#,
-    )
-    .bind(comment_id)
-    .bind(file_ids)
-    .bind(submission_id)
-    .execute(pool)
-    .await?;
-
-    Ok(())
-}
-
 /// Verify the submission exists and the caller may read/post its comments.
 /// 404 when the submission is missing, 403 when access is denied.
 async fn authorize_comment_thread(
@@ -343,58 +260,7 @@ async fn authorize_comment_thread(
     Ok(())
 }
 
-/// POST /submissions/{submissionId}/comments
-async fn create_comment(
-    State(state): State<AppState>,
-    Path(submission_id): Path<i64>,
-    auth: AuthUser,
-    Json(payload): Json<CreateComment>,
-) -> Result<(StatusCode, Json<SubmissionComment>), ApiError> {
-    create_comment_for(&state, submission_id, auth, payload).await
-}
-
-/// Shared list logic for the flat routes.
-/// Course teacher/admin OR the submission's own student → [comments], active only, ordered by created_at
-async fn list_comments_for(
-    state: &AppState,
-    submission_id: i64,
-    auth: AuthUser,
-) -> Result<Json<Vec<SubmissionComment>>, ApiError> {
-    // Verify the submission exists (404 if not)
-    let _course_id = get_course_id_for_submission(&state.db, submission_id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-
-    // Access check
-    if !check_can_view_or_comment(&state.db, auth.id, submission_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let rows: Vec<SubmissionComment> = sqlx::query_as(
-        r#"
-        SELECT id, submission_id, author_id, comment, workflow_state, edited_at, created_at, updated_at
-        FROM submission_comments
-        WHERE submission_id = $1 AND workflow_state = 'active'
-        ORDER BY created_at ASC
-        "#,
-    )
-    .bind(submission_id)
-    .fetch_all(&state.db)
-    .await?;
-
-    Ok(Json(rows))
-}
-
-/// GET /submissions/{submissionId}/comments
-async fn list_comments(
-    State(state): State<AppState>,
-    Path(submission_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<Vec<SubmissionComment>>, ApiError> {
-    list_comments_for(&state, submission_id, auth).await
-}
-
-/// Shared delete logic for the flat and Canvas-nested routes.
+/// Shared delete logic for the Canvas-nested member route.
 /// Author or admin → soft-delete (workflow_state = 'deleted'), 204
 async fn delete_comment_for(
     state: &AppState,
@@ -575,8 +441,8 @@ async fn update_comment_nested(
 /// returns the attachment shape (no binary upload / storage handling).
 ///
 /// `comment_id`, when given, must be an active comment of this submission.
-/// Otherwise the record stays unattached until a comment references it via
-/// `file_ids` (Canvas attaches those ids when the comment is written).
+/// Otherwise the record stays unattached: Canvas links the remaining ids when
+/// it writes the comment on the submission update, which is star-assignments.
 async fn upload_comment_file_for(
     state: &AppState,
     submission_id: i64,
@@ -768,15 +634,15 @@ async fn annotation_notification(
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/submissions/{submissionId}/comments", post(create_comment))
-        .route("/submissions/{submissionId}/comments", get(list_comments))
         // Canvas nested member routes — resolve submission by course/assignment/user.
-        // Canvas has no comments index/create here: the thread is read through
-        // `include[]=submission_comments` and written through `PUT
-        // .../submissions/{userId}` (star-assignments).  Canvas declares only
-        // PUT and DELETE on the member path (routes.rb:1582-1583), so the flat
-        // `/submissions/{submissionId}/comments/{commentId}` twin and a GET on
-        // the member path are not registered.
+        // Canvas declares no comments index or create route anywhere in the API
+        // route set: the thread is read through `include[]=submission_comments`
+        // on the submission and written through `PUT
+        // .../submissions/{userId}` (both star-assignments), and only PUT and
+        // DELETE exist on the member path (routes.rb:1582-1583).  The
+        // Canvas-absent flat twins `/submissions/{submissionId}/comments`
+        // (GET/POST) and `/submissions/{submissionId}/comments/{commentId}`
+        // are therefore not registered, and neither is a GET on the member path.
         // Metadata-only comment file upload (Canvas SubmissionCommentsApiController#create_file)
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/files",
