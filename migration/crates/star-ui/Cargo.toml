@@ -6,7 +6,6 @@ edition.workspace = true
 [dependencies]
 star-common = { path = "../star-common" }
 star-auth = { path = "../star-auth" }
-star-dashboard = { path = "../star-dashboard" }
 star-courses = { path = "../star-courses" }
 star-pages = { path = "../star-pages" }
 star-modules = { path = "../star-modules" }
@@ -36,6 +35,13 @@ time = { workspace = true }
 # (`question_<id>`, `question_<id>_answer_<answer_id>`), so serde_urlencoded
 # cannot type them — the submit handler decodes raw pairs from the body.
 url = { workspace = true }
+
+# build.rs embeds migration/ui/{build,static} into the binary and hashes each file.
+# sha2 is already an ordinary dependency of this package, so the lockfile does not
+# change: it records one flat dependency set per package, not per kind. CI builds with
+# `--locked` (browser-smoke.yml), which a genuinely new dependency would break.
+[build-dependencies]
+sha2 = { workspace = true }
 
 [dev-dependencies]
 star-db = { path = "../star-db" }

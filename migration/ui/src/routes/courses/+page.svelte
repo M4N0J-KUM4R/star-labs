@@ -3,6 +3,7 @@
 	import { session } from '$lib/auth.svelte';
 	import type { Course } from '$lib/types';
 	import DashboardCard from '$lib/components/DashboardCard.svelte';
+	import { cardFromCourse } from '$lib/dashboardCards';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { loadCanvasStyles } from '$lib/canvasStyles';
 
@@ -50,12 +51,14 @@
 	{#if visible.length === 0}
 		<EmptyState title="No matching courses" body="Nothing in your enrollments matches that." />
 	{:else}
-		<div id="DashboardCard_Container">
-			<div class="ic-DashboardCard__box">
-				{#each visible as course (course.id)}
-					<DashboardCard {course} />
-				{/each}
-			</div>
-		</div>
+	<div class="ic-DashboardCard__box">
+		{#each visible as course (course.id)}
+			<!-- Canvas' All Courses page renders its own component, not the dashboard
+			     card (grep -rn DashboardCard ui/features/allCourses returns nothing);
+			     this grid is our approximation and reuses the card through
+			     cardFromCourse. Porting Canvas' real All Courses view is its own task. -->
+			<DashboardCard card={cardFromCourse(course)} />
+		{/each}
+	</div>
 	{/if}
 {/if}

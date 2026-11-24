@@ -10,7 +10,7 @@ gate.
 migration/ui/
   src/lib/api.ts           same-origin /api/v1 client + the endpoint map
   src/lib/auth.svelte.ts   the session (Svelte 5 module state)
-  src/lib/token.ts         where the Bearer token comes from
+  src/lib/token.ts         no credential to hold: ENV token, else the cookie
   src/lib/env.ts           typed reader over window.ENV (the Rust contract)
   src/lib/canvasStyles.ts  appends Canvas' <link>s, in Canvas' order
   src/lib/types.ts         shapes = Canvas serializer keys
@@ -18,8 +18,16 @@ migration/ui/
   src/app.css              3 declarations — the pre-paint floor, nothing else
   static/canvas/<variant>/ Canvas' compiled bundles (npm run styles:canvas)
   static/fonts/, static/images/  exactly the assets that CSS references (npm run assets:canvas)
+  build/                   adapter-static output; index.html + _app are committed
   scripts/                 build-canvas-css.sh, build-brandable-tokens.mjs,
                            vendor-canvas-assets.sh, canvas-sass-deps.txt
+
+crates/star-ui/            the serving side of the same contract
+  build.rs                 embeds build/ + static/, hashes each file
+  embed/shell-map.txt      route → (Canvas bundles, body classes)
+  src/shell.rs             injects title/ENV/links/classes into index.html
+  src/assets.rs            serves the embedded files, with the cache families
+  src/session_bridge.rs    star_session → Authorization: Bearer on /api/v1
 ```
 
 There is no hand-written stylesheet in this package apart from `src/app.css`.
@@ -30,24 +38,33 @@ appears here only when Canvas' CSS actually asks for it.
 `MIGRATION.md` is the ordered plan for retiring the Askama templates. Read it
 before deleting anything — there is a parity constraint that sequences the work.
 
-## Measured, 2026-11-24 (`npm run build`, adapter-static, brotli -q11)
+## Measured, 2026-11-24 (`npm run build`, adapter-static, brotli quality 11)
 
 The dashboard route, normal contrast, cold cache. Numbers are the files a browser
-actually fetches: `build/index.html`, the 21 preloaded chunks in its
-`<link rel=modulepreload>`, the five sheets `loadCanvasStyles()` appends
-(tokens, fonts, common, dashboard, dashboard_card) and the two Lato weights the
-first text paints with.
+actually fetches: `build/index.html`, the five Canvas sheets `shell.rs` links into it
+server-side (tokens, fonts, common, dashboard, dashboard_card, from
+`crates/star-ui/embed/shell-map.txt`), the JS it needs — the 19 files the built
+document itself `rel=modulepreload`s (the two entries, the `+layout.svelte` node and
+their static chunks) unioned with what the `/dashboard` node additionally imports
+(22 files in all; the set is the `from"../…"` / `import"../…"` edges in the built JS,
+walked from those two nodes) — the 115-byte `assets/*.css` that one link carries
+`src/app.css` in, and the two Lato weights the first text paints with. The compressed
+columns are per-file sums at brotli quality 11 and gzip level 9, taken with Node's
+`zlib` (`zlib.brotliCompressSync` / `zlib.gzipSync`; the `brotli` and `gzip` CLIs give
+a few bytes more per file, because their headers carry an mtime) — what a proxy would
+send; the binary answers `Identity` today (MIGRATION.md "Nothing is precompressed").
 
 | Quantity | raw | brotli | gzip |
 |---|---|---|---|
-| JS — shell, chunks, entry, route node 0 | 117,215 | 42,707 | 47,952 |
-| Canvas CSS — the dashboard stack | 416,051 | 54,774 | 68,581 |
-| Lato Extended Regular + Bold (woff2, Canvas' files) | 367,620 | 359,520 | 360,773 |
-| Fallback shell HTML | 2,197 | 502 | 658 |
-| **Cold first load** | **903,083** | **457,503** | **477,964** |
-| First load without the two fonts | 535,463 | 97,983 | 117,191 |
-| All 15 route nodes together | 38,943 | 16,076 | 18,448 |
-| One extra page's sheet, e.g. assignments.css | 30,410 | 5,822 | — |
+| JS — preloaded entries, chunks, the dashboard node | 129,281 | 47,383 | 53,247 |
+| Canvas CSS — the dashboard stack | 416,051 | 54,774 | 68,594 |
+| `app.css`, the pre-paint floor | 115 | 84 | 121 |
+| Lato Extended Regular + Bold (woff2, Canvas' files) | 367,620 | 359,520 | 360,898 |
+| Shell HTML | 2,125 | 488 | 643 |
+| **Cold first load** | **915,192** | **462,249** | **483,503** |
+| First load without the two fonts | 547,572 | 102,729 | 122,605 |
+| All 15 route nodes together | 43,285 | 17,446 | 20,236 |
+| One extra page's sheet, e.g. assignments.css | 30,410 | 5,822 | 6,622 |
 
 Read the rows this way: **the fonts are the payload**, not the framework. Lato
 Extended ships every Latin codepoint Canvas has ever rendered, 182 KB per weight,
@@ -66,23 +83,37 @@ visible, not in a PR.
 | Other | Value |
 |---|---|
 | Canvas bundles compiled per variant | 31, plus the generated token sheet = 32 files |
-| Vendored files in `static/` | 236, 4.6 MB (fonts 2.1 MB, images 892 KB, sheets 1.4 MB) |
-| Build time | 2.81 s |
-| Type gate | `svelte-check` 0 errors, 1 warning (Canvas' own `href="#"`) |
-| Unit tests | 7 passed |
+| Vendored files in `static/` | 236 files, 4,159,439 B (fonts 2,181,616; sheets 1,533,493; images 444,072; favicon 258) |
+| Embedded into the binary (`build.rs`, `ASSETS`) | 275 files, 4,316,433 B, of which `/_app` is 39 files / 156,994 B (67,473 B gzipped, per-file gzip 9) |
+| Build time | 3.20 s (`vite build`) |
+| Type gate | `svelte-check` 0 errors, 0 warnings |
+| Unit tests | 19 passed (`npm run test:unit`) |
 
 
 Resource profile, which is the reason for the shape:
 
-- **No second process.** `build/` is files; axum serves them. There is no Node
-  runtime to run, patch, health-check, or scale, and no per-request render cost
-  on the Rust side beyond the one shell template that injects `window.ENV`.
-- **Cacheable everything.** Hash-named chunks under `/_app/immutable/` are
-  `max-age=31536000, immutable`; only the ~2 KB shell is revalidated. For a large
-  user base the marginal cost of a returning visitor is one small HTML fetch plus
-  API JSON — the UI itself never leaves the browser cache.
-- **Per-page CSS, like Canvas.** A page imports the Canvas bundles it renders, so
-  the dashboard does not download gradebook rules.
+- **No second process, and no second artifact.** `crates/star-ui/build.rs` embeds
+  `build/index.html`, `build/_app` and `static/{canvas,fonts,images}` into the
+  binary with `include_bytes!`; `assets::serve_embedded` answers them from memory.
+  Deployment is one file — no repo checkout, no `ServeDir` path to mount, no Node
+  runtime to run, patch, health-check or scale. The only per-request work on the
+  Rust side is `shell::render`, which injects the title, `window.ENV`, the
+  stylesheet links and the body classes into the document SvelteKit emitted.
+- **Cacheable everything.** `/_app/immutable/**` (Vite-hashed) and
+  `/canvas/{sha256-prefix}/{variant}/{name}.css` (hashed by `build.rs`, because
+  Canvas' sheet names are fixed) are `max-age=31536000, immutable`. Canvas' fonts
+  and images keep their literal paths — its own sheets reference them that way —
+  so they get `max-age=86400, must-revalidate` and an `ETag`. Only the ~2 KB
+  shell is uncached, so a returning visitor costs one small HTML fetch plus API
+  JSON: the UI itself never leaves the browser cache.
+- **Per-page CSS, like Canvas.** `crates/star-ui/embed/shell-map.txt` is the
+  server-side route → bundle table (mirrored by each page's
+  `loadCanvasStyles([...])` call), so the dashboard does not download gradebook
+  rules, and a typo in it fails the build rather than shipping a 404 `<link>`.
+- **The session is a cookie, not a token.** `crates/star-ui/src/session_bridge.rs`
+  turns `star_session` into the bearer header `AuthUser` verifies, guarded by the
+  same-origin check and the `star_csrf` double-submit Rails uses. No credential is
+  ever readable by script. See step 1 of `MIGRATION.md`.
 
 ## Commands
 
@@ -90,21 +121,29 @@ Resource profile, which is the reason for the shape:
 npm install
 npm run check        # svelte-check — the gate for fleet-authored pages
 npm run test:unit    # vitest
-npm run build        # -> build/, copied to crates/star-ui/static/ui/
+npm run build        # -> build/, embedded into star-ui by crates/star-ui/build.rs
 npm run dev          # vite dev on :5173, proxy target is the axum origin
 ```
 
 ## Rules for adding a page
 
-1. Paths live in `src/lib/api.ts` only, written exactly as Canvas' `routes.rb`
+1. **Rebuild and commit `build/` with the source.** `crates/star-ui/build.rs`
+   embeds `build/index.html` and `build/_app/**` (see `migration/ui/.gitignore`),
+   and the Rust CI job has no Node step, so the committed bundle *is* what the
+   binary serves. A `.svelte` change without `npm run build` looks like a hydration
+   bug in CI, because that is literally what ships.
+2. If the page needs Canvas bundles other than tokens/fonts/common, add its path to
+   `crates/star-ui/embed/shell-map.txt` — the build fails if a named bundle has no
+   compiled sheet, which is the point.
+3. Paths live in `src/lib/api.ts` only, written exactly as Canvas' `routes.rb`
    serves them. Never inline a fetch path in a `.svelte` file — that is how
    invented verbs get shipped, and the parity scoreboard counts them.
-2. Field names in `src/lib/types.ts` are Canvas serializer keys. Renaming one is
+4. Field names in `src/lib/types.ts` are Canvas serializer keys. Renaming one is
    a parity break, not a style choice.
-3. Class names are Canvas'. If a needed class has no rule, it comes from
+5. Class names are Canvas'. If a needed class has no rule, it comes from
    `styles:canvas`, not from a new hand-written block (see
    `src/styles/README.md` for why).
-4. `npm run check` before pushing. With `ssr = false`, a wrong prop type is a
+6. `npm run check` before pushing. With `ssr = false`, a wrong prop type is a
    runtime blank page, and CI does not run this yet.
-5. Role gating reads `session.isTeacher`, which is the role the server reported —
+7. Role gating reads `session.isTeacher`, which is the role the server reported —
    never a claim parsed out of the JWT.

@@ -1,7 +1,7 @@
 //! Thin data loaders for the shell handlers.
 //!
 //! Each loader either calls a pub loader extracted from a domain crate
-//! (`star_dashboard::load_dashboard_cards`, `star_courses::load_course_tabs`,
+//! (`star_courses::load_course_tabs`,
 //! `star_pages::load_front_page`, `star_modules::load_modules`) or runs a
 //! minimal, shell-specific query. No business logic is duplicated: the goal
 //! (spec §2.2) is that the shell renders exactly what the REST API serves.

@@ -1,55 +1,53 @@
-/** Where the Bearer token comes from, in priority order.
+/** The credential the SPA sends, which is normally none.
  *
- *  `/api/v1` accepts `Authorization: Bearer <jwt>` only (star-auth's `AuthUser`
- *  extractor has no cookie fallback), while the Rust web shell authenticates with
- *  the `star_session` cookie. So the SPA has two bootstrap paths and this module
- *  is the seam between them:
+ *  Canvas' browser code holds no API token. Its API controllers authenticate the web
+ *  session — `class AnnouncementsApiController < ApplicationController`
+ *  (app/controllers/announcements_api_controller.rb:26) — and `window.ENV`
+ *  (app/controllers/application_controller.rb:264-309) has no access-token key. This
+ *  port reaches the same shape from the other direction: instead of teaching
+ *  star-auth a second transport, `crates/star-ui/src/session_bridge.rs` rewrites the
+ *  HttpOnly `star_session` cookie into the `Authorization: Bearer` header that
+ *  `AuthUser` already verifies. So a page served by axum needs no client-side
+ *  credential at all, and the cookie stays unreadable to script.
  *
- *  1. `window.ENV.api_token` — set by the Rust shell once step 1 of
- *     MIGRATION.md lands. Preferred: no client-side storage of a credential.
- *  2. `sessionStorage` — written by the /login page from the
- *     `POST /api/v1/auth/login` response. Survives SPA navigation but not a tab
- *     close, which matches how long a UI session should live.
+ *  `getToken()` therefore returns a token only when a deployment hands one to the
+ *  shell through `window.ENV.api_token`. `setToken()` keeps one in memory for the
+ *  `npm run dev` flow, where Vite serves the bundle without the Rust session.
  *
- *  Never `localStorage`: a token there outlives the logout that should have
- *  killed it, and `users.last_logged_out` only bounds the cookie path. */
+ *  Not `localStorage`, and not sessionStorage either: a credential in web storage
+ *  outlives the logout that should have killed it, and `users.last_logged_out` only
+ *  bounds the cookie path. */
 
 import { env } from '$lib/env';
 
-const STORAGE_KEY = 'star.api_token';
-
 let memory: string | null = null;
 
+/** Hold a token for the lifetime of this document only. */
 export function setToken(token: string): void {
 	memory = token;
-	if (typeof sessionStorage !== 'undefined') {
-		try {
-			sessionStorage.setItem(STORAGE_KEY, token);
-		} catch {
-			// Private-mode browsers throw on write; the in-memory copy still works
-			// for this document, which is all the SPA needs until it reloads.
-		}
-	}
 }
 
 export function getToken(): string | null {
-	const fromEnv = env().api_token;
-	if (fromEnv) return fromEnv;
-	if (memory) return memory;
-	if (typeof sessionStorage === 'undefined') return null;
-	try {
-		return sessionStorage.getItem(STORAGE_KEY);
-	} catch {
-		return null;
-	}
+	return env().api_token ?? memory;
 }
 
 export function clearToken(): void {
 	memory = null;
-	if (typeof sessionStorage === 'undefined') return;
-	try {
-		sessionStorage.removeItem(STORAGE_KEY);
-	} catch {
-		// Nothing else to do — the in-memory copy is already gone.
+}
+
+/** The `star_csrf` cookie value, for `X-CSRF-Token`.
+ *
+ *  That cookie is deliberately not HttpOnly — `session::ensure_csrf_cookie` says so in
+ *  its own comment, "so a future JS layer can echo it in headers (Canvas parity)", and
+ *  `packages/canvas-rce/src/rce/plugins/shared/do-fetch-api-effect/defaultFetchOptions.ts:35`
+ *  is Canvas' own JS doing exactly that. It is a CSRF token, not a session credential:
+ *  reading it grants nothing on its own, which is why exposing it to script is safe
+ *  while exposing `star_session` would not be. */
+export function csrfToken(): string | null {
+	if (typeof document === 'undefined') return null;
+	for (const pair of document.cookie.split(';')) {
+		const [name, value] = pair.split('=');
+		if (name?.trim() === 'star_csrf' && value) return decodeURIComponent(value.trim());
 	}
+	return null;
 }
