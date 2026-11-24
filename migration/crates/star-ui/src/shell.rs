@@ -60,7 +60,7 @@ pub fn match_shell(path: &str) -> Option<&'static embed::ShellEntry> {
     let mut best: Option<((usize, usize), &embed::ShellEntry)> = None;
     for entry in embed::SHELL_ENTRIES {
         let Some(s) = score(entry) else { continue };
-        if best.map_or(true, |(previous, _)| s > previous) {
+        if best.is_none_or(|(previous, _)| s > previous) {
             best = Some((s, entry));
         }
     }
@@ -107,8 +107,12 @@ fn head_fragment(path: &str, title: &str, env_json: &str, high_contrast: bool) -
 
     let page_bundles: &[&str] = match_shell(path).map_or(&[], |entry| entry.bundles);
     let mut emitted: Vec<&str> = Vec::new();
-    for name in embed::SHELL_ALWAYS.iter().chain(page_bundles.iter()) {
-        if emitted.contains(name) {
+    for name in embed::SHELL_ALWAYS
+        .iter()
+        .chain(page_bundles.iter())
+        .copied()
+    {
+        if emitted.contains(&name) {
             continue;
         }
         emitted.push(name);

@@ -116,11 +116,14 @@ fn is_safe(method: &Method) -> bool {
 /// *this* host — a page on another domain cannot forge it, and `Origin: null` (a
 /// sandboxed iframe, a `file://` document) is rejected rather than guessed at.
 fn same_origin(headers: &HeaderMap, uri: &Uri) -> Result<(), &'static str> {
-    let host = headers
+    let claimed_host = headers
         .get(header::HOST)
         .and_then(|value| value.to_str().ok())
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| uri.host().unwrap_or_default());
+        .filter(|value| !value.is_empty());
+    let host = match claimed_host {
+        Some(value) => value,
+        None => uri.host().unwrap_or_default(),
+    };
 
     if let Some(origin) = headers
         .get(header::ORIGIN)

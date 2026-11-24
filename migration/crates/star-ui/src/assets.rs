@@ -281,10 +281,9 @@ mod tests {
             assert!(embedded(path).is_some(), "{path} is not embedded");
         }
         assert!(
-            embed::ASSETS.iter().any(|asset| asset
-                .path
-                .starts_with("/_app/immutable/entry/start-")
-                || asset.path.starts_with("/_app/immutable/entry/start.")),
+            embed::ASSETS
+                .iter()
+                .any(|asset| asset.path.starts_with("/_app/immutable/entry/start.")),
             "no SvelteKit start entry embedded"
         );
     }

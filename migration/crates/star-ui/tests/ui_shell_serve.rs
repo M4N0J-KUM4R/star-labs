@@ -191,9 +191,9 @@ async fn an_unknown_api_path_keeps_the_default_404() {
     let resp = server.get("/api/v1/definitely-not-a-route").await;
     assert_eq!(resp.status_code(), StatusCode::NOT_FOUND);
     assert_eq!(
-        resp.text().trim(),
-        "Not Found",
-        "the fallback must answer as axum's default does"
+        resp.text(),
+        "",
+        "the fallback must answer as axum's default does: a bare StatusCode, no body"
     );
 
     // ... and a write never fetches an asset, even at a real one's path.

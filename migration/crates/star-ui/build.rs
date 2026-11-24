@@ -24,6 +24,14 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
+/// One collected file: the cache revision to serve it under, and the path to read
+/// its bytes from at generation time.
+type Filed = (String, PathBuf);
+
+/// One `embed/shell-map.txt` record: the path pattern, its stylesheet bundles in
+/// cascade order, and the `<body>` classes Canvas computes for that page.
+type ShellRecord = (String, Vec<String>, Vec<String>);
+
 /// Extension → Content-Type. Unknown extensions abort the build: a wrong type on a
 /// JS module is a silent "the page renders nothing" bug, not a visible one.
 fn mime_for(path: &Path) -> &'static str {
@@ -68,7 +76,7 @@ fn revision(bytes: &[u8]) -> String {
 }
 
 /// Walk `root`, filing every file under the URL it will be served at.
-fn collect(root: &Path, url_prefix: &str, out: &mut BTreeMap<String, (String, PathBuf)>) {
+fn collect(root: &Path, url_prefix: &str, out: &mut BTreeMap<String, Filed>) {
     if !root.is_dir() {
         return;
     }
@@ -94,8 +102,8 @@ fn collect(root: &Path, url_prefix: &str, out: &mut BTreeMap<String, (String, Pa
 /// wrong", which is the hardest class of CSS bug to find from a screenshot.
 fn parse_shell_map(
     file: &Path,
-    sheets: &BTreeMap<String, (String, PathBuf)>,
-) -> (Vec<String>, Vec<(String, Vec<String>, Vec<String>)>) {
+    sheets: &BTreeMap<String, Filed>,
+) -> (Vec<String>, Vec<ShellRecord>) {
     let text = fs::read_to_string(file).unwrap_or_else(|e| {
         panic!(
             "read {}: {e} — the shell cannot pick a page's stylesheets without its table",
@@ -103,7 +111,7 @@ fn parse_shell_map(
         )
     });
     let mut always: Vec<String> = Vec::new();
-    let mut entries: Vec<(String, Vec<String>, Vec<String>)> = Vec::new();
+    let mut entries: Vec<ShellRecord> = Vec::new();
 
     for (index, raw) in text.lines().enumerate() {
         let line_no = index + 1;
@@ -194,7 +202,7 @@ fn main() {
     // literal name; the Canvas sheets keep theirs, because the `url()` references
     // inside them are rooted at /fonts and /images — renaming those files would mean
     // rewriting Canvas' own CSS.
-    let mut assets: BTreeMap<String, (String, PathBuf)> = BTreeMap::new();
+    let mut assets: BTreeMap<String, Filed> = BTreeMap::new();
     collect(&build_dir.join("_app"), "/_app", &mut assets);
     for dir in ["canvas", "fonts", "images"] {
         collect(&static_dir.join(dir), &format!("/{dir}"), &mut assets);
