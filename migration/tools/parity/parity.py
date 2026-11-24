@@ -947,7 +947,11 @@ def route_referenced(normalized_path, ui_refs):
 # ---------------------------------------------------------------------------
 
 def _extract_route_calls(text):
-    """Yield the argument text of every `.route(...)` call, paren-balanced."""
+    """Yield (argument text, start offset) of every `.route(...)` call.
+
+    The offset is the index of the `.route(` token in `text`, so callers can
+    map a call back to the enclosing function (see `star_route_mounts`).
+    """
     pos = 0
     while True:
         start = text.find(".route(", pos)
@@ -973,7 +977,7 @@ def _extract_route_calls(text):
             elif ch == ")":
                 depth -= 1
             i += 1
-        yield text[start + len(".route("):i - 1]
+        yield text[start + len(".route("):i - 1], start
         pos = i
 
 
@@ -1070,6 +1074,381 @@ def _strip_tests(text):
     return text
 
 
+# ---------------------------------------------------------------------------
+# Rust comment stripping
+# ---------------------------------------------------------------------------
+
+RUST_CHAR_RE = re.compile(r"'(?:\\u\{[0-9a-fA-F]+\}|\\.|[^\\'])'")
+
+
+def _strip_rust_comments(text):
+    """Blank `//` and nested `/* */` comments out, preserving every offset.
+
+    A comment is not code: star-ui's asset block carries the sentence
+    "parity.py counts `.route()` calls" in a `//`, which the scoreboard read
+    as one unparsed registration. Offsets are preserved so a call found in
+    the stripped text still maps to the ranges computed from the same text.
+    Strings (including byte and raw strings) and char literals are stepped
+    over, never blanked; lifetimes (`'a`) are not char literals.
+    """
+    out = list(text)
+    n = len(text)
+
+    def blank(start, stop):
+        for k in range(start, stop):
+            if out[k] != "\n":
+                out[k] = " "
+
+    i = 0
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if ch == "/" and nxt == "/":
+            j = i
+            while j < n and text[j] != "\n":
+                j += 1
+            blank(i, j)
+            i = j
+            continue
+        if ch == "/" and nxt == "*":
+            depth = 0
+            j = i
+            while j < n:
+                if text.startswith("/*", j):
+                    depth += 1
+                    j += 2
+                elif text.startswith("*/", j):
+                    depth -= 1
+                    j += 2
+                    if depth == 0:
+                        break
+                else:
+                    j += 1
+            blank(i, j)
+            i = j
+            continue
+        # string-literal prefixes: b"...", r"...", r#"..."#, br"...", rb"..."
+        # (guarded so an identifier ending in b/r is not mistaken for one)
+        k = i
+        if (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")) \
+                and k + 1 < n and text[k] == "b" and text[k + 1] in "r\"":
+            k += 1
+        if text[k] == "r":
+            k += 1
+            hashes = 0
+            while k < n and text[k] == "#":
+                hashes += 1
+                k += 1
+            if k < n and text[k] == '"':
+                term = '"' + "#" * hashes
+                j = text.find(term, k + 1)
+                i = n if j < 0 else j + len(term)
+                continue
+            i += 1
+            continue
+        if k != i and text[k] == '"':
+            i = k
+        if text[i] == '"':
+            j = i + 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    break
+                j += 1
+            i = j + 1
+            continue
+        if ch == "'":
+            match = RUST_CHAR_RE.match(text, i)
+            if match:
+                i = match.end()
+                continue
+        i += 1
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Router mount detection
+# ---------------------------------------------------------------------------
+#
+# `web_*` vs `api_*` must answer WHERE a registration is mounted, not what
+# shape its path string has: `PUT /assignments/{id}` inside a router that
+# reaches `nest("/api/v1", ...)` is an API-surface question even though the
+# same text appears as a Canvas *page* path, and a star-ui page is a web
+# question even when its path matches an API table row's tail. The mount is
+# recovered from the router composition: the axum chains in `star-http`'s
+# `main()` (the `/api/v1` nest, the `fallback_service` web shell, and the
+# root-merged/`/api/graphql`-nested routers whose route strings are full
+# URLs and whose Canvas counterparts are drawn in the web route set), then
+# transitively through every `.merge(...)` / `.nest(...)` /
+# `.fallback_service(...)` argument that resolves to a `fn` in the tree.
+
+RUST_BODY_FN_RE = re.compile(
+    r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^<>()]*>)?\s*\(")
+COMPOSITION_HEAD_RE = re.compile(r"\.(merge|nest|fallback_service)\s*\(")
+CALL_PATH_RE = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_]*(?:\s*(?:::|\.)\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*\(")
+LET_NULLARY_RE = re.compile(
+    r"\blet\s+(?:mut\s+)?([a-z_][A-Za-z0-9_]*)[^=;]*?=\s*"
+    r"([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)\s*\(\s*\)\s*;")
+NEST_PREFIX_RE = re.compile(r"^\s*\"([^\"]*)\"")
+
+
+def _rust_fn_ranges(text):
+    """(name, body_start, body_end) for every `fn` with a body in `text`."""
+    ranges = []
+    for match in RUST_BODY_FN_RE.finditer(text):
+        args_close = _skip_balanced(text, match.end() - 1)
+        j = args_close
+        depth = 0
+        while j < len(text):
+            ch = text[j]
+            if ch in "([":
+                depth += 1
+            elif ch in ")]":
+                depth -= 1
+            elif depth == 0 and ch == "{":
+                break
+            elif depth == 0 and ch == ";":
+                break
+            j += 1
+        if j >= len(text) or text[j] == ";":
+            continue  # trait / extern declaration: no body to compose
+        ranges.append((match.group(1), j, _skip_balanced(text, j, "{", "}")))
+    return ranges
+
+
+def _enclosing_fn(ranges, offset):
+    """Innermost function body containing `offset`, or None."""
+    best = None
+    for name, start, end in ranges:
+        if start <= offset < end:
+            if best is None or (end - start) < (best[2] - best[1]):
+                best = (name, start, end)
+    return best[0] if best else None
+
+
+def _split_top_level_args(text):
+    """Split a call-argument list on depth-0 commas (string-aware)."""
+    parts = []
+    depth = 0
+    quote = None
+    escaped = False
+    current = []
+    for ch in text:
+        if quote:
+            current.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+            current.append(ch)
+            continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(ch)
+    parts.append("".join(current))
+    return parts
+
+
+def _composition_edges(body):
+    """(nest_prefix, call_path_text) for each merge/nest/fallback_service
+    argument inside one function body."""
+    edges = []
+    bindings = dict(LET_NULLARY_RE.findall(body))
+    for match in COMPOSITION_HEAD_RE.finditer(body):
+        open_index = body.index("(", match.start())
+        args_end = _skip_balanced(body, open_index)
+        args = body[open_index + 1:args_end - 1]
+        if match.group(1) == "nest":
+            parts = _split_top_level_args(args)
+            prefix = None
+            if parts:
+                pm = NEST_PREFIX_RE.match(parts[0])
+                prefix = pm.group(1) if pm else None
+            expr = ",".join(parts[1:]) if len(parts) > 1 else ""
+        else:
+            prefix = None
+            expr = args
+        for call in CALL_PATH_RE.finditer(expr):
+            chain = re.sub(r"\s+", "", call.group(1))
+            if any(not seg[:1].islower() for seg in chain.replace(".", "::").split("::")):
+                continue  # type paths (`Router::new`) build no sub-router
+            head = re.split(r"[.:]+", chain)[0]
+            if head in bindings:
+                edges.append((prefix, bindings[head]))
+            elif "." not in chain:
+                edges.append((prefix, chain))
+    return edges
+
+
+def star_route_mounts(star_src):
+    """Map (file, fn name) -> 'api' | 'web' from the router composition.
+
+    'api' means the function's registrations are reachable only through
+    `nest("/api/v1", ...)`; 'web' means they answer at the top level (the
+    `fallback_service` shell, root-merged routers, `/api/graphql`), which is
+    where Canvas draws their counterparts. Raises SystemExit when the
+    composition root is missing or a router is reachable with two different
+    mounts -- an ambiguous mount is exactly the silence this tool is here to
+    remove.
+    """
+    main_file = star_src / "crates" / "star-http" / "src" / "main.rs"
+    if not main_file.is_file():
+        raise SystemExit(
+            "mount detection: star-http main.rs not found under %s — the "
+            "router composition root is missing, so no registration can be "
+            "classified by mount" % star_src)
+
+    definitions = {}   # (crate, fn) -> list of (file, start, end)
+    ranges_by_file = {}
+    crate_by_file = {}
+    for path in sorted((star_src / "crates").glob("*/src/**/*.rs")):
+        crate = path.relative_to(star_src / "crates").parts[0]
+        text = _strip_tests(_strip_rust_comments(
+            path.read_text(encoding="utf-8", errors="replace")))
+        ranges = _rust_fn_ranges(text)
+        if ranges:
+            key = str(path)
+            ranges_by_file[key] = (text, ranges)
+            crate_by_file[key] = crate
+            for name, start, end in ranges:
+                definitions.setdefault((crate, name), []).append(
+                    (key, start, end))
+
+    def resolve(chain, caller_file):
+        """Call path text -> (file, fn) definition site, or None."""
+        segments = chain.split("::")
+        fn_name = segments[-1]
+        caller_crate = crate_by_file[caller_file]
+        if len(segments) == 1:
+            crate, modules = caller_crate, []
+        elif segments[0] in ("crate", "self"):
+            crate = caller_crate
+            modules = segments[2:-1]
+        elif segments[0].startswith("star_"):
+            crate = segments[0].replace("_", "-")
+            modules = segments[1:-1]
+        else:
+            # a same-crate module path: `content_exports::router()`
+            crate = caller_crate
+            modules = segments[:-1]
+        candidates = definitions.get((crate, fn_name), [])
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return (candidates[0][0], fn_name)
+        hit = []
+        if modules:
+            want = "/".join(["src"] + modules)
+            hit = [f for f, _, _ in candidates
+                   if f.endswith(want + ".rs") or f.endswith(want + "/mod.rs")]
+        if not hit and caller_file in [f for f, _, _ in candidates]:
+            hit = [caller_file]
+        if not hit and not modules:
+            # crate-qualified call with no module chain: the crate root file
+            # (a `pub fn router()` in lib.rs, the star-http convention).
+            hit = [f for f, _, _ in candidates
+                   if Path(f).name in ("lib.rs", "main.rs")]
+        if len(hit) == 1:
+            return (hit[0], fn_name)
+        raise SystemExit(
+            "mount detection: call %s::%s() is ambiguous — %s defines it in "
+            "%s; qualify the call with its module path" %
+            ("::".join(segments[:-1]), fn_name, crate,
+             ", ".join(sorted(str(Path(c).relative_to(star_src))
+                              for c in (hit or [f for f, _, _ in candidates])))))
+
+    labels = {}
+    conflicts = []
+    key_main = str(main_file)
+    if key_main not in ranges_by_file:
+        raise SystemExit("mount detection: no functions found in %s" % key_main)
+    queue = [(key_main, "main", "web")]
+    while queue:
+        file, fn, label = queue.pop(0)
+        node = (file, fn)
+        previous = labels.get(node)
+        if previous is not None:
+            if previous != label:
+                conflicts.append(node)
+            continue
+        labels[node] = label
+        entry = ranges_by_file.get(file)
+        if entry is None:
+            continue
+        text, ranges = entry
+        body = next(((s, e) for n, s, e in ranges if n == fn), None)
+        if body is None:
+            continue
+        scope = text[body[0]:body[1]]
+        seen_edges = set()
+        composition_edges = _composition_edges(scope)
+        # chains already placed by a merge/nest argument: the mount decided
+        # there wins, the plain body scan must not re-label them (main's
+        # `let api_router = build_api_router();` is not a second, web mount).
+        composed_chains = {chain for _, chain in composition_edges}
+        for prefix, chain in composition_edges:
+            if (prefix, chain) in seen_edges:
+                continue
+            seen_edges.add((prefix, chain))
+            child = resolve(chain, file)
+            if child is None:
+                continue
+            child_label = "api" if prefix == "/api/v1" else label
+            queue.append((child[0], child[1], child_label))
+        # A builder may also return / splice another builder directly
+        # (`fn router() -> Router { conferences_api::router() }`), so any
+        # call in the body whose target itself composes or registers routes
+        # is followed too. Non-router helpers resolve to bodies with neither
+        # marker and contribute nothing.
+        for call in CALL_PATH_RE.finditer(scope):
+            if call.start() and scope[call.start() - 1] == ".":
+                continue  # a method call (`query.merge(`), not a free router
+            chain = re.sub(r"\s+", "", call.group(1))
+            if "." in chain or any(not seg[:1].islower()
+                                   for seg in chain.split("::")):
+                continue
+            if chain in composed_chains:
+                continue
+            if (None, chain) in seen_edges:
+                continue
+            seen_edges.add((None, chain))
+            child = resolve(chain, file)
+            if child is None:
+                continue
+            entry2 = ranges_by_file.get(child[0])
+            if entry2 is None:
+                continue
+            text2, ranges2 = entry2
+            child_body = next(((s, e) for n, s, e in ranges2
+                               if n == child[1]), None)
+            if child_body is None:
+                continue
+            inner = text2[child_body[0]:child_body[1]]
+            if ".route(" in inner or COMPOSITION_HEAD_RE.search(inner):
+                queue.append((child[0], child[1], label))
+    if conflicts:
+        raise SystemExit(
+            "mount detection: router functions reachable with two different "
+            "mounts: %s" % ", ".join(
+                "%s::%s" % (Path(f).name, n) for f, n in sorted(conflicts)))
+    return labels, ranges_by_file
+
+
+
 def star_reachable_files(star_src):
     """.rs files under `crates/*/src/` that a crate's `mod` tree pulls in.
 
@@ -1126,19 +1505,29 @@ def parse_star_routes(star_src):
     test_calls = 0
     unreachable_calls = 0
     reachable = star_reachable_files(star_src)
+    mounts, ranges_by_file = star_route_mounts(star_src)
+    unmounted = []
     for path in sorted((star_src / "crates").glob("*/src/*.rs")):
         crate = path.parent.parent.name
         raw = path.read_text(encoding="utf-8", errors="replace")
-        raw_calls = list(_extract_route_calls(raw))
-        text_calls = list(_extract_route_calls(_strip_tests(raw)))
+        code = _strip_rust_comments(raw)
+        raw_calls = list(_extract_route_calls(code))
+        text_calls = list(_extract_route_calls(_strip_tests(code)))
         test_calls += max(len(raw_calls) - len(text_calls), 0)
         if path.resolve() not in reachable:
             # Uncompiled file: count its calls as excluded rather than
             # silently crediting its routes to the product.
             unreachable_calls += len(raw_calls)
             continue
-        for args in text_calls:
+        key = str(path)
+        fn_ranges = ranges_by_file.get(key, ("", []))[1]
+        for args, offset in text_calls:
             calls += 1
+            fn = _enclosing_fn(fn_ranges, offset)
+            mount = mounts.get((key, fn)) if fn else None
+            if mount is None:
+                unmounted.append((key, fn,
+                                  code[:offset].count("\n") + 1))
             sm = STR_RE.search(args)
             if not sm:
                 unparsed += 1
@@ -1155,7 +1544,19 @@ def parse_star_routes(star_src):
                     "normalized_path": normalize_path(route_path),
                     "crate": crate,
                     "source": str(path.relative_to(star_src)),
+                    "mount": mount,
+                    "router_fn": fn,
                 })
+    if unmounted:
+        raise SystemExit(
+            "parity mount failure: %d `.route(...)` call(s) sit in functions "
+            "the app never mounts (the router composition in star-http does "
+            "not reach them, so their `web`/`api` side is unknown): %s — "
+            "wire the router into main.rs or drop the registration" %
+            (len(unmounted), ", ".join(
+                "%s::%s(%s)" % (Path(file).relative_to(star_src),
+                                fn or "<top level>", line)
+                for file, fn, line in unmounted)))
     return (sorted(routes, key=lambda r: (r["normalized_path"], r["verb"],
                                           r["crate"])), calls, unparsed,
             test_calls, unreachable_calls)
@@ -1427,17 +1828,23 @@ def _self_alias_paths(path):
 
 
 def classify_extras(extras, canvas_routes, web_routes, star_keys):
-    """Say WHY each unmatched star registration is unmatched.
+    """Say WHY each unmatched star registration is unmatched, BY MOUNT.
 
-    Before this existed every one of them was reported as a bare "extra", which
-    conflated three different jobs: fix the verb, port a Canvas web endpoint,
-    or delete a route Canvas never had.
-
-    `api_*_mismatch`/`api_nested` now mean a real gap: Canvas answers this path
-    in a shape star does not serve. When star already serves every Canvas verb
-    at the path, the extra is additive (`api_extra_verb`) and the job is to
-    label it, not to change it -- conflating the two put 18 no-op "verb fixes"
-    on issue #233's list.
+    Before this existed every one of them was reported as a bare "extra", and
+    the web/api split came from the shape of the path: an API-mounted
+    `PUT /assignments/{id}` scored against Canvas' WEB route set
+    (`match "assignments/:id"` is a page) and a star-ui page could be called
+    an API verb. Now the registration's real mount decides which Canvas
+    route set is the question: routers reachable through `nest("/api/v1",
+    ...)` answer against the API manifest (api_* classes, alias included),
+    and routers mounted at the top level -- the `star_ui::app` fallback, the
+    root-merged login/LTI/sis families, `/api/graphql` -- answer against
+    the Canvas web set (web_* classes), because Canvas draws those URLs in
+    its web route table. A registration with no proven mount is a hard
+    error, not a bucket; when star already serves every Canvas verb at the
+    path, the extra is additive (`api_extra_verb`) and the job is to label
+    it, not to change it -- conflating the two put 18 no-op "verb fixes" on
+    issue #233's list.
     """
     api_verbs = {}
     for route in canvas_routes:
@@ -1457,46 +1864,60 @@ def classify_extras(extras, canvas_routes, web_routes, star_keys):
     counts = {name: 0 for name in EXTRA_CLASSES}
     for extra in extras:
         path, verb = extra["normalized_path"], extra["verb"]
-        if path in api_verbs:
-            missing = sorted(v for v in api_verbs[path] if (v, path) not in star_keys)
-            closest = sorted(api_verbs[path])
-            kind = "api_verb_mismatch" if missing else "api_extra_verb"
-            if missing:
-                closest = missing
-        elif any(ap in api_verbs for ap in _self_alias_paths(path)):
-            ap = next(a for a in _self_alias_paths(path) if a in api_verbs)
-            verbs = sorted(api_verbs[ap])
-            # The alias only proves parity for the verb Canvas really answers
-            # there: star's PUT /users/self/profile sits on a path Canvas
-            # exposes as GET only, so it is an additive verb on an aliased
-            # path, not a parity-exact route.
-            kind = "api_alias" if verb in verbs else "api_extra_verb"
-            counts[kind] += 1
-            extra["classification"] = kind
-            extra["canvas_closest"] = ["%s %s" % (v, ap) for v in verbs]
-            continue
-        elif (verb, path) in web_keys:
-            kind = "web_exact"
-            closest = ["WEB " + verb]
-        elif path in web_verbs:
-            kind = "web_verb_mismatch"
-            closest = sorted(web_verbs[path])
-        elif any(wp == path or wp.endswith("/" + path) for wp in web_paths):
-            kind = "web_nested"
-            closest = [wp for wp in web_paths
-                       if wp.endswith("/" + path)][:1]
-        elif any(ap == path or ap.endswith("/" + path) for ap in api_paths):
-            parents = [ap for ap in api_paths if ap.endswith("/" + path)]
-            served = [r for ap in parents for r in api_routes_by_path[ap]
-                      if (r["verb"], r["normalized_path"]) in star_keys]
-            missing = [r for ap in parents for r in api_routes_by_path[ap]
-                       if (r["verb"], r["normalized_path"]) not in star_keys]
-            kind = "api_extra_nested" if served and not missing else "api_nested"
-            closest = [(r["verb"] + " " + r["normalized_path"])
-                       for r in (missing or served)][:3]
+        mount = extra.get("mount")
+        if mount == "api":
+            if path in api_verbs:
+                missing = sorted(v for v in api_verbs[path]
+                                 if (v, path) not in star_keys)
+                closest = sorted(api_verbs[path])
+                kind = "api_verb_mismatch" if missing else "api_extra_verb"
+                if missing:
+                    closest = missing
+            elif any(ap in api_verbs for ap in _self_alias_paths(path)):
+                ap = next(a for a in _self_alias_paths(path)
+                          if a in api_verbs)
+                verbs = sorted(api_verbs[ap])
+                # The alias only proves parity for the verb Canvas really
+                # answers there: star's PUT /users/self/profile sits on a
+                # path Canvas exposes as GET only, so it is an additive verb
+                # on an aliased path, not a parity-exact route.
+                kind = "api_alias" if verb in verbs else "api_extra_verb"
+                counts[kind] += 1
+                extra["classification"] = kind
+                extra["canvas_closest"] = ["%s %s" % (v, ap) for v in verbs]
+                continue
+            elif any(ap == path or ap.endswith("/" + path) for ap in api_paths):
+                parents = [ap for ap in api_paths if ap.endswith("/" + path)]
+                served = [r for ap in parents for r in api_routes_by_path[ap]
+                          if (r["verb"], r["normalized_path"]) in star_keys]
+                missing = [r for ap in parents for r in api_routes_by_path[ap]
+                           if (r["verb"], r["normalized_path"]) not in star_keys]
+                kind = "api_extra_nested" if served and not missing \
+                    else "api_nested"
+                closest = [(r["verb"] + " " + r["normalized_path"])
+                           for r in (missing or served)][:3]
+            else:
+                kind = "absent"
+                closest = []
+        elif mount == "web":
+            if (verb, path) in web_keys:
+                kind = "web_exact"
+                closest = ["WEB " + verb]
+            elif path in web_verbs:
+                kind = "web_verb_mismatch"
+                closest = sorted(web_verbs[path])
+            elif any(wp == path or wp.endswith("/" + path) for wp in web_paths):
+                kind = "web_nested"
+                closest = [wp for wp in web_paths
+                           if wp.endswith("/" + path)][:1]
+            else:
+                kind = "absent"
+                closest = []
         else:
-            kind = "absent"
-            closest = []
+            raise SystemExit(
+                "parity classify failure: %s %s (%s) has mount %r -- every "
+                "registration must be proven web or api by star_route_mounts"
+                % (verb, extra["path"], extra["source"], mount))
         extra["classification"] = kind
         extra["canvas_closest"] = closest
         counts[kind] += 1
@@ -1733,9 +2154,11 @@ def render_report(coverage):
         "routes.rb check before it is kept. It is not a clean bill of health: "
         "`POST /courses` sat here until it was deleted, because Canvas' only API "
         "course create is `post \"accounts/:account_id/courses\"` "
-        "(canvas-src/config/routes.rb:1231); `web_*` means Canvas "
-        "answers that path as a **web** (HTML/JS) route rather than an API "
-        "route -- a port, not a REST parity item; `api_alias` is Canvas' own "
+        "(canvas-src/config/routes.rb:1231); `web_*` means the "
+        "registration is mounted on the top-level (non-`/api/v1`) side -- "
+        "the page shell or the root URL families -- and Canvas answers "
+        "that path as a **web** (HTML/JS) route, so it is a port, not a "
+        "REST parity item; `api_alias` is Canvas' own "
         "`self` id spelling (canvas-src/lib/api.rb:51 maps the literal `self` "
         "to the current user), which is parity-exact and must not be deleted; "
         "and `absent` means no Canvas path or path-tail matches, which covers "
@@ -1764,12 +2187,13 @@ def render_report(coverage):
         }[name]
         add("| `%s` | %d | %s |" % (name, classes.get(name, 0), action))
     add("")
-    add("| Verb | Path | Crate | Class | Canvas closest |")
-    add("|---|---|---|---|---|")
+    add("| Verb | Path | Crate | Mount | Class | Canvas closest |")
+    add("|---|---|---|---|---|---|")
     for route in sorted(extras, key=lambda r: (r.get("classification", "absent"),
                                                r["normalized_path"], r["verb"])):
-        add("| %s | `%s` | `%s` | %s | %s |" %
+        add("| %s | `%s` | `%s` | %s | %s | %s |" %
             (route["verb"], route["path"], route["crate"],
+             route.get("mount", "?"),
              route.get("classification", "unclassified"),
              ", ".join("`%s`" % c for c in route.get("canvas_closest") or [])
              or "-"))
@@ -1801,8 +2225,17 @@ def render_report(coverage):
         "Canvas graphql_names before matching. Connection and edge helpers "
         "(e.g. `PageInfo`, `*Edge`, `*Connection`) only count when Canvas "
         "defines a type of the same name.")
-    add("- Rust paths are matched by `(verb, normalized path)`; axum's "
-        "`nest(\"/api/v1\", ...)` mount is assumed for all crate routers.")
+    add("- Rust paths are matched by `(verb, normalized path)`. `web_*` vs "
+        "`api_*` is decided by the Rust mount, not the path shape: "
+        "`star_route_mounts` walks the router composition from `star-http` "
+        "main() -- `nest(\"/api/v1\", build_api_router)` and everything its "
+        "`.merge(...)` chain reaches is `api`; the `fallback_service("
+        "star_ui::app)` shell, the root-merged login/LTI/sis routers, and "
+        "`nest(\"/api/graphql\", ...)` and everything they reach are `web`. "
+        "API-mounted extras are classified only against the Canvas API "
+        "table, web-mounted extras only against the Canvas web table; a "
+        "registration whose enclosing router function is not reachable from "
+        "main() is a hard error.")
     add("- Extras include deliberate flat-path deviations (for example "
         "`/assignments/{id}` where Canvas uses "
         "`/courses/{course_id}/assignments/{id}`) and auth/dashboard/health "
