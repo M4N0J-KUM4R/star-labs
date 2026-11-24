@@ -6,7 +6,6 @@ edition.workspace = true
 [dependencies]
 star-common = { path = "../star-common" }
 star-auth = { path = "../star-auth" }
-star-dashboard = { path = "../star-dashboard" }
 star-courses = { path = "../star-courses" }
 star-pages = { path = "../star-pages" }
 star-modules = { path = "../star-modules" }

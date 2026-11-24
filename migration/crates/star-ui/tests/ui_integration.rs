@@ -385,9 +385,16 @@ async fn global_nav_calendar_link_points_to_calendar() {
     );
 }
 
-/// AC3 + AC4 + AC8: dashboard renders 200 with the 18 phase-1 ENV keys of the
-/// right types, one card per enrolled course linking /courses/{id}, an
-/// unpublished style for unpublished courses, and only hashed asset links.
+/// AC3 + AC4 + AC8: `/dashboard` is the shell boot document with the 18 phase-1 ENV
+/// keys of the right types, Canvas' own dashboard sheets linked in cascade order, and
+/// only hashed asset links.
+///
+/// The card grid and the To Do list are no longer in this document: Canvas renders them
+/// from `GET /api/v1/dashboard/dashboard_cards` and `GET /api/v1/users/self/todo`, and
+/// those payloads are asserted in `star-dashboard/tests/dashboard_integration.rs`
+/// (`dashboard_cards_return_menu_cards_ordered_by_position`,
+/// `todo_lists_grading_and_submitting_items_with_canvas_shape`) and their DOM in
+/// `browser-smoke/tests/dashboard-shell-styles.spec.ts`.
 #[tokio::test]
 async fn dashboard_renders_cards_and_env_contract() {
     let Some((server, pool, prefix)) = setup().await else {
@@ -396,10 +403,6 @@ async fn dashboard_renders_cards_and_env_contract() {
     };
 
     let user = seed_user(&pool, &prefix, "dashuser", "student", "not-a-real-hash").await;
-    let published = seed_course(&pool, &prefix, "Published Course", "available").await;
-    let unpublished = seed_course(&pool, &prefix, "Draft Course", "unpublished").await;
-    seed_enrollment(&pool, user, published, "student").await;
-    seed_enrollment(&pool, user, unpublished, "student").await;
 
     let token = star_auth::create_token(user, "student", JWT_SECRET).expect("mint");
     let resp = server
@@ -453,23 +456,31 @@ async fn dashboard_renders_cards_and_env_contract() {
     assert!(env["files_domain"].is_string());
     assert!(env["notices"].is_array());
 
-    // Global nav.
-    assert!(body.contains("ic-app-header"));
-    assert!(body.contains("global_nav_dashboard_link"));
-
-    // One card per enrolled course, linking /courses/{id}.
-    assert!(body.contains(&format!("data-course-id=\"{published}\"")));
-    assert!(body.contains(&format!("href=\"/courses/{published}\"")));
-    assert!(body.contains(&format!("data-course-id=\"{unpublished}\"")));
-    // Unpublished style per the API's published flag.
-    assert!(body.contains("ic-DashboardCard__unpublished"));
-
-    // AC8: hashed asset link present; sole inline <script> is the ENV block.
-    let hash = star_ui::assets::app_css_hash();
+    // AC8: the boot document, then Canvas' dashboard sheets on top of the common set.
     assert!(
-        body.contains(&format!("/static/{hash}/app.css")),
-        "hashed CSS link missing"
+        body.contains("kit.start(app, element)"),
+        "boot script missing"
     );
+    assert!(
+        body.contains("/_app/immutable/entry/start."),
+        "entry link missing"
+    );
+    for bundle in ["tokens", "common", "dashboard", "dashboard_card"] {
+        assert!(
+            body.contains(&format!("data-canvas-bundle=\"{bundle}\"")),
+            "Canvas sheet {bundle} missing from the cascade"
+        );
+    }
+    // `with-right-side` is what Canvas' layout adds because user_dashboard provides
+    // :right_side (app/views/users/user_dashboard.html.erb:84); the To Do panel sits in
+    // that aside and `.with-right-side` sizes it (app/stylesheets/base/_layout.scss:78).
+    assert!(
+        body.contains("<body class=\"primary-nav-expanded with-right-side\""),
+        "body class missing: {}",
+        &body[..body.len().min(300)]
+    );
+
+    // The sole inline <script> is the ENV block; every other tag is a module link.
     let script_count = body.matches("<script>").count();
     let env_block_count = body.matches("window.ENV = ").count();
     assert_eq!(
@@ -478,17 +489,11 @@ async fn dashboard_renders_cards_and_env_contract() {
     );
     assert_eq!(env_block_count, 1);
 
-    // Static asset serves with immutable caching; wrong hash 404s.
-    let asset = server.get(&format!("/static/{hash}/app.css")).await;
-    assert_eq!(asset.status_code(), 200);
-    let cache_control = asset
-        .headers()
-        .get("cache-control")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    assert!(cache_control.contains("immutable"));
-    let bad = server.get("/static/wrong-hash/app.css").await;
-    assert_eq!(bad.status_code(), 404);
+    // One user's document must never be cached.
+    assert!(resp.headers()["cache-control"]
+        .to_str()
+        .unwrap_or_default()
+        .contains("no-store"));
 
     cleanup(&pool, &prefix).await;
 }

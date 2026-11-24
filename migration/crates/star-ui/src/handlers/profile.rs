@@ -54,7 +54,8 @@ pub async fn profile(State(app): State<AppState>, user: SessionUser, jar: Cookie
     // The bundle writes through `/api/v1`, and `session_bridge` requires the
     // double-submit pair on an unsafe method. `star_csrf` is the half the browser
     // can read, so the shell has to have set it before the first POST — every
-    // Askama page already does this (login.rs:89, dashboard.rs:156).
+    // Askama page already does this (login.rs:89) and so does the dashboard shell
+    // (dashboard.rs:57).
     let (jar, _csrf_token) = crate::session::ensure_csrf_cookie(jar);
 
     // The dyslexic half of Canvas' variant matrix is not reachable yet: it needs

@@ -21,10 +21,12 @@ import type {
 	CalendarEvent,
 	Course,
 	CourseTab,
+	DashboardCardJson,
 	DiscussionTopic,
 	Enrollment,
 	LoginResponse,
 	Quiz,
+	TodoItem,
 	User,
 	WikiPage
 } from '$lib/types';
@@ -218,6 +220,18 @@ export const endpoints = {
 				per_page: 50,
 				...query
 			})
+	},
+
+	dashboard: {
+		/** GET /api/v1/dashboard/dashboard_cards (routes.rb:1839,
+		 *  `users#dashboard_cards`). Canvas prefetches this exact path from
+		 *  `app/views/shared/_dashboard_card.html.erb:36`, so the dashboard's
+		 *  cards come from here and not from `/users/:id/courses`. */
+		cards: () => api.get<DashboardCardJson[]>('/api/v1/dashboard/dashboard_cards'),
+		/** GET /api/v1/users/self/todo (routes.rb:1789). The rows of the
+		 *  right-hand To Do list Canvas renders in
+		 *  `app/views/courses/_to_do_list.html.erb`. */
+		todo: () => api.get<TodoItem[]>('/api/v1/users/self/todo')
 	},
 
 	users: {

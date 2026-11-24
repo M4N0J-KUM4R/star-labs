@@ -25,12 +25,15 @@ test.describe('journey 1: login -> dashboard', () => {
     // Global nav is present on the authenticated shell.
     await expect(page.locator('#global_nav_dashboard_link')).toBeVisible();
 
-    // At least one course card for an enrolled course, linking /courses/{id}.
+    // At least one course card for an enrolled course, linking /courses/{id}. The card
+    // is identified by the link the cards API put in its payload — Canvas' component has
+    // no data-course-id attribute (ui/shared/dashboard-card/react/DashboardCard.tsx:311-316
+    // gives only class, style, aria-label and data-testid="draggable-card").
     const cards = page.locator('.ic-DashboardCard');
     expect(await cards.count()).toBeGreaterThanOrEqual(1);
 
     const card = page.locator(
-      `.ic-DashboardCard[data-course-id="${COURSE_FRONT_PAGE_ID}"]`,
+      `.ic-DashboardCard:has(a.ic-DashboardCard__link[href="/courses/${COURSE_FRONT_PAGE_ID}"])`,
     );
     await expect(card).toBeVisible();
     await expect(card.locator('a.ic-DashboardCard__link')).toHaveAttribute(

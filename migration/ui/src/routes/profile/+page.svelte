@@ -3,6 +3,7 @@
 	import { session } from '$lib/auth.svelte';
 	import type { Course } from '$lib/types';
 	import DashboardCard from '$lib/components/DashboardCard.svelte';
+	import { cardFromCourse } from '$lib/dashboardCards';
 	import { loadCanvasStyles } from '$lib/canvasStyles';
 
 	/* Canvas loads exactly these bundles for this page: profile_show.
@@ -32,17 +33,18 @@
 
 <h2>{session.user?.name ?? 'Signed in'}</h2>
 <p>{session.user?.email}</p>
-<p class="ic-DashboardCard__header-term">Role: {session.user?.role ?? '—'}</p>
+<p>Role: {session.user?.role ?? '—'}</p>
 
 {#if courses.length === 0}
 	<span class="screenreader-only">No course enrollments</span>
 {:else}
 	<h2>Enrollments</h2>
-	<div id="DashboardCard_Container">
-		<div class="ic-DashboardCard__box">
-			{#each courses as course (course.id)}
-				<DashboardCard {course} />
-			{/each}
-		</div>
+	<!-- Canvas' profile page has no card grid (app/views/profile/show.html.erb renders
+	     shared/_profile_main); this list is our approximation and reuses the dashboard
+	     card through cardFromCourse. Porting Canvas' real profile layout is its own task. -->
+	<div class="ic-DashboardCard__box">
+		{#each courses as course (course.id)}
+			<DashboardCard card={cardFromCourse(course)} />
+		{/each}
 	</div>
 {/if}

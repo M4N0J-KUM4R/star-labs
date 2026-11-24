@@ -205,3 +205,71 @@ export interface LoginResponse {
 	token: string;
 	user: User;
 }
+
+/**
+ * One link inside a dashboard card — Canvas `CourseForMenuPresenter#to_h`
+ * (`app/presenters/course_for_menu_presenter.rb`), rendered by
+ * `ui/shared/dashboard-card/react/DashboardCardAction.jsx`. The keys are
+ * snake_case because that is what Canvas serialises; `css_class` is the class
+ * the action anchor gets, and `icon` is an `icon-*` sprite name.
+ */
+export interface DashboardCardLink {
+	css_class: string;
+	icon: string | null;
+	hidden: boolean;
+	path: string;
+	label: string;
+}
+
+/**
+ * `GET /api/v1/dashboard/dashboard_cards` (`config/routes.rb:1839`) — one
+ * course card. camelCase because Canvas' presenter emits camelCase here
+ * (`shortName`, `originalName`, `assetString`, `isFavorited`).
+ */
+export interface DashboardCardJson {
+	id: number;
+	longName: string;
+	shortName: string;
+	originalName: string;
+	courseCode: string;
+	assetString: string;
+	href: string;
+	term?: string | null;
+	subtitle: string;
+	enrollmentState: string;
+	enrollmentType: string;
+	observee?: string | null;
+	isFavorited: boolean;
+	isK5Subject?: boolean;
+	isHomeroom?: boolean;
+	published: boolean;
+	color?: string | null;
+	image?: string | null;
+	position?: number | null;
+	canManage?: boolean;
+	canReadAnnouncements?: boolean;
+	canChangeCoursePublishState?: boolean;
+	defaultView?: string;
+	pagesUrl?: string;
+	frontPageTitle?: string | null;
+	links: DashboardCardLink[];
+}
+
+/**
+ * `GET /api/v1/users/self/todo` (`config/routes.rb:1789`) — one row of the
+ * right-hand To Do list, as `app/views/courses/_to_do_list.html.erb` renders
+ * it. `type` is `grading` or `submitting`; `assignment` carries the due date
+ * and the URL the row links to.
+ */
+export interface TodoItem {
+	context_type: string;
+	course_id: number;
+	context_name: string;
+	context_short_name: string;
+	type: string;
+	ignore: string;
+	ignore_permanently: string;
+	html_url: string;
+	assignment: Assignment;
+	needs_grading_count?: number;
+}

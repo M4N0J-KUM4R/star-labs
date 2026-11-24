@@ -41,21 +41,25 @@ before deleting anything — there is a parity constraint that sequences the wor
 ## Measured, 2026-11-24 (`npm run build`, adapter-static, brotli -q11)
 
 The dashboard route, normal contrast, cold cache. Numbers are the files a browser
-actually fetches: `build/index.html`, the 21 preloaded chunks in its
-`<link rel=modulepreload>`, the five sheets `loadCanvasStyles()` appends
-(tokens, fonts, common, dashboard, dashboard_card) and the two Lato weights the
-first text paints with.
+actually fetches: `build/index.html` with the five Canvas sheets already linked into
+it server-side (tokens, fonts, common, dashboard, dashboard_card, from
+`crates/star-ui/embed/shell-map.txt`), the two entry files plus the chunks they and
+the `/dashboard` route node statically import (17 files, walked from the `from"../…"`
+edges in the built JS), and the two Lato weights the first text paints with. The
+compressed columns are per-file sums at brotli `--quality=11` and gzip 9 — what a
+proxy would send; the binary answers `Identity` today (MIGRATION.md "Nothing is
+precompressed").
 
 | Quantity | raw | brotli | gzip |
 |---|---|---|---|
-| JS — shell, chunks, entry, route node 0 | 117,215 | 42,707 | 47,952 |
-| Canvas CSS — the dashboard stack | 416,051 | 54,774 | 68,581 |
+| JS — entry, chunks, the dashboard route node | 114,792 | 42,223 | 47,080 |
+| Canvas CSS — the dashboard stack | 416,051 | 54,776 | 68,581 |
 | Lato Extended Regular + Bold (woff2, Canvas' files) | 367,620 | 359,520 | 360,773 |
-| Fallback shell HTML | 2,197 | 502 | 658 |
-| **Cold first load** | **903,083** | **457,503** | **477,964** |
-| First load without the two fonts | 535,463 | 97,983 | 117,191 |
-| All 15 route nodes together | 38,943 | 16,076 | 18,448 |
-| One extra page's sheet, e.g. assignments.css | 30,410 | 5,822 | — |
+| Shell HTML | 2,125 | 493 | 644 |
+| **Cold first load** | **900,588** | **457,012** | **477,078** |
+| First load without the two fonts | 532,968 | 97,492 | 116,305 |
+| All 15 route nodes together | 42,416 | 17,328 | 19,857 |
+| One extra page's sheet, e.g. assignments.css | 30,410 | 5,822 | 6,641 |
 
 Read the rows this way: **the fonts are the payload**, not the framework. Lato
 Extended ships every Latin codepoint Canvas has ever rendered, 182 KB per weight,
@@ -74,11 +78,11 @@ visible, not in a PR.
 | Other | Value |
 |---|---|
 | Canvas bundles compiled per variant | 31, plus the generated token sheet = 32 files |
-| Vendored files in `static/` | 236 files, 4,160,228 B (fonts 2,181,616; sheets 1,533,493; images 444,072) |
-| Embedded into the binary (`build.rs`) | 277 files, 4,310,494 B, of which `build/_app` is 151,055 B (55,087 B gzipped) |
-| Build time | 2.81 s |
+| Vendored files in `static/` | 236 files, 4,159,439 B (fonts 2,181,616; sheets 1,533,493; images 444,072; favicon 258) |
+| Embedded into the binary (`build.rs`, `ASSETS`) | 276 files, 4,316,376 B, of which `/_app` is 40 files / 156,937 B (67,498 B gzipped, per-file gzip 9) |
+| Build time | 3.10 s (`vite build`) |
 | Type gate | `svelte-check` 0 errors, 0 warnings |
-| Unit tests | 15 passed (`npm run test:unit`) |
+| Unit tests | 19 passed (`npm run test:unit`) |
 
 
 Resource profile, which is the reason for the shape:

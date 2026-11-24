@@ -152,14 +152,51 @@ After every page has a Svelte route:
 
 ## Known gaps in this branch
 
-- Only `/profile` renders through `shell.rs`. The other ten routes still return
-  their Askama page, because each one has markup assertions in
+- `/profile` and `/dashboard` render through `shell.rs`. The other nine routes still
+  return their Askama page, because each one has markup assertions in
   `tests/ui_integration.rs`, `tests/ui_journeys.rs` and `tests/auth_integration.rs`
   (~375 of them across the set) that describe the server-rendered DOM; converting
   a page means rewriting its assertions in the same commit, and that cannot be
   validated locally (cargo is CI-only). `embed/shell-map.txt` already carries all
   of them, so each conversion is one handler body plus its tests.
+- What the dashboard does **not** have yet, each one because the write or the feed it
+  needs does not exist:
+  * the card kebab — colour picker, nickname, drag-to-reorder (`DashboardCard.tsx:264`),
+    needing `PUT /users/:id/colors`, `PUT /users/:id/course_nickname` and
+    `PUT /users/self/favorites`;
+  * the `PublishButton` on an unpublished card a manager can publish
+    (`DashboardCard.tsx:353`), needing the course publish `PUT`;
+  * the card action badges (new announcements, recent feedback) — Canvas derives them
+    from a GraphQL activity-stream summary
+    (`ui/shared/dashboard-card/graphql/ActivityStream.ts`, mapped at
+    `ui/shared/dashboard-card/util/dashboardUtils.ts:112`), and this port ships REST,
+    so there is no endpoint to point them at;
+  * the dashboard header's course search, Cards/Stream switch and Start a New Course
+    (`#dashboard_header_container` is a React mount with `data-props` in
+    `user_dashboard.html.erb:126`), so only its title is rendered;
+  * the rest of the right-hand sidebar — Coming Up, Recent Feedback, Start a New Course
+    and, for a student whose planner is on, the Planner itself. Canvas serves that
+    column as one HTML fragment from `GET /dashboard-sidebar`
+    (`config/routes.rb:1077`, `app/views/users/dashboard_sidebar.html.erb`); this port
+    renders only the To Do list, from the JSON Canvas also serves at
+    `GET /api/v1/users/self/todo` (`routes.rb:1789`), which the ERB's own comment says
+    must carry the same rows.
+  These are absent, not inert: nothing here renders a control that 404s when used.
 - `/courses` is **not** registered. Canvas' nav hardcodes `href="/courses"`
+  (`_new_nav_header.html.erb:167`) and `CoursesController#index` exists
+  (`courses_controller.rb:530`), but `config/routes.rb` has no web `get "courses"`
+  row — so serving it would add a star route Canvas does not have, and
+  `parity.yml` fails on a coverage change. The SPA's `/courses` remains reachable
+  as a client-side route only. Task #30 is the classification fix that decides
+  this properly.
+- The `/courses` and `/profile` course lists are approximations. Canvas renders neither
+  with the dashboard card — `grep -rn DashboardCard ui/features/allCourses
+  ui/features/profile` returns nothing; All Courses has its own component and
+  `profile/show.html.erb` renders `shared/_profile_main`. Both pages reuse
+  `DashboardCard.svelte` through `cardFromCourse()` (`src/lib/dashboardCards.ts`),
+  which only ever fills fields the enrollments API returns and leaves the action tray
+  empty, because the tray comes from the cards API. Porting the two real views is its
+  own task.
   (`_new_nav_header.html.erb:167`) and `CoursesController#index` exists
   (`courses_controller.rb:530`), but `config/routes.rb` has no web `get "courses"`
   row — so serving it would add a star route Canvas does not have, and
@@ -173,18 +210,25 @@ After every page has a Svelte route:
   dyslexic root attribute also needs
   `ENV.PREFERENCES.user_system_default_font_family`, which `EnvPreferences` does
   not carry yet — so `handlers::profile` passes `dyslexic: false`.
-- Nothing is precompressed. Measured on this branch's build, in bytes: the
-  embedded set is 277 files / 4,310,494 B; a `/profile` first load is 425,130 B
-  of CSS (70,064 B gzipped: `common.css` alone is 64,948 of that) plus 151,055 B
-  of JS (55,087 B gzipped), and the shell document itself is ~2 KB `no-store`.
-  Serving `Content-Encoding: gzip` from the binary needs `flate2`,
+- Nothing is precompressed. Measured on this branch's build, in bytes: `build.rs`
+  embeds 276 files / 4,316,376 B (of which `/_app` is 40 files / 156,937 B); a
+  `/profile` first load is 425,130 B of CSS (69,596 B gzipped — `common.css` alone
+  is 399,634 raw / 64,530 gzipped) plus 109,354 B of JS across the 15 files the
+  entry and the profile route node import (44,585 B gzipped), and the shell
+  document itself is ~2 KB `no-store`. The `/dashboard` first load is the same
+  shape: 416,051 B CSS and 114,792 B JS across 17 files. Serving
+  `Content-Encoding: gzip` from the binary needs `flate2`,
   which is not in `Cargo.lock` — and CI builds `--locked`, so that is a lockfile
   change to land on `main` first, not something this branch can smuggle in.
   Until then compression is the reverse proxy's job.
-- The browser check is on this branch: `browser-smoke/tests/profile-shell-styles`
+- The browser checks are on this branch: `browser-smoke/tests/profile-shell-styles`
   asserts the 84 px nav rail, the revisioned `common.css` URL and its `immutable`
   + 304 behaviour, `Lato Extended` as the computed font family, and that
   `star_session` stays out of `document.cookie` while a cookie-only
-  `/api/v1/auth/me` returns 200. What it cannot cover is the ten pages still on
-  Askama, and `npm run check` / `npm run test:unit` are still not in CI — they
-  were run by hand for this branch (0 errors, 15 passed).
+  `/api/v1/auth/me` returns 200. `browser-smoke/tests/dashboard-shell-styles` adds
+  the measured card geometry (262 px card, 146 px hero), the cascade order of the
+  four dashboard bundles, both API calls going out with no `Authorization` header,
+  and `#right-side` visible only on the page Canvas gives `with-right-side`. What
+  they still cannot cover is the nine pages left on Askama, and `npm run check` /
+  `npm run test:unit` are still not in CI — they were run by hand for this branch
+  (0 errors, 19 passed).

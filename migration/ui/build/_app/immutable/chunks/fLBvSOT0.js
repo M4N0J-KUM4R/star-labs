@@ -1,1 +1,0 @@
-import{t as h}from"./BKuqSeVd.js";import{C as l,q as C,w as v,x as A,y as S,z as m}from"./DMw0sZFD.js";function w(r,p,t,b,f,i){var u=r[l];if(C||u!==t||u===void 0||v){var a=h(t,b,i);(!C||a!==A(r,"class"))&&(a==null?S(r,"class"):r.className=a),r[l]=t}else if(i&&f!==i)for(var o in i){var g=!!i[o];(f==null||g!==!!f[o])&&m(r,o,g)}return i}export{w as s};

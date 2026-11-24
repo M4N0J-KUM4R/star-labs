@@ -51,6 +51,12 @@ for pixel parity:
   already linked (`data-canvas-bundle` is the key), so the two never double-load.
   The reason a variant could not be picked from a Vite bundle is gone; the JS half
   stays because mid-navigation loads need it.
+- Shell pages delete the hand-ported rules they replace. `/dashboard` is one: its
+  first paint gets `dashboard.css` and `dashboard_card.css` from `shell-map.txt`,
+  and the `.ic-DashboardCard*` / `.today-panel*` blocks that used to sit in
+  `crates/star-ui/static/app.css` are gone rather than overridden. Any page that
+  converts must delete its own rules from that file in the same commit, or the
+  cascade becomes the accident this file exists to prevent.
 
 ## Known gaps
 

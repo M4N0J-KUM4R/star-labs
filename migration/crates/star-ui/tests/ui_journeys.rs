@@ -773,12 +773,25 @@ async fn calendar_grid_filter_is_read_only() {
 }
 
 // -------------------------------------------------------------------------
-// Precision Workspace: dashboard Today panel, card badges
+// Precision Workspace: dashboard shell, right-side mount
 // -------------------------------------------------------------------------
 
-/// The dashboard shows a Today panel with due-soon and overdue rows (each
-/// linking to the assignment) and per-course badges for new announcements
-/// and recently graded feedback.
+/// The logged-in dashboard is the shell document with Canvas' dashboard sheets and the
+/// right-side aside the To Do panel mounts into.
+///
+/// The rows themselves are not in this document any more, because Canvas does not put
+/// them there either: `app/views/users/user_dashboard.html.erb` only provides
+/// `:right_side`, and the panel comes from `GET /api/v1/users/self/todo`. That payload is
+/// asserted in `star-dashboard/tests/dashboard_integration.rs`
+/// (`todo_lists_grading_and_submitting_items_with_canvas_shape`), the cookie→Bearer fetch
+/// of it in `ui_shell_serve.rs::a_cookie_get_reaches_the_bearer_only_handler`, and the
+/// rendered rows in `browser-smoke/tests/dashboard-shell-styles.spec.ts`.
+///
+/// The card tray badges (new announcements, recent feedback) have no REST endpoint to
+/// move to: Canvas derives them from the activity stream summary in a GraphQL query
+/// (`ui/shared/dashboard-card/graphql/ActivityStream.ts`, mapped at
+/// `ui/shared/dashboard-card/util/dashboardUtils.ts:112`), so the old
+/// `load_today_items`/`load_course_badges` page queries are gone rather than ported.
 #[tokio::test]
 async fn dashboard_today_panel_and_badges() {
     let Some((server, pool, prefix)) = setup().await else {
@@ -792,51 +805,6 @@ async fn dashboard_today_panel_and_badges() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
 
-    let (group_id,): (i64,) = sqlx::query_as(
-        "INSERT INTO assignment_groups (course_id, name) VALUES ($1, 'Homework') RETURNING id",
-    )
-    .bind(course)
-    .fetch_one(&pool)
-    .await
-    .expect("seed group");
-    let (due_soon, overdue): (i64, i64) = sqlx::query_as(
-        "INSERT INTO assignments (course_id, assignment_group_id, title, points_possible, workflow_state, due_at) \
-         VALUES ($1, $2, 'Essay Draft', 50, 'published', now() + interval '3 days') RETURNING id, id",
-    )
-    .bind(course)
-    .bind(group_id)
-    .fetch_one(&pool)
-    .await
-    .expect("seed due-soon assignment");
-    let (_,): (i64,) = sqlx::query_as(
-        "INSERT INTO assignments (course_id, assignment_group_id, title, points_possible, workflow_state, due_at) \
-         VALUES ($1, $2, 'Old Quiz', 50, 'published', now() - interval '5 days') RETURNING id, id",
-    )
-    .bind(course)
-    .bind(group_id)
-    .fetch_one(&pool)
-    .await
-    .expect("seed overdue assignment");
-    let _ = overdue;
-
-    sqlx::query(
-        "INSERT INTO announcements (course_id, title, message, workflow_state, posted_at) \
-         VALUES ($1, 'Welcome', 'Hello class', 'active', now())",
-    )
-    .bind(course)
-    .execute(&pool)
-    .await
-    .expect("seed announcement");
-    sqlx::query(
-        "INSERT INTO submissions (assignment_id, user_id, score, graded_at, workflow_state) \
-         VALUES ($1, $2, 48, now(), 'graded')",
-    )
-    .bind(due_soon)
-    .bind(student)
-    .execute(&pool)
-    .await
-    .expect("seed graded submission");
-
     let (session, csrf) = login(
         &server,
         &format!("{prefix}-Dash Student@test.local"),
@@ -847,15 +815,30 @@ async fn dashboard_today_panel_and_badges() {
     let resp = authed_get(&server, &session, &csrf, "/dashboard").await;
     assert_eq!(resp.status_code(), 200, "dashboard: {}", resp.text());
     let body = resp.text();
-    assert!(body.contains("Today"), "today panel heading");
-    assert!(body.contains("Essay Draft"), "due-soon row");
+
+    // Canvas' own dashboard sheets are in the cascade on first paint.
+    for bundle in ["dashboard", "dashboard_card"] {
+        assert!(
+            body.contains(&format!("data-canvas-bundle=\"{bundle}\"")),
+            "Canvas sheet {bundle} missing from /dashboard"
+        );
+    }
+
+    // The aside Canvas' layout reserves for :right_side is asked for by the body class
+    // (app/views/layouts/application.html.erb:94 adds `with-right-side` when the page
+    // provides :right_side, and app/stylesheets/base/_layout.scss:78 sizes the aside).
     assert!(
-        body.contains("overdue") && body.contains("Old Quiz"),
-        "overdue row"
+        body.contains("<body class=\"primary-nav-expanded with-right-side\""),
+        "body class missing: {body}"
     );
-    assert!(body.contains("1 new announcement"), "announcement badge");
-    assert!(body.contains("1 new grade"), "feedback badge");
-    assert!(!body.contains("2 new"), "counts not duplicated");
+
+    // The page's data is fetched, not baked in: the built document is the boot shell
+    // (ui/build/index.html has no markup between <body> and the start script), so no
+    // card node can appear here.
+    assert!(
+        !body.contains("ic-DashboardCard"),
+        "dashboard cards must not be server-rendered"
+    );
 
     let _ = cleanup(&pool, &prefix).await;
 }

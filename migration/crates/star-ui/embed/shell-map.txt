@@ -42,7 +42,7 @@
 /register                       |registration       |full-width,ic-Login-Body
 /forgot_password                |login_confirm      |full-width,ic-Login-Body
 /reset_password/*               |login_confirm      |full-width,ic-Login-Body
-/dashboard                      |dashboard,dashboard_card|primary-nav-expanded
+/dashboard                      |dashboard,dashboard_card|primary-nav-expanded,with-right-side
 /profile                        |profile_show       |primary-nav-expanded
 /courses/*                      |discussions,wiki_page|primary-nav-expanded
 /courses/*/assignments          |assignments        |primary-nav-expanded
