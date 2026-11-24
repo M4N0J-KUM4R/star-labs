@@ -18,10 +18,15 @@
 //! and the REST update cannot persist them (documented deviation — only
 //! fields the API can actually persist are on the form).
 //!
-//! Add-people maps onto `star_enrollments::ui::enroll_user_in_course`, the
-//! extracted body of the REST `POST /api/v1/enrollments` create (login
-//! resolved to a user id, role validated to student/teacher/ta, duplicate
-//! triple 409). It is reached through Canvas' own web verb,
+//! Add-people maps onto `star_enrollments::ui::enroll_user_in_course`, which
+//! runs Canvas' enrollment-create gate in the REST create's order (permission
+//! check, then course 404, then user 404, then role, then the duplicate-triple
+//! 409), with the login resolved to a user id. Its REST counterpart is now
+//! `POST /api/v1/courses/{id}/enrollments` (star-courses `create_enrollment`,
+//! config/routes.rb:1402) — the flat `POST /api/v1/enrollments` was
+//! Canvas-absent and is gone — and the two differ only in the role set: this
+//! helper accepts student/teacher/ta as Canvas does, while that handler
+//! narrows to student/teacher. It is reached through Canvas' own web verb,
 //! `POST /courses/{id}/enroll_users` (config/routes.rb:231).
 //! Conclude/reactivate flip `enrollments.workflow_state`
 //! inactive/active, the same transitions the REST lifecycle endpoints use, on
