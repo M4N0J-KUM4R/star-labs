@@ -42,9 +42,15 @@ for pixel parity:
 - Image values keep their `/images/` prefix. Canvas emits `url('canvas_logomark_only@2x.png')`
   and lets the Rails asset host resolve it; under a plain static root that resolves
   relative to the sheet and 404s, so we emit the absolute path.
-- `loadCanvasStyles()` appends at run time what Canvas emits server-side from
-  `layouts/_head.html.erb`, because the variant is a per-user choice and a Vite
-  bundle is a per-build one. MIGRATION.md step 2 moves these tags into axum's shell.
+- Under the shell, the tags are emitted **server-side**: `crates/star-ui/shell.rs`
+  writes one `<link>` per bundle from `crates/star-ui/embed/shell-map.txt`, at the
+  revisioned path `/canvas/{sha}/{variant}/{name}.css`, so the first paint is already
+  Canvas and the sheet is cache-immutable. `loadCanvasStyles()` still runs, for two
+  jobs the server cannot do: `npm run dev`, and a client-side navigation to a page
+  whose bundle the incoming document did not name. It skips any bundle the shell
+  already linked (`data-canvas-bundle` is the key), so the two never double-load.
+  The reason a variant could not be picked from a Vite bundle is gone; the JS half
+  stays because mid-navigation loads need it.
 
 ## Known gaps
 

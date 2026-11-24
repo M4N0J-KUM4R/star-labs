@@ -1,7 +1,23 @@
 node_modules/
-build/
 .svelte-kit/
 .vercel/
 *.local
 .env
 test-results/
+
+# `npm run build` output, with one exception.
+#
+# star-ui's build.rs embeds the shell document and the hashed chunks into the
+# binary (spec §2.3: "one binary, no filesystem dependency at runtime, no Node
+# process"), and the Rust CI job has no `setup-node` step — rust-migration.yml
+# runs `cargo test` straight off the checkout. So `build/index.html` and
+# `build/_app/**` are committed as the input to that embed; everything else the
+# adapter writes is either a copy of `static/` (canvas, fonts, images) or not
+# read by anyone.
+#
+# Regenerate with `npm ci && npm run build` in this directory before committing
+# a source change: a stale `build/_app` means the binary serves the previous
+# page set, which looks like a hydration bug rather than a build one.
+build/*
+!build/index.html
+!build/_app

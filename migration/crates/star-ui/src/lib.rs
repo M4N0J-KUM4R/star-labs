@@ -20,11 +20,14 @@
 //! Rack::MethodOverride does (`method_override`); `/api/v1` is untouched.
 
 pub mod assets;
+pub mod embed;
 pub mod env;
 pub mod handlers;
 pub mod method_override;
 pub mod queries;
 pub mod session;
+pub mod session_bridge;
+pub mod shell;
 
 use axum::middleware;
 use axum::routing::{get, post};
@@ -109,6 +112,10 @@ pub fn router() -> Router<AppState> {
             "/conversations/{id}/add_message",
             post(handlers::conversations::conversation_reply),
         )
+        // Canvas: `resource :profile, only: [:show, :update]` (config/routes.rb:1045)
+        // → GET /profile. Served as the Svelte shell (see `shell`), the first lane on
+        // this branch to do so; the tabs API already emits this html_url.
+        .route("/profile", get(handlers::profile::profile))
         .route("/courses/{id}", get(handlers::course::course_home))
         // Quiz-taking journey (issue #109) — specific before generic.
         .route("/courses/{id}/quizzes", get(handlers::quiz::quiz_list))
@@ -284,6 +291,14 @@ pub fn router() -> Router<AppState> {
         // not at `/calendar` — so no create or delete is registered here.
         .route("/calendar", get(handlers::calendar::calendar_index))
         .route("/static/{hash}/{file}", get(assets::serve_static))
+        // Everything the front end ships that is not a page: the Vite bundle under
+        // /_app, the Canvas sheets under /canvas, and the fonts and images those
+        // sheets reference by root-relative path. A fallback rather than a route
+        // because these are assets, not pages — parity.py counts `.route()` calls as
+        // the app's route table, and `/fonts/**` has no business in it. Unmatched
+        // paths still 404 (`assets::serve_embedded` answers a bare 404, byte-identical
+        // to axum's default fallback).
+        .fallback(assets::serve_embedded)
 }
 
 /// The shell as it is actually served: the page table behind Rack's `_method`

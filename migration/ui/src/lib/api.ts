@@ -1,16 +1,21 @@
 /** Same-origin `/api/v1` client.
  *
  *  The bundle is served by axum from the same origin as the API, so no CORS and
- *  no base URL: `fetch('/api/v1/...')` just works. Credentials ride on
- *  `Authorization: Bearer`, resolved by `token.ts` (ENV first, then the token the
- *  /login page received). `hasApiToken()` lets a page say "log in" instead of
- *  rendering a wall of 401s when there is none.
+ *  no base URL: `fetch('/api/v1/...')` just works. The session rides on the
+ *  `star_session` cookie (`credentials: 'same-origin'`), which
+ *  `crates/star-ui/src/session_bridge.rs` turns into the `Authorization: Bearer`
+ *  header `AuthUser` verifies — so there is no token to store here unless the
+ *  deployment hands one to the shell through `window.ENV.api_token`. What an
+ *  unsafe method does need is `X-CSRF-Token`, echoing the non-HttpOnly
+ *  `star_csrf` cookie, because a cookie is sent cross-site without being asked
+ *  and a header is not. `hasApiToken()` lets a page say "log in" instead of
+ *  rendering a wall of 401s when there is neither cookie nor ENV token.
  *
  *  Error bodies are plain text, not JSON: `ApiError` renders `(status, to_string())`
  *  with a variant prefix, e.g. `bad request: invalid namespace`. Reading
  *  `.json()` on a 4xx panics the caller, so this client always reads text. */
 
-import { getToken } from '$lib/token';
+import { csrfToken, getToken } from '$lib/token';
 import type {
 	Assignment,
 	CalendarEvent,
@@ -65,10 +70,21 @@ export function buildPath(path: string, query?: Query): string {
 	return qs ? `${path}?${qs}` : path;
 }
 
-function headers(extra: Record<string, string> = {}): Record<string, string> {
+/** Methods Rails' `protect_from_forgery` (and `session_bridge::decide`) treat as
+ *  safe, i.e. never CSRF-checked. Keep in sync with `star_ui::session_bridge`. */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/** Same string as `star_ui::session::CSRF_HEADER`. */
+const CSRF_HEADER = 'x-csrf-token';
+
+function headers(method: string, extra: Record<string, string> = {}): Record<string, string> {
 	const out: Record<string, string> = { accept: 'application/json', ...extra };
 	const token = getToken();
 	if (token) out.authorization = `Bearer ${token}`;
+	if (!SAFE_METHODS.has(method.toUpperCase())) {
+		const csrf = csrfToken();
+		if (csrf) out[CSRF_HEADER] = csrf;
+	}
 	return out;
 }
 
@@ -77,9 +93,9 @@ export function hasApiToken(): boolean {
 }
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-	const init: RequestInit = { method, headers: headers(), credentials: 'same-origin' };
+	const init: RequestInit = { method, headers: headers(method), credentials: 'same-origin' };
 	if (body !== undefined) {
-		init.headers = headers({ 'content-type': 'application/json' });
+		init.headers = headers(method, { 'content-type': 'application/json' });
 		init.body = JSON.stringify(body);
 	}
 

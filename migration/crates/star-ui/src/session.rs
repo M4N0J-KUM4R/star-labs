@@ -35,6 +35,12 @@ pub const CSRF_COOKIE: &str = "star_csrf";
 /// Hidden form field carrying the CSRF token.
 pub const CSRF_FIELD: &str = "_csrf";
 
+/// Header a script echoes the CSRF cookie in. Canvas' own front end does this for its
+/// API writes (`packages/canvas-rce/src/rce/plugins/shared/do-fetch-api-effect/
+/// defaultFetchOptions.ts:35`), and it is why `CSRF_COOKIE` is deliberately not
+/// HttpOnly.
+pub const CSRF_HEADER: &str = "x-csrf-token";
+
 /// Token lifetime in star-auth (`create_token`); used to derive issued-at
 /// from `exp` for the `last_logged_out` invalidation check.
 const TOKEN_EXPIRY_SECS: i64 = 7 * 24 * 60 * 60;
@@ -190,6 +196,14 @@ pub fn check_csrf(jar: &CookieJar, form_token: &str) -> bool {
     !cookie_token.is_empty() && !form_token.is_empty() && constant_time_eq(cookie_token, form_token)
 }
 
+/// Cookie-vs-header half of the double-submit check, for `fetch` clients rather than
+/// form posts. Same constant-time comparison as `check_csrf`; a caller that has no
+/// cookie can never pass, so a fresh visitor is not silently CSRF-exempt.
+pub fn check_csrf_header(cookie: Option<&str>, header: &str) -> bool {
+    let cookie = cookie.unwrap_or("");
+    !cookie.is_empty() && !header.is_empty() && constant_time_eq(cookie, header)
+}
+
 /// Issue the CSRF cookie when absent, returning the (possibly updated) jar
 /// and the token the form must embed. The cookie is deliberately NOT
 /// HttpOnly so a future JS layer can echo it in headers (Canvas parity).
@@ -278,6 +292,17 @@ mod tests {
         assert!(!check_csrf(&jar, "wrong"));
         assert!(!check_csrf(&CookieJar::new(), "token"));
         assert!(!check_csrf(&jar, ""));
+    }
+
+    #[test]
+    fn check_csrf_header_mirrors_the_form_field_check() {
+        let jar = CookieJar::new().add(Cookie::new(CSRF_COOKIE, "tok"));
+        let cookie = jar.get(CSRF_COOKIE).map(|c| c.value());
+        assert!(check_csrf_header(cookie, "tok"));
+        assert!(!check_csrf_header(cookie, "other"));
+        assert!(!check_csrf_header(cookie, ""));
+        // No cookie issued yet: nothing can authorize an unsafe request.
+        assert!(!check_csrf_header(None, "tok"));
     }
 
     #[test]

@@ -46,55 +46,74 @@ Pixel parity is a stylesheet question, not a framework question. It is answered 
    vs `6px`, and a font stack missing `"Lato Extended"`).
 
 
-## Step 1 — Make the API reachable from the bundle (pick one)
+## Step 1 — Make the API reachable from the bundle (done: 1b)
 
-`/api/v1` authenticates with `Authorization: Bearer` only. star-auth's
-`AuthUser` extractor reads that header and has no cookie path, while the web
-shell authenticates with the `star_session` cookie. The SPA needs one of:
+`/api/v1` authenticated with `Authorization: Bearer` only. star-auth's `AuthUser`
+extractor reads that header and has no cookie path, while the web shell
+authenticates with the `star_session` cookie.
 
-- **1a. Emit the token in ENV.** Add `api_token` to `JsEnv` and `ENV_KEYS` in
-  `crates/star-ui/src/env.rs`. Cheapest, and `env.ts`/`token.ts` already read it.
-  Cost: the JWT becomes readable by any XSS on the page, for the whole token
-  lifetime (`TOKEN_EXPIRY_SECS`), because `last_logged_out` does not bound a
-  token the page already handed out.
-- **1b. (preferred) Accept the cookie on `/api/v1`.** Teach `AuthUser` to fall
-  back to the `star_session` cookie and require the `star_csrf` token on unsafe
-  methods — the mechanism PR #247 already built for the web forms. Keeps the
-  credential out of JS; costs one extractor change plus CSRF coverage.
+**1b landed, in a different place than first sketched.** `AuthUser` was *not*
+taught a cookie branch — verification stays single-sourced in one header. Instead
+`crates/star-ui/src/session_bridge.rs` is a middleware on the `/api/v1` nest
+(`crates/star-http/src/main.rs`) that rewrites the session cookie into the bearer
+header `AuthUser` already verifies. Two Rails-equivalent guards close the hole a
+cookie-carried credential opens:
 
-The interim path in this branch (sessionStorage after `/auth/login`) works
-without either, but a token in `sessionStorage` is XSS-readable for the tab's
-lifetime, so it is a bridge, not the end state. **Do not ship 1a and the bridge
-together.**
+1. `Origin`, else `Referer`, must name the request host (`Origin: null` is
+   rejected, not guessed).
+2. Unsafe methods must send `X-CSRF-Token` equal to the non-HttpOnly `star_csrf`
+   cookie — the same double-submit `session::check_csrf` compares for the shell's
+   own forms. `src/lib/api.ts` does this on every write.
 
-## Step 2 — Serve the bundle from axum
+A request that fails either answers **403**, and an existing `Authorization`
+header short-circuits the layer entirely, so the CLI, LTI tools and every
+golden-response test behave exactly as before.
 
-- `crates/star-ui/src/lib.rs`: mount the built files
-  (`migration/ui/build` → `crates/star-ui/static/ui/`) via
-  `ServeDir`, and point every page route's handler at one `shell` function that
-  renders a single `shell.html` template: the existing `_head` contract with
-  `window.ENV` inline, plus `<script type="module" src="/ui/…">`.
-- Add a `fallback_to_index` for client-side routes that have no Canvas URL (the
-  SPA's own deep links). Canvas-real paths must keep explicit registrations —
-  that is the parity constraint above.
-- `adapter-static` emits `build/index.html` as the fallback document. Cache it at
-  `max-age=0, must-revalidate` and hash-named assets at
-  `max-age=31536000, immutable`; that asymmetry is the whole point of the static
-  choice — under load, the shell is one small uncached HTML response and
-  everything else is a cache hit.
-- `static/canvas/` and `static/fonts/` ship inside the same `ServeDir` mount, at
-  `/canvas/…` and `/fonts/…` — the exact paths Canvas' compiled rules already
-  contain, so no sheet needs rewriting. Serve them `immutable` like the JS.
-- Two things `src/lib/canvasStyles.ts` does in the browser today belong in the
-  shell once axum renders it, and moving them is what makes the first paint
-  Canvas-correct rather than Canvas-after-a-frame:
-  1. the `<link>` tags (tokens → fonts → common → page bundle, per
-     `ENV.use_high_contrast`) — the reason it is JS now is that a Vite bundle
-     cannot pick a variant at request time, but `shell.html` can;
-  2. `body` classes (`primary-nav-expanded`, or `full-width ic-Login-Body` on the
-     auth pages), which Canvas computes in `application.html.erb:83-110`.
-  `src/app.css` then loses its three declarations too, because they exist only to
-  cover the window before those tags exist.
+1a (emit `api_token` in ENV) was rejected: it makes the JWT readable by any XSS
+for the whole `TOKEN_EXPIRY_SECS`, and `last_logged_out` cannot bound a token the
+page already handed out. `env.ts` keeps the field only so a deployment *can*
+supply one; nothing in the shell writes it.
+
+The sessionStorage bridge is deleted. What remains for the auth pages:
+`POST /api/v1/auth/login` does not set `star_session` (only the shell's
+`POST /login` does — star-auth never names the cookie), so when `/login` itself
+moves onto the shell it must submit that form rather than fetch the API. No new
+route for this: Canvas has no cookie-granting API endpoint, and parity would
+count it as an invention.
+
+## Step 2 — Serve the bundle from axum (done, for `/profile`)
+
+- `crates/star-ui/build.rs` embeds `migration/ui/build/{index.html,_app}` and
+  `migration/ui/static/{canvas,fonts,images}` (+ favicons) into the binary as
+  `include_bytes!`, each with a 32-bit sha256 revision. Embedding rather than
+  `ServeDir` is what keeps spec §2.3 true — one binary, no filesystem dependency
+  at runtime, no Node process — which also means the Rust CI job needs no
+  `setup-node` step: **`build/index.html` and `build/_app` are committed** (see
+  `migration/ui/.gitignore`) and must be rebuilt before a commit.
+- `crates/star-ui/src/assets.rs::serve_embedded` is the router's **fallback**, not
+  a route: `migration/tools/parity/parity.py` counts `.route(...)` calls, and
+  `/fonts/**` has no business in the route table. A miss answers with a bare 404
+  so an unmatched `/api/v1` path stays byte-identical to axum's default.
+- Cache policy is per family: `/_app/**` (Vite-hashed) and
+  `/canvas/{rev}/{variant}/{name}.css` get `max-age=31536000, immutable`; the
+  unversioned forms — Canvas' own font and image paths, which its sheets
+  reference by name and therefore cannot be renamed — get
+  `max-age=86400, must-revalidate` plus an `ETag`, so a repeat view is a 304.
+- `crates/star-ui/src/shell.rs` injects the per-request parts into the document
+  `adapter-static` emitted: `<title>`, `window.ENV` (with `</` escaped so a
+  course name cannot close the script block), the Canvas `<link>`s in Canvas'
+  order, and the `<html>`/`<body>` attributes. `embed/shell-map.txt` is the
+  route → (bundles, body classes) table, and a typo there is a **build failure**,
+  because a 404 stylesheet reaches the browser as "the dashboard looks slightly
+  wrong".
+- `GET /profile` (config/routes.rb:1045, `ProfileController#show`) is the first
+  handler on this path. It also ensures the `star_csrf` cookie, which the
+  bundle's first write needs.
+- `fallback_to_index` is deliberately **not** used: an SPA fallback would swallow
+  every unmatched URL and turn a 404 into a 200, which is both a parity
+  regression and a worse answer to a typo. Canvas-real paths keep explicit
+  registrations; a client-side deep link the server does not know is a bug to fix
+  in the route table.
 
 
 ## Step 3 — Port pages journey by journey
@@ -133,14 +152,37 @@ After every page has a Svelte route:
 
 ## Known gaps in this branch
 
-- `styles:canvas` builds the normal-contrast variant only. Canvas ships eight
+- Only `/profile` renders through `shell.rs`. The other ten routes still return
+  their Askama page, because each one has markup assertions in
+  `tests/ui_integration.rs`, `tests/ui_journeys.rs` and `tests/auth_integration.rs`
+  (~375 of them across the set) that describe the server-rendered DOM; converting
+  a page means rewriting its assertions in the same commit, and that cannot be
+  validated locally (cargo is CI-only). `embed/shell-map.txt` already carries all
+  of them, so each conversion is one handler body plus its tests.
+- `/courses` is **not** registered. Canvas' nav hardcodes `href="/courses"`
+  (`_new_nav_header.html.erb:167`) and `CoursesController#index` exists
+  (`courses_controller.rb:530`), but `config/routes.rb` has no web `get "courses"`
+  row — so serving it would add a star route Canvas does not have, and
+  `parity.yml` fails on a coverage change. The SPA's `/courses` remains reachable
+  as a client-side route only. Task #30 is the classification fix that decides
+  this properly.
+- `styles:canvas` builds two variants. Canvas ships eight
   (`config/brandable_css.yml`); the high-contrast token overrides are in
-  `tokens.css`, but variant-specific rules are not captured yet.
-- No bundle has been built, so bundle size is unmeasured — the resource claims in
-  `README.md` are architectural, not measured.
-- Nothing here is verified in a browser yet. `npm run check` is the gate, and CI
-  does not run it today; wiring it into `rust-migration.yml` is a coordinator
-  change, not a worker one.
-- `courses/[id]/pages` (wiki) and `modules` are not ported; the tab component
-  renders whatever the tabs API returns, so those tabs link to routes the SPA
-  does not have yet.
+  `tokens.css`, and `shell-map.txt` refuses a bundle that lacks either of the two
+  compiled sets, but the RTL and dyslexic-specific rules are not captured. The
+  dyslexic root attribute also needs
+  `ENV.PREFERENCES.user_system_default_font_family`, which `EnvPreferences` does
+  not carry yet — so `handlers::profile` passes `dyslexic: false`.
+- Nothing is precompressed. Measured on this branch's build: the embedded set is
+  277 files / 4.8 MB, a `/profile` first load is 425 KB of CSS (69 KB gzipped)
+  plus 252 KB of JS (23 KB gzipped), and the shell document itself is ~2 KB
+  `no-store`. Serving `Content-Encoding: gzip` from the binary needs `flate2`,
+  which is not in `Cargo.lock` — and CI builds `--locked`, so that is a lockfile
+  change to land on `main` first, not something this branch can smuggle in.
+  Until then compression is the reverse proxy's job.
+- Nothing here is verified in a browser yet. `npm run check` (0 errors on this
+  branch) and `npm run test:unit` are the local gates; CI does not run either
+  today, and `browser-smoke.yml` builds `star-http` without a Node step, which is
+  exactly why the bundle is committed. A Playwright assertion that Canvas' CSS
+  actually applies (the 84 px nav rail, Lato as the computed font) is the missing
+  end-to-end check.
