@@ -2,9 +2,9 @@
 //!
 //! Exposes `pub fn router() -> Router<AppState>` with endpoints:
 //! - GET/POST /courses/{courseId}/pages
-//! - GET/PUT/DELETE /courses/{courseId}/pages/{id}  (id may be numeric id or url slug)
 //! - GET/PUT/DELETE /courses/{courseId}/pages/{id}
-//!   (Canvas v1 aliases for the flat routes; the page must belong to
+//!   (id may be a numeric id or a url slug; Canvas declares pages only under a
+//!   wiki context, so there is no flat /pages/{id} — the page must belong to
 //!   {courseId}, otherwise 404)
 //! - GET /courses/{courseId}/pages/{url}/revisions             (page history)
 //! - GET /courses/{courseId}/pages/{url}/revisions/latest      (current version)
