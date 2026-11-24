@@ -303,7 +303,7 @@ mod tests {
         ] {
             let map = headers(&[
                 ("cookie", &cookie(None)),
-                (name, &value),
+                (name, value),
                 ("host", "lms.example"),
             ]);
             assert!(

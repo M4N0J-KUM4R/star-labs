@@ -309,7 +309,7 @@ mod tests {
             Some(("/canvas/normal_contrast/common.css".to_string(), false))
         );
         assert_eq!(
-            resolve("/canvas/de10a2be/high_contrast/tokens.css").map(|(key, rev)| (key, rev)),
+            resolve("/canvas/de10a2be/high_contrast/tokens.css"),
             Some((
                 "/canvas/high_contrast/tokens.css".to_string(),
                 Some("de10a2be".to_string())

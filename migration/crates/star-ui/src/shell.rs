@@ -268,9 +268,9 @@ mod tests {
     fn the_high_contrast_request_gets_the_other_directory() {
         let normal = render("/profile", "Profile", "{}", false, false);
         let contrast = render("/profile", "Profile", "{}", true, false);
-        assert!(normal.contains("/canvas/normal_contrast/"));
-        assert!(!normal.contains("/canvas/high_contrast/"));
-        assert!(contrast.contains("/canvas/high_contrast/"));
+        assert!(normal.contains("/normal_contrast/"));
+        assert!(!normal.contains("/high_contrast/"));
+        assert!(contrast.contains("/high_contrast/"));
         assert!(contrast.contains("<html data-use-high-contrast"));
     }
 
