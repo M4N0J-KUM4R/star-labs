@@ -12996,9 +12996,9 @@
     "implemented_rest_routes": 1410,
     "js_env_call_sites": 490,
     "js_env_files": 124,
-    "js_env_files_implemented": 0,
+    "js_env_files_implemented": 1,
     "js_tsx_files": 5459,
-    "js_tsx_files_implemented": 0,
+    "js_tsx_files_implemented": 12,
     "star_extras": 160,
     "star_extras_by_class": {
       "absent": 25,

@@ -12,9 +12,9 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | GraphQL object types | 246 | 246 | 100.0% |
 | GraphQL mutations | 100 | 100 | 100.0% |
 | UI feature directories | 0 | 232 | 0.0% |
-| JS/JSX/TS/TSX files | 0 | 5459 | 0.0% |
+| JS/JSX/TS/TSX files | 12 | 5459 | 0.2% |
 | ERB views | 0 | 475 | 0.0% |
-| js_env files | 0 | 124 | 0.0% |
+| js_env files | 1 | 124 | 0.8% |
 | Schema tables (vs 688 Canvas models) | 397 | 688 | n/a |
 
 Implemented REST route count: **1410 / 1410** (100.0%).
