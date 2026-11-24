@@ -133,7 +133,27 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{id}/quizzes/{qid}",
-            get(handlers::quiz::quiz_show),
+            get(handlers::quiz::quiz_show)
+                .patch(handlers::quiz::quiz_update)
+                .put(handlers::quiz::quiz_update),
+        )
+        // The verbs above are Canvas' `resources :quizzes` member set
+        // (config/routes.rb:447): GET is the show page, PATCH/PUT is the
+        // editor save (`quizzes#update`, quizzes_controller.rb:493 — gated by
+        // `authorized_action(@quiz, @current_user, :update)`, HTML branch
+        // flashes then redirects to the show url at :612-613). The browser
+        // form reaches PATCH through Rails' hidden `_method` field, which
+        // `method_override` rewrites, so no POST verb is registered here.
+        //
+        // `/edit` is the editor page itself: `quizzes#edit` (:359) is gated by
+        // the same :update right and ends in `render :new` (:431), whose
+        // template app/views/quizzes/quizzes/new.html.erb exists — so Canvas
+        // really does serve it, and `quiz_create` redirects to it (:352-355).
+        // Our page is the server-rendered equivalent of the React mount that
+        // template boots (`js_bundle :quizzes`, :429).
+        .route(
+            "/courses/{id}/quizzes/{qid}/edit",
+            get(handlers::quiz::quiz_edit),
         )
         .route(
             "/courses/{id}/quizzes/{qid}/take",
