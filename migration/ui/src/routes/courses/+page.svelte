@@ -4,6 +4,11 @@
 	import type { Course } from '$lib/types';
 	import DashboardCard from '$lib/components/DashboardCard.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { loadCanvasStyles } from '$lib/canvasStyles';
+
+	/* Canvas loads exactly these bundles for this page: all_courses, course_list.
+	 *  See scripts/build-canvas-css.sh for where the names come from. */
+	$effect(() => loadCanvasStyles(['all_courses', 'course_list']));
 
 	/* Canvas' All Courses page (app/views/users/all_courses.html.erb, bundle
 	 * all_courses.scss) is the same card grid as the dashboard, but grouped by
@@ -11,7 +16,6 @@
 	let courses = $state<Course[] | null>(null);
 	let failure = $state<string | null>(null);
 	let filter = $state('');
-
 	let visible: Course[] = $derived(
 		(courses ?? []).filter(
 			(c) =>
@@ -20,13 +24,13 @@
 				(c.course_code ?? '').toLowerCase().includes(filter.toLowerCase())
 		)
 	);
-
 	$effect(() => {
 		if (!session.ready) return;
 		endpoints.courses
 			.list({ include: ['term'], state: ['available', 'completed'] })
 			.then((list) => (courses = list), (error) => (failure = error.publicMessage));
 	});
+
 </script>
 
 <div class="page-header">

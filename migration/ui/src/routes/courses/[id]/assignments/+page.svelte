@@ -4,27 +4,30 @@
 	import { session } from '$lib/auth.svelte';
 	import type { Assignment } from '$lib/types';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { loadCanvasStyles } from '$lib/canvasStyles';
+
+	/* Canvas loads exactly these bundles for this page: assignments.
+	 *  See scripts/build-canvas-css.sh for where the names come from. */
+	$effect(() => loadCanvasStyles(['assignments']));
 
 	let courseId = $derived(Number(page.params.id));
 	let assignments = $state<Assignment[] | null>(null);
 	let failure = $state<string | null>(null);
-
 	$effect(() => {
 		if (!Number.isFinite(courseId)) return;
 		endpoints.assignments
 			.list(courseId)
 			.then((list) => (assignments = list), (error) => (failure = error.publicMessage));
 	});
-
 	/* Canvas shows the student their own submission (include[]=submission puts it
 	 * on the assignment) and the teacher the needs-grading count. Same endpoint,
 	 * different column — driven by the role the server reported, never by a claim
 	 * parsed out of the token. */
 	let studentView: boolean = $derived(!session.isTeacher);
-
 	function due(iso?: string | null): string {
 		return iso ? new Date(iso).toLocaleString() : '—';
 	}
+
 </script>
 
 <div class="page-header">

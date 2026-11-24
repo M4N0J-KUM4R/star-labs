@@ -4,6 +4,11 @@
 	import { session } from '$lib/auth.svelte';
 	import type { Assignment, Enrollment } from '$lib/types';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { loadCanvasStyles } from '$lib/canvasStyles';
+
+	/* Canvas loads exactly these bundles for this page: user_grades, grade_summary.
+	 *  See scripts/build-canvas-css.sh for where the names come from. */
+	$effect(() => loadCanvasStyles(['user_grades', 'grade_summary']));
 
 	/* Canvas' /courses/:id/grades is gradebooks#grade_summary (routes.rb:262). It
 	 * renders one of two shapes depending on who asks: a teacher gets the whole
@@ -15,7 +20,6 @@
 	let roster = $state<Enrollment[] | null>(null);
 	let mine = $state<Assignment[] | null>(null);
 	let failure = $state<string | null>(null);
-
 	$effect(() => {
 		if (!Number.isFinite(courseId) || !session.ready) return;
 		if (session.isTeacher) {
@@ -28,6 +32,7 @@
 				.then((list) => (mine = list), (error) => (failure = error.publicMessage));
 		}
 	});
+
 </script>
 
 <div class="page-header">

@@ -16,28 +16,35 @@ So the swap is: **keep every route, replace every handler body with one shell
 render, then delete the templates.** The URLs stay identical to Canvas' (which is
 what parity measures) while the markup becomes the SPA's.
 
-## Step 0 — Styles and fonts (blocking, do not skip)
+## Step 0 — Styles and fonts (done on this branch)
 
-Pixel parity is a stylesheet question, not a framework question.
+Pixel parity is a stylesheet question, not a framework question. It is answered by
+`CANVAS_CSS.md`; the rest of this plan assumes it.
 
 1. `npm run styles:canvas` compiles Canvas' own bundles
-   (`canvas-src/app/stylesheets/bundles/*.scss`) into
-   `migration/ui/src/styles/canvas/`. Requires a canvas-src checkout with
-   `yarn install` done: `base/_environment.scss` imports the `sass-direction`
-   npm package, so `direction-sides()` cannot be resolved otherwise.
-2. Vendor the Lato webfonts. `$ic-font-family` leads with **"Lato Extended"**,
-   which is not in this checkout (`public/fonts/` has `canvas-icons` only).
-   Without the woff2 files the metric fallback shifts every line height, so no
-   stack is pixel-perfect until they are committed under
-   `crates/star-ui/static/fonts/`.
-3. `src/styles/tokens.css` is the stand-in for the sheet
-   `lib/brandable_css.rb` generates. Keep the `--ic-` names: Canvas' compiled
-   rules already read `var(--ic-brand-primary)`.
+   (`canvas-src/app/stylesheets/bundles/*.scss`) to
+   `migration/ui/static/canvas/<variant>/<bundle>.css` — 31 bundles ×
+   `normal_contrast`/`high_contrast`, 62 files, 0 failures as of 2026-11-24.
+   Requires a canvas-src checkout holding `sass-direction` and `emoji-mart@3.0.1`
+   in `node_modules` (`scripts/canvas-sass-deps.txt`), and the variant directory
+   first on the load path or `base/_variables.scss:34` cannot resolve
+   `variant_variables`.
+2. `npm run tokens:canvas` **generates** the brandable sheet from
+   `canvas-src/app/stylesheets/brandable_variables.json` plus the derivations in
+   `lib/brandable_css.rb:168-210`, reproducing `CanvasColor`'s math. It is not a
+   transcription, and it ends with a self-check that fails the build if a bundle
+   reads a custom property no sheet defines.
+3. `npm run assets:canvas` copies only the files those sheets reference: 236 files,
+   including the five **Lato Extended** woff2 weights, which *are* in this checkout
+   at `public/fonts/lato/extended/` (an earlier note here claimed otherwise, and
+   was wrong). Canvas' own unresolvable references are listed, with citations, in
+   `scripts/vendor-canvas-assets.sh` — reproduced rather than fixed.
 4. Tailwind is deliberately absent. Its preflight resets box-sizing, borders,
    margins and font smoothing, which moves Canvas' own measurements; and our
    previous hand-ported palette proved the drift risk — six values did not match
-   Canvas (`#0374b5` vs `#2B7ABC` at `_variables.scss:51`, `#2d3b45` vs `#34444f`
-   at `:245`, radius `4px` vs `6px` at `:200`).
+   Canvas (`#0374b5` vs `#2B7ABC`, `#2d3b45` vs the real `#334451`, radius `4px`
+   vs `6px`, and a font stack missing `"Lato Extended"`).
+
 
 ## Step 1 — Make the API reachable from the bundle (pick one)
 
@@ -75,6 +82,20 @@ together.**
   `max-age=31536000, immutable`; that asymmetry is the whole point of the static
   choice — under load, the shell is one small uncached HTML response and
   everything else is a cache hit.
+- `static/canvas/` and `static/fonts/` ship inside the same `ServeDir` mount, at
+  `/canvas/…` and `/fonts/…` — the exact paths Canvas' compiled rules already
+  contain, so no sheet needs rewriting. Serve them `immutable` like the JS.
+- Two things `src/lib/canvasStyles.ts` does in the browser today belong in the
+  shell once axum renders it, and moving them is what makes the first paint
+  Canvas-correct rather than Canvas-after-a-frame:
+  1. the `<link>` tags (tokens → fonts → common → page bundle, per
+     `ENV.use_high_contrast`) — the reason it is JS now is that a Vite bundle
+     cannot pick a variant at request time, but `shell.html` can;
+  2. `body` classes (`primary-nav-expanded`, or `full-width ic-Login-Body` on the
+     auth pages), which Canvas computes in `application.html.erb:83-110`.
+  `src/app.css` then loses its three declarations too, because they exist only to
+  cover the window before those tags exist.
+
 
 ## Step 3 — Port pages journey by journey
 

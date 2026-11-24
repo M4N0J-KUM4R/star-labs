@@ -3,15 +3,18 @@
 	import { endpoints } from '$lib/api';
 	import { session } from '$lib/auth.svelte';
 	import { setToken } from '$lib/token';
+	import { loadCanvasStyles } from '$lib/canvasStyles';
+
+	/* Canvas loads exactly these bundles for this page: registration.
+	 *  See scripts/build-canvas-css.sh for where the names come from. */
+	$effect(() => loadCanvasStyles(['registration']));
 
 	let form = $state({ name: '', email: '', password: '', confirm: '' });
 	let busy = $state(false);
 	let failure = $state<string | null>(null);
-
 	let mismatch: boolean = $derived(
 		form.confirm.length > 0 && form.confirm !== form.password
 	);
-
 	async function submit() {
 		busy = true;
 		failure = null;
@@ -32,6 +35,7 @@
 			busy = false;
 		}
 	}
+
 </script>
 
 <div class="ic-Login">

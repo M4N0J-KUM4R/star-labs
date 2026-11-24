@@ -3,6 +3,11 @@
 	import { session } from '$lib/auth.svelte';
 	import type { Course } from '$lib/types';
 	import DashboardCard from '$lib/components/DashboardCard.svelte';
+	import { loadCanvasStyles } from '$lib/canvasStyles';
+
+	/* Canvas loads exactly these bundles for this page: profile_show.
+	 *  See scripts/build-canvas-css.sh for where the names come from. */
+	$effect(() => loadCanvasStyles(['profile_show']));
 
 	/* Canvas' /profile is the logged-in user's own page; the enrollments API
 	 * (GET /api/v1/users/:id/courses) is how it lists their courses. Time zone and
@@ -10,7 +15,6 @@
 	 * route has not been ported, and a form that 404s on submit is worse than no
 	 * form. */
 	let courses = $state<Course[]>([]);
-
 	$effect(() => {
 		const id = session.user?.id;
 		if (!id) return;
@@ -19,6 +23,7 @@
 			() => (courses = [])
 		);
 	});
+
 </script>
 
 <div class="page-header">

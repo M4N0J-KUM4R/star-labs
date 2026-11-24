@@ -2,12 +2,16 @@
 	import { goto } from '$app/navigation';
 	import { session } from '$lib/auth.svelte';
 	import { ApiError } from '$lib/api';
+	import { loadCanvasStyles } from '$lib/canvasStyles';
+
+	/* Canvas loads exactly these bundles for this page: login.
+	 *  See scripts/build-canvas-css.sh for where the names come from. */
+	$effect(() => loadCanvasStyles(['login']));
 
 	let email = $state('');
 	let password = $state('');
 	let busy = $state(false);
 	let failure = $state<string | null>(null);
-
 	async function submit() {
 		busy = true;
 		failure = null;
@@ -25,6 +29,7 @@
 			busy = false;
 		}
 	}
+
 </script>
 
 <!-- Canvas' login page root is .ic-Login (app/views/shared/_auth_type_icon.html.erb

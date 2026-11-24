@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test:unit": "vitest run",
-    "styles:canvas": "bash scripts/build-canvas-css.sh"
+    "styles:canvas": "bash scripts/build-canvas-css.sh",
+    "tokens:canvas": "node scripts/build-brandable-tokens.mjs",
+    "assets:canvas": "bash scripts/vendor-canvas-assets.sh"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.8",

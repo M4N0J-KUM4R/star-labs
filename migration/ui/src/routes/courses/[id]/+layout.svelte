@@ -32,6 +32,7 @@
 			(error) => (failure = error.publicMessage)
 		);
 	});
+
 </script>
 
 {#if failure}

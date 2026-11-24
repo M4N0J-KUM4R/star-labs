@@ -3,6 +3,11 @@
 	import { endpoints } from '$lib/api';
 	import type { Assignment, DiscussionTopic } from '$lib/types';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { loadCanvasStyles } from '$lib/canvasStyles';
+
+	/* Canvas loads exactly these bundles for this page: discussions, wiki_page.
+	 *  See scripts/build-canvas-css.sh for where the names come from. */
+	$effect(() => loadCanvasStyles(['discussions', 'wiki_page']));
 
 	/* Canvas' course home (app/views/courses/home.html.erb) is a feed of recent
 	 * discussions plus upcoming assignments, not a landing card. Keep that shape:
@@ -10,7 +15,6 @@
 	let courseId = $derived(Number(page.params.id));
 	let topics = $state<DiscussionTopic[] | null>(null);
 	let assignments = $state<Assignment[] | null>(null);
-
 	$effect(() => {
 		if (!Number.isFinite(courseId)) return;
 		endpoints.discussions
@@ -20,10 +24,10 @@
 			.list(courseId, { bucket: 'upcoming', order_by: 'position' })
 			.then((list) => (assignments = list), () => (assignments = []));
 	});
-
 	function due(iso?: string | null): string {
 		return iso ? new Date(iso).toLocaleDateString() : '—';
 	}
+
 </script>
 
 {#if topics === null || assignments === null}

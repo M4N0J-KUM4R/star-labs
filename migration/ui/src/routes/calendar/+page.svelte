@@ -22,6 +22,7 @@
 		const date = new Date(event.start_at);
 		return event.all_day ? date.toLocaleDateString() : date.toLocaleString();
 	}
+
 </script>
 
 <div class="page-header">

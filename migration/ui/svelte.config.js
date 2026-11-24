@@ -23,9 +23,6 @@ const config = {
 			strict: true
 		}),
 		paths: { base: '' },
-		alias: {
-			$styles: 'src/styles'
-		}
 	}
 };
 

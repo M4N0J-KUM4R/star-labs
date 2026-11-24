@@ -3,7 +3,7 @@
 	 * shell. `role=status` + aria-live keeps it announced, which matters because
 	 * with ssr=false a screen reader otherwise hears nothing until data lands.
 	 * No class here: `ic-Ellipsis` is not in this Canvas checkout, and inventing a
-	 * Canvas-prefixed name is exactly the drift src/styles/README.md forbids. */
+	 * Canvas-prefixed name is exactly the drift CANVAS_CSS.md forbids. */
 	let { label = 'Loading' }: { label?: string } = $props();
 </script>
 

@@ -1,130 +1,29 @@
-/* Global base: a transcription of Canvas' own base typography sheet,
- * components/_ic-typography.scss and base/_layout.scss. Not a restyle.
+/* The only sheet this project authors, and it is three declarations long.
  *
- * Order matters here exactly as it does in Canvas: `_ic-typography.scss` sets
- * h1 at 2.375em and then, a few lines below, "tweak them all a bit to be less
- * shouty" overrides h1/h2 to 1.8em. Both layers are kept, because dropping the
- * first one is how a port ends up 6px off on every page title.
+ * Everything else — typography, colours, `.ic-*` components, the layout shell —
+ * comes from Canvas' own compiled bundles (static/canvas/<variant>/, built by
+ * scripts/build-canvas-css.sh from canvas-src/app/stylesheets). A rule for an
+ * `.ic-` or `.Button-` selector written by hand here is a drift bug: the same
+ * class already has Canvas' rule somewhere else and one of the two will win by
+ * accident of load order.
  *
- * Component CSS comes from the vendored Canvas bundles (src/styles/canvas/), so
- * nothing below this file's base layer is authored by us. */
+ * What is left below exists only for the window before those `<link>`s land.
+ * loadCanvasStyles() appends them at run time (the variant is a per-request
+ * choice, see src/lib/canvasStyles.ts), so for a few frames the document has no
+ * sheet at all. Without these three declarations the first paint is
+ * Times-on-white and the page visibly reflows when Lato arrives — which changes
+ * the metric of every line on the screen.
+ *
+ * Values are Canvas' compiled ones, quoted from static/canvas/normal_contrast/
+ * common.css: `html{font-size:100%;-webkit-text-size-adjust:100%;font-family:
+ * "Lato Extended","Lato","Helvetica Neue",Helvetica,Arial,sans-serif}` and
+ * `body{min-height:100vh;background:#fff;font-weight:300}`. */
 
-@import './styles/tokens.css';
-
-/* html: _ic-typography.scss:34-38 */
 html {
+	font-family: 'Lato Extended', 'Lato', 'Helvetica Neue', Helvetica, Arial, sans-serif;
 	font-size: 100%;
-	-webkit-text-size-adjust: 100%;
-	-ms-text-size-adjust: 100%;
-	font-family: var(--ic-font-family);
 }
 
-/* body: _ic-typography.scss:40-46 plus _layout.scss:24-27.
- * Canvas declares font-weight twice on body (normal in typography, 300 in
- * layout); _layout.scss is imported after, so 300 wins in the real render. */
 body {
-	margin: 0;
-	min-height: 100vh;
-	background: var(--ic-color-light);
-	font-family: var(--ic-font-family);
-	font-size: var(--ic-font-size);
-	font-weight: 300;
-	line-height: var(--ic-line-height);
-	color: var(--ic-font-color-dark);
-	-webkit-font-smoothing: antialiased;
-	-moz-osx-font-smoothing: grayscale;
-}
-
-/* _ic-typography.scss:48-50, :57 */
-p {
-	margin: var(--ic-sp) 0;
-}
-small {
-	font-size: 85%;
-}
-
-/* headings: _ic-typography.scss:95-101 */
-h1,
-h2,
-h3,
-h4,
-h5,
-h6 {
-	margin: calc(var(--ic-sp) * 0.5) 0;
-	font-family: var(--ic-font-family);
-	font-weight: var(--ic-font-weight-bold);
-	line-height: var(--ic-line-height);
-	text-rendering: optimizelegibility;
-}
-/* the "less shouty" pass, :113-131 — these are the values that actually render */
-h1,
-h2,
-h3,
-h4,
-h5,
-h6,
-.h1,
-.h2,
-.h3,
-.h4,
-.h5,
-.h6 {
-	font-weight: normal;
-}
-h1,
-h2,
-.h1,
-.h2 {
-	font-size: 1.8em;
-	line-height: var(--ic-line-height);
-}
-h3,
-.h3 {
-	font-size: 1.5em;
-}
-h4,
-.h4 {
-	font-size: 1.125em;
-}
-
-/* .page-header: _ic-typography.scss:133-138 */
-.page-header {
-	padding-bottom: calc(var(--ic-sp) * 0.5);
-	margin: 20px 0 30px;
-	border-bottom: 1px solid var(--ic-border-color);
-}
-
-/* links: _ic-typography.scss:143-160 (normal-contrast branch) */
-a {
-	color: var(--ic-link-color);
-	text-decoration: none;
-}
-a:focus,
-a:hover {
-	color: var(--ic-link-color-darkened-10);
-	text-decoration: underline;
-}
-/* The high-contrast branch inverts it: always underlined, none on hover.
- * Driven by the same root attribute `tokens.css` uses, so it follows
- * ENV.use_high_contrast with no JS. */
-:root[data-use-high-contrast='true'] a {
-	text-decoration: underline;
-}
-:root[data-use-high-contrast='true'] a:focus,
-:root[data-use-high-contrast='true'] a:hover {
-	text-decoration: none;
-}
-
-/* .screenreader-only is a real Canvas utility class (used by
- * app/views/eportfolios/user_index.html.erb and throughout InstUI). */
-.screenreader-only {
-	position: absolute;
-	width: 1px;
-	height: 1px;
-	padding: 0;
-	margin: -1px;
-	overflow: hidden;
-	clip: rect(0, 0, 0, 0);
-	white-space: nowrap;
-	border: 0;
+	background: #fff;
 }

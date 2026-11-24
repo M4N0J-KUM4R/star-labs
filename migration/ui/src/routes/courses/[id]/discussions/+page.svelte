@@ -4,18 +4,21 @@
 	import { session } from '$lib/auth.svelte';
 	import type { DiscussionTopic } from '$lib/types';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { loadCanvasStyles } from '$lib/canvasStyles';
+
+	/* Canvas loads exactly these bundles for this page: discussions_index, announcements_index.
+	 *  See scripts/build-canvas-css.sh for where the names come from. */
+	$effect(() => loadCanvasStyles(['discussions_index', 'announcements_index']));
 
 	let courseId = $derived(Number(page.params.id));
 	let topics = $state<DiscussionTopic[] | null>(null);
 	let failure = $state<string | null>(null);
-
 	$effect(() => {
 		if (!Number.isFinite(courseId)) return;
 		endpoints.discussions
 			.list(courseId)
 			.then((list) => (topics = list), (error) => (failure = error.publicMessage));
 	});
-
 	/* Canvas stores an announcement as a DiscussionTopic with `is_announcement`
 	 * true (see open task #25 — the Rust port does not emit that field yet, so
 	 * `type === 'AnnouncementDiscussionTopic'` is the signal available today).
@@ -26,11 +29,11 @@
 	let announcements: DiscussionTopic[] = $derived(
 		(topics ?? []).filter((t) => t.type === 'AnnouncementDiscussionTopic')
 	);
-
 	function when(topic: DiscussionTopic): string {
 		const iso = topic.posted_at ?? topic.last_reply_at;
 		return iso ? new Date(iso).toLocaleDateString() : '—';
 	}
+
 </script>
 
 <div class="page-header">

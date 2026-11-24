@@ -4,17 +4,22 @@
 	import { session } from '$lib/auth.svelte';
 	import type { Quiz } from '$lib/types';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { loadCanvasStyles } from '$lib/canvasStyles';
+
+	/* Canvas loads exactly these bundles for this page: quizzes, canvas_quizzes.
+	 *  See scripts/build-canvas-css.sh for where the names come from. */
+	$effect(() => loadCanvasStyles(['quizzes', 'canvas_quizzes']));
 
 	let courseId = $derived(Number(page.params.id));
 	let quizzes = $state<Quiz[] | null>(null);
 	let failure = $state<string | null>(null);
-
 	$effect(() => {
 		if (!Number.isFinite(courseId)) return;
 		endpoints.quizzes
 			.list(courseId)
 			.then((list) => (quizzes = list), (error) => (failure = error.publicMessage));
 	});
+
 </script>
 
 <div class="page-header">

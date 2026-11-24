@@ -4,10 +4,14 @@
 	import type { Course } from '$lib/types';
 	import DashboardCard from '$lib/components/DashboardCard.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
+	import { loadCanvasStyles } from '$lib/canvasStyles';
+
+	/* Canvas loads exactly these bundles for this page: dashboard, dashboard_card.
+	 *  See scripts/build-canvas-css.sh for where the names come from. */
+	$effect(() => loadCanvasStyles(['dashboard', 'dashboard_card']));
 
 	let courses = $state<Course[] | null>(null);
 	let failure = $state<string | null>(null);
-
 	/* Two sources for the same list because there are two sessions: the Bearer
 	 * token lists the signed-in user's courses, while a cookie-only shell has no
 	 * token yet and falls back to the courses the Rust page handler embedded. */
@@ -19,6 +23,7 @@
 			.courses(id)
 			.then((list) => (courses = list), (error) => (failure = error.publicMessage));
 	});
+
 </script>
 
 <div class="ic-Dashboard-header">
