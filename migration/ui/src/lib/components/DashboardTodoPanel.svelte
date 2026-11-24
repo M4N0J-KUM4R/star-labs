@@ -16,6 +16,10 @@
 	 * serves, `GET /api/v1/users/self/todo` (`config/routes.rb:1789`) — the ERB's own
 	 * comment says "if you add a new thing here, it probably needs adding to the
 	 * /users/self/todo API", so the two are meant to carry the same rows.
+	 *
+	 * Every row links to a page the server renders, so each `a.item` carries
+	 * `data-sveltekit-reload`: Canvas' anchor is a whole document load, and this
+	 * bundle has no route that answers these paths.
 	 */
 
 	/* `ToDoListPresenter::VISIBLE_LIMIT = 5`: rows past the fifth in a group stay in
@@ -73,7 +77,7 @@
 	<ul class="right-side-list to-do-list">
 		{#each grading as item, index (item.assignment.id)}
 			<li class="todo" style:display={index < VISIBLE_LIMIT || revealed ? undefined : 'none'}>
-				<a class="item" href={item.html_url}>
+				<a class="item" href={item.html_url} data-sveltekit-reload>
 					<div class="todo-badge-wrapper">
 						<div class="todo-badge">
 							<span aria-hidden="true">{item.needs_grading_count ?? 0}</span>
@@ -94,7 +98,7 @@
 		{/each}
 		{#each submitting as item, index (item.assignment.id)}
 			<li class="todo" style:display={index < VISIBLE_LIMIT || revealed ? undefined : 'none'}>
-				<a class="item" href={item.html_url}>
+				<a class="item" href={item.html_url} data-sveltekit-reload>
 					<i class="icon-note-editing" aria-hidden="true"></i>
 					<div class="todo-details">
 						<b class="todo-details__title">{titleFor(item)}</b>

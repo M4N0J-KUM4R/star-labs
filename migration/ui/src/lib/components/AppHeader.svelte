@@ -1,11 +1,13 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import { goto } from '$app/navigation';
+	import { endpoints } from '$lib/api';
 	import { session } from '$lib/auth.svelte';
+	import { csrfToken } from '$lib/token';
 	import { env } from '$lib/env';
 	import coursesIcon from '$lib/icons/_svg_icon_courses_new_styles.svg?raw';
 	import calendarIcon from '$lib/icons/_svg_icon_calendar_new_styles.svg?raw';
 	import dashboardIcon from '$lib/icons/_svg_icon_dashboard.svg?raw';
+	import inboxIcon from '$lib/icons/_svg_icon_inbox.svg?raw';
 	import loginIcon from '$lib/icons/_svg_login_new_styles.svg?raw';
 	import navToggleIcon from '$lib/icons/_svg_icon_navtoggle.svg?raw';
 
@@ -25,17 +27,46 @@
 	 *
 	 * Not ported: the k5 branch of `_new_nav_header.html.erb:29-38`, which swaps
 	 * the dashboard icon for svg_icon_home and labels Courses "Subjects"; and the
-	 * Groups / Conversations / Files / Help items, since this app has no route for
-	 * them yet. Those are `<li>` additions to this list, not a change to its structure. */
+	 * Groups / Files / Help items, since this app has no route for them yet. Those
+	 * are `<li>` additions to this list, not a change to its structure.
+	 *
+	 * Links here are mixed-stack by necessity: `/dashboard` and `/profile` are this
+	 * bundle, but `/calendar` and `/conversations` are still Askama documents, so each
+	 * link to a server page carries `data-sveltekit-reload` and is a whole document
+	 * load, exactly like Canvas' nav. Without it SvelteKit intercepts the click, finds
+	 * no matching route, and renders its own 404 over the shell.
+	 *
+	 * The logout control is ours, not Canvas': `_new_nav_header.html.erb` has no logout
+	 * at all (Canvas ends the session from its own confirm page, a DELETE form —
+	 * `app/views/login/logout_confirm.html.erb:39`). It stays because every Askama page
+	 * this shell replaces put one in the rail, so dropping it here would take a control
+	 * away from a user who had one. */
 	let active = (prefix: string): string =>
 		page.url.pathname === prefix || page.url.pathname.startsWith(`${prefix}/`)
 			? ' ic-app-header__menu-list-item--active'
 			: '';
 
-	async function signOut() {
-		await session.signOut();
-		await goto('/login');
-	}
+	/* Canvas paints the Inbox count from the client, never from the template:
+	 * `NavigationBadges.tsx:66-75` fetches the unread count and mounts it in the
+	 * badge span at :106-122 only while it is above zero. Same feed, same rule.
+	 * A failure to read it leaves the badge empty rather than inventing a number. */
+	let unreadInbox = $state(0);
+	$effect(() => {
+		if (!session.signedIn) {
+			unreadInbox = 0;
+			return;
+		}
+		endpoints.conversations
+			.unreadCount()
+			.then((body) => {
+				// The same parse Canvas' query does: the wire value is a string.
+				const count = parseInt(String(body.unread_count), 10);
+				unreadInbox = Number.isNaN(count) ? 0 : count;
+			})
+			.catch(() => {
+				unreadInbox = 0;
+			});
+	});
 
 	/* #primaryNavToggle is what Canvas binds to flip body.primary-nav-expanded,
 	 * which sizes the rail and shifts .ic-Layout-wrapper by 84px. */
@@ -96,9 +127,35 @@
 				</li>
 			{/if}
 			<li class="menu-item ic-app-header__menu-list-item{active('/calendar')}">
-				<a id="global_nav_calendar_link" href="/calendar" class="ic-app-header__menu-list-link">
+				<a id="global_nav_calendar_link" href="/calendar" data-sveltekit-reload class="ic-app-header__menu-list-link">
 					<div class="menu-item-icon-container" aria-hidden="true">{@html calendarIcon}</div>
 					<div class="menu-item__text">Calendar</div>
+				</a>
+			</li>
+			<!-- erb:199-210, immediately after Calendar: id and href verbatim, `svg_icon_inbox`
+			     for the icon, "Inbox" for the label, and the badge span Canvas leaves empty in
+			     the template for NavigationBadges to fill. Ungated, as there — this header only
+			     mounts for a signed-in user (+layout.svelte:70), which is erb's `<% if
+			     @current_user %>` for the whole rail. -->
+			<li class="menu-item ic-app-header__menu-list-item{active('/conversations')}">
+				<a
+					id="global_nav_conversations_link"
+					href="/conversations"
+					data-sveltekit-reload
+					class="ic-app-header__menu-list-link"
+				>
+					<div class="menu-item-icon-container">
+						<span aria-hidden="true">{@html inboxIcon}</span>
+						<!-- The id is this port's, shared with the Askama nav
+						     (`templates/layouts/authenticated.html:22`) so one selector finds the
+						     count on either stack; Canvas has no id on this span. -->
+						<span
+							class="menu-item__badge"
+							id={unreadInbox > 0 ? 'global_nav_conversations_unread_badge' : undefined}
+							aria-label={unreadInbox > 0 ? `${unreadInbox} unread conversations` : undefined}
+						>{unreadInbox > 0 ? unreadInbox : ''}</span>
+					</div>
+					<div class="menu-item__text">Inbox</div>
 				</a>
 			</li>
 		</ul>
@@ -123,10 +180,19 @@
 				</a>
 			</li>
 			{#if session.signedIn}
+				<!-- The same control the Askama nav renders (`templates/
+				     layouts/authenticated.html:33-36`): a POST form to /logout with the
+				     `star_csrf` cookie echoed into a hidden `_csrf`, so submitting it is
+				     Rails' own double-submit pair rather than a fetch the page invents.
+				     `ssr = false`, so the cookie is readable here on every page the shell
+				     served — `ensure_csrf_cookie` set it before this document arrived. -->
 				<li class="menu-item ic-app-header__menu-list-item">
-					<button class="ic-app-header__menu-list-link" type="button" onclick={signOut}>
-						<div class="menu-item__text">Log Out</div>
-					</button>
+					<form method="post" action="/logout" class="menu-item__logout-form">
+						<input type="hidden" name="_csrf" value={csrfToken() ?? ''} />
+						<button type="submit" id="global_nav_logout_link" class="Button--link">
+							Logout
+						</button>
+					</form>
 				</li>
 			{/if}
 		</ul>

@@ -234,6 +234,18 @@ export const endpoints = {
 		todo: () => api.get<TodoItem[]>('/api/v1/users/self/todo')
 	},
 
+	conversations: {
+		/** GET /api/v1/conversations/unread_count — the feed Canvas' global nav
+		 *  reads for the Inbox badge: `unreadCountQuery.ts` URL_MAP.conversations,
+		 *  queried at `NavigationBadges.tsx:66-75` and portal-mounted into
+		 *  `#global_nav_conversations_link .menu-item__badge` (:34-35, :106-122)
+		 *  only while the count is above zero. The count is a STRING on the wire;
+		 *  this crate mirrors that (`crates/star-conversations/src/lib.rs:293`)
+		 *  and Canvas' query parses it back (`parseInt(fetched, 10)`). */
+		unreadCount: () =>
+			api.get<{ unread_count: string | number }>('/api/v1/conversations/unread_count')
+	},
+
 	users: {
 		show: (userId: number) => api.get<User>(`/api/v1/users/${userId}`),
 		courses: (userId: number) =>

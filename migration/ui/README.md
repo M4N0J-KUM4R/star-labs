@@ -38,28 +38,33 @@ appears here only when Canvas' CSS actually asks for it.
 `MIGRATION.md` is the ordered plan for retiring the Askama templates. Read it
 before deleting anything — there is a parity constraint that sequences the work.
 
-## Measured, 2026-11-24 (`npm run build`, adapter-static, brotli -q11)
+## Measured, 2026-11-24 (`npm run build`, adapter-static, brotli quality 11)
 
 The dashboard route, normal contrast, cold cache. Numbers are the files a browser
-actually fetches: `build/index.html` with the five Canvas sheets already linked into
-it server-side (tokens, fonts, common, dashboard, dashboard_card, from
-`crates/star-ui/embed/shell-map.txt`), the two entry files plus the chunks they and
-the `/dashboard` route node statically import (17 files, walked from the `from"../…"`
-edges in the built JS), and the two Lato weights the first text paints with. The
-compressed columns are per-file sums at brotli `--quality=11` and gzip 9 — what a
-proxy would send; the binary answers `Identity` today (MIGRATION.md "Nothing is
-precompressed").
+actually fetches: `build/index.html`, the five Canvas sheets `shell.rs` links into it
+server-side (tokens, fonts, common, dashboard, dashboard_card, from
+`crates/star-ui/embed/shell-map.txt`), the JS it needs — the 19 files the built
+document itself `rel=modulepreload`s (the two entries, the `+layout.svelte` node and
+their static chunks) unioned with what the `/dashboard` node additionally imports
+(22 files in all; the set is the `from"../…"` / `import"../…"` edges in the built JS,
+walked from those two nodes) — the 115-byte `assets/*.css` that one link carries
+`src/app.css` in, and the two Lato weights the first text paints with. The compressed
+columns are per-file sums at brotli quality 11 and gzip level 9, taken with Node's
+`zlib` (`zlib.brotliCompressSync` / `zlib.gzipSync`; the `brotli` and `gzip` CLIs give
+a few bytes more per file, because their headers carry an mtime) — what a proxy would
+send; the binary answers `Identity` today (MIGRATION.md "Nothing is precompressed").
 
 | Quantity | raw | brotli | gzip |
 |---|---|---|---|
-| JS — entry, chunks, the dashboard route node | 114,792 | 42,223 | 47,080 |
-| Canvas CSS — the dashboard stack | 416,051 | 54,776 | 68,581 |
-| Lato Extended Regular + Bold (woff2, Canvas' files) | 367,620 | 359,520 | 360,773 |
-| Shell HTML | 2,125 | 493 | 644 |
-| **Cold first load** | **900,588** | **457,012** | **477,078** |
-| First load without the two fonts | 532,968 | 97,492 | 116,305 |
-| All 15 route nodes together | 42,416 | 17,328 | 19,857 |
-| One extra page's sheet, e.g. assignments.css | 30,410 | 5,822 | 6,641 |
+| JS — preloaded entries, chunks, the dashboard node | 129,281 | 47,383 | 53,247 |
+| Canvas CSS — the dashboard stack | 416,051 | 54,774 | 68,594 |
+| `app.css`, the pre-paint floor | 115 | 84 | 121 |
+| Lato Extended Regular + Bold (woff2, Canvas' files) | 367,620 | 359,520 | 360,898 |
+| Shell HTML | 2,125 | 488 | 643 |
+| **Cold first load** | **915,192** | **462,249** | **483,503** |
+| First load without the two fonts | 547,572 | 102,729 | 122,605 |
+| All 15 route nodes together | 43,285 | 17,446 | 20,236 |
+| One extra page's sheet, e.g. assignments.css | 30,410 | 5,822 | 6,622 |
 
 Read the rows this way: **the fonts are the payload**, not the framework. Lato
 Extended ships every Latin codepoint Canvas has ever rendered, 182 KB per weight,
@@ -79,8 +84,8 @@ visible, not in a PR.
 |---|---|
 | Canvas bundles compiled per variant | 31, plus the generated token sheet = 32 files |
 | Vendored files in `static/` | 236 files, 4,159,439 B (fonts 2,181,616; sheets 1,533,493; images 444,072; favicon 258) |
-| Embedded into the binary (`build.rs`, `ASSETS`) | 276 files, 4,316,376 B, of which `/_app` is 40 files / 156,937 B (67,498 B gzipped, per-file gzip 9) |
-| Build time | 3.10 s (`vite build`) |
+| Embedded into the binary (`build.rs`, `ASSETS`) | 275 files, 4,316,433 B, of which `/_app` is 39 files / 156,994 B (67,473 B gzipped, per-file gzip 9) |
+| Build time | 3.20 s (`vite build`) |
 | Type gate | `svelte-check` 0 errors, 0 warnings |
 | Unit tests | 19 passed (`npm run test:unit`) |
 

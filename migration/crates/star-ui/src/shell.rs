@@ -277,7 +277,17 @@ mod tests {
     #[test]
     fn the_body_class_is_on_the_opening_tag() {
         let doc = render("/dashboard", "Dashboard", "{}", false, false);
-        assert!(doc.contains("<body class=\"primary-nav-expanded\" data-sveltekit-preload-data"));
+        // `with-right-side` is `shell-map.txt`'s own column for this route, because
+        // Canvas' layout adds it when a page provides :right_side
+        // (app/views/users/user_dashboard.html.erb:84 -> layouts/application.html.erb:94)
+        // and it is the only thing that un-hides #right-side-wrapper.
+        assert!(
+            doc.contains(
+                "<body class=\"primary-nav-expanded with-right-side\" data-sveltekit-preload-data"
+            ),
+            "dashboard body tag: {:?}",
+            doc.lines().find(|line| line.contains("<body"))
+        );
         // Every sheet link is versioned, which is what lets the handler cache it forever.
         assert!(
             doc.matches("/canvas/").count() >= 4,

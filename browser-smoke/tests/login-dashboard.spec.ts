@@ -30,6 +30,9 @@ test.describe('journey 1: login -> dashboard', () => {
     // no data-course-id attribute (ui/shared/dashboard-card/react/DashboardCard.tsx:311-316
     // gives only class, style, aria-label and data-testid="draggable-card").
     const cards = page.locator('.ic-DashboardCard');
+    // The grid arrives from `GET /api/v1/dashboard/dashboard_cards` after boot, so wait
+    // for the first card instead of reading a count that is still 0 at this instant.
+    await expect(cards.first()).toBeVisible();
     expect(await cards.count()).toBeGreaterThanOrEqual(1);
 
     const card = page.locator(

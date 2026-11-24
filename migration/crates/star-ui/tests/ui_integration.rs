@@ -356,6 +356,13 @@ async fn login_page_is_no_store() {
 
 /// Regression: the global nav Calendar link must point at the global
 /// /calendar page (it previously linked /dashboard).
+///
+/// It asks for `/calendar` rather than `/dashboard` because `/dashboard` is now the
+/// shell boot document and its nav comes from the bundle at runtime
+/// (`ui/src/lib/components/AppHeader.svelte:98-103`), so no server-rendered nav exists
+/// there to read. `browser-smoke/tests/dashboard-shell-styles` covers the bundle's own
+/// link; this covers every Askama page, which still renders
+/// `templates/layouts/authenticated.html:19`.
 #[tokio::test]
 async fn global_nav_calendar_link_points_to_calendar() {
     let Some((server, pool, prefix)) = setup().await else {
@@ -366,7 +373,7 @@ async fn global_nav_calendar_link_points_to_calendar() {
     let user = seed_user(&pool, &prefix, "navcaluser", "student", "not-a-real-hash").await;
     let token = star_auth::create_token(user, "student", JWT_SECRET).expect("mint");
     let resp = server
-        .get("/dashboard")
+        .get("/calendar?month=2026-11")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_session",
             token.clone(),
@@ -476,16 +483,19 @@ async fn dashboard_renders_cards_and_env_contract() {
     // that aside and `.with-right-side` sizes it (app/stylesheets/base/_layout.scss:78).
     assert!(
         body.contains("<body class=\"primary-nav-expanded with-right-side\""),
-        "body class missing: {}",
-        &body[..body.len().min(300)]
+        "body class missing: {:?}",
+        body.chars().take(300).collect::<String>()
     );
 
-    // The sole inline <script> is the ENV block; every other tag is a module link.
+    // Two inline <script> tags and no more: the one `shell::render` injects with this
+    // user's `window.ENV`, and SvelteKit's own boot block, which is a bare `<script>`
+    // too (`ui/build/index.html`: `__sveltekit_… = { base }` plus `kit.start(…)`).
+    // A third would mean per-request data reached the cacheable bundle.
     let script_count = body.matches("<script>").count();
     let env_block_count = body.matches("window.ENV = ").count();
     assert_eq!(
-        script_count, 1,
-        "exactly one inline <script> (the ENV block)"
+        script_count, 2,
+        "the ENV block and the boot block, nothing else"
     );
     assert_eq!(env_block_count, 1);
 

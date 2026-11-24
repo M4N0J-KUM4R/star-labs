@@ -48,7 +48,13 @@
 				aria-hidden="true"
 			></div>
 		{/if}
-		<a href={card.href} class="ic-DashboardCard__link">
+		<!-- data-sveltekit-reload: Canvas' card links to a document, and so must ours.
+		     The destination is `GET /courses/:id`, served by axum as server-rendered
+		     HTML (crates/star-ui/src/lib.rs:119), which the bundle has no route for that
+		     answers it — leaving the interceptor on would render our /courses/[id] page
+		     instead and `#section-tabs` (browser-smoke/tests/dashboard-course-home.spec.ts)
+		     would never appear. -->
+		<a href={card.href} data-sveltekit-reload class="ic-DashboardCard__link">
 			<div class="ic-DashboardCard__header_content">
 				<h3 class="ic-DashboardCard__header-title ellipsis" title={card.originalName}>
 					<span style:color={backgroundColor}>{card.shortName}</span>
@@ -78,6 +84,7 @@
 			<a
 				class={`ic-DashboardCard__action ${link.css_class}`}
 				href={link.path}
+				data-sveltekit-reload
 				title={`${link.label} - ${card.shortName}`}
 			>
 				<span class="screenreader-only">{link.label} - {card.shortName}</span>

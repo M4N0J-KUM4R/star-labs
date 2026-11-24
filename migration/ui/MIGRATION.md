@@ -211,13 +211,13 @@ After every page has a Svelte route:
   `ENV.PREFERENCES.user_system_default_font_family`, which `EnvPreferences` does
   not carry yet — so `handlers::profile` passes `dyslexic: false`.
 - Nothing is precompressed. Measured on this branch's build, in bytes: `build.rs`
-  embeds 276 files / 4,316,376 B (of which `/_app` is 40 files / 156,937 B); a
-  `/profile` first load is 425,130 B of CSS (69,596 B gzipped — `common.css` alone
-  is 399,634 raw / 64,530 gzipped) plus 109,354 B of JS across the 15 files the
-  entry and the profile route node import (44,585 B gzipped), and the shell
-  document itself is ~2 KB `no-store`. The `/dashboard` first load is the same
-  shape: 416,051 B CSS and 114,792 B JS across 17 files. Serving
-  `Content-Encoding: gzip` from the binary needs `flate2`,
+  embeds 275 files / 4,316,433 B (of which `/_app` is 39 files / 156,994 B); a
+  `/profile` first load is 425,130 B of CSS (69,607 B gzipped — `common.css` alone
+  is 399,634 raw / 64,563 gzipped) plus 124,878 B of JS across 21 files (51,351 B
+  gzipped) — the modules `build/index.html` preloads, plus what the profile route
+  node imports on top — and the shell document itself is ~2 KB `no-store`. The
+  `/dashboard` first load is the same shape: 416,051 B CSS and 129,281 B JS across
+  22 files. Serving `Content-Encoding: gzip` from the binary needs `flate2`,
   which is not in `Cargo.lock` — and CI builds `--locked`, so that is a lockfile
   change to land on `main` first, not something this branch can smuggle in.
   Until then compression is the reverse proxy's job.
