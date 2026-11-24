@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+# Which Canvas' own webpack aliases resolve to inside node_modules, and what
+# each is for. One line per package so the npm install below stays auditable.
+emoji-mart@3.0.1 css/emoji-mart.css        components/_emoji.scss:18 — assignments, gradebook
+sass-direction   _direction.scss           base/_environment.scss:32 — every bundle
+fullcalendar     main/scss/_variables.scss bundles/calendar2.scss — calendar page
