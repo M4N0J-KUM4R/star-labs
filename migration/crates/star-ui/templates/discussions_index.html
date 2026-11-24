@@ -12,7 +12,7 @@
       </div>
       <div class="ic-Action-header__Secondary">
         {% if can_create %}
-        <a href="/courses/{{ course_id }}/discussions/new" class="Button Button--primary" id="add_discussion">+ Discussion</a>
+        <a href="/courses/{{ course_id }}/discussion_topics/new" class="Button Button--primary" id="add_discussion">+ Discussion</a>
         {% endif %}
       </div>
     </div>
@@ -40,7 +40,7 @@
             {% if topic.unread %}<span class="unread-mark" title="Unread" aria-label="Unread topic">●</span>{% endif %}
           </td>
           <td class="topic-title-cell">
-            <a class="discussion-topic-title" href="/courses/{{ course_id }}/discussions/{{ topic.id }}">{{ topic.title }}</a>
+            <a class="discussion-topic-title" href="/courses/{{ course_id }}/discussion_topics/{{ topic.id }}">{{ topic.title }}</a>
             {% if topic.pinned %}<span class="topic-flag topic-flag--pinned" title="Pinned">📌 Pinned</span>{% endif %}
             {% if topic.locked %}<span class="topic-flag topic-flag--locked" title="Locked">🔒 Locked</span>{% endif %}
           </td>

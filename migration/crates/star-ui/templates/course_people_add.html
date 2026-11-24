@@ -1,14 +1,15 @@
 {% extends "layouts/course.html" %}
 {# Add People form (issue #73) — the no-JS single-step equivalent of the
-   Canvas "Add People" wizard: login (email) + role select, posting to the
-   enrollments REST create validation. #}
+   Canvas "Add People" wizard: login (email) + role select, posting to
+   Canvas' own web verb `post "enroll_users"` on the course collection
+   (config/routes.rb:231), which runs the enrollments REST create validation. #}
 {% block content %}
   <div id="add_people" class="add-people-form content_underline_links">
     <h1 class="add-people-heading">Add People</h1>
     {% if !error.is_empty() %}
     <div class="ic-flash error" role="alert">{{ error }}</div>
     {% endif %}
-    <form id="add_people_form" class="add-people" method="post" action="/courses/{{ course_id }}/users/add">
+    <form id="add_people_form" class="add-people" method="post" action="/courses/{{ course_id }}/enroll_users">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
 
       <div class="ic-Form-control">

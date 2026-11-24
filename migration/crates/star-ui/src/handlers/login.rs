@@ -1,12 +1,21 @@
 //! Login / logout handlers (spec §5).
 //!
-//! `GET /login` renders the form and issues the CSRF cookie; `POST /login`
-//! form-decodes, checks the double-submit CSRF pair, verifies the password
-//! with star-auth's argon2 `verify_password`, mints the SAME JWT via
-//! `star_auth::create_token` (HS256, 7-day expiry) and sets it as the
-//! `star_session` cookie. `POST /logout` stamps `users.last_logged_out` —
-//! which the session extractor (and the API's AuthUser) already honor — and
-//! clears the cookie.
+//! The web-side login surface, on Canvas' own rows (config/routes.rb:928-935):
+//! `GET /login` is the page (`get "login" => "login#new"`, :928) and renders the
+//! form plus issues the CSRF cookie; the CREDENTIAL POST is Canvas' auth-method
+//! row `post "login/canvas" => "login/canvas#create"` (:935), which form-decodes,
+//! checks the double-submit CSRF pair, verifies the password with star-auth's
+//! argon2 `verify_password`, mints the SAME JWT via `star_auth::create_token`
+//! (HS256, 7-day expiry) and sets it as the `star_session` cookie. Canvas serves
+//! no POST at `/login` itself, so neither do we.
+//! Session end is `DELETE /logout` (`delete "logout" => "login#destroy"`, :930):
+//! it stamps `users.last_logged_out` — which the session extractor (and the API's
+//! AuthUser) already honor — and clears the cookie. HTML forms get there with
+//! Rails' `form_tag logout_path, method: :delete`
+//! (app/views/login/logout_confirm.html.erb:39), i.e. a POST + hidden
+//! `_method=delete` that [`crate::method_override`] rewrites; Canvas' other
+//! logout row, `get "logout" => "login#logout_landing"` (:931), is a landing page
+//! this port does not have.
 
 use askama::Template;
 use axum::extract::{Query, State};
@@ -114,7 +123,8 @@ pub async fn login_form(
         .into_response()
 }
 
-/// POST /login — form-decode, CSRF check, password verify, cookie set, 303.
+/// POST /login/canvas — form-decode, CSRF check, password verify, cookie set, 303.
+/// (Canvas's `post "login/canvas" => "login/canvas#create"`, config/routes.rb:935.)
 pub async fn login_submit(
     State(app): State<AppState>,
     jar: CookieJar,
@@ -216,7 +226,9 @@ pub async fn login_submit(
         .into_response()
 }
 
-/// POST /logout — CSRF check, stamp `last_logged_out`, clear cookie, redirect.
+/// DELETE /logout — CSRF check, stamp `last_logged_out`, clear cookie, redirect.
+/// (Canvas's `delete "logout" => "login#destroy"`, config/routes.rb:930; the nav form
+/// arrives as POST + `_method=delete` via [`crate::method_override`].)
 ///
 /// The UPDATE reuses the token-invalidation mechanism the API's terminate
 /// sessions route uses (star-users): every token minted before now is dead

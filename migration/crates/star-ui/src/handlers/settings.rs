@@ -18,11 +18,21 @@
 //! and the REST update cannot persist them (documented deviation — only
 //! fields the API can actually persist are on the form).
 //!
-//! Add-people maps onto `star_enrollments::ui::enroll_user_in_course`, the
-//! extracted body of the REST `POST /api/v1/enrollments` create (login
-//! resolved to a user id, role validated to student/teacher/ta, duplicate
-//! triple 409). Conclude/reactivate flip `enrollments.workflow_state`
-//! inactive/active, the same transitions the REST lifecycle endpoints use.
+//! Add-people maps onto `star_enrollments::ui::enroll_user_in_course`, which
+//! runs Canvas' enrollment-create gate in the REST create's order (permission
+//! check, then course 404, then user 404, then role, then the duplicate-triple
+//! 409), with the login resolved to a user id. Its REST counterpart is now
+//! `POST /api/v1/courses/{id}/enrollments` (star-courses `create_enrollment`,
+//! config/routes.rb:1402) — the flat `POST /api/v1/enrollments` was
+//! Canvas-absent and is gone — and the two differ only in the role set: this
+//! helper accepts student/teacher/ta as Canvas does, while that handler
+//! narrows to student/teacher. It is reached through Canvas' own web verb,
+//! `POST /courses/{id}/enroll_users` (config/routes.rb:231).
+//! Conclude/reactivate flip `enrollments.workflow_state`
+//! inactive/active, the same transitions the REST lifecycle endpoints use, on
+//! Canvas' enrollment-id slots `DELETE /courses/{id}/conclude_user/{enrollment_id}`
+//! and `POST /courses/{id}/unconclude_user/{enrollment_id}`
+//! (config/routes.rb:215-216; the web conclude form posts `_method=delete`).
 
 use askama::Template;
 use axum::extract::{Form, Path, Query, State};
@@ -245,7 +255,10 @@ pub async fn course_settings(
     render_settings(&app, &user, render, jar).await
 }
 
-/// POST /courses/{id}/settings — CSRF-checked form save.
+/// PUT /courses/{id}/settings — CSRF-checked form save (Canvas
+/// `PUT /courses/:course_id`, config/routes.rb:228; the HTML form posts with
+/// a hidden `_method=put` and [`crate::method_override`] rewrites it, exactly
+/// like Canvas' Rack::MethodOverride).
 ///
 /// Maps the form onto the same validation the REST update applies (via
 /// `star_courses::update_course_record`): a blank name is a 422 re-render;
@@ -629,7 +642,9 @@ pub async fn course_people_add(
     render_add_people(&app, &user, course_id, None, String::new(), jar).await
 }
 
-/// POST /courses/{id}/users/add — create the enrollment.
+/// POST /courses/{id}/enroll_users — create the enrollment (Canvas
+/// `post "enroll_users"` on the course collection, config/routes.rb:231 →
+/// `courses#enroll_users`, app/controllers/courses_controller.rb:2870).
 ///
 /// Reuses the enrollments REST create validation exactly (via
 /// `star_enrollments::ui::enroll_user_in_course`): unknown login -> 422
@@ -731,13 +746,16 @@ pub async fn course_people_add_submit(
     }
 }
 
-/// POST /courses/{id}/users/{user_id}/conclude — teacher-only, CSRF, PRG.
-///
-/// Flips the user's non-deleted enrollments in this course to `inactive`
-/// (the state the REST reactivate endpoint is the counterpart of).
+/// DELETE /courses/{id}/conclude_user/{enrollment_id} — teacher-only, CSRF,
+/// PRG. Canvas' `:id` is the enrollment row
+/// (`@context.enrollments.find(params[:id])`, courses_controller.rb:2808), so
+/// this slot carries the same identity: the row is resolved inside the course
+/// first (a foreign enrollment is a 404, like Canvas' `find`), and the user
+/// behind it is what the shared enrollment helper flips to `inactive` (the
+/// state the REST reactivate endpoint is the counterpart of).
 pub async fn course_people_conclude(
     State(app): State<AppState>,
-    Path((course_id, target_user_id)): Path<(i64, i64)>,
+    Path((course_id, enrollment_id)): Path<(i64, i64)>,
     user: SessionUser,
     jar: CookieJar,
     Form(form): Form<ConcludeForm>,
@@ -754,6 +772,12 @@ pub async fn course_people_conclude(
     if !check_csrf(&jar, &form._csrf) {
         return from_api_error(&ApiError::Forbidden, &origin).into_response();
     }
+
+    let target_user_id = match enrollment_owner(&app, course_id, enrollment_id).await {
+        Ok(Some(owner)) => owner,
+        Ok(None) => return from_api_error(&ApiError::NotFound, &origin).into_response(),
+        Err(e) => return from_api_error(&e, &origin).into_response(),
+    };
 
     match star_enrollments::ui::conclude_course_enrollment(&app.db, course_id, target_user_id).await
     {
@@ -765,13 +789,15 @@ pub async fn course_people_conclude(
     }
 }
 
-/// POST /courses/{id}/users/{user_id}/reactivate — teacher-only, CSRF, PRG.
-///
-/// Flips inactive enrollments back to `active` (same transition as the REST
+/// POST /courses/{id}/unconclude_user/{enrollment_id} — teacher-only, CSRF,
+/// PRG. Same enrollment-identity slot as conclude_user above
+/// (courses_controller.rb:2824), and the same verb Canvas draws for it
+/// (`post "unconclude_user/:id"`, config/routes.rb:216). Flips inactive
+/// enrollments back to `active` (same transition as the REST
 /// `PUT /courses/{courseId}/enrollments/{id}/reactivate`).
 pub async fn course_people_reactivate(
     State(app): State<AppState>,
-    Path((course_id, target_user_id)): Path<(i64, i64)>,
+    Path((course_id, enrollment_id)): Path<(i64, i64)>,
     user: SessionUser,
     jar: CookieJar,
     Form(form): Form<ConcludeForm>,
@@ -789,6 +815,12 @@ pub async fn course_people_reactivate(
         return from_api_error(&ApiError::Forbidden, &origin).into_response();
     }
 
+    let target_user_id = match enrollment_owner(&app, course_id, enrollment_id).await {
+        Ok(Some(owner)) => owner,
+        Ok(None) => return from_api_error(&ApiError::NotFound, &origin).into_response(),
+        Err(e) => return from_api_error(&e, &origin).into_response(),
+    };
+
     match star_enrollments::ui::reactivate_course_enrollment(&app.db, course_id, target_user_id)
         .await
     {
@@ -798,6 +830,23 @@ pub async fn course_people_reactivate(
         }
         Err(e) => from_api_error(&e, &origin).into_response(),
     }
+}
+
+/// The user an enrollment in this course belongs to — Canvas' scoped
+/// `@context.enrollments.find(id)` lookup, `None` when the row is not in the
+/// course (or carries no user, which no roster row does).
+async fn enrollment_owner(
+    app: &AppState,
+    course_id: i64,
+    enrollment_id: i64,
+) -> Result<Option<i64>, ApiError> {
+    Ok(sqlx::query_scalar::<_, i64>(
+        "SELECT user_id FROM enrollments WHERE id = $1 AND course_id = $2 AND user_id IS NOT NULL",
+    )
+    .bind(enrollment_id)
+    .bind(course_id)
+    .fetch_optional(&app.db)
+    .await?)
 }
 
 /// The CSRF-only form body of the conclude/reactivate row actions.

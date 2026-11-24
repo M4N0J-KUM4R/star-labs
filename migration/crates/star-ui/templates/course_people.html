@@ -33,14 +33,18 @@
           <td class="roster-state"><span class="enrollment-state state-{{ row.state }}">{{ row.state_label }}</span></td>
           {% if is_teacher %}
           <td class="roster-actions">
+            {# Canvas row actions: form posts to conclude_user with a hidden
+               _method=delete (Rack::MethodOverride) and to unconclude_user
+               with POST — config/routes.rb:215-216. #}
             {% if row.state == "active" || row.state == "invited" %}
-            <form class="roster-action-form" method="post" action="/courses/{{ course_id }}/users/{{ row.user_id }}/conclude">
+            <form class="roster-action-form" method="post" action="/courses/{{ course_id }}/conclude_user/{{ row.enrollment_id }}">
+              <input type="hidden" name="_method" value="delete">
               <input type="hidden" name="_csrf" value="{{ csrf_token }}">
               <button type="submit" class="btn btn-small conclude-link">Conclude</button>
             </form>
             {% endif %}
             {% if row.state == "inactive" %}
-            <form class="roster-action-form" method="post" action="/courses/{{ course_id }}/users/{{ row.user_id }}/reactivate">
+            <form class="roster-action-form" method="post" action="/courses/{{ course_id }}/unconclude_user/{{ row.enrollment_id }}">
               <input type="hidden" name="_csrf" value="{{ csrf_token }}">
               <button type="submit" class="btn btn-small reactivate-link">Reactivate</button>
             </form>

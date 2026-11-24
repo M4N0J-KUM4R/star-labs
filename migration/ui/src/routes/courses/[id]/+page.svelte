@@ -47,7 +47,7 @@
 			<tbody>
 				{#each topics.slice(0, 10) as topic (topic.id)}
 					<tr>
-						<td><a href="/courses/{courseId}/discussions/{topic.id}">{topic.title}</a></td>
+						<td><a href="/courses/{courseId}/discussion_topics/{topic.id}">{topic.title}</a></td>
 						<td>{due(topic.last_reply_at ?? topic.posted_at)}</td>
 					</tr>
 				{/each}

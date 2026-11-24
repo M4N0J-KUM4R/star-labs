@@ -3,11 +3,17 @@
 //!
 //! Routes (registered in `lib.rs`):
 //! - GET  /conversations            — inbox; `?filter=unread|starred` scope
-//! - GET  /conversations/compose    — compose form (recipients select)
+//! - GET  /conversations/compose    — compose form (recipients select). Not a
+//!   Canvas URL: `resources :conversations, only: %i[index show update create
+//!   destroy]` (config/routes.rb:61) draws no compose row and
+//!   app/views/conversations holds only index_new.html.erb, because Canvas'
+//!   React inbox opens compose as a dialog in that one page. This port has no
+//!   JS on the inbox, so the dialog becomes a page the "Compose" control links
+//!   to.
 //! - POST /conversations            — create conversation, PRG to the thread
 //! - GET  /conversations/{id}       — thread show, marks read on open
 //! - POST /conversations/{id}/add_message — reply, PRG back to the thread
-//! - POST /conversations/mark_all_read   — mark-all-read, PRG to the inbox
+//! - POST /conversations/mark_all_as_read   — mark-all-read, PRG to the inbox
 //!
 //! All data access goes through the `star_conversations::ui` pub loaders,
 //! which apply the same active-participant gates as the REST API. The
@@ -521,7 +527,7 @@ pub struct MarkAllForm {
     pub _csrf: String,
 }
 
-/// POST /conversations/mark_all_read — mark every active conversation read,
+/// POST /conversations/mark_all_as_read — mark every active conversation read,
 /// redirect back to the inbox (PRG).
 pub async fn conversations_mark_all_read(
     State(app): State<AppState>,
