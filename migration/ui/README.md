@@ -74,8 +74,8 @@ visible, not in a PR.
 | Other | Value |
 |---|---|
 | Canvas bundles compiled per variant | 31, plus the generated token sheet = 32 files |
-| Vendored files in `static/` | 236, 4.6 MB (fonts 2.1 MB, images 892 KB, sheets 1.4 MB) |
-| Embedded into the binary (`build.rs`) | 277 files, 4.8 MB, of which `build/_app` is 252 KB |
+| Vendored files in `static/` | 236 files, 4,160,228 B (fonts 2,181,616; sheets 1,533,493; images 444,072) |
+| Embedded into the binary (`build.rs`) | 277 files, 4,310,494 B, of which `build/_app` is 151,055 B (55,087 B gzipped) |
 | Build time | 2.81 s |
 | Type gate | `svelte-check` 0 errors, 0 warnings |
 | Unit tests | 15 passed (`npm run test:unit`) |

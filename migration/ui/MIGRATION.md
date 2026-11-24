@@ -173,16 +173,18 @@ After every page has a Svelte route:
   dyslexic root attribute also needs
   `ENV.PREFERENCES.user_system_default_font_family`, which `EnvPreferences` does
   not carry yet — so `handlers::profile` passes `dyslexic: false`.
-- Nothing is precompressed. Measured on this branch's build: the embedded set is
-  277 files / 4.8 MB, a `/profile` first load is 425 KB of CSS (69 KB gzipped)
-  plus 252 KB of JS (23 KB gzipped), and the shell document itself is ~2 KB
-  `no-store`. Serving `Content-Encoding: gzip` from the binary needs `flate2`,
+- Nothing is precompressed. Measured on this branch's build, in bytes: the
+  embedded set is 277 files / 4,310,494 B; a `/profile` first load is 425,130 B
+  of CSS (70,064 B gzipped: `common.css` alone is 64,948 of that) plus 151,055 B
+  of JS (55,087 B gzipped), and the shell document itself is ~2 KB `no-store`.
+  Serving `Content-Encoding: gzip` from the binary needs `flate2`,
   which is not in `Cargo.lock` — and CI builds `--locked`, so that is a lockfile
   change to land on `main` first, not something this branch can smuggle in.
   Until then compression is the reverse proxy's job.
-- Nothing here is verified in a browser yet. `npm run check` (0 errors on this
-  branch) and `npm run test:unit` are the local gates; CI does not run either
-  today, and `browser-smoke.yml` builds `star-http` without a Node step, which is
-  exactly why the bundle is committed. A Playwright assertion that Canvas' CSS
-  actually applies (the 84 px nav rail, Lato as the computed font) is the missing
-  end-to-end check.
+- The browser check is on this branch: `browser-smoke/tests/profile-shell-styles`
+  asserts the 84 px nav rail, the revisioned `common.css` URL and its `immutable`
+  + 304 behaviour, `Lato Extended` as the computed font family, and that
+  `star_session` stays out of `document.cookie` while a cookie-only
+  `/api/v1/auth/me` returns 200. What it cannot cover is the ten pages still on
+  Askama, and `npm run check` / `npm run test:unit` are still not in CI — they
+  were run by hand for this branch (0 errors, 15 passed).
