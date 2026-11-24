@@ -12998,8 +12998,8 @@
     "js_env_files": 124,
     "js_env_files_implemented": 1,
     "js_tsx_files": 5459,
-    "js_tsx_files_implemented": 12,
-    "star_extras": 160,
+    "js_tsx_files_implemented": 51,
+    "star_extras": 161,
     "star_extras_by_class": {
       "absent": 25,
       "api_alias": 5,
@@ -13007,15 +13007,15 @@
       "api_extra_verb": 19,
       "api_nested": 0,
       "api_verb_mismatch": 0,
-      "web_exact": 52,
+      "web_exact": 53,
       "web_nested": 26,
       "web_verb_mismatch": 15
     },
-    "star_route_calls": 1286,
-    "star_route_registrations": 1576,
+    "star_route_calls": 1288,
+    "star_route_registrations": 1577,
     "star_tables": 397,
     "star_test_calls_excluded": 3,
-    "star_unparsed_calls": 0,
+    "star_unparsed_calls": 1,
     "star_unreachable_calls_excluded": 0,
     "ui_feature_dirs": 232,
     "ui_feature_dirs_implemented": 0,
@@ -14436,6 +14436,17 @@
       "path": "/pages/{id}",
       "source": "crates/star-pages/src/lib.rs",
       "verb": "PUT"
+    },
+    {
+      "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
+      "crate": "star-ui",
+      "normalized_path": "profile",
+      "path": "/profile",
+      "source": "crates/star-ui/src/lib.rs",
+      "verb": "GET"
     },
     {
       "canvas_closest": [
