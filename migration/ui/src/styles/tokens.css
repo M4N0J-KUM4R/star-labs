@@ -1,0 +1,113 @@
+/* Canvas LMS design tokens — verbatim, with the source line for every value.
+ *
+ * This file exists because "pixel perfect" is a source-of-truth question. Our
+ * previous hand-ported palette (crates/star-ui/static/app.css) had six values
+ * that did not match Canvas and nobody noticed, because nothing diffed them:
+ *
+ *   brand   ported #0374b5  vs Canvas #2B7ABC   (_variables.scss:51)
+ *   header  ported #2d3b45  vs Canvas #34444f   (_variables.scss:245)
+ *   danger  ported #ee0612  vs Canvas #E62429   (_variables.scss:72)
+ *   success ported #127a1e  vs Canvas #03893D   (_variables.scss:60)
+ *   muted   ported #73858c  vs Canvas #6A7883   (_variables.scss:96)
+ *   radius  ported 4px      vs Canvas 6px       (_variables.scss:200)
+ *
+ * So: every token below is copied from canvas-src and cited. Change a value
+ * only by changing the citation. `npm run styles:canvas` regenerates the
+ * component CSS from Canvas' own bundles; this file is the variable layer both
+ * Canvas and we read.
+ *
+ * Naming keeps the `--ic-` prefix on purpose: Canvas' compiled rules already
+ * reference `var(--ic-brand-primary)` (see app/stylesheets/components/
+ * _ProgressBar.scss:22), so a vendored bundle resolves against these and needs
+ * no rewrite. */
+
+:root {
+	/* ---- brandable layer (brandable_variables.json) ---- */
+	--ic-brand-primary: #2b7abc; /* $electric, _variables.scss:51 */
+	--ic-brand-font-color-dark: #273540; /* $ic-color-dark, :94 */
+	--ic-link-color: #0e68b3;
+	/* Canvas emits a whole derived family (`--ic-link-color-darkened-10`,
+	 * `-darkened-20`, ...) from the brandable build; the vendored bundle defines
+	 * the exact sass value. color-mix is the stand-in so hover is not invisible
+	 * before `npm run styles:canvas` has been run. */
+	--ic-link-color-darkened-10: color-mix(in srgb, var(--ic-link-color) 90%, #000);
+	--ic-brand-button--primary-bgd: var(--ic-brand-primary);
+	--ic-brand-button--primary-text: #ffffff;
+	--ic-brand-button--secondary-text: #ffffff;
+
+	/* ---- abstract palette (_variables.scss:51-126) ---- */
+	--ic-color-electric: #2b7abc; /* blue */
+	--ic-color-shamrock: #03893d; /* green */
+	--ic-color-barney: #c54396; /* magenta */
+	--ic-color-crimson: #e62429; /* red */
+	--ic-color-fire: #f06e26; /* orange */
+	--ic-color-light: #ffffff; /* :126 */
+	--ic-color-neutral: hsl(0deg 0% 90%); /* :184 */
+	--ic-color-medium-light: #f2f4f4; /* porcelain, :120 */
+	--ic-color-medium: #6a7883; /* slate / heather, :96 */
+	--ic-color-medium-darker: #334451; /* oxford, :95 */
+	--ic-color-dark: #273540; /* licorice, :94 */
+	--ic-color-tiara: #e8eaec; /* :117 */
+
+	/* ---- functional palette (:85-88) ---- */
+	--ic-color-success: var(--ic-color-shamrock);
+	--ic-color-action: var(--ic-color-barney);
+	--ic-color-danger: var(--ic-color-crimson);
+	--ic-color-alert: var(--ic-color-fire);
+
+	/* ---- borders (:266-273) ---- */
+	--ic-border-color: var(--ic-color-tiara);
+	--ic-border-light: var(--ic-color-tiara);
+	--ic-border-dark: var(--ic-color-medium);
+
+	/* ---- typography (:211-238) ----
+	 * "Lato Extended" leads the stack. It is Instructure's own cut and is NOT in
+	 * canvas-src/public/fonts (that directory only carries canvas-icons), so the
+	 * webfont files must be vendored before this can be called pixel-perfect;
+	 * until then metrics fall back to Lato. See src/styles/README.md. */
+	--ic-font-family: 'Lato Extended', 'Lato', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+	--ic-font-family-monospace: Monaco, Menlo, Consolas, 'Courier New', monospace;
+	--ic-line-height: 1.5;
+	--ic-font-size: 16px;
+	/* $ic-font-weight: bold (_variables.scss:225) — headings only; body is 300. */
+	--ic-font-weight-bold: bold;
+	--ic-font-size--xlarge: 30px; /* $ic-font-size + 14 */
+	--ic-font-size--large: 25px; /* + 9 */
+	--ic-font-size--medium: 18px; /* + 2 */
+	--ic-font-size--small: 16px; /* unchanged in Canvas — the name lies */
+	--ic-font-size--xsmall: 14px; /* - 2 */
+
+	/* ---- layout (:199-200, 242-246) ---- */
+	--ic-sp: 12px;
+	--ic-border-radius: 6px; /* math.div($ic-sp, 2) */
+	--ic-content-padding: 15px;
+	--ic-content-background-color: var(--ic-color-light);
+	--ic-body-background-color: hsl(0deg 0% 94%); /* lighten($ic-color-neutral, 4) */
+	--ic-header-background: #34444f;
+	--ic-header-primary-width: 84px;
+}
+
+/* Canvas ships high contrast as a *separate compiled variant* of the same
+ * variables (`@if $use_high_contrast`). We get the same result from one
+ * stylesheet by re-declaring only the tokens that variant overrides, and the
+ * Rust shell switches it from the existing `ENV.use_high_contrast` key
+ * (star-ui/src/env.rs ENV_KEYS). Values from _variables.scss:63,69,75,81,98,105,111,123. */
+:root[data-use-high-contrast='true'] {
+	--ic-color-shamrock: #02672d;
+	--ic-color-barney: #a31c73;
+	--ic-color-crimson: #ae1b1f;
+	--ic-color-fire: #cf4a00;
+	--ic-color-medium: #4a5b68;
+	--ic-color-medium-lighter: #4a5b68;
+	--ic-color-medium-light: #ffffff;
+	--ic-border-dark: #4a5b68;
+	--ic-border-color: #6a7883;
+}
+
+/* `$use_dyslexic_font` prepends OpenDyslexic to both stacks (:216, :222). */
+:root[data-use-dyslexic-font='true'] {
+	--ic-font-family: OpenDyslexic, 'Lato Extended', 'Lato', 'Helvetica Neue', Helvetica, Arial,
+		sans-serif;
+	--ic-font-family-monospace: OpenDyslexicMono, Monaco, Menlo, Consolas, 'Courier New', monospace;
+	--ic-header-primary-width: 104px; /* :248 */
+}

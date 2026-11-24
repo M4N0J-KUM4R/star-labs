@@ -1,0 +1,57 @@
+<script lang="ts">
+	import { endpoints } from '$lib/api';
+	import { session } from '$lib/auth.svelte';
+	import type { Course } from '$lib/types';
+	import DashboardCard from '$lib/components/DashboardCard.svelte';
+	import EmptyState from '$lib/components/EmptyState.svelte';
+
+	/* Canvas' All Courses page (app/views/users/all_courses.html.erb, bundle
+	 * all_courses.scss) is the same card grid as the dashboard, but grouped by
+	 * enrollment term and including past/unpublished enrollments. */
+	let courses = $state<Course[] | null>(null);
+	let failure = $state<string | null>(null);
+	let filter = $state('');
+
+	let visible: Course[] = $derived(
+		(courses ?? []).filter(
+			(c) =>
+				!filter ||
+				c.name.toLowerCase().includes(filter.toLowerCase()) ||
+				(c.course_code ?? '').toLowerCase().includes(filter.toLowerCase())
+		)
+	);
+
+	$effect(() => {
+		if (!session.ready) return;
+		endpoints.courses
+			.list({ include: ['term'], state: ['available', 'completed'] })
+			.then((list) => (courses = list), (error) => (failure = error.publicMessage));
+	});
+</script>
+
+<div class="page-header">
+	<h1>All Courses</h1>
+</div>
+
+{#if failure}
+	<div class="ic-flash-error" role="alert">{failure}</div>
+{:else if courses === null}
+	<span class="screenreader-only" role="status">Loading courses</span>
+{:else}
+	<p>
+		<label class="screenreader-only" for="course_filter">Filter courses</label>
+		<input id="course_filter" placeholder="Filter by course name or code" bind:value={filter} />
+	</p>
+
+	{#if visible.length === 0}
+		<EmptyState title="No matching courses" body="Nothing in your enrollments matches that." />
+	{:else}
+		<div id="DashboardCard_Container">
+			<div class="ic-DashboardCard__box">
+				{#each visible as course (course.id)}
+					<DashboardCard {course} />
+				{/each}
+			</div>
+		</div>
+	{/if}
+{/if}
