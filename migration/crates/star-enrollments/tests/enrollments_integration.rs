@@ -1,9 +1,13 @@
 //! Integration tests for star-enrollments.
 //!
-//! Exercises the real enrollments router (POST /enrollments, GET /enrollments,
-//! DELETE /enrollments/{id} and the section-scoped
-//! GET/POST /sections/{sectionId}/enrollments) through axum-test against a real
-//! Postgres.
+//! Exercises the real enrollments router (the Canvas-nested
+//! GET/POST /sections/{sectionId}/enrollments pair, the
+//! /courses/{courseId}/enrollments/{id} lifecycle actions and
+//! GET /users/{userId}/enrollments) through axum-test against a real
+//! Postgres.  Canvas never exposed a bare `/enrollments` index/create or a flat
+//! `DELETE /enrollments/{id}`: every enrollment route is context-scoped
+//! (canvas-src/config/routes.rb:1394-1411), so the flat twins are not
+//! registered here.
 //!
 //! Conventions (mirrors the rest of the workspace):
 //! - Skipped cleanly when DATABASE_URL is not set (prints SKIP and returns).
@@ -158,15 +162,11 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
         .await;
 }
 
-/// GET /enrollments with the given bearer token and query string.
-async fn list_enrollments(server: &TestServer, token: &str, query: &str) -> Value {
-    let mut path = "/enrollments".to_string();
-    if !query.is_empty() {
-        path.push('?');
-        path.push_str(query);
-    }
+/// GET /sections/{section_id}/enrollments with the given bearer token
+/// (Canvas EnrollmentsApiController#index, routes.rb:1395).
+async fn list_section_enrollments(server: &TestServer, token: &str, section_id: i64) -> Value {
     let resp = server
-        .get(&path)
+        .get(&format!("/sections/{section_id}/enrollments"))
         .add_header(axum::http::header::AUTHORIZATION, token)
         .await;
     assert_eq!(
@@ -175,6 +175,25 @@ async fn list_enrollments(server: &TestServer, token: &str, query: &str) -> Valu
         "list should succeed; body: {}",
         resp.text()
     );
+    resp.json()
+}
+
+/// POST /sections/{section_id}/enrollments (Canvas
+/// EnrollmentsApiController#create, routes.rb:1403) asserting 201 and returning
+/// the created enrollment body.
+async fn create_in_section(
+    server: &TestServer,
+    token: &str,
+    section_id: i64,
+    user_id: i64,
+    role: &str,
+) -> Value {
+    let resp = server
+        .post(&format!("/sections/{section_id}/enrollments"))
+        .add_header(axum::http::header::AUTHORIZATION, token)
+        .json(&json!({ "user_id": user_id, "role": role }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "seed enrollment: {}", resp.text());
     resp.json()
 }
 
@@ -424,11 +443,15 @@ async fn create_enrollment_without_token_is_401() {
 }
 
 // ---------------------------------------------------------------------------
-// GET /enrollments
+// GET /sections/{sectionId}/enrollments (Canvas EnrollmentsApiController#index,
+// routes.rb:1395) — the Canvas-real spelling of the removed flat GET
+// /enrollments. Canvas scopes every enrollment read to a course, section or
+// user context, so the flat route's cross-course `course_id`/`user_id` query
+// filters have no Canvas counterpart here.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn list_as_admin_sees_all_and_filters() {
+async fn list_as_admin_sees_the_whole_section_roster() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -440,47 +463,37 @@ async fn list_as_admin_sees_all_and_filters() {
     let s2 = seed_user(&pool, &prefix, "S2", "student").await;
     let c1 = seed_course(&pool, &prefix, "ListCourseA").await;
     let c2 = seed_course(&pool, &prefix, "ListCourseB").await;
+    let sec1 = seed_section(&pool, c1, "Section A").await;
+    let sec2 = seed_section(&pool, c2, "Section B").await;
 
-    for (u, c, r) in [
-        (t1, c1, "teacher"),
-        (s1, c1, "student"),
-        (s2, c2, "student"),
+    for (u, section, r) in [
+        (t1, sec1, "teacher"),
+        (s1, sec1, "student"),
+        (s2, sec2, "student"),
     ] {
-        let resp = server
-            .post("/enrollments")
-            .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
-            .json(&json!({ "user_id": u, "course_id": c, "role": r }))
-            .await;
-        assert_eq!(resp.status_code(), 201, "seed enroll: {}", resp.text());
+        create_in_section(&server, &auth(admin, "admin"), section, u, r).await;
     }
 
-    // Unfiltered: all three.
-    let all = list_enrollments(&server, &auth(admin, "admin"), "").await;
+    // Admin sees every enrollment of the requested section, and only those.
+    let all = list_section_enrollments(&server, &auth(admin, "admin"), sec1).await;
     let arr = all.as_array().expect("array response");
-    let ours: Vec<&Value> = arr
+    assert_eq!(arr.len(), 2, "section A roster: {arr:?}");
+    assert!(arr
         .iter()
-        .filter(|e| {
-            e["email"]
-                .as_str()
-                .map(|e| e.starts_with(&prefix))
-                .unwrap_or(false)
-        })
-        .collect();
-    assert_eq!(ours.len(), 3, "ours: {ours:?}");
+        .all(|e| e["course_id"] == c1 && e["course_section_id"] == sec1));
+    assert!(arr
+        .iter()
+        .any(|e| e["user_id"] == t1 && e["role"] == "teacher"));
+    assert!(arr
+        .iter()
+        .any(|e| e["user_id"] == s1 && e["role"] == "student"));
 
-    // Filter by course.
-    let by_course =
-        list_enrollments(&server, &auth(admin, "admin"), &format!("course_id={c1}")).await;
-    let arr = by_course.as_array().unwrap();
-    assert_eq!(arr.len(), 2);
-    assert!(arr.iter().all(|e| e["course_id"] == c1));
-
-    // Filter by user.
-    let by_user = list_enrollments(&server, &auth(admin, "admin"), &format!("user_id={s1}")).await;
-    let arr = by_user.as_array().unwrap();
-    assert_eq!(arr.len(), 1);
-    assert_eq!(arr[0]["user_id"], s1);
-    assert_eq!(arr[0]["course_id"], c1);
+    // The other course's section is a separate roster.
+    let other = list_section_enrollments(&server, &auth(admin, "admin"), sec2).await;
+    let arr = other.as_array().unwrap();
+    assert_eq!(arr.len(), 1, "section B roster: {arr:?}");
+    assert_eq!(arr[0]["user_id"], s2);
+    assert_eq!(arr[0]["course_id"], c2);
 
     cleanup(&pool, &prefix).await;
 }
@@ -499,87 +512,33 @@ async fn list_as_teacher_scoped_to_own_courses() {
     let s2 = seed_user(&pool, &prefix, "S2", "student").await;
     let my_course = seed_course(&pool, &prefix, "MyCourse").await;
     let other_course = seed_course(&pool, &prefix, "OtherCourse").await;
+    let my_section = seed_section(&pool, my_course, "My Section").await;
+    let other_section = seed_section(&pool, other_course, "Other Section").await;
 
-    for (u, c, r) in [
-        (mine, my_course, "teacher"),
-        (other, other_course, "teacher"),
-        (s1, my_course, "student"),
-        (s2, other_course, "student"),
+    for (u, section, r) in [
+        (mine, my_section, "teacher"),
+        (other, other_section, "teacher"),
+        (s1, my_section, "student"),
+        (s2, other_section, "student"),
     ] {
-        let resp = server
-            .post("/enrollments")
-            .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
-            .json(&json!({ "user_id": u, "course_id": c, "role": r }))
-            .await;
-        assert_eq!(resp.status_code(), 201, "seed enroll: {}", resp.text());
+        create_in_section(&server, &auth(admin, "admin"), section, u, r).await;
     }
 
-    // Teacher sees only enrollments in courses they teach.
-    let all = list_enrollments(&server, &auth(mine, "teacher"), "").await;
+    // Teacher sees the roster of a section in their own course.
+    let all = list_section_enrollments(&server, &auth(mine, "teacher"), my_section).await;
     let arr = all.as_array().expect("array response");
     assert_eq!(arr.len(), 2, "teacher 'mine' should see 2 rows: {arr:?}");
     assert!(arr.iter().all(|e| e["course_id"] == my_course));
 
-    // course_id filter within scope works.
-    let scoped = list_enrollments(
-        &server,
-        &auth(mine, "teacher"),
-        &format!("course_id={my_course}"),
-    )
-    .await;
-    assert_eq!(scoped.as_array().unwrap().len(), 2);
-
-    // course_id filter outside scope is Forbidden.
-    let out_of_scope = server
-        .get(&format!("/enrollments?course_id={other_course}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(mine, "teacher"))
-        .await;
+    // A section outside their courses yields no roster rows: the Canvas section
+    // index falls back to the caller's own enrollments there, so 'mine' (who has
+    // none) sees nothing rather than another teacher's roster.
+    let outside = list_section_enrollments(&server, &auth(mine, "teacher"), other_section).await;
     assert_eq!(
-        out_of_scope.status_code(),
-        403,
-        "body: {}",
-        out_of_scope.text()
-    );
-
-    // user_id filter still constrained to own courses.
-    let by_user = list_enrollments(&server, &auth(mine, "teacher"), &format!("user_id={s2}")).await;
-    assert_eq!(
-        by_user.as_array().unwrap().len(),
+        outside.as_array().unwrap().len(),
         0,
         "s2 is in other teacher's course"
     );
-
-    cleanup(&pool, &prefix).await;
-}
-
-#[tokio::test]
-async fn list_as_student_gets_empty_array() {
-    let Some((server, pool, prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let other_student = seed_user(&pool, &prefix, "S2", "student").await;
-    let course = seed_course(&pool, &prefix, "StudentList").await;
-    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
-
-    // Populate the DB so a broken scoping check (e.g. returning everything)
-    // would fail the test.
-    for (u, c, r) in [
-        (student, course, "student"),
-        (other_student, course, "student"),
-    ] {
-        let resp = server
-            .post("/enrollments")
-            .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
-            .json(&json!({ "user_id": u, "course_id": c, "role": r }))
-            .await;
-        assert_eq!(resp.status_code(), 201, "seed enroll: {}", resp.text());
-    }
-
-    let resp = list_enrollments(&server, &auth(student, "student"), "").await;
-    assert_eq!(resp.as_array().expect("array").len(), 0);
 
     cleanup(&pool, &prefix).await;
 }
@@ -591,246 +550,70 @@ async fn list_without_token_is_401() {
         return;
     };
 
-    let resp = server.get("/enrollments").await;
+    let resp = server.get("/sections/1/enrollments").await;
     assert_eq!(resp.status_code(), 401);
 }
 
 // ---------------------------------------------------------------------------
-// DELETE /enrollments/{id}
+// DELETE: Canvas declares `delete "courses/:course_id/enrollments/:id"`
+// (routes.rb:1410), a course-scoped member route that this crate does not
+// register (its course-scoped member routes are the accept/reject/reactivate
+// lifecycle actions below).  The old flat `DELETE /enrollments/{id}` coverage is
+// therefore dropped here rather than pointed at a route that does not exist;
+// re-add it together with the Canvas-real course-scoped destroy route.
 // ---------------------------------------------------------------------------
-
-#[tokio::test]
-async fn delete_by_course_teacher_succeeds() {
-    let Some((server, pool, prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
-    let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "DeleteCourse").await;
-    seed_course_teacher(&pool, teacher, course).await;
-
-    let created: Value = server
-        .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "user_id": student, "course_id": course, "role": "student" }))
-        .await
-        .json();
-
-    let enrollment_id = created["id"].as_i64().expect("enrollment id");
-
-    let resp = server
-        .delete(&format!("/enrollments/{enrollment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .await;
-    assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
-
-    // Soft-deleted enrollments remain in the database for audit/history, but
-    // are no longer active.
-    let count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM enrollments WHERE id = $1 AND workflow_state != 'deleted'",
-    )
-    .bind(enrollment_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(count.0, 0);
-
-    cleanup(&pool, &prefix).await;
-}
-
-#[tokio::test]
-async fn delete_by_admin_succeeds() {
-    let Some((server, pool, prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
-    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
-    let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "AdminDelete").await;
-
-    let created: Value = server
-        .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "user_id": student, "course_id": course, "role": "student" }))
-        .await
-        .json();
-    let enrollment_id = created["id"].as_i64().expect("enrollment id");
-
-    let resp = server
-        .delete(&format!("/enrollments/{enrollment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
-        .await;
-    assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
-
-    cleanup(&pool, &prefix).await;
-}
-
-#[tokio::test]
-async fn delete_by_other_teacher_is_403() {
-    let Some((server, pool, prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
-    let _teacher_a = seed_user(&pool, &prefix, "TeacherA", "teacher").await;
-    let teacher_b = seed_user(&pool, &prefix, "TeacherB", "teacher").await;
-    let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course_a = seed_course(&pool, &prefix, "CourseA").await;
-
-    let created: Value = server
-        .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
-        .json(&json!({ "user_id": student, "course_id": course_a, "role": "student" }))
-        .await
-        .json();
-    let enrollment_id = created["id"].as_i64().expect("enrollment id");
-
-    // Teacher B does not teach course A.
-    let resp = server
-        .delete(&format!("/enrollments/{enrollment_id}"))
-        .add_header(
-            axum::http::header::AUTHORIZATION,
-            auth(teacher_b, "teacher"),
-        )
-        .await;
-    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-
-    // Row still exists.
-    let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM enrollments WHERE id = $1")
-        .bind(enrollment_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(count.0, 1);
-
-    cleanup(&pool, &prefix).await;
-}
-
-#[tokio::test]
-async fn delete_by_student_is_403() {
-    let Some((server, pool, prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let _admin = seed_user(&pool, &prefix, "Admin", "admin").await;
-    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
-    let student = seed_user(&pool, &prefix, "Student", "student").await;
-    let course = seed_course(&pool, &prefix, "StudentDelete").await;
-
-    let created: Value = server
-        .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "user_id": student, "course_id": course, "role": "student" }))
-        .await
-        .json();
-    let enrollment_id = created["id"].as_i64().expect("enrollment id");
-
-    let resp = server
-        .delete(&format!("/enrollments/{enrollment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
-        .await;
-    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-
-    cleanup(&pool, &prefix).await;
-}
-
-#[tokio::test]
-async fn delete_missing_enrollment_is_404() {
-    let Some((server, pool, prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
-
-    let resp = server
-        .delete("/enrollments/999999999")
-        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
-        .await;
-    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-
-    cleanup(&pool, &prefix).await;
-}
-
-#[tokio::test]
-async fn delete_without_token_is_401() {
-    let Some((server, _pool, _prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let resp = server.delete("/enrollments/1").await;
-    assert_eq!(resp.status_code(), 401);
-}
 
 // ---------------------------------------------------------------------------
 // Cross-cutting / lifecycle
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn full_lifecycle_create_list_delete() {
+async fn full_lifecycle_create_then_list_in_section() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
 
-    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let s1 = seed_user(&pool, &prefix, "S1", "student").await;
     let s2 = seed_user(&pool, &prefix, "S2", "student").await;
     let course = seed_course(&pool, &prefix, "Lifecycle").await;
     seed_course_teacher(&pool, teacher, course).await;
+    let section = seed_section(&pool, course, "Lifecycle Section").await;
 
-    // Create two enrollments as the teacher.
+    // Create two enrollments as the teacher through the Canvas-real section
+    // route (routes.rb:1403).
     for s in [s1, s2] {
-        let resp = server
-            .post("/enrollments")
-            .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-            .json(&json!({ "user_id": s, "course_id": course, "role": "student" }))
-            .await;
-        assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+        create_in_section(&server, &auth(teacher, "teacher"), section, s, "student").await;
     }
 
-    // Teacher lists and sees both.
-    let listed = list_enrollments(
-        &server,
-        &auth(teacher, "teacher"),
-        &format!("course_id={course}"),
-    )
-    .await;
+    // Teacher lists the section and sees both students.
+    let listed = list_section_enrollments(&server, &auth(teacher, "teacher"), section).await;
     let arr = listed.as_array().unwrap();
-    assert_eq!(arr.len(), 3, "teacher plus two student enrollments");
+    assert_eq!(arr.len(), 2, "two student enrollments: {arr:?}");
     assert_eq!(arr.iter().filter(|e| e["role"] == "student").count(), 2);
-    assert!(arr.iter().all(|e| e["course_id"] == course));
+    assert!(arr
+        .iter()
+        .all(|e| e["course_id"] == course && e["course_section_id"] == section));
 
-    // Admin deletes one of them.
+    // The listing reflects a deletion: soft-deleted enrollments stay in the
+    // database for audit/history but drop out of the roster (the Canvas
+    // `workflow_state != 'deleted'` filter).
     let enrollment_id = arr
         .iter()
-        .find(|e| e["role"] == "student")
+        .find(|e| e["user_id"] == s1)
         .and_then(|e| e["id"].as_i64())
         .expect("student enrollment id");
-    let resp = server
-        .delete(&format!("/enrollments/{enrollment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
-        .await;
-    assert_eq!(resp.status_code(), 204);
+    sqlx::query("UPDATE enrollments SET workflow_state = 'deleted' WHERE id = $1")
+        .bind(enrollment_id)
+        .execute(&pool)
+        .await
+        .expect("soft delete enrollment");
 
-    // Listing reflects the deletion.
-    let after = list_enrollments(
-        &server,
-        &auth(teacher, "teacher"),
-        &format!("course_id={course}"),
-    )
-    .await;
+    let after = list_section_enrollments(&server, &auth(teacher, "teacher"), section).await;
     let arr = after.as_array().unwrap();
-    assert_eq!(arr.len(), 2, "teacher plus one remaining student");
-    assert_eq!(arr.iter().filter(|e| e["role"] == "student").count(), 1);
+    assert_eq!(arr.len(), 1, "one remaining student: {arr:?}");
+    assert_eq!(arr[0]["user_id"], s2);
     assert!(!arr.iter().any(|e| e["id"].as_i64() == Some(enrollment_id)));
 
     cleanup(&pool, &prefix).await;
@@ -966,31 +749,33 @@ async fn list_section_enrollments_is_scoped_and_missing_section_is_404() {
 }
 
 #[tokio::test]
-async fn create_enrollment_with_section_from_other_course_is_404() {
+async fn create_in_other_courses_section_does_not_leak_enrollment() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let teacher_a = seed_user(&pool, &prefix, "TeacherA", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let course_a = seed_course(&pool, &prefix, "CourseA").await;
     let course_b = seed_course(&pool, &prefix, "CourseB").await;
+    seed_course_teacher(&pool, teacher_a, course_a).await;
+    let section_a = seed_section(&pool, course_a, "Section A").await;
     let section_b = seed_section(&pool, course_b, "Section B").await;
 
-    // course_section_id that belongs to a different course must not create a
-    // cross-course enrollment.
+    // The section route derives the course from the section (routes.rb:1403),
+    // so a teacher of course A cannot enroll anybody through course B's section
+    // and no cross-course enrollment is reachable at all.
     let resp = server
-        .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
-        .json(&json!({
-            "user_id": student,
-            "course_id": course_a,
-            "course_section_id": section_b,
-            "role": "student"
-        }))
+        .post(&format!("/sections/{section_b}/enrollments"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(teacher_a, "teacher"),
+        )
+        .json(&json!({ "user_id": student, "role": "student" }))
         .await;
-    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
     let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM enrollments WHERE user_id = $1")
         .bind(student)
@@ -999,20 +784,29 @@ async fn create_enrollment_with_section_from_other_course_is_404() {
         .unwrap();
     assert_eq!(count.0, 0, "no enrollment should have been created");
 
-    // A matching section on the course route is accepted.
-    let section_a = seed_section(&pool, course_a, "Section A").await;
+    // The same route on course A's own section is accepted, and the section
+    // always wins as the enrollment's course.
     let resp = server
-        .post("/enrollments")
-        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
-        .json(&json!({
-            "user_id": student,
-            "course_id": course_a,
-            "course_section_id": section_a,
-            "role": "student"
-        }))
+        .post(&format!("/sections/{section_a}/enrollments"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(teacher_a, "teacher"),
+        )
+        .json(&json!({ "user_id": student, "role": "student" }))
         .await;
     assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
-    assert_eq!(resp.json::<Value>()["course_section_id"], section_a);
+    let created: Value = resp.json();
+    assert_eq!(created["course_section_id"], section_a);
+    assert_eq!(created["course_id"], course_a);
+
+    // Admin may enroll through either section: the section decides the course.
+    let resp = server
+        .post(&format!("/sections/{section_b}/enrollments"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "user_id": student, "role": "ta" }))
+        .await;
+    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["course_id"], course_b);
 
     cleanup(&pool, &prefix).await;
 }

@@ -73,18 +73,26 @@ fn parity_created_enrollment_has_workflow_state_active() {
         .unwrap();
     let user_id = user["id"].as_i64().unwrap();
 
+    // Canvas scopes the create to the course
+    // (`post "courses/:course_id/enrollments"`, routes.rb:1402); the flat
+    // POST /enrollments was never a Canvas API route.
     let r = client
-        .post(format!("{BASE}/api/v1/enrollments"))
+        .post(format!("{BASE}/api/v1/courses/{course_id}/enrollments"))
         .header("Authorization", format!("Bearer {token}"))
-        .json(&serde_json::json!({ "user_id": user_id, "course_id": course_id }))
+        .json(&serde_json::json!({ "user_id": user_id, "role": "student" }))
         .send()
         .unwrap();
     assert_eq!(r.status(), 201, "create enrollment");
     let body = r.json::<Value>().unwrap();
     assert_eq!(
-        body["workflow_state"].as_str(),
-        Some("active"),
-        "new enrollment must be workflow_state=active (Canvas parity)"
+        body["user"]["id"].as_i64(),
+        Some(user_id),
+        "the enrolled user comes back on the enrollment (Canvas parity)"
+    );
+    assert_eq!(
+        body["role"].as_str(),
+        Some("student"),
+        "role defaults to student (Canvas parity)"
     );
 }
 
@@ -126,31 +134,43 @@ fn parity_deleted_enrollment_vanishes_from_list() {
     let user_id = user["id"].as_i64().unwrap();
 
     let enr = client
-        .post(format!("{BASE}/api/v1/enrollments"))
+        .post(format!("{BASE}/api/v1/courses/{course_id}/enrollments"))
         .header("Authorization", format!("Bearer {token}"))
-        .json(&serde_json::json!({ "user_id": user_id, "course_id": course_id }))
+        .json(&serde_json::json!({ "user_id": user_id, "role": "student" }))
         .send()
         .unwrap();
-    assert_eq!(enr.status(), 201);
-    let enrollment_id = enr.json::<Value>().unwrap()["id"].as_i64().unwrap();
+    assert_eq!(enr.status(), 201, "create enrollment");
 
+    // Canvas declares the member delete as
+    // `delete "courses/:course_id/enrollments/:id"` keyed by enrollment id
+    // (routes.rb:1410). The Rust API serves the member delete keyed by user id
+    // (star-courses `DELETE /courses/{id}/enrollments/{userId}`), so that is
+    // the spelling this live leg exercises until the enrollment-id member
+    // route lands.
     let r = client
-        .delete(format!("{BASE}/api/v1/enrollments/{enrollment_id}"))
+        .delete(format!(
+            "{BASE}/api/v1/courses/{course_id}/enrollments/{user_id}"
+        ))
         .header("Authorization", format!("Bearer {token}"))
         .send()
         .unwrap();
-    assert_eq!(r.status(), 204, "soft delete returns 204");
+    assert_eq!(r.status(), 204, "delete returns 204");
 
+    // The list is course-scoped too: `get "courses/:course_id/enrollments"`
+    // (routes.rb:1394).
     let list = client
-        .get(format!("{BASE}/api/v1/enrollments?course_id={course_id}"))
+        .get(format!("{BASE}/api/v1/courses/{course_id}/enrollments"))
         .header("Authorization", format!("Bearer {token}"))
         .send()
         .unwrap()
         .json::<Value>()
         .unwrap();
-    let arr = list.as_array().expect("enrollment list is array");
+    let arr = list["data"]
+        .as_array()
+        .expect("enrollment list data is array");
     assert!(
-        !arr.iter().any(|e| e["id"].as_i64() == Some(enrollment_id)),
+        !arr.iter()
+            .any(|e| e["user"]["id"].as_i64() == Some(user_id)),
         "deleted enrollment must not appear in list (Canvas parity)"
     );
 }
@@ -192,9 +212,10 @@ fn parity_duplicate_active_enrollment_conflicts() {
         .unwrap();
     let user_id = user["id"].as_i64().unwrap();
 
-    let payload = serde_json::json!({ "user_id": user_id, "course_id": course_id });
+    let payload = serde_json::json!({ "user_id": user_id, "role": "student" });
     let auth = format!("Bearer {token}");
-    let url = format!("{BASE}/api/v1/enrollments");
+    // Canvas-real course-scoped create (routes.rb:1402).
+    let url = format!("{BASE}/api/v1/courses/{course_id}/enrollments");
 
     let first = client
         .post(&url)
