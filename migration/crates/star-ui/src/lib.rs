@@ -31,7 +31,7 @@ pub mod session_bridge;
 pub mod shell;
 
 use axum::middleware;
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, post};
 use axum::Router;
 
 use star_common::AppState;

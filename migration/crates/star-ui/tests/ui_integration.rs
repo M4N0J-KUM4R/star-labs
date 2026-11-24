@@ -3353,7 +3353,7 @@ async fn people_page_lists_roster() {
     );
     assert!(
         !body.contains("/conclude\"") && !body.contains("/reactivate\""),
-        "the old /users/{user_id}/conclude and /reactivate forms are gone"
+        "the old /users/{{user_id}}/conclude and /reactivate forms are gone"
     );
     assert!(
         body.contains(&format!("/courses/{course}/unconclude_user/"))
