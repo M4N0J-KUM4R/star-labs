@@ -3308,9 +3308,16 @@ async fn people_page_lists_roster() {
 
     let teacher = seed_user(&pool, &prefix, "pteacher", "teacher", "not-a-real-hash").await;
     let student = seed_user(&pool, &prefix, "pstudent", "student", "not-a-real-hash").await;
+    let concluded = seed_user(&pool, &prefix, "pconcluded", "student", "not-a-real-hash").await;
     let course = seed_course(&pool, &prefix, "People Course", "available").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
+    let concluded_enrollment = seed_enrollment(&pool, concluded, course, "student").await;
+    sqlx::query("UPDATE enrollments SET workflow_state = 'inactive' WHERE id = $1")
+        .bind(concluded_enrollment)
+        .execute(&pool)
+        .await
+        .expect("conclude the seeded enrollment");
 
     let resp = server
         .get(&format!("/courses/{course}/users"))
@@ -3356,9 +3363,10 @@ async fn people_page_lists_roster() {
         "the old /users/{{user_id}}/conclude and /reactivate forms are gone"
     );
     assert!(
-        body.contains(&format!("/courses/{course}/unconclude_user/"))
-            || body.contains("reactivate-link"),
-        "inactive rows offer Canvas' reactivate action"
+        body.contains(&format!(
+            "/courses/{course}/unconclude_user/{concluded_enrollment}"
+        )) && body.contains("reactivate-link"),
+        "the inactive row posts Canvas' unconclude_user reactivate form"
     );
 
     cleanup(&pool, &prefix).await;
