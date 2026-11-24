@@ -27,7 +27,7 @@ use axum::{
     body::Bytes,
     extract::{Path, RawQuery, State},
     http::StatusCode,
-    routing::{delete, post, put},
+    routing::{post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
