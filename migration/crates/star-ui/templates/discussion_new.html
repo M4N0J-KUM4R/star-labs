@@ -1,7 +1,7 @@
 {% extends "layouts/course.html" %}
 {# New discussion topic form — Canvas discussion_topics#new. Teacher-gated
    upstream (students get the 403 page before this renders). The form posts
-   to POST /courses/{id}/discussions (PRG redirect to the new topic).
+   to POST /courses/{id}/discussion_topics (PRG redirect to the new topic).
    Deviation: no delayed_post field (no column in this schema). #}
 {% block content %}
   <div id="discussion_new" class="discussion-new">

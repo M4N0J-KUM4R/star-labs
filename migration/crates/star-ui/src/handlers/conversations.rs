@@ -5,7 +5,7 @@
 //! - GET  /conversations            — inbox; `?filter=unread|starred` scope
 //! - GET  /conversations/compose    — compose form (recipients select). Not a
 //!   Canvas URL: `resources :conversations, only: %i[index show update create
-//!   destroy]` (config/routes.rb:60) draws no compose row and
+//!   destroy]` (config/routes.rb:61) draws no compose row and
 //!   app/views/conversations holds only index_new.html.erb, because Canvas'
 //!   React inbox opens compose as a dialog in that one page. This port has no
 //!   JS on the inbox, so the dialog becomes a page the "Compose" control links

@@ -39,7 +39,7 @@
 <div class="page-header">
 	<h1>Discussions</h1>
 	{#if session.isTeacher}
-		<a class="btn btn-primary" href="/courses/{courseId}/discussions/new">+ Discussion</a>
+		<a class="btn btn-primary" href="/courses/{courseId}/discussion_topics/new">+ Discussion</a>
 	{/if}
 </div>
 
@@ -55,7 +55,7 @@
 		<ul>
 			{#each announcements as topic (topic.id)}
 				<li>
-					<a href="/courses/{courseId}/discussions/{topic.id}">{topic.title}</a>
+					<a href="/courses/{courseId}/discussion_topics/{topic.id}">{topic.title}</a>
 					<span>{when(topic)}</span>
 				</li>
 			{/each}
@@ -77,7 +77,7 @@
 			<tbody>
 				{#each discussions as topic (topic.id)}
 					<tr class:unpublished={topic.published === false}>
-						<td><a href="/courses/{courseId}/discussions/{topic.id}">{topic.title}</a></td>
+						<td><a href="/courses/{courseId}/discussion_topics/{topic.id}">{topic.title}</a></td>
 						<td>{topic.unread_count ?? 0}</td>
 						<td>{when(topic)}</td>
 					</tr>

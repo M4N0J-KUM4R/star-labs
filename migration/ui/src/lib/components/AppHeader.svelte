@@ -181,13 +181,19 @@
 			</li>
 			{#if session.signedIn}
 				<!-- The same control the Askama nav renders (`templates/
-				     layouts/authenticated.html:33-36`): a POST form to /logout with the
-				     `star_csrf` cookie echoed into a hidden `_csrf`, so submitting it is
-				     Rails' own double-submit pair rather than a fetch the page invents.
+				     layouts/authenticated.html:33-42`): a POST form to /logout carrying
+				     Rails' `method: :delete` override (Canvas renders exactly this pair —
+				     `form_tag logout_path, method: :delete`,
+				     app/views/login/logout_confirm.html.erb:39) plus the `star_csrf`
+				     cookie echoed into a hidden `_csrf`, so submitting it is Rails' own
+				     double-submit pair rather than a fetch the page invents. The shell's
+				     `method_override` rewrites the verb to the one
+				     `delete "logout"` (config/routes.rb:930) answers.
 				     `ssr = false`, so the cookie is readable here on every page the shell
 				     served — `ensure_csrf_cookie` set it before this document arrived. -->
 				<li class="menu-item ic-app-header__menu-list-item">
 					<form method="post" action="/logout" class="menu-item__logout-form">
+						<input type="hidden" name="_method" value="delete" />
 						<input type="hidden" name="_csrf" value={csrfToken() ?? ''} />
 						<button type="submit" id="global_nav_logout_link" class="Button--link">
 							Logout

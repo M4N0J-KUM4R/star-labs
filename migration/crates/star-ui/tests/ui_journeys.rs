@@ -148,7 +148,7 @@ async fn login(server: &TestServer, email: &str, password: &str) -> (String, Str
         .value()
         .to_string();
     let resp = server
-        .post("/login")
+        .post("/login/canvas")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
             csrf.clone(),

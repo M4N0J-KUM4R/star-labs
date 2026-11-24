@@ -40,7 +40,8 @@ use star_common::AppState;
 /// override; star-http and the integration tests all go through `app`.
 ///
 /// Route-order note: axum 0.8 matches STATIC segments before path parameters
-/// at the same depth, so `/courses/{id}/discussions` (and the quiz routes)
+/// at the same depth, so `/courses/{id}/discussion_topics` (and the quiz
+/// routes)
 /// win over `/courses/{id}/{tab}` regardless of registration order; the
 /// specific routes are still registered first to keep that property local
 /// and visible.
@@ -144,7 +145,7 @@ pub fn router() -> Router<AppState> {
                 .post(handlers::conversations::conversation_create),
         )
         // Canvas has no compose URL: `resources :conversations, only: %i[index
-        // show update create destroy]` (config/routes.rb:60) plus the scope
+        // show update create destroy]` (config/routes.rb:61) plus the scope
         // rows above it, and app/views/conversations holds only
         // index_new.html.erb — the React inbox opens compose as a dialog in
         // that one page. Our inbox is server-rendered, so compose is a page of

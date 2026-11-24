@@ -48,4 +48,4 @@
 /courses/*/assignments          |assignments        |primary-nav-expanded
 /courses/*/grades               |user_grades,grade_summary|primary-nav-expanded
 /courses/*/quizzes              |quizzes,canvas_quizzes|primary-nav-expanded
-/courses/*/discussions          |discussions_index,announcements_index|primary-nav-expanded
+/courses/*/discussion_topics     |discussions_index,announcements_index|primary-nav-expanded

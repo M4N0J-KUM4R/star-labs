@@ -9,7 +9,13 @@
 //! Deviations from Canvas (documented in the PR):
 //! - Canvas answers each question via `POST /quiz_submissions/:id/answer`
 //!   (missing in star-quizzes); the shell bulk-submits the whole form to
-//!   `POST .../submissions/{sid}/submit` and grades server-side in one go.
+//!   Canvas' take-form target, the submissions COLLECTION path
+//!   `POST /courses/{id}/quizzes/{qid}/submissions`
+//!   (`course_quiz_quiz_submissions_path`,
+//!   app/presenters/quizzes/take_quiz_presenter.rb:167-168), which resolves the
+//!   attempt from the current user the way
+//!   app/controllers/quizzes/quiz_submissions_controller.rb:60-61 does, and
+//!   grades server-side in one go.
 //! - Canvas' `/edit` boots the React editor (questions, banks, settings) from
 //!   `quizzes#edit`'s `render :new`; the shell serves the quiz-details fields
 //!   only, since question editing lives behind the REST question routes.

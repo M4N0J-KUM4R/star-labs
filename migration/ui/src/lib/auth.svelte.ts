@@ -92,9 +92,14 @@ class Session {
 	/** Sign out of the session the server holds.
 	 *
 	 *  Under the shell the credential is the `star_session` cookie, and a cookie is not
-	 *  something this document can delete — only `POST /logout` can, because that handler
+	 *  something this document can delete — only `/logout` can, because that handler
 	 *  both expires the cookie (`clear_session_cookie`) and stamps
 	 *  `users.last_logged_out`, which is what invalidates the JWT for `AuthUser` too.
+	 *  Canvas' verb there is `delete "logout" => "login#destroy"` (config/routes.rb:930),
+	 *  and Rails reaches it with `form_tag logout_path, method: :delete`
+	 *  (app/views/login/logout_confirm.html.erb:39) — a POST carrying a hidden
+	 *  `_method`, which the shell's `method_override` rewrites before routing. So the
+	 *  fields below are exactly what Canvas' own form emits, not an invention here.
 	 *  Calling the API's logout instead would leave a visitor who presses Back, or who
 	 *  reloads, still authenticated. So the shell-hosted path submits Rails' own form and
 	 *  never resolves: the browser is navigating away, and a caller that resumed to
@@ -104,7 +109,7 @@ class Session {
 		this.user = null;
 
 		if (shellHosted()) {
-			submitShellForm('/logout', { _csrf: csrfToken() ?? '' });
+			submitShellForm('/logout', { _method: 'delete', _csrf: csrfToken() ?? '' });
 			return new Promise<void>(() => {});
 		}
 

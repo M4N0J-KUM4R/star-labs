@@ -9,7 +9,7 @@
     {% if !error.is_empty() %}
     <div class="ic-flash error" role="alert">{{ error }}</div>
     {% endif %}
-    <form id="add_people_form" class="add-people" method="post" action="/courses/{{ course_id }}/users/add">
+    <form id="add_people_form" class="add-people" method="post" action="/courses/{{ course_id }}/enroll_users">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
 
       <div class="ic-Form-control">

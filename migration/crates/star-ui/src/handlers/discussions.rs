@@ -430,9 +430,10 @@ pub async fn discussion_create(
         .await
     {
         // PRG: land on the freshly created topic page.
-        Ok(topic_id) => {
-            Redirect::to(&format!("/courses/{course_id}/discussion_topics/{topic_id}")).into_response()
-        }
+        Ok(topic_id) => Redirect::to(&format!(
+            "/courses/{course_id}/discussion_topics/{topic_id}"
+        ))
+        .into_response(),
         Err(e) => from_api_error(&e, &origin).into_response(),
     }
 }
@@ -598,9 +599,10 @@ pub async fn discussion_reply(
     };
 
     match result {
-        Ok(_) => {
-            Redirect::to(&format!("/courses/{course_id}/discussion_topics/{topic_id}")).into_response()
-        }
+        Ok(_) => Redirect::to(&format!(
+            "/courses/{course_id}/discussion_topics/{topic_id}"
+        ))
+        .into_response(),
         Err(e) => from_api_error(&e, &origin).into_response(),
     }
 }

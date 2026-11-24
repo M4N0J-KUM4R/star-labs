@@ -30,7 +30,15 @@
       <ul id="menu" class="ic-app-header__menu-list">
         <li class="ic-app-header__menu-list-item menu-item__user">
           <span class="menu-item__user-name">{{ user_name }}</span>
+          {# Canvas' logout control is Rails' `form_tag logout_path,
+             method: :delete` (app/views/login/logout_confirm.html.erb:39,
+             also app/views/shared/terms_required.html.erb:52), i.e. a POST
+             carrying a hidden _method that Rack::MethodOverride rewrites to
+             `delete "logout"` (config/routes.rb:930). Our shell has the same
+             override (src/method_override.rs), so this form is the byte-shape
+             Rails renders. #}
           <form method="post" action="/logout" class="menu-item__logout-form">
+            <input type="hidden" name="_method" value="delete">
             <input type="hidden" name="_csrf" value="{{ csrf_token }}">
             <button type="submit" id="global_nav_logout_link" class="Button--link">Logout</button>
           </form>

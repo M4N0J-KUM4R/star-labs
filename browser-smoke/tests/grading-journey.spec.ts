@@ -37,7 +37,7 @@ test.describe('grading journey (#108)', () => {
     await login(page, TEACHER_EMAIL);
 
     // Open the SpeedGrader queue (default assignment = the only one).
-    await page.goto(`/courses/${COURSE_ID}/gradebook/speedgrader`);
+    await page.goto(`/courses/${COURSE_ID}/gradebook/speed_grader`);
     const speedgrader = page.locator('#speedgrader');
     await expect(speedgrader).toBeVisible();
 
@@ -74,7 +74,7 @@ test.describe('grading journey (#108)', () => {
     // PRG back to the same student + assignment with the success notice.
     await expect(page).toHaveURL(
       new RegExp(
-        `/courses/${COURSE_ID}/gradebook/speedgrader\\?assignment_id=${ASSIGNMENT_ID}.*&graded=1$`,
+        `/courses/${COURSE_ID}/gradebook/speed_grader\\?assignment_id=${ASSIGNMENT_ID}.*&graded=1$`,
       ),
     );
     await expect(page.locator('.ic-flash.success')).toContainText('Grade saved.');
@@ -109,7 +109,7 @@ test.describe('grading journey (#108)', () => {
   test('student is blocked from the grading queue (403)', async ({ page }) => {
     await login(page, STUDENT_EMAIL);
 
-    const response = await page.goto(`/courses/${COURSE_ID}/gradebook/speedgrader`);
+    const response = await page.goto(`/courses/${COURSE_ID}/gradebook/speed_grader`);
     expect(response?.status()).toBe(403);
     await expect(page.locator('#speedgrader')).toHaveCount(0);
   });

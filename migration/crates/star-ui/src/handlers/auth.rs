@@ -8,7 +8,7 @@
 //!   `student`, email must contain `@`, password >= 8 chars, argon2 hashing
 //!   via `star_auth::hash_password`, and the same `INSERT ... sortable_name`
 //!   SQL (unique-violation 23505 = "email already in use"). Success issues a
-//!   session (auto-login) and 303s to /dashboard, exactly like POST /login.
+//!   session (auto-login) and 303s to /dashboard, exactly like POST /login/canvas.
 //! * `GET/POST /forgot_password` — always-200 generic confirmation; a token
 //!   row is created only when the email exists, but the response is
 //!   byte-identical either way (no user enumeration). No mailer exists in
@@ -249,7 +249,7 @@ pub async fn register_submit(
         }
     };
 
-    // Auto-login: mint the session exactly like POST /login does.
+    // Auto-login: mint the session exactly like POST /login/canvas does.
     let token = create_token(user_id, "student", &app.jwt_secret).unwrap_or_default();
     if token.is_empty() {
         return from_api_error(
