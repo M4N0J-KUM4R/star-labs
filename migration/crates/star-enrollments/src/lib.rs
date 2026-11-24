@@ -1369,7 +1369,8 @@ async fn create_bulk_enrollment(
 }
 
 /// Map a Canvas enrollment type to the star `enrollments.role` value used by
-/// the rest of the crate (`create_enrollment`'s default is "student").
+/// the rest of the crate (`create_section_enrollment` falls back to "student"
+/// for an unknown type, as Canvas does).
 fn enrollment_role_column(enrollment_type: &str) -> &'static str {
     match enrollment_type {
         "TeacherEnrollment" => "teacher",
