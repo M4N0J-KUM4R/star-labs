@@ -435,7 +435,7 @@ async fn create_enrollment_without_token_is_401() {
     };
 
     let resp = server
-        .post(&format!("/sections/{section}/enrollments"))
+        .post("/sections/1/enrollments")
         .json(&json!({ "user_id": 1, "course_id": 1, "role": "student" }))
         .await;
 
@@ -556,11 +556,12 @@ async fn list_without_token_is_401() {
 
 // ---------------------------------------------------------------------------
 // DELETE: Canvas declares `delete "courses/:course_id/enrollments/:id"`
-// (routes.rb:1410), a course-scoped member route that this crate does not
-// register (its course-scoped member routes are the accept/reject/reactivate
-// lifecycle actions below).  The old flat `DELETE /enrollments/{id}` coverage is
-// therefore dropped here rather than pointed at a route that does not exist;
-// re-add it together with the Canvas-real course-scoped destroy route.
+// (routes.rb:1410), a course-scoped member route. This crate registers only
+// the lifecycle members (accept/reject/reactivate) and the section pair, so
+// the flat `DELETE /enrollments/{id}` twin had no Canvas counterpart and is
+// gone; the destroy verb itself stays covered where Canvas mounts it —
+// star-courses' `/courses/{id}/enrollments/{userId}` (src/lib.rs:4945) and its
+// permission tests in star-courses/tests/courses_integration.rs.
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------

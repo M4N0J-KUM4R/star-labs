@@ -268,11 +268,15 @@ async fn entry_get_and_moderator_update_delete_round_trip() {
     assert_eq!(message, None, "delete must clear the body");
 
     // The deleted entry is gone for GET and absent from the topic listing.
+    // The member path carries no GET verb at all — Canvas declares only the
+    // entry update/destroy there (config/routes.rb:1662-1663) — so axum
+    // answers the unmatched verb with 405 and the listing below is the read
+    // surface that proves the delete.
     let resp = server
         .get(&url)
         .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
         .await;
-    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    assert_eq!(resp.status_code(), 405, "body: {}", resp.text());
     let resp = server
         .get(&format!(
             "/courses/{course}/discussion_topics/{topic_id}/entries"

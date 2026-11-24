@@ -402,16 +402,31 @@ async fn group_page_routes_decline_without_group_wiki() {
     }
 
     // Writes: the parent-course teacher holds manage rights — declined too.
-    for url in [
-        format!("/groups/{group_id}/pages"),
-        format!("/groups/{group_id}/pages/{prefix}-irrelevant"),
-    ] {
-        let resp = server
-            .post(&url)
-            .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
-            .await;
-        assert_eq!(resp.status_code(), 403, "{url}; body: {}", resp.text());
-    }
+    let resp = server
+        .post(&format!("/groups/{group_id}/pages"))
+        .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        403,
+        "group page create must be declined; body: {}",
+        resp.text()
+    );
+
+    // Canvas creates a page only on the wiki's collection, so the group
+    // member path carries no POST verb at all; axum answers the unmatched
+    // verb with 405 (the same "not routable" signal the course pages tests
+    // expect).
+    let resp = server
+        .post(&format!("/groups/{group_id}/pages/{prefix}-irrelevant"))
+        .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        405,
+        "the member path must not accept POST; body: {}",
+        resp.text()
+    );
     for url in [
         format!("/groups/{group_id}/pages/{prefix}-irrelevant"),
         format!("/groups/{group_id}/front_page"),
