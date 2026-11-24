@@ -12996,10 +12996,10 @@
     "implemented_rest_routes": 1410,
     "js_env_call_sites": 490,
     "js_env_files": 124,
-    "js_env_files_implemented": 0,
+    "js_env_files_implemented": 1,
     "js_tsx_files": 5459,
-    "js_tsx_files_implemented": 0,
-    "star_extras": 162,
+    "js_tsx_files_implemented": 51,
+    "star_extras": 164,
     "star_extras_by_class": {
       "absent": 25,
       "api_alias": 5,
@@ -13007,15 +13007,15 @@
       "api_extra_verb": 20,
       "api_nested": 0,
       "api_verb_mismatch": 0,
-      "web_exact": 53,
+      "web_exact": 56,
       "web_nested": 26,
-      "web_verb_mismatch": 15
+      "web_verb_mismatch": 14
     },
-    "star_route_calls": 1287,
-    "star_route_registrations": 1579,
+    "star_route_calls": 1291,
+    "star_route_registrations": 1581,
     "star_tables": 397,
     "star_test_calls_excluded": 3,
-    "star_unparsed_calls": 0,
+    "star_unparsed_calls": 1,
     "star_unreachable_calls_excluded": 0,
     "ui_feature_dirs": 232,
     "ui_feature_dirs_implemented": 0,
@@ -14463,6 +14463,17 @@
     },
     {
       "canvas_closest": [
+        "WEB GET"
+      ],
+      "classification": "web_exact",
+      "crate": "star-ui",
+      "normalized_path": "profile",
+      "path": "/profile",
+      "source": "crates/star-ui/src/lib.rs",
+      "verb": "GET"
+    },
+    {
+      "canvas_closest": [
         "courses/{}/quizzes/{}"
       ],
       "classification": "web_nested",
@@ -14507,14 +14518,14 @@
     },
     {
       "canvas_closest": [
-        "GET"
+        "WEB GET"
       ],
-      "classification": "web_verb_mismatch",
+      "classification": "web_exact",
       "crate": "star-ui",
-      "normalized_path": "register",
-      "path": "/register",
+      "normalized_path": "register_from_website",
+      "path": "/register_from_website",
       "source": "crates/star-ui/src/lib.rs",
-      "verb": "POST"
+      "verb": "GET"
     },
     {
       "canvas_closest": [],
@@ -14689,6 +14700,17 @@
       "path": "/users",
       "source": "crates/star-users/src/lib.rs",
       "verb": "GET"
+    },
+    {
+      "canvas_closest": [
+        "WEB POST"
+      ],
+      "classification": "web_exact",
+      "crate": "star-ui",
+      "normalized_path": "users",
+      "path": "/users",
+      "source": "crates/star-ui/src/lib.rs",
+      "verb": "POST"
     },
     {
       "canvas_closest": [
