@@ -190,7 +190,8 @@ pub async fn serve_embedded(
     // A stale revision means the client is holding a link from a previous build.
     // `serve_static` refuses that for app.css for the same reason: a cache-immutable
     // URL must never answer with different bytes.
-    if claimed_rev.is_some_and(|rev| rev != asset.rev) {
+    let rev_claimed = claimed_rev.is_some();
+    if claimed_rev.as_deref().is_some_and(|rev| rev != asset.rev) {
         return not_found();
     }
 
@@ -209,7 +210,7 @@ pub async fn serve_embedded(
             (header::CONTENT_TYPE, asset.mime.to_string()),
             (
                 header::CACHE_CONTROL,
-                cache_policy(&key, claimed_rev.is_some()).to_string(),
+                cache_policy(&key, rev_claimed).to_string(),
             ),
             (header::ETAG, etag),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff".to_string()),
