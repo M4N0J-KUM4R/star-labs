@@ -1044,7 +1044,7 @@ pub struct SubmitForm {
     pub body: String,
 }
 
-/// POST /courses/{id}/assignments/{aid}/submit — student text-entry submit.
+/// POST /courses/{id}/assignments/{aid}/submissions — student text-entry submit.
 ///
 /// Same upsert SQL shape as the REST `create_submission`
 /// (ON CONFLICT (assignment_id, user_id) DO UPDATE), gated to enrolled

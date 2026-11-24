@@ -16,6 +16,9 @@
     <div class="ic-flash error" role="alert">{{ error }}</div>
     {% endif %}
     <form id="course_settings_form" class="course-settings-form" method="post" action="/courses/{{ course_id }}/settings">
+      {# Canvas draws updates as PUT (config/routes.rb:228); Rails' form helper
+         posts with this override and Rack::MethodOverride rewrites the verb. #}
+      <input type="hidden" name="_method" value="put">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
 
       <div class="ic-Form-control">

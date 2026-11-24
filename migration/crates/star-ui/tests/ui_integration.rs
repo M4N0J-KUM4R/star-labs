@@ -2863,7 +2863,7 @@ async fn inbox_unread_open_reply_mark_all_and_compose() {
         .value()
         .to_string();
     let resp = server
-        .post("/conversations/mark_all_read")
+        .post("/conversations/mark_all_as_read")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_session",
             teacher_token.clone(),

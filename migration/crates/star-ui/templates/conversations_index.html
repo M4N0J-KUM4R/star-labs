@@ -18,7 +18,7 @@
       <div class="panel__secondary">
         <div class="conversations__actions">
           <a href="/conversations/compose" class="Button Button--primary" id="compose-btn" aria-label="Compose a new message">Compose</a>
-          <form method="post" action="/conversations/mark_all_read" class="conversations__mark-all-form">
+          <form method="post" action="/conversations/mark_all_as_read" class="conversations__mark-all-form">
             <input type="hidden" name="_csrf" value="{{ csrf_token }}">
             <button type="submit" class="Button" id="mark_all_read_btn">Mark All Read</button>
           </form>

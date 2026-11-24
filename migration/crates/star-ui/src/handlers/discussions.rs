@@ -3,12 +3,12 @@
 //!
 //! Routes (registered in `lib.rs` BEFORE the generic `/courses/{id}/{tab}`
 //! route so they win the match):
-//! - GET  /courses/{id}/discussions                — index (also served at
-//!   /courses/{id}/discussion_topics, the html_url the tabs API emits)
-//! - GET  /courses/{id}/discussions/new            — new-topic form (teacher)
-//! - POST /courses/{id}/discussions                — create topic (teacher), PRG
-//! - GET  /courses/{id}/discussions/{topic_id}     — topic show, marks read
-//! - POST /courses/{id}/discussions/{topic_id}/entries — post entry or reply
+//! - GET  /courses/{id}/discussion_topics          — index (Canvas' own path;
+//!   also the html_url the tabs API emits for the "discussions" tab)
+//! - POST /courses/{id}/discussion_topics          — create topic (teacher), PRG
+//! - GET  /courses/{id}/discussion_topics/new      — new-topic form (teacher)
+//! - GET  /courses/{id}/discussion_topics/{topic_id}       — topic show, marks read
+//! - POST /courses/{id}/discussion_topics/{topic_id}/entries — post entry or reply
 //!
 //! All data access goes through the `star_discussions::ui` pub loaders, which
 //! run the same enrolled-or-admin / teacher-or-admin gates as the REST API.
@@ -233,7 +233,7 @@ async fn load_course_context(
     })
 }
 
-/// GET /courses/{id}/discussions (alias: /courses/{id}/discussion_topics) —
+/// GET /courses/{id}/discussion_topics —
 /// the topic index. Teachers see the "+ Discussion" button; the unread
 /// marker is per-viewer from `discussion_topic_reads`.
 pub async fn discussions_index(
@@ -306,7 +306,7 @@ pub async fn discussions_index(
             (ctx.course_name.clone(), format!("/courses/{course_id}")),
             (
                 "Discussions".to_string(),
-                format!("/courses/{course_id}/discussions"),
+                format!("/courses/{course_id}/discussion_topics"),
             ),
         ],
         csrf_token,
@@ -321,7 +321,7 @@ pub async fn discussions_index(
     (jar, page).into_response()
 }
 
-/// GET /courses/{id}/discussions/new — the new-topic form, teacher-gated
+/// GET /courses/{id}/discussion_topics/new — the new-topic form, teacher-gated
 /// (Canvas `user_can_create` via moderate_forum). Students get the 403 page.
 pub async fn discussion_new(
     State(app): State<AppState>,
@@ -373,7 +373,7 @@ pub async fn discussion_new(
             (ctx.course_name.clone(), format!("/courses/{course_id}")),
             (
                 "Discussions".to_string(),
-                format!("/courses/{course_id}/discussions"),
+                format!("/courses/{course_id}/discussion_topics"),
             ),
         ],
         csrf_token,
@@ -399,7 +399,7 @@ pub struct TopicForm {
     pub locked: Option<String>,
 }
 
-/// POST /courses/{id}/discussions — create a topic (teacher), then redirect
+/// POST /courses/{id}/discussion_topics — create a topic (teacher), then redirect
 /// to the new topic's page (POST/Redirect/GET so a refresh never re-posts).
 pub async fn discussion_create(
     State(app): State<AppState>,
@@ -431,13 +431,13 @@ pub async fn discussion_create(
     {
         // PRG: land on the freshly created topic page.
         Ok(topic_id) => {
-            Redirect::to(&format!("/courses/{course_id}/discussions/{topic_id}")).into_response()
+            Redirect::to(&format!("/courses/{course_id}/discussion_topics/{topic_id}")).into_response()
         }
         Err(e) => from_api_error(&e, &origin).into_response(),
     }
 }
 
-/// GET /courses/{id}/discussions/{topic_id} — topic show. Marks the topic
+/// GET /courses/{id}/discussion_topics/{topic_id} — topic show. Marks the topic
 /// read on view (Canvas `discussion_topics#show` marks read unless locked),
 /// renders the topic body plus the FLAT entry list.
 pub async fn discussion_show(
@@ -521,7 +521,7 @@ pub async fn discussion_show(
             (ctx.course_name.clone(), format!("/courses/{course_id}")),
             (
                 "Discussions".to_string(),
-                format!("/courses/{course_id}/discussions"),
+                format!("/courses/{course_id}/discussion_topics"),
             ),
             (detail.title.clone(), String::new()),
         ],
@@ -554,7 +554,7 @@ pub struct EntryForm {
     pub parent_id: Option<i64>,
 }
 
-/// POST /courses/{id}/discussions/{topic_id}/entries — post a root entry
+/// POST /courses/{id}/discussion_topics/{topic_id}/entries — post a root entry
 /// (parent_id absent) or an inline reply (parent_id set), then redirect back
 /// to the topic (PRG).
 pub async fn discussion_reply(
@@ -599,7 +599,7 @@ pub async fn discussion_reply(
 
     match result {
         Ok(_) => {
-            Redirect::to(&format!("/courses/{course_id}/discussions/{topic_id}")).into_response()
+            Redirect::to(&format!("/courses/{course_id}/discussion_topics/{topic_id}")).into_response()
         }
         Err(e) => from_api_error(&e, &origin).into_response(),
     }

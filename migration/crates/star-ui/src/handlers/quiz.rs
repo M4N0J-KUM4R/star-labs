@@ -1499,15 +1499,20 @@ pub async fn quiz_take(
         quiz_title: quiz.title,
         instructions_html: quiz.description.unwrap_or_default(),
         questions,
-        submit_url: format!(
-            "/courses/{course_id}/quizzes/{quiz_id}/submissions/{}/submit",
-            submission.id
-        ),
+        submit_url: format!("/courses/{course_id}/quizzes/{quiz_id}/submissions"),
     };
     (jar, html_response(page.render(), "quiz take")).into_response()
 }
 
-/// POST /courses/{id}/quizzes/{qid}/submissions/{sid}/submit — bulk submit.
+/// POST /courses/{id}/quizzes/{qid}/submissions — bulk submit.
+///
+/// Canvas' take form posts to this collection path
+/// (`course_quiz_quiz_submissions_path`,
+/// app/presenters/quizzes/take_quiz_presenter.rb:167-168) and resolves the
+/// attempt from the current user, not from an id in the URL
+/// (`@quiz.quiz_submissions.where(user_id: @current_user).first`,
+/// app/controllers/quizzes/quiz_submissions_controller.rb:60-61) — so this
+/// handler does the same lookup `quiz_take` already used to paint the form.
 ///
 /// The Canvas API's `POST /quiz_submissions/:id/answer` is not implemented in
 /// star-quizzes, so the shell grades the whole form server-side (documented
@@ -1517,7 +1522,7 @@ pub async fn quiz_take(
 /// timestamp stamps. 303 to the results page.
 pub async fn quiz_submit(
     State(app): State<AppState>,
-    Path((course_id, quiz_id, submission_id)): Path<(i64, i64, i64)>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
     user: SessionUser,
     jar: CookieJar,
     body: Bytes,
@@ -1544,18 +1549,14 @@ pub async fn quiz_submit(
         return *response;
     }
 
-    let submission = match load_submission(&app.db, quiz_id, submission_id).await {
+    let submission = match load_my_submission(&app.db, quiz_id, user.id).await {
         Ok(Some(sub)) => sub,
         Ok(None) => {
             return from_api_error(&ApiError::NotFound, &crate::request_origin()).into_response()
         }
         Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
     };
-
-    // Only the owning student may submit (Canvas quiz_submission_allowed?).
-    if submission.user_id != user.id {
-        return from_api_error(&ApiError::Forbidden, &crate::request_origin()).into_response();
-    }
+    let submission_id = submission.id;
 
     // One shot per attempt: submitting a finished attempt goes to results.
     if matches!(

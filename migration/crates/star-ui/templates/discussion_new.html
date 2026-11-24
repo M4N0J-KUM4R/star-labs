@@ -10,7 +10,7 @@
         <h1 class="discussion-new__title">New Discussion</h1>
       </div>
       <div class="ic-Action-header__Secondary">
-        <a href="/courses/{{ course_id }}/discussions" class="Button">Back to Discussions</a>
+        <a href="/courses/{{ course_id }}/discussion_topics" class="Button">Back to Discussions</a>
       </div>
     </div>
 
@@ -18,7 +18,7 @@
     <div class="ic-flash error" role="alert">{{ error }}</div>
     {% endif %}
 
-    <form id="new_discussion_form" method="post" action="/courses/{{ course_id }}/discussions" class="discussion-new__form">
+    <form id="new_discussion_form" method="post" action="/courses/{{ course_id }}/discussion_topics" class="discussion-new__form">
       <input type="hidden" name="_csrf" value="{{ csrf_token }}">
       <div class="ic-Form-control">
         <label class="ic-Label" for="discussion_title">Title</label>
@@ -38,7 +38,7 @@
       </div>
       <div class="discussion-new__actions">
         <button type="submit" class="Button Button--primary">Create Discussion</button>
-        <a href="/courses/{{ course_id }}/discussions" class="Button button-secondary">Cancel</a>
+        <a href="/courses/{{ course_id }}/discussion_topics" class="Button button-secondary">Cancel</a>
       </div>
     </form>
   </div>

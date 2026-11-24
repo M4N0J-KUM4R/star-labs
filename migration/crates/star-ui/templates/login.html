@@ -24,7 +24,10 @@
             <div class="ic-flash error" role="alert">{{ error }}</div>
             {% endif %}
             </div>
-            <form id="login_form" method="post" action="/login">
+            {# Canvas keeps GET /login as the page (login#new) and posts the
+               credentials to `post "login/canvas"` (login/canvas#create,
+               app/controllers/login/canvas_controller.rb:53). #}
+            <form id="login_form" method="post" action="/login/canvas">
               <input type="hidden" name="_csrf" value="{{ csrf_token }}">
               <input type="hidden" name="next" value="{{ next }}">
               <div class="ic-Form-control ic-Form-control--login">
