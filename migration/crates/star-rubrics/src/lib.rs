@@ -684,17 +684,6 @@ fn is_valid_assessment_type(value: &str) -> bool {
     VALID_ASSESSMENT_TYPES.contains(&value)
 }
 
-/// Canvas rubric assessment read policy: course managers, the assessor, and
-/// the user being assessed may read; other enrolled users may not.
-fn can_read_assessment(
-    is_admin: bool,
-    is_teacher: bool,
-    is_assessor: bool,
-    is_assessed: bool,
-) -> bool {
-    is_admin || is_teacher || is_assessor || is_assessed
-}
-
 /// Canvas rubric assessment update/delete policy: course managers and the
 /// assessor who recorded the assessment.
 fn can_modify_assessment(is_admin: bool, is_teacher: bool, is_assessor: bool) -> bool {
@@ -730,26 +719,6 @@ async fn submission_context(
     .bind(submission_id)
     .fetch_optional(pool)
     .await?)
-}
-
-/// Resolve the course and assessed user for a stored assessment, backfilling
-/// from the submission when migrations 0023-era rows lack them.
-async fn assessment_context(
-    pool: &PgPool,
-    assessment: &RubricAssessment,
-) -> Result<(Option<i64>, Option<i64>), ApiError> {
-    let mut course_id = assessment.course_id;
-    let mut user_id = assessment.user_id;
-    let referenced_submission = assessment
-        .submission_id
-        .filter(|_| course_id.is_none() || user_id.is_none());
-    if let Some(submission_id) = referenced_submission {
-        if let Some((sub_course_id, owner_id)) = submission_context(pool, submission_id).await? {
-            course_id = course_id.or(Some(sub_course_id));
-            user_id = user_id.or(Some(owner_id));
-        }
-    }
-    Ok((course_id, user_id))
 }
 
 /// Whether `auth` may manage rubrics in `course_id`. A course-less legacy
@@ -1008,30 +977,6 @@ async fn apply_assessment_update(
         .await?
         .ok_or(ApiError::NotFound)?;
     Ok(updated)
-}
-
-/// GET /rubric_assessments/{id}  → 200
-async fn get_rubric_assessment(
-    State(state): State<AppState>,
-    Path(assessment_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<RubricAssessment>, ApiError> {
-    let assessment = fetch_assessment(&state.db, assessment_id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    let (course_id, assessed_user_id) = assessment_context(&state.db, &assessment).await?;
-    let is_teacher = caller_manages_course(&state.db, &auth, course_id).await?;
-
-    if !can_read_assessment(
-        is_admin(&auth),
-        is_teacher,
-        assessment.assessor_id == auth.id,
-        assessed_user_id == Some(auth.id),
-    ) {
-        return Err(ApiError::Forbidden);
-    }
-
-    Ok(Json(assessment))
 }
 
 // ---------------------------------------------------------------------------
@@ -2087,7 +2032,14 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/rubric_associations/{rubric_association_id}/rubric_assessments/{id}",
             delete(delete_association_rubric_assessment),
         )
-        .route("/rubric_assessments/{id}", get(get_rubric_assessment))
+        // Canvas has no read route for a single rubric assessment at all:
+        // `app/controllers/rubric_assessments_controller.rb` defines only
+        // create/update/destroy, and canvas-src/config/routes.rb:2840-2842
+        // declares the API surface as PUT/DELETE under the association. Reads
+        // reach the client embedded in the submission
+        // (`GET /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}`,
+        // canvas-src/config/routes.rb:1547), so the flat
+        // `GET /rubric_assessments/{id}` was invented surface and is gone.
         .route(
             "/courses/{courseId}/rubrics/{rubricId}/used_locations",
             get(list_used_locations),
@@ -2124,9 +2076,7 @@ pub fn router() -> Router<AppState> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        can_manage_rubrics, can_modify_assessment, can_read_assessment, is_valid_assessment_type,
-    };
+    use super::{can_manage_rubrics, can_modify_assessment, is_valid_assessment_type};
 
     #[test]
     fn only_course_teachers_or_admins_can_manage_rubrics() {
@@ -2142,17 +2092,6 @@ mod tests {
         assert!(is_valid_assessment_type("provisional_grade"));
         assert!(!is_valid_assessment_type("curve"));
         assert!(!is_valid_assessment_type(""));
-    }
-
-    #[test]
-    fn assessment_read_policy_matches_canvas() {
-        // Course managers, assessor, and assessed user can read.
-        assert!(can_read_assessment(true, false, false, false));
-        assert!(can_read_assessment(false, true, false, false));
-        assert!(can_read_assessment(false, false, true, false));
-        assert!(can_read_assessment(false, false, false, true));
-        // An unrelated enrolled user cannot.
-        assert!(!can_read_assessment(false, false, false, false));
     }
 
     #[test]

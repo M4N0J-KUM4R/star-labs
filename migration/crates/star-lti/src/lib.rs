@@ -5,10 +5,10 @@
 //!
 //! - `GET    /api/v1/accounts/{accountId}/lti_registrations` — list
 //! - `POST   /api/v1/accounts/{accountId}/lti_registrations` — create
-//! - `GET    /api/v1/lti_registrations/{id}` — show
-//! - `DELETE /api/v1/lti_registrations/{id}` — soft delete
-//! - `GET    /api/v1/lti_registrations/{id}/deployments` — list deployments
-//! - `POST   /api/v1/lti_registrations/{id}/deployments` — create deployment
+//! - `GET    /api/v1/accounts/{accountId}/lti_registrations/{id}` — show
+//! - `DELETE /api/v1/accounts/{accountId}/lti_registrations/{id}` — soft delete
+//! - `GET    /api/v1/accounts/{accountId}/lti_registrations/{id}/deployments`
+//! - `POST   /api/v1/accounts/{accountId}/lti_registrations/{id}/deployments`
 //!
 //! Issue #69 deep slices (`lti/registrations_controller.rb`,
 //! `lti/deployments_controller.rb`):
@@ -353,7 +353,7 @@ pub struct CreateRegistrationRequest {
     pub overlay: Option<Value>,
 }
 
-/// Body for `POST /lti_registrations/{id}/deployments`.
+/// Body for `POST /accounts/{accountId}/lti_registrations/{id}/deployments`.
 #[derive(Debug, Deserialize, Default)]
 pub struct CreateDeploymentRequest {
     pub for_subaccount_id: Option<i64>,
@@ -852,7 +852,10 @@ pub fn router() -> Router<AppState> {
             "/accounts/{account_id}/lti_registrations",
             get(list_registrations).post(create_registration),
         )
-        // Canvas-nested registration paths.
+        // Canvas declares the whole LTI-registration surface under an account
+        // scope only (`config/routes.rb:2168-2186`, plus the deployments scope
+        // at `config/routes.rb:2190-2195`), so these nested paths are the
+        // complete surface — there is no flat `/lti_registrations/{id}`.
         .route(
             "/accounts/{account_id}/lti_registrations/{id}",
             get(show_registration_scoped)
@@ -862,15 +865,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/accounts/{account_id}/lti_registrations/{registration_id}/deployments",
             get(list_deployments_scoped).post(create_deployment_scoped),
-        )
-        // Brief-compatible flat paths.
-        .route(
-            "/lti_registrations/{id}",
-            get(show_registration).delete(delete_registration),
-        )
-        .route(
-            "/lti_registrations/{id}/deployments",
-            get(list_deployments).post(create_deployment),
         )
         // Issue #69 — registration lifecycle (registrations_controller.rb).
         .route(
@@ -1181,27 +1175,8 @@ async fn create_registration(
     Ok((StatusCode::CREATED, Json(body)).into_response())
 }
 
-/// `GET /lti_registrations/{id}` — show one registration. Canvas always
-/// embeds the account binding and configuration.
-async fn show_registration(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-    auth: AuthUser,
-    Query(params): Query<IncludeQuery>,
-) -> Result<Json<Value>, ApiError> {
-    let registration = find_active_registration(&state.db, id).await?;
-    require_registration_permission(&state.db, &auth, &registration).await?;
-
-    let includes = Includes {
-        configuration: true,
-        overlay: params.includes().overlay,
-    };
-    Ok(Json(
-        registration_json(&state.db, &registration, includes).await?,
-    ))
-}
-
-/// Canvas path alias: `GET /accounts/{accountId}/lti_registrations/{id}`.
+/// Canvas path: `GET /accounts/{accountId}/lti_registrations/{id}`. Canvas
+/// always embeds the account binding and configuration.
 async fn show_registration_scoped(
     State(state): State<AppState>,
     Path((account_id, id)): Path<(i64, i64)>,
@@ -1220,19 +1195,9 @@ async fn show_registration_scoped(
     ))
 }
 
-/// `DELETE /lti_registrations/{id}` — Canvas soft-deletes the registration
-/// and returns its JSON with `workflow_state: "deleted"`.
-async fn delete_registration(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<Value>, ApiError> {
-    let registration = find_active_registration(&state.db, id).await?;
-    require_registration_permission(&state.db, &auth, &registration).await?;
-    soft_delete_registration(&state.db, id, auth.id).await
-}
-
-/// Canvas path alias: `DELETE /accounts/{accountId}/lti_registrations/{id}`.
+/// Canvas path: `DELETE /accounts/{accountId}/lti_registrations/{id}` — Canvas
+/// soft-deletes the registration and returns its JSON with
+/// `workflow_state: "deleted"`.
 async fn delete_registration_scoped(
     State(state): State<AppState>,
     Path((account_id, id)): Path<(i64, i64)>,
@@ -1288,21 +1253,8 @@ async fn soft_delete_registration(
 // Deployment handlers
 // ---------------------------------------------------------------------------
 
-/// `GET /lti_registrations/{id}/deployments` — Canvas returns a bare array.
-async fn list_deployments(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<Vec<Value>>, ApiError> {
-    let registration = find_active_registration(&state.db, id).await?;
-    require_registration_permission(&state.db, &auth, &registration).await?;
-    Ok(Json(
-        deployments_for_registration(&state.db, registration.id).await?,
-    ))
-}
-
-/// Canvas path alias:
-/// `GET /accounts/{accountId}/lti_registrations/{registrationId}/deployments`.
+/// Canvas path: `GET /accounts/{accountId}/lti_registrations/{registrationId}/deployments`
+/// — Canvas returns a bare array.
 async fn list_deployments_scoped(
     State(state): State<AppState>,
     Path((account_id, registration_id)): Path<(i64, i64)>,
@@ -1338,22 +1290,10 @@ async fn deployments_for_registration(
     Ok(deployments)
 }
 
-/// `POST /lti_registrations/{id}/deployments` — deploy into an account (the
-/// registration's own by default) or a course. Canvas answers `200` with the
-/// deployment JSON.
-async fn create_deployment(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-    auth: AuthUser,
-    Json(payload): Json<CreateDeploymentRequest>,
-) -> Result<Response, ApiError> {
-    let registration = find_active_registration(&state.db, id).await?;
-    require_registration_permission(&state.db, &auth, &registration).await?;
-    create_deployment_for_registration(&state.db, &registration, &auth, payload).await
-}
-
-/// Canvas path alias:
-/// `POST /accounts/{accountId}/lti_registrations/{registrationId}/deployments`.
+/// Canvas path:
+/// `POST /accounts/{accountId}/lti_registrations/{registrationId}/deployments`
+/// — deploy into an account (the registration's own by default) or a course.
+/// Canvas answers `200` with the deployment JSON.
 async fn create_deployment_scoped(
     State(state): State<AppState>,
     Path((account_id, registration_id)): Path<(i64, i64)>,
@@ -2795,7 +2735,7 @@ async fn delete_deployment_scoped(
 
     // Canvas renders the destroyed deployment's JSON (deployments_
     // controller.rb:164-170), with workflow_state 'deleted' on the returned
-    // record — the same shape delete_registration uses.
+    // record — the same shape delete_registration_scoped uses.
     let mut deleted = deployment;
     deleted.workflow_state = STATE_DELETED.to_string();
     let root =

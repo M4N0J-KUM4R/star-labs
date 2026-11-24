@@ -398,22 +398,18 @@ async fn association_scoped_assessments_create_and_read() {
     assert_eq!(created_body["assessor_id"].as_i64(), Some(teacher));
     assert_eq!(created_body["assessment_type"].as_str(), Some("grading"));
 
-    // The assessed student can read the flat route; the teacher can too.
-    for user in [teacher, student] {
-        let role = if user == teacher {
-            "teacher"
-        } else {
-            "student"
-        };
-        let fetched = server
-            .get(&format!("/rubric_assessments/{assessment_id}"))
-            .add_header(axum::http::header::AUTHORIZATION, auth(user, role))
-            .await;
-        assert_eq!(fetched.status_code(), 200, "body: {}", fetched.text());
-        let fetched_body: Value = fetched.json();
-        assert_eq!(fetched_body["id"].as_i64(), Some(assessment_id));
-        assert_eq!(fetched_body["score"].as_f64(), Some(85.0));
-    }
+    // Canvas has no read route for a single assessment (see
+    // star-rubrics/src/lib.rs), so the create is verified through the stored
+    // row rather than a GET: the assessment is graded at 85 for this
+    // submission and belongs to the course the association lives in.
+    let stored: (Option<f64>, Option<i64>) =
+        sqlx::query_as("SELECT score, course_id FROM rubric_assessments WHERE id = $1")
+            .bind(assessment_id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch stored assessment");
+    assert_eq!(stored.0, Some(85.0), "persisted score");
+    assert_eq!(stored.1, Some(course), "persisted course id");
 
     // Wrong-course association access is a 404.
     let wrong_course = server
@@ -491,11 +487,15 @@ async fn rubric_assessment_update_and_delete_roundtrip() {
     assert_eq!(deleted.status_code(), 200, "body: {}", deleted.text());
     assert_eq!(deleted.json::<Value>()["id"].as_i64(), Some(assessment_id));
 
-    let gone = server
-        .get(&format!("/rubric_assessments/{assessment_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .await;
-    assert_eq!(gone.status_code(), 404);
+    // Canvas' destroy removes the row (a follow-up read is not part of the
+    // Canvas surface), so the deletion is asserted on the table.
+    let remaining: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM rubric_assessments WHERE id = $1")
+            .bind(assessment_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count assessment rows");
+    assert_eq!(remaining, 0, "the assessment row is deleted");
 
     cleanup(&pool, &prefix).await;
 }
@@ -530,9 +530,8 @@ async fn rubric_assessment_routes_enforce_canvas_access_policy() {
         .expect("assessment id");
 
     // A different enrolled student cannot read or modify someone's assessment.
-    for method in ["get", "put", "delete"] {
+    for method in ["put", "delete"] {
         let request = match method {
-            "get" => server.get(&format!("/rubric_assessments/{assessment_id}")),
             "put" => server.put(&format!("{nested}/{assessment_id}")),
             _ => server.delete(&format!("{nested}/{assessment_id}")),
         }
@@ -558,9 +557,7 @@ async fn rubric_assessment_routes_enforce_canvas_access_policy() {
     assert_eq!(student_create.status_code(), 403);
 
     // Unauthenticated access is rejected.
-    let anonymous = server
-        .get(&format!("/rubric_assessments/{assessment_id}"))
-        .await;
+    let anonymous = server.delete(&format!("{nested}/{assessment_id}")).await;
     assert_eq!(anonymous.status_code(), 401);
 
     // The rejected writes left the assessment untouched.

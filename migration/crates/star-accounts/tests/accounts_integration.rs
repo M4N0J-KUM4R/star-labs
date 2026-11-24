@@ -2,7 +2,7 @@
 //!
 //! Exercises the real accounts router (GET /accounts, GET /accounts/{id},
 //! POST /accounts/{id}/sub_accounts, GET /accounts/{id}/courses,
-//! GET /accounts/{id}/users, POST /accounts/{id}/users/{userId}) through
+//! GET /accounts/{id}/users, POST /accounts/{account_id}/admins) through
 //! axum-test against a real Postgres.
 //!
 //! Conventions (mirrors the rest of the workspace):
@@ -13,8 +13,10 @@
 //!
 //! Characterization notes — behavior these tests pin:
 //! - Permission model: every route requires the global `admin` role except
-//!   GET /accounts/{id}, which also accepts account admins via the parent
-//!   chain (upward-only walk, capped at MAX_ACCOUNT_TREE_DEPTH = 10 hops).
+//!   GET /accounts/{id} and POST /accounts/{account_id}/admins, which go
+//!   through `can_access_account` (global admin OR an account_admins grant on
+//!   the account itself or any parent in the chain, walked upward and capped
+//!   at MAX_ACCOUNT_TREE_DEPTH = 10 hops).
 //!   Permission is checked before existence, so a non-admin gets 403 (not
 //!   404) even for a missing account.
 //! - "Does this row exist" probes are `SELECT 1 ...` decoded into `(i32,)`,
@@ -1065,16 +1067,18 @@ async fn list_account_users_as_non_admin_is_403() {
 }
 
 // ---------------------------------------------------------------------------
-// POST /accounts/{id}/users/{userId}
+// POST /accounts/{account_id}/admins
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
 async fn grant_account_admin_with_existing_rows_grants_admin() {
-    // Both existence probes (`SELECT 1 FROM accounts ...` and
-    // `SELECT 1 FROM users ...`) succeed when the rows exist, so the grant
-    // reaches the upsert: 201 with the AccountUser body, role defaulting to
-    // 'admin' (for {} and {"role": null}), duplicates upserting the same
-    // (account_id, user_id) row, and only 'admin' accepted (422 otherwise).
+    // Canvas grants an account admin role with
+    // `post "accounts/:account_id/admins"` (canvas-src/config/routes.rb:1996);
+    // `accounts/:account_id/users/:user_id` is DELETE-only (routes.rb:1938).
+    // With both rows present the existence probes succeed, so the grant
+    // reaches the upsert: 200 with the Admin body, role defaulting to
+    // AccountAdmin, duplicates upserting the same (account_id, user_id) row,
+    // and only admin roles accepted (422 otherwise).
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -1087,14 +1091,14 @@ async fn grant_account_admin_with_existing_rows_grants_admin() {
     let sibling = seed_account(&pool, &format!("{prefix}-Sibling"), None, "active").await;
 
     for (payload, expected) in [
-        (json!({}), 201),                    // default role
-        (json!({ "role": null }), 201),      // explicit null role
-        (json!({ "role": "admin" }), 201),   // explicit admin
-        (json!({ "role": "admin" }), 201),   // duplicate grant
-        (json!({ "role": "teacher" }), 422), // invalid role
+        (json!({ "user_id": target }), 200),               // default role
+        (json!({ "user_id": target, "role": null }), 200), // explicit null role
+        (json!({ "user_id": target, "role": "admin" }), 200), // explicit admin
+        (json!({ "user_id": target, "role": "admin" }), 200), // duplicate grant
+        (json!({ "user_id": target, "role": "teacher" }), 422), // invalid role
     ] {
         let resp = server
-            .post(&format!("/accounts/{account}/users/{target}"))
+            .post(&format!("/accounts/{account}/admins"))
             .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
             .json(&payload)
             .await;
@@ -1104,11 +1108,10 @@ async fn grant_account_admin_with_existing_rows_grants_admin() {
             "payload {payload}: {}",
             resp.text()
         );
-        if expected == 201 {
+        if expected == 200 {
             let body: Value = resp.json();
-            assert_eq!(body["account_id"], account);
-            assert_eq!(body["user_id"], target);
-            assert_eq!(body["role"], "admin");
+            assert_eq!(body["role"], "AccountAdmin");
+            assert_eq!(body["user"]["id"], target);
         }
     }
 
@@ -1154,11 +1157,12 @@ async fn grant_account_admin_missing_account_or_user_is_404() {
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let target = seed_user(&pool, &prefix, "Target", "student").await;
 
-    // Missing account: the account probe matches no row -> 404.
+    // A global admin clears the permission gate for any id, so the missing
+    // account reaches the existence probe -> 404.
     let resp = server
-        .post(&format!("/accounts/999999999/users/{target}"))
+        .post("/accounts/999999999/admins")
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
-        .json(&json!({}))
+        .json(&json!({ "user_id": target }))
         .await;
     assert_eq!(resp.status_code(), 404, "missing account: {}", resp.text());
 
@@ -1166,9 +1170,9 @@ async fn grant_account_admin_missing_account_or_user_is_404() {
     // the user probe matches no row -> 404.
     let account = seed_account(&pool, &format!("{prefix}-Account"), None, "active").await;
     let resp = server
-        .post(&format!("/accounts/{account}/users/999999999"))
+        .post(&format!("/accounts/{account}/admins"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
-        .json(&json!({}))
+        .json(&json!({ "user_id": 999999999 }))
         .await;
     assert_eq!(resp.status_code(), 404, "missing user: {}", resp.text());
 
@@ -1184,10 +1188,12 @@ async fn grant_account_admin_missing_account_or_user_is_404() {
 }
 
 #[tokio::test]
-async fn grant_account_admin_as_non_admin_is_403_even_for_account_admins() {
-    // Documents actual behavior: only the global admin role may grant;
-    // being an account admin of the target account is not enough. The role
-    // gate runs before any DB probe.
+async fn grant_account_admin_permission_gate() {
+    // Canvas gates `POST accounts/:account_id/admins` on
+    // manage_account_memberships, which an existing account admin holds: the
+    // gate is `can_access_account`, not the global admin role. A plain user
+    // without any grant is rejected, and the gate runs before existence
+    // probes (403 wins over 404).
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -1205,20 +1211,38 @@ async fn grant_account_admin_as_non_admin_is_403_even_for_account_admins() {
     )
     .await;
 
-    for (user, role) in [(account_admin, "teacher"), (student, "student")] {
-        let resp = server
-            .post(&format!("/accounts/{account}/users/{student}"))
-            .add_header(axum::http::header::AUTHORIZATION, auth(user, role))
-            .json(&json!({}))
-            .await;
-        assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-    }
+    let resp = server
+        .post(&format!("/accounts/{account}/admins"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "user_id": student }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
     assert_eq!(
         account_user_count(&pool, account, student).await,
         0,
-        "non-admins must not grant anything"
+        "a plain user must not grant anything"
     );
+
+    // An existing account admin can grant admin to another user.
+    let resp = server
+        .post(&format!("/accounts/{account}/admins"))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(account_admin, "teacher"),
+        )
+        .json(&json!({ "user_id": student }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(account_user_count(&pool, account, student).await, 1);
+
+    // Permission is checked before the account existence probe.
+    let resp = server
+        .post("/accounts/999999999/admins")
+        .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
+        .json(&json!({ "user_id": student }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }
