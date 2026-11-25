@@ -827,6 +827,89 @@ def count_canvas_sources(canvas_src):
     }
 
 
+CANVAS_CREATE_TABLE_RE = re.compile(
+    r"(?<![A-Za-z_])create_table\s*\(?\s*(?::([A-Za-z_][A-Za-z0-9_]*)"
+    r"|['\"]([A-Za-z_][A-Za-z0-9_]*)['\"])\s*(?=[,)\s]|$)")
+CANVAS_PARTITION_DEF_RE = re.compile(r"\s*def\s+(\w+)\s*\((\w+)\)")
+CANVAS_PARTITION_LOOP_RE = re.compile(
+    r"\s*\((\d+)\.\.(\d+)\)\.each\s*(?:\{|\bdo\b)\s*\|(\w+)\|\s*(\w+)[\s(]")
+
+
+def _loop_created_tables(lines):
+    """Table names a `(first..last).each { |i| helper(i) }` loop creates.
+
+    Canvas' migrations create most tables with literal `create_table :name`
+    calls, but the init migration also defines
+
+        def create_aua_log_partition(index)
+          table_name = :"aua_logs_#{index}"
+          create_table table_name do |t| ...
+
+    and calls it from `(0..6).each { |i| create_aua_log_partition(i) }`, so a
+    static `create_table :name` scan misses its 7 partition tables. Replay the
+    idiom: a same-file helper whose body assigns
+    `table_name = :"prefix_#{arg}"` and calls `create_table table_name`,
+    invoked by an integer-range loop, emits `prefix_N` for each N in the range.
+    """
+    helpers = {}
+    for i, line in enumerate(lines):
+        dm = CANVAS_PARTITION_DEF_RE.match(line)
+        if not dm:
+            continue
+        body = "\n".join(lines[i:i + 15])
+        table = re.search(
+            r"table_name\s*=\s*:\"([A-Za-z_]+)_#\{\s*%s\s*\}\""
+            % re.escape(dm.group(2)), body)
+        if table and re.search(r"(?<![A-Za-z_])create_table\s+table_name\b",
+                               body):
+            helpers[dm.group(1)] = table.group(1)
+    names = []
+    for line in lines:
+        lm = CANVAS_PARTITION_LOOP_RE.match(line)
+        if lm and lm.group(4) in helpers:
+            names.extend("%s_%d" % (helpers[lm.group(4)], n)
+                         for n in range(int(lm.group(1)), int(lm.group(2)) + 1))
+    return names
+
+
+def canvas_schema_tables(canvas_src):
+    """Canvas table names replayed from db/migrate/*.rb, filename order.
+
+    Returns (loop_tables, named_tables). `named_tables` are the distinct
+    `create_table :name` / `create_table "name"` / `create_table(:name)` names
+    (comment text stripped first, so prose cannot pollute the list);
+    `loop_tables` are the names range-loops create (in Canvas: the 7
+    aua_logs_0..6 partitions of init_canvas_db.rb). Together they are the
+    schema-row denominator (298 named + 7 loop-created = 305).
+    """
+    migrations = canvas_src / "db" / "migrate"
+    named = set()
+    loop_tables = []
+    if migrations.is_dir():
+        for path in sorted(migrations.glob("*.rb")):
+            lines = path.read_text(encoding="utf-8",
+                                   errors="replace").splitlines()
+            for line in lines:
+                # Drop comment text, but only after the match point matters:
+                # `:"aua_logs_#{index}"` interpolation contains no create_table
+                # call, and a commented-out `# create_table :x` must not count.
+                code = line.split("#", 1)[0]
+                for m in CANVAS_CREATE_TABLE_RE.finditer(code):
+                    named.add(m.group(1) or m.group(2))
+            loop_tables.extend(_loop_created_tables(lines))
+    return sorted(set(loop_tables)), sorted(named)
+
+
+def canvas_query_root_fields(canvas_src):
+    """Root `field :` declarations on Canvas' GraphQL QueryType."""
+    query = canvas_src / "app" / "graphql" / "types" / "query_type.rb"
+    if not query.is_file():
+        return 0
+    return len(re.findall(r"^\s*field :", query.read_text(encoding="utf-8",
+                                                          errors="replace"),
+                          re.MULTILINE))
+
+
 def canvas_graphql_type_names(canvas_src):
     """Distinct GraphQL type names defined in app/graphql/types/*_type.rb.
 
@@ -1595,11 +1678,41 @@ def count_star_sources(star_src):
     migrations = star_src / "crates" / "star-db" / "migrations"
     for path in sorted(migrations.glob("*.sql")) if migrations.is_dir() else []:
         text = path.read_text(encoding="utf-8", errors="replace")
+        # Only real statements count: `--` comment prose ("CREATE TABLE would
+        # run before ...", a backticked `CREATE TABLE collaborations`) must not
+        # pollute the count. Stripping comments and requiring the table name to
+        # be followed by `(` keeps prose and comment mentions out.
+        text = re.sub(r"--[^\n]*", "", text)
         tables.update(m.group(1).lower() for m in re.finditer(
-            r"CREATE TABLE(?:\s+IF NOT EXISTS)?\s+([A-Za-z_][A-Za-z0-9_]*)",
+            r"CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][A-Za-z0-9_]*)"
+            r"\s*\(",
             text, re.IGNORECASE))
     impl["tables"] = len(tables)
+    impl["table_names"] = sorted(tables)
     return impl
+
+
+def count_star_query_root_fields(star_src):
+    """async fn count inside star-graphql's `impl Query` block.
+
+    The block starts at the `impl Query {` line and ends at the
+    `#[derive(MergedObject` that merges Query with the mutation object; both
+    markers are located by regex, never line numbers, so unrelated edits above
+    the block cannot shift the slice. A missing marker is a hard error: a
+    silently-0 root-field count would read as a regression in the report.
+    """
+    lib = star_src / "crates" / "star-graphql" / "src" / "lib.rs"
+    if not lib.is_file():
+        return 0
+    text = lib.read_text(encoding="utf-8", errors="replace")
+    start = re.search(r"^impl Query \{", text, re.MULTILINE)
+    end = re.search(r"#\[derive\(MergedObject", text)
+    if not start or not end or end.start() < start.start():
+        raise SystemExit(
+            "parity: star-graphql `impl Query {` / `#[derive(MergedObject` "
+            "markers not found in %s -- the Query-root-field count is "
+            "meaningless without them" % lib)
+    return len(re.findall(r"\basync\s+fn\b", text[start.start():end.start()]))
 
 
 # --- Star (Rust) GraphQL name extraction -------------------------------------
@@ -1763,6 +1876,9 @@ def build_manifest(canvas_src):
     counts["ui_api_ref_strings"] = ui_literals
     counts["ui_api_ref_paths"] = len(ui_refs)
 
+    loop_tables, named_tables = canvas_schema_tables(canvas_src)
+    schema_tables = sorted(set(named_tables) | set(loop_tables))
+
     return {
         "source": "canvas-lms config/routes.rb (ApiRouteSet blocks; resources "
                   "and %w context loops expanded; concerns and member/collection "
@@ -1775,6 +1891,13 @@ def build_manifest(canvas_src):
         "counts": counts,
         "graphql_type_names": canvas_graphql_type_names(canvas_src),
         "graphql_mutation_names": canvas_graphql_mutation_names(canvas_src),
+        # Canvas' schema inventory, replayed from db/migrate/*.rb: every named
+        # create_table plus the tables its Ruby range-loops create
+        # (aua_logs_0..6). schema_tables is the full denominator;
+        # schema_loop_tables marks the names no literal create_table spells.
+        "schema_tables": schema_tables,
+        "schema_loop_tables": loop_tables,
+        "graphql_query_root_fields": canvas_query_root_fields(canvas_src),
     }
 
 
@@ -1790,6 +1913,10 @@ def cmd_manifest(args):
     print("graphql names: %d types, %d mutation operations" %
           (len(manifest["graphql_type_names"]),
            len(manifest["graphql_mutation_names"])))
+    print("schema tables: %d named, %d loop-created" %
+          (len(manifest["schema_tables"]) - len(manifest["schema_loop_tables"]),
+           len(manifest["schema_loop_tables"])))
+    print("graphql query root fields: %d" % manifest["graphql_query_root_fields"])
     print("wrote %s" % args.out)
 
 
@@ -1924,7 +2051,7 @@ def classify_extras(extras, canvas_routes, web_routes, star_keys):
     return counts
 
 
-def build_coverage(manifest, star_src):
+def build_coverage(manifest, star_src, golden_dir=None):
     canvas_routes = manifest["routes"]
     star_routes, calls, unparsed, test_calls, unreachable_calls = \
         parse_star_routes(star_src)
@@ -1958,6 +2085,18 @@ def build_coverage(manifest, star_src):
 
     star_impl = count_star_sources(star_src)
     counts = manifest["counts"]
+
+    # Schema like-for-like: Canvas table names (the manifest's db/migrate
+    # replay) against unique real star-db CREATE TABLE names. The star-only
+    # figure is taken against Canvas' NAMED tables -- the loop partitions are
+    # on the star-only side of that line -- matching the parity audit.
+    canvas_tables = set(manifest.get("schema_tables") or [])
+    loop_tables = set(manifest.get("schema_loop_tables") or [])
+    star_table_names = set(star_impl.get("table_names") or [])
+    star_only_tables = sorted(star_table_names - (canvas_tables - loop_tables))
+    golden_count = 0
+    if golden_dir is not None and Path(golden_dir).is_dir():
+        golden_count = len(list(Path(golden_dir).glob("*.json")))
 
     # GraphQL parity by operation name: implemented names from star-graphql
     # (with the documented renames mapped to Canvas graphql_names) intersected
@@ -2008,6 +2147,15 @@ def build_coverage(manifest, star_src):
             "js_env_call_sites": counts["js_env_call_sites"],
             "canvas_models": counts["models"],
             "star_tables": star_impl["tables"],
+            "canvas_schema_tables": len(canvas_tables),
+            "schema_tables_implemented": len(canvas_tables & star_table_names),
+            "schema_missing_tables": sorted(canvas_tables - star_table_names),
+            "schema_star_only": len(star_only_tables),
+            "route_shape_contracts": golden_count,
+            "graphql_query_root_fields_canvas": manifest.get(
+                "graphql_query_root_fields") or 0,
+            "graphql_query_root_fields_star": count_star_query_root_fields(
+                star_src),
         },
         "controllers": controllers,
         "implemented_routes": implemented,
@@ -2048,16 +2196,30 @@ def render_report(coverage):
         ("GraphQL object types", s["graphql_types_implemented"], s["graphql_types"]),
         ("GraphQL mutations", s["graphql_mutations_implemented"],
          s["graphql_mutations"]),
+        ("GraphQL Query root fields", s["graphql_query_root_fields_star"],
+         s["graphql_query_root_fields_canvas"]),
         ("UI feature directories", s["ui_feature_dirs_implemented"],
          s["ui_feature_dirs"]),
         ("JS/JSX/TS/TSX files", s["js_tsx_files_implemented"], s["js_tsx_files"]),
         ("ERB views", s["erb_views_implemented"], s["erb_views"]),
         ("js_env files", s["js_env_files_implemented"], s["js_env_files"]),
+        ("Route shape contracts", s["route_shape_contracts"],
+         s["canvas_api_routes"]),
+        ("Canvas schema tables", s["schema_tables_implemented"],
+         s["canvas_schema_tables"]),
     ]
     for label, part, total in rows:
         add("| %s | %d | %d | %s |" % (label, part, total, fmt_pct(part, total)))
-    add("| Schema tables (vs %d Canvas models) | %d | %d | n/a |" %
-        (s["canvas_models"], s["star_tables"], s["canvas_models"]))
+    missing = s["schema_missing_tables"]
+    add("")
+    add("Missing Canvas schema tables (%d): %s." %
+        (len(missing), ", ".join("`%s`" % n for n in missing) or "(none)"))
+    add("Star-only tables: %d (star-db `CREATE TABLE` names with no Canvas "
+        "`create_table` counterpart; includes the 7 `aua_logs_0..6` partitions "
+        "Canvas creates in a Ruby loop)." % s["schema_star_only"])
+    add("Route shape contracts are the golden request/response pairs under "
+        "`parity/behavior/golden/canvas/`, compared by "
+        "`tools/parity/golden_differ.py`.")
     add("")
     add("Implemented REST route count: **%d / %d** (%s)." %
         (s["implemented_rest_routes"], s["canvas_api_routes"],
@@ -2240,9 +2402,20 @@ def render_report(coverage):
         "`/assignments/{id}` where Canvas uses "
         "`/courses/{course_id}/assignments/{id}`) and auth/dashboard/health "
         "routes Canvas does not expose.")
-    add("- The schema row counts `CREATE TABLE` statements in `star-db` migrations "
-        "(36 authored tables); sqlx adds `_sqlx_migrations`, so a live database "
-        "has 37 tables.")
+    add("- The schema row compares table NAMES on both sides. Canvas' names "
+        "are replayed from `db/migrate/*.rb` in filename order -- every "
+        "`create_table :name` / `create_table \"name\"` / "
+        "`create_table(:name)` call (comment text stripped), plus the 7 "
+        "`aua_logs_0..6` partitions the init migration creates through its "
+        "`create_aua_log_partition` loop; the manifest stores the full name "
+        "list (`schema_tables`) with the loop-created names marked in "
+        "`schema_loop_tables`. star-db's names are the unique real "
+        "`CREATE TABLE` statements in `crates/star-db/migrations/*.sql`: "
+        "`--` comments are stripped before matching and the table name must "
+        "be followed by `(`, so comment prose (\"CREATE TABLE would run "
+        "before ...\") cannot inflate the count. The star-only figure is "
+        "taken against Canvas' named tables only, so the 7 loop partitions "
+        "sit on the star-only side of that line.")
     add("")
     return "\n".join(lines)
 
@@ -2252,7 +2425,9 @@ def cmd_report(args):
     star_src = Path(args.star_src).resolve()
     out_dir = Path(args.out)
 
-    coverage = build_coverage(manifest, star_src)
+    coverage = build_coverage(manifest, star_src,
+                              golden_dir=out_dir / "behavior" / "golden"
+                              / "canvas")
     current = coverage["summary"]["implemented_rest_routes"]
 
     baseline_path = out_dir / "baseline.json"

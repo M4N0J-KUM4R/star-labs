@@ -11,15 +11,21 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | GraphQL files | 1 | 390 | 0.3% |
 | GraphQL object types | 246 | 246 | 100.0% |
 | GraphQL mutations | 100 | 100 | 100.0% |
+| GraphQL Query root fields | 9 | 27 | 33.3% |
 | UI feature directories | 0 | 232 | 0.0% |
 | JS/JSX/TS/TSX files | 51 | 5459 | 0.9% |
 | ERB views | 0 | 475 | 0.0% |
 | js_env files | 1 | 124 | 0.8% |
-| Schema tables (vs 688 Canvas models) | 397 | 688 | n/a |
+| Route shape contracts | 7 | 1410 | 0.5% |
+| Canvas schema tables | 302 | 305 | 99.0% |
+
+Missing Canvas schema tables (3): `assignment_embeddings`, `discussion_topic_embeddings`, `wiki_page_embeddings`.
+Star-only tables: 101 (star-db `CREATE TABLE` names with no Canvas `create_table` counterpart; includes the 7 `aua_logs_0..6` partitions Canvas creates in a Ruby loop).
+Route shape contracts are the golden request/response pairs under `parity/behavior/golden/canvas/`, compared by `tools/parity/golden_differ.py`.
 
 Implemented REST route count: **1410 / 1410** (100.0%).
 
-Star registrations: 1558 route/method pairs from 1275 `.route(...)` calls (0 unparsed); 141 have no Canvas match and are listed as extras below.
+Star registrations: 1557 route/method pairs from 1276 `.route(...)` calls (0 unparsed); 133 have no Canvas match and are listed as extras below.
 
 Excluded before counting: 3 `.route(...)` calls inside `#[cfg(test)]` or `#[test]` bodies, 0 calls in `.rs` files no `mod` declaration reaches (not compiled, so not registered).
 
@@ -276,7 +282,7 @@ Renames mapped to Canvas names: `CourseSection` -> `Section`, `DiscussionTopic` 
 
 Star names with no Canvas counterpart (not counted): `AcceptEnrollmentInvitationInput`, `AddConversationMessageInput`, `AllocationRulePayload`, `ApplyInstitutionalTagInput`, `AssignmentConnection`, `AssignmentEdge`, `AssignmentGroupConnection`, `AssignmentGroupEdge`, `AutoGradeSubmissionInput`, `AutoGradeSubmissionPayload`, `BatchBConversation`, `BatchBConversationMessage`, `BatchBDiscussionEntry`, `BatchBDiscussionTopic`, `BatchBError`, `BatchBGroup`, `BatchBGroupSet`, `BatchBModule`, `BatchBSubmission`, `BatchBSubmissionComment`, `BatchCError`, `BatchCLearningOutcome`, `BatchCLearningOutcomeGroup`, `BatchCNotificationPolicy`, `CommentBankItemPayload`, `ConversationMessageConnection`, `ConversationMessageEdge`, `ConversationParticipantConnection`, `ConversationParticipantEdge`, `ConversationParticipantPayload`, `ConversationPayload`, `CreateAllocationRuleInput`, `CreateAssignmentPayload`, `CreateCommentBankItemInput`, `CreateConversationInput`, `CreateDiscussionEntryInput`, `CreateDiscussionTopicInput`, `CreateGroupInSetInput`, `CreateGroupSetInput`, `CreateInstitutionalTagCategoryInput`, `CreateInstitutionalTagInput`, `CreateInternalSettingInput`, `CreateLearningOutcomeGroupInput`, `CreateLearningOutcomeInput`, `CreateModuleInput`, `CreateOutcomeCalculationMethodInput`, `CreateOutcomeProficiencyInput`, `CreateSubmissionCommentInput`, `CreateSubmissionDraftInput`, `CreateSubmissionInput`, `CreateUserInboxLabelInput`, `CustomGradeStatusPayload`, `DeleteAllocationRuleInput`, `DeleteCommentBankItemInput`, `DeleteConversationInput`, `DeleteConversationMessagesInput`, `DeleteConversationsInput`, `DeleteCustomGradeStatusInput`, `DeleteDiscussionEntryInput`, `DeleteDiscussionTopicInput`, `DeleteInternalSettingInput`, `DeleteLearningOutcomeGroupInput`, `DeleteLearningOutcomeInput`, `DeleteOutcomeCalculationMethodInput`, `DeleteOutcomeLinksInput`, `DeleteOutcomeProficiencyInput`, `DeleteSubmissionCommentInput`, `DeleteSubmissionDraftInput`, `DeleteUserInboxLabelInput`, `DiscussionEntryConnection`, `DiscussionEntryEdge`, `DiscussionEntryPayload`, `DiscussionTopicConnection`, `DiscussionTopicEdge`, `DiscussionTopicPayload`, `DismissAccountNotificationInput`, `DraftSubmissionCommentPayload`, `EnrollmentConnection`, `EnrollmentEdge`, `EnrollmentInvitationPayload`, `ExternalToolConnection`, `ExternalToolEdge`, `FolderConnection`, `FolderEdge`, `FriendlyDescriptionPayload`, `G1Error`, `G1SuccessPayload`, `G2Error`, `G2SuccessPayload`, `G3Error`, `G3SuccessPayload`, `GradebookFilterPayload`, `GroupConnection`, `GroupEdge`, `GroupMembershipConnection`, `GroupMembershipEdge`, `GroupPayload`, `GroupSetConnection`, `GroupSetEdge`, `GroupSetPayload`, `HideAssignmentGradesForSectionsInput`, `HideAssignmentGradesInput`, `ImportOutcomesInput`, `ImportOutcomesPayload`, `InboxSettingsPayload`, `InstitutionalTagAssociationPayload`, `InstitutionalTagCategoryPayload`, `InstitutionalTagPayload`, `InternalSettingPayload`, `LearnerDashboardTabSelectionPayload`, `LearningOutcomeConnection`, `LearningOutcomeEdge`, `LearningOutcomeGroupPayload`, `LearningOutcomePayload`, `MarkSubmissionCommentsReadInput`, `ModuleConnection`, `ModuleEdge`, `ModuleItemCompletionPayload`, `ModuleItemConnection`, `ModuleItemEdge`, `ModulePayload`, `MoveOutcomeLinksInput`, `NotificationPreferencePayload`, `OutcomeCalculationMethodPayload`, `OutcomeProficiencyPayload`, `OverrideScorePayload`, `OverrideStatusPayload`, `PageConnection`, `PageEdge`, `PageInfo`, `PostAssignmentGradesForSectionsInput`, `PostAssignmentGradesInput`, `PostAssignmentGradesPayload`, `PostDraftSubmissionCommentInput`, `QuizConnection`, `QuizEdge`, `QuizQuestionConnection`, `QuizQuestionEdge`, `QuizSubmissionConnection`, `QuizSubmissionEdge`, `RejectEnrollmentInvitationInput`, `RemoveInstitutionalTagInput`, `ReorderModuleItemsInput`, `RestoreDeletedDiscussionEntryInput`, `RubricAssessmentPayload`, `RubricConnection`, `RubricEdge`, `RubricSelfAssessmentPayload`, `SaveRubricAssessmentInput`, `SelectProvisionalGradeInput`, `SelectProvisionalGradePayload`, `SetAssignmentPostPolicyInput`, `SetCoursePostPolicyInput`, `SetFriendlyDescriptionInput`, `SetModuleItemCompletionInput`, `SetOverrideScoreInput`, `SetOverrideStatusInput`, `SetRubricSelfAssessmentInput`, `SpeedGraderSettingsPayload`, `SplitscreenPreferencePayload`, `StandardGradeStatusPayload`, `StringMapEntry`, `StudentEnteredScorePayload`, `SubmissionCommentPayload`, `SubmissionConnection`, `SubmissionDraftPayload`, `SubmissionEdge`, `SubmissionGradeStatusPayload`, `SubmissionPayload`, `SubmissionStickerPayload`, `SubmitAutoGradeFeedbackInput`, `SubscribeToDiscussionTopicInput`, `SuccessPayload`, `UpdateAllocationRuleInput`, `UpdateAssignmentPayload`, `UpdateCommentBankItemInput`, `UpdateConversationParticipantsInput`, `UpdateDiscussionEntriesReadStateInput`, `UpdateDiscussionEntryInput`, `UpdateDiscussionEntryParticipantInput`, `UpdateDiscussionEntryPayload`, `UpdateDiscussionReadStateInput`, `UpdateDiscussionThreadReadStateInput`, `UpdateDiscussionTopicInput`, `UpdateDiscussionTopicParticipantInput`, `UpdateDiscussionTopicPayload`, `UpdateGradebookGroupFilterInput`, `UpdateInstitutionalTagArchivedStateInput`, `UpdateInstitutionalTagCategoryArchivedStateInput`, `UpdateInstitutionalTagCategoryInput`, `UpdateInstitutionalTagInput`, `UpdateInternalSettingInput`, `UpdateLearnerDashboardTabSelectionInput`, `UpdateLearningOutcomeGroupInput`, `UpdateLearningOutcomeInput`, `UpdateMyInboxSettingsInput`, `UpdateNotificationPreferencesInput`, `UpdateOutcomeCalculationMethodInput`, `UpdateOutcomeProficiencyInput`, `UpdateRubricArchivedStateInput`, `UpdateRubricAssessmentReadStateInput`, `UpdateSpeedGraderSettingsInput`, `UpdateSplitScreenViewDeeplyNestedAlertInput`, `UpdateSubmissionGradeInput`, `UpdateSubmissionGradeStatusInput`, `UpdateSubmissionStickerInput`, `UpdateSubmissionStudentEnteredScoreInput`, `UpdateSubmissionsReadStateInput`, `UpdateUserDiscussionsSplitscreenViewInput`, `UpdateWidgetDashboardConfigInput`, `UpdateWidgetDashboardLayoutInput`, `UpdatedDiscussionEntry`, `UpdatedDiscussionTopic`, `UpsertCustomGradeStatusInput`, `UpsertStandardGradeStatusInput`, `UserConnection`, `UserEdge`, `UserInboxLabelPayload`, `WidgetDashboardPayload`, `deleteConversation`, `deleteLearningOutcome`, `deleteLearningOutcomeGroup`.
 
-## Star routes with no Canvas API match (141)
+## Star routes with no Canvas API match (133)
 
 Classified, because the fix differs by class: only `api_verb_mismatch` and `api_nested` are Canvas gaps (star misses a verb or the nested form entirely); `api_extra_*` means Canvas' own verbs at that path are all implemented and this registration is *additive surface* -- Canvas does not answer that (verb, path) through its API, so each row still needs a routes.rb check before it is kept. It is not a clean bill of health: `POST /courses` sat here until it was deleted, because Canvas' only API course create is `post "accounts/:account_id/courses"` (canvas-src/config/routes.rb:1231); `web_*` means the registration is mounted on the top-level (non-`/api/v1`) side -- the page shell or the root URL families -- and Canvas answers that path as a **web** (HTML/JS) route, so it is a port, not a REST parity item; `api_alias` is Canvas' own `self` id spelling (canvas-src/lib/api.rb:51 maps the literal `self` to the current user), which is parity-exact and must not be deleted; and `absent` means no Canvas path or path-tail matches, which covers deliberate aliases (`/assignment_overrides/{id}` for Canvas' `/courses/{course_id}/assignments/{assignment_id}/overrides/{id}`, whose nested form IS implemented) as well as genuinely new endpoints.
 
@@ -285,12 +291,12 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | `api_verb_mismatch` | 0 | Canvas verb at this path is unimplemented: add it |
 | `api_extra_verb` | 11 | Canvas serves other verbs here, not this one: extra API surface, verify in routes.rb |
 | `api_alias` | 5 | Canvas' `self` id alias (lib/api.rb): keep, parity-exact |
-| `web_exact` | 29 | port of a Canvas web route: keep, label as web/UI |
-| `web_verb_mismatch` | 8 | web port with the wrong verb |
+| `web_exact` | 37 | port of a Canvas web route: keep, label as web/UI |
+| `web_verb_mismatch` | 5 | web port with the wrong verb |
 | `web_nested` | 1 | web route flattened to top level: re-nest or label |
 | `api_nested` | 0 | Canvas serves the nested form and star does not: re-nest |
 | `api_extra_nested` | 38 | nested form already served: this flat twin is extra surface, verify in routes.rb |
-| `absent` | 49 | no Canvas path or tail: a renamed alias, a custom endpoint, or unused -- check before deleting |
+| `absent` | 36 | no Canvas path or tail: a renamed alias, a custom endpoint, or unused -- check before deleting |
 
 | Verb | Path | Crate | Mount | Class | Canvas closest |
 |---|---|---|---|---|---|
@@ -306,32 +312,19 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | GET | `/auth/me` | `star-auth` | api | absent | - |
 | POST | `/auth/register` | `star-auth` | api | absent | - |
 | GET | `/conversations/compose` | `star-ui` | web | absent | - |
-| POST | `/conversations/mark_all_read` | `star-ui` | web | absent | - |
 | GET | `/courses/{courseId}/announcements` | `star-announcements` | api | absent | - |
 | POST | `/courses/{courseId}/announcements` | `star-announcements` | api | absent | - |
 | GET | `/courses/{id}/announcements/new` | `star-ui` | web | absent | - |
-| POST | `/courses/{id}/assignments/{aid}/submit` | `star-ui` | web | absent | - |
 | GET | `/courses/{courseId}/calendar_events` | `star-calendar` | api | absent | - |
 | POST | `/courses/{courseId}/calendar_events` | `star-calendar` | api | absent | - |
-| GET | `/courses/{id}/discussions` | `star-ui` | web | absent | - |
-| POST | `/courses/{id}/discussions` | `star-ui` | web | absent | - |
-| GET | `/courses/{id}/discussions/new` | `star-ui` | web | absent | - |
-| GET | `/courses/{id}/discussions/{topic_id}` | `star-ui` | web | absent | - |
-| POST | `/courses/{id}/discussions/{topic_id}/entries` | `star-ui` | web | absent | - |
 | GET | `/courses/{course_id}/external_tools/{id}/eula_launch` | `star-lti` | api | absent | - |
 | GET | `/courses/{id}/gradebook.csv` | `star-ui` | web | absent | - |
-| GET | `/courses/{id}/gradebook/speedgrader` | `star-ui` | web | absent | - |
-| POST | `/courses/{id}/gradebook/speedgrader/grade` | `star-ui` | web | absent | - |
 | DELETE | `/courses/{courseId}/modules/items/{itemId}` | `star-modules` | api | absent | - |
 | GET | `/courses/{courseId}/modules/items/{itemId}` | `star-modules` | api | absent | - |
 | PUT | `/courses/{courseId}/modules/items/{itemId}` | `star-modules` | api | absent | - |
 | GET | `/courses/{courseId}/outcomes` | `star-outcomes` | api | absent | - |
 | POST | `/courses/{courseId}/outcomes` | `star-outcomes` | api | absent | - |
-| POST | `/courses/{id}/quizzes/{qid}/submissions/{sid}/submit` | `star-ui` | web | absent | - |
 | GET | `/courses/{id}/users/add` | `star-ui` | web | absent | - |
-| POST | `/courses/{id}/users/add` | `star-ui` | web | absent | - |
-| POST | `/courses/{id}/users/{user_id}/conclude` | `star-ui` | web | absent | - |
-| POST | `/courses/{id}/users/{user_id}/reactivate` | `star-ui` | web | absent | - |
 | GET | `/dashboard` | `star-dashboard` | api | absent | - |
 | DELETE | `/grading_schemes/{id}` | `star-grading-standards` | api | absent | - |
 | GET | `/grading_schemes/{id}` | `star-grading-standards` | api | absent | - |
@@ -408,20 +401,28 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | GET | `/courses/{id}/assignments/syllabus` | `star-ui` | web | web_exact | `WEB GET` |
 | PATCH | `/courses/{id}/assignments/{aid}` | `star-ui` | web | web_exact | `WEB PATCH` |
 | GET | `/courses/{id}/assignments/{aid}/edit` | `star-ui` | web | web_exact | `WEB GET` |
+| DELETE | `/courses/{id}/conclude_user/{enrollment_id}` | `star-ui` | web | web_exact | `WEB DELETE` |
 | POST | `/courses/{id}/deep_linking_response` | `star-lti` | web | web_exact | `WEB POST` |
+| GET | `/courses/{id}/discussion_topics/new` | `star-ui` | web | web_exact | `WEB GET` |
+| POST | `/courses/{id}/enroll_users` | `star-ui` | web | web_exact | `WEB POST` |
 | GET | `/courses/{id}/gradebook` | `star-ui` | web | web_exact | `WEB GET` |
+| GET | `/courses/{id}/gradebook/speed_grader` | `star-ui` | web | web_exact | `WEB GET` |
+| POST | `/courses/{id}/gradebook/update_submission` | `star-ui` | web | web_exact | `WEB POST` |
 | GET | `/courses/{id}/grades` | `star-ui` | web | web_exact | `WEB GET` |
 | POST | `/courses/{id}/quizzes/new` | `star-ui` | web | web_exact | `WEB POST` |
 | PATCH | `/courses/{id}/quizzes/{qid}` | `star-ui` | web | web_exact | `WEB PATCH` |
 | GET | `/courses/{id}/quizzes/{qid}/edit` | `star-ui` | web | web_exact | `WEB GET` |
+| POST | `/courses/{id}/unconclude_user/{enrollment_id}` | `star-ui` | web | web_exact | `WEB POST` |
 | GET | `/dashboard` | `star-ui` | web | web_exact | `WEB GET` |
 | GET | `/deep_linking_cancel` | `star-lti` | web | web_exact | `WEB GET` |
 | POST | `/groups/{group_id}/deep_linking_response` | `star-lti` | web | web_exact | `WEB POST` |
 | GET | `/login` | `star-ui` | web | web_exact | `WEB GET` |
+| POST | `/login/canvas` | `star-ui` | web | web_exact | `WEB POST` |
 | GET | `/login/oauth2/auth` | `star-auth` | web | web_exact | `WEB GET` |
 | GET | `/login/oauth2/jwks` | `star-auth` | web | web_exact | `WEB GET` |
 | DELETE | `/login/oauth2/token` | `star-auth` | web | web_exact | `WEB DELETE` |
 | POST | `/login/oauth2/token` | `star-auth` | web | web_exact | `WEB POST` |
+| DELETE | `/logout` | `star-ui` | web | web_exact | `WEB DELETE` |
 | GET | `/profile` | `star-ui` | web | web_exact | `WEB GET` |
 | GET | `/register` | `star-ui` | web | web_exact | `WEB GET` |
 | GET | `/register_from_website` | `star-ui` | web | web_exact | `WEB GET` |
@@ -430,11 +431,8 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 | POST | `/` | `star-graphql` | web | web_verb_mismatch | `GET` |
 | GET | `/courses/{id}/quizzes/{qid}/take` | `star-ui` | web | web_verb_mismatch | `MATCH` |
 | POST | `/courses/{id}/quizzes/{qid}/take` | `star-ui` | web | web_verb_mismatch | `MATCH` |
-| POST | `/courses/{id}/settings` | `star-ui` | web | web_verb_mismatch | `GET` |
 | GET | `/forgot_password` | `star-ui` | web | web_verb_mismatch | `MATCH` |
 | POST | `/forgot_password` | `star-ui` | web | web_verb_mismatch | `MATCH` |
-| POST | `/login` | `star-ui` | web | web_verb_mismatch | `GET` |
-| POST | `/logout` | `star-ui` | web | web_verb_mismatch | `DELETE`, `GET` |
 
 ## Parser scope and limitations
 
@@ -444,4 +442,4 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 - GraphQL type names come from `graphql_name` declarations (or the class name minus a trailing `Type`) in `app/graphql/types/*_type.rb`, and mutation operations from classes whose superclass chain reaches `Mutations::BaseMutation` in `app/graphql/mutations/**`; the denominators remain the file counts (170 type files, 110 mutation files). star-graphql names are extracted from `#[Object]` impls and async-graphql derives, with documented renames (CourseSection->Section, EnrollmentTerm->Term, DiscussionTopic->Discussion, QuizQuestion->QuizItem) mapped to their Canvas graphql_names before matching. Connection and edge helpers (e.g. `PageInfo`, `*Edge`, `*Connection`) only count when Canvas defines a type of the same name.
 - Rust paths are matched by `(verb, normalized path)`. `web_*` vs `api_*` is decided by the Rust mount, not the path shape: `star_route_mounts` walks the router composition from `star-http` main() -- `nest("/api/v1", build_api_router)` and everything its `.merge(...)` chain reaches is `api`; the `fallback_service(star_ui::app)` shell, the root-merged login/LTI/sis routers, and `nest("/api/graphql", ...)` and everything they reach are `web`. API-mounted extras are classified only against the Canvas API table, web-mounted extras only against the Canvas web table; a registration whose enclosing router function is not reachable from main() is a hard error.
 - Extras include deliberate flat-path deviations (for example `/assignments/{id}` where Canvas uses `/courses/{course_id}/assignments/{id}`) and auth/dashboard/health routes Canvas does not expose.
-- The schema row counts `CREATE TABLE` statements in `star-db` migrations (36 authored tables); sqlx adds `_sqlx_migrations`, so a live database has 37 tables.
+- The schema row compares table NAMES on both sides. Canvas' names are replayed from `db/migrate/*.rb` in filename order -- every `create_table :name` / `create_table "name"` / `create_table(:name)` call (comment text stripped), plus the 7 `aua_logs_0..6` partitions the init migration creates through its `create_aua_log_partition` loop; the manifest stores the full name list (`schema_tables`) with the loop-created names marked in `schema_loop_tables`. star-db's names are the unique real `CREATE TABLE` statements in `crates/star-db/migrations/*.sql`: `--` comments are stripped before matching and the table name must be followed by `(`, so comment prose ("CREATE TABLE would run before ...") cannot inflate the count. The star-only figure is taken against Canvas' named tables only, so the 7 loop partitions sit on the star-only side of that line.
