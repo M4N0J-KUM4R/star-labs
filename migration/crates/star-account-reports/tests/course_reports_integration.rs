@@ -14,7 +14,12 @@
 //!   job for a teacher;
 //! - `GET /courses/{id}/reports/{type}/{report_id}` (`show`) returns the
 //!   report (the owner or a teacher), 404 for unknown ids and for reports
-//!   of another course;
+//!   of another course, 403 for a non-owner without `read_reports` — but
+//!   the owner always reads their own report (the record policy of spec
+//!   §3);
+//! - `create` stores the permitted parameters only: the query string
+//!   merges with the body like Rails `params`, then the strong-parameter
+//!   permit list keeps `enrollment_ids[]` / `section_ids[]` (arrays only);
 //! - anonymous callers get 401 on every route.
 //!
 //! Fleet rule: dedicated users, accounts, courses and reports per test,
@@ -147,17 +152,22 @@ fn auth(user_id: i64, role: &str) -> String {
 
 async fn cleanup(pool: &PgPool, prefix: &str) {
     let pattern = format!("{prefix}%");
+    // The queued course_report jobs of this run (the courses must still
+    // exist for the subquery, so this runs before the course deletes).
     let _ = sqlx::query(
-        "DELETE FROM course_reports WHERE course_id IN \
-         (SELECT id FROM courses WHERE course_code LIKE $1)",
+        "DELETE FROM jobs WHERE tag = 'course_report#run_report' \
+         AND context_type = 'CourseReport' AND context_id IN \
+           (SELECT id FROM course_reports WHERE course_id IN \
+             (SELECT id FROM courses WHERE course_code LIKE $1))",
     )
     .bind(&pattern)
     .execute(pool)
     .await;
     let _ = sqlx::query(
-        "DELETE FROM jobs WHERE tag = 'course_report#run_report' \
-         AND context_id NOT IN (SELECT id FROM course_reports)",
+        "DELETE FROM course_reports WHERE course_id IN \
+         (SELECT id FROM courses WHERE course_code LIKE $1)",
     )
+    .bind(&pattern)
     .execute(pool)
     .await;
     let _ = sqlx::query(
@@ -372,6 +382,154 @@ async fn show_returns_the_report_of_the_course() {
         ))
         .await;
     assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn create_permits_only_the_canvas_parameters_and_last_echoes_them() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let account = seed_account(&pool, &prefix).await;
+    let course = seed_course(&pool, &prefix, account).await;
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+
+    // A JSON body: the `parameters` object is unwrapped (`params[:parameters]`)
+    // and the permit list keeps only `enrollment_ids[]` / `section_ids[]`
+    // (Canvas `params[:parameters].permit(enrollment_ids: [], section_ids: [])`).
+    let resp = server
+        .post(&format!("/courses/{course}/reports/course_pace_docx"))
+        .add_header("Authorization", auth(teacher, "teacher"))
+        .json(&json!({
+            "parameters": {
+                "enrollment_ids": [11, 22],
+                "section_ids": [7],
+                "course_id": 99,
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let report_id = body["id"].as_i64().expect("report id");
+    assert_eq!(
+        body["parameters"],
+        json!({ "enrollment_ids": [11, 22], "section_ids": [7] }),
+        "unpermitted keys are dropped; body: {body}"
+    );
+
+    // `last` echoes the stored parameters back.
+    let resp = server
+        .get(&format!("/courses/{course}/reports/course_pace_docx"))
+        .add_header("Authorization", auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["id"], json!(report_id));
+    assert_eq!(body["parameters"]["enrollment_ids"], json!([11, 22]));
+
+    // The query string merges with the body like Rails `params`, so the
+    // `parameters[x][]` form of the UI works from the query alone. A
+    // scalar under a permitted `[]` key would be rejected by strong
+    // parameters.
+    let resp = server
+        .post(&format!(
+            "/courses/{course}/reports/course_pace_docx\
+             ?parameters[section_ids][]=3&parameters[enrollment_ids][]=4&parameters[course_id]=5"
+        ))
+        .add_header("Authorization", auth(teacher, "teacher"))
+        .json(&json!({}))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(
+        body["parameters"],
+        json!({ "enrollment_ids": ["4"], "section_ids": ["3"] }),
+        "query parameters merge with the body; body: {body}"
+    );
+
+    // A scalar `enrollment_ids` is not an array, so the permit list drops
+    // it and the report is stored without parameters.
+    let resp = server
+        .post(&format!("/courses/{course}/reports/course_pace_docx"))
+        .add_header("Authorization", auth(teacher, "teacher"))
+        .json(&json!({ "parameters": { "enrollment_ids": 9 } }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["parameters"], json!({}), "body: {body}");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn show_follows_the_record_policy_and_404s_across_courses() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let account = seed_account(&pool, &prefix).await;
+    let course_a = seed_course(&pool, &prefix, account).await;
+    let course_b = seed_course(&pool, &prefix, account).await;
+    let owner = seed_user(&pool, &prefix, "Owner", "teacher").await;
+    let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    seed_enrollment(&pool, student, course_a, "student").await;
+    seed_enrollment(&pool, teacher, course_a, "teacher").await;
+
+    let report_a = seed_report(&pool, course_a, owner, "course_pace_docx", "complete").await;
+    let report_b = seed_report(&pool, course_b, owner, "course_pace_docx", "complete").await;
+    let student_report = seed_report(&pool, course_a, student, "course_pace_docx", "created").await;
+
+    // The owner reads their own report without any enrollment.
+    let resp = server
+        .get(&format!(
+            "/courses/{course_a}/reports/course_pace_docx/{report_a}"
+        ))
+        .add_header("Authorization", auth(owner, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // A teacher of the course reads it through `:read_reports`.
+    let resp = server
+        .get(&format!(
+            "/courses/{course_a}/reports/course_pace_docx/{report_a}"
+        ))
+        .add_header("Authorization", auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // A student who is neither the owner nor a `:read_reports` holder is
+    // a 403.
+    let resp = server
+        .get(&format!(
+            "/courses/{course_a}/reports/course_pace_docx/{report_a}"
+        ))
+        .add_header("Authorization", auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // The record policy lets the owner read their own report even without
+    // `read_reports` (spec §3).
+    let resp = server
+        .get(&format!(
+            "/courses/{course_a}/reports/course_pace_docx/{student_report}"
+        ))
+        .add_header("Authorization", auth(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // A report of another course is a 404 (the find is course-scoped),
+    // even for the owner.
+    let resp = server
+        .get(&format!(
+            "/courses/{course_a}/reports/course_pace_docx/{report_b}"
+        ))
+        .add_header("Authorization", auth(owner, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }
