@@ -706,7 +706,10 @@ async fn misc_gaps_v2_shapes() {
     assert_eq!(results[0]["user_id"], student);
     assert_eq!(results[0]["passed"], true);
 
-    // Root-mounted /api/sis disable_post_to_sis (teacher gate).
+    // Root-mounted /api/sis disable_post_to_sis — Canvas serves a bare
+    // `head :no_content` to a teacher (manage_assignments_edit), a bare
+    // `head :unauthorized` (401) to anyone else and a 400
+    // `{"code": "not_found", ...}` for an unknown grading period.
     let (status, cleared) = req(
         &server,
         "PUT",
@@ -715,8 +718,19 @@ async fn misc_gaps_v2_shapes() {
         None,
     )
     .await;
-    assert_eq!(status, 200, "disable_post_to_sis should succeed");
-    assert_eq!(cleared["disabled_count"], 0, "no flagged assignments");
+    assert_eq!(status, 204, "disable_post_to_sis should succeed");
+    assert_eq!(cleared, Value::Null, "204 has no body");
+    let (status, not_found) = req(
+        &server,
+        "PUT",
+        &format!("/api/sis/courses/{course}/disable_post_to_sis?grading_period_id=99999999"),
+        Some(&auth(teacher, "teacher")),
+        None,
+    )
+    .await;
+    assert_eq!(status, 400, "unknown grading period is a 400");
+    assert_eq!(not_found["code"], "not_found");
+    assert_eq!(not_found["error"], "The Grading Period cannot be found");
     let (status, _) = req(
         &server,
         "PUT",

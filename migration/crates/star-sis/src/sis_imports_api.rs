@@ -44,7 +44,16 @@
 //! * star-lms has no SIS import worker. `create` therefore stores the batch
 //!   (and its attachment) but does not run the CSV parser; the batch stays in
 //!   the `created` state, exactly like a Canvas batch whose job has not been
-//!   picked up yet.
+//!   picked up yet. The state machine itself (`initializing`/`created` →
+//!   `importing`/`cleanup_batch` → `imported`/`imported_with_messages`/
+//!   `failed`/`failed_with_messages`, `aborted` off the running states) is
+//!   enforced by the handlers (`abort`, `abort_all_pending`) and advanced by
+//!   the external worker; the integration tests move rows through it with
+//!   direct SQL the same way. Canvas computes `data.counts`
+//!   (`error_count`/`warning_count`), `processing_errors`/`processing_warnings`
+//!   and the `errors_attachment` error file when the batch finishes
+//!   (`SisBatch#populate_old_warnings_and_errors`, `#write_errors_to_file`);
+//!   the JSON renders all of them verbatim once the row carries them.
 //! * The `pre_attachment` upload flow needs Canvas's file upload subsystem
 //!   (an S3 presigned post), which star-lms does not have. The branch is
 //!   reproduced (the batch is created in the `initializing` state and the
@@ -920,14 +929,26 @@ async fn create(
     .await?;
 
     if attachment_id.is_some() {
-        // Canvas enqueues the import job here. star-lms has no SIS import
-        // worker, so the job row is the only trace of it.
+        // Canvas `SisBatch#process` enqueues `queue_job_for_account`:
+        // `Delayed::LOW_PRIORITY` work with `singleton: strand_for_account`
+        // (at most one import processes per account) and `max_attempts: 1`.
+        //
+        // The shared job-model convention (specs/p5-rest-misc-index.md §3)
+        // maps that onto the durable `jobs` row: tag `SisBatch#
+        // process_instructure_csv`, `strand`/`singleton` = `sis_batch:
+        // {account_id}` (`singleton` is a text column here; Canvas sets it to
+        // the strand string as well), priority 20 = `Delayed::LOW_PRIORITY`.
+        // star-lms has no SIS import worker, so the row is the only trace of
+        // the job.
+        let strand = format!("sis_batch:{account_id}");
         let _ = sqlx::query(
-            "INSERT INTO jobs (tag, workflow_state, progress, user_id, context_type, context_id) \
-             VALUES ('SisBatch#process_instructure_csv_zip', 'queued', 0, $1, 'SisBatch', $2)",
+            "INSERT INTO jobs (tag, workflow_state, progress, user_id, context_type, context_id, \
+             strand, singleton, priority, max_attempts) \
+             VALUES ('SisBatch#process_instructure_csv', 'queued', 0, $1, 'SisBatch', $2, $3, $3, 20, 1)",
         )
         .bind(auth.id)
         .bind(batch_id)
+        .bind(&strand)
         .execute(&state.db)
         .await;
     }
@@ -1304,12 +1325,18 @@ async fn sis_import_json(
 
     if let Some(errors) = parse_json_array(batch.processing_errors.as_deref()) {
         if !errors.is_empty() {
-            json.insert("processing_errors".to_string(), Value::Array(errors));
+            json.insert(
+                "processing_errors".to_string(),
+                Value::Array(processing_pairs(errors)),
+            );
         }
     }
     if let Some(warnings) = parse_json_array(batch.processing_warnings.as_deref()) {
         if !warnings.is_empty() {
-            json.insert("processing_warnings".to_string(), Value::Array(warnings));
+            json.insert(
+                "processing_warnings".to_string(),
+                Value::Array(processing_pairs(warnings)),
+            );
         }
     }
     if batch.diffing_data_set_identifier.is_some() {
@@ -1855,6 +1882,22 @@ fn parse_json_object(raw: Option<&str>) -> Map<String, Value> {
 fn parse_json_array(raw: Option<&str>) -> Option<Vec<Value>> {
     raw.and_then(|value| serde_json::from_str::<Value>(value).ok())
         .and_then(|value| value.as_array().cloned())
+}
+
+/// Regroups a serialized `processing_errors`/`processing_warnings` column
+/// into the shape Canvas renders (`SIS_BATCH_KEYS` round-trips them through
+/// `SisBatch#processing_errors`, an array of `[filename, message]` pairs).
+/// The worker serializes a flat JSON array — `[file, message, file, message,
+/// …]` — so a flat list is chunked into `[file, message]` pairs; a column
+/// that already holds pairs passes through untouched.
+fn processing_pairs(values: Vec<Value>) -> Vec<Value> {
+    if values.iter().any(Value::is_array) {
+        return values;
+    }
+    values
+        .chunks(2)
+        .map(|pair| Value::Array(pair.to_vec()))
+        .collect()
 }
 
 /// The ids of a JSON array of ids.

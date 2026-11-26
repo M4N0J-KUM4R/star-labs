@@ -751,6 +751,11 @@
       "note": "web_conferences tails (recordings JSONB, calendar_events FK); 0129 reserved number unusable (snapshot ordering) so the post-snapshot hole 0229 was used per PR #212 precedent",
       "status": "merged"
     },
+    "0230": {
+      "issue": null,
+      "note": "GraphQL parity completion backing tables (peer_reviews, sub_assignments, audit_events, internal_settings, speed_grader_settings, checkpoints, gradebook_user_filters, widget_dashboards, user_inbox_labels, learner_dashboard_tab_selections, account_user_dismissals, submission_histories, discussion_entry_reports) \u2014 PR #228",
+      "status": "merged"
+    },
     "0231": {
       "issue": null,
       "note": "Canvas column parity for the authored cohort (0001-0222 tables PR #200 skipped): 447 ADD COLUMN IF NOT EXISTS across 33 tables \u2014 reference tools/parity/canvas_authored_tables_reference.json, backlog tools/parity/authored_column_backlog.py \u2014 PR #228",
@@ -861,11 +866,6 @@
       "note": "star-courses: misc gap tables (parity gap)",
       "status": "merged"
     },
-    "0230": {
-      "issue": null,
-      "note": "GraphQL parity completion backing tables (peer_reviews, sub_assignments, audit_events, internal_settings, speed_grader_settings, checkpoints, gradebook_user_filters, widget_dashboards, user_inbox_labels, learner_dashboard_tab_selections, account_user_dismissals, submission_histories, discussion_entry_reports) \u2014 PR #228",
-      "status": "merged"
-    },
     "0253": {
       "issue": null,
       "note": "star-media: the media object columns, the tracks and the media files (renumbered from the pre-merge 0231 after main took the number in PR #228)",
@@ -891,9 +891,14 @@
       "note": "star-courses: the Api::V1::CourseJson columns (uuid, license, integration_id, grade_passback_setting, locale, template) plus the Canvas root-account chain and Default Term backfill (PR #241)",
       "status": "merged"
     },
+    "0260": {
+      "issue": 92,
+      "note": "SIS assignment ids + pseudonyms parity (PR #262, wave 4)",
+      "status": "merged"
+    },
     "0263": {
       "issue": 86,
-      "note": "star-outcomes: outcome results/rollups runtime columns — learning_outcomes.data (rubric criterion), the learning_outcome_results Canvas columns (context_code, alignment link, hidden, possible/percent, mastery, workflow_state, timestamps) and users.uuid for /enqueue_outcome_rollup_calculation (additive only)",
+      "note": "star-outcomes: outcome results/rollups runtime columns \u2014 learning_outcomes.data (rubric criterion), the learning_outcome_results Canvas columns (context_code, alignment link, hidden, possible/percent, mastery, workflow_state, timestamps) and users.uuid for /enqueue_outcome_rollup_calculation (additive only)",
       "status": "merged"
     }
   }
