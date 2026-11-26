@@ -23,6 +23,7 @@
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
@@ -73,41 +74,109 @@ async fn course_exists(pool: &PgPool, course_id: i64) -> Result<bool, ApiError> 
 
 #[derive(Debug, Default, Deserialize)]
 pub struct DisablePostToSis {
-    /// Accepted for Canvas compatibility (period-scoped clears).
-    #[allow(dead_code)]
+    /// Period-scoped clears (Canvas `grading_period_id`).
     pub grading_period_id: Option<i64>,
 }
 
 /// Canvas: disable_post_to_sis_api_controller#disable_post_to_sis —
 /// PUT /api/sis/courses/:course_id/disable_post_to_sis.
 ///
-/// Bulk-clears the post_to_sis flag on the course's assignments
-/// (teacher/admin). NOTE: Canvas serves this under /api/sis, OUTSIDE
-/// /api/v1 — the route is registered with its full path in
-/// `root_routes()` and root-mounted by star-http next to
-/// `star_auth::small_controllers_root_routes()`.
+/// Bulk-clears the `post_to_sis` flag on the course's published assignments
+/// (204 No Content; `manage_assignments_edit` → `head :unauthorized` 401 for
+/// anyone else). A `grading_period_id` (query or JSON body) narrows the clear
+/// to the assignments due inside the period (or undated); an unknown id is a
+/// 400 `{"code": "not_found", "error": "The Grading Period cannot be found"}`.
+/// NOTE: Canvas serves this under /api/sis, OUTSIDE /api/v1 — the route is
+/// registered with its full path in `root_routes()` and root-mounted by
+/// star-http next to `star_auth::small_controllers_root_routes()`.
 async fn disable_post_to_sis(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
+    Query(query): Query<DisablePostToSis>,
     auth: AuthUser,
     payload: Option<Json<DisablePostToSis>>,
-) -> Result<Json<Value>, ApiError> {
-    if !course_exists(&state.db, course_id).await? {
+) -> Result<Response, ApiError> {
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted')",
+    )
+    .bind(course_id)
+    .fetch_one(&state.db)
+    .await?;
+    if !exists {
         return Err(ApiError::NotFound);
     }
     if !teacher_or_admin(&state.db, &auth, course_id).await? {
-        return Err(ApiError::Forbidden);
+        // Canvas `require_authorized_user`: head :unauthorized.
+        return Err(ApiError::Unauthorized);
     }
-    let _ = payload;
-    let cleared = sqlx::query(
+
+    // `require_valid_grading_period` — the period must belong to a group of
+    // the course or of the course's account chain (Canvas
+    // `GradingPeriod.for(context, inherit: true)`); an unknown id is a 400
+    // `{"code": "not_found", ...}` before anything is updated.
+    let grading_period_id = payload
+        .and_then(|Json(body)| body.grading_period_id)
+        .or(query.grading_period_id);
+    let period: Option<(chrono::DateTime<chrono::Utc>, chrono::DateTime<chrono::Utc>)> =
+        match grading_period_id {
+            None => None,
+            Some(id) => {
+                let found = sqlx::query_as(
+                    "SELECT gp.start_date, gp.end_date \
+                     FROM grading_periods gp \
+                     JOIN grading_period_groups gpg ON gpg.id = gp.grading_period_group_id \
+                     WHERE gp.id = $1 AND gp.workflow_state = 'active' \
+                       AND gpg.workflow_state = 'active' \
+                       AND (gpg.course_id = $2 OR gpg.account_id IN ( \
+                            WITH RECURSIVE chain AS ( \
+                                SELECT id, parent_account_id FROM accounts \
+                                WHERE id = (SELECT account_id FROM courses WHERE id = $2) \
+                                UNION ALL \
+                                SELECT a.id, a.parent_account_id FROM accounts a \
+                                JOIN chain c ON a.id = c.parent_account_id) \
+                            SELECT id FROM chain))",
+                )
+                .bind(id)
+                .bind(course_id)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(ApiError::from)?;
+                match found {
+                    Some(dates) => Some(dates),
+                    None => {
+                        // Canvas renders the miss as
+                        // `render(json: {code: "not_found", error: ...}, status: :bad_request)`.
+                        return Ok((
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({
+                                "code": "not_found",
+                                "error": "The Grading Period cannot be found"
+                            })),
+                        )
+                            .into_response());
+                    }
+                }
+            }
+        };
+
+    let mut sql = String::from(
         "UPDATE assignments SET post_to_sis = FALSE, updated_at = now() \
-         WHERE course_id = $1 AND post_to_sis IS TRUE",
-    )
-    .bind(course_id)
-    .execute(&state.db)
-    .await?
-    .rows_affected();
-    Ok(Json(json!({ "disabled_count": cleared })))
+         WHERE course_id = $1 AND workflow_state = 'published' AND post_to_sis IS TRUE",
+    );
+    if let Some((start_date, end_date)) = period {
+        sql.push_str(" AND (due_at BETWEEN $2 AND $3 OR due_at IS NULL)");
+        sqlx::query(&sql)
+            .bind(course_id)
+            .bind(start_date)
+            .bind(end_date)
+            .execute(&state.db)
+            .await?;
+    } else {
+        sqlx::query(&sql).bind(course_id).execute(&state.db).await?;
+    }
+
+    // Canvas `head :no_content`.
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 // ---------------------------------------------------------------------------
