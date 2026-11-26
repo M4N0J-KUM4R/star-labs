@@ -11,11 +11,17 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 | GraphQL files | 1 | 390 | 0.3% |
 | GraphQL object types | 246 | 246 | 100.0% |
 | GraphQL mutations | 100 | 100 | 100.0% |
+| GraphQL Query root fields | 9 | 27 | 33.3% |
 | UI feature directories | 0 | 232 | 0.0% |
 | JS/JSX/TS/TSX files | 51 | 5459 | 0.9% |
 | ERB views | 0 | 475 | 0.0% |
 | js_env files | 1 | 124 | 0.8% |
-| Schema tables (vs 688 Canvas models) | 397 | 688 | n/a |
+| Route shape contracts | 7 | 1410 | 0.5% |
+| Canvas schema tables | 302 | 305 | 99.0% |
+
+Missing Canvas schema tables (3): `assignment_embeddings`, `discussion_topic_embeddings`, `wiki_page_embeddings`.
+Star-only tables: 101 (star-db `CREATE TABLE` names with no Canvas `create_table` counterpart; includes the 7 `aua_logs_0..6` partitions Canvas creates in a Ruby loop).
+Route shape contracts are the golden request/response pairs under `parity/behavior/golden/canvas/`, compared by `tools/parity/golden_differ.py`.
 
 Implemented REST route count: **1410 / 1410** (100.0%).
 
@@ -436,4 +442,4 @@ Classified, because the fix differs by class: only `api_verb_mismatch` and `api_
 - GraphQL type names come from `graphql_name` declarations (or the class name minus a trailing `Type`) in `app/graphql/types/*_type.rb`, and mutation operations from classes whose superclass chain reaches `Mutations::BaseMutation` in `app/graphql/mutations/**`; the denominators remain the file counts (170 type files, 110 mutation files). star-graphql names are extracted from `#[Object]` impls and async-graphql derives, with documented renames (CourseSection->Section, EnrollmentTerm->Term, DiscussionTopic->Discussion, QuizQuestion->QuizItem) mapped to their Canvas graphql_names before matching. Connection and edge helpers (e.g. `PageInfo`, `*Edge`, `*Connection`) only count when Canvas defines a type of the same name.
 - Rust paths are matched by `(verb, normalized path)`. `web_*` vs `api_*` is decided by the Rust mount, not the path shape: `star_route_mounts` walks the router composition from `star-http` main() -- `nest("/api/v1", build_api_router)` and everything its `.merge(...)` chain reaches is `api`; the `fallback_service(star_ui::app)` shell, the root-merged login/LTI/sis routers, and `nest("/api/graphql", ...)` and everything they reach are `web`. API-mounted extras are classified only against the Canvas API table, web-mounted extras only against the Canvas web table; a registration whose enclosing router function is not reachable from main() is a hard error.
 - Extras include deliberate flat-path deviations (for example `/assignments/{id}` where Canvas uses `/courses/{course_id}/assignments/{id}`) and auth/dashboard/health routes Canvas does not expose.
-- The schema row counts `CREATE TABLE` statements in `star-db` migrations (36 authored tables); sqlx adds `_sqlx_migrations`, so a live database has 37 tables.
+- The schema row compares table NAMES on both sides. Canvas' names are replayed from `db/migrate/*.rb` in filename order -- every `create_table :name` / `create_table "name"` / `create_table(:name)` call (comment text stripped), plus the 7 `aua_logs_0..6` partitions the init migration creates through its `create_aua_log_partition` loop; the manifest stores the full name list (`schema_tables`) with the loop-created names marked in `schema_loop_tables`. star-db's names are the unique real `CREATE TABLE` statements in `crates/star-db/migrations/*.sql`: `--` comments are stripped before matching and the table name must be followed by `(`, so comment prose ("CREATE TABLE would run before ...") cannot inflate the count. The star-only figure is taken against Canvas' named tables only, so the 7 loop partitions sit on the star-only side of that line.
