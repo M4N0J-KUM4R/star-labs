@@ -16,7 +16,7 @@ on:
     branches: [main]
     paths:
       - 'migration/**'
-      - '.github/workflows/production-build.yml'
+      - '.github/workflows/**'
   pull_request:
     paths:
       - 'specs/**'
