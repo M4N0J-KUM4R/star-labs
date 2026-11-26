@@ -22,13 +22,19 @@
 //! - `show` finds the course's active report and guards `:read` on the
 //!   record itself.
 //!
+//! The permitted parameters reproduce Rails `params[:parameters].permit(
+//! enrollment_ids: [], section_ids: [])`: the query string merges with
+//! the body (the body wins), only the two documented keys survive, and
+//! only when their value is an array (strong parameters reject scalars
+//! under a `key: []` permit).
+//!
 //! `course_report_json` (`lib/api/v1/course_report.rb`): `id`,
 //! `parameters`, `status` (the workflow state), `report_type`,
 //! `course_id`, `created_at`, `started_at`, `ended_at`, `file_url` and
 //! `progress` (100 when complete, else 0).
 
 use axum::{
-    extract::{Path, State},
+    extract::{Path, RawQuery, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -147,6 +153,10 @@ async fn create_report(
     Path((course_id, report_type)): Path<(String, String)>,
     auth: AuthUser,
     headers: axum::http::HeaderMap,
+    // `RawQuery` keeps the bracket keys (`parameters[x][]`) visible; a
+    // typed `Query` extractor would percent-decode them into something
+    // else. The string is decoded below.
+    RawQuery(raw_query): RawQuery,
     body: axum::body::Bytes,
 ) -> Result<Response, ReportError> {
     let course_id = load_course(&state.db, &course_id).await?;
@@ -165,13 +175,13 @@ async fn create_report(
 
     authorize_read_reports(&state.db, &auth, course_id).await?;
 
-    // The permitted parameters (`enrollment_ids[]`, `section_ids[]`) ride
-    // on the body exactly like the account-report routes.
+    // The permitted parameters (`enrollment_ids[]`, `section_ids[]`) merge
+    // the query string with the body, exactly like Rails `params`.
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let parameters = parse_parameters(content_type, &body);
+    let parameters = permitted_parameters(raw_query.as_deref().unwrap_or(""), content_type, &body);
     let parameters_text = parameters.as_ref().map(|value| value.to_string());
 
     let row: CourseReportRow = sqlx::query_as(
@@ -272,8 +282,10 @@ fn iso8601(value: chrono::NaiveDateTime) -> Value {
 }
 
 fn iso8601_opt(value: Option<chrono::NaiveDateTime>) -> Value {
+    // Ruby `Time#iso8601` on a UTC time (the account-report module renders
+    // the timestamps the same way).
     value.map_or(Value::Null, |at| {
-        Value::String(at.and_local_timezone(chrono::Utc).unwrap().to_rfc3339())
+        Value::String(at.format("%Y-%m-%dT%H:%M:%SZ").to_string())
     })
 }
 
@@ -282,7 +294,13 @@ fn iso8601_opt(value: Option<chrono::NaiveDateTime>) -> Value {
 fn parse_parameters(content_type: &str, body: &[u8]) -> Option<Value> {
     let text = String::from_utf8_lossy(body);
     if content_type.starts_with("application/json") || text.trim_start().starts_with('{') {
-        serde_json::from_str::<Value>(&text).ok()
+        // A JSON body is `{"parameters": {...}}`; Canvas reads
+        // `params[:parameters]`, so only the nested object is stored.
+        let value: Value = serde_json::from_str(&text).ok()?;
+        match value.get("parameters") {
+            Some(Value::Object(map)) => Some(Value::Object(map.clone())),
+            _ => None,
+        }
     } else {
         // Form parameters — `parameters[section_ids][]=1&...` style — are
         // folded into a JSON object of arrays.
@@ -306,5 +324,114 @@ fn parse_parameters(content_type: &str, body: &[u8]) -> Option<Value> {
             }
         }
         (!map.is_empty()).then_some(Value::Object(map))
+    }
+}
+
+/// Canvas `params[:parameters].permit(enrollment_ids: [], section_ids: []).to_h`.
+///
+/// Rails `params` merges the query string with the body (the body wins);
+/// the strong-parameter permit list then keeps only the two documented
+/// keys, and only when their value is an array (`enrollment_ids: []`
+/// rejects scalars). `None` means "no parameters at all".
+fn permitted_parameters(query: &str, content_type: &str, body: &[u8]) -> Option<Value> {
+    let mut map = query_parameters(query);
+    if let Some(Value::Object(body_map)) = parse_parameters(content_type, body) {
+        for (key, value) in body_map {
+            map.insert(key, value);
+        }
+    }
+    let mut permitted = Map::new();
+    for name in ["enrollment_ids", "section_ids"] {
+        if let Some(value) = map.get(name) {
+            if value.is_array() {
+                permitted.insert(name.to_string(), value.clone());
+            }
+        }
+    }
+    (!permitted.is_empty()).then_some(Value::Object(permitted))
+}
+
+/// The `parameters[key][]=v` / `parameters[key]=v` fields of the query
+/// string — the Rails nested-query form (`Rack::Utils.parse_nested_query`):
+/// the name sits between the first `[` and its matching `]`, a trailing
+/// `[]` folds repetitions into an array of strings, a bare scalar stays a
+/// string (the permit list drops it), and only keys under `parameters`
+/// are collected. Query values keep their string form, exactly like
+/// Canvas reading `params`.
+fn query_parameters(query: &str) -> Map<String, Value> {
+    let mut map = Map::new();
+    for pair in query.split('&') {
+        let Some((raw_key, raw_value)) = pair.split_once('=') else {
+            continue;
+        };
+        let key = decode_query_component(raw_key);
+        let Some(inner) = key.strip_prefix("parameters[") else {
+            continue;
+        };
+        let Some(name_end) = inner.find(']') else {
+            continue;
+        };
+        let name = &inner[..name_end];
+        if name.is_empty() {
+            continue;
+        }
+        let value = Value::String(decode_query_component(raw_value));
+        if &inner[name_end + 1..] == "[]" {
+            // `parameters[key][]` repetitions fold into an array.
+            let entry = map
+                .entry(name.to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Value::Array(items) = entry {
+                items.push(value);
+            }
+        } else {
+            map.insert(name.to_string(), value);
+        }
+    }
+    map
+}
+
+/// Percent-decode a query component (`%XX` escapes, `+` as space).
+fn decode_query_component(component: &str) -> String {
+    let bytes = component.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'+' => {
+                decoded.push(b' ');
+                index += 1;
+            }
+            b'%' => {
+                let high = bytes.get(index + 1).and_then(|&b| hex_digit(b));
+                let low = bytes.get(index + 2).and_then(|&b| hex_digit(b));
+                match (high, low) {
+                    (Some(high), Some(low)) => {
+                        decoded.push(high * 16 + low);
+                        index += 3;
+                    }
+                    // A stray `%` is kept verbatim.
+                    _ => {
+                        decoded.push(b'%');
+                        index += 1;
+                    }
+                }
+            }
+            byte => {
+                decoded.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&decoded).into_owned()
+}
+
+/// The numeric value of a hexadecimal digit (`%XX` decoding).
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
     }
 }

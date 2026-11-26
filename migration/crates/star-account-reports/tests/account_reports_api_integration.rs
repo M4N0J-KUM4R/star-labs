@@ -18,7 +18,16 @@
 //!   the same type and parameters is still running;
 //! - `DELETE .../{id}` marks the report as `deleted`;
 //! - `PUT .../{id}/abort` marks a created or running report as `aborted` and
-//!   404s for a report that is neither.
+//!   404s for a report that is neither;
+//! - the catalog carries the last run of every type as `last_run`;
+//! - a report advances `created → running → complete` through the `jobs` row
+//!   plus SQL state flips, and a complete report carries the generated CSV as
+//!   an `attachment` (`file_url`, the attachment JSON, `run_time`,
+//!   `current_line`);
+//! - show / destroy / abort find the report scoped by account *and* type, so
+//!   another account's report id and an unknown type are 404s (`index` has no
+//!   registry lookup: an unknown type is simply an empty list);
+//! - anonymous callers get 401 on every route of the controller.
 //!
 //! Fleet rule: dedicated users, accounts and reports per test, every seeded
 //! row is cleaned up. Skipped cleanly when DATABASE_URL is unset.
@@ -269,6 +278,10 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     .bind(format!("{prefix}%"))
     .execute(pool)
     .await;
+    let _ = sqlx::query("DELETE FROM attachments WHERE uuid LIKE $1")
+        .bind(format!("{prefix}%"))
+        .execute(pool)
+        .await;
     let _ = sqlx::query(
         "DELETE FROM enrollment_terms WHERE root_account_id IN \
            (SELECT id FROM accounts WHERE name LIKE $1)",
@@ -814,6 +827,353 @@ async fn aborts_a_running_report() {
             "/accounts/{account}/reports/grade_export_csv/{complete}/abort"
         ))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn catalog_populates_the_last_run_after_a_run() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "Account").await;
+    let report = seed_report(
+        &pool,
+        account,
+        admin,
+        "grade_export_csv",
+        "complete",
+        "2020-01-15 10:00:00",
+        Some(r#"{"enrollment_term_id":1}"#),
+    )
+    .await;
+
+    let resp = server
+        .get(&format!("/accounts/{account}/reports"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let reports = body.as_array().expect("array");
+
+    // The type that ran carries its most recent report as `last_run`.
+    let grade_export = reports
+        .iter()
+        .find(|entry| entry["report"] == json!("grade_export_csv"))
+        .expect("grade export");
+    assert_eq!(grade_export["last_run"]["id"], json!(report));
+    assert_eq!(grade_export["last_run"]["status"], json!("complete"));
+    assert_eq!(
+        grade_export["last_run"]["report"],
+        json!("grade_export_csv")
+    );
+    assert_eq!(
+        grade_export["last_run"]["parameters"]["enrollment_term_id"],
+        json!(1)
+    );
+
+    // A type that never ran keeps a null `last_run`.
+    let sis_export = reports
+        .iter()
+        .find(|entry| entry["report"] == json!("sis_export_csv"))
+        .expect("sis export");
+    assert_eq!(sis_export["last_run"], Value::Null);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn advances_a_report_through_the_lifecycle_with_an_attachment() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "Account").await;
+
+    // `create` starts the report in the `created` state without an
+    // attachment and with the generation queued as a job row.
+    let resp = server
+        .post(&format!("/accounts/{account}/reports/grade_export_csv"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "parameters": { "enrollment_term_id": 1 } }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    let report = body["id"].as_i64().expect("report id");
+    assert_eq!(body["status"], json!("created"));
+    assert_eq!(body["file_url"], Value::Null);
+    assert!(body.get("attachment").is_none(), "no attachment yet");
+
+    // The worker advances the row in SQL (star-lms has no worker process);
+    // `show` reflects the running state.
+    sqlx::query(
+        "UPDATE account_reports SET workflow_state = 'running', progress = 50, \
+             current_line = 2000, start_at = now() WHERE id = $1",
+    )
+    .bind(report)
+    .execute(&pool)
+    .await
+    .expect("advance the report to running");
+    let resp = server
+        .get(&format!(
+            "/accounts/{account}/reports/grade_export_csv/{report}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["status"], json!("running"));
+    assert_eq!(body["progress"], json!(50));
+    assert_eq!(body["current_line"], json!(2000));
+    assert!(body["started_at"].as_str().is_some(), "started_at is set");
+    assert_eq!(body["file_url"], Value::Null);
+    assert!(body["run_time"].as_f64().unwrap_or(-1.0) >= 0.0);
+
+    // Completing attaches the generated CSV the way the generator would:
+    // an `attachments` row referenced by the report.
+    let display_name = format!("{prefix}-grade_export_csv.csv");
+    let attachment: i64 = sqlx::query_scalar(
+        "INSERT INTO attachments (display_name, filename, uuid, content_type, size, \
+             workflow_state, created_at, updated_at) \
+         VALUES ($1, $1, $2, 'text/csv', 42, 'processed', now(), now()) RETURNING id",
+    )
+    .bind(display_name.as_str())
+    .bind(format!("{prefix}-uuid"))
+    .fetch_one(&pool)
+    .await
+    .expect("seed the report attachment");
+    sqlx::query(
+        "UPDATE account_reports SET workflow_state = 'complete', progress = 100, \
+             current_line = 4200, end_at = now(), attachment_id = $2 WHERE id = $1",
+    )
+    .bind(report)
+    .bind(attachment)
+    .execute(&pool)
+    .await
+    .expect("complete the report");
+
+    let resp = server
+        .get(&format!(
+            "/accounts/{account}/reports/grade_export_csv/{report}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["status"], json!("complete"));
+    assert_eq!(body["progress"], json!(100));
+    assert_eq!(body["current_line"], json!(4200));
+    assert!(body["ended_at"].as_str().is_some(), "ended_at is set");
+    assert_eq!(
+        body["file_url"],
+        json!(format!("/accounts/{account}/files/{attachment}/download"))
+    );
+    assert_eq!(body["attachment"]["id"], json!(attachment));
+    assert_eq!(body["attachment"]["display_name"], json!(display_name));
+    assert_eq!(body["attachment"]["content-type"], json!("text/csv"));
+    assert_eq!(body["attachment"]["mime_class"], json!("file"));
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn aborts_a_created_report_and_404s_the_scoped_misses() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "Account").await;
+    let created = seed_report(
+        &pool,
+        account,
+        admin,
+        "grade_export_csv",
+        "created",
+        "2020-01-15 10:00:00",
+        None,
+    )
+    .await;
+    let complete = seed_report(
+        &pool,
+        account,
+        admin,
+        "grade_export_csv",
+        "complete",
+        "2020-01-15 10:00:00",
+        None,
+    )
+    .await;
+
+    // A `created` report aborts like a running one.
+    let resp = server
+        .put(&format!(
+            "/accounts/{account}/reports/grade_export_csv/{created}/abort"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["id"], json!(created));
+    assert_eq!(body["status"], json!("aborted"));
+
+    // A complete report cannot be aborted (`created_or_running` scope).
+    let resp = server
+        .put(&format!(
+            "/accounts/{account}/reports/grade_export_csv/{complete}/abort"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    // An unknown id or an unknown type is a scoped miss: 404 on show,
+    // destroy and abort.
+    let resp = server
+        .put(&format!(
+            "/accounts/{account}/reports/grade_export_csv/987654321/abort"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    let resp = server
+        .put(&format!(
+            "/accounts/{account}/reports/no_such_report/{created}/abort"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    let resp = server
+        .delete(&format!(
+            "/accounts/{account}/reports/no_such_report/{created}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    let resp = server
+        .get(&format!(
+            "/accounts/{account}/reports/no_such_report/{created}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+
+    // `index` has no registry lookup: an unknown type is an empty list
+    // (Canvas `type_scope` is a plain `where`, not a catalog check).
+    let resp = server
+        .get(&format!("/accounts/{account}/reports/no_such_report"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert!(body.as_array().expect("array").is_empty(), "body: {body}");
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn anonymous_callers_get_401_on_every_account_route() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    // The workspace sentinel id: an anonymous caller is rejected by the
+    // auth layer before any record lookup, so every route of the
+    // controller answers 401 — never 404, never 200.
+    let account = 999999999;
+    let resp = server.get(&format!("/accounts/{account}/reports")).await;
+    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
+    let resp = server
+        .get(&format!("/accounts/{account}/reports/grade_export_csv"))
+        .await;
+    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
+    let resp = server
+        .get(&format!(
+            "/accounts/{account}/reports/grade_export_csv/999999999"
+        ))
+        .await;
+    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
+    let resp = server
+        .post(&format!("/accounts/{account}/reports/grade_export_csv"))
+        .await;
+    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
+    let resp = server
+        .delete(&format!(
+            "/accounts/{account}/reports/grade_export_csv/999999999"
+        ))
+        .await;
+    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
+    let resp = server
+        .put(&format!(
+            "/accounts/{account}/reports/grade_export_csv/999999999/abort"
+        ))
+        .await;
+    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn cross_account_report_ids_are_404() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    // Two account administrators (plain users with `account_users` rows —
+    // not site admins) so the account hierarchy of `read_reports` is
+    // actually exercised.
+    let admin_a = seed_user(&pool, &prefix, "AdminA", "student").await;
+    let admin_b = seed_user(&pool, &prefix, "AdminB", "student").await;
+    let account_a = seed_account(&pool, &prefix, "AccountA").await;
+    let account_b = seed_account(&pool, &prefix, "AccountB").await;
+    seed_account_admin(&pool, account_a, admin_a).await;
+    seed_account_admin(&pool, account_b, admin_b).await;
+    let foreign = seed_report(
+        &pool,
+        account_b,
+        admin_b,
+        "grade_export_csv",
+        "complete",
+        "2020-01-15 10:00:00",
+        None,
+    )
+    .await;
+
+    // The index of account A does not list account B's report.
+    let resp = server
+        .get(&format!("/accounts/{account_a}/reports/grade_export_csv"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_a, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert!(body.as_array().expect("array").is_empty(), "body: {body}");
+
+    // And the scoped finds of show, destroy and abort answer 404 for
+    // another account's report id.
+    let resp = server
+        .get(&format!(
+            "/accounts/{account_a}/reports/grade_export_csv/{foreign}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_a, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    let resp = server
+        .delete(&format!(
+            "/accounts/{account_a}/reports/grade_export_csv/{foreign}"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_a, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
+    let resp = server
+        .put(&format!(
+            "/accounts/{account_a}/reports/grade_export_csv/{foreign}/abort"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin_a, "student"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 

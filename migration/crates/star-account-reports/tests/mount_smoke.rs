@@ -1,9 +1,8 @@
 //! Mount-smoke test for star-account-reports (scaffold, issue #138).
 //!
-//! Verifies the crate's router mounts and answers unknown paths with 404
-//! (not 500, not open) exactly the way star-http assembles it. No domain
-//! routes exist yet — the smoke request targets a path owned by this crate's
-//! future route set.
+//! Verifies the crate's router mounts and answers exactly the way star-http
+//! assembles it: the implemented domain routes require auth (401 without a
+//! token) and genuinely unknown paths fall through to axum's 404.
 //!
 //! Conventions (mirrors star-enrollments):
 //! - Skipped cleanly when DATABASE_URL is not set (prints SKIP and returns).
