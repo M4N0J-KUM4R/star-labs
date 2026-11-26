@@ -19,6 +19,11 @@
 //!     that assignment (manage/view-all grades); `student_id` → the
 //!     student's aligned assignments with submission state; neither → 400
 //!     `{message: "student_id or assignment_id is required"}`.
+//!
+//! Canvas stores an outcome alignment in `content_tags` with
+//! `tag_type = 'learning_outcome'` (the `ContentTag.learning_outcome_alignments`
+//! scope), the outcome in `content_tags.learning_outcome_id` and the aligned
+//! assignment in `content_id`/`content_type`.
 
 use axum::extract::{Path, Query, State};
 use axum::routing::{delete, get, put};
@@ -269,16 +274,20 @@ async fn course_outcome_alignments(
         }
     }
 
-    // Assignment branch: every active outcome alignment of that assignment.
+    // Assignment branch: every active outcome alignment of that assignment
+    // (`fetch_assignment_alignments`).
     if let Some(aid) = assignment_id.filter(|_| student_id.is_none()) {
         let rows: Vec<(i64, String, i64, Option<String>)> = sqlx::query_as(
-            "SELECT ct.content_id AS learning_outcome_id, ct.title, \
+            "SELECT ct.learning_outcome_id, ct.title, \
                     a.id AS assignment_id, a.submission_types \
              FROM content_tags ct \
              JOIN assignments a ON a.id = ct.content_id AND ct.content_type = 'Assignment' \
              WHERE ct.context_id = $1 AND ct.context_type = 'Course' \
-               AND ct.tag_type = 'learning_outcome_alignment' \
-               AND ct.workflow_state = 'active' AND a.id = $2",
+               AND ct.tag_type = 'learning_outcome' \
+               AND ct.learning_outcome_id IS NOT NULL \
+               AND ct.workflow_state = 'active' \
+               AND a.id = $2 AND a.workflow_state <> 'deleted' \
+             ORDER BY a.id",
         )
         .bind(course_id)
         .bind(aid)
@@ -299,25 +308,31 @@ async fn course_outcome_alignments(
         ));
     }
 
-    // Student branch: aligned assignments of the course with the student's
-    // submission state.
+    // Student branch: the aligned assignments WITH a submission for the
+    // student (`INNER JOIN submissions`), excluding deleted assignments and —
+    // for callers without grade rights — unpublished ones.
     type StudentAlignmentRow = (i64, String, i64, Option<String>, Option<String>);
     let sid = student_id.expect("checked above");
     let rows: Vec<StudentAlignmentRow> = sqlx::query_as(
-        "SELECT ct.content_id AS learning_outcome_id, ct.title, \
+        "SELECT ct.learning_outcome_id, ct.title, \
                 a.id AS assignment_id, a.submission_types, s.workflow_state \
          FROM content_tags ct \
          JOIN assignments a ON a.id = ct.content_id AND ct.content_type = 'Assignment' \
-         LEFT JOIN submissions s ON s.assignment_id = a.id AND s.user_id = $2 \
+         JOIN submissions s ON s.assignment_id = a.id AND s.user_id = $2 \
               AND s.workflow_state <> 'deleted' \
          WHERE ct.context_id = $1 AND ct.context_type = 'Course' \
-           AND ct.tag_type = 'learning_outcome_alignment' \
+           AND ct.tag_type = 'learning_outcome' \
+           AND ct.learning_outcome_id IS NOT NULL \
            AND ct.workflow_state = 'active' \
            AND a.workflow_state <> 'deleted' \
+           AND ($3::bigint IS NULL OR a.id = $3) \
+           AND ($4 OR a.workflow_state <> 'unpublished') \
          ORDER BY a.id",
     )
     .bind(course_id)
     .bind(sid)
+    .bind(assignment_id)
+    .bind(can_manage)
     .fetch_all(&state.db)
     .await?;
     Ok(Json(

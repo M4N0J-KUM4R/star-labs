@@ -22,11 +22,14 @@
 //!
 //! # Required DDL
 //!
-//! The coordinator must add the following to a `star-db` migration. The tables
-//! below already exist (`outcome_imports`, `outcome_groups`, `outcome_links`,
+//! The outcome-results portion of this DDL has landed as `star-db` migration
+//! `0263_outcome_results_data.sql` (learning_outcomes.data, the
+//! learning_outcome_results columns and users.uuid). The tables below all
+//! exist (`outcome_imports`, `outcome_groups`, `outcome_links`,
 //! `outcome_alignments`, `learning_outcomes`, `learning_outcome_results`,
-//! `attachments`, `jobs`, `users`, `pseudonyms`); only the listed columns and
-//! the `outcome_import_errors` table are missing.
+//! `attachments`, `jobs`, `users`, `pseudonyms`); the outcome-imports tail
+//! (`outcome_import_errors`, `latest_outcome_import_id`) is still applied
+//! ad hoc by the integration tests.
 //!
 //! ```sql
 //! -- Canvas stores the rubric criterion / calculation settings on the outcome.
