@@ -1704,14 +1704,28 @@ async fn pace_student_enrollments(
 }
 
 /// Write the paced due date of one student for one assignment (Canvas
-/// `CoursePace#publish` creates an ad-hoc assignment override).
+/// `CoursePace#publish`, app/models/course_pace.rb:178-217).
+///
+/// Canvas never edits a shared ad-hoc override in place: the student's
+/// `assignment_override_students` row is re-pointed to the override that
+/// already carries the target date (`create_or_update_assignment_student_override!`),
+/// an override is only updated in place while it still carries exactly one
+/// student, and an override that loses its last student is destroyed
+/// (`destroy_if_empty_set`). That is what keeps a per-student pace from
+/// changing the date the course pace gave the other students.
+///
+/// The port keeps the ad-hoc membership in the `student_ids` array instead of
+/// a join table, so the move is an append plus an `array_remove`, and an
+/// override emptied by the move is soft-deleted like every other port delete.
 async fn write_paced_override(
     db: &PgPool,
     assignment_id: i64,
     user_id: i64,
     due_at: DateTime<Utc>,
 ) -> Result<(), ApiError> {
-    let existing: Option<(i64,)> = sqlx::query_as(
+    // Canvas: `next if current_override&.due_at == due_at` — the student is
+    // already where the plan wants them.
+    let current: Option<(i64,)> = sqlx::query_as(
         "SELECT id FROM assignment_overrides \
          WHERE assignment_id = $1 AND workflow_state <> 'deleted' \
            AND due_at = $2 AND $3 = ANY(student_ids) LIMIT 1",
@@ -1721,61 +1735,103 @@ async fn write_paced_override(
     .bind(user_id)
     .fetch_optional(db)
     .await?;
-    if existing.is_some() {
+    if current.is_some() {
         return Ok(());
     }
 
-    let same_date: Option<(i64,)> = sqlx::query_as(
+    // Canvas: an ADHOC override already carries the target date — move the
+    // student into it and drop them from the override they came from. (Canvas
+    // only matches `set_type: "ADHOC"`; in the port the ad-hoc rows are the
+    // ones with a non-empty `student_ids` and no section/group set.)
+    let target: Option<(i64,)> = sqlx::query_as(
         "SELECT id FROM assignment_overrides \
-         WHERE assignment_id = $1 AND workflow_state <> 'deleted' AND due_at = $2 LIMIT 1",
+         WHERE assignment_id = $1 AND workflow_state <> 'deleted' AND due_at = $2 \
+           AND student_ids <> '{}' AND course_section_id IS NULL AND group_id IS NULL \
+         ORDER BY id LIMIT 1",
     )
     .bind(assignment_id)
     .bind(due_at)
     .fetch_optional(db)
     .await?;
-    if let Some((override_id,)) = same_date {
+    if let Some((target_id,)) = target {
         sqlx::query(
             "UPDATE assignment_overrides \
              SET student_ids = array_append(student_ids, $1), updated_at = now() \
-             WHERE id = $2",
+             WHERE id = $2 AND NOT ($1 = ANY(student_ids))",
         )
         .bind(user_id)
-        .bind(override_id)
+        .bind(target_id)
         .execute(db)
         .await?;
+        remove_user_from_other_overrides(db, assignment_id, user_id, target_id).await?;
         return Ok(());
     }
 
-    let for_user: Option<(i64,)> = sqlx::query_as(
-        "SELECT id FROM assignment_overrides \
+    // Canvas: `elsif current_override&.assignment_override_students&.size == 1`
+    // — the student's override is theirs alone, so it is updated in place.
+    let own: Option<(i64, Vec<i64>)> = sqlx::query_as(
+        "SELECT id, student_ids FROM assignment_overrides \
          WHERE assignment_id = $1 AND workflow_state <> 'deleted' \
-           AND $2 = ANY(student_ids) LIMIT 1",
+           AND $2 = ANY(student_ids) ORDER BY id LIMIT 1",
     )
     .bind(assignment_id)
     .bind(user_id)
     .fetch_optional(db)
     .await?;
-    if let Some((override_id,)) = for_user {
-        sqlx::query(
-            "UPDATE assignment_overrides SET due_at = $1, updated_at = now() WHERE id = $2",
-        )
-        .bind(due_at)
-        .bind(override_id)
-        .execute(db)
-        .await?;
-        return Ok(());
+    if let Some((own_id, students)) = own {
+        if students.len() == 1 && students[0] == user_id {
+            sqlx::query(
+                "UPDATE assignment_overrides SET due_at = $1, updated_at = now() WHERE id = $2",
+            )
+            .bind(due_at)
+            .bind(own_id)
+            .execute(db)
+            .await?;
+            return Ok(());
+        }
     }
 
-    sqlx::query(
+    // Canvas: otherwise a fresh "Course Pacing" override for the student and
+    // the membership moves out of the (shared) previous override.
+    let created: (i64,) = sqlx::query_as(
         "INSERT INTO assignment_overrides (assignment_id, title, due_at, student_ids, workflow_state) \
-         VALUES ($1, 'Course Pacing', $2, ARRAY[$3]::bigint[], 'active')",
+         VALUES ($1, 'Course Pacing', $2, ARRAY[$3]::bigint[], 'active') RETURNING id",
     )
     .bind(assignment_id)
     .bind(due_at)
     .bind(user_id)
+    .fetch_one(db)
+    .await?;
+    remove_user_from_other_overrides(db, assignment_id, user_id, created.0).await?;
+
+    Ok(())
+}
+
+/// Drop the student from every other active override of the assignment and
+/// soft-delete the overrides the move empties (Canvas `destroy_if_empty_set`).
+async fn remove_user_from_other_overrides(
+    db: &PgPool,
+    assignment_id: i64,
+    user_id: i64,
+    keep_id: i64,
+) -> Result<(), ApiError> {
+    sqlx::query(
+        "WITH moved AS ( \
+           UPDATE assignment_overrides \
+           SET student_ids = array_remove(student_ids, $1), updated_at = now() \
+           WHERE assignment_id = $2 AND workflow_state <> 'deleted' \
+             AND $1 = ANY(student_ids) AND id <> $3 \
+           RETURNING id, student_ids \
+         ) \
+         UPDATE assignment_overrides \
+         SET workflow_state = 'deleted', updated_at = now() \
+         WHERE id IN (SELECT id FROM moved WHERE student_ids = '{}')",
+    )
+    .bind(user_id)
+    .bind(assignment_id)
+    .bind(keep_id)
     .execute(db)
     .await?;
-
     Ok(())
 }
 
