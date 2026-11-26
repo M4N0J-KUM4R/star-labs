@@ -3,8 +3,8 @@
   "free": [
     "0111"
   ],
-  "max_merged": "0257",
-  "next_available": "0258",
+  "max_merged": "0263",
+  "next_available": "0264",
   "reservations": {
     "0001": {
       "issue": null,
@@ -889,6 +889,11 @@
     "0257": {
       "issue": 231,
       "note": "star-courses: the Api::V1::CourseJson columns (uuid, license, integration_id, grade_passback_setting, locale, template) plus the Canvas root-account chain and Default Term backfill (PR #241)",
+      "status": "merged"
+    },
+    "0263": {
+      "issue": 86,
+      "note": "star-outcomes: outcome results/rollups runtime columns — learning_outcomes.data (rubric criterion), the learning_outcome_results Canvas columns (context_code, alignment link, hidden, possible/percent, mastery, workflow_state, timestamps) and users.uuid for /enqueue_outcome_rollup_calculation (additive only)",
       "status": "merged"
     }
   }
