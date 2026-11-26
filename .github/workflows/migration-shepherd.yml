@@ -1,0 +1,92 @@
+name: Migration shepherd
+
+# Dispatch one run per pull request. The shepherd waits for the PR's Rust
+# migration validation checks to finish, merges when every check is green
+# (repo protocol: no-ff merge commits), and posts a receipt comment. Many
+# shepherds run in parallel — GitHub queues them beyond the concurrent-job
+# limit automatically, so as soon as one PR finishes, the next is already
+# running. Dispatch: gh workflow run migration-shepherd.yml -f pr=<number>
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Pull request number to shepherd to merge
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: shepherd-${{ github.event.inputs.pr }}
+  cancel-in-progress: false
+
+jobs:
+  shepherd:
+    name: Shepherd PR ${{ github.event.inputs.pr }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Wait for PR checks
+        id: wait
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.inputs.pr }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 5400))
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            mapfile -t states < <(gh pr view "$PR" --repo "$REPO" \
+              --json statusCheckRollup \
+              -q '.statusCheckRollup[]?.state' 2>/dev/null || true)
+            if [ "${#states[@]}" -gt 0 ]; then
+              fail=0
+              pend=0
+              for s in "${states[@]}"; do
+                case "$s" in
+                  SUCCESS) ;;
+                  FAILURE|ERROR|CANCELLED) fail=1 ;;
+                  *) pend=1 ;;
+                esac
+              done
+              if [ "$fail" -eq 1 ]; then
+                echo "at least one check failed - not merging"
+                exit 1
+              fi
+              if [ "$pend" -eq 0 ]; then
+                echo "all checks green after ${SECONDS}s"
+                exit 0
+              fi
+            fi
+            sleep 60
+          done
+          echo "timed out waiting for checks"
+          exit 1
+
+      - name: Merge when green (no-ff per repo protocol)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.inputs.pr }}
+          REPO: ${{ github.repository }}
+        run: |
+          gh pr merge "$PR" --repo "$REPO" --merge
+
+      - name: Receipt comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.inputs.pr }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ "${{ job.status }}" = "success" ]; then
+            gh pr comment "$PR" --repo "$REPO" \
+              --body "Migration shepherd: all checks green - merged. The next wave item is now ready for work."
+          else
+            gh pr comment "$PR" --repo "$REPO" \
+              --body "Migration shepherd: checks did not all pass within the wait window - not merged. Fix the failed checks above and re-dispatch."
+          fi
