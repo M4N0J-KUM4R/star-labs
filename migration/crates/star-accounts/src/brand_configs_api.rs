@@ -9,6 +9,9 @@
 //!   - `show` skips require_user (public: CORS `*`), then 302-redirects to
 //!     the active brand config's public JSON path (the BrandableCSS default
 //!     when the account has no active brand).
+//!   - `show_context` still runs `require_user` (Canvas skips it only for
+//!     `show`): an anonymous caller answers 401 before the context check,
+//!     and a signed-in caller with an unknown account/course answers 404.
 //!   - `show_context`: require_context — the account/course must exist
 //!     (404); anything else would be a 400, but the route shapes here only
 //!     carry Account/Course ids, so existence is the only check.
@@ -16,10 +19,13 @@
 //!     with no configured active brand → Canvas' public default path.
 
 use axum::extract::{Path, State};
-use axum::response::{IntoResponse, Redirect, Response};
+use axum::http::header::LOCATION;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use sqlx::PgPool;
+use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 /// Canvas `Canvas::Cdn.config.host` — unset in this workspace, so the path
@@ -57,8 +63,11 @@ async fn active_brand_json_path(
 }
 
 fn brand_redirect_response(path: String) -> Response {
-    // Canvas sets Access-Control-Allow-Origin: * (public CSS/JSON asset).
-    let mut resp = Redirect::temporary(&path).into_response();
+    // Rails `redirect_to` answers 302 Found; axum's `Redirect` only offers
+    // 303/307/308 constructors (no 302 in axum 0.8), so the response is
+    // built directly. Canvas also sets Access-Control-Allow-Origin: * for
+    // the public CSS/JSON asset.
+    let mut resp = (StatusCode::FOUND, [(LOCATION, path)]).into_response();
     resp.headers_mut().insert(
         "Access-Control-Allow-Origin",
         "*".parse().expect("static header value"),
@@ -81,9 +90,13 @@ async fn show_brand_variables(State(state): State<AppState>) -> Result<Response,
 }
 
 /// GET /accounts/{accountId}/brand_variables
+///
+/// Canvas `show_context`: `require_user` still applies (only `show` skips
+/// it), so an anonymous caller answers 401 before the context lookup.
 async fn show_account_brand_variables(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
+    _auth: AuthUser,
 ) -> Result<Response, ApiError> {
     // require_context: unknown account → 404.
     let exists: bool = sqlx::query_scalar(
@@ -103,6 +116,7 @@ async fn show_account_brand_variables(
 async fn show_course_brand_variables(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
+    _auth: AuthUser,
 ) -> Result<Response, ApiError> {
     // require_context + the course's account brand.
     let account_id: Option<i64> = sqlx::query_scalar(
