@@ -2,10 +2,11 @@ name: Migration shepherd
 
 # Dispatch one run per pull request. The shepherd waits for the PR's Rust
 # migration validation checks to finish, merges when every check is green
-# (repo protocol: no-ff merge commits), and posts a receipt comment. Many
-# shepherds run in parallel — GitHub queues them beyond the concurrent-job
-# limit automatically, so as soon as one PR finishes, the next is already
-# running. Dispatch: gh workflow run migration-shepherd.yml -f pr=<number>
+# and stable (two consecutive all-green polls, reset on a head change), and
+# posts a receipt comment. Many shepherds run in parallel — GitHub queues
+# them beyond the concurrent-job limit automatically, so as soon as one PR
+# finishes, the next is already running.
+# Dispatch: gh workflow run migration-shepherd.yml -f pr=<number>
 
 on:
   workflow_dispatch:
@@ -27,11 +28,11 @@ jobs:
   shepherd:
     name: Shepherd PR ${{ github.event.inputs.pr }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
 
-      - name: Wait for PR checks
+      - name: Wait for PR checks (stable green)
         id: wait
         env:
           GH_TOKEN: ${{ github.token }}
@@ -39,29 +40,41 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          deadline=$((SECONDS + 5400))
+          deadline=$((SECONDS + 6600))
+          greens=0
+          head0="$(gh pr view "$PR" --repo "$REPO" --json headRefOid -q .headRefOid)"
           while [ "$SECONDS" -lt "$deadline" ]; do
             mapfile -t states < <(gh pr view "$PR" --repo "$REPO" \
               --json statusCheckRollup \
               -q '.statusCheckRollup[]?.state' 2>/dev/null || true)
-            if [ "${#states[@]}" -gt 0 ]; then
-              fail=0
-              pend=0
-              for s in "${states[@]}"; do
-                case "$s" in
-                  SUCCESS) ;;
-                  FAILURE|ERROR|CANCELLED) fail=1 ;;
-                  *) pend=1 ;;
-                esac
-              done
+            fail=0
+            pend=0
+            for s in "${states[@]}"; do
+              case "$s" in
+                SUCCESS) ;;
+                FAILURE|ERROR|CANCELLED) fail=1 ;;
+                *) pend=1 ;;
+              esac
+            done
+            # A force-push supersedes the checks: reset the stability counter.
+            head_now="$(gh pr view "$PR" --repo "$REPO" --json headRefOid \
+              -q .headRefOid 2>/dev/null || echo "$head0")"
+            if [ "$head_now" != "$head0" ]; then
+              head0="$head_now"
+              greens=0
+            fi
+            if [ "${#states[@]}" -gt 0 ] && [ "$pend" -eq 0 ]; then
               if [ "$fail" -eq 1 ]; then
-                echo "at least one check failed - not merging"
+                echo "all checks completed with a failure - not merging"
                 exit 1
               fi
-              if [ "$pend" -eq 0 ]; then
-                echo "all checks green after ${SECONDS}s"
+              greens=$((greens + 1))
+              if [ "$greens" -ge 2 ]; then
+                echo "stable green after $greens consecutive polls"
                 exit 0
               fi
+            else
+              greens=0
             fi
             sleep 60
           done
@@ -85,8 +98,8 @@ jobs:
         run: |
           if [ "${{ job.status }}" = "success" ]; then
             gh pr comment "$PR" --repo "$REPO" \
-              --body "Migration shepherd: all checks green - merged. The next wave item is now ready for work."
+              --body "Migration shepherd: checks stable green - merged. The next wave item is now ready for work."
           else
             gh pr comment "$PR" --repo "$REPO" \
-              --body "Migration shepherd: checks did not all pass within the wait window - not merged. Fix the failed checks above and re-dispatch."
+              --body "Migration shepherd: checks did not stabilize green within the wait window - not merged. Fix the failed checks above and re-dispatch."
           fi
