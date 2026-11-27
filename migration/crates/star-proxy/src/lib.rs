@@ -20,12 +20,16 @@
 //! status, the `Set-Cookie` headers and the body. Only the hop-by-hop
 //! headers (`Connection`, `Transfer-Encoding`, …) are dropped, because they
 //! describe one connection rather than the message.
+//!
+//! The forwarded path is the path the request came in with, not the path the
+//! router matched: axum's `nest` strips the `/api/v1` prefix before the
+//! fallback runs, and Canvas serves its API under that prefix.
 
 use std::{sync::Arc, time::Duration};
 
 use axum::{
     body::Body,
-    extract::{Extension, Request},
+    extract::{Extension, OriginalUri, Request},
     http::{header, HeaderMap, HeaderName, StatusCode},
     response::{IntoResponse, Response},
 };
@@ -127,9 +131,18 @@ impl CanvasOrigin {
     async fn try_forward(&self, req: Request<Body>) -> Result<Response, ProxyError> {
         let (parts, body) = req.into_parts();
         let method = parts.method.clone();
-        let path = parts.uri.path().to_string();
-        let query = parts
-            .uri
+        // axum's `nest` strips the prefix before the fallback runs, so the
+        // delegation must use the URI the request came in with: Canvas serves
+        // its API at `/api/v1/...`, and the port's router is nested there.
+        // A forwarded `/courses/1` would make Canvas answer 404 for a route it
+        // owns, so the original URI is the one that goes upstream.
+        let original = parts
+            .extensions
+            .get::<OriginalUri>()
+            .map(|original| original.0.clone())
+            .unwrap_or_else(|| parts.uri.clone());
+        let path = original.path().to_string();
+        let query = original
             .query()
             .map(|q| format!("?{q}"))
             .unwrap_or_default();

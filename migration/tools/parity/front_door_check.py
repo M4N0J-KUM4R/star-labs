@@ -72,12 +72,18 @@ def wait_for(url: str, timeout: float = 60.0) -> bool:
 
 
 def get(url: str, headers: dict[str, str] | None = None):
+    """Fetch a URL and return its status, its headers and its body.
+
+    The headers are the message itself, not a plain dict: HTTP header names
+    are case-insensitive and the proxy writes them lowercased, so a lookup
+    has to be case-insensitive too.
+    """
     request = urllib.request.Request(url, headers=headers or {})
     try:
         with urllib.request.urlopen(request, timeout=10) as response:
-            return response.status, dict(response.headers), response.read().decode()
+            return response.status, response.headers, response.read().decode()
     except urllib.error.HTTPError as error:
-        return error.code, dict(error.headers), error.read().decode()
+        return error.code, error.headers, error.read().decode()
 
 
 def main() -> int:

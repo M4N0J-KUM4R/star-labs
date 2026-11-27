@@ -70,6 +70,20 @@ fn front_door(origin: Option<CanvasOrigin>) -> Router {
         .layer(Extension(origin.map(std::sync::Arc::new)))
 }
 
+/// The port's router as the binary builds it: the API router is nested under
+/// `/api/v1`, so axum strips the prefix before the fallback runs.
+fn nested_front_door(origin: Option<CanvasOrigin>) -> Router {
+    Router::new()
+        .nest(
+            "/api/v1",
+            Router::new()
+                .route("/owned", get(|| async { "owned" }))
+                .fallback(star_proxy::fallback)
+                .method_not_allowed_fallback(star_proxy::fallback),
+        )
+        .layer(Extension(origin.map(std::sync::Arc::new)))
+}
+
 /// Serve the port and return its address.
 async fn start_port(app: Router) -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -168,6 +182,27 @@ async fn without_a_canvas_the_front_door_answers_an_empty_404() {
 
     assert_eq!(response.status(), 404);
     assert_eq!(response.text().await.unwrap(), "");
+}
+
+#[tokio::test]
+async fn a_nested_router_delegates_the_path_the_request_came_in_with() {
+    let canvas = start_canvas().await;
+    let origin = CanvasOrigin::new(&format!("http://{canvas}")).unwrap();
+    let port = start_port(nested_front_door(Some(origin))).await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .get(format!("http://{port}/api/v1/canvas/echo?a=1"))
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), 200);
+    let seen: Value = response.json().await.unwrap();
+    // axum's `nest` stripped the prefix before the fallback ran; the
+    // delegation must put it back, because Canvas serves `/api/v1`.
+    assert_eq!(seen["path"], "/api/v1/canvas/echo");
+    assert_eq!(seen["query"].as_str(), Some("a=1"));
 }
 
 #[tokio::test]
