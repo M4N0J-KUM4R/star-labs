@@ -1,1 +1,1 @@
-[..]
+{"id":25,"name":"Uploaded Media","full_name":"course files/Uploaded Media","position":6,"parent_folder_id":1,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T13:51:51Z","updated_at":"2026-11-27T13:51:51Z","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/25/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/25/files","files_count":0,"folders_count":0,"hidden":true,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}

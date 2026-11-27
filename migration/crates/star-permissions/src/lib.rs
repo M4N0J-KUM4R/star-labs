@@ -1038,6 +1038,20 @@ const PERMISSION_CATALOG: &[PermissionCatalogEntry] = &[
         true_for: &["AccountAdmin"],
     },
     PermissionCatalogEntry {
+        key: "manage_account_settings",
+        label: "Manage account settings",
+        group: Some(("account", "Account")),
+        available_to: &["account_all", "account_admin"],
+        true_for: &["AccountAdmin"],
+    },
+    PermissionCatalogEntry {
+        key: "manage_users_in_bulk",
+        label: "Manage users in bulk",
+        group: Some(("account", "Account")),
+        available_to: &["account_all", "account_admin"],
+        true_for: &["AccountAdmin"],
+    },
+    PermissionCatalogEntry {
         key: "manage_role_overrides",
         label: "Manage role overrides",
         group: Some(("account", "Account")),

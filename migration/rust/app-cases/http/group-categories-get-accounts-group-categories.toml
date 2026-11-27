@@ -9,12 +9,14 @@ Authorization = "Bearer __REPLAY_TOKEN__"
 status = 200
 
 [response.headers]
-cache-control = "[..]"
+cache-control = "max-age=0, private, must-revalidate"
 content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
 content-type = "application/json; charset=utf-8"
+link = '<http://127.0.0.1:[..]/api/v1/accounts/6/group_categories?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/accounts/6/group_categories?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/accounts/6/group_categories?page=1&per_page=10>; rel="last"'
 referrer-policy = "no-referrer-when-downgrade"
 set-cookie = "[..]"
-x-canvas-meta = "[..]"
+x-canvas-meta = "at=10000000000007;dk=10000000000001;o=group_categories;n=index;t=Account;i=6;b=2074132;m=2074132;u=0.[..];y=0.[..];d=0.00;rlr=600.0;"
+x-canvas-user-id = "10000000000001"
 x-content-type-options = "nosniff"
 x-download-options = "noopen"
 x-permitted-cross-domain-policies = "none"
@@ -22,4 +24,5 @@ x-rate-limit-remaining = "600.0"
 x-request-context-id = "[..]-[..]-[..]-[..]-[..]"
 x-request-cost = "0.[..]"
 x-runtime = "0.[..]"
+x-session-id = "[..]"
 x-xss-protection = "1; mode=block"

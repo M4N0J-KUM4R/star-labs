@@ -1,1 +1,1 @@
-{"errors":[{"message":"Expired access token.","expired_at":"2026-11-27T13:52:00Z"}]}
+{"errors":{"user":{"pseudonyms":[{"attribute":"pseudonyms","message":"is invalid","type":"invalid"}]},"pseudonym":{"unique_id":[{"attribute":"unique_id","message":"is invalid","type":"invalid"},{"attribute":"unique_id","message":"is too short (minimum is 1 character)","type":"too_short"}]},"observee":{},"pairing_code":{},"recaptcha":null}}

@@ -1,0 +1,343 @@
+{
+ "accounts": {
+  "columns": [
+   "id",
+   "name",
+   "parent_account_id",
+   "workflow_state"
+  ],
+  "rows": [
+   {
+    "id": 1,
+    "name": "Canvas Root",
+    "parent_account_id": null,
+    "workflow_state": "active"
+   },
+   {
+    "id": 4,
+    "name": "Default Account",
+    "parent_account_id": null,
+    "workflow_state": "active"
+   },
+   {
+    "id": 5,
+    "name": "Site Admin",
+    "parent_account_id": null,
+    "workflow_state": "active"
+   },
+   {
+    "id": 6,
+    "name": "Parity Account",
+    "parent_account_id": null,
+    "workflow_state": "active"
+   },
+   {
+    "id": 7,
+    "name": "Canvas Root",
+    "parent_account_id": 7,
+    "workflow_state": "active"
+   }
+  ]
+ },
+ "assignments": {
+  "columns": [
+   "id",
+   "course_id",
+   "title",
+   "points_possible"
+  ],
+  "rows": [
+   {
+    "course_id": 1,
+    "id": 1,
+    "points_possible": 100,
+    "title": "Parity Assignment"
+   }
+  ]
+ },
+ "course_sections": {
+  "columns": [
+   "id",
+   "course_id",
+   "name"
+  ],
+  "rows": [
+   {
+    "course_id": 3,
+    "id": 1,
+    "name": "Parity Course"
+   },
+   {
+    "course_id": 5,
+    "id": 2,
+    "name": "Parity Course"
+   },
+   {
+    "course_id": 1,
+    "id": 3,
+    "name": "Parity Course"
+   }
+  ]
+ },
+ "courses": {
+  "columns": [
+   "id",
+   "name",
+   "course_code",
+   "account_id"
+  ],
+  "rows": [
+   {
+    "account_id": 6,
+    "course_code": "PARITY",
+    "id": 1,
+    "name": "Parity Course"
+   },
+   {
+    "account_id": 6,
+    "course_code": "Unnamed",
+    "id": 2,
+    "name": "Unnamed Course"
+   },
+   {
+    "account_id": 6,
+    "course_code": "PARITY",
+    "id": 3,
+    "name": "Parity Course"
+   },
+   {
+    "account_id": 6,
+    "course_code": "Unnamed",
+    "id": 4,
+    "name": "Unnamed Course"
+   },
+   {
+    "account_id": 6,
+    "course_code": "PARITY",
+    "id": 5,
+    "name": "Parity Course"
+   }
+  ]
+ },
+ "enrollments": {
+  "columns": [
+   "id",
+   "user_id",
+   "course_id",
+   "role",
+   "workflow_state"
+  ],
+  "rows": [
+   {
+    "course_id": 3,
+    "id": 1,
+    "role": "teacher",
+    "user_id": 1,
+    "workflow_state": "deleted"
+   },
+   {
+    "course_id": 3,
+    "id": 2,
+    "role": "student",
+    "user_id": 2,
+    "workflow_state": "deleted"
+   },
+   {
+    "course_id": 3,
+    "id": 3,
+    "role": "student",
+    "user_id": 3,
+    "workflow_state": "active"
+   },
+   {
+    "course_id": 3,
+    "id": 4,
+    "role": "teacher",
+    "user_id": 5,
+    "workflow_state": "deleted"
+   },
+   {
+    "course_id": 3,
+    "id": 5,
+    "role": "student",
+    "user_id": 6,
+    "workflow_state": "active"
+   },
+   {
+    "course_id": 5,
+    "id": 6,
+    "role": "teacher",
+    "user_id": 1,
+    "workflow_state": "deleted"
+   },
+   {
+    "course_id": 5,
+    "id": 7,
+    "role": "student",
+    "user_id": 3,
+    "workflow_state": "active"
+   },
+   {
+    "course_id": 5,
+    "id": 8,
+    "role": "student",
+    "user_id": 7,
+    "workflow_state": "active"
+   },
+   {
+    "course_id": 1,
+    "id": 9,
+    "role": "teacher",
+    "user_id": 1,
+    "workflow_state": "active"
+   },
+   {
+    "course_id": 1,
+    "id": 10,
+    "role": "student",
+    "user_id": 3,
+    "workflow_state": "completed"
+   },
+   {
+    "course_id": 1,
+    "id": 11,
+    "role": "student",
+    "user_id": 8,
+    "workflow_state": "active"
+   }
+  ]
+ },
+ "folders": {
+  "columns": [
+   "id",
+   "name",
+   "full_name",
+   "context_type",
+   "context_id"
+  ],
+  "rows": [
+   {
+    "context_id": 1,
+    "context_type": "Course",
+    "full_name": "course files",
+    "id": 1,
+    "name": "course files"
+   },
+   {
+    "context_id": 1,
+    "context_type": "Course",
+    "full_name": "course files/Parity Folder",
+    "id": 2,
+    "name": "Parity Folder"
+   }
+  ]
+ },
+ "group_categories": {
+  "columns": [
+   "id",
+   "course_id",
+   "account_id",
+   "name"
+  ],
+  "rows": [
+   {
+    "account_id": 6,
+    "course_id": 1,
+    "id": 1,
+    "name": "Parity Category"
+   }
+  ]
+ },
+ "groups": {
+  "columns": [
+   "id",
+   "course_id",
+   "name",
+   "group_category_id"
+  ],
+  "rows": [
+   {
+    "course_id": 1,
+    "group_category_id": 1,
+    "id": 1,
+    "name": "Parity Group"
+   }
+  ]
+ },
+ "users": {
+  "columns": [
+   "id",
+   "name",
+   "sortable_name",
+   "email",
+   "password_hash",
+   "role"
+  ],
+  "rows": [
+   {
+    "email": "parity@example.com",
+    "id": 1,
+    "name": "Parity User",
+    "password_hash": "not-a-real-hash",
+    "role": "teacher",
+    "sortable_name": "User, Parity"
+   },
+   {
+    "email": "user2@example.com",
+    "id": 2,
+    "name": "Test Student",
+    "password_hash": "not-a-real-hash",
+    "role": "teacher",
+    "sortable_name": "Student, Test"
+   },
+   {
+    "email": "student@example.com",
+    "id": 3,
+    "name": "Parity Student",
+    "password_hash": "not-a-real-hash",
+    "role": "teacher",
+    "sortable_name": "Student, Parity"
+   },
+   {
+    "email": "user4@example.com",
+    "id": 4,
+    "name": "Probe Plain",
+    "password_hash": "not-a-real-hash",
+    "role": "teacher",
+    "sortable_name": "Plain, Probe"
+   },
+   {
+    "email": "user5@example.com",
+    "id": 5,
+    "name": "Probe Teacher",
+    "password_hash": "not-a-real-hash",
+    "role": "teacher",
+    "sortable_name": "Teacher, Probe"
+   },
+   {
+    "email": "4edb9dc84f40b2a60f1ba4226251e725c2b3e5e1",
+    "id": 6,
+    "name": "Test Student",
+    "password_hash": "not-a-real-hash",
+    "role": "teacher",
+    "sortable_name": "Student, Test"
+   },
+   {
+    "email": "66128c72c2d932c144a86ac0e90edf3f78879f21",
+    "id": 7,
+    "name": "Test Student",
+    "password_hash": "not-a-real-hash",
+    "role": "teacher",
+    "sortable_name": "Student, Test"
+   },
+   {
+    "email": "4c96f8dbf95063694a3d07b5f26dd8587cba9abb",
+    "id": 8,
+    "name": "Test Student",
+    "password_hash": "not-a-real-hash",
+    "role": "teacher",
+    "sortable_name": "Student, Test"
+   }
+  ]
+ }
+}
