@@ -13037,7 +13037,7 @@
     ],
     "schema_star_only": 102,
     "schema_tables_implemented": 302,
-    "star_extras": 168,
+    "star_extras": 170,
     "star_extras_by_class": {
       "absent": 61,
       "api_alias": 0,
@@ -13047,10 +13047,10 @@
       "api_verb_mismatch": 0,
       "web_exact": 70,
       "web_nested": 26,
-      "web_verb_mismatch": 11
+      "web_verb_mismatch": 13
     },
     "star_route_calls": 1175,
-    "star_route_registrations": 1592,
+    "star_route_registrations": 1594,
     "star_tables": 397,
     "star_test_calls_excluded": 3,
     "star_unparsed_calls": 0,
@@ -13190,6 +13190,35 @@
       "router_fn": "router",
       "source": "crates/star-permissions/src/lib.rs",
       "verb": "PUT"
+    },
+    {
+      "canvas_closest": [
+        "GET"
+      ],
+      "classification": "web_verb_mismatch",
+      "crate": "star-accounts",
+      "mount": "web",
+      "normalized_path": "accounts/{}/settings",
+      "path": "/accounts/{id}/settings",
+      "router_fn": "router",
+      "source": "crates/star-accounts/src/lib.rs",
+      "verb": "PUT"
+    },
+    {
+      "canvas_closest": [
+        "DELETE",
+        "GET",
+        "PATCH",
+        "PUT"
+      ],
+      "classification": "web_verb_mismatch",
+      "crate": "star-accounts",
+      "mount": "web",
+      "normalized_path": "accounts/{}/users/{}",
+      "path": "/accounts/{id}/users/{userId}",
+      "router_fn": "router",
+      "source": "crates/star-accounts/src/lib.rs",
+      "verb": "POST"
     },
     {
       "canvas_closest": [

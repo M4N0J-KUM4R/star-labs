@@ -17,6 +17,8 @@ use std::collections::HashMap;
 pub mod learn_platform;
 
 mod account_gaps;
+mod brand_configs_api;
+mod discovery_pages_api;
 mod shared_brand_configs;
 
 use star_auth::AuthUser;
@@ -2030,6 +2032,8 @@ pub fn router() -> Router<AppState> {
     Router::new()
         // The shared brand configurations of an account.
         .merge(shared_brand_configs::router())
+        .merge(brand_configs_api::brand_configs_routes())
+        .merge(discovery_pages_api::discovery_pages_routes())
         .merge(account_gaps::account_gaps_routes())
         .route("/accounts", get(list_accounts))
         .route("/accounts/{id}", get(get_account).put(update_account))
