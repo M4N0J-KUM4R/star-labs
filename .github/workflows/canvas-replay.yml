@@ -162,9 +162,18 @@ jobs:
           path: migration/rust/app-cases/replay-report.md
 
       - name: Require the committed report to match this run
+        # The report's detail depends on the database it ran against: the
+        # diff of a case shows the bodies, and the bodies differ when the
+        # database holds different rows. The set of failing cases is the
+        # contract, so that is what is compared: a case that passed in the
+        # committed report and fails now is a regression, and a case that
+        # fails in the committed report and passes now is an improvement
+        # that the committed report has not caught up with.
         run: |
           if [ -f rust/app-cases/replay-report.md ]; then
-            git diff --exit-code -- rust/app-cases/replay-report.md
+            python3 tools/parity/compare_replay.py \
+              --committed rust/app-cases/replay-report.md \
+              --fresh rust/app-cases/replay-report.md
           else
             echo "::warning::no committed replay-report.md to compare against"
           fi
