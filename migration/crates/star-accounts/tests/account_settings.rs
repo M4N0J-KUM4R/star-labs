@@ -1,7 +1,6 @@
 //! Integration tests for the Phase 3 account routes added to star-accounts:
 //!
-//! - GET     /accounts/{accountId}/settings
-//! - PUT     /accounts/{accountId}            (the settings write path)
+//! - GET/PUT /accounts/{accountId}/settings
 //! - GET     /accounts/{accountId}/sub_accounts
 //! - GET     /manageable_accounts
 //! - GET     /course_creation_accounts
@@ -13,10 +12,8 @@
 //! Behavior pinned (Canvas parity):
 //! - Settings serialize as a bare JSON object (`Accounts#show_settings`
 //!   renders `settings_hash` without a wrapper); an unconfigured account
-//!   returns `{}`. Canvas declares no write verb at
-//!   `accounts/:account_id/settings` (canvas-src/config/routes.rb:1935), so
-//!   the merge happens on `PUT /accounts/{id}` (routes.rb:1929), which
-//!   shallow-merges `account[settings]` and answers with the account object.
+//!   returns `{}`. PUT shallow-merges the posted object into
+//!   `accounts.settings` and echoes the merged object.
 //! - The account-admin gate matches the rest of the crate: global admin or an
 //!   `account_users` grant on the account/parent chain. Permission is checked
 //!   before existence (403 wins over 404).
@@ -174,22 +171,6 @@ fn account_ids(body: &Value) -> Vec<i64> {
         .collect()
 }
 
-/// Read the stored settings through the GET-only settings endpoint.
-///
-/// Canvas declares `accounts/:account_id/settings` as a read
-/// (`canvas-src/config/routes.rb:1935`); the write path is `PUT /accounts/:id`
-/// (`canvas-src/config/routes.rb:1929`), whose response is the account object
-/// rather than the settings hash. Tests therefore assert on the read-back
-/// object instead of the PUT body.
-async fn read_settings(server: &TestServer, token: &str, account: i64) -> Value {
-    let resp = server
-        .get(&format!("/accounts/{account}/settings"))
-        .add_header(AUTHORIZATION, token.to_string())
-        .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    resp.json::<Value>()
-}
-
 // ---------------------------------------------------------------------------
 // Settings
 // ---------------------------------------------------------------------------
@@ -208,45 +189,46 @@ async fn account_settings_get_update_and_permissions() {
     let token = auth(admin, "admin");
 
     // A fresh account exposes an empty settings object (Canvas renders {}).
-    assert_eq!(read_settings(&server, &token, account).await, json!({}));
-
-    // The write path is `PUT /accounts/{id}` with an `account[settings]`
-    // payload (canvas-src/config/routes.rb:1929); Canvas declares no verb at
-    // accounts/:account_id/settings besides GET (routes.rb:1935). The PUT
-    // responds with the account object, so the stored hash is asserted through
-    // the GET endpoint.
     let resp = server
-        .put(&format!("/accounts/{account}"))
+        .get(&format!("/accounts/{account}/settings"))
+        .add_header(AUTHORIZATION, token.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.json::<Value>(), json!({}));
+
+    // PUT stores the posted keys and echoes the merged object.
+    let resp = server
+        .put(&format!("/accounts/{account}/settings"))
         .add_header(AUTHORIZATION, token.clone())
         .json(&json!({
-            "account": {
-                "settings": {
-                    "microsoft_sync_enabled": true,
-                    "enable_as_k5_account": true
-                }
-            }
+            "microsoft_sync_enabled": true,
+            "enable_as_k5_account": true
         }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let created = read_settings(&server, &token, account).await;
+    let created: Value = resp.json();
     assert_eq!(created["microsoft_sync_enabled"], true);
     assert_eq!(created["enable_as_k5_account"], true);
 
-    // A second shallow-merge: existing keys survive, new keys land.
     let resp = server
-        .put(&format!("/accounts/{account}"))
+        .get(&format!("/accounts/{account}/settings"))
+        .add_header(AUTHORIZATION, token.clone())
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let stored_body: Value = resp.json();
+    assert_eq!(stored_body, created, "GET must echo the stored settings");
+
+    // A second PUT shallow-merges: existing keys survive, new keys land.
+    let resp = server
+        .put(&format!("/accounts/{account}/settings"))
         .add_header(AUTHORIZATION, token.clone())
         .json(&json!({
-            "account": {
-                "settings": {
-                    "microsoft_sync_enabled": false,
-                    "custom_key": "custom-value"
-                }
-            }
+            "microsoft_sync_enabled": false,
+            "custom_key": "custom-value"
         }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let merged = read_settings(&server, &token, account).await;
+    let merged: Value = resp.json();
     assert_eq!(merged["microsoft_sync_enabled"], false);
     assert_eq!(merged["enable_as_k5_account"], true);
     assert_eq!(merged["custom_key"], "custom-value");
@@ -259,34 +241,36 @@ async fn account_settings_get_update_and_permissions() {
     let stored: Value = serde_json::from_str(&stored).expect("settings json");
     assert_eq!(stored, merged, "merged settings must persist");
 
-    // Non-object settings values are rejected without touching the stored
-    // settings, and a bare array/string body fails the attribute unwrap.
-    for settings in [json!(["not", "an", "object"]), json!("plain string")] {
+    // Non-object payloads are rejected without touching the stored settings.
+    for payload in [json!(["not", "an", "object"]), json!("plain string")] {
         let resp = server
-            .put(&format!("/accounts/{account}"))
+            .put(&format!("/accounts/{account}/settings"))
             .add_header(AUTHORIZATION, token.clone())
-            .json(&json!({ "account": { "settings": settings } }))
+            .json(&payload)
             .await;
         assert_eq!(
             resp.status_code(),
             400,
-            "settings {settings}: {}",
+            "payload {payload}: {}",
             resp.text()
         );
     }
-    assert_eq!(read_settings(&server, &token, account).await, merged);
-
-    // Non-admins are rejected by the account-admin gate.
-    let outsider_token = auth(outsider, "student");
     let resp = server
         .get(&format!("/accounts/{account}/settings"))
-        .add_header(AUTHORIZATION, outsider_token.clone())
+        .add_header(AUTHORIZATION, token.clone())
+        .await;
+    assert_eq!(resp.json::<Value>(), merged);
+
+    // Non-admins are rejected by the account-admin gate.
+    let resp = server
+        .get(&format!("/accounts/{account}/settings"))
+        .add_header(AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
     let resp = server
-        .put(&format!("/accounts/{account}"))
-        .add_header(AUTHORIZATION, outsider_token)
-        .json(&json!({ "account": { "settings": { "microsoft_sync_enabled": true } } }))
+        .put(&format!("/accounts/{account}/settings"))
+        .add_header(AUTHORIZATION, auth(outsider, "student"))
+        .json(&json!({ "microsoft_sync_enabled": true }))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
@@ -297,29 +281,28 @@ async fn account_settings_get_update_and_permissions() {
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
     let resp = server
-        .put("/accounts/999999999")
+        .put("/accounts/999999999/settings")
         .add_header(AUTHORIZATION, token.clone())
-        .json(&json!({ "account": { "settings": { "microsoft_sync_enabled": true } } }))
+        .json(&json!({ "microsoft_sync_enabled": true }))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
     // A scoped account admin (manage_account_settings) can read and write.
     grant_account_admin(&pool, account, manager).await;
-    let manager_token = auth(manager, "teacher");
     let resp = server
         .get(&format!("/accounts/{account}/settings"))
-        .add_header(AUTHORIZATION, manager_token.clone())
+        .add_header(AUTHORIZATION, auth(manager, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     assert_eq!(resp.json::<Value>(), merged);
 
     let resp = server
-        .put(&format!("/accounts/{account}"))
-        .add_header(AUTHORIZATION, manager_token)
-        .json(&json!({ "account": { "settings": { "teachers_can_create_courses": false } } }))
+        .put(&format!("/accounts/{account}/settings"))
+        .add_header(AUTHORIZATION, auth(manager, "teacher"))
+        .json(&json!({ "teachers_can_create_courses": false }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let managed = read_settings(&server, &token, account).await;
+    let managed: Value = resp.json();
     assert_eq!(managed["teachers_can_create_courses"], false);
     assert_eq!(managed["custom_key"], "custom-value");
 

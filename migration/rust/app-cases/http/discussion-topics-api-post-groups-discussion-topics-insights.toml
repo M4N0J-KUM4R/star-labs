@@ -3,7 +3,7 @@ method = "POST"
 path = "/api/v1/groups/1/discussion_topics/1/insights"
 
 [request.headers]
-Authorization = "Bearer __REPLAY_TOKEN__"
+Authorization = "Bearer parity-replay-access-token"
 
 [response]
 status = 404
@@ -13,7 +13,7 @@ cache-control = "no-cache"
 content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
 content-type = "application/json; charset=utf-8"
 referrer-policy = "no-referrer-when-downgrade"
-set-cookie = "[..]"
+set-cookie = "_csrf_token=[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..]-[..].[..]; path=/; httponly"
 x-canvas-meta = "[..]"
 x-canvas-user-id = "10000000000001"
 x-content-type-options = "nosniff"

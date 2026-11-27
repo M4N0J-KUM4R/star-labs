@@ -29,9 +29,13 @@ COMPOSE = pathlib.Path(__file__).resolve().parents[4] / "canvas-boot" / "docker-
 # them, the extra constant columns the port needs)
 TABLES: dict[str, dict] = {
     "accounts": {
-        "columns": ["id", "name", "parent_account_id", "workflow_state"],
+        # Canvas keeps the account settings in a YAML column; the port keeps
+        # them as JSON. The recorded cases do not depend on them, and a
+        # leftover from an earlier run would.
+        "columns": ["id", "name", "parent_account_id", "workflow_state", "settings"],
         "canvas": "id, name, parent_account_id, workflow_state",
         "from": "accounts",
+        "extra": {"settings": "{}"},
     },
     "users": {
         # Canvas keeps the email in the pseudonyms table; the port's schema

@@ -1,1 +1,2 @@
-name,canvas_user_id,user_id,login_id,sections,group_name
+name,canvas_user_id,user_id,login_id,sections,group_name,canvas_group_id,group_id
+"Student, Parity",3,,,Parity Course,Parity Group,1,

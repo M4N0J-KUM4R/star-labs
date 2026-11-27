@@ -21,7 +21,7 @@ use axum::{
     routing::{delete, post, put},
     Json, Router,
 };
-use chrono::{NaiveDateTime, SecondsFormat};
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
@@ -35,64 +35,39 @@ struct SharedBrandConfigPayload {
     brand_config_md5: Option<String>,
 }
 
-/// Canvas posts the fields inside a `shared_brand_config` envelope
-/// (`params.require(:shared_brand_config).permit(:brand_config_md5, :name)`);
-/// the flat shape is tolerated so older callers keep working.
-#[derive(Debug, serde::Deserialize)]
-#[serde(untagged)]
-enum SharedBrandConfigBody {
-    Enveloped {
-        shared_brand_config: SharedBrandConfigPayload,
-    },
-    Flat(SharedBrandConfigPayload),
-}
-
-impl SharedBrandConfigBody {
-    fn into_options(self) -> (Option<String>, Option<String>) {
-        match self {
-            SharedBrandConfigBody::Enveloped {
-                shared_brand_config,
-            } => shared_brand_config.into_options(),
-            SharedBrandConfigBody::Flat(payload) => payload.into_options(),
-        }
-    }
-}
-
 impl SharedBrandConfigPayload {
-    /// Canvas `params.require(:shared_brand_config).permit(:brand_config_md5, :name)`:
-    /// only the permitted keys are read, blank values are dropped.
-    fn into_options(self) -> (Option<String>, Option<String>) {
+    /// Canvas `params.require(:shared_brand_config).permit(:brand_config_md5, :name)`.
+    fn into_params(self) -> Result<(String, String), ApiError> {
         let name = self
             .name
             .map(|name| name.trim().to_string())
-            .filter(|name| !name.is_empty());
+            .filter(|name| !name.is_empty())
+            .ok_or_else(|| ApiError::Validation("name is required".into()))?;
         let md5 = self
             .brand_config_md5
             .map(|md5| md5.trim().to_string())
-            .filter(|md5| !md5.is_empty());
-        (name, md5)
+            .filter(|md5| !md5.is_empty())
+            .ok_or_else(|| ApiError::Validation("brand_config_md5 is required".into()))?;
+        Ok((name, md5))
     }
 }
 
 /// A shared brand config row.
-///
-/// The table's timestamps are `timestamp without time zone` (Rails schema),
-/// so they decode as `NaiveDateTime`.
 #[derive(Debug, sqlx::FromRow)]
 struct SharedBrandConfigRow {
     id: i64,
     account_id: i64,
     name: String,
     brand_config_md5: String,
-    created_at: NaiveDateTime,
-    updated_at: NaiveDateTime,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
 }
 
 impl SharedBrandConfigRow {
     /// The model attributes of the share.
     fn to_json(&self) -> Value {
-        fn ts(value: &NaiveDateTime) -> String {
-            value.and_utc().to_rfc3339_opts(SecondsFormat::Secs, true)
+        fn ts(value: &DateTime<Utc>) -> String {
+            value.to_rfc3339_opts(SecondsFormat::Secs, true)
         }
 
         json!({
@@ -136,49 +111,29 @@ async fn ensure_account(pool: &PgPool, account_id: i64) -> Result<(), ApiError> 
     row.map(|_| ()).ok_or(ApiError::NotFound)
 }
 
-/// Canvas `validates :brand_config, presence: true`: the md5 has to reference
-/// an existing BrandConfig, otherwise the save fails and the route answers
-/// the errors with `unprocessable_content` (422).
-async fn ensure_brand_config(pool: &PgPool, md5: &str) -> Result<(), ApiError> {
-    let row: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM brand_configs WHERE md5 = $1")
-        .bind(md5)
-        .fetch_optional(pool)
-        .await?;
-    row.map(|_| ()).ok_or_else(|| {
-        ApiError::Validation("brand_config_md5 does not reference a brand config".into())
-    })
-}
-
 /// POST /accounts/{accountId}/shared_brand_configs — Canvas `create`.
 async fn create_shared_brand_config(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
-    body: Option<Json<SharedBrandConfigBody>>,
+    body: Option<Json<SharedBrandConfigPayload>>,
 ) -> Result<(StatusCode, Json<Value>), ApiError> {
     ensure_account(&state.db, account_id).await?;
     if !can_manage_account(&state.db, auth.id, account_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
-    let body = body
-        .map(|Json(body)| body)
-        .unwrap_or(SharedBrandConfigBody::Flat(SharedBrandConfigPayload {
+    let payload = body
+        .map(|Json(value)| value)
+        .unwrap_or(SharedBrandConfigPayload {
             name: None,
             brand_config_md5: None,
-        }));
-    // Both keys are documented Required for the share.
-    let (name, md5) = body.into_options();
-    let name = name.ok_or_else(|| ApiError::Validation("name is required".into()))?;
-    let md5 = md5.ok_or_else(|| ApiError::Validation("brand_config_md5 is required".into()))?;
-    ensure_brand_config(&state.db, &md5).await?;
+        });
+    let (name, md5) = payload.into_params()?;
 
-    // The table has `created_at DEFAULT now()` but `updated_at` is NOT NULL
-    // without a default, so both timestamps are set explicitly.
     let row: SharedBrandConfigRow = sqlx::query_as(
-        "INSERT INTO shared_brand_configs \
-         (account_id, name, brand_config_md5, created_at, updated_at) \
-         VALUES ($1, $2, $3, now(), now()) \
+        "INSERT INTO shared_brand_configs (account_id, name, brand_config_md5) \
+         VALUES ($1, $2, $3) \
          RETURNING id, account_id, name, brand_config_md5, created_at, updated_at",
     )
     .bind(account_id)
@@ -195,7 +150,7 @@ async fn update_shared_brand_config(
     State(state): State<AppState>,
     Path((account_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
-    body: Option<Json<SharedBrandConfigBody>>,
+    body: Option<Json<SharedBrandConfigPayload>>,
 ) -> Result<Json<Value>, ApiError> {
     ensure_account(&state.db, account_id).await?;
 
@@ -207,17 +162,13 @@ async fn update_shared_brand_config(
         return Err(ApiError::Forbidden);
     }
 
-    let body = body
-        .map(|Json(body)| body)
-        .unwrap_or(SharedBrandConfigBody::Flat(SharedBrandConfigPayload {
+    let payload = body
+        .map(|Json(value)| value)
+        .unwrap_or(SharedBrandConfigPayload {
             name: None,
             brand_config_md5: None,
-        }));
-    // Canvas `update` only touches the attributes the caller sent.
-    let (name, md5) = body.into_options();
-    let name = name.unwrap_or_else(|| row.name.clone());
-    let md5 = md5.unwrap_or(row.brand_config_md5);
-    ensure_brand_config(&state.db, &md5).await?;
+        });
+    let (name, md5) = payload.into_params()?;
 
     let updated: SharedBrandConfigRow = sqlx::query_as(
         "UPDATE shared_brand_configs \

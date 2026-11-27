@@ -149,22 +149,6 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
         .await;
 }
 
-/// The routes under test resolve "the root account" to the lowest-id live
-/// root account in the database (Canvas semantics: one root per install),
-/// while every test here seeds its own prefixed root account and deletes it
-/// in cleanup.  Two tests running at once (--test-threads=2) can therefore
-/// flip the resolved root between two calls of a test that relies on its
-/// stability — the manually-created-courses idempotency route creates a
-/// second sub-account under the new root instead of answering the stored
-/// one.  The mutex runs this binary's tests one at a time so a sibling's
-/// cleanup can never interleave.
-static ROOT_EXCLUSIVE: std::sync::LazyLock<tokio::sync::Mutex<()>> =
-    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
-
-async fn root_exclusive() -> tokio::sync::MutexGuard<'static, ()> {
-    ROOT_EXCLUSIVE.lock().await
-}
-
 // ---------------------------------------------------------------------------
 // PUT /accounts/{accountId} — edge cases and response shape
 // ---------------------------------------------------------------------------
@@ -177,7 +161,6 @@ async fn update_account_empty_body_is_ok() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    let _roots = root_exclusive().await;
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let token = auth(admin, "admin");
@@ -215,7 +198,6 @@ async fn update_account_response_has_all_fields() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    let _roots = root_exclusive().await;
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let token = auth(admin, "admin");
@@ -259,7 +241,6 @@ async fn update_account_move_into_own_subtree_is_bad_request() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    let _roots = root_exclusive().await;
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let token = auth(admin, "admin");
@@ -293,7 +274,6 @@ async fn manually_created_courses_account_any_authenticated_user() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    let _roots = root_exclusive().await;
 
     // A student (non-admin) user who has no account admin grants.
     let student = seed_user(&pool, &prefix, "Student", "student").await;
@@ -319,7 +299,6 @@ async fn manually_created_courses_account_idempotent_by_id() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    let _roots = root_exclusive().await;
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let token = auth(admin, "admin");
@@ -358,13 +337,10 @@ async fn delete_user_on_subaccount_always_404() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    let _roots = root_exclusive().await;
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let token = auth(admin, "admin");
-    // Dedicated root account (issue #75): the shared account 1 is never
-    // mutated — grants and sub-accounts stay private to this test.
-    let root = seed_account(&pool, &format!("{prefix}-Root"), None).await;
+    let root = root_account(&pool).await;
     let child = seed_account(&pool, &format!("{prefix}-Child"), Some(root)).await;
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
 
@@ -393,12 +369,10 @@ async fn delete_user_unassociated_user_not_found() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    let _roots = root_exclusive().await;
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let token = auth(admin, "admin");
-    // Dedicated root account (issue #75): never the shared account 1.
-    let root = seed_account(&pool, &format!("{prefix}-Root"), None).await;
+    let root = root_account(&pool).await;
     // A user that exists in the DB but has no account_users grant and no
     // enrollments in any course of this account's subtree.
     let ghost = seed_user(&pool, &prefix, "Ghost", "student").await;
@@ -428,7 +402,6 @@ async fn acceptable_use_policy_no_auth_required() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    let _roots = root_exclusive().await;
     let _ = &prefix;
 
     // No Authorization header at all — must not be 401.
@@ -447,7 +420,6 @@ async fn acceptable_use_policy_uses_camel_case_redirect_url() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    let _roots = root_exclusive().await;
 
     // ToS rows are keyed on the shared root account (UNIQUE account_id); other
     // test binaries mutate that row in parallel. Serialize with a session-level
@@ -504,7 +476,6 @@ async fn acceptable_use_policy_content_field_when_no_external_url() {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
-    let _roots = root_exclusive().await;
 
     // Serialize against the other ToS test binaries (shared root account).
     let mut lock_conn = pool.acquire().await.expect("lock connection");

@@ -2,7 +2,7 @@
 
 Build: `target/debug/star-http`
 
-Passed: 166/460
+Passed: 110/460
 
 Fallback rate: not reported by this build
 
@@ -10,48 +10,52 @@ Fallback rate: not reported by this build
 
 | Cases | Id | Where | Kind |
 | ---: | --- | --- | --- |
-| 181 | `d04de58a` | `header cache-control` | text |
-| 42 | `59f5f378` | `status` | 200→404 |
-| 34 | `59f5f078` | `status` | 200→403 |
-| 30 | `4e1b1758` | `header link` | missing key |
-| 29 | `84139eb4` | `header pragma` | missing key |
-| 28 | `862e729b` | `body $` | type |
-| 28 | `6b521040` | `body` | text |
-| 27 | `e06d529c` | `header set-cookie` | text |
-| 27 | `7ec02a16` | `body $.errors[].message` | value |
-| 24 | `d506e5b1` | `body $.status` | missing key |
-| 20 | `bf07e579` | `status` | 403→404 |
+| 227 | `d04de58a` | `header cache-control` | text |
+| 77 | `59f5f378` | `status` | 200→404 |
+| 43 | `84139eb4` | `header pragma` | missing key |
+| 38 | `4e1b1758` | `header link` | missing key |
+| 38 | `d506e5b1` | `body $.status` | missing key |
+| 36 | `59f5f078` | `status` | 200→403 |
+| 36 | `862e729b` | `body $` | type |
+| 35 | `bf07e579` | `status` | 403→404 |
+| 34 | `6b521040` | `body` | text |
+| 30 | `e06d529c` | `header set-cookie` | text |
+| 26 | `8e66a14e` | `body $.id` | missing key |
+| 24 | `7ec02a16` | `body $.errors[].message` | value |
+| 21 | `5a352777` | `body` | lines added |
 | 20 | `84764fab` | `status` | 404→403 |
-| 17 | `8e66a14e` | `body $.id` | missing key |
-| 17 | `5a352777` | `body` | lines added |
+| 17 | `9c827749` | `body $.errors` | type |
 | 16 | `d088d7d7` | `body $.message` | missing key |
 | 15 | `0da8054c` | `header content-type` | text |
-| 13 | `1388bc4e` | `body $` | length |
 | 13 | `ea00df59` | `status` | 400→403 |
-| 13 | `9c827749` | `body $.errors` | type |
-| 9 | `847351ab` | `status` | 404→415 |
-| 8 | `451c2498` | `status` | 204→404 |
-| 8 | `ea00de59` | `status` | 400→404 |
-| 7 | `c99aa66e` | `body $.errors` | missing key |
-| 6 | `59f28678` | `status` | 200→415 |
-| 6 | `d62ae6e8` | `body` | lines missing |
-| 6 | `96a328ab` | `status` | 404→200 |
-| 5 | `363352ad` | `body $.error` | missing key |
+| 13 | `ea00de59` | `status` | 400→404 |
+| 12 | `1388bc4e` | `body $` | length |
+| 12 | `451c2498` | `status` | 204→404 |
+| 8 | `fbfed8ad` | `body $.url` | missing key |
+| 7 | `363352ad` | `body $.error` | missing key |
+| 7 | `59f28678` | `status` | 200→415 |
+| 6 | `847351ab` | `status` | 404→415 |
+| 6 | `b0ad2aee` | `body $.read` | missing key |
+| 6 | `7ad71360` | `body $.revision_id` | missing key |
+| 5 | `e9fdd959` | `status` | 400→415 |
+| 5 | `7a1c3f36` | `body $.errors[].code` | missing key |
 | 4 | `b61a6028` | `status` | 500→200 |
-| 4 | `847652ab` | `status` | 404→400 |
-| 4 | `e9fdd959` | `status` | 400→415 |
-| 4 | `7a1c3f36` | `body $.errors[].code` | missing key |
-| 4 | `fbfed8ad` | `body $.url` | missing key |
+| 4 | `c99aa66e` | `body $.errors` | missing key |
+| 4 | `4b262163` | `body $[].id` | value |
+| 4 | `d62ae6e8` | `body` | lines missing |
+| 4 | `ea7fde28` | `status` | 500→404 |
 | 3 | `ce5768af` | `body $.id` | value |
-| 3 | `8caa558f` | `header content-type` | missing key |
+| 3 | `847652ab` | `status` | 404→400 |
 | 3 | `946b26c3` | `header location` | missing key |
-| 3 | `19fe84fe` | `status` | 401→200 |
-| 3 | `7ad71360` | `body $.revision_id` | missing key |
+| 3 | `0d525965` | `header link` | text |
+| 3 | `3ccedb4f` | `status` | 422→403 |
+| 3 | `bf07e979` | `status` | 403→400 |
 | 2 | `bb192150` | `body $.status` | extra key |
-| 2 | `8e5bed78` | `status` | 200→204 |
 | 2 | `2867bf27` | `body $.created_at` | value |
 | 2 | `e0eac759` | `status` | 400→500 |
 | 2 | `5292d478` | `status` | 200→500 |
+| 2 | `96a328ab` | `status` | 404→200 |
+| 2 | `7e12c68a` | `body $.html` | missing key |
 | 2 | `ea836b28` | `status` | 500→415 |
 | 2 | `0191ac8c` | `status` | 201→404 |
 | 2 | `59f5ef78` | `status` | 200→400 |
@@ -63,54 +67,67 @@ Fallback rate: not reported by this build
 | 2 | `0895895f` | `header access-control-allow-methods` | missing key |
 | 2 | `d150aa07` | `header access-control-allow-origin` | missing key |
 | 2 | `06ffc01c` | `header access-control-request-method` | missing key |
+| 2 | `19fe84fe` | `status` | 401→200 |
 | 2 | `e5f63a90` | `header content-transfer-encoding` | missing key |
-| 2 | `3ccedb4f` | `status` | 422→403 |
+| 2 | `ad489779` | `status` | 403→204 |
+| 2 | `8caa558f` | `header content-type` | missing key |
+| 2 | `97540306` | `body $.join_level` | value |
 | 2 | `34dd3427` | `body $.context_type` | missing key |
 | 2 | `f810c4ea` | `status` | 302→403 |
-| 2 | `0d525965` | `header link` | text |
 | 2 | `ea7fe128` | `status` | 500→403 |
 | 2 | `6591b220` | `body $.message` | value |
+| 2 | `284237a2` | `body $.graded` | missing key |
 | 2 | `efc6d93d` | `body $.manual_mark_as_read` | missing key |
-| 2 | `bf07e979` | `status` | 403→400 |
 | 1 | `4cb105ff` | `status` | 401→403 |
 | 1 | `04edf02b` | `body $.site_admin_self_token_create` | missing key |
 | 1 | `5f045dfa` | `body $.quiz_ip_filters` | missing key |
-| 1 | `187da715` | `body $.calendar_contexts_limit` | extra key |
 | 1 | `8a77b5c6` | `body $.timetable` | extra key |
 | 1 | `f8a8bd64` | `body $.account_id` | missing key |
 | 1 | `8e791948` | `body $.status` | value |
-| 1 | `f3bc1db5` | `body $["10"]` | missing key |
+| 1 | `d874e882` | `body $["1"]` | missing key |
 | 1 | `1c47c326` | `body $.id` | type |
 | 1 | `e05b6599` | `body $.read_outcomes` | missing key |
 | 1 | `16f83452` | `body $.use_default_discussion_settings` | value |
 | 1 | `9a628c86` | `body $.created_at` | missing key |
-| 1 | `4b262163` | `body $[].id` | value |
 | 1 | `2fd06ba3` | `body $.success` | missing key |
-| 1 | `7e12c68a` | `body $.html` | missing key |
 | 1 | `ad489379` | `status` | 403→200 |
 | 1 | `45192798` | `status` | 204→415 |
 | 1 | `139c3d9d` | `body $.allow_final_grade_override` | missing key |
 | 1 | `7d67a581` | `body $.unread_entries` | missing key |
-| 1 | `5c20b18d` | `header x-request-context-id` | text |
-| 1 | `59f5ee78` | `status` | 200→401 |
 | 1 | `451c2998` | `status` | 204→403 |
 | 1 | `ea7fe228` | `status` | 500→400 |
 | 1 | `f810c9ea` | `status` | 302→404 |
 | 1 | `2e708528` | `body $.quota` | value |
-| 1 | `ea7fde28` | `status` | 500→404 |
+| 1 | `c37ba3e2` | `body $.quota` | missing key |
 | 1 | `00c26cb1` | `header content-disposition` | missing key |
+| 1 | `bd14c25e` | `body $.participate` | missing key |
 | 1 | `fa3db4ca` | `body $.duplicates` | missing key |
 | 1 | `bfa50d61` | `body $.total` | missing key |
+| 1 | `3ccb554f` | `status` | 422→415 |
 | 1 | `e2775cc2` | `body $.errors[]` | type |
+| 1 | `afca6754` | `body $.errors[].field` | missing key |
 | 1 | `171679bc` | `header location` | text |
 | 1 | `c7f2b919` | `header content-disposition` | text |
-| 1 | `ad489779` | `status` | 403→204 |
 | 1 | `2b07d2b3` | `body $[].shortName` | value |
 | 1 | `c1869d73` | `body $.custom_colors` | missing key |
 | 1 | `7e18373e` | `body $.dashboard_positions` | missing key |
+| 1 | `131cc702` | `body $.needs_grading_count` | value |
 | 1 | `ea07f059` | `status` | 400→422 |
 
 ## Failing cases
+
+### accounts-get-acceptable-use-policy
+
+Arguments: `GET /api/v1/acceptable_use_policy`
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨M⟩GZ2BqCfuwucZsLFD…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%3D[..]_[..]_[..]_[..].[..].[..]; path=/; httponly
++ _csrf_token=MGZ2BqCfuwucZsLFDgpoWK5EePzpCesRU%2BgONVtwwg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
 
 ### accounts-get-accounts-237
 
@@ -236,21 +253,12 @@ body:
 
 Arguments: `GET /api/v1/accounts/6/permissions`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨I⟩%2BBG%2Bzu5cVluy…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%[..]%[..]%[..]%[..]%[..]_[..]-[..]-[..].[..].[..]; path=/; httponly
-+ _csrf_token=I%2BBG%2Bzu5cVluy7XU%2BqYyZhejCUcUu%2BeE%2BeL70SBiQA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
-```
-
 at body $.site_admin_self_token_create (missing key)
 
 body:
 
 ```diff
-- {"site_admin_self_token_create":false,"become_user":true,"import_sis":true,"create_access_tokens":true,"delete_access_tokens":true,"view_user_generated_access_tokens":true,"manage_account_memberships":true,"manage_account_settings":true,"manage_alerts":true,"manage_catalog":false,"manage_courses_admin":true,"manage_courses_add":true,"create_courses":true,"manage_courses_publish":true,"manage_courses_conclude":true,"manage_courses_reset":false,"manage_courses_delete":false,"undelete_courses":true,"view_archived_courses":false,"manage_data_services":true,"manage_course_visibility":true,"manage_developer_keys":true,"modify_site_admin_developer_keys":false,"moderate_user_content":true,"view_feature_flags":true,"manage_feature_flags":true,"manage_frozen_assignments":true,"manage_global_outcomes":false,"manage_jobs":false,"manage_lti_registrations":true,"manage_release_notes":false,"manage_master_courses":true,"manage_nav_menu_links":false,"manage_role_overrides":true,"manage_storage_quotas":true,"manage_sis":true,"manage_site_settings":false,"manage_rate_limiting":false,"manage_internal_settings":false,"manage_user_logins":true,"manage_dsr_requests":false,"manage_user_observers":true,"read_course_content":true,"read_course_list":true,"read_messages":false,"reset_any_mfa":false,"view_course_changes":true,"view_error_reports":false,"view_grade_changes":true,"view_jobs":false,"view_notifications":false,"view_statistics":true,"create_collaborations":true,"create_conferences":true,"create_forum":true,"generate_observer_pairing_code":true,"import_outcomes":true,"manage_lti_add":true,"manage_lti_edit":true,"manage_lti_delete":true,"allow_course_admin_actions":true,"add_teacher_to_course":true,"remove_teacher_from_course":true,"add_ta_to_course":true,"remove_ta_from_course":true,"add_observer_to_course":true,"remove_observer_from_course":true,"add_designer_to_course":true,"remove_designer_from_course":true,"manage_assignments_add":true,"manage_assignments_edit":true,"manage_assignments_delete":false,"manage_account_calendar_visibility":true,"manage_account_calendar_events":true,"manage_calendar":true,"manage_course_content_add":true,"manage_course_content_edit":true,"manage_course_content_delete":true,"add_course_template":true,"edit_course_template":true,"delete_course_template":true,"manage_account_banks":true,"share_banks_with_subaccounts":false,"manage_files_add":true,"manage_files_edit":true,"manage_files_delete":true,"manage_grades":true,"manage_groups_add":true,"manage_groups_manage":true,"manage_groups_delete":true,"manage_tags_add":true,"manage_tags_manage":true,"manage_tags_delete":true,"manage_interaction_alerts":true,"manage_outcomes":true,"manage_proficiency_calculations":true,"manage_proficiency_scales":true,"manage_sections_add":true,"manage_sections_edit":true,"manage_sections_delete":true,"manage_students":true,"add_student_to_course":true,"remove_student_from_course":true,"temporary_enrollments_add":false,"temporary_enrollments_edit":false,"temporary_enrollments_delete":false,"manage_rubrics":true,"manage_wiki_create":true,"manage_wiki_update":true,"manage_wiki_delete":true,"moderate_forum":true,"new_quizzes_view_ip_address":true,"post_to_forum":true,"proxy_assignment_submission":false,"read_announcements":true,"read_email_addresses":true,"read_forum":true,"read_question_banks":true,"read_reports":true,"read_roster":true,"read_sis":true,"select_final_grade":true,"send_messages":true,"send_messages_all":true,"view_audit_trail":true,"view_all_grades":true,"view_group_pages":true,"view_quiz_answer_audits":true,"view_user_logins":true,"view_admin_analytics":false,"view_analytics_hub":false,"view_ask_questions_pinboards":false,"view_ask_questions_analytics":false,"manage_ask_questions_analytics_context":false,"view_students_in_need":false,"view_students_in_need_in_course":false,"view_course_readiness":false,"view_title_iv_financial_aid_report":false,"view_rsi_report":false,"view_accessibility_insights":false,"manage_impact":true,"manage_institutional_tags_view":false,"manage_institutional_tags_create":false,"manage_institutional_tags_edit":false,"access_oak":false,"access_oak_teacher":false,"block_editor_template_editor":false,"block_editor_global_template_editor":false,"new_quizzes_multiple_session_detection":true,"manage_users_in_bulk":false,"manage_rules_view":false,"manage_rules_add":false,"manage_rules_edit":false,"manage_rules_delete":false,"manage_course_details":false,"manage_course_navigation":false,"manage_course_feature_options":false,"edit_discussion_anonymity":false,"edit_discussion_options":false,"edit_discussion_views":false,"apply_default_discussion_options":false,"read":true,"read_as_admin":true,"manage":true,"update":true,"delete":true,"read_outcomes":true,"read_terms":true,"read_files":true,"launch_external_tool":true,"read_global_outcomes":false,"view_bounced_emails":false,"view_account_calendar_details":true,"make_submission_comments":false,"manage_grading_schemes":true}
+- {"site_admin_self_token_create":false,"become_user":true,"import_sis":true,"create_access_tokens":true,"delete_access_tokens":true,"view_user_generated_access_tokens":true,"manage_account_memberships":true,"manage_account_settings":true,"manage_alerts":true,"manage_catalog":false,"manage_courses_admin":true,"manage_courses_add":true,"create_courses":true,"manage_courses_publish":true,"manage_courses_conclude":true,"manage_courses_reset":false,"manage_courses_delete":false,"undelete_courses":true,"view_archived_courses":false,"manage_data_services":true,"manage_course_visibility":true,"manage_developer_keys":true,"modify_site_admin_developer_keys":false,"moderate_user_content":true,"view_feature_flags":true,"manage_feature_flags":true,"manage_frozen_assignments":true,"manage_global_outcomes":false,"manage_jobs":false,"manage_lti_registrations":true,"manage_release_notes":false,"manage_master_courses":true,"manage_nav_menu_links":false,"manage_role_overrides":true,"manage_storage_quotas":true,"manage_sis":true,"manage_site_settings":false,"manage_rate_limiting":false,"manage_internal_settings":false,"manage_user_logins":true,"manage_dsr_requests":false,"manage_user_observers":true,"read_course_content":true,"read_course_list":true,"read_messages":false,"reset_any_mfa":false,"view_course_changes":true,"view_error_reports":false,"view_grade_changes":true,"view_jobs":false,"view_notifications":false,"view_statistics":true,"create_collaborations":true,"create_conferences":true,"create_forum":true,"generate_observer_pairing_code":true,"import_outcomes":true,"manage_lti_add":true,"manage_lti_edit":true,"manage_lti_delete":false,"allow_course_admin_actions":true,"add_teacher_to_course":true,"remove_teacher_from_course":true,"add_ta_to_course":true,"remove_ta_from_course":true,"add_observer_to_course":true,"remove_observer_from_course":true,"add_designer_to_course":true,"remove_designer_from_course":true,"manage_assignments_add":true,"manage_assignments_edit":true,"manage_assignments_delete":false,"manage_account_calendar_visibility":true,"manage_account_calendar_events":true,"manage_calendar":true,"manage_course_content_add":true,"manage_course_content_edit":true,"manage_course_content_delete":true,"add_course_template":true,"edit_course_template":true,"delete_course_template":true,"manage_account_banks":true,"share_banks_with_subaccounts":false,"manage_files_add":true,"manage_files_edit":true,"manage_files_delete":true,"manage_grades":true,"manage_groups_add":true,"manage_groups_manage":true,"manage_groups_delete":false,"manage_tags_add":true,"manage_tags_manage":true,"manage_tags_delete":true,"manage_interaction_alerts":true,"manage_outcomes":true,"manage_proficiency_calculations":true,"manage_proficiency_scales":true,"manage_sections_add":true,"manage_sections_edit":true,"manage_sections_delete":true,"manage_students":true,"add_student_to_course":true,"remove_student_from_course":true,"temporary_enrollments_add":false,"temporary_enrollments_edit":false,"temporary_enrollments_delete":false,"manage_rubrics":true,"manage_wiki_create":true,"manage_wiki_update":true,"manage_wiki_delete":true,"moderate_forum":true,"new_quizzes_view_ip_address":true,"post_to_forum":true,"proxy_assignment_submission":false,"read_announcements":true,"read_email_addresses":true,"read_forum":true,"read_question_banks":true,"read_reports":true,"read_roster":true,"read_sis":true,"select_final_grade":true,"send_messages":true,"send_messages_all":true,"view_audit_trail":true,"view_all_grades":true,"view_group_pages":true,"view_quiz_answer_audits":true,"view_user_logins":true,"view_admin_analytics":false,"view_analytics_hub":false,"view_ask_questions_pinboards":false,"view_ask_questions_analytics":false,"manage_ask_questions_analytics_context":false,"view_students_in_need":false,"view_students_in_need_in_course":false,"view_course_readiness":false,"view_title_iv_financial_aid_report":false,"view_rsi_report":false,"view_accessibility_insights":false,"manage_impact":true,"manage_institutional_tags_view":false,"manage_institutional_tags_create":false,"manage_institutional_tags_edit":false,"access_oak":false,"access_oak_teacher":false,"block_editor_template_editor":false,"block_editor_global_template_editor":false,"new_quizzes_multiple_session_detection":true,"manage_users_in_bulk":false,"manage_rules_view":false,"manage_rules_add":false,"manage_rules_edit":false,"manage_rules_delete":false,"manage_course_details":false,"manage_course_navigation":false,"manage_course_feature_options":false,"edit_discussion_anonymity":false,"edit_discussion_options":false,"edit_discussion_views":false,"apply_default_discussion_options":false,"read":true,"read_as_admin":true,"manage":true,"update":true,"delete":true,"read_outcomes":true,"read_terms":true,"read_files":true,"launch_external_tool":true,"read_global_outcomes":false,"view_bounced_emails":false,"view_account_calendar_details":true,"make_submission_comments":false,"manage_grading_schemes":true}
 + {"become_user":false,"create_courses":false,"manage_account_memberships":false,"manage_admin_roles":false,"manage_alerts":false,"manage_courses_admin":false,"manage_feature_flags":false,"manage_settings":false,"manage_sis":false,"view_statistics":false}
 ```
 
@@ -282,15 +290,6 @@ header link:
 ```diff
 - <http://127.0.0.1:[..]/api/v1/accounts/6/quiz_ip_filters?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/accounts/6/quiz_ip_filters?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/accounts/6/quiz_ip_filters?page=1&per_page=10>; rel="last"
 (missing)
-```
-
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨4⟩S3hLNaztJcegSHum…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%[..] [..].[..].[..]; path=/; httponly
-+ _csrf_token=4S3hLNaztJcegSHumA2ZsnLw%2B%2BXobeqENGe0IyqTYA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.quiz_ip_filters (missing key)
@@ -470,6 +469,15 @@ body:
 
 Arguments: `GET /api/v1/manageable_accounts`
 
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨B⟩jZ4YfQA1WyXaT8as…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]-[..]-[..].[..]; path=/; httponly
++ _csrf_token=BjZ4YfQA1WyXaT8asDIYSwOMxr7yN17B4D%2FDklCscg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
 at body $ (length), length 2 expected, 0 got
 
 body:
@@ -490,28 +498,6 @@ body:
 ```diff
 - {"id":9,"name":"Manually-Created Courses","parent_account_id":4,"root_account_id":null,"workflow_state":"active","uuid":"Hp6ITN1nNVCwGH4CJSgSm0pNkOaFWesKyzH8Uca2","default_time_zone":"America/Denver"}
 + {"id":2,"name":"Manually-Created Courses","parent_account_id":1,"root_account_id":1,"workflow_state":"active"}
-```
-
-### accounts-get-settings-environment
-
-Arguments: `GET /api/v1/settings/environment`
-
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨0⟩h1djBX72R8sLmCFF…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%[..]%[..]%3D[..]_[..]_[..]-[..]-[..]-[..].[..]; path=/; httponly
-+ _csrf_token=0h1djBX72R8sLmCFFm0%2F5zRJvY924lt0BTFppSihqw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
-```
-
-at body $.calendar_contexts_limit (extra key)
-
-body:
-
-```diff
-- {}
-+ {"calendar_contexts_limit":3,"open_registration":true}
 ```
 
 ### accounts-put-accounts
@@ -548,30 +534,39 @@ body:
 
 Arguments: `DELETE /api/v1/courses/1/assignments/1`
 
-at status (200→204)
+at status (403→404)
 
 status:
 
 ```diff
-expected 200, got 204
+expected 403, got 404
 ```
 
-at header content-type (missing key)
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
 
-header content-type:
+header cache-control:
 
 ```diff
-- application/json; charset=utf-8
+- no-store
++ no-cache
+```
+
+at header pragma (missing key)
+
+header pragma:
+
+```diff
+- no-cache
 (missing)
 ```
 
-at body (lines missing), line 1, length 4 expected, 0 got
+at body $.status (missing key)
 
 body:
 
 ```diff
-- [..]
-(trailing newline: expected false, got true)
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### calendar-events-api-delete-calendar-events
@@ -915,30 +910,17 @@ body:
 + [{"id":"course_1","name":"Parity Course","permissions":{},"type":"context","user_count":3}]
 ```
 
-### conversations-post-conversations-remove-messages
+### conversations-post-conversations-add-recipients
 
-Arguments: `POST /api/v1/conversations/1/remove_messages`
+Arguments: `POST /api/v1/conversations/1/add_recipients`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨u⟩HgwF8ZY7qGhWjlHt…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%3D[..]_[..]_[..]-[..].[..]_[..].[..]; path=/; httponly
-+ _csrf_token=uHgwF8ZY7qGhWjlHtM5fDzrNE7f2WAFKbEMGtCBvgQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
-```
-
-### conversations-put-conversations-restore
-
-Arguments: `PUT /api/v1/conversations/restore`
-
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨Z⟩G07qVCoFoSJHWouf…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨C⟩ak8zzCpcrSG4QZgb…"
 
 header set-cookie:
 
 ```diff
-- _csrf_token=[..]%[..]%[..]%[..]%[..]%3D[..]_[..]_[..]_[..]-[..]_[..]_[..]_[..].[..].[..]; path=/; httponly
-+ _csrf_token=ZG07qVCoFoSJHWoufDpWI4ztQ9kbCpSE2PApSoZiYA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+- _csrf_token=[..]%[..]%[..] [..]_[..]-[..].[..].[..]; path=/; httponly
++ _csrf_token=Cak8zzCpcrSG4QZgbaEmqLTdCzTeTRNbLyhG70hY5Q%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### courses-delete-courses
@@ -981,20 +963,33 @@ body:
 
 ```diff
 - {"id":1,"name":"Parity Course","course_code":"PARITY","account_id":6,"created_at":"2026-11-26T20:10:16Z","start_at":null,"default_view":"modules","enrollment_term_id":6,"is_public":null,"grading_standard_id":null,"root_account_id":6,"uuid":"vjyH5dTcmA5kYHx39sliWmwHoWQjDUPZxcwwNz8f","license":null,"grade_passback_setting":null,"end_at":null,"public_syllabus":false,"public_syllabus_to_auth":false,"storage_quota_mb":500,"is_public_to_auth_users":false,"homeroom_course":false,"course_color":null,"friendly_name":null,"hide_final_grades":false,"apply_assignment_group_weights":false,"calendar":{"ics":"http://127.0.0.1:[..]/feeds/calendars/course_vjyH5dTcmA5kYHx39sliWmwHoWQjDUPZxcwwNz8f.ics"},"time_zone":"America/Denver","blueprint":false,"template":false,"sis_course_id":null,"sis_import_id":null,"integration_id":null,"enrollments":[{"type":"teacher","role":"TeacherEnrollment","role_id":44,"user_id":1,"enrollment_state":"active","limit_privileges_to_course_section":false}],"workflow_state":"available","restrict_enrollments_to_course_dates":false}
-+ {"id":1,"name":"Parity Course","course_code":"PARITY","workflow_state":"available","created_at":"2026-11-27T14:23:43.613643Z","updated_at":"2026-11-27T14:23:43.613643Z"}
++ {"id":1,"name":"Parity Course","course_code":"PARITY","workflow_state":"available","created_at":"2026-11-27T14:57:21.508889Z","updated_at":"2026-11-27T14:57:21.508889Z"}
 ```
 
 ### courses-get-courses-289
 
 Arguments: `GET /api/v1/courses/1`
 
-at body $.created_at, char 9: expected "2026-11-2⟨6⟩T20:10:16Z", got "2026-11-2⟨7⟩T14:23:43.613643…"
+at body $.created_at, char 9: expected "2026-11-2⟨6⟩T20:10:16Z", got "2026-11-2⟨7⟩T14:57:21.508889…"
 
 body:
 
 ```diff
 - {"id":1,"name":"Parity Course","course_code":"PARITY","account_id":6,"created_at":"2026-11-26T20:10:16Z","start_at":null,"default_view":"modules","enrollment_term_id":6,"is_public":null,"grading_standard_id":null,"root_account_id":6,"uuid":"vjyH5dTcmA5kYHx39sliWmwHoWQjDUPZxcwwNz8f","license":null,"grade_passback_setting":null,"end_at":null,"public_syllabus":false,"public_syllabus_to_auth":false,"storage_quota_mb":500,"is_public_to_auth_users":false,"homeroom_course":false,"course_color":null,"friendly_name":null,"hide_final_grades":false,"apply_assignment_group_weights":false,"calendar":{"ics":"http://127.0.0.1:[..]/feeds/calendars/course_vjyH5dTcmA5kYHx39sliWmwHoWQjDUPZxcwwNz8f.ics"},"time_zone":"America/Denver","blueprint":false,"template":false,"sis_course_id":null,"sis_import_id":null,"integration_id":null,"enrollments":[{"type":"teacher","role":"TeacherEnrollment","role_id":44,"user_id":1,"enrollment_state":"active","limit_privileges_to_course_section":false}],"workflow_state":"available","restrict_enrollments_to_course_dates":false}
-+ {"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:51468/feeds/calendars/course_Course_44e9fbc419cd4e2091f0ccad7fd39c5681dc5158.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:23:43.613643Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":1,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"44e9fbc419cd4e2091f0ccad7fd39c5681dc5158","workflow_state":"available"}
++ {"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:62855/feeds/calendars/course_Course_d7f599c0fe2948c7b7173361ac57981538c7a687.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:57:21.508889Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":1,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"d7f599c0fe2948c7b7173361ac57981538c7a687","workflow_state":"available"}
+```
+
+### courses-get-courses-activity-stream-summary
+
+Arguments: `GET /api/v1/courses/1/activity_stream/summary`
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨a⟩WWRprDw0e7doEQq%…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]_[..].[..].[..]; path=/; httponly
++ _csrf_token=aWWRprDw0e7doEQq%2BoEEOx0GbuYyla4tklV2EOgPMg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### courses-get-courses-bulk-user-progress
@@ -1052,12 +1047,12 @@ body:
 
 Arguments: `GET /api/v1/courses/1/effective_due_dates`
 
-at body $["10"] (missing key)
+at body $["1"] (missing key)
 
 body:
 
 ```diff
-- {"10":{"3":{"due_at":"2026-12-27T12:16:12Z","grading_period_id":null,"in_closed_grading_period":false},"8":{"due_at":"2026-12-27T12:16:12Z","grading_period_id":null,"in_closed_grading_period":false}}}
+- {"1":{"3":{"due_at":null,"grading_period_id":null,"in_closed_grading_period":false},"8":{"due_at":null,"grading_period_id":null,"in_closed_grading_period":false},"9":{"due_at":null,"grading_period_id":null,"in_closed_grading_period":false}},"10":{"3":{"due_at":"2026-12-27T12:16:12Z","grading_period_id":null,"in_closed_grading_period":false},"8":{"due_at":"2026-12-27T12:16:12Z","grading_period_id":null,"in_closed_grading_period":false},"9":{"due_at":"2026-12-27T12:16:12Z","grading_period_id":null,"in_closed_grading_period":false}}}
 + {}
 ```
 
@@ -1083,7 +1078,7 @@ at body $.read_outcomes (missing key)
 body:
 
 ```diff
-- {"read":true,"read_outcomes":true,"read_syllabus":true,"read_files":true,"site_admin_self_token_create":false,"become_user":true,"import_sis":true,"create_access_tokens":true,"delete_access_tokens":true,"view_user_generated_access_tokens":true,"manage_account_memberships":true,"manage_account_settings":true,"manage_alerts":true,"manage_catalog":false,"manage_courses_admin":true,"manage_courses_add":true,"manage_courses_publish":true,"manage_courses_conclude":true,"manage_courses_reset":false,"manage_courses_delete":false,"undelete_courses":true,"view_archived_courses":false,"manage_data_services":true,"manage_course_visibility":true,"manage_developer_keys":true,"modify_site_admin_developer_keys":false,"moderate_user_content":true,"view_feature_flags":true,"manage_feature_flags":true,"manage_frozen_assignments":true,"manage_global_outcomes":false,"manage_jobs":false,"manage_lti_registrations":true,"manage_release_notes":false,"manage_master_courses":true,"manage_nav_menu_links":false,"manage_role_overrides":true,"manage_storage_quotas":true,"manage_sis":true,"manage_site_settings":false,"manage_rate_limiting":false,"manage_internal_settings":false,"manage_user_logins":true,"manage_dsr_requests":false,"manage_user_observers":true,"read_course_content":true,"read_course_list":true,"read_messages":false,"reset_any_mfa":false,"view_course_changes":true,"view_error_reports":false,"view_grade_changes":true,"view_jobs":false,"view_notifications":false,"view_statistics":true,"create_collaborations":true,"create_conferences":true,"create_forum":true,"generate_observer_pairing_code":true,"import_outcomes":true,"manage_lti_add":true,"manage_lti_edit":true,"manage_lti_delete":true,"allow_course_admin_actions":true,"add_teacher_to_course":true,"remove_teacher_from_course":true,"add_ta_to_course":true,"remove_ta_from_course":true,"add_observer_to_course":true,"remove_observer_from_course":true,"add_designer_to_course":true,"remove_designer_from_course":true,"manage_assignments_add":true,"manage_assignments_edit":true,"manage_assignments_delete":true,"manage_account_calendar_visibility":true,"manage_account_calendar_events":true,"manage_calendar":true,"manage_course_content_add":true,"manage_course_content_edit":true,"manage_course_content_delete":true,"add_course_template":true,"edit_course_template":true,"delete_course_template":true,"manage_account_banks":true,"share_banks_with_subaccounts":false,"manage_files_add":true,"manage_files_edit":true,"manage_files_delete":true,"manage_grades":true,"manage_groups_add":true,"manage_groups_manage":true,"manage_groups_delete":true,"manage_tags_add":true,"manage_tags_manage":true,"manage_tags_delete":true,"manage_interaction_alerts":true,"manage_outcomes":true,"manage_proficiency_calculations":true,"manage_proficiency_scales":true,"manage_sections_add":true,"manage_sections_edit":true,"manage_sections_delete":true,"manage_students":true,"add_student_to_course":true,"remove_student_from_course":true,"temporary_enrollments_add":false,"temporary_enrollments_edit":false,"temporary_enrollments_delete":false,"manage_rubrics":true,"manage_wiki_create":true,"manage_wiki_update":true,"manage_wiki_delete":true,"moderate_forum":true,"new_quizzes_view_ip_address":true,"post_to_forum":true,"proxy_assignment_submission":false,"read_announcements":true,"read_email_addresses":true,"read_forum":true,"read_question_banks":true,"read_reports":true,"read_roster":true,"read_sis":true,"select_final_grade":true,"send_messages":true,"send_messages_all":true,"view_audit_trail":true,"view_all_grades":true,"view_group_pages":true,"view_quiz_answer_audits":true,"view_user_logins":true,"view_admin_analytics":false,"view_analytics_hub":false,"view_ask_questions_pinboards":false,"view_ask_questions_analytics":false,"manage_ask_questions_analytics_context":false,"view_students_in_need":false,"view_students_in_need_in_course":false,"view_course_readiness":false,"view_title_iv_financial_aid_report":false,"view_rsi_report":false,"view_accessibility_insights":false,"manage_impact":true,"manage_institutional_tags_view":false,"manage_institutional_tags_create":false,"manage_institutional_tags_edit":false,"access_oak":false,"access_oak_teacher":false,"block_editor_template_editor":false,"block_editor_global_template_editor":false,"new_quizzes_multiple_session_detection":true,"manage_users_in_bulk":false,"manage_rules_view":false,"manage_rules_add":false,"manage_rules_edit":false,"manage_rules_delete":false,"manage_course_details":false,"manage_course_navigation":false,"manage_course_feature_options":false,"edit_discussion_anonymity":false,"edit_discussion_options":false,"edit_discussion_views":false,"apply_default_discussion_options":false,"read_as_member":true,"participate_as_student":false,"read_grades":false,"reset_what_if_grades":false,"read_as_admin":true,"manage":true,"update":true,"view_unpublished_items":true,"read_rubrics":true,"use_student_view":true,"set_grading_scheme":true,"manage_grading_schemes":true,"reset_content":false,"delete":false,"read_prior_roster":true,"direct_share":true,"edit_course_availability":true,"update_nav":true,"update_course_details":true}
+- {"read":true,"read_outcomes":true,"read_syllabus":true,"read_files":true,"site_admin_self_token_create":false,"become_user":true,"import_sis":true,"create_access_tokens":true,"delete_access_tokens":true,"view_user_generated_access_tokens":true,"manage_account_memberships":true,"manage_account_settings":true,"manage_alerts":true,"manage_catalog":false,"manage_courses_admin":true,"manage_courses_add":true,"manage_courses_publish":true,"manage_courses_conclude":true,"manage_courses_reset":false,"manage_courses_delete":false,"undelete_courses":true,"view_archived_courses":false,"manage_data_services":true,"manage_course_visibility":true,"manage_developer_keys":true,"modify_site_admin_developer_keys":false,"moderate_user_content":true,"view_feature_flags":true,"manage_feature_flags":true,"manage_frozen_assignments":true,"manage_global_outcomes":false,"manage_jobs":false,"manage_lti_registrations":true,"manage_release_notes":false,"manage_master_courses":true,"manage_nav_menu_links":false,"manage_role_overrides":true,"manage_storage_quotas":true,"manage_sis":true,"manage_site_settings":false,"manage_rate_limiting":false,"manage_internal_settings":false,"manage_user_logins":true,"manage_dsr_requests":false,"manage_user_observers":true,"read_course_content":true,"read_course_list":true,"read_messages":false,"reset_any_mfa":false,"view_course_changes":true,"view_error_reports":false,"view_grade_changes":true,"view_jobs":false,"view_notifications":false,"view_statistics":true,"create_collaborations":true,"create_conferences":true,"create_forum":true,"generate_observer_pairing_code":true,"import_outcomes":true,"manage_lti_add":true,"manage_lti_edit":true,"manage_lti_delete":false,"allow_course_admin_actions":true,"add_teacher_to_course":true,"remove_teacher_from_course":true,"add_ta_to_course":true,"remove_ta_from_course":true,"add_observer_to_course":true,"remove_observer_from_course":true,"add_designer_to_course":true,"remove_designer_from_course":true,"manage_assignments_add":true,"manage_assignments_edit":true,"manage_assignments_delete":false,"manage_account_calendar_visibility":true,"manage_account_calendar_events":true,"manage_calendar":true,"manage_course_content_add":true,"manage_course_content_edit":true,"manage_course_content_delete":true,"add_course_template":true,"edit_course_template":true,"delete_course_template":true,"manage_account_banks":true,"share_banks_with_subaccounts":false,"manage_files_add":true,"manage_files_edit":true,"manage_files_delete":true,"manage_grades":true,"manage_groups_add":true,"manage_groups_manage":true,"manage_groups_delete":false,"manage_tags_add":true,"manage_tags_manage":true,"manage_tags_delete":true,"manage_interaction_alerts":true,"manage_outcomes":true,"manage_proficiency_calculations":true,"manage_proficiency_scales":true,"manage_sections_add":true,"manage_sections_edit":true,"manage_sections_delete":true,"manage_students":true,"add_student_to_course":true,"remove_student_from_course":true,"temporary_enrollments_add":false,"temporary_enrollments_edit":false,"temporary_enrollments_delete":false,"manage_rubrics":true,"manage_wiki_create":true,"manage_wiki_update":true,"manage_wiki_delete":true,"moderate_forum":true,"new_quizzes_view_ip_address":true,"post_to_forum":true,"proxy_assignment_submission":false,"read_announcements":true,"read_email_addresses":true,"read_forum":true,"read_question_banks":true,"read_reports":true,"read_roster":true,"read_sis":true,"select_final_grade":true,"send_messages":true,"send_messages_all":true,"view_audit_trail":true,"view_all_grades":true,"view_group_pages":true,"view_quiz_answer_audits":true,"view_user_logins":true,"view_admin_analytics":false,"view_analytics_hub":false,"view_ask_questions_pinboards":false,"view_ask_questions_analytics":false,"manage_ask_questions_analytics_context":false,"view_students_in_need":false,"view_students_in_need_in_course":false,"view_course_readiness":false,"view_title_iv_financial_aid_report":false,"view_rsi_report":false,"view_accessibility_insights":false,"manage_impact":true,"manage_institutional_tags_view":false,"manage_institutional_tags_create":false,"manage_institutional_tags_edit":false,"access_oak":false,"access_oak_teacher":false,"block_editor_template_editor":false,"block_editor_global_template_editor":false,"new_quizzes_multiple_session_detection":true,"manage_users_in_bulk":false,"manage_rules_view":false,"manage_rules_add":false,"manage_rules_edit":false,"manage_rules_delete":false,"manage_course_details":false,"manage_course_navigation":false,"manage_course_feature_options":false,"edit_discussion_anonymity":false,"edit_discussion_options":false,"edit_discussion_views":false,"apply_default_discussion_options":false,"read_as_member":true,"participate_as_student":false,"read_grades":false,"reset_what_if_grades":false,"read_as_admin":true,"manage":true,"update":true,"view_unpublished_items":true,"read_rubrics":true,"use_student_view":true,"set_grading_scheme":true,"manage_grading_schemes":true,"reset_content":false,"delete":false,"read_prior_roster":true,"direct_share":true,"edit_course_availability":true,"update_nav":true,"update_course_details":true}
 + {"read":true,"read_roster":true,"view_all_grades":true,"manage_grades":true,"update":true,"delete":false,"manage":true,"use_student_view":true}
 ```
 
@@ -1122,7 +1117,7 @@ at body $ (type), expected array, got object
 body:
 
 ```diff
-- [{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","sis_user_id":null,"integration_id":null,"login_id":"student@example.com","last_login":null}]
+- [{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","sis_user_id":null,"integration_id":null,"login_id":"student@example.com","last_login":null},{"id":9,"name":"Parity Throwaway Student","created_at":"2026-11-27T14:31:24Z","sortable_name":"Student, Parity Throwaway","short_name":"Parity Throwaway Student","sis_user_id":null,"integration_id":null,"login_id":"throwaway@example.com","last_login":null}]
 + {"errors":[{"message":"An error occurred.","error_code":"internal_server_error"}]}
 ```
 
@@ -1191,7 +1186,7 @@ at body $ (type), expected array, got object
 body:
 
 ```diff
-- []
+- [{"context_type":"Course","course_id":1,"context_name":"Parity Course","context_short_name":"PARITY","type":"grading","ignore":"http://127.0.0.1:[..]/api/v1/users/self/todo/assignment_1/grading?permanent=0","ignore_permanently":"http://127.0.0.1:[..]/api/v1/users/self/todo/assignment_1/grading?permanent=1","assignment":{"id":1,"position":1,"description":null,"points_possible":100.0,"grading_type":"points","created_at":"2026-11-26T20:29:17Z","updated_at":"2026-11-27T14:51:03Z","due_at":null,"final_grader_id":null,"grader_count":0,"graders_anonymous_to_graders":false,"grader_comments_visible_to_graders":true,"grader_names_visible_to_final_grader":true,"lock_at":null,"unlock_at":null,"assignment_group_id":1,"peer_reviews":false,"anonymous_peer_reviews":false,"automatic_peer_reviews":false,"intra_group_peer_reviews":false,"post_to_sis":false,"grade_group_students_individually":false,"group_category_id":null,"grading_standard_id":null,"moderated_grading":false,"hide_in_gradebook":false,"omit_from_final_grade":false,"suppress_assignment":false,"anonymous_instructor_annotations":false,"anonymous_grading":false,"allowed_attempts":-1,"annotatable_attachment_id":null,"secure_params":"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJsdGlfYXNzaWdubWVudF9pZCI6IjFjZTM5OGVlLTZjMzAtNDMzOS05MzIwLWQ2MGExYTQ0MjFjMyJ9.nf26L1W2MrwC_qn8fM3wW0BZwLAMYkiwM37Ru20S1eY","lti_context_id":"1ce398ee-6c30-4339-9320-d60a1a4421c3","course_id":1,"name":"Parity Assignment","submission_types":["online_text_entry"],"has_submitted_submissions":true,"due_date_required":false,"max_name_length":255,"in_closed_grading_period":false,"graded_submissions_exist":false,"is_quiz_assignment":false,"can_duplicate":true,"original_course_id":null,"original_assignment_id":null,"original_lti_resource_link_id":null,"original_assignment_name":null,"original_quiz_id":null,"workflow_state":"published","important_dates":false,"muted":true,"html_url":"http://127.0.0.1:[..]/courses/1/assignments/1","speed_grader_url":"http://127.0.0.1:[..]/courses/1/gradebook/speed_grader?assignment_id=1","has_overrides":false,"needs_grading_count":1,"sis_assignment_id":null,"integration_id":null,"integration_data":{},"all_dates":[{"due_at":null,"unlock_at":null,"lock_at":null,"title":"Everyone","base":true}],"published":true,"unpublishable":false,"only_visible_to_overrides":false,"visible_to_everyone":true,"locked_for_user":false,"submissions_download_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions?zip=1","post_manually":false,"anonymize_students":false,"new_quizzes_anonymous_participants":false,"require_lockdown_browser":false,"restrict_quantitative_data":false},"html_url":"http://127.0.0.1:[..]/courses/1/gradebook/speed_grader?assignment_id=1","needs_grading_count":1}]
 + {"data":[],"page":1,"per_page":50,"total":0}
 ```
 
@@ -1199,13 +1194,13 @@ body:
 
 Arguments: `GET /api/v1/courses/1/users/1`
 
-at body $.created_at, char 9: expected "2026-11-2⟨6⟩T20:10:15Z", got "2026-11-2⟨7⟩T14:23:43.613643…"
+at body $.created_at, char 9: expected "2026-11-2⟨6⟩T20:10:15Z", got "2026-11-2⟨7⟩T14:57:21.508889…"
 
 body:
 
 ```diff
 - {"id":1,"name":"Parity User","created_at":"2026-11-26T20:10:15Z","sortable_name":"User, Parity","short_name":"Parity User","sis_user_id":null,"integration_id":null,"login_id":"parity@example.com"}
-+ {"id":1,"name":"Parity User","sortable_name":"User, Parity","short_name":"Parity User","email":"parity@example.com","role":"teacher","created_at":"2026-11-27T14:23:43.613643Z"}
++ {"id":1,"name":"Parity User","sortable_name":"User, Parity","short_name":"Parity User","email":"parity@example.com","role":"teacher","created_at":"2026-11-27T14:57:21.508889Z"}
 ```
 
 ### courses-get-courses-users-progress
@@ -1299,7 +1294,7 @@ body:
 
 ```diff
 - [{"id":1,"name":"Parity Course","course_code":"PARITY","account_id":6,"created_at":"2026-11-26T20:10:16Z","start_at":null,"default_view":"modules","enrollment_term_id":6,"is_public":null,"grading_standard_id":null,"root_account_id":6,"uuid":"vjyH5dTcmA5kYHx39sliWmwHoWQjDUPZxcwwNz8f","license":null,"grade_passback_setting":null,"end_at":null,"public_syllabus":false,"public_syllabus_to_auth":false,"storage_quota_mb":500,"is_public_to_auth_users":false,"homeroom_course":false,"course_color":null,"friendly_name":null,"apply_assignment_group_weights":false,"calendar":{"ics":"http://127.0.0.1:[..]/feeds/calendars/course_vjyH5dTcmA5kYHx39sliWmwHoWQjDUPZxcwwNz8f.ics"},"time_zone":"America/Denver","blueprint":false,"template":false,"sis_course_id":null,"sis_import_id":null,"integration_id":null,"enrollments":[{"type":"teacher","role":"TeacherEnrollment","role_id":44,"user_id":1,"enrollment_state":"active","limit_privileges_to_course_section":false}],"hide_final_grades":false,"workflow_state":"available","restrict_enrollments_to_course_dates":false}]
-+ [{"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:51468/feeds/calendars/course_Course_f45ef8d7b8aa40a39de04c293078d957194d2033.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:23:43.613643Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":5,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"f45ef8d7b8aa40a39de04c293078d957194d2033","workflow_state":"available"},{"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:51468/feeds/calendars/course_Course_38f5ca9f52c649b9a78ea5628545b1ef1aa0f58c.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:23:43.613643Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":3,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"38f5ca9f52c649b9a78ea5628545b1ef1aa0f58c","workflow_state":"available"},{"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:51468/feeds/calendars/course_Course_44e9fbc419cd4e2091f0ccad7fd39c5681dc5158.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:23:43.613643Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":1,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"44e9fbc419cd4e2091f0ccad7fd39c5681dc5158","workflow_state":"available"}]
++ [{"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:62855/feeds/calendars/course_Course_af31b1c74d574a0b87debc21d3da35a4b9a01752.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:57:21.508889Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":5,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"af31b1c74d574a0b87debc21d3da35a4b9a01752","workflow_state":"available"},{"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:62855/feeds/calendars/course_Course_ca8905a85638438094b49addaff7fedf422a01e9.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:57:21.508889Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":3,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"ca8905a85638438094b49addaff7fedf422a01e9","workflow_state":"available"},{"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:62855/feeds/calendars/course_Course_d7f599c0fe2948c7b7173361ac57981538c7a687.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:57:21.508889Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":1,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"d7f599c0fe2948c7b7173361ac57981538c7a687","workflow_state":"available"}]
 ```
 
 ### courses-get-users-courses
@@ -1332,6 +1327,15 @@ header link:
 (missing)
 ```
 
+at body $ (type), expected array, got object
+
+body:
+
+```diff
+- [{"id":1,"name":"Parity Course","course_code":"PARITY","account_id":6,"created_at":"2026-11-26T20:10:16Z","start_at":null,"default_view":"modules","enrollment_term_id":6,"is_public":null,"grading_standard_id":null,"root_account_id":6,"uuid":"vjyH5dTcmA5kYHx39sliWmwHoWQjDUPZxcwwNz8f","license":null,"grade_passback_setting":null,"end_at":null,"public_syllabus":false,"public_syllabus_to_auth":false,"storage_quota_mb":500,"is_public_to_auth_users":false,"homeroom_course":false,"course_color":null,"friendly_name":null,"apply_assignment_group_weights":false,"calendar":{"ics":"http://127.0.0.1:[..]/feeds/calendars/course_vjyH5dTcmA5kYHx39sliWmwHoWQjDUPZxcwwNz8f.ics"},"time_zone":"America/Denver","blueprint":false,"template":false,"sis_course_id":null,"sis_import_id":null,"integration_id":null,"enrollments":[{"type":"student","role":"StudentEnrollment","role_id":43,"user_id":3,"enrollment_state":"active","limit_privileges_to_course_section":false}],"hide_final_grades":false,"workflow_state":"available","restrict_enrollments_to_course_dates":false}]
++ {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
+```
+
 ### courses-post-accounts-courses
 
 Arguments: `POST /api/v1/accounts/6/courses`
@@ -1358,7 +1362,7 @@ at body, line 1, column 3, char 2: expected "{\"⟨i⟩d\":", got "{\"⟨e⟩rro
 body:
 
 ```diff
-- {"id":[..],"name":"Unnamed Course","course_code":"Unnamed","account_id":6,"created_at":"2026-11-27T14:12:[..]","start_at":null,"default_view":"modules","enrollment_term_id":6,"is_public":null,"grading_standard_id":null,"root_account_id":6,"uuid":"[..]","license":null,"grade_passback_setting":null,"conclude_at":null,"allow_wiki_comments":null,"allow_student_forum_attachments":true,"open_enrollment":null,"self_enrollment":null,"restrict_enrollments_to_course_dates":false,"end_at":null,"public_syllabus":false,"public_syllabus_to_auth":false,"storage_quota_mb":500,"is_public_to_auth_users":false,"homeroom_course":false,"course_color":null,"friendly_name":null,"hide_final_grades":false,"apply_assignment_group_weights":false,"calendar":{"ics":"http://127.0.0.1:[..]/feeds/calendars/course_[..].ics"},"time_zone":"America/Denver","blueprint":false,"template":false,"sis_course_id":null,"sis_import_id":null,"integration_id":null,"workflow_state":"unpublished"}
+- {"id":[..],"name":"Unnamed Course","course_code":"Unnamed","account_id":6,"created_at":"2026-11-27T14:53:[..]","start_at":null,"default_view":"modules","enrollment_term_id":6,"is_public":null,"grading_standard_id":null,"root_account_id":6,"uuid":"[..]","license":null,"grade_passback_setting":null,"conclude_at":null,"allow_wiki_comments":null,"allow_student_forum_attachments":true,"open_enrollment":null,"self_enrollment":null,"restrict_enrollments_to_course_dates":false,"end_at":null,"public_syllabus":false,"public_syllabus_to_auth":false,"storage_quota_mb":500,"is_public_to_auth_users":false,"homeroom_course":false,"course_color":null,"friendly_name":null,"hide_final_grades":false,"apply_assignment_group_weights":false,"calendar":{"ics":"http://127.0.0.1:[..]/feeds/calendars/course_[..].ics"},"time_zone":"America/Denver","blueprint":false,"template":false,"sis_course_id":null,"sis_import_id":null,"integration_id":null,"workflow_state":"unpublished"}
 + {"errors":[{"message":"Expected request with `Content-Type: application/json`"}]}
 ```
 
@@ -1711,15 +1715,6 @@ status:
 expected 204, got 404
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨m⟩L24QFEKlUOjhFfHe…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%[..]%[..]%[..]%3D[..]_[..]_[..].[..].[..]; path=/; httponly
-+ _csrf_token=mL24QFEKlUOjhFfHeqxWEZ%2Fd61ugJtEDdaI11f97Rg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
-```
-
 at body (lines added), line 1, length 0 expected, 65 got
 
 body:
@@ -1879,6 +1874,15 @@ header pragma:
 (missing)
 ```
 
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨W⟩uAsfAEYI24ElSbSr…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]%[..]%3D[..]_[..]_[..]_[..].[..]_[..].[..]; path=/; httponly
++ _csrf_token=WuAsfAEYI24ElSbSrxoBRU33Ej4XIUylCrzhes%2B4EQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
 at body $.status (missing key)
 
 body:
@@ -2022,7 +2026,7 @@ at body, line 1, column 3, char 2: expected "{\"⟨i⟩d\":1,\"title\":\"Pa…",
 body:
 
 ```diff
-- {"id":1,"title":"Parity Topic","assignment_id":null,"delayed_post_at":null,"lock_at":null,"created_at":"2026-11-27T06:20:54Z","last_reply_at":"2026-11-[..]:[..]:[..]","posted_at":"2026-11-27T06:20:54Z","root_topic_id":null,"podcast_has_student_posts":false,"discussion_type":"threaded","position":null,"allow_rating":false,"only_graders_can_rate":false,"sort_by_rating":false,"is_section_specific":false,"anonymous_state":null,"summary_enabled":false,"user_name":"Parity User","discussion_subentry_count":[..],"permissions":{"attach":true,"update":true,"reply":true,"delete":true,"manage_assign_to":true},"require_initial_post":null,"user_can_see_posts":true,"podcast_url":null,"read_state":"unread","unread_count":[..],"subscribed":false,"attachments":[],"published":true,"can_unpublish":false,"locked":false,"can_lock":true,"comments_disabled":false,"author":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/courses/1/users/1","pronouns":null},"html_url":"http://127.0.0.1:[..]/courses/1/discussion_topics/1","url":"http://127.0.0.1:[..]/courses/1/discussion_topics/1","pinned":false,"group_category_id":null,"can_group":false,"topic_children":[],"group_topic_children":[],"ungraded_discussion_overrides":[],"locked_for_user":false,"message":null,"todo_date":null,"is_announcement":false,"sort_order":"desc","sort_order_locked":false,"expanded":false,"expanded_locked":false}
+- {"id":1,"title":"Parity Topic","assignment_id":null,"delayed_post_at":null,"lock_at":null,"created_at":"2026-11-27T06:20:54Z","last_reply_at":"2026-11-27T14:[..]:[..]","posted_at":"2026-11-27T06:20:54Z","root_topic_id":null,"podcast_has_student_posts":false,"discussion_type":"threaded","position":null,"allow_rating":false,"only_graders_can_rate":false,"sort_by_rating":false,"is_section_specific":false,"anonymous_state":null,"summary_enabled":false,"user_name":"Parity User","discussion_subentry_count":[..],"permissions":{"attach":true,"update":true,"reply":true,"delete":true,"manage_assign_to":true},"require_initial_post":null,"user_can_see_posts":true,"podcast_url":null,"read_state":"unread","unread_count":[..],"subscribed":false,"attachments":[],"published":true,"can_unpublish":false,"locked":false,"can_lock":true,"comments_disabled":false,"author":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/courses/1/users/1","pronouns":null},"html_url":"http://127.0.0.1:[..]/courses/1/discussion_topics/1","url":"http://127.0.0.1:[..]/courses/1/discussion_topics/1","pinned":false,"group_category_id":null,"can_group":false,"topic_children":[],"group_topic_children":[],"ungraded_discussion_overrides":[],"locked_for_user":false,"message":null,"todo_date":null,"is_announcement":false,"sort_order":"desc","sort_order_locked":false,"expanded":false,"expanded_locked":false}
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
@@ -2130,7 +2134,7 @@ at body, line 1, column 3, char 2: expected "{\"⟨i⟩d\":", got "{\"⟨e⟩rro
 body:
 
 ```diff
-- {"id":[..],"title":"Parity Topic Copy [..]","assignment_id":null,"delayed_post_at":null,"lock_at":null,"created_at":"2026-11-27T14:12:[..]","last_reply_at":null,"posted_at":"2026-11-27T14:12:[..]","root_topic_id":null,"podcast_has_student_posts":false,"discussion_type":"threaded","position":null,"allow_rating":false,"only_graders_can_rate":false,"sort_by_rating":false,"is_section_specific":false,"anonymous_state":null,"summary_enabled":false,"user_name":"Parity User","discussion_subentry_count":0,"permissions":{"attach":true,"update":true,"reply":true,"delete":true,"manage_assign_to":true},"require_initial_post":null,"user_can_see_posts":true,"podcast_url":null,"read_state":"read","unread_count":0,"subscribed":true,"attachments":[],"published":false,"can_unpublish":true,"locked":false,"can_lock":true,"comments_disabled":false,"author":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/courses/1/users/1","pronouns":null},"html_url":"http://127.0.0.1:[..]/courses/1/discussion_topics/[..]","url":"http://127.0.0.1:[..]/courses/1/discussion_topics/[..]","pinned":false,"group_category_id":null,"can_group":true,"topic_children":[],"group_topic_children":[],"ungraded_discussion_overrides":[],"locked_for_user":false,"message":null,"todo_date":null,"is_announcement":false,"sort_order":"desc","sort_order_locked":false,"expanded":false,"expanded_locked":false}
+- {"id":[..],"title":"Parity Topic Copy [..]","assignment_id":null,"delayed_post_at":null,"lock_at":null,"created_at":"2026-11-27T14:[..]:[..]","last_reply_at":null,"posted_at":"2026-11-27T14:[..]:[..]","root_topic_id":null,"podcast_has_student_posts":false,"discussion_type":"threaded","position":null,"allow_rating":false,"only_graders_can_rate":false,"sort_by_rating":false,"is_section_specific":false,"anonymous_state":null,"summary_enabled":false,"user_name":"Parity User","discussion_subentry_count":0,"permissions":{"attach":true,"update":true,"reply":true,"delete":true,"manage_assign_to":true},"require_initial_post":null,"user_can_see_posts":true,"podcast_url":null,"read_state":"read","unread_count":0,"subscribed":true,"attachments":[],"published":false,"can_unpublish":true,"locked":false,"can_lock":true,"comments_disabled":false,"author":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/courses/1/users/1","pronouns":null},"html_url":"http://127.0.0.1:[..]/courses/1/discussion_topics/[..]","url":"http://127.0.0.1:[..]/courses/1/discussion_topics/[..]","pinned":false,"group_category_id":null,"can_group":true,"topic_children":[],"group_topic_children":[],"ungraded_discussion_overrides":[],"locked_for_user":false,"message":null,"todo_date":null,"is_announcement":false,"sort_order":"desc","sort_order_locked":false,"expanded":false,"expanded_locked":false}
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
@@ -2194,12 +2198,21 @@ header cache-control:
 + no-cache
 ```
 
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨I⟩p7jp1nPXVin9e300…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..].[..]-[..]-[..].[..].[..]; path=/; httponly
++ _csrf_token=Ip7jp1nPXVin9e300qi%2FbSFck7stNTXGqPAJRx8nzQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
 at body, line 1, column 3, char 2: expected "{\"⟨i⟩d\":", got "{\"⟨e⟩rrors\":[{\"messag…"
 
 body:
 
 ```diff
-- {"id":[..],"created_at":"2026-11-27T14:12:[..]","updated_at":"2026-11-27T14:12:[..]","parent_id":1,"rating_count":null,"rating_sum":null,"user_id":1,"user_name":"Parity User","message":null,"user":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/courses/1/users/1","pronouns":null},"read_state":"read","forced_read_state":false}
+- {"id":[..],"created_at":"2026-11-27T14:[..]:[..]","updated_at":"2026-11-27T14:[..]:[..]","parent_id":1,"rating_count":null,"rating_sum":null,"user_id":1,"user_name":"Parity User","message":null,"user":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/courses/1/users/1","pronouns":null},"read_state":"read","forced_read_state":false}
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
@@ -2229,7 +2242,7 @@ at body, line 1, column 3, char 2: expected "{\"⟨i⟩d\":", got "{\"⟨e⟩rro
 body:
 
 ```diff
-- {"id":[..],"created_at":"2026-11-27T14:12:[..]","updated_at":"2026-11-27T14:12:[..]","parent_id":null,"rating_count":null,"rating_sum":null,"user_id":1,"user_name":"Parity User","message":null,"user":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/courses/1/users/1","pronouns":null},"read_state":"read","forced_read_state":false}
+- {"id":[..],"created_at":"2026-11-27T14:[..]:[..]","updated_at":"2026-11-27T14:[..]:[..]","parent_id":null,"rating_count":null,"rating_sum":null,"user_id":1,"user_name":"Parity User","message":null,"user":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/courses/1/users/1","pronouns":null},"read_state":"read","forced_read_state":false}
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
@@ -2350,6 +2363,32 @@ body:
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
+### discussion-topics-api-post-groups-discussion-topics-entries
+
+Arguments: `POST /api/v1/groups/1/discussion_topics/1/entries`
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨G⟩0nVAeAL8kMtk2KRA…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%3D[..]_[..]_[..]-[..].[..]; path=/; httponly
++ _csrf_token=G0nVAeAL8kMtk2KRAqHxCzwW%2FCzN90DTFtDF%2BFvWLw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
+### discussion-topics-api-post-groups-discussion-topics-insights
+
+Arguments: `POST /api/v1/groups/1/discussion_topics/1/insights`
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨T⟩1Tp0BtY8zwkgk3f6…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..]-[..].[..]; path=/; httponly
++ _csrf_token=T1Tp0BtY8zwkgk3f6xSiDS5Z4riARMg8hKqF9JWQ4A%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
 ### discussion-topics-api-put-courses-discussion-topics-entries-read
 
 Arguments: `PUT /api/v1/courses/1/discussion_topics/1/entries/1/read`
@@ -2360,6 +2399,15 @@ status:
 
 ```diff
 expected 204, got 404
+```
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨w⟩KAJwdIJByadH3Wsp…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]%[..]_[..]-[..].[..]; path=/; httponly
++ _csrf_token=wKAJwdIJByadH3WspvRR3xJiChyGEnNL9Giu7qSrXw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body (lines added), line 1, length 0 expected, 65 got
@@ -2438,28 +2486,6 @@ body:
 ```diff
 - {"errors":[{"message":"The specified resource does not exist."}]}
 + {"update_count":0}
-```
-
-### discussion-topics-api-put-courses-discussion-topics-read-all-91
-
-Arguments: `PUT /api/v1/courses/1/discussion_topics/read_all`
-
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨p⟩VZot7FpTvns8usWZ…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..]-[..].[..]; path=/; httponly
-+ _csrf_token=pVZot7FpTvns8usWZ54adqtJCldE2nKBvBCn%2BE0yTA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
-```
-
-at header x-request-context-id, line 1, column 1, char 0: expected "⟨⟩", got "⟨b⟩fc092d2-7745-403…"
-
-header x-request-context-id:
-
-```diff
-- [..]-[..]-444c-[..]-[..]
-+ bfc092d2-7745-403d-ab4e-d6e8e540d507
 ```
 
 ### discussion-topics-api-put-courses-discussion-topics-read-all
@@ -2585,35 +2611,22 @@ body:
 + {"error":"Missing data"}
 ```
 
-### discussion-topics-api-put-groups-discussion-topics-read-all-186
+### discussion-topics-api-put-groups-discussion-topics-read-all
 
-Arguments: `PUT /api/v1/groups/1/discussion_topics/read_all`
+Arguments: `PUT /api/v1/groups/1/discussion_topics/1/read_all`
 
-at body (lines missing), line 1, length 4 expected, 0 got
-
-body:
-
-```diff
-- [..]
-(trailing newline: expected false, got true)
-```
-
-### discussion-topics-api-put-groups-discussion-topics-subscribed
-
-Arguments: `PUT /api/v1/groups/1/discussion_topics/1/subscribed`
-
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨q⟩WcK70nViQZLrW4UB…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨u⟩pRg%2BprULnQ6clG…"
 
 header set-cookie:
 
 ```diff
-- _csrf_token=[..]%[..]%[..]%[..]-[..]_[..].[..]; path=/; httponly
-+ _csrf_token=qWcK70nViQZLrW4UBElYx0uMELf7JvAXTRle%2FUSz4Q%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+- _csrf_token=[..]%[..]%[..]%[..]%[..]%[..]%[..]%3D[..]_[..]_[..]-[..].[..]_[..].[..]; path=/; httponly
++ _csrf_token=upRg%2BprULnQ6clGLUfOkmkLZyrW2Ogx0%2BdyPq0zplw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### enrollments-api-delete-courses-enrollments
 
-Arguments: `DELETE /api/v1/courses/1/enrollments/10`
+Arguments: `DELETE /api/v1/courses/1/enrollments/12`
 
 at status (200→404)
 
@@ -2637,29 +2650,29 @@ at body $.id (missing key)
 body:
 
 ```diff
-- {"id":10,"root_account_id":6,"user_id":3,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T14:12:[..]","created_at":"2026-11-27T13:37:59Z","start_at":null,"end_at":null,"type":"StudentEnrollment","enrollment_state":"completed","role":"StudentEnrollment","role_id":43,"last_activity_at":null,"last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/1/grades/3","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/3"}
+- {"id":12,"root_account_id":6,"user_id":9,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T14:[..]:[..]","created_at":"2026-11-27T14:31:28Z","start_at":null,"end_at":null,"type":"StudentEnrollment","enrollment_state":"completed","role":"StudentEnrollment","role_id":43,"last_activity_at":null,"last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/1/grades/9","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/9"}
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### enrollments-api-get-accounts-enrollments
 
-Arguments: `GET /api/v1/accounts/6/enrollments/10`
+Arguments: `GET /api/v1/accounts/6/enrollments/12`
 
-at status (200→401)
+at status (200→404)
 
 status:
 
 ```diff
-expected 200, got 401
+expected 200, got 404
 ```
 
-at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-store"
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
 
 header cache-control:
 
 ```diff
 - max-age=0, private, must-revalidate
-+ no-store
++ no-cache
 ```
 
 at body $.id (missing key)
@@ -2667,8 +2680,8 @@ at body $.id (missing key)
 body:
 
 ```diff
-- {"id":10,"root_account_id":6,"user_id":3,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T14:12:[..]","created_at":"2026-11-27T13:37:59Z","start_at":null,"end_at":null,"type":"StudentEnrollment","enrollment_state":"completed","role":"StudentEnrollment","role_id":43,"last_activity_at":null,"last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/1/grades/3","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/3"}
-+ {"status":"unauthenticated","errors":[{"message":"user authorization required"}]}
+- {"id":12,"root_account_id":6,"user_id":9,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T14:[..]:[..]","created_at":"2026-11-27T14:31:28Z","start_at":null,"end_at":null,"type":"StudentEnrollment","enrollment_state":"completed","role":"StudentEnrollment","role_id":43,"last_activity_at":null,"last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/1/grades/9","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/9"}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### enrollments-api-get-courses-enrollments
@@ -2680,7 +2693,7 @@ at body $ (type), expected array, got object
 body:
 
 ```diff
-- [{"id":11,"root_account_id":6,"user_id":8,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T13:51:40Z","created_at":"2026-11-27T13:51:40Z","start_at":null,"end_at":null,"type":"StudentViewEnrollment","enrollment_state":"active","role":"StudentEnrollment","role_id":43,"last_activity_at":null,"last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/1/grades/8","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/8","user":{"id":8,"name":"Test Student","created_at":"2026-11-27T13:51:40Z","sortable_name":"Student, Test","short_name":"Test Student","sis_user_id":null,"integration_id":null,"login_id":"4c96f8dbf95063694a3d07b5f26dd8587cba9abb"}},{"id":9,"root_account_id":6,"user_id":1,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T13:37:59Z","created_at":"2026-11-27T13:37:59Z","start_at":null,"end_at":null,"type":"TeacherEnrollment","enrollment_state":"active","role":"TeacherEnrollment","role_id":44,"last_activity_at":"2026-11-27T14:11:58Z","last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/1","user":{"id":1,"name":"Parity User","created_at":"2026-11-26T20:10:15Z","sortable_name":"User, Parity","short_name":"Parity User","sis_user_id":null,"integration_id":null,"login_id":"parity@example.com"}}]
+- [{"id":10,"root_account_id":6,"user_id":3,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T14:31:24Z","created_at":"2026-11-27T13:37:59Z","start_at":null,"end_at":null,"type":"StudentEnrollment","enrollment_state":"active","role":"StudentEnrollment","role_id":43,"last_activity_at":null,"last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/1/grades/3","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/3","user":{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","sis_user_id":null,"integration_id":null,"login_id":"student@example.com"}},{"id":11,"root_account_id":6,"user_id":8,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T13:51:40Z","created_at":"2026-11-27T13:51:40Z","start_at":null,"end_at":null,"type":"StudentViewEnrollment","enrollment_state":"active","role":"StudentEnrollment","role_id":43,"last_activity_at":null,"last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/1/grades/8","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/8","user":{"id":8,"name":"Test Student","created_at":"2026-11-27T13:51:40Z","sortable_name":"Student, Test","short_name":"Test Student","sis_user_id":null,"integration_id":null,"login_id":"4c96f8dbf95063694a3d07b5f26dd8587cba9abb"}},{"id":9,"root_account_id":6,"user_id":1,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T13:37:59Z","created_at":"2026-11-27T13:37:59Z","start_at":null,"end_at":null,"type":"TeacherEnrollment","enrollment_state":"active","role":"TeacherEnrollment","role_id":44,"last_activity_at":"2026-11-27T14:52:27Z","last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/1","user":{"id":1,"name":"Parity User","created_at":"2026-11-26T20:10:15Z","sortable_name":"User, Parity","short_name":"Parity User","sis_user_id":null,"integration_id":null,"login_id":"parity@example.com"}}]
 + {"data":[{"id":9,"role":"teacher","user":{"id":1,"name":"Parity User","email":"parity@example.com"}},{"id":10,"role":"student","user":{"id":3,"name":"Parity Student","email":"student@example.com"}},{"id":11,"role":"student","user":{"id":8,"name":"Test Student","email":"4c96f8dbf95063694a3d07b5f26dd8587cba9abb"}}],"page":1,"per_page":50,"total":3}
 ```
 
@@ -2688,12 +2701,12 @@ body:
 
 Arguments: `GET /api/v1/sections/3/enrollments`
 
-at body $ (length), length 2 expected, 0 got
+at body $ (length), length 3 expected, 0 got
 
 body:
 
 ```diff
-- [{"id":11,"root_account_id":6,"user_id":8,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T13:51:40Z","created_at":"2026-11-27T13:51:40Z","start_at":null,"end_at":null,"type":"StudentViewEnrollment","enrollment_state":"active","role":"StudentEnrollment","role_id":43,"last_activity_at":null,"last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/1/grades/8","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/8","user":{"id":8,"name":"Test Student","created_at":"2026-11-27T13:51:40Z","sortable_name":"Student, Test","short_name":"Test Student","sis_user_id":null,"integration_id":null,"login_id":"4c96f8dbf95063694a3d07b5f26dd8587cba9abb"}},{"id":9,"root_account_id":6,"user_id":1,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T13:37:59Z","created_at":"2026-11-27T13:37:59Z","start_at":null,"end_at":null,"type":"TeacherEnrollment","enrollment_state":"active","role":"TeacherEnrollment","role_id":44,"last_activity_at":"2026-11-27T14:11:58Z","last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/1","user":{"id":1,"name":"Parity User","created_at":"2026-11-26T20:10:15Z","sortable_name":"User, Parity","short_name":"Parity User","sis_user_id":null,"integration_id":null,"login_id":"parity@example.com"}}]
+- [{"id":10,"root_account_id":6,"user_id":3,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T14:31:24Z","created_at":"2026-11-27T13:37:59Z","start_at":null,"end_at":null,"type":"StudentEnrollment","enrollment_state":"active","role":"StudentEnrollment","role_id":43,"last_activity_at":null,"last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/1/grades/3","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/3","user":{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","sis_user_id":null,"integration_id":null,"login_id":"student@example.com"}},{"id":11,"root_account_id":6,"user_id":8,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T13:51:40Z","created_at":"2026-11-27T13:51:40Z","start_at":null,"end_at":null,"type":"StudentViewEnrollment","enrollment_state":"active","role":"StudentEnrollment","role_id":43,"last_activity_at":null,"last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/1/grades/8","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/8","user":{"id":8,"name":"Test Student","created_at":"2026-11-27T13:51:40Z","sortable_name":"Student, Test","short_name":"Test Student","sis_user_id":null,"integration_id":null,"login_id":"4c96f8dbf95063694a3d07b5f26dd8587cba9abb"}},{"id":9,"root_account_id":6,"user_id":1,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T13:37:59Z","created_at":"2026-11-27T13:37:59Z","start_at":null,"end_at":null,"type":"TeacherEnrollment","enrollment_state":"active","role":"TeacherEnrollment","role_id":44,"last_activity_at":"2026-11-27T14:52:27Z","last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/1","user":{"id":1,"name":"Parity User","created_at":"2026-11-26T20:10:15Z","sortable_name":"User, Parity","short_name":"Parity User","sis_user_id":null,"integration_id":null,"login_id":"parity@example.com"}}]
 + []
 ```
 
@@ -2722,13 +2735,13 @@ header cache-control:
 
 Arguments: `GET /api/v1/users/3/enrollments`
 
-at body $ (length), length 2 expected, 0 got
+at body $[0].id (value): expected 3, got 10
 
 body:
 
 ```diff
-- [{"id":3,"root_account_id":6,"user_id":3,"course_id":3,"course_section_id":1,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T12:32:51Z","created_at":"2026-11-27T05:33:48Z","start_at":null,"end_at":null,"type":"StudentEnrollment","enrollment_state":"active","role":"StudentEnrollment","role_id":43,"last_activity_at":"2026-11-27T09:48:46Z","last_attended_at":null,"total_activity_time":580,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/3/grades/3","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/3/users/3","user":{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","login_id":"student@example.com"}},{"id":7,"root_account_id":6,"user_id":3,"course_id":5,"course_section_id":2,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T13:00:45Z","created_at":"2026-11-27T12:55:33Z","start_at":null,"end_at":null,"type":"StudentEnrollment","enrollment_state":"active","role":"StudentEnrollment","role_id":43,"last_activity_at":null,"last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/5/grades/3","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/5/users/3","user":{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","login_id":"student@example.com"}}]
-+ []
+- [{"id":3,"root_account_id":6,"user_id":3,"course_id":3,"course_section_id":1,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T12:32:51Z","created_at":"2026-11-27T05:33:48Z","start_at":null,"end_at":null,"type":"StudentEnrollment","enrollment_state":"active","role":"StudentEnrollment","role_id":43,"last_activity_at":"2026-11-27T09:48:46Z","last_attended_at":null,"total_activity_time":580,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/3/grades/3","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/3/users/3","user":{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","login_id":"student@example.com"}},{"id":7,"root_account_id":6,"user_id":3,"course_id":5,"course_section_id":2,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T13:00:45Z","created_at":"2026-11-27T12:55:33Z","start_at":null,"end_at":null,"type":"StudentEnrollment","enrollment_state":"active","role":"StudentEnrollment","role_id":43,"last_activity_at":null,"last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/5/grades/3","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/5/users/3","user":{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","login_id":"student@example.com"}},{"id":10,"root_account_id":6,"user_id":3,"course_id":1,"course_section_id":3,"associated_user_id":null,"limit_privileges_to_course_section":false,"updated_at":"2026-11-27T14:31:24Z","created_at":"2026-11-27T13:37:59Z","start_at":null,"end_at":null,"type":"StudentEnrollment","enrollment_state":"active","role":"StudentEnrollment","role_id":43,"last_activity_at":null,"last_attended_at":null,"total_activity_time":0,"sis_import_id":null,"grades":{"html_url":"http://127.0.0.1:[..]/courses/1/grades/3","current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"unposted_current_score":null,"unposted_current_grade":null,"unposted_final_score":null,"unposted_final_grade":null},"sis_account_id":null,"sis_course_id":null,"course_integration_id":null,"sis_section_id":null,"section_integration_id":null,"sis_user_id":null,"html_url":"http://127.0.0.1:[..]/courses/1/users/3","user":{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","login_id":"student@example.com"}}]
++ [{"associated_user_id":null,"course_id":1,"course_integration_id":null,"course_section_id":null,"created_at":"2026-11-27T14:57:21Z","end_at":null,"enrollment_state":"active","grades":{"current_grade":null,"current_score":null,"final_grade":null,"final_score":null,"html_url":"/courses/1/grades/3","unposted_current_grade":null,"unposted_current_score":null,"unposted_final_grade":null,"unposted_final_score":null},"html_url":"/courses/1/users/3","id":10,"limit_privileges_to_course_section":false,"role":"student","role_id":1,"root_account_id":6,"section_integration_id":null,"sis_account_id":null,"sis_course_id":null,"sis_section_id":null,"sis_user_id":null,"start_at":null,"type":"StudentViewEnrollment","updated_at":"2026-11-27T14:57:21Z","user":{"created_at":"2026-11-27T14:57:21Z","id":3,"integration_id":null,"login_id":null,"name":"Parity Student","short_name":"Parity Student","sis_user_id":null,"sortable_name":"Student, Parity"},"user_id":3}]
 ```
 
 ### enrollments-api-get-users-temporary-enrollment-status
@@ -2774,6 +2787,93 @@ body:
 + {"errors":[{"message":"An error occurred.","error_code":"internal_server_error"}]}
 ```
 
+### enrollments-api-post-courses-enrollments-accept
+
+Arguments: `POST /api/v1/courses/1/enrollments/12/accept`
+
+at status (403→404)
+
+status:
+
+```diff
+expected 403, got 404
+```
+
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
+
+header cache-control:
+
+```diff
+- no-store
++ no-cache
+```
+
+at header pragma (missing key)
+
+header pragma:
+
+```diff
+- no-cache
+(missing)
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### enrollments-api-post-courses-enrollments-reject
+
+Arguments: `POST /api/v1/courses/1/enrollments/12/reject`
+
+at status (403→404)
+
+status:
+
+```diff
+expected 403, got 404
+```
+
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
+
+header cache-control:
+
+```diff
+- no-store
++ no-cache
+```
+
+at header pragma (missing key)
+
+header pragma:
+
+```diff
+- no-cache
+(missing)
+```
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨k⟩BNdnDUWhSs3%2F9V…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%3D[..]_[..]_[..]_[..]-[..].[..]; path=/; httponly
++ _csrf_token=kBNdnDUWhSs3%2F9VHftXDVgNV2l0tSeVgo1xnv%2BcjSQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
 ### enrollments-api-post-courses-enrollments
 
 Arguments: `POST /api/v1/courses/1/enrollments`
@@ -2793,6 +2893,27 @@ body:
 ```diff
 - {"message":"No parameters given"}
 + {"errors":[{"message":"Expected request with `Content-Type: application/json`"}]}
+```
+
+### enrollments-api-put-courses-enrollments-reactivate
+
+Arguments: `PUT /api/v1/courses/1/enrollments/12/reactivate`
+
+at status (400→404)
+
+status:
+
+```diff
+expected 400, got 404
+```
+
+at body $.error (missing key)
+
+body:
+
+```diff
+- {"error":"enrollment not inactive"}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### enrollments-api-put-courses-users-last-attended
@@ -2876,6 +2997,45 @@ header pragma:
 ```diff
 - no-cache
 (missing)
+```
+
+### external-tools-delete-courses-external-tools
+
+Arguments: `DELETE /api/v1/courses/1/external_tools/1`
+
+at status (403→404)
+
+status:
+
+```diff
+expected 403, got 404
+```
+
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
+
+header cache-control:
+
+```diff
+- no-store
++ no-cache
+```
+
+at header pragma (missing key)
+
+header pragma:
+
+```diff
+- no-cache
+(missing)
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### external-tools-get-accounts-external-tools-migration-info
@@ -2968,6 +3128,58 @@ body:
 + {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
 ```
 
+### external-tools-get-api-lti-courses-jwt-token
+
+Arguments: `GET /api/lti/courses/1/jwt_token`
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨s⟩AQeiTaffmgePujYQ…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]-[..].[..]; path=/; httponly
++ _csrf_token=sAQeiTaffmgePujYQgfgDEr8AeOO6bwn783hBqKkDQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
+### external-tools-get-courses-external-tools-316
+
+Arguments: `GET /api/v1/courses/1/external_tools/1`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨r⟩zI%2ByJpeug3LL7m…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]%[..]%[..]%[..]_[..].[..]; path=/; httponly
++ _csrf_token=rzI%2ByJpeug3LL7mAWRapoOEPOfaGAUwVarX6rX2JcA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
+at body $.id (missing key)
+
+body:
+
+```diff
+- {"id":1,"name":"Parity Tool","description":"Parity tool.","url":"https://example.invalid/parity","domain":null,"consumer_key":"parity-consumer-key","created_at":"2026-11-27T12:16:13Z","updated_at":"2026-11-27T14:51:05Z","privacy_level":"public","custom_fields":null,"workflow_state":"public","message_settings":null,"account_navigation":null,"analytics_hub":null,"assignment_edit":null,"assignment_group_menu":null,"assignment_index_menu":null,"assignment_menu":null,"assignment_selection":null,"assignment_view":null,"collaboration":null,"course_assignments_menu":null,"course_home_sub_navigation":null,"course_navigation":null,"course_settings_sub_navigation":null,"discussion_topic_index_menu":null,"discussion_topic_menu":null,"file_index_menu":null,"file_menu":null,"global_navigation":null,"homework_submission":null,"link_selection":null,"migration_selection":null,"module_group_menu":null,"module_index_menu":null,"module_index_menu_modal":null,"module_menu_modal":null,"module_menu":null,"post_grades":null,"quiz_index_menu":null,"quiz_menu":null,"resource_selection":null,"similarity_detection":null,"student_context_card":null,"submission_type_selection":null,"tool_configuration":null,"user_navigation":null,"wiki_index_menu":null,"wiki_page_menu":null,"editor_button":null,"not_selectable":false,"version":"1.1","unified_tool_id":null,"developer_key_id":1,"deployment_id":"1:34a568660fc7e61983c10ff732ab1ecb3021677e"}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
 ### external-tools-get-courses-external-tools-migration-info
 
 Arguments: `GET /api/v1/courses/1/external_tools/1/migration_info`
@@ -3049,13 +3261,17 @@ header location:
 (missing)
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨V⟩K7%2FCrrrUYPejcK…"
+### external-tools-get-courses-external-tools
 
-header set-cookie:
+Arguments: `GET /api/v1/courses/1/external_tools`
+
+at body $ (length), length 1 expected, 0 got
+
+body:
 
 ```diff
-- _csrf_token=[..]%[..]%[..]%[..]%[..]%3D[..]_[..]_[..]+[..].[..].[..]; path=/; httponly
-+ _csrf_token=VK7%2FCrrrUYPejcKqMLV7sUo4RhFJ7pgzpqbPLNjMgw%3D%3D; path=/, log_session_id=225a972484c7473051339d977a312dbf; path=/; httponly, _normandy_session=225a972484c7473051339d977a312dbf.225a972484c7473051339d977a312dbf; path=/; httponly
+- [{"id":1,"name":"Parity Tool","description":"Parity tool.","url":"https://example.invalid/parity","domain":null,"consumer_key":"parity-consumer-key","created_at":"2026-11-27T12:16:13Z","updated_at":"2026-11-27T14:51:05Z","privacy_level":"public","custom_fields":null,"workflow_state":"public","message_settings":null,"account_navigation":null,"analytics_hub":null,"assignment_edit":null,"assignment_group_menu":null,"assignment_index_menu":null,"assignment_menu":null,"assignment_selection":null,"assignment_view":null,"collaboration":null,"course_assignments_menu":null,"course_home_sub_navigation":null,"course_navigation":null,"course_settings_sub_navigation":null,"discussion_topic_index_menu":null,"discussion_topic_menu":null,"file_index_menu":null,"file_menu":null,"global_navigation":null,"homework_submission":null,"link_selection":null,"migration_selection":null,"module_group_menu":null,"module_index_menu":null,"module_index_menu_modal":null,"module_menu_modal":null,"module_menu":null,"post_grades":null,"quiz_index_menu":null,"quiz_menu":null,"resource_selection":null,"similarity_detection":null,"student_context_card":null,"submission_type_selection":null,"tool_configuration":null,"user_navigation":null,"wiki_index_menu":null,"wiki_page_menu":null,"editor_button":null,"not_selectable":false,"version":"1.1","unified_tool_id":null,"developer_key_id":1,"deployment_id":"1:34a568660fc7e61983c10ff732ab1ecb3021677e"}]
++ []
 ```
 
 ### external-tools-get-external-tools-visible-course-nav-tools
@@ -3249,6 +3465,15 @@ status:
 expected 404, got 415
 ```
 
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨Y⟩mmfijMcTXOMqvi94…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]_[..]_[..]-[..].[..]; path=/; httponly
++ _csrf_token=YmmfijMcTXOMqvi94GHpvMQJHTi%2F6bShNUqCbEb%2B%2FA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
 at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨E⟩xpected request …"
 
 body:
@@ -3262,20 +3487,29 @@ body:
 
 Arguments: `PUT /api/v1/courses/1/external_tools/1`
 
-at status (404→415)
+at status (200→415)
 
 status:
 
 ```diff
-expected 404, got 415
+expected 200, got 415
 ```
 
-at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨E⟩xpected request …"
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.id (missing key)
 
 body:
 
 ```diff
-- {"errors":[{"message":"The specified resource does not exist."}]}
+- {"id":1,"name":"Parity Tool","description":"Parity tool.","url":"https://example.invalid/parity","domain":null,"consumer_key":"parity-consumer-key","created_at":"2026-11-27T12:16:13Z","updated_at":"2026-11-27T14:51:05Z","privacy_level":"public","custom_fields":null,"workflow_state":"public","message_settings":null,"account_navigation":null,"analytics_hub":null,"assignment_edit":null,"assignment_group_menu":null,"assignment_index_menu":null,"assignment_menu":null,"assignment_selection":null,"assignment_view":null,"collaboration":null,"course_assignments_menu":null,"course_home_sub_navigation":null,"course_navigation":null,"course_settings_sub_navigation":null,"discussion_topic_index_menu":null,"discussion_topic_menu":null,"file_index_menu":null,"file_menu":null,"global_navigation":null,"homework_submission":null,"link_selection":null,"migration_selection":null,"module_group_menu":null,"module_index_menu":null,"module_index_menu_modal":null,"module_menu_modal":null,"module_menu":null,"post_grades":null,"quiz_index_menu":null,"quiz_menu":null,"resource_selection":null,"similarity_detection":null,"student_context_card":null,"submission_type_selection":null,"tool_configuration":null,"user_navigation":null,"wiki_index_menu":null,"wiki_page_menu":null,"editor_button":null,"not_selectable":false,"version":"1.1","unified_tool_id":null,"developer_key_id":1,"deployment_id":"1:34a568660fc7e61983c10ff732ab1ecb3021677e"}
 + {"errors":[{"message":"Expected request with `Content-Type: application/json`"}]}
 ```
 
@@ -3311,6 +3545,19 @@ body:
 ```diff
 - {"quota":500000000,"quota_used":0}
 + {"quota":50000000,"quota_used":0}
+```
+
+### files-get-courses-files
+
+Arguments: `GET /api/v1/courses/1/files`
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨v⟩uNWOzg2JzxqQ1pCC…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]%3D[..]_[..]_[..]_[..]_[..].[..]; path=/; httponly
++ _csrf_token=vuNWOzg2JzxqQ1pCCepm9kl8u9A1sWvPQilxrlZEWA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### files-get-files-create-success
@@ -3499,6 +3746,75 @@ body:
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
+### files-get-groups-files-quota
+
+Arguments: `GET /api/v1/groups/1/files/quota`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.quota (missing key)
+
+body:
+
+```diff
+- {"quota":50000000,"quota_used":0}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### files-get-groups-files
+
+Arguments: `GET /api/v1/groups/1/files`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at header link (missing key)
+
+header link:
+
+```diff
+- <http://127.0.0.1:[..]/api/v1/groups/1/files?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/groups/1/files?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/groups/1/files?page=1&per_page=10>; rel="last"
+(missing)
+```
+
+at body $ (type), expected array, got object
+
+body:
+
+```diff
+- []
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
 ### files-get-users-files-439
 
 Arguments: `GET /api/v1/users/3/files/7`
@@ -3518,6 +3834,15 @@ header cache-control:
 ```diff
 - no-cache
 + no-store
+```
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨f⟩v27pESbb5POzuHKl…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..]-[..]-[..].[..].[..]; path=/; httponly
++ _csrf_token=fv27pESbb5POzuHKl2FaT3fiQuJYDUp%2Fylmbuel8Ug%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨u⟩ser not authoriz…"
@@ -3845,6 +4170,19 @@ header cache-control:
 + no-store
 ```
 
+### folders-get-courses-folders-by-path-326
+
+Arguments: `GET '/api/v1/courses/1/folders/by_path/*full_path'`
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨U⟩grXrVYnyEIOSkfef…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]%3D[..]_[..]_[..]-[..].[..]; path=/; httponly
++ _csrf_token=UgrXrVYnyEIOSkfefs7sxgQFyHZ3rVjlvPP8AyxeKQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
 ### folders-get-courses-folders-by-path
 
 Arguments: `GET /api/v1/courses/1/folders/by_path`
@@ -3855,7 +4193,7 @@ body:
 
 ```diff
 - [{"id":1,"name":"course files","full_name":"course files","position":null,"parent_folder_id":null,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-26T20:29:16Z","updated_at":"2026-11-27T13:00:59Z","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/1/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/1/files","files_count":0,"folders_count":[..],"hidden":null,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}]
-+ [{"id":2,"name":"Parity Folder","full_name":"course files/Parity Folder","position":1,"parent_folder_id":null,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:23:43.613643Z","updated_at":"2026-11-27T14:23:43.613643Z","category":null,"locked":false,"all_url":"/api/v1/folders/2/all","folders_url":"/api/v1/folders/2/folders","files_url":"/api/v1/folders/2/files","files_count":0,"folders_count":0,"hidden":false,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}]
++ [{"id":2,"name":"Parity Folder","full_name":"course files/Parity Folder","position":1,"parent_folder_id":null,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:57:21.508889Z","updated_at":"2026-11-27T14:57:21.508889Z","category":null,"locked":false,"all_url":"/api/v1/folders/2/all","folders_url":"/api/v1/folders/2/folders","files_url":"/api/v1/folders/2/files","files_count":0,"folders_count":3,"hidden":false,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}]
 ```
 
 ### folders-get-courses-folders-duplicates
@@ -3875,26 +4213,39 @@ header cache-control:
 
 Arguments: `GET /api/v1/courses/1/folders/icon_maker`
 
-at body $.id (value): expected 24, got 19
+at body $.id (value): expected 24, got 30
 
 body:
 
 ```diff
 - {"id":24,"name":"Icon Maker Icons","full_name":"course files/Icon Maker Icons","position":5,"parent_folder_id":1,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T13:51:51Z","updated_at":"2026-11-27T13:51:51Z","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/24/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/24/files","files_count":0,"folders_count":0,"hidden":true,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
-+ {"id":19,"name":"Icon Maker Icons","full_name":"course files/Parity Folder/Icon Maker Icons","position":1,"parent_folder_id":2,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:23:47.879104Z","updated_at":"2026-11-27T14:23:47.879104Z","category":null,"locked":false,"all_url":"/api/v1/folders/19/all","folders_url":"/api/v1/folders/19/folders","files_url":"/api/v1/folders/19/files","files_count":0,"folders_count":0,"hidden":true,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
++ {"id":30,"name":"Icon Maker Icons","full_name":"course files/Parity Folder/Icon Maker Icons","position":1,"parent_folder_id":2,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:57:26.270669Z","updated_at":"2026-11-27T14:57:26.270669Z","category":null,"locked":false,"all_url":"/api/v1/folders/30/all","folders_url":"/api/v1/folders/30/folders","files_url":"/api/v1/folders/30/files","files_count":0,"folders_count":0,"hidden":true,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
 ```
 
 ### folders-get-courses-folders-media
 
 Arguments: `GET /api/v1/courses/1/folders/media`
 
-at body $.id (value): expected 25, got 20
+at body $.id (value): expected 25, got 31
 
 body:
 
 ```diff
 - {"id":25,"name":"Uploaded Media","full_name":"course files/Uploaded Media","position":6,"parent_folder_id":1,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T13:51:51Z","updated_at":"2026-11-27T13:51:51Z","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/25/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/25/files","files_count":0,"folders_count":0,"hidden":true,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
-+ {"id":20,"name":"Uploaded Media","full_name":"course files/Parity Folder/Uploaded Media","position":2,"parent_folder_id":2,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:23:47.894169Z","updated_at":"2026-11-27T14:23:47.894169Z","category":null,"locked":false,"all_url":"/api/v1/folders/20/all","folders_url":"/api/v1/folders/20/folders","files_url":"/api/v1/folders/20/files","files_count":0,"folders_count":0,"hidden":true,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
++ {"id":31,"name":"Uploaded Media","full_name":"course files/Parity Folder/Uploaded Media","position":2,"parent_folder_id":2,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:57:26.291223Z","updated_at":"2026-11-27T14:57:26.291223Z","category":null,"locked":false,"all_url":"/api/v1/folders/31/all","folders_url":"/api/v1/folders/31/folders","files_url":"/api/v1/folders/31/files","files_count":0,"folders_count":0,"hidden":true,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
+```
+
+### folders-get-courses-folders
+
+Arguments: `GET /api/v1/courses/1/folders`
+
+at header link, line 1, column 19, char 18: expected "…ttp://127.0.0.1:⟨⟩", got "…ttp://127.0.0.1:⟨6⟩2855/api/v1/cour…"
+
+header link:
+
+```diff
+- <http://127.0.0.1:[..]/api/v1/courses/1/folders?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/courses/1/folders?page=2&per_page=10>; rel="next",<http://127.0.0.1:[..]/api/v1/courses/1/folders?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/courses/1/folders?page=2&per_page=10>; rel="last"
++ <http://127.0.0.1:62855/api/v1/courses/1/folders?page=1&per_page=10>; rel="current",<http://127.0.0.1:62855/api/v1/courses/1/folders?page=1&per_page=10>; rel="first",<http://127.0.0.1:62855/api/v1/courses/1/folders?page=1&per_page=10>; rel="last"
 ```
 
 ### folders-get-folders-all
@@ -3961,6 +4312,15 @@ header cache-control:
 + no-cache
 ```
 
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨V⟩9iXt7X%2BVnR9nBC…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]%[..]%3D[..]_[..]_[..]_[..]_[..]-[..].[..]; path=/; httponly
++ _csrf_token=V9iXt7X%2BVnR9nBC5mm%2B%2BytQ%2FbEOI30erYY8jQobhVg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
 at body, line 1, column 3, char 2: expected "{\"⟨i⟩d\":1,\"name\":\"cou…", got "{\"⟨e⟩rrors\":[{\"messag…"
 
 body:
@@ -3970,9 +4330,17 @@ body:
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
-### folders-get-groups-folders-and-files
+### folders-get-groups-folders-400
 
-Arguments: `GET /api/v1/groups/1/folders_and_files`
+Arguments: `GET /api/v1/groups/1/folders/1`
+
+at status (404→403)
+
+status:
+
+```diff
+expected 404, got 403
+```
 
 at header cache-control, line 1, column 4, char 3: expected "no-⟨c⟩ache", got "no-⟨s⟩tore"
 
@@ -3983,9 +4351,47 @@ header cache-control:
 + no-store
 ```
 
-### folders-get-groups-folders-duplicates
+at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨u⟩ser not authoriz…"
 
-Arguments: `GET /api/v1/groups/1/folders/1/duplicates`
+body:
+
+```diff
+- {"errors":[{"message":"The specified resource does not exist."}]}
++ {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
+```
+
+### folders-get-groups-folders-and-files
+
+Arguments: `GET /api/v1/groups/1/folders_and_files`
+
+at status (403→404)
+
+status:
+
+```diff
+expected 403, got 404
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### folders-get-groups-folders-by-path-403
+
+Arguments: `GET '/api/v1/groups/1/folders/by_path/*full_path'`
+
+at status (404→403)
+
+status:
+
+```diff
+expected 404, got 403
+```
 
 at header cache-control, line 1, column 4, char 3: expected "no-⟨c⟩ache", got "no-⟨s⟩tore"
 
@@ -3994,6 +4400,126 @@ header cache-control:
 ```diff
 - no-cache
 + no-store
+```
+
+at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨u⟩ser not authoriz…"
+
+body:
+
+```diff
+- {"errors":[{"message":"The specified resource does not exist."}]}
++ {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
+```
+
+### folders-get-groups-folders-by-path
+
+Arguments: `GET /api/v1/groups/1/folders/by_path`
+
+at status (200→403)
+
+status:
+
+```diff
+expected 200, got 403
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-store"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-store
+```
+
+at body $ (type), expected array, got object
+
+body:
+
+```diff
+- [{"id":4,"name":"files","full_name":"files","position":null,"parent_folder_id":null,"context_type":"Group","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-26T20:48:28Z","updated_at":"2026-11-26T20:48:28Z","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/4/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/4/files","files_count":0,"folders_count":2,"hidden":null,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}]
++ {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
+```
+
+### folders-get-groups-folders-duplicates
+
+Arguments: `GET /api/v1/groups/1/folders/1/duplicates`
+
+at status (403→404)
+
+status:
+
+```diff
+expected 403, got 404
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### folders-get-groups-folders-media
+
+Arguments: `GET /api/v1/groups/1/folders/media`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.id (missing key)
+
+body:
+
+```diff
+- {"id":12,"name":"Uploaded Media","full_name":"files/Uploaded Media","position":1,"parent_folder_id":4,"context_type":"Group","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T12:33:08Z","updated_at":"2026-11-27T12:33:08Z","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/12/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/12/files","files_count":0,"folders_count":0,"hidden":true,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### folders-get-groups-folders
+
+Arguments: `GET /api/v1/groups/1/folders`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at header link (missing key)
+
+header link:
+
+```diff
+- <http://127.0.0.1:[..]/api/v1/groups/1/folders?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/groups/1/folders?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/groups/1/folders?page=1&per_page=10>; rel="last"
+(missing)
 ```
 
 ### folders-get-users-folders-442
@@ -4090,12 +4616,12 @@ header cache-control:
 + no-store
 ```
 
-at body $ (type), expected array, got object
+at body, line 1, column 1, char 0: expected "⟨[⟩{\"id\":31,\"name\":…", got "⟨{⟩\"status\":\"unauth…"
 
 body:
 
 ```diff
-- [{"id":31,"name":"my files","full_name":"my files","position":null,"parent_folder_id":null,"context_type":"User","context_id":3,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:12:08Z","updated_at":"2026-11-27T14:12:08Z","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/31/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/31/files","files_count":0,"folders_count":0,"hidden":null,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":false}]
+- [{"id":31,"name":"my files","full_name":"my files","position":null,"parent_folder_id":null,"context_type":"User","context_id":3,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:12:08Z","updated_at":"2026-11-27T14:12:08Z","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/31/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/31/files","files_count":0,"folders_count":[..],"hidden":null,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":false}]
 + {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
 ```
 
@@ -4142,15 +4668,6 @@ header link:
 (missing)
 ```
 
-at body $ (type), expected array, got object
-
-body:
-
-```diff
-- [{"id":31,"name":"my files","full_name":"my files","position":null,"parent_folder_id":null,"context_type":"User","context_id":3,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:12:08Z","updated_at":"2026-11-27T14:12:08Z","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/31/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/31/files","files_count":0,"folders_count":0,"hidden":null,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":false}]
-+ {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
-```
-
 ### folders-post-accounts-folders
 
 Arguments: `POST /api/v1/accounts/6/folders`
@@ -4185,13 +4702,13 @@ body:
 
 Arguments: `POST /api/v1/courses/1/folders`
 
-at body, line 1, column 7, char 6: expected "{\"id\":⟨⟩", got "{\"id\":⟨2⟩2,\"name\":\"New Fo…"
+at body, line 1, column 7, char 6: expected "{\"id\":⟨⟩", got "{\"id\":⟨3⟩5,\"name\":\"New Fo…"
 
 body:
 
 ```diff
 - {"id":[..],"name":"New Folder [..]","full_name":"course files/unfiled/New Folder [..]","position":[..],"parent_folder_id":3,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:[..]:[..]","updated_at":"2026-11-27T14:[..]:[..]","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/[..]/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/[..]/files","files_count":0,"folders_count":0,"hidden":null,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
-+ {"id":22,"name":"New Folder","full_name":"course files/Parity Folder/unfiled/New Folder","position":1,"parent_folder_id":21,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:23:48.110638Z","updated_at":"2026-11-27T14:23:48.110638Z","category":null,"locked":false,"all_url":"/api/v1/folders/22/all","folders_url":"/api/v1/folders/22/folders","files_url":"/api/v1/folders/22/files","files_count":0,"folders_count":0,"hidden":false,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
++ {"id":35,"name":"New Folder 2","full_name":"course files/Parity Folder/unfiled/New Folder 2","position":2,"parent_folder_id":32,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:57:47.913920Z","updated_at":"2026-11-27T14:57:47.913920Z","category":null,"locked":false,"all_url":"/api/v1/folders/35/all","folders_url":"/api/v1/folders/35/folders","files_url":"/api/v1/folders/35/files","files_count":0,"folders_count":0,"hidden":false,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
 ```
 
 ### folders-post-folders-copy-file
@@ -4204,15 +4721,6 @@ status:
 
 ```diff
 expected 400, got 415
-```
-
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨2⟩pDb9x63FVKjy0kPV…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%[..]%[..]%[..]%[..]%3D[..]_[..]_[..].[..].[..]; path=/; httponly
-+ _csrf_token=2pDb9x63FVKjy0kPV954M2BGU%2Btqh%2BvTPeMNWdU1cA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.message (missing key)
@@ -4234,6 +4742,15 @@ status:
 
 ```diff
 expected 400, got 415
+```
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨d⟩KPYa8dbJ5YqoueoO…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..]_[..]_[..]-[..].[..].[..]; path=/; httponly
++ _csrf_token=dKPYa8dbJ5YqoueoOFSwTuoKeBQ4oz50SXpEG1jDgg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.message (missing key)
@@ -4296,6 +4813,36 @@ body:
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
+### folders-post-groups-folders
+
+Arguments: `POST /api/v1/groups/1/folders`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body, line 1, column 3, char 2: expected "{\"⟨i⟩d\":", got "{\"⟨e⟩rrors\":[{\"messag…"
+
+body:
+
+```diff
+- {"id":[..],"name":"New Folder [..]","full_name":"files/unfiled/New Folder [..]","position":[..],"parent_folder_id":17,"context_type":"Group","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:[..]:[..]","updated_at":"2026-11-27T14:[..]:[..]","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/[..]/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/[..]/files","files_count":0,"folders_count":0,"hidden":null,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
 ### folders-put-folders
 
 Arguments: `PUT /api/v1/folders/1`
@@ -4330,21 +4877,30 @@ body:
 
 Arguments: `DELETE /api/v1/group_categories/1`
 
-at status (401→200)
+at status (403→404)
 
 status:
 
 ```diff
-expected 401, got 200
+expected 403, got 404
 ```
 
-at header cache-control, line 1, column 1, char 0: expected "⟨n⟩o-cache", got "⟨m⟩ax-age=0, privat…"
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
 
 header cache-control:
 
 ```diff
+- no-store
++ no-cache
+```
+
+at header pragma (missing key)
+
+header pragma:
+
+```diff
 - no-cache
-+ max-age=0, private, must-revalidate
+(missing)
 ```
 
 at body $.status (missing key)
@@ -4352,8 +4908,8 @@ at body $.status (missing key)
 body:
 
 ```diff
-- {"status":"unauthorized"}
-+ {"id":1,"name":"Parity Category","role":null,"self_signup":null,"self_signup_end_at":null,"group_limit":null,"auto_leader":null,"context_type":"Course","course_id":1,"account_id":6,"non_collaborative":false,"protected":false,"allows_multiple_memberships":false,"is_member":false,"created_at":"2026-11-27T14:23:43.613643Z"}
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### group-categories-get-accounts-group-categories
@@ -4384,6 +4940,15 @@ header link:
 ```diff
 - <http://127.0.0.1:[..]/api/v1/accounts/6/group_categories?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/accounts/6/group_categories?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/accounts/6/group_categories?page=1&per_page=10>; rel="last"
 (missing)
+```
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨S⟩stpbzKbX4DxTuzVh…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..] [..]_[..]-[..]-[..]-[..]-[..].[..]; path=/; httponly
++ _csrf_token=SstpbzKbX4DxTuzVhhKK2QSZ8%2FdG8WQ794P6NNPi%2BQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $ (type), expected array, got object
@@ -4446,7 +5011,7 @@ at body $ (length), length 1 expected, 0 got
 body:
 
 ```diff
-- [{"id":1,"name":"Parity Category","role":"StudentEnrollment","self_signup":null,"self_signup_end_at":null,"group_limit":null,"auto_leader":null,"created_at":"2026-11-26T20:24:30Z","context_type":"Course","course_id":1,"progress":{"id":28,"context_id":1,"context_type":"GroupCategory","user_id":null,"tag":"assign_unassigned_members","completion":0.0,"workflow_state":"running","created_at":"2026-11-27T13:51:53Z","updated_at":"2026-11-27T13:51:53Z","message":null,"url":"http://127.0.0.1:[..]/api/v1/progress/28"},"sis_group_category_id":null,"sis_import_id":null,"protected":true,"allows_multiple_memberships":false,"is_member":false}]
+- [{"id":1,"name":"Parity Category","role":"StudentEnrollment","self_signup":null,"self_signup_end_at":null,"group_limit":null,"auto_leader":null,"created_at":"2026-11-26T20:24:30Z","context_type":"Course","course_id":1,"progress":{"id":28,"context_id":1,"context_type":"GroupCategory","user_id":null,"tag":"assign_unassigned_members","completion":0.0,"workflow_state":"running","created_at":"2026-11-27T13:51:53Z","updated_at":"2026-11-27T13:51:53Z","message":null,"url":"http://127.0.0.1:[..]/api/v1/progress/28"},"sis_group_category_id":null,"sis_import_id":null,"protected":true,"allows_multiple_memberships":false,"is_member":true}]
 + []
 ```
 
@@ -4503,7 +5068,8 @@ at body, line 1, column 1, char 0: expected "⟨n⟩ame,canvas_user_…", got "�
 body:
 
 ```diff
-- name,canvas_user_id,user_id,login_id,sections,group_name
+- name,canvas_user_id,user_id,login_id,sections,group_name,canvas_group_id,group_id
+- "Student, Parity",3,,,Parity Course,Parity Group,1,
 + {"errors":[{"message":"The specified resource does not exist."}]}
 (trailing newline: expected true, got false)
 ```
@@ -4573,7 +5139,7 @@ at body $ (type), expected array, got object
 body:
 
 ```diff
-- []
+- [{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","sis_user_id":null,"integration_id":null,"login_id":"student@example.com"}]
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
@@ -4603,7 +5169,7 @@ at body $.id (missing key)
 body:
 
 ```diff
-- {"id":1,"name":"Parity Category","role":"StudentEnrollment","self_signup":null,"self_signup_end_at":null,"group_limit":null,"auto_leader":null,"created_at":"2026-11-26T20:24:30Z","context_type":"Course","course_id":1,"progress":{"id":28,"context_id":1,"context_type":"GroupCategory","user_id":null,"tag":"assign_unassigned_members","completion":0.0,"workflow_state":"running","created_at":"2026-11-27T13:51:53Z","updated_at":"2026-11-27T13:51:53Z","message":null,"url":"http://127.0.0.1:[..]/api/v1/progress/28"},"sis_group_category_id":null,"sis_import_id":null,"protected":true,"allows_multiple_memberships":false,"is_member":false}
+- {"id":1,"name":"Parity Category","role":"StudentEnrollment","self_signup":null,"self_signup_end_at":null,"group_limit":null,"auto_leader":null,"created_at":"2026-11-26T20:24:30Z","context_type":"Course","course_id":1,"progress":{"id":28,"context_id":1,"context_type":"GroupCategory","user_id":null,"tag":"assign_unassigned_members","completion":0.0,"workflow_state":"running","created_at":"2026-11-27T13:51:53Z","updated_at":"2026-11-27T13:51:53Z","message":null,"url":"http://127.0.0.1:[..]/api/v1/progress/28"},"sis_group_category_id":null,"sis_import_id":null,"protected":true,"allows_multiple_memberships":false,"is_member":true}
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
@@ -4686,7 +5252,7 @@ body:
 
 ```diff
 - {"status":"unauthorized"}
-+ {"completion":0,"context_id":1,"context_type":"Course","created_at":"2026-11-27T14:23:48.311833+00:00","id":5,"message":null,"tag":"course_tag_import","updated_at":"2026-11-27T14:23:48.311849+00:00","url":"http://localhost:3000/api/v1/progress/5","user_id":1,"workflow_state":"running"}
++ {"completion":0,"context_id":1,"context_type":"Course","created_at":"2026-11-27T14:57:48.410617+00:00","id":9,"message":null,"tag":"course_tag_import","updated_at":"2026-11-27T14:57:48.410707+00:00","url":"http://localhost:3000/api/v1/progress/9","user_id":1,"workflow_state":"running"}
 ```
 
 ### group-categories-post-courses-group-categories
@@ -4779,7 +5345,7 @@ at body $.id (missing key)
 body:
 
 ```diff
-- {"id":1,"name":"Parity Category","role":"StudentEnrollment","self_signup":null,"self_signup_end_at":null,"group_limit":null,"auto_leader":null,"created_at":"2026-11-26T20:24:30Z","context_type":"Course","course_id":1,"progress":{"id":28,"context_id":1,"context_type":"GroupCategory","user_id":null,"tag":"assign_unassigned_members","completion":0.0,"workflow_state":"running","created_at":"2026-11-27T13:51:53Z","updated_at":"2026-11-27T13:51:53Z","message":null,"url":"http://127.0.0.1:[..]/api/v1/progress/28"},"sis_group_category_id":null,"sis_import_id":null,"protected":true,"allows_multiple_memberships":false,"is_member":false}
+- {"id":1,"name":"Parity Category","role":"StudentEnrollment","self_signup":null,"self_signup_end_at":null,"group_limit":null,"auto_leader":null,"created_at":"2026-11-26T20:24:30Z","context_type":"Course","course_id":1,"progress":{"id":28,"context_id":1,"context_type":"GroupCategory","user_id":null,"tag":"assign_unassigned_members","completion":0.0,"workflow_state":"running","created_at":"2026-11-27T13:51:53Z","updated_at":"2026-11-27T13:51:53Z","message":null,"url":"http://127.0.0.1:[..]/api/v1/progress/28"},"sis_group_category_id":null,"sis_import_id":null,"protected":true,"allows_multiple_memberships":false,"is_member":true}
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
@@ -4787,12 +5353,21 @@ body:
 
 Arguments: `DELETE /api/v1/groups/1`
 
-at status (200→204)
+at status (403→204)
 
 status:
 
 ```diff
-expected 200, got 204
+expected 403, got 204
+```
+
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
+
+header cache-control:
+
+```diff
+- no-store
++ no-cache
 ```
 
 at header content-type (missing key)
@@ -4804,12 +5379,21 @@ header content-type:
 (missing)
 ```
 
-at body (lines missing), line 1, length 4 expected, 0 got
+at header pragma (missing key)
+
+header pragma:
+
+```diff
+- no-cache
+(missing)
+```
+
+at body (lines missing), line 1, length 93 expected, 0 got
 
 body:
 
 ```diff
-- [..]
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
 (trailing newline: expected false, got true)
 ```
 
@@ -4869,103 +5453,95 @@ body:
 
 Arguments: `GET /api/v1/groups/1/activity_stream/summary`
 
-at status (404→200)
-
-status:
-
-```diff
-expected 404, got 200
-```
-
-at header cache-control, line 1, column 1, char 0: expected "⟨n⟩o-cache", got "⟨m⟩ax-age=0, privat…"
-
-header cache-control:
-
-```diff
-- no-cache
-+ max-age=0, private, must-revalidate
-```
-
-at body $.errors (missing key)
+at body $ (type), expected array, got object
 
 body:
 
 ```diff
-- {"errors":[{"message":"The specified resource does not exist."}]}
+- []
 + {"entries":[],"unread_count":0}
 ```
 
-### groups-get-groups-activity-stream
+### groups-get-groups-permissions
 
-Arguments: `GET /api/v1/groups/1/activity_stream`
+Arguments: `GET /api/v1/groups/1/permissions`
 
-at status (404→200)
+at status (200→404)
 
 status:
 
 ```diff
-expected 404, got 200
+expected 200, got 404
 ```
 
-at header cache-control, line 1, column 1, char 0: expected "⟨n⟩o-cache", got "⟨m⟩ax-age=0, privat…"
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
 
 header cache-control:
 
 ```diff
-- no-cache
-+ max-age=0, private, must-revalidate
+- max-age=0, private, must-revalidate
++ no-cache
 ```
 
-at body $ (type), expected object, got array
+at body $.participate (missing key)
 
 body:
 
 ```diff
-- {"errors":[{"message":"The specified resource does not exist."}]}
-+ []
+- {"participate":true,"manage_calendar":true,"manage_course_content_add":true,"manage_course_content_edit":true,"manage_course_content_delete":true,"manage_files_add":true,"manage_files_edit":true,"manage_files_delete":true,"manage_wiki_create":true,"manage_wiki_delete":true,"manage_wiki_update":true,"post_to_forum":true,"create_collaborations":true,"create_forum":true,"read_forum":true,"read":true,"read_announcements":true,"read_roster":true,"view_unpublished_items":true,"read_files":true,"send_messages":true,"send_messages_all":true,"moderate_forum":true,"delete":false,"manage":true,"allow_course_admin_actions":true,"manage_students":true,"update":true,"create":true,"participate_as_student":false,"join":false,"leave":false,"create_conferences":true,"read_as_admin":true,"read_sis":true,"view_user_logins":true,"read_email_addresses":true}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### groups-get-groups-users
+
+Arguments: `GET /api/v1/groups/1/users`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at header link (missing key)
+
+header link:
+
+```diff
+- <http://127.0.0.1:[..]/api/v1/groups/1/users?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/groups/1/users?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/groups/1/users?page=1&per_page=10>; rel="last"
+(missing)
+```
+
+at body $ (type), expected array, got object
+
+body:
+
+```diff
+- [{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","sis_user_id":null,"integration_id":null,"login_id":"student@example.com"},{"id":1,"name":"Parity User","created_at":"2026-11-26T20:10:15Z","sortable_name":"User, Parity","short_name":"Parity User","sis_user_id":null,"integration_id":null,"login_id":"parity@example.com"}]
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### groups-get-groups
 
 Arguments: `GET /api/v1/groups/1`
 
-at status (404→200)
-
-status:
-
-```diff
-expected 404, got 200
-```
-
-at header cache-control, line 1, column 1, char 0: expected "⟨n⟩o-cache", got "⟨m⟩ax-age=0, privat…"
-
-header cache-control:
-
-```diff
-- no-cache
-+ max-age=0, private, must-revalidate
-```
-
-at body $.errors (missing key)
+at body $.join_level, char 0: expected "⟨p⟩arent_context_on…", got "⟨i⟩nvitation_only"
 
 body:
 
 ```diff
-- {"errors":[{"message":"The specified resource does not exist."}]}
-+ {"id":1,"name":"Parity Group","description":null,"is_public":false,"join_level":"invitation_only","group_category_id":1,"max_membership":null,"created_at":"2026-11-27T14:23:43.613643Z","members_count":0,"storage_quota_mb":null,"context_type":null,"course_id":1,"context_name":null,"avatar_url":null,"role":null,"leader":null,"has_submission":false,"concluded":false,"non_collaborative":false}
-```
-
-### groups-get-users-self-groups
-
-Arguments: `GET /api/v1/users/self/groups`
-
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨x⟩YjUdVxpDD%2BhhSv…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..]-[..]-[..].[..]; path=/; httponly
-+ _csrf_token=xYjUdVxpDD%2BhhSv6XJs3Z0f6edeubnY0FLcQJZ3Igw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+- {"id":1,"name":"Parity Group","description":null,"is_public":false,"join_level":"parent_context_only","group_category_id":1,"max_membership":null,"created_at":"2026-11-26T20:29:16Z","members_count":2,"storage_quota_mb":50,"context_type":"Course","course_id":1,"context_name":"Parity Course","avatar_url":null,"role":"StudentEnrollment","leader":null,"sis_group_id":null,"sis_import_id":null,"has_submission":false,"concluded":false,"non_collaborative":false}
++ {"id":1,"name":"Parity Group","description":null,"is_public":false,"join_level":"invitation_only","group_category_id":1,"max_membership":null,"created_at":"2026-11-27T14:57:21.508889Z","members_count":0,"storage_quota_mb":null,"context_type":null,"course_id":1,"context_name":null,"avatar_url":null,"role":null,"leader":null,"has_submission":false,"concluded":false,"non_collaborative":false}
 ```
 
 ### groups-patch-groups
@@ -5016,7 +5592,97 @@ at body, line 1, column 3, char 2: expected "{\"⟨i⟩d\":", got "{\"⟨e⟩rro
 body:
 
 ```diff
-- {"id":[..],"name":"[..]","description":null,"is_public":false,"join_level":"invitation_only","group_category_id":1,"max_membership":null,"created_at":"2026-11-27T14:[..]:[..]","members_count":0,"storage_quota_mb":50,"permissions":{"create_discussion_topic":true,"join":false,"create_announcement":true},"context_type":"Course","course_id":1,"context_name":"Parity Course","avatar_url":null,"role":"StudentEnrollment","leader":null,"users":[],"group_category":{"id":1,"name":"Parity Category","role":"StudentEnrollment","self_signup":null,"self_signup_end_at":null,"group_limit":null,"auto_leader":null,"created_at":"2026-11-26T20:24:30Z","context_type":"Course","course_id":1,"sis_group_category_id":null,"sis_import_id":null,"protected":true,"allows_multiple_memberships":false,"is_member":false},"sis_group_id":null,"sis_import_id":null,"has_submission":false,"concluded":false,"non_collaborative":false}
+- {"id":[..],"name":"[..]","description":null,"is_public":false,"join_level":"invitation_only","group_category_id":1,"max_membership":null,"created_at":"2026-11-27T14:[..]:[..]","members_count":0,"storage_quota_mb":50,"permissions":{"create_discussion_topic":true,"join":false,"create_announcement":true},"context_type":"Course","course_id":1,"context_name":"Parity Course","avatar_url":null,"role":"StudentEnrollment","leader":null,"users":[],"group_category":{"id":1,"name":"Parity Category","role":"StudentEnrollment","self_signup":null,"self_signup_end_at":null,"group_limit":null,"auto_leader":null,"created_at":"2026-11-26T20:24:30Z","context_type":"Course","course_id":1,"sis_group_category_id":null,"sis_import_id":null,"protected":true,"allows_multiple_memberships":false,"is_member":true},"sis_group_id":null,"sis_import_id":null,"has_submission":false,"concluded":false,"non_collaborative":false}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### groups-post-groups-files
+
+Arguments: `POST /api/v1/groups/1/files`
+
+at status (500→404)
+
+status:
+
+```diff
+expected 500, got 404
+```
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨a⟩VyQLbRG%2FFkZCce…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]%3D[..]_[..]_[..].[..]; path=/; httponly
++ _csrf_token=aVyQLbRG%2FFkZCcedZ7F9WkVBSmcZVc1XtlZmHLukmQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
+at body, line 1, column 24, char 23: expected "…s\":[{\"message\":\"⟨A⟩n error occurred…", got "…s\":[{\"message\":\"⟨T⟩he specified res…"
+
+body:
+
+```diff
+- {"errors":[{"message":"An error occurred.","error_code":"internal_server_error"}],"error_report_id":[..]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### groups-post-groups-invite
+
+Arguments: `POST /api/v1/groups/1/invite`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $ (type), expected array, got object
+
+body:
+
+```diff
+- []
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### groups-post-groups-preview-html
+
+Arguments: `POST /api/v1/groups/1/preview_html`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.html (missing key)
+
+body:
+
+```diff
+- {"html":""}
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
@@ -5024,48 +5690,31 @@ body:
 
 Arguments: `POST /api/v1/groups`
 
-at body, line 1, column 7, char 6: expected "{\"id\":⟨⟩", got "{\"id\":⟨5⟩,\"name\":\"8e29d8f…"
+at body, line 1, column 7, char 6: expected "{\"id\":⟨⟩", got "{\"id\":⟨9⟩,\"name\":\"f9d9229…"
 
 body:
 
 ```diff
 - {"id":[..],"name":"[..]","description":null,"is_public":false,"join_level":"invitation_only","group_category_id":2,"max_membership":null,"created_at":"2026-11-27T14:[..]:[..]","members_count":1,"storage_quota_mb":50,"permissions":{"create_discussion_topic":true,"join":false,"create_announcement":true},"context_type":"Account","account_id":4,"context_name":"Default Account","avatar_url":null,"role":"communities","leader":null,"users":[{"id":1,"name":"Parity User","created_at":"2026-11-26T20:10:15Z","sortable_name":"User, Parity","short_name":"Parity User"}],"group_category":{"id":2,"name":"Communities","role":"communities","self_signup":null,"self_signup_end_at":null,"group_limit":null,"auto_leader":null,"created_at":"2026-11-26T20:48:31Z","context_type":"Account","account_id":4,"protected":true,"allows_multiple_memberships":true,"is_member":true},"has_submission":false,"concluded":false,"non_collaborative":false}
-+ {"id":5,"name":"8e29d8fa-04c5-4841-b1dd-b3b4f2197294","description":null,"is_public":false,"join_level":"invitation_only","group_category_id":null,"max_membership":null,"created_at":"2026-11-27T14:23:48.525283Z","members_count":0,"storage_quota_mb":null,"context_type":"Account","course_id":null,"context_name":"Root Account","avatar_url":null,"role":null,"leader":null,"has_submission":false,"concluded":false,"non_collaborative":false}
++ {"id":9,"name":"f9d92299-e219-4bf1-a635-60c4878ec0c8","description":null,"is_public":false,"join_level":"invitation_only","group_category_id":null,"max_membership":null,"created_at":"2026-11-27T14:57:48.864645Z","members_count":0,"storage_quota_mb":null,"context_type":"Account","course_id":null,"context_name":"Canvas Root","avatar_url":null,"role":null,"leader":null,"has_submission":false,"concluded":false,"non_collaborative":false}
 ```
 
 ### groups-put-groups
 
 Arguments: `PUT /api/v1/groups/1`
 
-at status (404→200)
-
-status:
-
-```diff
-expected 404, got 200
-```
-
-at header cache-control, line 1, column 1, char 0: expected "⟨n⟩o-cache", got "⟨m⟩ax-age=0, privat…"
-
-header cache-control:
-
-```diff
-- no-cache
-+ max-age=0, private, must-revalidate
-```
-
-at body $.errors (missing key)
+at body $.join_level, char 0: expected "⟨p⟩arent_context_on…", got "⟨i⟩nvitation_only"
 
 body:
 
 ```diff
-- {"errors":[{"message":"The specified resource does not exist."}]}
-+ {"id":1,"name":"Parity Group","description":null,"is_public":false,"join_level":"invitation_only","group_category_id":1,"max_membership":null,"created_at":"2026-11-27T14:23:43.613643Z","members_count":0,"storage_quota_mb":null,"context_type":null,"course_id":1,"context_name":null,"avatar_url":null,"role":null,"leader":null,"has_submission":false,"concluded":false,"non_collaborative":false}
+- {"id":1,"name":"Parity Group","description":null,"is_public":false,"join_level":"parent_context_only","group_category_id":1,"max_membership":null,"created_at":"2026-11-26T20:29:16Z","members_count":2,"storage_quota_mb":50,"permissions":{"create_discussion_topic":true,"join":false,"create_announcement":true},"context_type":"Course","course_id":1,"context_name":"Parity Course","avatar_url":null,"role":"StudentEnrollment","leader":null,"users":[{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","sis_user_id":null,"integration_id":null,"login_id":"student@example.com"},{"id":1,"name":"Parity User","created_at":"2026-11-26T20:10:15Z","sortable_name":"User, Parity","short_name":"Parity User","sis_user_id":null,"integration_id":null,"login_id":"parity@example.com"}],"group_category":{"id":1,"name":"Parity Category","role":"StudentEnrollment","self_signup":null,"self_signup_end_at":null,"group_limit":null,"auto_leader":null,"created_at":"2026-11-26T20:24:30Z","context_type":"Course","course_id":1,"sis_group_category_id":null,"sis_import_id":null,"protected":true,"allows_multiple_memberships":false,"is_member":true},"sis_group_id":null,"sis_import_id":null,"has_submission":false,"concluded":false,"non_collaborative":false}
++ {"id":1,"name":"Parity Group","description":null,"is_public":false,"join_level":"invitation_only","group_category_id":1,"max_membership":null,"created_at":"2026-11-27T14:57:21.508889Z","members_count":0,"storage_quota_mb":null,"context_type":null,"course_id":1,"context_name":null,"avatar_url":null,"role":null,"leader":null,"has_submission":false,"concluded":false,"non_collaborative":false}
 ```
 
 ### lti-registrations-delete-accounts-lti-registrations-bind
 
-Arguments: `DELETE /api/v1/accounts/6/lti_registrations/4/bind`
+Arguments: `DELETE /api/v1/accounts/6/lti_registrations/5/bind`
 
 at status (404→403)
 
@@ -5095,7 +5744,58 @@ body:
 
 ### lti-registrations-delete-accounts-lti-registrations
 
-Arguments: `DELETE /api/v1/accounts/6/lti_registrations/4`
+Arguments: `DELETE /api/v1/accounts/6/lti_registrations/5`
+
+at status (400→404)
+
+status:
+
+```diff
+expected 400, got 404
+```
+
+at body $.errors (type), expected string, got array
+
+body:
+
+```diff
+- {"errors":"registration does not belong to account"}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### lti-registrations-get-accounts-lti-registration-by-client-id
+
+Arguments: `GET /api/v1/accounts/6/lti_registration_by_client_id/4`
+
+at status (200→403)
+
+status:
+
+```diff
+expected 200, got 403
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-store"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-store
+```
+
+at body $.id (missing key)
+
+body:
+
+```diff
+- {"id":5,"account_id":5,"root_account_id":5,"internal_service":false,"vendor":null,"name":"Parity LTI Registration","admin_nickname":null,"workflow_state":"active","created_at":"2026-11-27T14:31:33Z","updated_at":"2026-11-27T14:31:33Z","description":"Parity LTI registration.","lock_deploying":false,"template_registration_id":null,"inherited":true,"lti_version":"1.3","icon_url":null,"developer_key_id":10000000000004,"ims_registration_id":null,"dynamic_registration_url":null,"reinstall_disabled":null,"manual_configuration_id":null,"created_by":"Instructure","updated_by":"Instructure","configuration":{},"overlaid_configuration":{},"pending_update":null}
++ {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
+```
+
+### lti-registrations-get-accounts-lti-registrations-251
+
+Arguments: `GET /api/v1/accounts/6/lti_registrations/5`
 
 at status (200→404)
 
@@ -5105,34 +5805,22 @@ status:
 expected 200, got 404
 ```
 
-### lti-registrations-get-accounts-lti-registration-by-client-id
-
-Arguments: `GET /api/v1/accounts/6/lti_registration_by_client_id/4`
-
-at status (404→403)
-
-status:
-
-```diff
-expected 404, got 403
-```
-
-at header cache-control, line 1, column 4, char 3: expected "no-⟨c⟩ache", got "no-⟨s⟩tore"
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
 
 header cache-control:
 
 ```diff
-- no-cache
-+ no-store
+- max-age=0, private, must-revalidate
++ no-cache
 ```
 
-at body $.errors (type), expected string, got array
+at body $.id (missing key)
 
 body:
 
 ```diff
-- {"errors":"LTI registration not found"}
-+ {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
+- {"id":5,"account_id":5,"root_account_id":5,"internal_service":false,"vendor":null,"name":"Parity LTI Registration","admin_nickname":null,"workflow_state":"active","created_at":"2026-11-27T14:31:33Z","updated_at":"2026-11-27T14:31:33Z","description":"Parity LTI registration.","lock_deploying":false,"template_registration_id":null,"inherited":true,"lti_version":"1.3","icon_url":null,"developer_key_id":10000000000004,"ims_registration_id":null,"dynamic_registration_url":null,"reinstall_disabled":null,"manual_configuration_id":null,"created_by":"Instructure","updated_by":"Instructure","configuration":{},"pending_update":null}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### lti-registrations-get-accounts-lti-registrations-by-utid
@@ -5197,7 +5885,7 @@ body:
 
 ### lti-registrations-get-accounts-lti-registrations-history
 
-Arguments: `GET /api/v1/accounts/6/lti_registrations/4/history`
+Arguments: `GET /api/v1/accounts/6/lti_registrations/5/history`
 
 at status (404→403)
 
@@ -5255,9 +5943,30 @@ body:
 + {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
 ```
 
+### lti-registrations-get-accounts-lti-registrations-latest-update-request
+
+Arguments: `GET /api/v1/accounts/6/lti_registrations/5/latest_update_request`
+
+at status (400→404)
+
+status:
+
+```diff
+expected 400, got 404
+```
+
+at body $.errors (type), expected string, got array
+
+body:
+
+```diff
+- {"errors":"registration does not belong to account"}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
 ### lti-registrations-get-accounts-lti-registrations-overlay-history
 
-Arguments: `GET /api/v1/accounts/6/lti_registrations/4/overlay_history`
+Arguments: `GET /api/v1/accounts/6/lti_registrations/5/overlay_history`
 
 at status (404→403)
 
@@ -5326,22 +6035,22 @@ body:
 
 ### lti-registrations-post-accounts-lti-registrations-bind
 
-Arguments: `POST /api/v1/accounts/6/lti_registrations/4/bind`
+Arguments: `POST /api/v1/accounts/6/lti_registrations/5/bind`
 
-at status (404→415)
+at status (422→415)
 
 status:
 
 ```diff
-expected 404, got 415
+expected 422, got 415
 ```
 
-at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨E⟩xpected request …"
+at body $.errors[0].code (missing key)
 
 body:
 
 ```diff
-- {"errors":[{"message":"The specified resource does not exist."}]}
+- {"errors":[{"code":"invalid_workflow_state","message":"workflow_state must be one of 'on', 'off'"}]}
 + {"errors":[{"message":"Expected request with `Content-Type: application/json`"}]}
 ```
 
@@ -5377,14 +6086,14 @@ body:
 
 ### lti-registrations-post-accounts-lti-registrations-install-from-template
 
-Arguments: `POST /api/v1/accounts/6/lti_registrations/4/install_from_template`
+Arguments: `POST /api/v1/accounts/6/lti_registrations/5/install_from_template`
 
-at status (404→403)
+at status (422→403)
 
 status:
 
 ```diff
-expected 404, got 403
+expected 422, got 403
 ```
 
 at header cache-control, line 1, column 4, char 3: expected "no-⟨c⟩ache", got "no-⟨s⟩tore"
@@ -5396,12 +6105,12 @@ header cache-control:
 + no-store
 ```
 
-at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨u⟩ser not authoriz…"
+at body $.errors[0].field (missing key)
 
 body:
 
 ```diff
-- {"errors":[{"message":"The specified resource does not exist."}]}
+- {"errors":[{"field":"lti_key","message":"tool configuration must have public jwk or public jwk url","error_code":"tool configuration must have public jwk or public jwk url"},{"field":"configuration","message":" /redirect_uris/0. Schema: {\"type\" =\u003e \"string\"}","error_code":" /redirect_uris/0. Schema: {\"type\" =\u003e \"string\"}"},{"field":"configuration","message":"The following fields are required: object at root is missing required properties: title, target_link_uri, oidc_initiation_url","error_code":"The following fields are required: object at root is missing required properties: title, target_link_uri, oidc_initiation_url"}]}
 + {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
 ```
 
@@ -5428,7 +6137,7 @@ body:
 
 ### lti-registrations-put-accounts-lti-registrations-reset
 
-Arguments: `PUT /api/v1/accounts/6/lti_registrations/4/reset`
+Arguments: `PUT /api/v1/accounts/6/lti_registrations/5/reset`
 
 at body $.errors[0].code (missing key)
 
@@ -5441,28 +6150,28 @@ body:
 
 ### lti-registrations-put-accounts-lti-registrations
 
-Arguments: `PUT /api/v1/accounts/6/lti_registrations/4`
+Arguments: `PUT /api/v1/accounts/6/lti_registrations/5`
 
-at status (404→415)
+at status (400→415)
 
 status:
 
 ```diff
-expected 404, got 415
+expected 400, got 415
 ```
 
-at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨E⟩xpected request …"
+at body $.errors (type), expected string, got array
 
 body:
 
 ```diff
-- {"errors":[{"message":"The specified resource does not exist."}]}
+- {"errors":"registration does not belong to account"}
 + {"errors":[{"message":"Expected request with `Content-Type: application/json`"}]}
 ```
 
 ### outcome-groups-api-delete-accounts-outcome-groups-outcomes
 
-Arguments: `DELETE /api/v1/accounts/6/outcome_groups/2/outcomes/2`
+Arguments: `DELETE /api/v1/accounts/6/outcome_groups/2/outcomes/3`
 
 at status (404→403)
 
@@ -5522,7 +6231,7 @@ body:
 
 ### outcome-groups-api-delete-courses-outcome-groups-outcomes
 
-Arguments: `DELETE /api/v1/courses/1/outcome_groups/2/outcomes/2`
+Arguments: `DELETE /api/v1/courses/1/outcome_groups/2/outcomes/3`
 
 at status (200→404)
 
@@ -5546,7 +6255,7 @@ at body $.context_type (missing key)
 body:
 
 ```diff
-- {"context_type":"Course","context_id":1,"quiz_lti":false,"url":"/api/v1/courses/1/outcome_groups/2/outcomes/2","outcome_group":{"id":2,"title":"Parity Course","vendor_guid":null,"url":"/api/v1/courses/1/outcome_groups/2","subgroups_url":"/api/v1/courses/1/outcome_groups/2/subgroups","outcomes_url":"/api/v1/courses/1/outcome_groups/2/outcomes","can_edit":true},"outcome":{"id":2,"context_type":"Course","context_id":1,"vendor_guid":null,"display_name":null,"title":"Parity outcome","url":"/api/v1/outcomes/2","can_edit":true,"has_updateable_rubrics":false},"assessed":false}
+- {"context_type":"Course","context_id":1,"quiz_lti":false,"url":"/api/v1/courses/1/outcome_groups/2/outcomes/3","outcome_group":{"id":2,"title":"Parity Course","vendor_guid":null,"url":"/api/v1/courses/1/outcome_groups/2","subgroups_url":"/api/v1/courses/1/outcome_groups/2/subgroups","outcomes_url":"/api/v1/courses/1/outcome_groups/2/outcomes","can_edit":true},"outcome":{"id":3,"context_type":"Course","context_id":1,"vendor_guid":null,"display_name":null,"title":"Parity outcome","url":"/api/v1/outcomes/3","can_edit":true,"has_updateable_rubrics":false},"assessed":false}
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
@@ -5560,6 +6269,15 @@ status:
 
 ```diff
 expected 400, got 404
+```
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨r⟩uunWdPGAJSPjc3DT…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..].[..]-[..].[..]; path=/; httponly
++ _csrf_token=ruunWdPGAJSPjc3DTAIyt1xQBG4nFkVo8TuJfjO8%2FQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body, line 1, column 1, char 0: expected "⟨\"⟩error\"", got "⟨{⟩\"errors\":[{\"mess…"
@@ -5705,12 +6423,12 @@ body:
 
 Arguments: `GET /api/v1/courses/1/outcome_group_links`
 
-at body $ (length), length 1 expected, 0 got
+at body $ (length), length 2 expected, 0 got
 
 body:
 
 ```diff
-- [{"context_type":"Course","context_id":1,"quiz_lti":false,"url":"/api/v1/courses/1/outcome_groups/2/outcomes/1","outcome_group":{"id":2,"title":"Parity Course","vendor_guid":null,"url":"/api/v1/courses/1/outcome_groups/2","subgroups_url":"/api/v1/courses/1/outcome_groups/2/subgroups","outcomes_url":"/api/v1/courses/1/outcome_groups/2/outcomes","can_edit":true},"outcome":{"id":1,"context_type":"Course","context_id":1,"vendor_guid":null,"display_name":null,"title":"Parity outcome","url":"/api/v1/outcomes/1","can_edit":true,"has_updateable_rubrics":false},"can_unlink":true,"assessed":false}]
+- [{"context_type":"Course","context_id":1,"quiz_lti":false,"url":"/api/v1/courses/1/outcome_groups/2/outcomes/1","outcome_group":{"id":2,"title":"Parity Course","vendor_guid":null,"url":"/api/v1/courses/1/outcome_groups/2","subgroups_url":"/api/v1/courses/1/outcome_groups/2/subgroups","outcomes_url":"/api/v1/courses/1/outcome_groups/2/outcomes","can_edit":true},"outcome":{"id":1,"context_type":"Course","context_id":1,"vendor_guid":null,"display_name":null,"title":"Parity outcome","url":"/api/v1/outcomes/1","can_edit":true,"has_updateable_rubrics":false},"can_unlink":true,"assessed":false},{"context_type":"Course","context_id":1,"quiz_lti":false,"url":"/api/v1/courses/1/outcome_groups/2/outcomes/2","outcome_group":{"id":2,"title":"Parity Course","vendor_guid":null,"url":"/api/v1/courses/1/outcome_groups/2","subgroups_url":"/api/v1/courses/1/outcome_groups/2/subgroups","outcomes_url":"/api/v1/courses/1/outcome_groups/2/outcomes","can_edit":true},"outcome":{"id":2,"context_type":"Course","context_id":1,"vendor_guid":null,"display_name":null,"title":"Parity outcome","url":"/api/v1/outcomes/2","can_edit":true,"has_updateable_rubrics":false},"can_unlink":true,"assessed":false}]
 + []
 ```
 
@@ -5754,16 +6472,16 @@ header link:
 
 ```diff
 - </api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="current",</api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="first",</api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="last"
-+ <http://127.0.0.1:51468/api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="current",<http://127.0.0.1:51468/api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="first",<http://127.0.0.1:51468/api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="last"
++ <http://127.0.0.1:62855/api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="current",<http://127.0.0.1:62855/api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="first",<http://127.0.0.1:62855/api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="last"
 ```
 
-at body $ (length), length 1 expected, 0 got
+at body $[0].id (value): expected 1, got 8
 
 body:
 
 ```diff
 - [{"id":1,"title":"Parity Account","description":"Account level outcomes group.","dontImport":true,"url":"/api/v1/accounts/6/outcome_groups/1","subgroups_url":"/api/v1/accounts/6/outcome_groups/1/subgroups","outcomes_url":"/api/v1/accounts/6/outcome_groups/1/outcomes"}]
-+ []
++ [{"can_edit":true,"context_id":1,"context_type":"Course","course_id":1,"created_at":"2026-11-27T14:57:27.548658Z","description":null,"id":8,"import_url":"/api/v1/courses/1/outcome_groups/8/import","outcomes_url":"/api/v1/courses/1/outcome_groups/8/outcomes","parent_outcome_group_id":null,"subgroups_url":"/api/v1/courses/1/outcome_groups/8/subgroups","title":"Parity Course","updated_at":"2026-11-27T14:57:27.548658Z","url":"/api/v1/courses/1/outcome_groups/8","vendor_guid":null,"workflow_state":"active"}]
 ```
 
 ### outcome-groups-api-get-courses-outcome-groups-outcomes
@@ -5801,7 +6519,7 @@ at body $ (type), expected array, got object
 body:
 
 ```diff
-- [{"context_type":"Course","context_id":1,"quiz_lti":false,"url":"/api/v1/courses/1/outcome_groups/2/outcomes/1","outcome_group":{"id":2,"title":"Parity Course","vendor_guid":null,"url":"/api/v1/courses/1/outcome_groups/2","subgroups_url":"/api/v1/courses/1/outcome_groups/2/subgroups","outcomes_url":"/api/v1/courses/1/outcome_groups/2/outcomes","can_edit":true},"outcome":{"id":1,"context_type":"Course","context_id":1,"vendor_guid":null,"display_name":null,"title":"Parity outcome","url":"/api/v1/outcomes/1","can_edit":true,"has_updateable_rubrics":false},"can_unlink":true,"assessed":false}]
+- [{"context_type":"Course","context_id":1,"quiz_lti":false,"url":"/api/v1/courses/1/outcome_groups/2/outcomes/1","outcome_group":{"id":2,"title":"Parity Course","vendor_guid":null,"url":"/api/v1/courses/1/outcome_groups/2","subgroups_url":"/api/v1/courses/1/outcome_groups/2/subgroups","outcomes_url":"/api/v1/courses/1/outcome_groups/2/outcomes","can_edit":true},"outcome":{"id":1,"context_type":"Course","context_id":1,"vendor_guid":null,"display_name":null,"title":"Parity outcome","url":"/api/v1/outcomes/1","can_edit":true,"has_updateable_rubrics":false},"can_unlink":true,"assessed":false},{"context_type":"Course","context_id":1,"quiz_lti":false,"url":"/api/v1/courses/1/outcome_groups/2/outcomes/2","outcome_group":{"id":2,"title":"Parity Course","vendor_guid":null,"url":"/api/v1/courses/1/outcome_groups/2","subgroups_url":"/api/v1/courses/1/outcome_groups/2/subgroups","outcomes_url":"/api/v1/courses/1/outcome_groups/2/outcomes","can_edit":true},"outcome":{"id":2,"context_type":"Course","context_id":1,"vendor_guid":null,"display_name":null,"title":"Parity outcome","url":"/api/v1/outcomes/2","can_edit":true,"has_updateable_rubrics":false},"can_unlink":true,"assessed":false}]
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
@@ -5848,13 +6566,13 @@ body:
 
 Arguments: `GET /api/v1/courses/1/outcome_groups`
 
-at body $ (length), length 1 expected, 0 got
+at body $[0].id (value): expected 2, got 8
 
 body:
 
 ```diff
 - [{"id":2,"title":"Parity Course","vendor_guid":null,"url":"/api/v1/courses/1/outcome_groups/2","subgroups_url":"/api/v1/courses/1/outcome_groups/2/subgroups","outcomes_url":"/api/v1/courses/1/outcome_groups/2/outcomes","can_edit":true,"import_url":"/api/v1/courses/1/outcome_groups/2/import","context_id":1,"context_type":"Course","description":null}]
-+ []
++ [{"id":8,"course_id":1,"context_type":"Course","context_id":1,"title":"Parity Course","workflow_state":"active","created_at":"2026-11-27T14:57:27.548658Z","updated_at":"2026-11-27T14:57:27.548658Z"}]
 ```
 
 ### outcome-groups-api-get-courses-root-outcome-group
@@ -5876,7 +6594,7 @@ header location:
 
 ```diff
 - http://127.0.0.1:[..]/api/v1/courses/1/outcome_groups/2
-+ /api/v1/courses/1/outcome_groups/5
++ /api/v1/courses/1/outcome_groups/8
 ```
 
 at body (lines added), line 1, length 0 expected, 506 got
@@ -5884,7 +6602,7 @@ at body (lines added), line 1, length 0 expected, 506 got
 body:
 
 ```diff
-+ {"can_edit":true,"context_id":1,"context_type":"Course","course_id":1,"created_at":"2026-11-27T14:23:48.943908Z","description":null,"id":5,"import_url":"/api/v1/courses/1/outcome_groups/5/import","outcomes_url":"/api/v1/courses/1/outcome_groups/5/outcomes","parent_outcome_group_id":null,"subgroups_url":"/api/v1/courses/1/outcome_groups/5/subgroups","title":"Parity Course","updated_at":"2026-11-27T14:23:48.943908Z","url":"/api/v1/courses/1/outcome_groups/5","vendor_guid":null,"workflow_state":"active"}
++ {"can_edit":true,"context_id":1,"context_type":"Course","course_id":1,"created_at":"2026-11-27T14:57:27.548658Z","description":null,"id":8,"import_url":"/api/v1/courses/1/outcome_groups/8/import","outcomes_url":"/api/v1/courses/1/outcome_groups/8/outcomes","parent_outcome_group_id":null,"subgroups_url":"/api/v1/courses/1/outcome_groups/8/subgroups","title":"Parity Course","updated_at":"2026-11-27T14:57:49.694546Z","url":"/api/v1/courses/1/outcome_groups/8","vendor_guid":null,"workflow_state":"active"}
 (trailing newline: expected true, got false)
 ```
 
@@ -5985,6 +6703,15 @@ header cache-control:
 ```diff
 - no-cache
 + no-store
+```
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨N⟩hQxyakFBILIGuSRv…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]%[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..].[..]-[..]_[..]_[..].[..].[..]; path=/; httponly
++ _csrf_token=NhQxyakFBILIGuSRve5Swn01CqO%2FFJPMXrJIqP0m%2BA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨u⟩ser not authoriz…"
@@ -6119,22 +6846,9 @@ body:
 + {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
 ```
 
-### outcome-groups-api-post-global-outcome-groups-outcomes
-
-Arguments: `POST /api/v1/global/outcome_groups/2/outcomes`
-
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨3⟩IKmMKhz2wgthpi2q…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%[..]%[..]_[..]-[..].[..].[..]; path=/; httponly
-+ _csrf_token=3IKmMKhz2wgthpi2qL9P0M0VuL%2FwdIPBs%2FPP6KZQ8g%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
-```
-
 ### outcome-groups-api-put-accounts-outcome-groups-outcomes
 
-Arguments: `PUT /api/v1/accounts/6/outcome_groups/2/outcomes/2`
+Arguments: `PUT /api/v1/accounts/6/outcome_groups/2/outcomes/3`
 
 at status (404→403)
 
@@ -6194,7 +6908,7 @@ body:
 
 ### outcome-groups-api-put-courses-outcome-groups-outcomes
 
-Arguments: `PUT /api/v1/courses/1/outcome_groups/2/outcomes/2`
+Arguments: `PUT /api/v1/courses/1/outcome_groups/2/outcomes/3`
 
 at status (200→404)
 
@@ -6218,7 +6932,7 @@ at body $.context_type (missing key)
 body:
 
 ```diff
-- {"context_type":"Course","context_id":1,"quiz_lti":false,"url":"/api/v1/courses/1/outcome_groups/2/outcomes/2","outcome_group":{"id":2,"title":"Parity Course","vendor_guid":null,"url":"/api/v1/courses/1/outcome_groups/2","subgroups_url":"/api/v1/courses/1/outcome_groups/2/subgroups","outcomes_url":"/api/v1/courses/1/outcome_groups/2/outcomes","can_edit":true},"outcome":{"id":2,"context_type":"Course","context_id":1,"vendor_guid":null,"display_name":null,"title":"Parity outcome","url":"/api/v1/outcomes/2","can_edit":true,"has_updateable_rubrics":false},"can_unlink":true,"assessed":false}
+- {"context_type":"Course","context_id":1,"quiz_lti":false,"url":"/api/v1/courses/1/outcome_groups/2/outcomes/3","outcome_group":{"id":2,"title":"Parity Course","vendor_guid":null,"url":"/api/v1/courses/1/outcome_groups/2","subgroups_url":"/api/v1/courses/1/outcome_groups/2/subgroups","outcomes_url":"/api/v1/courses/1/outcome_groups/2/outcomes","can_edit":true},"outcome":{"id":3,"context_type":"Course","context_id":1,"vendor_guid":null,"display_name":null,"title":"Parity outcome","url":"/api/v1/outcomes/3","can_edit":true,"has_updateable_rubrics":false},"can_unlink":true,"assessed":false}
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
@@ -6245,7 +6959,7 @@ body:
 
 ### outcome-groups-api-put-global-outcome-groups-outcomes
 
-Arguments: `PUT /api/v1/global/outcome_groups/2/outcomes/2`
+Arguments: `PUT /api/v1/global/outcome_groups/2/outcomes/3`
 
 at status (403→404)
 
@@ -6652,13 +7366,42 @@ body:
 
 Arguments: `DELETE /api/v1/courses/1/assignments/1/submissions/3/read`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨q⟩3uc3guzdYk8%2B3W…"
+at status (204→404)
 
-header set-cookie:
+status:
 
 ```diff
-- _csrf_token=[..]%[..]%[..]%[..].[..].[..]; path=/; httponly
-+ _csrf_token=q3uc3guzdYk8%2B3WhtFCWGF79ZXeJ%2BgjfeZKaDOfgVA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+expected 204, got 404
+```
+
+at body (lines added), line 1, length 0 expected, 65 got
+
+body:
+
+```diff
++ {"errors":[{"message":"The specified resource does not exist."}]}
+(trailing newline: expected true, got false)
+```
+
+### submissions-api-delete-sections-assignments-submissions-read
+
+Arguments: `DELETE /api/v1/sections/3/assignments/1/submissions/3/read`
+
+at status (204→404)
+
+status:
+
+```diff
+expected 204, got 404
+```
+
+at body (lines added), line 1, length 0 expected, 65 got
+
+body:
+
+```diff
++ {"errors":[{"message":"The specified resource does not exist."}]}
+(trailing newline: expected true, got false)
 ```
 
 ### submissions-api-get-courses-assignments-gradeable-students-300
@@ -6674,56 +7417,494 @@ body:
 + [{"assignment_ids":[],"avatar_image_url":null,"display_name":"Parity Student","html_url":"/courses/1/users/3","id":3,"pronouns":null},{"assignment_ids":[],"avatar_image_url":null,"display_name":"Test Student","html_url":"/courses/1/users/8","id":8,"pronouns":null}]
 ```
 
-### submissions-api-get-sections-assignments-submissions-document-annotations-read
+### submissions-api-get-courses-assignments-gradeable-students
 
-Arguments: `GET /api/v1/sections/3/assignments/1/submissions/3/document_annotations/read`
+Arguments: `GET /api/v1/courses/1/assignments/1/gradeable_students`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨8⟩BQYVLrD1idBDfcFg…"
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at header link (missing key)
+
+header link:
+
+```diff
+- <http://127.0.0.1:[..]/api/v1/courses/1/assignments/1/gradeable_students?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/courses/1/assignments/1/gradeable_students?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/courses/1/assignments/1/gradeable_students?page=1&per_page=10>; rel="last"
+(missing)
+```
+
+at body $ (type), expected array, got object
+
+body:
+
+```diff
+- [{"id":3,"anonymous_id":"3","display_name":"Parity Student","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/courses/1/users/3","pronouns":null}]
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-get-courses-assignments-submission-summary
+
+Arguments: `GET /api/v1/courses/1/assignments/1/submission_summary`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.graded (missing key)
+
+body:
+
+```diff
+- {"graded":0,"ungraded":1,"not_submitted":0}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-get-courses-assignments-submissions-296
+
+Arguments: `GET /api/v1/courses/1/assignments/1/submissions/3`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.id (missing key)
+
+body:
+
+```diff
+- {"id":14,"user_id":3,"url":null,"score":null,"grade":null,"excused":null,"attempt":1,"submission_type":"online_text_entry","submitted_at":"2026-11-27T14:51:04Z","body":"Parity submission body.","assignment_id":1,"graded_at":null,"grade_matches_current_submission":true,"grader_id":null,"workflow_state":"submitted","late_policy_status":null,"points_deducted":null,"grading_period_id":null,"cached_due_date":null,"extra_attempts":null,"posted_at":null,"redo_request":false,"sticker":null,"custom_grade_status_id":null,"late":false,"missing":false,"seconds_late":0,"entered_grade":null,"entered_score":null,"preview_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions/3?preview=1\u0026version=1","anonymous_id":"uRjPo"}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-get-courses-assignments-submissions-document-annotations-read
+
+Arguments: `GET /api/v1/courses/1/assignments/1/submissions/3/document_annotations/read`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.read (missing key)
+
+body:
+
+```diff
+- {"read":true}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-get-courses-assignments-submissions-rubric-assessments-read
+
+Arguments: `GET /api/v1/courses/1/assignments/1/submissions/3/rubric_assessments/read`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.read (missing key)
+
+body:
+
+```diff
+- {"read":true}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-get-courses-assignments-submissions-rubric-comments-read
+
+Arguments: `GET /api/v1/courses/1/assignments/1/submissions/3/rubric_comments/read`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨H⟩g1NAwBLHRvTYdVjK…"
 
 header set-cookie:
 
 ```diff
-- _csrf_token=[..]%[..]%[..]%[..]%3D[..]_[..]_[..].[..]_[..]_[..]_[..].[..]; path=/; httponly
-+ _csrf_token=8BQYVLrD1idBDfcFg05YhFR%2Fs%2FH%2BbNB3cMLIEK8U8A%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+- _csrf_token=[..]%[..]%[..]%[..]%3D[..]_[..]_[..].[..].[..].[..]; path=/; httponly
++ _csrf_token=Hg1NAwBLHRvTYdVjK20SfGlQhhRskV3PWT6ZAkaFWw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
+at body $.read (missing key)
+
+body:
+
+```diff
+- {"read":true}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-get-courses-assignments-submissions
+
+Arguments: `GET /api/v1/courses/1/assignments/1/submissions`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at header link (missing key)
+
+header link:
+
+```diff
+- <http://127.0.0.1:[..]/api/v1/courses/1/assignments/1/submissions?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/courses/1/assignments/1/submissions?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/courses/1/assignments/1/submissions?page=1&per_page=10>; rel="last"
+(missing)
+```
+
+at body $ (type), expected array, got object
+
+body:
+
+```diff
+- [{"id":14,"user_id":3,"url":null,"score":null,"grade":null,"excused":null,"attempt":1,"submission_type":"online_text_entry","submitted_at":"2026-11-27T14:51:04Z","body":"Parity submission body.","assignment_id":1,"graded_at":null,"grade_matches_current_submission":true,"grader_id":null,"workflow_state":"submitted","late_policy_status":null,"points_deducted":null,"grading_period_id":null,"cached_due_date":null,"extra_attempts":null,"posted_at":null,"redo_request":false,"sticker":null,"custom_grade_status_id":null,"late":false,"missing":false,"seconds_late":0,"entered_grade":null,"entered_score":null,"preview_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions/3?preview=1\u0026version=1","anonymous_id":"uRjPo"}]
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-get-sections-assignments-submission-summary
+
+Arguments: `GET /api/v1/sections/3/assignments/1/submission_summary`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.graded (missing key)
+
+body:
+
+```diff
+- {"graded":0,"ungraded":1,"not_submitted":0}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-get-sections-assignments-submissions-422
+
+Arguments: `GET /api/v1/sections/3/assignments/1/submissions/3`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.id (missing key)
+
+body:
+
+```diff
+- {"id":14,"user_id":3,"url":null,"score":null,"grade":null,"excused":null,"attempt":1,"submission_type":"online_text_entry","submitted_at":"2026-11-27T14:51:04Z","body":"Parity submission body.","assignment_id":1,"graded_at":null,"grade_matches_current_submission":true,"grader_id":null,"workflow_state":"submitted","late_policy_status":null,"points_deducted":null,"grading_period_id":null,"cached_due_date":null,"extra_attempts":null,"posted_at":null,"redo_request":false,"sticker":null,"custom_grade_status_id":null,"late":false,"missing":false,"seconds_late":0,"entered_grade":null,"entered_score":null,"preview_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions/3?preview=1\u0026version=1","anonymous_id":"uRjPo"}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-get-sections-assignments-submissions-document-annotations-read
+
+Arguments: `GET /api/v1/sections/3/assignments/1/submissions/3/document_annotations/read`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨4⟩u2LvE7p7RsMYge1b…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%3D[..]_[..]_[..]_[..].[..]_[..].[..]; path=/; httponly
++ _csrf_token=4u2LvE7p7RsMYge1bfJWewLJeycHWR9MQN0kdWnvkA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
+at body $.read (missing key)
+
+body:
+
+```diff
+- {"read":true}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-get-sections-assignments-submissions-rubric-assessments-read
+
+Arguments: `GET /api/v1/sections/3/assignments/1/submissions/3/rubric_assessments/read`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.read (missing key)
+
+body:
+
+```diff
+- {"read":true}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-get-sections-assignments-submissions-rubric-comments-read
+
+Arguments: `GET /api/v1/sections/3/assignments/1/submissions/3/rubric_comments/read`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.read (missing key)
+
+body:
+
+```diff
+- {"read":true}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### submissions-api-get-sections-assignments-submissions
 
 Arguments: `GET /api/v1/sections/3/assignments/1/submissions`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨b⟩h9ppsC6RgI1d2nnl…"
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at header link (missing key)
+
+header link:
+
+```diff
+- <http://127.0.0.1:[..]/api/v1/sections/3/assignments/1/submissions?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/sections/3/assignments/1/submissions?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/sections/3/assignments/1/submissions?page=1&per_page=10>; rel="last"
+(missing)
+```
+
+at body $ (type), expected array, got object
+
+body:
+
+```diff
+- [{"id":14,"user_id":3,"url":null,"score":null,"grade":null,"excused":null,"attempt":1,"submission_type":"online_text_entry","submitted_at":"2026-11-27T14:51:04Z","body":"Parity submission body.","assignment_id":1,"graded_at":null,"grade_matches_current_submission":true,"grader_id":null,"workflow_state":"submitted","late_policy_status":null,"points_deducted":null,"grading_period_id":null,"cached_due_date":null,"extra_attempts":null,"posted_at":null,"redo_request":false,"sticker":null,"custom_grade_status_id":null,"late":false,"missing":false,"seconds_late":0,"entered_grade":null,"entered_score":null,"preview_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions/3?preview=1\u0026version=1","anonymous_id":"uRjPo"}]
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-get-sections-students-submissions
+
+Arguments: `GET /api/v1/sections/3/students/submissions`
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨F⟩VYSi6m4btIPWTAKZ…"
 
 header set-cookie:
 
 ```diff
-- _csrf_token=[..]%[..]%[..]%[..]%[..]%3D[..]_[..]_[..]_[..].[..]; path=/; httponly
-+ _csrf_token=bh9ppsC6RgI1d2nnlw5sWScBsRxKUSR%2B93ISHZbCKQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+- _csrf_token=[..]%[..]%[..]%[..]%[..]%[..]%[..]_[..]_[..]_[..].[..]; path=/; httponly
++ _csrf_token=FVYSi6m4btIPWTAKZPt9DlYQZD2p%2FYEHgZkueZsZew%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### submissions-api-post-courses-assignments-submissions-files
 
 Arguments: `POST /api/v1/courses/1/assignments/1/submissions/3/files`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨H⟩t27vepetXuHg2H3C…"
+at status (500→404)
 
-header set-cookie:
+status:
 
 ```diff
-- _csrf_token=[..]%[..]%[..]%[..]%3D[..]_[..]_[..].[..]-[..].[..].[..]; path=/; httponly
-+ _csrf_token=Ht27vepetXuHg2H3CevFw6gbnQbahY3yfJjG3QBN%2FA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+expected 500, got 404
 ```
 
-### submissions-api-post-courses-submissions-update-grades
+at body, line 1, column 24, char 23: expected "…s\":[{\"message\":\"⟨A⟩n error occurred…", got "…s\":[{\"message\":\"⟨T⟩he specified res…"
 
-Arguments: `POST /api/v1/courses/1/submissions/update_grades`
-
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨g⟩S7iTHIX19AZ9YGvg…"
-
-header set-cookie:
+body:
 
 ```diff
-- _csrf_token=[..]%[..]%[..]%3D[..]_[..]_[..]-[..].[..]; path=/; httponly
-+ _csrf_token=gS7iTHIX19AZ9YGvgAsczEH2CH1ndCi7e9h%2BRClZOQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+- {"errors":[{"message":"An error occurred.","error_code":"internal_server_error"}],"error_report_id":[..]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-post-sections-assignments-submissions-files
+
+Arguments: `POST /api/v1/sections/3/assignments/1/submissions/3/files`
+
+at status (500→404)
+
+status:
+
+```diff
+expected 500, got 404
+```
+
+at body, line 1, column 24, char 23: expected "…s\":[{\"message\":\"⟨A⟩n error occurred…", got "…s\":[{\"message\":\"⟨T⟩he specified res…"
+
+body:
+
+```diff
+- {"errors":[{"message":"An error occurred.","error_code":"internal_server_error"}],"error_report_id":[..]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### submissions-api-put-courses-assignments-anonymous-submissions
@@ -6738,15 +7919,6 @@ status:
 expected 404, got 415
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨r⟩BfikOja%2BgVvq10…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%[..]%[..]%[..]_[..].[..].[..]; path=/; httponly
-+ _csrf_token=rBfikOja%2BgVvq10v0tWPprm9AAHLVIapMk6EMwsr7w%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
-```
-
 at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨E⟩xpected request …"
 
 body:
@@ -6756,25 +7928,211 @@ body:
 + {"errors":[{"message":"Expected request with `Content-Type: application/json`"}]}
 ```
 
-### submissions-api-put-courses-assignments-submissions-read-64
+### submissions-api-put-courses-assignments-submissions-document-annotations-read
 
-Arguments: `PUT /api/v1/courses/1/assignments/1/submissions/3/read/:item`
+Arguments: `PUT /api/v1/courses/1/assignments/1/submissions/3/document_annotations/read`
 
-at status (404→400)
+at status (403→404)
 
 status:
 
 ```diff
-expected 404, got 400
+expected 403, got 404
 ```
 
-at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨u⟩nknown item: :it…"
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
+
+header cache-control:
+
+```diff
+- no-store
++ no-cache
+```
+
+at header pragma (missing key)
+
+header pragma:
+
+```diff
+- no-cache
+(missing)
+```
+
+at body $.status (missing key)
 
 body:
 
 ```diff
-- {"errors":[{"message":"The specified resource does not exist."}]}
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-put-courses-assignments-submissions-read-64
+
+Arguments: `PUT /api/v1/courses/1/assignments/1/submissions/3/read/:item`
+
+at status (403→400)
+
+status:
+
+```diff
+expected 403, got 400
+```
+
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
+
+header cache-control:
+
+```diff
+- no-store
++ no-cache
+```
+
+at header pragma (missing key)
+
+header pragma:
+
+```diff
+- no-cache
+(missing)
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
 + {"errors":[{"message":"unknown item: :item"}]}
+```
+
+### submissions-api-put-courses-assignments-submissions-read
+
+Arguments: `PUT /api/v1/courses/1/assignments/1/submissions/3/read`
+
+at status (204→404)
+
+status:
+
+```diff
+expected 204, got 404
+```
+
+at body (lines added), line 1, length 0 expected, 65 got
+
+body:
+
+```diff
++ {"errors":[{"message":"The specified resource does not exist."}]}
+(trailing newline: expected true, got false)
+```
+
+### submissions-api-put-courses-assignments-submissions-rubric-assessments-read
+
+Arguments: `PUT /api/v1/courses/1/assignments/1/submissions/3/rubric_assessments/read`
+
+at status (403→404)
+
+status:
+
+```diff
+expected 403, got 404
+```
+
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
+
+header cache-control:
+
+```diff
+- no-store
++ no-cache
+```
+
+at header pragma (missing key)
+
+header pragma:
+
+```diff
+- no-cache
+(missing)
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-put-courses-assignments-submissions-rubric-comments-read
+
+Arguments: `PUT /api/v1/courses/1/assignments/1/submissions/3/rubric_comments/read`
+
+at status (403→404)
+
+status:
+
+```diff
+expected 403, got 404
+```
+
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
+
+header cache-control:
+
+```diff
+- no-store
++ no-cache
+```
+
+at header pragma (missing key)
+
+header pragma:
+
+```diff
+- no-cache
+(missing)
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-put-courses-assignments-submissions
+
+Arguments: `PUT /api/v1/courses/1/assignments/1/submissions/3`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.id (missing key)
+
+body:
+
+```diff
+- {"id":14,"user_id":3,"url":null,"score":null,"grade":null,"excused":null,"attempt":1,"submission_type":"online_text_entry","submitted_at":"2026-11-27T14:51:04Z","body":"Parity submission body.","assignment_id":1,"graded_at":null,"grade_matches_current_submission":true,"grader_id":null,"workflow_state":"submitted","late_policy_status":null,"points_deducted":null,"grading_period_id":null,"cached_due_date":null,"extra_attempts":null,"posted_at":null,"redo_request":false,"sticker":null,"custom_grade_status_id":null,"late":false,"missing":false,"seconds_late":0,"entered_grade":null,"entered_score":null,"preview_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions/3?preview=1\u0026version=1","submission_comments":[],"anonymous_id":"uRjPo","all_submissions":[{"id":14,"user_id":3,"url":null,"score":null,"grade":null,"excused":null,"attempt":1,"submission_type":"online_text_entry","submitted_at":"2026-11-27T14:51:04Z","body":"Parity submission body.","assignment_id":1,"graded_at":null,"grade_matches_current_submission":true,"grader_id":null,"workflow_state":"submitted","late_policy_status":null,"points_deducted":null,"grading_period_id":null,"cached_due_date":null,"extra_attempts":null,"posted_at":null,"redo_request":false,"sticker":null,"custom_grade_status_id":null,"late":false,"missing":false,"seconds_late":0,"entered_grade":null,"entered_score":null,"preview_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions/3?preview=1\u0026version=1","anonymous_id":"uRjPo"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### submissions-api-put-courses-submissions-clear-unread
@@ -6837,6 +8195,15 @@ status:
 expected 404, got 415
 ```
 
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨B⟩EUcD4FErikI2tZ4P…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]-[..]_[..].[..]; path=/; httponly
++ _csrf_token=BEUcD4FErikI2tZ4PMCij0Bky660S6SUY%2Fo56hH22Q%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
 at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨E⟩xpected request …"
 
 body:
@@ -6846,17 +8213,211 @@ body:
 + {"errors":[{"message":"Expected request with `Content-Type: application/json`"}]}
 ```
 
+### submissions-api-put-sections-assignments-submissions-document-annotations-read
+
+Arguments: `PUT /api/v1/sections/3/assignments/1/submissions/3/document_annotations/read`
+
+at status (403→404)
+
+status:
+
+```diff
+expected 403, got 404
+```
+
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
+
+header cache-control:
+
+```diff
+- no-store
++ no-cache
+```
+
+at header pragma (missing key)
+
+header pragma:
+
+```diff
+- no-cache
+(missing)
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-put-sections-assignments-submissions-read-204
+
+Arguments: `PUT /api/v1/sections/3/assignments/1/submissions/3/read/:item`
+
+at status (403→404)
+
+status:
+
+```diff
+expected 403, got 404
+```
+
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
+
+header cache-control:
+
+```diff
+- no-store
++ no-cache
+```
+
+at header pragma (missing key)
+
+header pragma:
+
+```diff
+- no-cache
+(missing)
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
 ### submissions-api-put-sections-assignments-submissions-read
 
 Arguments: `PUT /api/v1/sections/3/assignments/1/submissions/3/read`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨x⟩DoFnzc%2FL1YUxcC…"
+at status (204→404)
 
-header set-cookie:
+status:
 
 ```diff
-- _csrf_token=[..]%[..]%[..]%[..]%[..].[..]; path=/; httponly
-+ _csrf_token=xDoFnzc%2FL1YUxcCTrcAuhzyXgmHvQbKpYM0ovFPfvg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+expected 204, got 404
+```
+
+at body (lines added), line 1, length 0 expected, 65 got
+
+body:
+
+```diff
++ {"errors":[{"message":"The specified resource does not exist."}]}
+(trailing newline: expected true, got false)
+```
+
+### submissions-api-put-sections-assignments-submissions-rubric-assessments-read
+
+Arguments: `PUT /api/v1/sections/3/assignments/1/submissions/3/rubric_assessments/read`
+
+at status (403→404)
+
+status:
+
+```diff
+expected 403, got 404
+```
+
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
+
+header cache-control:
+
+```diff
+- no-store
++ no-cache
+```
+
+at header pragma (missing key)
+
+header pragma:
+
+```diff
+- no-cache
+(missing)
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-put-sections-assignments-submissions-rubric-comments-read
+
+Arguments: `PUT /api/v1/sections/3/assignments/1/submissions/3/rubric_comments/read`
+
+at status (403→404)
+
+status:
+
+```diff
+expected 403, got 404
+```
+
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
+
+header cache-control:
+
+```diff
+- no-store
++ no-cache
+```
+
+at header pragma (missing key)
+
+header pragma:
+
+```diff
+- no-cache
+(missing)
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### submissions-api-put-sections-assignments-submissions
+
+Arguments: `PUT /api/v1/sections/3/assignments/1/submissions/3`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.id (missing key)
+
+body:
+
+```diff
+- {"id":14,"user_id":3,"url":null,"score":null,"grade":null,"excused":null,"attempt":1,"submission_type":"online_text_entry","submitted_at":"2026-11-27T14:51:04Z","body":"Parity submission body.","assignment_id":1,"graded_at":null,"grade_matches_current_submission":true,"grader_id":null,"workflow_state":"submitted","late_policy_status":null,"points_deducted":null,"grading_period_id":null,"cached_due_date":null,"extra_attempts":null,"posted_at":null,"redo_request":false,"sticker":null,"custom_grade_status_id":null,"late":false,"missing":false,"seconds_late":0,"entered_grade":null,"entered_score":null,"preview_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions/3?preview=1\u0026version=1","submission_comments":[],"anonymous_id":"uRjPo","all_submissions":[{"id":14,"user_id":3,"url":null,"score":null,"grade":null,"excused":null,"attempt":1,"submission_type":"online_text_entry","submitted_at":"2026-11-27T14:51:04Z","body":"Parity submission body.","assignment_id":1,"graded_at":null,"grade_matches_current_submission":true,"grader_id":null,"workflow_state":"submitted","late_policy_status":null,"points_deducted":null,"grading_period_id":null,"cached_due_date":null,"extra_attempts":null,"posted_at":null,"redo_request":false,"sticker":null,"custom_grade_status_id":null,"late":false,"missing":false,"seconds_late":0,"entered_grade":null,"entered_score":null,"preview_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions/3?preview=1\u0026version=1","anonymous_id":"uRjPo"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### users-delete-users-sessions
@@ -6924,7 +8485,7 @@ at body $ (type), expected array, got object
 body:
 
 ```diff
-- [{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","sis_user_id":null,"integration_id":null,"login_id":"student@example.com"},{"id":1,"name":"Parity User","created_at":"2026-11-26T20:10:15Z","sortable_name":"User, Parity","short_name":"Parity User","sis_user_id":null,"integration_id":null,"login_id":"parity@example.com"}]
+- [{"id":3,"name":"Parity Student","created_at":"2026-11-27T05:29:37Z","sortable_name":"Student, Parity","short_name":"Parity Student","sis_user_id":null,"integration_id":null,"login_id":"student@example.com"},{"id":9,"name":"Parity Throwaway Student","created_at":"2026-11-27T14:31:24Z","sortable_name":"Student, Parity Throwaway","short_name":"Parity Throwaway Student","sis_user_id":null,"integration_id":null,"login_id":"throwaway@example.com"},{"id":1,"name":"Parity User","created_at":"2026-11-26T20:10:15Z","sortable_name":"User, Parity","short_name":"Parity User","sis_user_id":null,"integration_id":null,"login_id":"parity@example.com"}]
 + {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
 ```
 
@@ -6945,13 +8506,13 @@ body:
 
 Arguments: `GET /api/v1/users/activity_stream`
 
-at header link, line 1, column 19, char 18: expected "…ttp://127.0.0.1:⟨⟩", got "…ttp://127.0.0.1:⟨5⟩1468/api/v1/user…"
+at header link, line 1, column 19, char 18: expected "…ttp://127.0.0.1:⟨⟩", got "…ttp://127.0.0.1:⟨6⟩2855/api/v1/user…"
 
 header link:
 
 ```diff
 - <http://127.0.0.1:[..]/api/v1/users/self/activity_stream?page=1&per_page=21>; rel="current",<http://127.0.0.1:[..]/api/v1/users/self/activity_stream?page=1&per_page=21>; rel="first",<http://127.0.0.1:[..]/api/v1/users/self/activity_stream?page=1&per_page=21>; rel="last"
-+ <http://127.0.0.1:51468/api/v1/users/activity_stream?page=1&per_page=21>; rel="current",<http://127.0.0.1:51468/api/v1/users/activity_stream?page=1&per_page=21>; rel="first",<http://127.0.0.1:51468/api/v1/users/activity_stream?page=1&per_page=21>; rel="last"
++ <http://127.0.0.1:62855/api/v1/users/activity_stream?page=1&per_page=21>; rel="current",<http://127.0.0.1:62855/api/v1/users/activity_stream?page=1&per_page=21>; rel="first",<http://127.0.0.1:62855/api/v1/users/activity_stream?page=1&per_page=21>; rel="last"
 ```
 
 ### users-get-users-colors-434
@@ -7003,15 +8564,6 @@ header cache-control:
 ```diff
 - max-age=0, private, must-revalidate
 + no-store
-```
-
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨9⟩sJZg7h5XQaXYQcvf…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%[..] [..]_[..]_[..]_[..].[..]-[..].[..]; path=/; httponly
-+ _csrf_token=9sJZg7h5XQaXYQcvf%2B67ALPvrdFwjbv4IjJzXU6f%2FA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.custom_colors (missing key)
@@ -7153,17 +8705,39 @@ body:
 + {"status":"unauthenticated","errors":[{"message":"user authorization required"}]}
 ```
 
-### users-get-users-self-upcoming-events
+### users-get-users-self-todo-item-count
 
-Arguments: `GET /api/v1/users/self/upcoming_events`
+Arguments: `GET /api/v1/users/self/todo_item_count`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨l⟩sGfeqkIbE0MnLMwM…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨z⟩s4tKMTzJo1qzw5HS…"
 
 header set-cookie:
 
 ```diff
-- _csrf_token=[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..]_[..].[..]; path=/; httponly
-+ _csrf_token=lsGfeqkIbE0MnLMwMc%2FrUSobOjxSdThbQLdm1lXrNw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+- _csrf_token=[..]%[..]%3D[..]_[..]_[..].[..].[..]; path=/; httponly
++ _csrf_token=zs4tKMTzJo1qzw5HS53vD9HCnqLubZezgNiy0LwfUQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
+at body $.needs_grading_count (value): expected 1, got 0
+
+body:
+
+```diff
+- {"needs_grading_count":1,"assignments_needing_submitting":0}
++ {"needs_grading_count":0,"assignments_needing_submitting":0}
+```
+
+### users-get-users-self-todo
+
+Arguments: `GET /api/v1/users/self/todo`
+
+at body $ (length), length 1 expected, 0 got
+
+body:
+
+```diff
+- [{"context_type":"Course","course_id":1,"context_name":"Parity Course","context_short_name":"PARITY","type":"grading","ignore":"http://127.0.0.1:[..]/api/v1/users/self/todo/assignment_1/grading?permanent=0","ignore_permanently":"http://127.0.0.1:[..]/api/v1/users/self/todo/assignment_1/grading?permanent=1","assignment":{"id":1,"position":1,"description":null,"points_possible":100.0,"grading_type":"points","created_at":"2026-11-26T20:29:17Z","updated_at":"2026-11-27T14:51:03Z","due_at":null,"final_grader_id":null,"grader_count":0,"graders_anonymous_to_graders":false,"grader_comments_visible_to_graders":true,"grader_names_visible_to_final_grader":true,"lock_at":null,"unlock_at":null,"assignment_group_id":1,"peer_reviews":false,"anonymous_peer_reviews":false,"automatic_peer_reviews":false,"intra_group_peer_reviews":false,"post_to_sis":false,"grade_group_students_individually":false,"group_category_id":null,"grading_standard_id":null,"moderated_grading":false,"hide_in_gradebook":false,"omit_from_final_grade":false,"suppress_assignment":false,"anonymous_instructor_annotations":false,"anonymous_grading":false,"allowed_attempts":-1,"annotatable_attachment_id":null,"secure_params":"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJsdGlfYXNzaWdubWVudF9pZCI6IjFjZTM5OGVlLTZjMzAtNDMzOS05MzIwLWQ2MGExYTQ0MjFjMyJ9.nf26L1W2MrwC_qn8fM3wW0BZwLAMYkiwM37Ru20S1eY","lti_context_id":"1ce398ee-6c30-4339-9320-d60a1a4421c3","course_id":1,"name":"Parity Assignment","submission_types":["online_text_entry"],"has_submitted_submissions":true,"due_date_required":false,"max_name_length":255,"in_closed_grading_period":false,"graded_submissions_exist":false,"is_quiz_assignment":false,"can_duplicate":true,"original_course_id":null,"original_assignment_id":null,"original_lti_resource_link_id":null,"original_assignment_name":null,"original_quiz_id":null,"workflow_state":"published","important_dates":false,"muted":true,"html_url":"http://127.0.0.1:[..]/courses/1/assignments/1","speed_grader_url":"http://127.0.0.1:[..]/courses/1/gradebook/speed_grader?assignment_id=1","has_overrides":false,"needs_grading_count":1,"sis_assignment_id":null,"integration_id":null,"integration_data":{},"all_dates":[{"due_at":null,"unlock_at":null,"lock_at":null,"title":"Everyone","base":true}],"published":true,"unpublishable":false,"only_visible_to_overrides":false,"visible_to_everyone":true,"locked_for_user":false,"submissions_download_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions?zip=1","post_manually":false,"anonymize_students":false,"new_quizzes_anonymous_participants":false,"require_lockdown_browser":false,"restrict_quantitative_data":false},"html_url":"http://127.0.0.1:[..]/courses/1/gradebook/speed_grader?assignment_id=1","needs_grading_count":1}]
++ []
 ```
 
 ### users-get-users-settings
@@ -7260,15 +8834,6 @@ header cache-control:
 + no-store
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨B⟩V6Vf6zrGm1XmW0l2…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..]-[..]-[..].[..]; path=/; httponly
-+ _csrf_token=BV6Vf6zrGm1XmW0l2d5Pc7DP%2FmEi32xPbvhd1665FQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
-```
-
 at body $.errors (type), expected object, got array
 
 body:
@@ -7276,19 +8841,6 @@ body:
 ```diff
 - {"errors":{"user":{"pseudonyms":[{"attribute":"pseudonyms","message":"is invalid","type":"invalid"}]},"pseudonym":{"unique_id":[{"attribute":"unique_id","message":"is invalid","type":"invalid"},{"attribute":"unique_id","message":"is too short (minimum is 1 character)","type":"too_short"}]},"observee":{},"pairing_code":{},"recaptcha":null}}
 + {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
-```
-
-### users-post-users-files
-
-Arguments: `POST /api/v1/users/3/files`
-
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨D⟩q5hOmBznrgAoY0bo…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%[..]%[..]%3D[..]_[..]_[..]-[..]_[..].[..]; path=/; httponly
-+ _csrf_token=Dq5hOmBznrgAoY0boHtI0%2Fx0WIWDHW%2FZYvr3iB%2FvBw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### users-post-users-self-pandata-events-token
@@ -7514,15 +9066,6 @@ header cache-control:
 + no-store
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨u⟩OkoxK2Ns93EJqL95…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..]-[..]-[..]_[..]-[..]-[..].[..].[..]; path=/; httponly
-+ _csrf_token=uOkoxK2Ns93EJqL95QBf2FHFVzhEp304AmjFBqn43A%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
-```
-
 at body $.id (missing key)
 
 body:
@@ -7535,6 +9078,27 @@ body:
 ### wiki-pages-api-delete-courses-pages
 
 Arguments: `DELETE /api/v1/courses/1/pages/front-page`
+
+at status (400→404)
+
+status:
+
+```diff
+expected 400, got 404
+```
+
+at body $.errors (type), expected object, got array
+
+body:
+
+```diff
+- {"errors":{"front_page":[{"attribute":"front_page","message":"The front page cannot be deleted","type":"The front page cannot be deleted"}]}}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### wiki-pages-api-delete-groups-pages
+
+Arguments: `DELETE /api/v1/groups/1/pages/front-page`
 
 at status (400→404)
 
@@ -7655,6 +9219,15 @@ header cache-control:
 + no-cache
 ```
 
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨9⟩JTJH3Lc8CXFHpkkj…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%3D[..]_[..]_[..]-[..].[..]; path=/; httponly
++ _csrf_token=9JTJH3Lc8CXFHpkkje6eoaGc0q%2BrjHxKmYPRlnE6HA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
 at body $.revision_id (missing key)
 
 body:
@@ -7724,12 +9297,51 @@ header link:
 (missing)
 ```
 
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨e⟩RCh2lZx03TjUF8r%…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..].[..]-[..].[..]; path=/; httponly
++ _csrf_token=eRCh2lZx03TjUF8r%2FCCzOWND%2BVaZeWD5l%2F5ZNfCiMw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
 at body $ (type), expected array, got object
 
 body:
 
 ```diff
 - [{"revision_id":1,"updated_at":"2026-11-27T12:16:09Z","latest":true,"edited_by":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/courses/1/users/1","pronouns":null}}]
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### wiki-pages-api-get-groups-front-page
+
+Arguments: `GET /api/v1/groups/1/front_page`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.url (missing key)
+
+body:
+
+```diff
+- {"url":"front-page","title":"Front Page","created_at":"2026-11-27T12:16:10Z","editing_roles":"teachers","page_id":6,"last_edited_by":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/groups/1/users/1","pronouns":null},"published":true,"hide_from_students":false,"front_page":true,"html_url":"http://127.0.0.1:[..]/groups/1/pages/front-page","todo_date":null,"publish_at":null,"updated_at":"2026-11-27T12:16:10Z","locked_for_user":false,"body":"Parity group front page."}
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
@@ -7752,6 +9364,174 @@ body:
 ```diff
 - {"errors":[{"message":"The specified resource does not exist."}]}
 + {"errors":[{"message":"Failed to deserialize query string: missing field `title`"}]}
+```
+
+### wiki-pages-api-get-groups-pages-409
+
+Arguments: `GET /api/v1/groups/1/pages/front-page`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.url (missing key)
+
+body:
+
+```diff
+- {"url":"front-page","title":"Front Page","created_at":"2026-11-27T12:16:10Z","editing_roles":"teachers","page_id":6,"last_edited_by":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/groups/1/users/1","pronouns":null},"published":true,"hide_from_students":false,"front_page":true,"html_url":"http://127.0.0.1:[..]/groups/1/pages/front-page","todo_date":null,"publish_at":null,"updated_at":"2026-11-27T12:16:10Z","locked_for_user":false,"body":"Parity group front page."}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### wiki-pages-api-get-groups-pages-revisions-411
+
+Arguments: `GET /api/v1/groups/1/pages/front-page/revisions/1`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.revision_id (missing key)
+
+body:
+
+```diff
+- {"revision_id":1,"updated_at":"2026-11-27T12:16:10Z","latest":true,"url":"front-page","title":"Front Page","body":"Parity group front page.","edited_by":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/groups/1/users/1","pronouns":null}}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### wiki-pages-api-get-groups-pages-revisions-latest
+
+Arguments: `GET /api/v1/groups/1/pages/front-page/revisions/latest`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.revision_id (missing key)
+
+body:
+
+```diff
+- {"revision_id":1,"updated_at":"2026-11-27T12:16:10Z","latest":true,"url":"front-page","title":"Front Page","body":"Parity group front page.","edited_by":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/groups/1/users/1","pronouns":null}}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### wiki-pages-api-get-groups-pages-revisions
+
+Arguments: `GET /api/v1/groups/1/pages/front-page/revisions`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at header link (missing key)
+
+header link:
+
+```diff
+- <http://127.0.0.1:[..]/api/v1/groups/1/pages/front-page/revisions?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/groups/1/pages/front-page/revisions?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/groups/1/pages/front-page/revisions?page=1&per_page=10>; rel="last"
+(missing)
+```
+
+at body $ (type), expected array, got object
+
+body:
+
+```diff
+- [{"revision_id":1,"updated_at":"2026-11-27T12:16:10Z","latest":true,"edited_by":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/groups/1/users/1","pronouns":null}}]
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### wiki-pages-api-get-groups-pages
+
+Arguments: `GET /api/v1/groups/1/pages`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at header link (missing key)
+
+header link:
+
+```diff
+- <http://127.0.0.1:[..]/api/v1/groups/1/pages?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/groups/1/pages?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/groups/1/pages?page=1&per_page=10>; rel="last"
+(missing)
+```
+
+at body $ (type), expected array, got object
+
+body:
+
+```diff
+- [{"url":"front-page","title":"Front Page","created_at":"2026-11-27T12:16:10Z","editing_roles":"teachers","page_id":6,"last_edited_by":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/groups/1/users/1","pronouns":null},"published":true,"hide_from_students":false,"front_page":true,"html_url":"http://127.0.0.1:[..]/groups/1/pages/front-page","todo_date":null,"publish_at":null,"updated_at":"2026-11-27T12:16:10Z","locked_for_user":false}]
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### wiki-pages-api-post-courses-pages-accessibility-queue-scan
@@ -7874,6 +9654,15 @@ header cache-control:
 + no-cache
 ```
 
+at body, line 1, column 3, char 2: expected "{\"⟨u⟩rl\":\"front-page-…", got "{\"⟨e⟩rrors\":[{\"messag…"
+
+body:
+
+```diff
+- {"url":"front-page-copy-[..]","title":"Front Page Copy [..]","created_at":"2026-11-27T14:[..]:[..]","editing_roles":"teachers","page_id":[..],"last_edited_by":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/courses/1/users/1","pronouns":null},"published":false,"hide_from_students":true,"front_page":false,"html_url":"http://127.0.0.1:[..]/courses/1/pages/front-page-copy-[..]","todo_date":null,"publish_at":null,"updated_at":"2026-11-27T14:[..]:[..]","locked_for_user":false,"body":"Parity front page."}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
 ### wiki-pages-api-post-courses-pages-revisions
 
 Arguments: `POST /api/v1/courses/1/pages/front-page/revisions/1`
@@ -7925,6 +9714,78 @@ body:
 + {"errors":[{"message":"title is required"}]}
 ```
 
+### wiki-pages-api-post-groups-pages-ai-alt-text
+
+Arguments: `POST /api/v1/groups/1/pages_ai/alt_text`
+
+at status (403→404)
+
+status:
+
+```diff
+expected 403, got 404
+```
+
+at body $.error (missing key)
+
+body:
+
+```diff
+- {"error":"The feature is not available"}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### wiki-pages-api-post-groups-pages-revisions
+
+Arguments: `POST /api/v1/groups/1/pages/front-page/revisions/1`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.revision_id (missing key)
+
+body:
+
+```diff
+- {"revision_id":1,"updated_at":"2026-11-27T12:16:10Z","latest":true,"url":"front-page","title":"Front Page","body":"Parity group front page.","edited_by":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/groups/1/users/1","pronouns":null}}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### wiki-pages-api-post-groups-pages
+
+Arguments: `POST /api/v1/groups/1/pages`
+
+at status (400→404)
+
+status:
+
+```diff
+expected 400, got 404
+```
+
+at body $.errors (type), expected object, got array
+
+body:
+
+```diff
+- {"errors":{"title":[{"attribute":"title","message":"Title can't be blank","type":"Title can't be blank"}]}}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
 ### wiki-pages-api-put-courses-front-page
 
 Arguments: `PUT /api/v1/courses/1/front_page`
@@ -7944,15 +9805,6 @@ header cache-control:
 ```diff
 - max-age=0, private, must-revalidate
 + no-cache
-```
-
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨6⟩mMS8cuD%2ByKDfWC…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%[..]%[..]%3D[..]_[..]_[..].[..]-[..].[..].[..]; path=/; httponly
-+ _csrf_token=6mMS8cuD%2ByKDfWCEsWxJDnX2V8T888%2BjzOstR92I%2Fw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.url (missing key)
@@ -7985,15 +9837,6 @@ header cache-control:
 + no-cache
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨N⟩6alsFiePR5RB3s1W…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..].[..]-[..].[..].[..]; path=/; httponly
-+ _csrf_token=N6alsFiePR5RB3s1W7%2FzxNJ9L3UUEN5u82xZoPrepQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
-```
-
 at body $.url (missing key)
 
 body:
@@ -8003,15 +9846,62 @@ body:
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
+### wiki-pages-api-put-groups-front-page
+
+Arguments: `PUT /api/v1/groups/1/front_page`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.url (missing key)
+
+body:
+
+```diff
+- {"url":"front-page","title":"Front Page","created_at":"2026-11-27T12:16:10Z","editing_roles":"teachers","page_id":6,"last_edited_by":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/groups/1/users/1","pronouns":null},"published":true,"hide_from_students":false,"front_page":true,"html_url":"http://127.0.0.1:[..]/groups/1/pages/front-page","todo_date":null,"publish_at":null,"updated_at":"2026-11-27T12:16:10Z","locked_for_user":false,"body":"Parity group front page."}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
 ### wiki-pages-api-put-groups-pages
 
 Arguments: `PUT /api/v1/groups/1/pages/front-page`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨d⟩Bgm60Asf%2FkFgoU…"
+at status (200→404)
 
-header set-cookie:
+status:
 
 ```diff
-- _csrf_token=[..]%[..]%[..]%[..]%[..]%3D[..]_[..]_[..]-[..].[..]_[..].[..]; path=/; httponly
-+ _csrf_token=dBgm60Asf%2FkFgoUUL3PR4LD1Ts0Xm4YnxpgVzVUyGw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.url (missing key)
+
+body:
+
+```diff
+- {"url":"front-page","title":"Front Page","created_at":"2026-11-27T12:16:10Z","editing_roles":"teachers","page_id":6,"last_edited_by":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/groups/1/users/1","pronouns":null},"published":true,"hide_from_students":false,"front_page":true,"html_url":"http://127.0.0.1:[..]/groups/1/pages/front-page","todo_date":null,"publish_at":null,"updated_at":"2026-11-27T12:16:10Z","locked_for_user":false,"body":"Parity group front page."}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```

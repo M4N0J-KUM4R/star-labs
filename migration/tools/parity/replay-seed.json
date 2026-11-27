@@ -4,37 +4,43 @@
    "id",
    "name",
    "parent_account_id",
-   "workflow_state"
+   "workflow_state",
+   "settings"
   ],
   "rows": [
    {
     "id": 1,
     "name": "Canvas Root",
     "parent_account_id": null,
+    "settings": "{}",
     "workflow_state": "active"
    },
    {
     "id": 4,
     "name": "Default Account",
     "parent_account_id": null,
+    "settings": "{}",
     "workflow_state": "active"
    },
    {
     "id": 5,
     "name": "Site Admin",
     "parent_account_id": null,
+    "settings": "{}",
     "workflow_state": "active"
    },
    {
     "id": 6,
     "name": "Parity Account",
     "parent_account_id": null,
+    "settings": "{}",
     "workflow_state": "active"
    },
    {
     "id": 7,
     "name": "Canvas Root",
     "parent_account_id": 7,
+    "settings": "{}",
     "workflow_state": "active"
    }
   ]
@@ -196,7 +202,7 @@
     "id": 10,
     "role": "student",
     "user_id": 3,
-    "workflow_state": "completed"
+    "workflow_state": "active"
    },
    {
     "course_id": 1,

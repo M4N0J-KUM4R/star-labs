@@ -210,7 +210,9 @@ async fn terms_of_service_shape_and_unknown_account() {
     assert_eq!(tos["content"], "Be kind to your classmates");
     assert_eq!(tos["passive"], false);
     assert_eq!(tos["account_id"].as_i64(), Some(root));
-    assert!(tos["self_registration_type"].is_null(), "body: {tos}");
+    // Canvas returns the account's own registration type, not null: the
+    // recorded Canvas body for this route carries "none".
+    assert_eq!(tos["self_registration_type"], "none", "body: {tos}");
 
     // A sub-account resolves to the root account's policy.
     let resp = server
@@ -222,17 +224,19 @@ async fn terms_of_service_shape_and_unknown_account() {
     assert_eq!(sub_tos["id"].as_i64(), Some(tos_id));
     assert_eq!(sub_tos["account_id"].as_i64(), Some(root));
 
-    // Without a stored policy the Canvas default shape is returned.
+    // Without a stored policy the Canvas default shape is returned: the
+    // account's own id, and Canvas' default `passive` value (the recorded
+    // Canvas body for this route carries "passive": true).
     let resp = server
         .get(&format!("/accounts/{bare}/terms_of_service"))
         .add_header(axum::http::header::AUTHORIZATION, token.clone())
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let default: Value = resp.json();
-    assert_eq!(default["id"].as_i64(), Some(0));
+    assert_eq!(default["id"].as_i64(), Some(bare));
     assert_eq!(default["terms_type"], "default");
     assert!(default["content"].is_null(), "body: {default}");
-    assert_eq!(default["passive"], false);
+    assert_eq!(default["passive"], true);
 
     // Non-admins are rejected; unknown accounts 404 for admins.
     let resp = server
@@ -329,10 +333,10 @@ async fn permissions_map_for_admin_and_non_admin() {
         "manage_account_memberships",
         "manage_courses_admin",
         "create_courses",
-        "manage_admin_roles",
+        "manage_role_overrides",
         "manage_alerts",
         "manage_sis",
-        "manage_settings",
+        "manage_account_settings",
         "manage_feature_flags",
         "view_statistics",
         "become_user",

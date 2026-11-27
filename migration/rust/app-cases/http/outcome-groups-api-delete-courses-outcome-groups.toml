@@ -3,7 +3,7 @@ method = "DELETE"
 path = "/api/v1/courses/1/outcome_groups/2"
 
 [request.headers]
-Authorization = "Bearer __REPLAY_TOKEN__"
+Authorization = "Bearer parity-replay-access-token"
 
 [response]
 status = 400
@@ -13,8 +13,8 @@ cache-control = "no-cache"
 content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
 content-type = "application/json; charset=utf-8"
 referrer-policy = "no-referrer-when-downgrade"
-set-cookie = "[..]"
-x-canvas-meta = "at=10000000000007;dk=10000000000001;o=outcome_groups_api;n=destroy;t=Course;i=1;b=2074132;m=2074132;u=0.[..];y=0.00;d=0.[..];rlr=600.0;"
+set-cookie = "_csrf_token=[..]%[..]%[..]%[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..].[..]-[..].[..]; path=/; httponly"
+x-canvas-meta = "[..]"
 x-canvas-user-id = "10000000000001"
 x-content-type-options = "nosniff"
 x-download-options = "noopen"

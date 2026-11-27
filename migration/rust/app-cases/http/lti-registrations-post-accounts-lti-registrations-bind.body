@@ -1,1 +1,1 @@
-{"errors":[{"message":"The specified resource does not exist."}]}
+{"errors":[{"code":"invalid_workflow_state","message":"workflow_state must be one of 'on', 'off'"}]}

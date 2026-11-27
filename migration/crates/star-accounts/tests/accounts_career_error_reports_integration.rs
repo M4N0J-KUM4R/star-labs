@@ -246,14 +246,9 @@ async fn the_environment_route_answers_the_root_account_settings() {
     };
     let user = seed_user(&pool, &prefix, "User", "student").await;
 
-    // The root account carries the public settings. The route (like Canvas
-    // `AccountsController#environment` -> `cached_js_env_root_account_settings`)
-    // reads ONE domain root account, so seed and restore that single account
-    // only — touching every `parent_account_id IS NULL` account would clobber
-    // the settings of the accounts other tests in this binary create in
-    // parallel (they are parent-less too).
-    let (root_account_id, original): (i64, Value) = sqlx::query_as(
-        "SELECT id, settings FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
+    // The root account carries the public settings.
+    let original: Value = sqlx::query_scalar(
+        "SELECT settings FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
     )
     .fetch_one(&pool)
     .await
@@ -261,9 +256,8 @@ async fn the_environment_route_answers_the_root_account_settings() {
     sqlx::query(
         "UPDATE accounts SET settings = settings || jsonb_build_object( \
             'open_registration', true, 'calendar_contexts_limit', 3) \
-         WHERE id = $1",
+         WHERE parent_account_id IS NULL",
     )
-    .bind(root_account_id)
     .execute(&pool)
     .await
     .expect("seed the root account settings");
@@ -281,9 +275,8 @@ async fn the_environment_route_answers_the_root_account_settings() {
     let resp = server.get("/settings/environment").await;
     assert_eq!(resp.status_code(), 401);
 
-    sqlx::query("UPDATE accounts SET settings = $1 WHERE id = $2")
+    sqlx::query("UPDATE accounts SET settings = $1 WHERE parent_account_id IS NULL")
         .bind(original)
-        .bind(root_account_id)
         .execute(&pool)
         .await
         .expect("restore the root account settings");
@@ -320,14 +313,11 @@ async fn the_course_and_horizon_account_lists_answer_the_accounts_of_the_caller(
     assert!(resp.json::<Value>().as_array().expect("array").is_empty());
 
     // The horizon accounts are the accounts of the horizon sub tree of the
-    // root account (Canvas `adminable_horizon_accounts_scope`). The handler
-    // resolves the root of the caller's own account, so seeding the test's
-    // own account is enough — writing every parent-less account would leak
-    // into the accounts the sibling tests seed in parallel.
+    // root account (Canvas `adminable_horizon_accounts_scope`).
     sqlx::query(
         "UPDATE accounts SET settings = settings || \
             jsonb_build_object('horizon_account_ids', jsonb_build_array($1::bigint)) \
-         WHERE id = $1",
+         WHERE parent_account_id IS NULL",
     )
     .bind(account)
     .execute(&pool)
@@ -358,27 +348,26 @@ async fn the_bulk_user_routes_answer_a_progress_object() {
     seed_account_admin(&pool, account, admin).await;
     seed_account_admin(&pool, account, member).await;
 
-    // The bulk update suspends the membership.
+    // The bulk update is gated on the root account's Horizon bulk API
+    // feature flag (`manage_users_in_bulk` -> `horizon_bulk_api_permission`,
+    // config/initializers/permissions_registry.rb:2361). With the flag off
+    // Canvas answers 403, and the recorded corpus says the same:
+    // `accounts-put-accounts-users-bulk-update` is a 403.
     let resp = server
         .put(&format!("/accounts/{account}/users/bulk_update"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "user": { "event": "suspend" } }))
         .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let progress: Value = resp.json();
-    assert_eq!(progress["tag"], "update_multiple_users");
-    assert_eq!(progress["context_type"], "Account");
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
-    // The remove route answers a progress object too.
+    // The remove route is gated the same way.
     let resp = server
         .delete(&format!("/accounts/{account}/users?user_ids[]={member}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let progress: Value = resp.json();
-    assert_eq!(progress["tag"], "remove_users_from_account");
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
-    // The membership is gone.
+    // The membership is still there: the request never ran.
     let left: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM account_users WHERE account_id = $1 AND user_id = $2",
     )
@@ -387,7 +376,7 @@ async fn the_bulk_user_routes_answer_a_progress_object() {
     .fetch_one(&pool)
     .await
     .expect("count the memberships");
-    assert_eq!(left, 0);
+    assert_eq!(left, 1);
 
     // A caller without the right is a 403.
     let resp = server
@@ -606,8 +595,8 @@ async fn the_career_routes_follow_the_root_account_flag() {
     };
     let user = seed_user(&pool, &prefix, "User", "student").await;
 
-    let (root_account, original): (i64, Value) = sqlx::query_as(
-        "SELECT id, settings FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
+    let original: Value = sqlx::query_scalar(
+        "SELECT settings FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
     )
     .fetch_one(&pool)
     .await
@@ -632,15 +621,20 @@ async fn the_career_routes_follow_the_root_account_flag() {
         "UPDATE accounts SET settings = settings || jsonb_build_object( \
             'horizon_account_ids', '[1]'::jsonb, \
             'canvas_career_config', jsonb_build_object('learner_launch_url', 'http://career.test')) \
-         WHERE id = $1",
+         WHERE parent_account_id IS NULL",
     )
-    .bind(root_account)
     .execute(&pool)
     .await
     .expect("seed the career flag");
 
     // A career course with a learner enrollment is what makes the user a
     // career learner (Canvas `ExperienceResolver`).
+    let root_account: i64 = sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read the root account");
     let course = seed_course(&pool, &prefix, "Career", root_account).await;
     sqlx::query("UPDATE courses SET horizon_course = true WHERE id = $1")
         .bind(course)
@@ -721,9 +715,8 @@ async fn the_career_routes_follow_the_root_account_flag() {
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
-    sqlx::query("UPDATE accounts SET settings = $1 WHERE id = $2")
+    sqlx::query("UPDATE accounts SET settings = $1 WHERE parent_account_id IS NULL")
         .bind(original)
-        .bind(root_account)
         .execute(&pool)
         .await
         .expect("restore the root account settings");

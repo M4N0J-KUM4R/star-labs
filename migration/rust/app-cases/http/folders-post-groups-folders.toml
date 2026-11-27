@@ -3,13 +3,13 @@ method = "POST"
 path = "/api/v1/groups/1/folders"
 
 [request.headers]
-Authorization = "Bearer __REPLAY_TOKEN__"
+Authorization = "Bearer parity-replay-access-token"
 
 [response]
 status = 200
 
 [response.headers]
-cache-control = "[..]"
+cache-control = "max-age=0, private, must-revalidate"
 content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
 content-type = "application/json; charset=utf-8"
 referrer-policy = "no-referrer-when-downgrade"

@@ -161,9 +161,13 @@ def oracle_rows() -> list[tuple[str, str, tuple]]:
             continue
         columns = spec["columns"]
         placeholders = ", ".join(["%s"] * len(columns))
+        # The row is replaced, not skipped: a database seeded twice keeps the
+        # old row otherwise, and the old row can carry a setting the new one
+        # does not.
+        updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in columns if c != "id")
         sql = (
             f"INSERT INTO {table} ({', '.join(columns)}) "
-            f"VALUES ({placeholders}) ON CONFLICT (id) DO NOTHING"
+            f"VALUES ({placeholders}) ON CONFLICT (id) DO UPDATE SET {updates}"
         )
         for row in spec["rows"]:
             rows.append((table, sql, tuple(row.get(c) for c in columns)))
