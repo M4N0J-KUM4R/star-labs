@@ -538,12 +538,14 @@ async fn deleted_index_and_restore_round_trip_is_admin_only() {
     .expect("removal row");
     assert!(removal_exists);
 
-    // Non-admins get 401 (Canvas unauthorized_action), admins the index.
+    // A logged-in caller without the right gets 403; Canvas' 401 is for a
+    // caller without a session (`render_json_unauthorized`,
+    // lib/authentication_methods.rb:413-426).
     let resp = server
         .get("/conversations/deleted")
         .add_header(axum::http::header::AUTHORIZATION, auth(bob, "user"))
         .await;
-    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
     let body = get_ok(&server, &auth(admin, "admin"), "/conversations/deleted").await;
     let rows = body.as_array().expect("array");
@@ -626,7 +628,7 @@ async fn delete_for_all_hard_deletes_for_everyone() {
         .delete(&format!("/conversations/{conv}/delete_for_all"))
         .add_header(axum::http::header::AUTHORIZATION, auth(alice, "user"))
         .await;
-    assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
     let resp = server
         .delete("/conversations/999999999/delete_for_all")

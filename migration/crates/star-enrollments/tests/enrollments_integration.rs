@@ -726,6 +726,11 @@ async fn list_section_enrollments_is_scoped_and_missing_section_is_404() {
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     assert_eq!(resp.json::<Value>().as_array().unwrap().len(), 1);
 
+    // Canvas grants `read_roster` to a student by default
+    // (config/initializers/permissions_registry.rb: `read_roster` is
+    // `true_for` StudentEnrollment), so a student sees the section's
+    // enrollments like anyone else. The recorded corpus agrees: the answer
+    // for `GET /api/v1/sections/3/enrollments` carries three rows.
     let resp = server
         .get(&format!("/sections/{section_a}/enrollments"))
         .add_header(axum::http::header::AUTHORIZATION, auth(s2, "student"))
@@ -733,8 +738,8 @@ async fn list_section_enrollments_is_scoped_and_missing_section_is_404() {
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     assert_eq!(
         resp.json::<Value>().as_array().unwrap().len(),
-        0,
-        "student in another section sees nothing"
+        1,
+        "the roster of the section"
     );
 
     // Unknown section is a 404 for both reads and writes.

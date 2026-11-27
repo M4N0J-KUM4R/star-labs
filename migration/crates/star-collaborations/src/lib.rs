@@ -143,11 +143,13 @@ struct CollaborationRow {
     r#type: Option<String>,
     created_at: Option<NaiveDateTime>,
     updated_at: Option<NaiveDateTime>,
+    workflow_state: Option<String>,
+    deleted_at: Option<NaiveDateTime>,
 }
 
 const COLLABORATION_COLUMNS: &str = "id, user_id, context_id, context_type, \
      collaboration_type, document_id, title, description, url, type, \
-     created_at, updated_at";
+     created_at, updated_at, workflow_state, deleted_at";
 
 // ---------------------------------------------------------------------------
 // Context resolution
@@ -462,6 +464,31 @@ async fn collaboration_json(
             "delete": can_delete,
         },
     }))
+}
+
+/// The record as Canvas renders it after a destroy.
+///
+/// `collaborations#destroy` answers `render json: @collaboration` — the
+/// record itself, not the whitelist the index uses
+/// (`Api::V1::Collaboration#collaboration_json`). `uuid` is in Canvas'
+/// `serialization_excludes`, so it is not in the answer.
+fn collaboration_record_json(row: &CollaborationRow) -> Value {
+    json!({
+        "id": row.id,
+        "user_id": row.user_id,
+        "context_id": row.context_id,
+        "context_type": row.context_type,
+        "collaboration_type": row.collaboration_type,
+        "document_id": row.document_id,
+        "title": row.title,
+        "description": row.description,
+        "url": row.url,
+        "type": row.r#type,
+        "created_at": row.created_at.map(|t| t.and_utc().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        "updated_at": row.updated_at.map(|t| t.and_utc().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+        "workflow_state": row.workflow_state,
+        "deleted_at": row.deleted_at.map(|t| t.and_utc().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+    })
 }
 
 /// Collaborator JSON (lib/api/v1/collaborator.rb): id, type ("group" iff
@@ -819,7 +846,11 @@ async fn destroy(
     .fetch_optional(pool)
     .await?;
     let fresh = fresh.ok_or(CollabError::NotFound)?;
-    let body = collaboration_json(pool, &fresh, &auth).await?;
+    // Canvas renders the record itself, not the whitelist the index uses
+    // (`render json: @collaboration`,
+    // app/controllers/collaborations_controller.rb), so the answer carries
+    // the workflow state and the deletion time.
+    let body = collaboration_record_json(&fresh);
     Ok((StatusCode::OK, Json(body)).into_response())
 }
 

@@ -1982,38 +1982,6 @@ async fn find_active_developer_key(
         .map_err(ApiError::from)
 }
 
-async fn issue_access_token(
-    pool: &PgPool,
-    secret: &str,
-    developer_key_id: i64,
-    user_id: Option<i64>,
-    scopes: &[String],
-) -> Result<(String, String), ApiError> {
-    let access_token = generate_opaque_token(32);
-    let refresh_token = generate_opaque_token(32);
-    let expires_at = Utc::now() + Duration::seconds(OAUTH_TOKEN_TTL_SECS);
-    // Canvas stores the token hashed (app/models/access_token.rb:312-315).
-    let crypted = hashed_token(&access_token, secret);
-
-    sqlx::query(
-        "INSERT INTO access_tokens
-             (user_id, developer_key_id, token, crypted_token, refresh_token, scopes,
-              expires_at, workflow_state)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 'active')",
-    )
-    .bind(user_id)
-    .bind(developer_key_id)
-    .bind(&access_token)
-    .bind(&crypted)
-    .bind(&refresh_token)
-    .bind(scopes.to_vec())
-    .bind(expires_at)
-    .execute(pool)
-    .await?;
-
-    Ok((access_token, refresh_token))
-}
-
 /// Requested scopes: the `scope` parameter (space separated) or the key's
 /// configured scopes.
 fn requested_scopes(params: &OAuthTokenRequest, key: &DeveloperKey) -> Vec<String> {
@@ -2071,7 +2039,7 @@ async fn oauth2_token(
             grant_refresh_token(&app, &client_id, &client_secret, &params).await
         }
         Some("client_credentials") => {
-            grant_client_credentials(&app, &client_id, &client_secret, &params).await
+            grant_client_credentials(&app, &client_id, &client_secret, &params, &headers).await
         }
         _ => oauth_error(
             StatusCode::BAD_REQUEST,
@@ -2317,6 +2285,7 @@ async fn grant_client_credentials(
     client_id: &Option<String>,
     client_secret: &str,
     params: &OAuthTokenRequest,
+    headers: &HeaderMap,
 ) -> Response {
     let key = match validate_oauth_client(app, client_id, client_secret).await {
         Ok(key) => key,
@@ -2344,15 +2313,35 @@ async fn grant_client_credentials(
         return oauth_error_dynamic(StatusCode::BAD_REQUEST, "invalid_scope", missing.join(" "));
     }
 
-    // Canvas stores the access token hashed (app/models/access_token.rb:312)
-    // and hands the client the opaque value. A session JWT would not be
-    // usable against the access_tokens table, which is where the port looks
-    // a bearer token up.
-    let (token, _refresh_token) =
-        match issue_access_token(&app.db, &app.jwt_secret, key.id, None, &scopes).await {
-            Ok(tokens) => tokens,
-            Err(err) => return internal_error("oauth token: issue client_credentials", err),
-        };
+    // Canvas signs the client-credentials token with the developer key
+    // (`access_token: key.issue_token(claims)`,
+    // lib/canvas/oauth/client_credentials_provider.rb:21). It is a JWT, not a
+    // stored opaque token, and no access_tokens row is created.
+    let host = headers
+        .get(HOST)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("localhost");
+    let now = Utc::now();
+    let claims = serde_json::json!({
+        // Canvas: Canvas::Security.config["lti_iss"]; star's fixed issuer.
+        "iss": "star-lms",
+        "sub": key.id.to_string(),
+        // Canvas: oauth2_token_url(host:, protocol:) — the token endpoint
+        // itself is the audience.
+        "aud": format!("http://{host}/login/oauth2/token"),
+        "iat": now.timestamp(),
+        "exp": now.timestamp() + OAUTH_TOKEN_TTL_SECS,
+        "jti": generate_opaque_token(16),
+        "scopes": scopes.join(" "),
+    });
+    let token = match encode(
+        &Header::default(),
+        &claims,
+        &EncodingKey::from_secret(app.jwt_secret.as_bytes()),
+    ) {
+        Ok(token) => token,
+        Err(err) => return internal_error("oauth token: sign client_credentials token", err),
+    };
 
     // Canvas ClientCredentialsProvider#generate_token: access_token,
     // token_type, expires_in, scope.

@@ -107,7 +107,7 @@ CREATE OR REPLACE VIEW job_queue AS
            context_type, context_id, strand, singleton, shard_id, max_concurrent,
            priority, attempts, max_attempts, locked_by, locked_at, run_at,
            handler, failed_at, original_job_id, requeued_job_id, last_error,
-           next_in_strand, COALESCE(queue, 'canvas_queue')
+           next_in_strand, COALESCE(queue, 'canvas_queue') AS queue
       FROM jobs
     UNION ALL
     -- The queue table stores naive timestamps (Canvas' `t.timestamp`) and
