@@ -3,7 +3,7 @@ method = "DELETE"
 path = "/api/v1/courses/1/assignments/1/submissions/3/read"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 204
@@ -13,7 +13,7 @@ cache-control = "no-cache"
 content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
 referrer-policy = "no-referrer-when-downgrade"
 set-cookie = "[..]"
-x-canvas-meta = "[..]"
+x-canvas-meta = "at=10000000000007;dk=10000000000001;o=submissions_api;n=mark_submission_unread;t=Course;i=1;b=2074132;m=2074132;u=0.[..];y=0.[..];d=0.02;rlr=600.0;"
 x-canvas-user-id = "10000000000001"
 x-content-type-options = "nosniff"
 x-download-options = "noopen"

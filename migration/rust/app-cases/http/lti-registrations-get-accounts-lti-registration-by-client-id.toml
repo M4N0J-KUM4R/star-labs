@@ -3,7 +3,7 @@ method = "GET"
 path = "/api/v1/accounts/6/lti_registration_by_client_id/4"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 200
@@ -14,7 +14,7 @@ content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
 content-type = "application/json; charset=utf-8"
 referrer-policy = "no-referrer-when-downgrade"
 set-cookie = "[..]"
-x-canvas-meta = "[..]"
+x-canvas-meta = "at=10000000000007;dk=10000000000001;o=lti/registrations;n=show_by_client_id;t=Account;i=6;b=2074132;m=2074132;u=0.[..];y=0.00;d=0.[..];rlr=600.0;"
 x-canvas-user-id = "10000000000001"
 x-content-type-options = "nosniff"
 x-download-options = "noopen"

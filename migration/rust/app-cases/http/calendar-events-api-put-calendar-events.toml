@@ -3,7 +3,7 @@ method = "PUT"
 path = "/api/v1/calendar_events/1"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 403
@@ -15,7 +15,7 @@ content-type = "application/json; charset=utf-8"
 pragma = "no-cache"
 referrer-policy = "no-referrer-when-downgrade"
 set-cookie = "[..]"
-x-canvas-meta = "[..]"
+x-canvas-meta = "at=10000000000007;dk=10000000000001;o=calendar_events_api;n=update;b=2074132;m=2074132;u=0.03;y=0.00;d=0.00;rlr=600.0;"
 x-canvas-user-id = "10000000000001"
 x-content-type-options = "nosniff"
 x-download-options = "noopen"
