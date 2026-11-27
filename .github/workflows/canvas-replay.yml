@@ -149,7 +149,11 @@ jobs:
           DATABASE_URL: postgres://canvas:canvas@localhost:5432/canvas_replay
           STAR_JWT_SECRET: ci-replay-secret-not-a-real-key
           STAR_CANVAS_DOMAIN: 54.252.48.186
-          STAR_PORT: "8099"
+          # No STAR_PORT here: the replay starts the build itself on a free
+          # port and hands it to the binary through PORT. The binary prefers
+          # STAR_PORT over PORT, so a STAR_PORT in the environment would
+          # pin the build to one port while the harness waits on another and
+          # the replay dies with "did not listen within 120s".
         run: |
           # The committed report is the baseline; this run's report replaces
           # it on disk. Removing the committed copy first means a replay that
@@ -163,28 +167,47 @@ jobs:
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
           cat rust/app-cases/replay-report.md >> "$GITHUB_STEP_SUMMARY" || true
 
-      - name: Restore the placeholder token and the recorded meta
-        if: always()
-        run: |
-          python3 tools/parity/token_tool.py restore rust/app-cases/http
-          python3 tools/parity/meta_tool.py restore rust/app-cases/http
-
       - name: Check the stable x-canvas-meta fields
+        # The meta header carries process diagnostics (bytes, cpu, db time)
+        # that no other process can reproduce, so the replay compares the
+        # header as a whole-value wildcard and this check compares the
+        # contract fields inside it: at, dk, o, n, t, i, rlr.
+        #
+        # The check needs a port to ask, and the replay's build is gone by
+        # now, so this starts the binary again on a fixed port. It runs
+        # before the token is restored, because the port only answers an
+        # authenticated request with the meta header.
         if: always()
         env:
           DATABASE_URL: postgres://canvas:canvas@localhost:5432/canvas_replay
           STAR_JWT_SECRET: ci-replay-secret-not-a-real-key
           STAR_CANVAS_DOMAIN: 54.252.48.186
+          STAR_PORT: "8099"
         run: |
-          # The meta header carries process diagnostics (bytes, cpu, db time)
-          # that no other process can reproduce, so the replay compares the
-          # header as a whole-value wildcard and this check compares the
-          # contract fields inside it: at, dk, o, n, t, i, rlr.
           set +e
+          ./target/release/star-http &
+          server_pid=$!
+          for _ in $(seq 1 120); do
+            if curl -sf "http://localhost:$STAR_PORT/health" > /dev/null; then break; fi
+            sleep 1
+          done
           python3 tools/parity/meta_tool.py check rust/app-cases/http \
             --url http://127.0.0.1:8099
-          echo "meta differences: $?" >> "$GITHUB_STEP_SUMMARY"
-          set -e
+          status=$?
+          kill "$server_pid" || true
+          wait "$server_pid" 2>/dev/null || true
+          echo "meta differences: $status" >> "$GITHUB_STEP_SUMMARY"
+          # The check reports, it does not gate yet: the port still names the
+          # wrong controller (`n`) or the wrong context (`t`, `i`) for a
+          # number of routes, and that is a parity gap to close rather than
+          # a gate to trip on. The replay's failing set is the gate.
+          exit 0
+
+      - name: Restore the placeholder token and the recorded meta
+        if: always()
+        run: |
+          python3 tools/parity/token_tool.py restore rust/app-cases/http
+          python3 tools/parity/meta_tool.py restore rust/app-cases/http
 
       - name: Upload the replay report
         if: always()
