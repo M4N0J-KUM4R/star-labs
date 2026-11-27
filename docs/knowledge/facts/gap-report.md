@@ -19,10 +19,10 @@ Canvas something.
 | Permissions declared | 160 | 160 | **0** |
 | Models with a table | 351 | 32 | **319** |
 | Columns missing (models with a table) | — | — | **440** |
-| GraphQL types | 621 | 275 | **418** |
-| GraphQL query fields | 28 | 32 | **18** |
-| GraphQL mutations | 100 | 0 | **100** |
-| Behavioural cases passing | 460 recorded | 112 pass / 348 fail | **348** |
+| GraphQL types | 621 | 251 | **428** |
+| GraphQL query fields | 28 | 32 | **0** |
+| GraphQL mutations | 100 | 103 | **0** |
+| Behavioural cases passing | 460 recorded | 115 pass / 345 fail | **345** |
 
 ## Routes Canvas mounts that the port does not
 
@@ -635,32 +635,9 @@ user_id
 
 ## GraphQL
 
-- **types**: 203/621 (32.7%) — 418 missing
-- **queries**: 10/28 (35.7%) — 18 missing
-- **mutations**: 0/100 (0.0%) — 100 missing
-
-Canvas query root fields the port does not expose:
-
-```
-accountNotifications
-allCourses
-assignmentGroup
-auditLogs
-courseInstructorsConnection
-enrollmentInvitations
-institutionalTag
-institutionalTagCategory
-internalSetting
-internalSettings
-learningOutcome
-learningOutcomeGroup
-legacyNode
-moduleItem
-myInboxSettings
-outcomeCalculationMethod
-outcomeProficiency
-peerReviewSubAssignment
-```
+- **types**: 193/621 (31.1%) — 428 missing
+- **queries**: 28/28 (100.0%) — 0 missing
+- **mutations**: 100/100 (100.0%) — 0 missing
 
 ## Where to start
 
