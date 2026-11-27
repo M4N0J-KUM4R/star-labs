@@ -1701,18 +1701,47 @@ def count_star_query_root_fields(star_src):
     the block cannot shift the slice. A missing marker is a hard error: a
     silently-0 root-field count would read as a regression in the report.
     """
-    lib = star_src / "crates" / "star-graphql" / "src" / "lib.rs"
-    if not lib.is_file():
+    crate = star_src / "crates" / "star-graphql" / "src"
+    if not crate.is_dir():
         return 0
-    text = lib.read_text(encoding="utf-8", errors="replace")
-    start = re.search(r"^impl Query \{", text, re.MULTILINE)
-    end = re.search(r"#\[derive\(MergedObject", text)
-    if not start or not end or end.start() < start.start():
+    # The Query root may live in its own module (`query_root.rs`) next to
+    # `lib.rs`, so every source file of the crate is a candidate.
+    query_file = None
+    text = ""
+    start = None
+    for candidate in sorted(crate.glob("*.rs")):
+        body = candidate.read_text(encoding="utf-8", errors="replace")
+        found = re.search(r"^(?:pub\s+)?impl Query \{", body, re.MULTILINE)
+        if found:
+            query_file, text, start = candidate, body, found
+            break
+    if query_file is None or start is None:
         raise SystemExit(
-            "parity: star-graphql `impl Query {` / `#[derive(MergedObject` "
-            "markers not found in %s -- the Query-root-field count is "
-            "meaningless without them" % lib)
-    return len(re.findall(r"\basync\s+fn\b", text[start.start():end.start()]))
+            "parity: star-graphql `impl Query {` marker not found in %s -- "
+            "the Query-root-field count is meaningless without it" % crate)
+    # The block ends at the `#[derive(MergedObject` that merges Query with the
+    # mutation object when it follows in the same file, and at the closing
+    # brace of the impl block otherwise.
+    end = re.search(r"#\[derive\(MergedObject", text)
+    if end and end.start() > start.start():
+        body = text[start.start():end.start()]
+    else:
+        depth = 0
+        i = start.end() - 1
+        while i < len(text):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    body = text[start.start():i]
+                    break
+            i += 1
+        else:
+            raise SystemExit(
+                "parity: the `impl Query {` block in %s is not closed -- the "
+                "Query-root-field count is meaningless without it" % query_file)
+    return len(re.findall(r"\basync\s+fn\b", body))
 
 
 # --- Star (Rust) GraphQL name extraction -------------------------------------
