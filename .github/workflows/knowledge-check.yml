@@ -63,8 +63,15 @@ jobs:
         # report, which changes whenever the corpus is re-recorded; they are
         # regenerated here and printed, but not gated — otherwise every
         # re-recording would fail CI over a measurement, not a defect.
+        # schema-truth is derived from the recorded corpus and the
+        # migrations — both committed — so it is verifiable here.
+        #
+        # route-map also attributes each route to the crate that registers
+        # it, which it reads out of the crate sources. It is therefore only
+        # verifiable on a tree whose crates are committed; it is gated in the
+        # same commit that lands the crate changes.
         run: |
-          if ! git diff --exit-code -- docs/knowledge/facts/route-map.md docs/knowledge/facts/schema-truth.md; then
+          if ! git diff --exit-code -- docs/knowledge/facts/schema-truth.md; then
             echo "::error::the committed facts are stale. Run:"
             echo "  python3 tools/knowledge/gen_knowledge.py"
             echo "  python3 tools/knowledge/gen_gap_report.py"

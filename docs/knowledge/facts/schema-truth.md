@@ -94,18 +94,9 @@ All recorded fields exist as columns.
 
 ## `folders`
 
-Rust columns: 15  ·  missing vs Canvas: **8**
+Rust columns: 23  ·  missing vs Canvas: **0**
 
-```
-can_upload
-files_count
-files_url
-folders_count
-folders_url
-hidden
-hidden_for_user
-locked_for_user
-```
+All recorded fields exist as columns.
 
 ## `group_categories`
 
@@ -178,7 +169,7 @@ _No non-error recorded response for this table yet._
 
 ## `users`
 
-Rust columns: 11  ·  missing vs Canvas: **20**
+Rust columns: 22  ·  missing vs Canvas: **14**
 
 ```
 assignments_needing_submitting
@@ -186,24 +177,18 @@ collapse_course_nav
 collapse_global_nav
 comment_library_suggestions_enabled
 default_to_block_editor
-effective_locale
 elementary_dashboard_disabled
-first_name
 hidden
 hide_dashcard_color_overlays
 ignored
-last_name
-locale
 manual_mark_as_read
 needs_grading_count
 release_notes_badge_disabled
-short_name
-time_zone
 widget_dashboard_dark_mode
 widget_dashboard_user_preference
 ```
 
-**Total missing columns across these tables: 122.**
+**Total missing columns across these tables: 108.**
 
 To close one: add an idempotent migration in
 `migration/crates/star-db/migrations/` (never edit an existing one),
