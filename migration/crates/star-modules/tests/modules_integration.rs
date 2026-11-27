@@ -304,7 +304,11 @@ async fn create_module_authz_runs_before_course_existence_check() {
         "teacher on missing course gets 404; body: {}",
         resp.text()
     );
-    assert_eq!(resp.text(), "not found", "error body is plain text");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#,
+        "Canvas renders the error as JSON"
+    );
 
     // Student: the Forbidden is returned BEFORE the course existence check,
     // so a missing course surfaces as 403 for unauthorized callers.
@@ -318,7 +322,11 @@ async fn create_module_authz_runs_before_course_existence_check() {
         403,
         "student on missing course must hit the authz gate (403), not 404"
     );
-    assert_eq!(resp.text(), "forbidden", "error body is plain text");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#,
+        "Canvas renders the error as JSON"
+    );
 
     // Plain student on a real course is forbidden too.
     let course = seed_course(&pool, &prefix, "AuthzOrderCourse").await;
