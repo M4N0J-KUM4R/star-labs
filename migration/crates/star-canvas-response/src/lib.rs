@@ -296,17 +296,25 @@ fn apply_canvas_headers(
 
     // app/controllers/application_controller.rb:1944 (set_no_cache_headers)
     // and the Rails default cache policy for successful answers.
-    match status {
-        StatusCode::OK => set(
-            headers,
-            "cache-control",
-            "max-age=0, private, must-revalidate",
-        ),
-        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-            set(headers, "cache-control", "no-store");
-            set(headers, "pragma", "no-cache");
+    // A handler that set its own cache policy keeps it: Canvas' asset
+    // pipeline serves the stylesheets with
+    // `public, max-age=31536000, immutable`, and Rails only adds the
+    // no-cache headers when the controller asks for them
+    // (`set_no_cache_headers`, application_controller.rb:1944). Overwriting
+    // them would make every immutable asset revalidate on every page view.
+    if !headers.contains_key("cache-control") {
+        match status {
+            StatusCode::OK => set(
+                headers,
+                "cache-control",
+                "max-age=0, private, must-revalidate",
+            ),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+                set(headers, "cache-control", "no-store");
+                set(headers, "pragma", "no-cache");
+            }
+            _ => set(headers, "cache-control", "no-cache"),
         }
-        _ => set(headers, "cache-control", "no-cache"),
     }
 
     // gems/request_context/lib/request_context/generator.rb:84

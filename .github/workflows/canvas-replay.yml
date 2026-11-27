@@ -101,7 +101,9 @@ jobs:
           wait "$server_pid" 2>/dev/null || true
           # The seed rows the recorded cases need (the acting user, the
           # course, the account, the access token and its developer key) are
-          # created here so the recorded ids resolve.
+          # created here so the recorded ids resolve. The seed talks to
+          # PostgreSQL through psycopg, which the runner does not have.
+          python3 -m pip install --quiet "psycopg[binary]"
           python3 tools/parity/seed_replay_db.py
 
       - name: Check the cutover front door
