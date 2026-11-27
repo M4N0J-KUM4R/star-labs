@@ -480,6 +480,21 @@ pub fn app(state: AppState) -> Router {
         .layer(middleware::from_fn(method_override::method_override))
 }
 
+/// The shell, with `fallback` answering the paths the shell does not own.
+///
+/// The shell is the application router's fallback service, so the paths it
+/// does not register are the ones the front door has to answer: without a
+/// fallback of its own the shell would swallow them.
+pub fn app_with_fallback<H, T>(state: AppState, fallback: H) -> Router
+where
+    H: axum::handler::Handler<T, ()>,
+    T: 'static,
+{
+    Router::new()
+        .fallback_service(router().with_state(state).fallback(fallback))
+        .layer(middleware::from_fn(method_override::method_override))
+}
+
 /// Request origin for `ENV.DEEP_LINKING_POST_MESSAGE_ORIGIN`.
 ///
 /// No host header is available without threading the request through every

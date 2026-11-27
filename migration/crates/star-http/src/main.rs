@@ -113,7 +113,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // -------------------------------------------------------------------------
     // Build API router under /api/v1
     // -------------------------------------------------------------------------
-    let api_router = build_api_router(origin.clone());
+    // The API router's own fallback is the front door: a path under
+    // /api/v1 that the port does not answer is Canvas' to answer, and the
+    // nested router would otherwise answer 404 on its own.
+    let api_router = build_api_router(origin.clone()).fallback(star_proxy::fallback);
 
     // -------------------------------------------------------------------------
     // Full app router — /health at top level, everything else under /api/v1
@@ -130,7 +133,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Rails' `_method` override, which has to run ahead of routing, and
         // none of the root-mounted routers below own a path the shell
         // registers, so the two shapes answer the same requests.
-        .fallback_service(star_ui::app(state.clone()))
+        // The front door sits behind the shell: the shell is the app's
+        // fallback (it carries Rails' `_method` override, which has to run
+        // ahead of routing), so the delegation has to be the shell's own
+        // fallback. A request the shell does not answer goes to Canvas.
+        .fallback_service(star_ui::app_with_fallback(
+            state.clone(),
+            star_proxy::fallback,
+        ))
         // Canvas serves the LTI Advantage family at /api/lti (outside
         // /api/v1), so the router carries the prefix and is merged here.
         .merge(star_lti::lti_advantage_router())
@@ -163,9 +173,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )
         // Canvas serves its GraphQL API at /api/graphql (outside /api/v1).
         .nest("/api/graphql", star_graphql::router())
-        // The front door: a request the port has no route for — or no route
-        // for that method — is Canvas' to answer.
-        .fallback(star_proxy::fallback)
+        // The front door: a request the port has no route for is Canvas' to
+        // answer. The shell is the app's fallback service (it carries the
+        // `_method` override), so the delegation is the shell's own fallback
+        // — a fallback set here would replace the shell.
         .method_not_allowed_fallback(star_proxy::fallback)
         .layer(Extension(origin.clone()))
         .layer(axum::middleware::from_fn_with_state(
