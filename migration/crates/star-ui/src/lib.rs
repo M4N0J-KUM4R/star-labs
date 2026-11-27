@@ -30,9 +30,13 @@ pub mod session;
 pub mod session_bridge;
 pub mod shell;
 
+use axum::extract::{Extension, OriginalUri};
 use axum::middleware;
+use axum::response::IntoResponse;
+use axum::routing::MethodRouter;
 use axum::routing::{delete, get, post};
 use axum::Router;
+use tower::Service;
 
 use star_common::AppState;
 
@@ -485,14 +489,40 @@ pub fn app(state: AppState) -> Router {
 /// The shell is the application router's fallback service, so the paths it
 /// does not register are the ones the front door has to answer: without a
 /// fallback of its own the shell would swallow them.
-pub fn app_with_fallback<H, T>(state: AppState, fallback: H) -> Router
-where
-    H: axum::handler::Handler<T, ()>,
-    T: 'static,
-{
+pub fn app_with_fallback(state: AppState, fallback: MethodRouter<()>) -> Router {
     Router::new()
-        .fallback_service(router().with_state(state).fallback(fallback))
+        .fallback_service(
+            router()
+                .with_state(state)
+                .fallback(serve_embedded_or_fallback),
+        )
+        // The application's fallback travels to the handler in the request's
+        // extensions: the shell's own fallback is the embedded front end, and
+        // the application's fallback answers everything the shell does not.
+        .layer(Extension(fallback))
         .layer(middleware::from_fn(method_override::method_override))
+}
+
+/// The shell's fallback: the embedded front-end assets, and then the
+/// application's own fallback.
+///
+/// The assets have to be asked first: they own the paths under `/canvas` and
+/// `/_app`, and the application's fallback (the front door) would send them
+/// to Canvas instead of serving the bytes the page links.
+async fn serve_embedded_or_fallback(
+    method: axum::http::Method,
+    OriginalUri(uri): OriginalUri,
+    headers: axum::http::HeaderMap,
+    Extension(mut fallback): Extension<MethodRouter<()>>,
+    request: axum::extract::Request,
+) -> axum::response::Response {
+    if assets::is_embedded_path(uri.path()) {
+        return assets::serve_embedded(method, OriginalUri(uri), headers).await;
+    }
+    fallback
+        .call(request)
+        .await
+        .unwrap_or_else(|_| axum::http::StatusCode::NOT_FOUND.into_response())
 }
 
 /// Request origin for `ENV.DEEP_LINKING_POST_MESSAGE_ORIGIN`.

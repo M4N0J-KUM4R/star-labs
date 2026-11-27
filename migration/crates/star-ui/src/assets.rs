@@ -123,6 +123,14 @@ pub fn canvas_href(variant: &str, bundle: &str) -> String {
 /// where the SPA knows bundle names but not their hashes). Everything else — Vite's
 /// `/_app/**`, and the fonts and images Canvas' own sheets reference by root-relative
 /// path — is looked up verbatim.
+/// Whether the path is one of the embedded front-end assets.
+///
+/// The shell's fallback answers the assets itself; every other path belongs
+/// to the application (the front door).
+pub fn is_embedded_path(path: &str) -> bool {
+    resolve(path).is_some()
+}
+
 fn resolve(path: &str) -> Option<(String, Option<String>)> {
     let Some(rest) = path.strip_prefix("/canvas/") else {
         return Some((path.to_string(), None));

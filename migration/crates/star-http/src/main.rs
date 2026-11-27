@@ -139,7 +139,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // fallback. A request the shell does not answer goes to Canvas.
         .fallback_service(star_ui::app_with_fallback(
             state.clone(),
-            star_proxy::fallback,
+            axum::routing::any(star_proxy::fallback),
         ))
         // Canvas serves the LTI Advantage family at /api/lti (outside
         // /api/v1), so the router carries the prefix and is merged here.
