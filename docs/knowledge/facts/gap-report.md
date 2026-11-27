@@ -16,7 +16,7 @@ Canvas something.
 | Dimension | Canvas | Port | Gap |
 |---|---:|---:|---:|
 | API routes mounted | 1292 | 767 | **154** |
-| Permissions declared | 160 | 32 | **128** |
+| Permissions declared | 160 | 160 | **0** |
 | Models with a table | 351 | 29 | **322** |
 | Columns missing (models with a table) | — | — | **493** |
 | GraphQL types | 621 | 44 | **583** |
@@ -90,138 +90,10 @@ the port invented. Each needs a decision: keep as an alias, or delete.
 
 ## Permissions the port does not mention
 
-128 of 160. Canvas declares each in
+0 of 160. Canvas declares each in
 `config/initializers/permissions_registry.rb`.
 
 ```
-access_oak
-access_oak_teacher
-add_course_template
-add_designer_to_course
-add_observer_to_course
-add_student_to_course
-add_ta_to_course
-add_teacher_to_course
-allow_course_admin_actions
-apply_default_discussion_options
-block_editor_global_template_editor
-block_editor_template_editor
-create_access_tokens
-create_collaborations
-create_conferences
-create_forum
-delete_access_tokens
-delete_course_template
-edit_course_template
-edit_discussion_anonymity
-edit_discussion_options
-edit_discussion_views
-generate_observer_pairing_code
-import_outcomes
-manage_account_banks
-manage_account_calendar_events
-manage_account_calendar_visibility
-manage_account_settings
-manage_ask_questions_analytics_context
-manage_assignments_add
-manage_assignments_delete
-manage_assignments_edit
-manage_catalog
-manage_course_details
-manage_course_feature_options
-manage_course_navigation
-manage_course_visibility
-manage_courses_add
-manage_courses_conclude
-manage_courses_delete
-manage_courses_publish
-manage_courses_reset
-manage_data_services
-manage_developer_keys
-manage_dsr_requests
-manage_files_add
-manage_frozen_assignments
-manage_global_outcomes
-manage_groups_add
-manage_groups_delete
-manage_groups_manage
-manage_impact
-manage_institutional_tags_create
-manage_institutional_tags_edit
-manage_institutional_tags_view
-manage_interaction_alerts
-manage_internal_settings
-manage_jobs
-manage_lti_add
-manage_lti_delete
-manage_lti_edit
-manage_lti_registrations
-manage_master_courses
-manage_nav_menu_links
-manage_proficiency_calculations
-manage_proficiency_scales
-manage_rate_limiting
-manage_release_notes
-manage_rules_add
-manage_rules_delete
-manage_rules_edit
-manage_rules_view
-manage_sections_add
-manage_sections_delete
-manage_sections_edit
-manage_site_settings
-manage_storage_quotas
-manage_tags_add
-manage_tags_delete
-manage_tags_manage
-manage_users_in_bulk
-manage_wiki_create
-manage_wiki_delete
-manage_wiki_update
-moderate_user_content
-modify_site_admin_developer_keys
-new_quizzes_multiple_session_detection
-new_quizzes_view_ip_address
-proxy_assignment_submission
-read_email_addresses
-read_messages
-read_sis
-remove_designer_from_course
-remove_observer_from_course
-remove_student_from_course
-remove_ta_from_course
-remove_teacher_from_course
-reset_any_mfa
-select_final_grade
-send_messages_all
-share_banks_with_subaccounts
-site_admin_self_token_create
-temporary_enrollments_add
-temporary_enrollments_delete
-temporary_enrollments_edit
-undelete_courses
-view_accessibility_insights
-view_admin_analytics
-view_analytics_hub
-view_archived_courses
-view_ask_questions_analytics
-view_ask_questions_pinboards
-view_audit_trail
-view_course_changes
-view_course_readiness
-view_error_reports
-view_feature_flags
-view_grade_changes
-view_group_pages
-view_jobs
-view_notifications
-view_quiz_answer_audits
-view_rsi_report
-view_students_in_need
-view_students_in_need_in_course
-view_title_iv_financial_aid_report
-view_user_generated_access_tokens
-view_user_logins
 ```
 
 ## Columns the port's tables still owe

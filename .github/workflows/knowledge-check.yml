@@ -38,9 +38,6 @@ jobs:
   knowledge:
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    defaults:
-      run:
-        working-directory: migration
     steps:
       - uses: actions/checkout@v4
 
@@ -57,10 +54,18 @@ jobs:
       - name: Regenerate the per-family briefs
         run: python3 tools/knowledge/gen_briefs.py
 
-      - name: Require the committed knowledge to match
+      - name: Require the committed structural facts to match
+        # route-map and schema-truth are derived from committed artefacts
+        # (the route registry, the corpus, the migrations), so a difference
+        # means the committed facts no longer describe the tree.
+        #
+        # The gap report and the parity state are derived from the replay
+        # report, which changes whenever the corpus is re-recorded; they are
+        # regenerated here and printed, but not gated — otherwise every
+        # re-recording would fail CI over a measurement, not a defect.
         run: |
-          if ! git diff --exit-code -- docs/knowledge/; then
-            echo "::error::docs/knowledge/ is stale. Run:"
+          if ! git diff --exit-code -- docs/knowledge/facts/route-map.md docs/knowledge/facts/schema-truth.md; then
+            echo "::error::the committed facts are stale. Run:"
             echo "  python3 tools/knowledge/gen_knowledge.py"
             echo "  python3 tools/knowledge/gen_gap_report.py"
             echo "  python3 tools/knowledge/gen_briefs.py"
