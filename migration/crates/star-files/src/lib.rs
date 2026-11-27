@@ -83,6 +83,15 @@ mod folders_api;
 pub mod ui;
 mod upload;
 
+/// Mint an attachment JWT, the one Canvas sends to `files/update_word_count`.
+///
+/// Canvas hands the browser an attachment JWT when it asks for a file
+/// (`app/controllers/files_controller.rb:1634` decodes it again). The port
+/// signs the same claim set with its own secret, so the minting is public:
+/// the caller of `POST /files/update_word_count` has to be able to produce
+/// one.
+pub use content::create_attachment_jwt;
+
 // ─── folder constants ──────────────────────────────────────────────────────
 
 /// Canvas Folder::ROOT_FOLDER_NAME.
