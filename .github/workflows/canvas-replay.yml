@@ -143,6 +143,11 @@ jobs:
           STAR_CANVAS_DOMAIN: 54.252.48.186
           STAR_PORT: "8099"
         run: |
+          # The committed report is the baseline; this run's report replaces
+          # it on disk. Removing the committed copy first means a replay that
+          # dies before writing leaves no report at all, which the gate
+          # below reports as a broken run instead of a pass.
+          rm -f rust/app-cases/replay-report.md
           set +e
           rust-anything app replay . --build "target/release/star-http"
           status=$?
@@ -188,17 +193,28 @@ jobs:
         # committed report and fails now is a regression, and a case that
         # fails in the committed report and passes now is an improvement
         # that the committed report has not caught up with.
+        #
+        # The committed report is read out of git, not off the disk: the
+        # replay overwrites `rust/app-cases/replay-report.md` with the fresh
+        # one, so comparing that file with itself would always agree and the
+        # gate would never trip.
         run: |
-          if [ -f rust/app-cases/replay-report.md ]; then
-            python3 tools/parity/compare_replay.py \
-              --committed rust/app-cases/replay-report.md \
-              --fresh rust/app-cases/replay-report.md
-          else
-            echo "::warning::no committed replay-report.md to compare against"
+          if [ ! -f rust/app-cases/replay-report.md ]; then
+            echo "::error::the replay produced no report"
+            exit 1
           fi
+          git show HEAD:migration/rust/app-cases/replay-report.md \
+            > /tmp/committed-replay-report.md
+          python3 tools/parity/compare_replay.py \
+            --committed /tmp/committed-replay-report.md \
+            --fresh rust/app-cases/replay-report.md
 
-      - name: Fail when any case regressed
-        if: steps.replay.outputs.exit_code != '0'
+      - name: Fail when the replay did not run
+        # The replay itself answers "which cases fail"; the committed report
+        # is the baseline and the step above compares the two. A replay that
+        # produced no report is a broken run, not a parity result.
         run: |
-          echo "::error::replay reported failing cases (exit ${{ steps.replay.outputs.exit_code }})"
-          exit 1
+          if [ ! -f rust/app-cases/replay-report.md ]; then
+            echo "::error::the replay produced no report (exit ${{ steps.replay.outputs.exit_code }})"
+            exit 1
+          fi

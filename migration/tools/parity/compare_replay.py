@@ -61,6 +61,16 @@ def main() -> int:
     if newly_failing:
         print("\ncompare_replay: the fresh run regressed", file=sys.stderr)
         return 1
+    if newly_passing:
+        # The committed report is the baseline: a case that passes now has to
+        # be recorded as passing, or the next run compares against a stale
+        # contract and a real regression hides behind it.
+        print(
+            "\ncompare_replay: the committed report is stale — commit the fresh one",
+            file=sys.stderr,
+        )
+        return 1
+    print("\ncompare_replay: the fresh run matches the committed report")
     return 0
 
 
