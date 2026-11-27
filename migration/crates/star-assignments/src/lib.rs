@@ -8542,10 +8542,12 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/assignments/{id}/submissions",
             get(course_list_submissions).post(course_create_submission),
         )
-        .route(
-            "/courses/{courseId}/assignments/{id}/submissions/self",
-            get(course_get_my_submission),
-        )
+        // Canvas serves `submissions/self` through the same route as
+        // `submissions/:user_id` (`lib/api.rb` maps the literal `self` to
+        // the caller), so the `{user_id}` route below answers both. The
+        // separate `self` route answered with the old handler, which
+        // answered 403 where Canvas answers 404 and 404 where Canvas
+        // synthesizes the unsubmitted record.
 
         // Assignment overrides — Canvas nested paths
         .route(
