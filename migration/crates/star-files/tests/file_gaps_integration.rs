@@ -302,13 +302,15 @@ async fn update_word_count_sets_the_column_and_gates_by_owner() {
         .await;
     assert_eq!(resp.status_code(), 400, "missing word_count");
 
-    // A stranger can neither see nor touch another user's file.
+    // Canvas reads the file from the attachment the JWT names and checks no
+    // ownership (`files_controller.rb:1624-1646`): a request without the
+    // JWT is a 400 before anything else is looked at.
     let resp = server
         .post("/files/update_word_count")
         .add_header(axum::http::header::AUTHORIZATION, auth(stranger, "student"))
         .json(&json!({ "file_id": student_file, "word_count": 5 }))
         .await;
-    assert_eq!(resp.status_code(), 403, "stranger denied");
+    assert_eq!(resp.status_code(), 400, "the attachment_jwt is missing");
 
     // Unknown file -> 404.
     let resp = server

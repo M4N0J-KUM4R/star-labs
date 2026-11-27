@@ -81,17 +81,18 @@ impl From<sqlx::Error> for CollabError {
 
 impl IntoResponse for CollabError {
     fn into_response(self) -> Response {
+        // Canvas answers an API error with JSON
+        // (app/controllers/application_controller.rb:2296), never with plain
+        // text.
         match self {
-            CollabError::NotFound => (StatusCode::NOT_FOUND, "not found").into_response(),
-            CollabError::Forbidden => (StatusCode::FORBIDDEN, "forbidden").into_response(),
-            CollabError::TabDisabled => (
+            CollabError::NotFound => star_common::ApiError::NotFound.into_response(),
+            CollabError::Forbidden => star_common::ApiError::Forbidden.into_response(),
+            CollabError::TabDisabled => star_common::ApiError::canvas_json(
                 StatusCode::NOT_FOUND,
-                Json(json!({"message": "That page has been disabled for this course"})),
+                json!({"message": "That page has been disabled for this course"}),
             )
-                .into_response(),
-            CollabError::Db => {
-                (StatusCode::INTERNAL_SERVER_ERROR, "database error").into_response()
-            }
+            .into_response(),
+            CollabError::Db => star_common::ApiError::Db("database error".into()).into_response(),
         }
     }
 }
@@ -384,15 +385,20 @@ async fn collaboration_deletable(
 async fn collaborations_tab_enabled(pool: &PgPool, ctx: ContextRef) -> Result<bool, CollabError> {
     match ctx.kind {
         ContextKind::Course => {
+            // Canvas' `tab_enabled?` asks the context whether the tab is
+            // enabled; a course that says nothing about it has it enabled
+            // (`collaborations_controller.rb:181`). Only an explicitly
+            // hidden tab disables the route.
             let row: Option<(i64,)> = sqlx::query_as(
                 "SELECT 1::bigint FROM course_tabs \
-                 WHERE course_id = $1 AND hidden = false \
+                 WHERE course_id = $1 AND hidden = true \
                  AND tab_id IN ('collaborations', 'collaborations_new')",
             )
             .bind(ctx.id)
             .fetch_optional(pool)
             .await?;
-            Ok(row.is_some())
+            // A hidden row disables the tab; no row means the tab is enabled.
+            Ok(row.is_none())
         }
         ContextKind::Group => Ok(true),
     }
