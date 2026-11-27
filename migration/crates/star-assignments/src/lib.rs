@@ -7,14 +7,14 @@ use axum::{
     extract::{Path, RawQuery, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use star_auth::AuthUser;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 use std::collections::{HashMap, HashSet};
 
 // Server-rendered UI loaders + the shared grading write (star-ui, issue
@@ -444,6 +444,72 @@ fn is_admin(auth: &AuthUser) -> bool {
 }
 
 /// Check if user is enrolled in a course (as any role) or is admin.
+/// Canvas `view_all_grades` on a course — a TA or teacher enrollment.
+///
+/// The permission carries `applies_to_concluded: true`
+/// (`config/initializers/permissions_registry.rb:1963`), so a *concluded*
+/// teacher / TA enrollment keeps it (`app/models/course.rb:2200`) — unlike
+/// the course-admin rights.
+/// Canvas `read_grades` on a course — any student, TA or teacher enrollment.
+///
+/// Canvas grants it through `active_or_pending_by_date`
+/// (`app/models/enrollment.rb:1438`), which does not list a concluded
+/// enrollment.
+async fn check_can_read_grades(
+    db: &PgPool,
+    user_id: i64,
+    course_id: i64,
+) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM enrollments \
+         WHERE user_id = $1 AND course_id = $2 \
+           AND workflow_state IN ('active', 'invited') \
+         LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(course_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.is_some())
+}
+
+/// Ask the shared permission layer whether the acting user holds a
+/// permission in this course.
+///
+/// Canvas answers with the permission registry, not with "is this user a
+/// teacher", so the port asks the same question the same way
+/// ([`star_permissions::check::require`]).
+async fn require_course_permission(
+    pool: &PgPool,
+    user_id: i64,
+    course_id: i64,
+    permission: &str,
+) -> Result<(), ApiError> {
+    star_permissions::check::require(
+        pool,
+        user_id,
+        &star_permissions::PermissionContext::Course { course_id },
+        permission,
+    )
+    .await
+}
+
+/// Canvas' grading rights: `manage_grades` or `view_all_grades`
+/// (`app/controllers/submissions_api_controller.rb:256`).
+async fn require_grading_right(
+    pool: &PgPool,
+    user_id: i64,
+    course_id: i64,
+) -> Result<(), ApiError> {
+    star_permissions::check::require_any(
+        pool,
+        user_id,
+        &star_permissions::PermissionContext::Course { course_id },
+        &["manage_grades", "view_all_grades"],
+    )
+    .await
+}
+
 async fn check_enrolled_or_admin(
     pool: &PgPool,
     user_id: i64,
@@ -476,8 +542,14 @@ async fn check_teacher_or_admin(
         return Ok(true);
     }
 
+    // Canvas grants the course-admin rights through
+    // `active_or_pending_by_date` (`app/models/enrollment.rb:1438`), which
+    // does not list a concluded enrollment.
     let row: Option<(i32,)> = sqlx::query_as(
-        r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' LIMIT 1"#,
+        r#"SELECT 1 FROM enrollments
+           WHERE user_id = $1 AND course_id = $2 AND role = 'teacher'
+             AND workflow_state IN ('active', 'invited')
+           LIMIT 1"#,
     )
     .bind(user_id)
     .bind(course_id)
@@ -682,6 +754,34 @@ async fn ensure_user_in_course(
     Ok(())
 }
 
+/// Verify the target user is a student of the course.
+///
+/// Canvas looks the target up among the students the caller can see
+/// (`app/controllers/submissions/show_helper.rb:51-57`), so a teacher is not
+/// a valid target: the lookup raises RecordNotFound and the route answers
+/// 404.
+async fn ensure_student_in_course(
+    pool: &PgPool,
+    course_id: i64,
+    user_id: i64,
+) -> Result<(), ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM enrollments
+        WHERE course_id = $1 AND user_id = $2 AND role = 'student'
+          AND workflow_state <> 'deleted'
+        LIMIT 1
+        "#,
+    )
+    .bind(course_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.ok_or(ApiError::NotFound)?;
+    Ok(())
+}
+
 /// Verify the target user has a live enrollment in the section. Canvas'
 /// `get_user_considering_section` raises RecordNotFound, so section-mismatched
 /// users are 404s rather than 403s. Caller must also verify course access.
@@ -836,6 +936,32 @@ fn parse_since(value: Option<&str>, field: &str) -> Result<Option<DateTime<Utc>>
 /// Canvas semantics: teachers/admins may request any visible student or
 /// "all"; students may only request themselves. Unknown student ids are
 /// unauthorized (403) just like `render_unauthorized_action`.
+/// Canvas `apply_enrollment_visibility` — the students of the course the
+/// caller may see. A requested id that is not one of them makes the request
+/// unauthorized (`app/controllers/submissions_api_controller.rb:400`).
+async fn ensure_visible_students(
+    pool: &PgPool,
+    course_id: i64,
+    ids: &[i64],
+) -> Result<(), ApiError> {
+    let visible: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(DISTINCT user_id) FROM enrollments
+        WHERE course_id = $1 AND user_id = ANY($2)
+          AND role = 'student' AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(course_id)
+    .bind(ids)
+    .fetch_one(pool)
+    .await?;
+
+    if visible as usize != ids.len() {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(())
+}
+
 async fn resolve_requested_student_ids(
     pool: &PgPool,
     course_id: i64,
@@ -844,7 +970,15 @@ async fn resolve_requested_student_ids(
     requested: &[String],
 ) -> Result<Vec<i64>, ApiError> {
     if requested.is_empty() {
-        return Ok(vec![auth.id]);
+        // Canvas falls back to the caller's own id
+        // (`app/controllers/submissions_api_controller.rb:389`) and, for a
+        // caller who may view all grades, refuses the request when that id
+        // is not one of the visible students (line 400).
+        let ids = vec![auth.id];
+        if can_view_all {
+            ensure_visible_students(pool, course_id, &ids).await?;
+        }
+        return Ok(ids);
     }
 
     if requested.iter().any(|id| id.eq_ignore_ascii_case("all")) {
@@ -1154,10 +1288,9 @@ async fn create_assignment(
     auth: AuthUser,
     Json(payload): Json<CreateAssignment>,
 ) -> Result<(StatusCode, Json<Assignment>), ApiError> {
-    // Check teacher or admin
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `AssignmentsApiController#create` -> `manage_assignments_add`
+    // (`app/controllers/assignments_api_controller.rb:872`).
+    require_course_permission(&state.db, auth.id, course_id, "manage_assignments_add").await?;
 
     if payload.title.trim().is_empty() {
         return Err(ApiError::Validation("title is required".into()));
@@ -1235,10 +1368,15 @@ async fn update_assignment(
 
     let existing = row.ok_or(ApiError::NotFound)?;
 
-    // Check teacher or admin
-    if !check_teacher_or_admin(&state.db, auth.id, existing.course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `AssignmentsApiController#update` -> `manage_assignments_edit`
+    // (`app/controllers/assignments_api_controller.rb:1758`).
+    require_course_permission(
+        &state.db,
+        auth.id,
+        existing.course_id,
+        "manage_assignments_edit",
+    )
+    .await?;
 
     let title = payload.title.unwrap_or(existing.title);
     let description = payload.description.or(existing.description);
@@ -1278,10 +1416,8 @@ async fn delete_assignment(
 
     let course_id = row.ok_or(ApiError::NotFound)?.0;
 
-    // Check teacher or admin
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `AssignmentsApiController#destroy` -> `manage_assignments_delete`.
+    require_course_permission(&state.db, auth.id, course_id, "manage_assignments_delete").await?;
 
     let result = sqlx::query(r#"DELETE FROM assignments WHERE id = $1"#)
         .bind(assignment_id)
@@ -1354,10 +1490,10 @@ async fn list_submissions(
 
     let course_id = row.ok_or(ApiError::NotFound)?.0;
 
-    // Check teacher or admin
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `SubmissionsApiController#index` ->
+    // `authorized_action(@context, @current_user, [:manage_grades,
+    // :view_all_grades])` (`app/controllers/submissions_api_controller.rb:256`).
+    require_grading_right(&state.db, auth.id, course_id).await?;
 
     let rows: Vec<SubmissionWithUser> = sqlx::query_as(
         r#"
@@ -1431,10 +1567,9 @@ async fn grade_submission(
 
     let course_id = row.ok_or(ApiError::NotFound)?.0;
 
-    // Check teacher or admin
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas requires :grade, i.e. `manage_grades` on the course
+    // (`app/models/submission.rb:615-618`).
+    require_course_permission(&state.db, auth.id, course_id, "manage_grades").await?;
 
     let updated: Submission = sqlx::query_as(
         r#"
@@ -1472,10 +1607,28 @@ async fn list_student_submissions(
     RawQuery(raw_query): RawQuery,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+    // Canvas `for_students`
+    // (`app/controllers/submissions_api_controller.rb:384`) answers with the
+    // caller's own submissions when they hold `read_grades`, and with 403
+    // when they hold neither `manage_grades`/`view_all_grades` nor
+    // `read_grades` (line 413). `read_grades` is not one of the permissions
+    // that apply to concluded enrollments
+    // (`config/initializers/permissions_registry.rb`), so a concluded
+    // enrollment loses it.
+    // `manage_grades` or `view_all_grades` on the course
+    // (`app/controllers/submissions_api_controller.rb:392`).
+    let can_view_all = star_permissions::check::require_any(
+        &state.db,
+        auth.id,
+        &star_permissions::PermissionContext::Course { course_id },
+        &["manage_grades", "view_all_grades"],
+    )
+    .await
+    .is_ok();
+    let can_read_grades = check_can_read_grades(&state.db, auth.id, course_id).await?;
+    if !can_view_all && !can_read_grades {
         return Err(ApiError::Forbidden);
     }
-    let can_view_all = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
 
     let query = parse_student_submissions_query(raw_query.as_deref())?;
     let student_ids = resolve_requested_student_ids(
@@ -1640,10 +1793,14 @@ async fn get_student_submission(
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-    ensure_user_in_course(&state.db, course_id, user_id).await?;
+    ensure_student_in_course(&state.db, course_id, user_id).await?;
 
-    if auth.id != user_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
+    // Canvas `SubmissionsApiController#show` -> `authorized_action(@submission,
+    // @current_user, :read)`: the submission's own user may read it, anyone
+    // else needs the grading rights on the course
+    // (`app/models/submission.rb:584-618`).
+    if auth.id != user_id {
+        require_grading_right(&state.db, auth.id, course_id).await?;
     }
 
     let query = parse_submission_includes(raw_query.as_deref());
@@ -2054,9 +2211,10 @@ async fn submission_summary(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
 
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `SubmissionsApiController#submission_summary` ->
+    // `authorized_action(@context, @current_user, [:manage_grades,
+    // :view_all_grades])` (`app/controllers/submissions_api_controller.rb:1321`).
+    require_grading_right(&state.db, auth.id, course_id).await?;
 
     let (students, graded, ungraded): (i64, i64, i64) = sqlx::query_as(
         r#"
@@ -2186,23 +2344,15 @@ async fn bulk_update_grades(
     auth: AuthUser,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Canvas reads `params[:grade_data]` first: a request without it is a
+    // 400 even for a caller who may not grade
+    // (`app/controllers/submissions_api_controller.rb:1388-1391`).
+    let grade_data = parse_grade_data(&body)?;
+
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
 
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let payload: serde_json::Value = serde_json::from_slice(&body)
-        .map_err(|_| ApiError::BadRequest("'grade_data' parameter required".into()))?;
-    let grade_data = payload
-        .get("grade_data")
-        .and_then(|value| value.as_object())
-        .ok_or_else(|| ApiError::BadRequest("'grade_data' parameter required".into()))?;
-    if grade_data.is_empty() {
-        return Err(ApiError::BadRequest(
-            "'grade_data' parameter required".into(),
-        ));
-    }
+    // Canvas `SubmissionsApiController#update_grades` -> `manage_grades`.
+    require_course_permission(&state.db, auth.id, course_id, "manage_grades").await?;
 
     for (raw_user_id, entry) in grade_data {
         let user_id: i64 = raw_user_id
@@ -2716,9 +2866,10 @@ async fn gradeable_students(
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let assignment = load_moderated_assignment(&state.db, course_id, assignment_id).await?;
 
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `SubmissionsApiController#gradeable_students` ->
+    // `authorized_action(@context, @current_user, [:manage_grades,
+    // :view_all_grades])` (`app/controllers/submissions_api_controller.rb:1245`).
+    require_grading_right(&state.db, auth.id, course_id).await?;
 
     let (sort_by_name, descending, allow_new_anonymous_id, include_provisional_grades) =
         parse_gradeable_students_query(raw_query.as_deref());
@@ -2883,9 +3034,12 @@ async fn multiple_gradeable_students(
         return Err(ApiError::NotFound);
     }
 
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `gradeable_students` needs `manage_grades` *or*
+    // `view_all_grades` (`app/controllers/submissions_api_controller.rb:1245`).
+    // `view_all_grades` carries `applies_to_concluded: true`
+    // (`config/initializers/permissions_registry.rb:1963`), so a concluded
+    // teacher keeps it — the shared permission layer applies that carve-out.
+    require_grading_right(&state.db, auth.id, course_id).await?;
 
     // assignment_ids[] filter (Canvas: Array(params[:assignment_ids]))
     let assignment_ids: Vec<i64> = raw_query
@@ -3280,7 +3434,7 @@ async fn section_update_submission(
     Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
     RawQuery(_raw_query): RawQuery,
     auth: AuthUser,
-    Json(payload): Json<serde_json::Value>,
+    ApiJson(payload): ApiJson<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
@@ -3459,10 +3613,10 @@ async fn create_submission_file(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
     auth: AuthUser,
-    Json(payload): Json<SubmissionFileRequest>,
+    ApiJson(payload): ApiJson<SubmissionFileRequest>,
 ) -> Result<(StatusCode, Json<SubmissionAttachment>), ApiError> {
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-    ensure_user_in_course(&state.db, course_id, user_id).await?;
+    ensure_student_in_course(&state.db, course_id, user_id).await?;
 
     if auth.id != user_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
@@ -3726,7 +3880,7 @@ async fn course_grade_submission(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
     auth: AuthUser,
-    Json(payload): Json<serde_json::Value>,
+    ApiJson(payload): ApiJson<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let assignment = load_moderated_assignment(&state.db, course_id, assignment_id).await?;
 
@@ -3752,12 +3906,11 @@ async fn course_grade_submission(
         }
     }
 
-    ensure_user_in_course(&state.db, course_id, user_id).await?;
+    ensure_student_in_course(&state.db, course_id, user_id).await?;
 
-    // Canvas requires :grade, i.e. manage_grades: teachers and admins only.
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas requires :grade, i.e. `manage_grades` on the course
+    // (`app/models/submission.rb:615-618`).
+    require_course_permission(&state.db, auth.id, course_id, "manage_grades").await?;
 
     if provisional {
         return grade_submission_provisional(
@@ -8241,16 +8394,18 @@ fn bulk_update_progress(
 
 /// The `grade_data` of a bulk update.
 fn parse_grade_data(body: &Bytes) -> Result<serde_json::Map<String, serde_json::Value>, ApiError> {
-    let payload: serde_json::Value = serde_json::from_slice(body)
-        .map_err(|_| ApiError::BadRequest("'grade_data' parameter required".into()))?;
+    // Canvas answers a missing or empty `grade_data` with a 400 and a single
+    // `error` key of its own
+    // (`app/controllers/submissions_api_controller.rb:1388-1391`).
+    let missing =
+        || ApiError::canvas_error(StatusCode::BAD_REQUEST, "'grade_data' parameter required");
+    let payload: serde_json::Value = serde_json::from_slice(body).map_err(|_| missing())?;
     let grade_data = payload
         .get("grade_data")
         .and_then(|value| value.as_object())
-        .ok_or_else(|| ApiError::BadRequest("'grade_data' parameter required".into()))?;
+        .ok_or_else(missing)?;
     if grade_data.is_empty() {
-        return Err(ApiError::BadRequest(
-            "'grade_data' parameter required".into(),
-        ));
+        return Err(missing());
     }
     Ok(grade_data.clone())
 }
@@ -8408,10 +8563,12 @@ async fn course_bulk_update_grades(
     auth: AuthUser,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Canvas reads `params[:grade_data]` before it checks the permission
+    // (`app/controllers/submissions_api_controller.rb:1388-1391`).
+    let grade_data = parse_grade_data(&body)?;
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
-    let grade_data = parse_grade_data(&body)?;
     apply_bulk_grade_data(&state, &auth, course_id, None, None, &grade_data).await?;
     Ok(Json(bulk_update_progress(
         course_id,
@@ -8430,10 +8587,12 @@ async fn section_bulk_update_grades(
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
+    // Canvas reads `params[:grade_data]` before it checks the permission
+    // (`app/controllers/submissions_api_controller.rb:1388-1391`).
+    let grade_data = parse_grade_data(&body)?;
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
-    let grade_data = parse_grade_data(&body)?;
     apply_bulk_grade_data(
         &state,
         &auth,
@@ -8460,11 +8619,13 @@ async fn section_bulk_update_assignment_grades(
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
+    // Canvas reads `params[:grade_data]` before it checks the permission
+    // (`app/controllers/submissions_api_controller.rb:1388-1391`).
+    let grade_data = parse_grade_data(&body)?;
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-    let grade_data = parse_grade_data(&body)?;
     apply_bulk_grade_data(
         &state,
         &auth,
@@ -8898,7 +9059,7 @@ async fn section_create_submission_file(
     State(state): State<AppState>,
     Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
     auth: AuthUser,
-    Json(payload): Json<SubmissionFileRequest>,
+    ApiJson(payload): ApiJson<SubmissionFileRequest>,
 ) -> Result<(StatusCode, Json<SubmissionAttachment>), ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
     ensure_section_user(&state.db, section_id, user_id).await?;
@@ -8906,7 +9067,7 @@ async fn section_create_submission_file(
         State(state),
         Path((course_id, assignment_id, user_id)),
         auth,
-        Json(payload),
+        ApiJson(payload),
     )
     .await
 }
@@ -8928,16 +9089,18 @@ pub fn router() -> Router<AppState> {
         // Course-level assignment routes
         .route(
             "/courses/{courseId}/assignments",
-            get(list_course_assignments),
+            get(list_course_assignments).post(create_assignment),
         )
-        .route("/courses/{courseId}/assignments", post(create_assignment))
         .route("/courses/{courseId}/gradebook", get(gradebook))
         // Assignment-level routes
-        .route("/assignments/{id}", get(get_assignment))
-        .route("/assignments/{id}", put(update_assignment))
-        .route("/assignments/{id}", delete(delete_assignment))
-        .route("/assignments/{id}/submissions", post(create_submission))
-        .route("/assignments/{id}/submissions", get(list_submissions))
+        .route(
+            "/assignments/{id}",
+            get(get_assignment).put(update_assignment).delete(delete_assignment),
+        )
+        .route(
+            "/assignments/{id}/submissions",
+            post(create_submission).get(list_submissions),
+        )
         .route("/assignments/{id}/submissions/me", get(get_my_submission))
         // Submission-level routes
         .route("/submissions/{id}/grade", put(grade_submission))
@@ -8952,7 +9115,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}",
-            get(get_student_submission),
+            get(get_student_submission).put(course_grade_submission),
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/files",
@@ -8965,11 +9128,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/read",
-            put(mark_submission_read),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/read",
-            delete(mark_submission_unread),
+            put(mark_submission_read).delete(mark_submission_unread),
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/update_grades",
@@ -8992,31 +9151,19 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
-            get(show_anonymous_submission),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
-            put(update_anonymous_submission),
+            get(show_anonymous_submission).put(update_anonymous_submission),
         )
         // Anonymous submissions: section twins (spec p5 slice E, #30)
         .route(
             "/sections/{sectionId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
-            get(section_show_anonymous_submission),
-        )
-        .route(
-            "/sections/{sectionId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
-            put(section_update_anonymous_submission),
+            get(section_show_anonymous_submission).put(section_update_anonymous_submission),
         )
         // Moderated / provisional grading (Canvas ModerationSetController,
         // ProvisionalGradesController, AnonymousProvisionalGradesController,
         // spec p5 slice F, #31)
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/moderated_students",
-            get(moderation_set_index),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/moderated_students",
-            post(moderation_set_create),
+            get(moderation_set_index).post(moderation_set_create),
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/provisional_grades/status",
@@ -9045,89 +9192,50 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
-            get(list_peer_reviews),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
-            post(create_peer_review),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
-            delete(destroy_peer_review),
+            get(list_peer_reviews)
+                .post(create_peer_review)
+                .delete(destroy_peer_review),
         )
         // Canvas v1 nested aliases (same handlers, course-scoped paths)
         .route(
             "/courses/{courseId}/assignments/{id}",
-            get(course_get_assignment),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{id}",
-            put(course_update_assignment),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{id}",
-            delete(course_delete_assignment),
+            get(course_get_assignment)
+                .put(course_update_assignment)
+                .delete(course_delete_assignment),
         )
         .route(
             "/courses/{courseId}/assignments/{id}/submissions",
-            get(course_list_submissions),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{id}/submissions",
-            post(course_create_submission),
+            get(course_list_submissions).post(course_create_submission),
         )
         .route(
             "/courses/{courseId}/assignments/{id}/submissions/self",
             get(course_get_my_submission),
         )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}",
-            put(course_grade_submission),
-        )
         // Assignment overrides — Canvas nested paths
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/overrides",
-            get(list_assignment_overrides),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/overrides",
-            post(create_assignment_override),
+            get(list_assignment_overrides).post(create_assignment_override),
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/overrides/{id}",
-            get(course_get_assignment_override),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/overrides/{id}",
-            put(course_update_assignment_override),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/overrides/{id}",
-            delete(course_delete_assignment_override),
+            get(course_get_assignment_override)
+                .put(course_update_assignment_override)
+                .delete(course_delete_assignment_override),
         )
         // Assignment overrides — flat routes
-        .route("/assignment_overrides/{id}", get(get_assignment_override))
         .route(
             "/assignment_overrides/{id}",
-            put(update_assignment_override),
-        )
-        .route(
-            "/assignment_overrides/{id}",
-            delete(delete_assignment_override),
+            get(get_assignment_override)
+                .put(update_assignment_override)
+                .delete(delete_assignment_override),
         )
         // Assignment overrides — batch routes (Canvas
         // AssignmentOverridesController#batch_*, issue #55)
         .route(
             "/courses/{courseId}/assignments/overrides",
-            get(batch_retrieve_assignment_overrides),
-        )
-        .route(
-            "/courses/{courseId}/assignments/overrides",
-            post(batch_create_assignment_overrides),
-        )
-        .route(
-            "/courses/{courseId}/assignments/overrides",
-            put(batch_update_assignment_overrides),
+            get(batch_retrieve_assignment_overrides)
+                .post(batch_create_assignment_overrides)
+                .put(batch_update_assignment_overrides),
         )
         // Assignment overrides — group/section aliases (#55)
         .route(
@@ -9253,11 +9361,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}",
-            get(section_get_submission),
-        )
-        .route(
-            "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}",
-            put(section_update_submission),
+            get(section_get_submission).put(section_update_submission),
         )
         // Read state routes — /courses/{courseId}/submissions/{id}/read/{item}
         .route(
@@ -9267,36 +9371,20 @@ pub fn router() -> Router<AppState> {
         // Course read state routes (for rubric/assignment/quiz)
         .route(
             "/courses/{courseId}/rubric_assessments/{id}/read",
-            put(mark_rubric_assessment_read),
-        )
-        .route(
-            "/courses/{courseId}/rubric_assessments/{id}/read",
-            delete(mark_rubric_assessment_unread),
+            put(mark_rubric_assessment_read).delete(mark_rubric_assessment_unread),
         )
         .route(
             "/courses/{courseId}/assignment_annotations/{id}/read",
-            put(mark_document_annotation_read),
-        )
-        .route(
-            "/courses/{courseId}/assignment_annotations/{id}/read",
-            delete(mark_document_annotation_unread),
+            put(mark_document_annotation_read).delete(mark_document_annotation_unread),
         )
         // Section read state routes
         .route(
             "/sections/{sectionId}/rubric_assessments/{id}/read",
-            put(section_mark_rubric_assessment_read),
-        )
-        .route(
-            "/sections/{sectionId}/rubric_assessments/{id}/read",
-            delete(section_mark_rubric_assessment_unread),
+            put(section_mark_rubric_assessment_read).delete(section_mark_rubric_assessment_unread),
         )
         .route(
             "/sections/{sectionId}/assignment_annotations/{id}/read",
-            put(section_mark_document_annotation_read),
-        )
-        .route(
-            "/sections/{sectionId}/assignment_annotations/{id}/read",
-            delete(section_mark_document_annotation_unread),
+            put(section_mark_document_annotation_read).delete(section_mark_document_annotation_unread),
         )
 }
 

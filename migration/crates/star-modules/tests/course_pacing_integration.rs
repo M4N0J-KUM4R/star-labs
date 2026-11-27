@@ -45,7 +45,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
 
     // The course_paces tables arrive with their own migration. Until then
     // the slice has nothing to talk to.
-    let tables: Option<(i64,)> = sqlx::query_as(
+    let tables: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM information_schema.tables \
          WHERE table_name IN ('course_paces', 'course_pace_module_items')",
     )
@@ -743,7 +743,7 @@ async fn compress_dates_answers_the_compressed_due_dates() {
     .await;
 
     // A second assignment item for the two item compression.
-    let module_id: i64 = sqlx::query_as("SELECT id FROM modules WHERE course_id = $1")
+    let module_id: i64 = sqlx::query_scalar("SELECT id FROM modules WHERE course_id = $1")
         .bind(fixture.course_id)
         .fetch_one(&pool)
         .await

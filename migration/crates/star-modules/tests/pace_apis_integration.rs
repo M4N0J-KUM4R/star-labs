@@ -48,7 +48,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
 
     star_db::MIGRATOR.run(&pool).await.expect("run migrations");
 
-    let tables: Option<(i64,)> = sqlx::query_as(
+    let tables: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM information_schema.tables \
          WHERE table_name IN ('course_paces', 'course_pace_module_items')",
     )

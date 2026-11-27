@@ -10,10 +10,10 @@ use axum::{
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use star_auth::{hash_password, AuthUser};
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 use std::collections::BTreeMap;
 
 pub mod users_api;
@@ -36,11 +36,109 @@ pub struct UserResponse {
 }
 
 /// Request to update a user.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct UpdateUserRequest {
     pub name: Option<String>,
     pub email: Option<String>,
     pub password: Option<String>,
+}
+
+/// The `users` row as the Canvas user JSON needs it.
+///
+/// The columns are the ones migration 0264 added on top of the port's own
+/// `users` columns: the name parts Canvas derives from the sortable name
+/// (`app/models/user.rb:1014`, `:1018`), the locale columns
+/// (`app/models/user.rb:3900`, `lib/api/v1/user.rb:135`), the time zone
+/// (`lib/api/v1/user.rb:176`) and the permissions map
+/// (`lib/api/v1/user.rb:159`).
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct CanvasUserRow {
+    id: i64,
+    name: String,
+    email: String,
+    role: String,
+    created_at: DateTime<Utc>,
+    sortable_name: String,
+    short_name: String,
+    first_name: Option<String>,
+    last_name: Option<String>,
+    locale: Option<String>,
+    effective_locale: Option<String>,
+    time_zone: Option<String>,
+    permissions: Option<serde_json::Value>,
+}
+
+/// Canvas `users#api_show` payload.
+///
+/// Canvas renders the user with `user_json` (`lib/api/v1/user.rb:53`) and the
+/// include list of `api_show_includes`
+/// (`app/controllers/users_controller.rb:3227`): first_name, last_name,
+/// locale, avatar_url, permissions, email and effective_locale. The port keeps
+/// the `email`/`role` keys it always answered with.
+#[derive(Debug, Clone, Serialize)]
+pub struct CanvasUserShow {
+    pub id: i64,
+    pub name: String,
+    pub email: String,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+    pub sortable_name: String,
+    pub short_name: String,
+    pub first_name: String,
+    pub last_name: String,
+    pub locale: Option<String>,
+    pub effective_locale: String,
+    pub permissions: serde_json::Value,
+}
+
+/// Canvas `users#update` payload.
+///
+/// The update action renders the user with the include list
+/// `locale avatar_url email time_zone`
+/// (`app/controllers/users_controller.rb:2340`), so it carries the time zone
+/// and not the name parts or the permissions map.
+#[derive(Debug, Clone, Serialize)]
+pub struct CanvasUserUpdate {
+    pub id: i64,
+    pub name: String,
+    pub email: String,
+    pub role: String,
+    pub created_at: DateTime<Utc>,
+    pub sortable_name: String,
+    pub short_name: String,
+    pub locale: Option<String>,
+    pub time_zone: Option<String>,
+}
+
+/// The permissions map Canvas computes for a user (`lib/api/v1/user.rb:159`).
+///
+/// The port has no avatar service, so `can_update_avatar` is false, and a user
+/// may always change their own name.
+fn default_user_permissions() -> serde_json::Value {
+    serde_json::json!({
+        "can_update_name": true,
+        "can_update_avatar": false,
+        "limit_parent_app_web_access": false,
+    })
+}
+
+/// Canvas `User.name_parts` (`app/models/user.rb:1027`) for the two shapes the
+/// port stores: "Surname, Given" splits on the comma, "Given Surname" puts
+/// the last word in the surname.
+fn user_name_parts(sortable_name: &str) -> (String, String) {
+    let name = sortable_name.trim();
+    match name.split_once(',') {
+        Some((surname, given)) => (given.trim().to_string(), surname.trim().to_string()),
+        None => {
+            let mut parts: Vec<&str> = name.split_whitespace().collect();
+            if parts.len() > 1 {
+                let surname = parts.pop().unwrap_or_default().to_string();
+                (parts.join(" "), surname)
+            } else {
+                (name.to_string(), String::new())
+            }
+        }
+    }
 }
 
 /// Pagination query parameters.
@@ -265,7 +363,7 @@ pub struct UserFileResponse {
 
 /// Request body for POST /users/{userId}/files. Canvas names the upload
 /// `name`; `filename` is accepted as an alias used elsewhere in this API.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct CreateUserFileRequest {
     pub name: Option<String>,
     pub filename: Option<String>,
@@ -286,14 +384,14 @@ pub struct UserColorResponse {
 }
 
 /// Body for PUT /users/{userId}/colors/{context}.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct SetCustomColorRequest {
     pub hexcode: Option<String>,
 }
 
 /// Body for PUT /users/{userId}/dashboard_positions. Canvas form params send
 /// string values, JSON clients send numbers, so values stay untyped here.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct UpdateDashboardPositionsRequest {
     pub dashboard_positions: BTreeMap<String, serde_json::Value>,
 }
@@ -851,9 +949,10 @@ pub fn router() -> Router<AppState> {
             "/users/self/profile",
             get(get_self_profile).put(update_self_profile),
         )
-        .route("/users/{id}", get(get_user))
-        .route("/users/{id}", put(update_user))
-        .route("/users/{id}", delete(delete_user))
+        .route(
+            "/users/{id}",
+            get(get_user).put(update_user).delete(delete_user),
+        )
         .route("/users/{id}/profile", get(get_user_profile))
         // Canvas users_controller#settings: `self` resolves to the caller.
         .route(
@@ -943,8 +1042,10 @@ pub fn router() -> Router<AppState> {
         // observers (who watches this user), observees (who this user watches),
         // create/show/update/delete observee links.
         .route("/users/{userId}/observers", get(list_observers))
-        .route("/users/{userId}/observees", get(list_observees))
-        .route("/users/{userId}/observees", post(create_observee))
+        .route(
+            "/users/{userId}/observees",
+            get(list_observees).post(create_observee),
+        )
         .route(
             "/users/{userId}/observees/{observeeId}",
             get(get_observee)
@@ -1031,24 +1132,18 @@ async fn list_users(
 }
 
 /// GET /users/self — get the current authenticated user (alias for /auth/me behavior).
-/// Queries the users table directly so sortable_name and the canonical
-/// UserResponse shape (matching Canvas API v1) are returned.
+///
+/// Canvas answers `users/self` with the same action as `users/:id`
+/// (`users#api_show`), so the payload is the Canvas user JSON.
 async fn get_self(
     State(state): State<AppState>,
     auth: AuthUser,
-) -> Result<Json<UserResponse>, ApiError> {
-    let user: Option<UserResponse> = sqlx::query_as(
-        r#"
-        SELECT id, name, COALESCE(sortable_name, name) AS sortable_name, email, role, created_at
-        FROM users WHERE id = $1
-        "#,
-    )
-    .bind(auth.id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(ApiError::from)?;
+) -> Result<Json<CanvasUserShow>, ApiError> {
+    let row = load_canvas_user(&state.db, auth.id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
 
-    user.ok_or(ApiError::NotFound).map(Json)
+    Ok(Json(canvas_user_show(&row)))
 }
 
 /// GET /users/self/profile — the caller's Canvas-shaped profile.
@@ -1078,10 +1173,79 @@ async fn get_user_profile(
 async fn update_self_profile(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(payload): Json<UpdateProfileRequest>,
+    ApiJson(payload): ApiJson<UpdateProfileRequest>,
 ) -> Result<Json<ProfileResponse>, ApiError> {
     validate_profile_update(&payload)?;
     upsert_profile(&state.db, auth.id, &payload).await.map(Json)
+}
+
+/// Read the `users` row the way the Canvas user JSON needs it.
+///
+/// The profile join supplies the time zone the port keeps on `user_profiles`
+/// (Canvas keeps it on the `users` row, `lib/api/v1/user.rb:176`).
+async fn load_canvas_user(pool: &PgPool, user_id: i64) -> Result<Option<CanvasUserRow>, ApiError> {
+    let row: Option<CanvasUserRow> = sqlx::query_as(
+        r#"
+        SELECT u.id, u.name, u.email, u.role, u.created_at,
+               COALESCE(u.sortable_name, u.name) AS sortable_name,
+               COALESCE(u.short_name, u.name) AS short_name,
+               u.first_name, u.last_name, u.locale, u.effective_locale,
+               COALESCE(u.time_zone, p.time_zone) AS time_zone,
+               u.permissions
+        FROM users u
+        LEFT JOIN user_profiles p ON p.user_id = u.id
+        WHERE u.id = $1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(row)
+}
+
+/// The Canvas `users#api_show` payload of a user row.
+fn canvas_user_show(row: &CanvasUserRow) -> CanvasUserShow {
+    let (first_name, last_name) = match (row.first_name.clone(), row.last_name.clone()) {
+        (Some(first), Some(last)) => (first, last),
+        _ => user_name_parts(&row.sortable_name),
+    };
+
+    CanvasUserShow {
+        id: row.id,
+        name: row.name.clone(),
+        email: row.email.clone(),
+        role: row.role.clone(),
+        created_at: row.created_at,
+        sortable_name: row.sortable_name.clone(),
+        short_name: row.short_name.clone(),
+        first_name,
+        last_name,
+        locale: row.locale.clone(),
+        effective_locale: row
+            .effective_locale
+            .clone()
+            .unwrap_or_else(|| "en".to_string()),
+        permissions: row
+            .permissions
+            .clone()
+            .unwrap_or_else(default_user_permissions),
+    }
+}
+
+/// The Canvas `users#update` payload of a user row.
+fn canvas_user_update(row: &CanvasUserRow) -> CanvasUserUpdate {
+    CanvasUserUpdate {
+        id: row.id,
+        name: row.name.clone(),
+        email: row.email.clone(),
+        role: row.role.clone(),
+        created_at: row.created_at,
+        sortable_name: row.sortable_name.clone(),
+        short_name: row.short_name.clone(),
+        locale: row.locale.clone(),
+        time_zone: row.time_zone.clone(),
+    }
 }
 
 /// GET /users/{id} — get a single user (self or admin only).
@@ -1089,25 +1253,18 @@ async fn get_user(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(user_id): Path<i64>,
-) -> Result<Json<UserResponse>, ApiError> {
+) -> Result<Json<CanvasUserShow>, ApiError> {
     let role = get_user_role(&state.db, auth.id).await?;
     let role = role.unwrap_or_else(|| "student".to_string());
     if !is_self(auth.id, user_id) && !is_admin(&role) {
         return Err(ApiError::Forbidden);
     }
 
-    let user: Option<UserResponse> = sqlx::query_as(
-        r#"
-        SELECT id, name, COALESCE(sortable_name, name) AS sortable_name, email, role, created_at
-        FROM users WHERE id = $1
-        "#,
-    )
-    .bind(user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(ApiError::from)?;
+    let row = load_canvas_user(&state.db, user_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
 
-    user.ok_or(ApiError::NotFound).map(Json)
+    Ok(Json(canvas_user_show(&row)))
 }
 
 /// PUT /users/{id} — update a user (self or admin).
@@ -1117,8 +1274,8 @@ async fn update_user(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(user_id): Path<i64>,
-    Json(payload): Json<UpdateUserRequest>,
-) -> Result<Json<UserResponse>, ApiError> {
+    ApiJson(payload): ApiJson<UpdateUserRequest>,
+) -> Result<Json<CanvasUserUpdate>, ApiError> {
     let auth_role = get_user_role(&state.db, auth.id).await?;
     let auth_role = auth_role.unwrap_or_else(|| "student".to_string());
     if !is_self(auth.id, user_id) && !is_admin(&auth_role) {
@@ -1158,41 +1315,46 @@ async fn update_user(
     let name = payload.name.clone().unwrap_or(existing.name);
 
     // Build the update query — handle password_hash separately.
-    let updated: UserResponse = if let Some(ref pw) = payload.password {
+    if let Some(ref pw) = payload.password {
         let hash = hash_password(pw).map_err(ApiError::BadRequest)?;
-        sqlx::query_as(
+        sqlx::query(
             r#"
             UPDATE users
             SET name = $2, email = $3, password_hash = $4, updated_at = now()
             WHERE id = $1
-            RETURNING id, name, sortable_name, email, role, created_at
             "#,
         )
         .bind(user_id)
         .bind(&name)
         .bind(&email)
         .bind(&hash)
-        .fetch_one(&state.db)
+        .execute(&state.db)
         .await
-        .map_err(ApiError::from)?
+        .map_err(ApiError::from)?;
     } else {
-        sqlx::query_as(
+        sqlx::query(
             r#"
             UPDATE users
             SET name = $2, email = $3, updated_at = now()
             WHERE id = $1
-            RETURNING id, name, sortable_name, email, role, created_at
             "#,
         )
         .bind(user_id)
         .bind(&name)
         .bind(&email)
-        .fetch_one(&state.db)
+        .execute(&state.db)
         .await
-        .map_err(ApiError::from)?
-    };
+        .map_err(ApiError::from)?;
+    }
 
-    Ok(Json(updated))
+    // Canvas answers the update with the user JSON of the update include list
+    // (`locale avatar_url email time_zone`,
+    // app/controllers/users_controller.rb:2340).
+    let row = load_canvas_user(&state.db, user_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    Ok(Json(canvas_user_update(&row)))
 }
 
 /// DELETE /users/{id} — delete a user (admin only).
@@ -1262,7 +1424,7 @@ async fn update_user_settings(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(raw_user_id): Path<String>,
-    Json(payload): Json<UpdateUserSettingsRequest>,
+    ApiJson(payload): ApiJson<UpdateUserSettingsRequest>,
 ) -> Result<Json<UserSettings>, ApiError> {
     let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
     upsert_user_settings(&state.db, user_id, &payload)
@@ -1364,7 +1526,7 @@ async fn create_user_file(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(raw_user_id): Path<String>,
-    Json(payload): Json<CreateUserFileRequest>,
+    ApiJson(payload): ApiJson<CreateUserFileRequest>,
 ) -> Result<Json<UserFileResponse>, ApiError> {
     let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
 
@@ -1447,7 +1609,7 @@ async fn create_account_user(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(account_id): Path<i64>,
-    Json(payload): Json<CreateAccountUserRequest>,
+    ApiJson(payload): ApiJson<CreateAccountUserRequest>,
 ) -> Result<Json<UserResponse>, ApiError> {
     let account: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM accounts WHERE id = $1")
         .bind(account_id)
@@ -1507,16 +1669,23 @@ async fn create_account_user(
         .password
         .unwrap_or_else(|| SaltString::generate(&mut OsRng).as_str().to_string());
     let hash = hash_password(&password).map_err(ApiError::BadRequest)?;
+    // Canvas derives the two name parts from the sortable name
+    // (app/models/user.rb:1014 and :1018) and falls back to the name for the
+    // short name (app/models/user.rb:1213).
+    let (first_name, last_name) = user_name_parts(&sortable_name);
 
     let user: UserResponse = sqlx::query_as(
         r#"
-        INSERT INTO users (name, sortable_name, email, password_hash, role)
-        VALUES ($1, $2, $3, $4, 'student')
+        INSERT INTO users (name, sortable_name, short_name, first_name, last_name,
+                           email, password_hash, role)
+        VALUES ($1, $2, $1, $3, $4, $5, $6, 'student')
         RETURNING id, name, sortable_name, email, role, created_at
         "#,
     )
     .bind(&name)
     .bind(&sortable_name)
+    .bind(&first_name)
+    .bind(&last_name)
     .bind(&email)
     .bind(&hash)
     .fetch_one(&state.db)
@@ -1562,7 +1731,7 @@ async fn set_custom_color(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((raw_user_id, context)): Path<(String, String)>,
-    Json(payload): Json<SetCustomColorRequest>,
+    ApiJson(payload): ApiJson<SetCustomColorRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
     if !asset_exists(&state.db, &context).await? {
@@ -1612,7 +1781,7 @@ async fn set_dashboard_positions(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(raw_user_id): Path<String>,
-    Json(payload): Json<UpdateDashboardPositionsRequest>,
+    ApiJson(payload): ApiJson<UpdateDashboardPositionsRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
 
@@ -1653,6 +1822,52 @@ async fn set_dashboard_positions(
     ))
 }
 
+/// Whether the actor may terminate the target user's sessions.
+///
+/// Canvas `users#terminate_sessions` (`app/controllers/users_controller.rb:2439`)
+/// runs `authorized_action(user, @current_user, :terminate_sessions)`, which
+/// resolves through the *User* policy (`app/models/user.rb:1529`):
+///
+/// ```ruby
+/// given { |user| check_accounts_right?(user, :manage_user_logins) }
+/// can %i[read read_reports read_profile api_show_user terminate_sessions read_files]
+/// ```
+///
+/// `terminate_sessions` is deliberately **not** in the `given { |user| user == self }`
+/// block, so acting on yourself is not enough. `check_accounts_right?` looks at
+/// the accounts the *target* belongs to, and `manage_user_logins` is declared
+/// `account_only: :root`
+/// (`config/initializers/permissions_registry.rb:500`), so only a root account
+/// can grant it: the actor has to be an admin of a root account the target
+/// belongs to as well.
+async fn can_terminate_sessions(
+    pool: &PgPool,
+    actor_id: i64,
+    target_id: i64,
+) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1
+        FROM account_users target_au
+        JOIN accounts acc ON acc.id = target_au.account_id
+        JOIN account_users actor_au ON actor_au.account_id = acc.id
+        WHERE target_au.user_id = $2
+          AND target_au.workflow_state = 'active'
+          AND actor_au.user_id = $1
+          AND actor_au.workflow_state = 'active'
+          AND acc.parent_account_id IS NULL
+          AND acc.workflow_state <> 'deleted'
+        LIMIT 1
+        "#,
+    )
+    .bind(actor_id)
+    .bind(target_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(ApiError::from)?;
+    Ok(row.is_some())
+}
+
 /// DELETE /users/{userId}/sessions — Canvas users#terminate_sessions: stamps
 /// `last_logged_out` and expires every active access token for the user.
 async fn terminate_sessions(
@@ -1660,7 +1875,11 @@ async fn terminate_sessions(
     auth: AuthUser,
     Path(raw_user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = authorize_settings(&state, &auth, &raw_user_id).await?;
+    let user_id = resolve_path_user(&raw_user_id, auth.id)?;
+    ensure_user_exists(&state.db, user_id).await?;
+    if !can_terminate_sessions(&state.db, auth.id, user_id).await? {
+        return Err(ApiError::Forbidden);
+    }
 
     sqlx::query("UPDATE users SET last_logged_out = now(), updated_at = now() WHERE id = $1")
         .bind(user_id)
@@ -2126,7 +2345,13 @@ async fn ignore_todo_item(
         purpose.as_str(),
         "grading" | "submitting" | "reviewing" | "moderation"
     ) {
-        return Err(ApiError::BadRequest("unknown purpose".into()));
+        // Canvas answers an unknown purpose with `{"ignored":false}` — not
+        // with the generic `errors` array
+        // (`app/controllers/users_controller.rb:1244-1246`).
+        return Err(ApiError::canvas_json(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "ignored": false }),
+        ));
     }
     let Some((asset_type, asset_id)) = split_asset_string(&asset_string) else {
         return Err(ApiError::NotFound);
@@ -2321,7 +2546,7 @@ async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, ApiError
 async fn create_self_registered_user(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
-    Json(payload): Json<SelfRegistrationRequest>,
+    ApiJson(payload): ApiJson<SelfRegistrationRequest>,
 ) -> Result<Json<UserResponse>, ApiError> {
     let root = root_account_id(&state.db, account_id).await?;
     if !self_registration_allowed(
@@ -2331,7 +2556,12 @@ async fn create_self_registered_user(
     )
     .await?
     {
-        return Err(ApiError::Forbidden);
+        // Canvas renders an empty JSON object for this refusal
+        // (app/controllers/users_controller.rb:3101).
+        return Err(ApiError::canvas_json(
+            StatusCode::FORBIDDEN,
+            serde_json::json!({}),
+        ));
     }
 
     // Canvas' require_self_registration falls back to the root account when
@@ -2378,16 +2608,23 @@ async fn create_self_registered_user(
         .password
         .unwrap_or_else(|| SaltString::generate(&mut OsRng).as_str().to_string());
     let hash = hash_password(&password).map_err(ApiError::BadRequest)?;
+    // Canvas derives the two name parts from the sortable name
+    // (app/models/user.rb:1014 and :1018) and falls back to the name for the
+    // short name (app/models/user.rb:1213).
+    let (first_name, last_name) = user_name_parts(&sortable_name);
 
     let user: UserResponse = sqlx::query_as(
         r#"
-        INSERT INTO users (name, sortable_name, email, password_hash, role)
-        VALUES ($1, $2, $3, $4, 'student')
+        INSERT INTO users (name, sortable_name, short_name, first_name, last_name,
+                           email, password_hash, role)
+        VALUES ($1, $2, $1, $3, $4, $5, $6, 'student')
         RETURNING id, name, sortable_name, email, role, created_at
         "#,
     )
     .bind(&name)
     .bind(&sortable_name)
+    .bind(&first_name)
+    .bind(&last_name)
     .bind(&email)
     .bind(&hash)
     .fetch_one(&state.db)
@@ -2453,7 +2690,15 @@ async fn expire_mobile_sessions_impl(
 /// fires: 400 `{"message": "Access token required"}`. This is a faithful
 /// pin, not a stub — the star-lms API has no access-token auth path.
 async fn pandata_events_token(_auth: AuthUser) -> Result<Json<serde_json::Value>, ApiError> {
-    Err(ApiError::BadRequest("Access token required".into()))
+    // Canvas answers a request without an access token with
+    // `{"message":"Access token required"}` — 400
+    // (`app/controllers/users_controller.rb:2953`). A request *with* an
+    // access token whose developer key is not allowed gets
+    // `{"message":"Developer key not authorized"}` — 403 (same place, 2955).
+    Err(ApiError::canvas_message(
+        StatusCode::BAD_REQUEST,
+        "Access token required",
+    ))
 }
 
 /// POST /users/{id}/clear_cache — Canvas UsersController#clear_cache.
@@ -2643,14 +2888,14 @@ type ObserveeRow = (
 );
 
 /// Observer link created by POST /users/{userId}/observees.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct CreateObserveeRequest {
     pub user_id: i64,
     pub course_id: Option<i64>,
 }
 
 /// Course-scoped update for PUT /users/{userId}/observees/{observeeId}.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct UpdateObserveeRequest {
     pub course_id: Option<i64>,
 }
@@ -2791,7 +3036,7 @@ async fn create_observee(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(user_id): Path<i64>,
-    Json(payload): Json<CreateObserveeRequest>,
+    ApiJson(payload): ApiJson<CreateObserveeRequest>,
 ) -> Result<Json<ObserveeResponse>, ApiError> {
     ensure_user_exists(&state.db, user_id).await?;
     authorize_observee_access(&state, &auth, user_id).await?;
@@ -2942,7 +3187,7 @@ async fn update_observee(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((user_id, observee_id)): Path<(i64, i64)>,
-    Json(payload): Json<UpdateObserveeRequest>,
+    ApiJson(payload): ApiJson<UpdateObserveeRequest>,
 ) -> Result<Json<ObserveeResponse>, ApiError> {
     ensure_user_exists(&state.db, user_id).await?;
     authorize_observee_access(&state, &auth, user_id).await?;
@@ -3094,7 +3339,7 @@ async fn set_text_editor_preference(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(raw_user_id): Path<String>,
-    Json(payload): Json<TextEditorPreferenceRequest>,
+    ApiJson(payload): ApiJson<TextEditorPreferenceRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user_id = authorize_preference_update(&state, &auth, &raw_user_id).await?;
 
@@ -3128,18 +3373,22 @@ async fn set_files_ui_version_preference(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(raw_user_id): Path<String>,
-    Json(payload): Json<FilesUiVersionRequest>,
+    ApiJson(payload): ApiJson<FilesUiVersionRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user_id = authorize_preference_update(&state, &auth, &raw_user_id).await?;
 
+    // Canvas renders this failure with a single `message` key of its own
+    // (`app/controllers/users_controller.rb:2086`).
     let Some(version) = payload.files_ui_version.as_deref() else {
-        return Err(ApiError::BadRequest(
-            "Invalid files_ui_version provided".into(),
+        return Err(ApiError::canvas_message(
+            StatusCode::BAD_REQUEST,
+            "Invalid files_ui_version provided",
         ));
     };
     if !matches!(version, "v1" | "v2") {
-        return Err(ApiError::BadRequest(
-            "Invalid files_ui_version provided".into(),
+        return Err(ApiError::canvas_message(
+            StatusCode::BAD_REQUEST,
+            "Invalid files_ui_version provided",
         ));
     }
     let value = serde_json::json!(version);
@@ -3219,7 +3468,7 @@ async fn set_new_user_tutorial_status(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((raw_user_id, page_name)): Path<(String, String)>,
-    Json(payload): Json<TutorialStatusRequest>,
+    ApiJson(payload): ApiJson<TutorialStatusRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user_id = resolve_path_user(&raw_user_id, auth.id)?;
     ensure_user_exists(&state.db, user_id).await?;
@@ -3227,7 +3476,12 @@ async fn set_new_user_tutorial_status(
         return Err(ApiError::Unauthorized);
     }
     if !TUTORIAL_PAGE_NAMES.contains(&page_name.as_str()) {
-        return Err(ApiError::BadRequest("Invalid Page Name Provided".into()));
+        // Canvas renders this failure with a single `message` key of its own
+        // (`app/controllers/users_controller.rb:1900`).
+        return Err(ApiError::canvas_message(
+            StatusCode::BAD_REQUEST,
+            "Invalid Page Name Provided",
+        ));
     }
     // The deserializer already applies Canvas' value_to_boolean coercion.
     let collapsed = payload.collapsed.unwrap_or(false);
@@ -3709,8 +3963,11 @@ async fn split_user(
         password_hash: from_hash,
     }) = merge
     else {
-        return Err(ApiError::BadRequest(
-            "Nothing to split off of this user".into(),
+        // Canvas renders this failure with a single `message` key of its own
+        // (`app/controllers/users_controller.rb:2835`).
+        return Err(ApiError::canvas_message(
+            StatusCode::BAD_REQUEST,
+            "Nothing to split off of this user",
         ));
     };
 
@@ -3747,15 +4004,19 @@ async fn split_user(
         None => restored_name.clone(),
     });
     let restored_hash = from_hash.unwrap_or_default();
+    let (restored_first, restored_last) = user_name_parts(&restored_sortable);
     let restored_id: i64 = sqlx::query_scalar(
         r#"
-        INSERT INTO users (name, sortable_name, email, password_hash, role)
-        VALUES ($1, $2, $3, $4, 'student')
+        INSERT INTO users (name, sortable_name, short_name, first_name, last_name,
+                           email, password_hash, role)
+        VALUES ($1, $2, $1, $3, $4, $5, $6, 'student')
         RETURNING id
         "#,
     )
     .bind(&restored_name)
     .bind(&restored_sortable)
+    .bind(&restored_first)
+    .bind(&restored_last)
     .bind(&restored_email)
     .bind(&restored_hash)
     .fetch_one(&mut *tx)

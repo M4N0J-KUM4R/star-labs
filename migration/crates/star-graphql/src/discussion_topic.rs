@@ -40,16 +40,16 @@ use crate::{db_err, decode_cursor, encode_cursor, PageInfo, DEFAULT_PAGE_SIZE, M
 /// Row of the `discussion_topics` table (migrations 0017 + 0105). `pinned` is
 /// not selected: it has no Canvas GraphQL counterpart (REST-only field).
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct TopicRow {
-    id: i64,
-    course_id: i64,
-    title: String,
-    message: Option<String>,
-    workflow_state: String,
-    discussion_type: String,
-    locked: bool,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+pub(crate) struct TopicRow {
+    pub(crate) id: i64,
+    pub(crate) course_id: i64,
+    pub(crate) title: String,
+    pub(crate) message: Option<String>,
+    pub(crate) workflow_state: String,
+    pub(crate) discussion_type: String,
+    pub(crate) locked: bool,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 // ---------------------------------------------------------------------------
@@ -61,8 +61,12 @@ struct TopicRow {
 /// `id`, `contextId`, `contextType`, `title`, `message`, `published`,
 /// `locked`, `discussionType`, `createdAt`, `updatedAt`.
 #[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "Discussion")]
 pub struct DiscussionTopic {
     pub id: ID,
+    /// Canvas `Discussion._id` — the legacy canvas id.
+    #[graphql(name = "_id")]
+    pub _id: ID,
     /// Canvas `contextId` — the discussion's context. star-lms topics are
     /// always course-scoped, so this is the course id.
     pub context_id: ID,
@@ -86,6 +90,7 @@ impl From<TopicRow> for DiscussionTopic {
     fn from(row: TopicRow) -> Self {
         DiscussionTopic {
             id: ID(row.id.to_string()),
+            _id: ID(row.id.to_string()),
             context_id: ID(row.course_id.to_string()),
             context_type: "Course".to_string(),
             title: row.title,
@@ -177,4 +182,29 @@ pub(crate) async fn fetch_discussion_topic_page(
             end_cursor,
         },
     })
+}
+
+// ---------------------------------------------------------------------------
+// Single-record fetch (Canvas `Query.node` / `Query.legacyNode`)
+// ---------------------------------------------------------------------------
+
+/// Canvas `Query.node(type: Discussion)` — a discussion topic by legacy id.
+pub(crate) async fn fetch_discussion_topic(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<DiscussionTopic>, async_graphql::Error> {
+    let row: Option<TopicRow> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, title, message, workflow_state, discussion_type,
+               locked, created_at, updated_at
+        FROM discussion_topics
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(Into::into))
 }

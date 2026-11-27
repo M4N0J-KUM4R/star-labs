@@ -1,0 +1,176 @@
+name: Canvas parity replay
+
+# Behavioural parity gate.
+#
+# `rust-anything app record` captured what the original Canvas answers for
+# every recorded request; `rust-anything app replay` sends the same requests
+# to the Rust build and diffs the answers. The recorded cases live in
+# `migration/rust/app-cases/http/`, and `replay-report.md` is committed.
+#
+# The gate is the documented CI pattern from the tool itself: commit the
+# report, replay, then `git diff --exit-code` on it. A change in what passes
+# — better or worse — fails CI until the report is updated with it. That is
+# what stops a port from silently losing behaviour.
+#
+# The oracle (a booted Canvas) is NOT needed here: the recorded cases are
+# the artifact of having run it once. This job only replays.
+#
+# Auth: the corpus stores `Authorization = "Bearer __REPLAY_TOKEN__"`.
+# Canvas answered the recorded requests with an access token, and the port
+# resolves the caller from the `access_tokens` row the same way, so this job
+# seeds that row (access token 7, developer key 1 — the ids the recorded
+# `x-canvas-meta` header carries) and injects the token into the case files.
+# No token is ever committed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'migration/**'
+      - '.github/workflows/canvas-replay.yml'
+  pull_request:
+    paths:
+      - 'migration/**'
+      - '.github/workflows/canvas-replay.yml'
+  merge_group:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_BACKTRACE: 1
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: migration
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: canvas
+          POSTGRES_PASSWORD: canvas
+          POSTGRES_DB: canvas_replay
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U canvas -d canvas_replay"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install rust-anything
+        run: cargo install rust-anything --locked
+
+      - name: Build the migration binary
+        run: cargo build --locked --release --bin star-http
+
+      - name: Prepare the replay database
+        env:
+          DATABASE_URL: postgres://canvas:canvas@localhost:5432/canvas_replay
+          # The port keys the access-token hash with its one app secret, the
+          # way Canvas keys `crypted_token` with its encryption key.
+          STAR_JWT_SECRET: ci-replay-secret-not-a-real-key
+          STAR_REPLAY_TOKEN: ci-replay-access-token-not-a-real-token
+          STAR_PORT: "8099"
+        run: |
+          # The schema comes from the binary itself: it runs star_db::MIGRATOR
+          # on start. Start it once so the migrations are applied, wait for it
+          # to answer, and stop it again.
+          ./target/release/star-http &
+          server_pid=$!
+          for _ in $(seq 1 180); do
+            if curl -sf "http://localhost:$STAR_PORT/health" > /dev/null; then break; fi
+            sleep 1
+          done
+          kill "$server_pid" || true
+          wait "$server_pid" 2>/dev/null || true
+          # The seed rows the recorded cases need (the acting user, the
+          # course, the account, the access token and its developer key) are
+          # created here so the recorded ids resolve.
+          python3 tools/parity/seed_replay_db.py
+
+      - name: Inject the replay token
+        env:
+          STAR_JWT_SECRET: ci-replay-secret-not-a-real-key
+          STAR_REPLAY_TOKEN: ci-replay-access-token-not-a-real-token
+          # Canvas' content-security-policy names its configured domain
+          # (config/domain.yml). The recorded cases carry that host, so the
+          # port must be told the same domain or every case mismatches.
+          STAR_CANVAS_DOMAIN: 54.252.48.186
+        run: |
+          python3 tools/parity/token_tool.py inject rust/app-cases/http \
+            "$STAR_REPLAY_TOKEN"
+
+      - name: Replay the recorded Canvas cases
+        id: replay
+        env:
+          DATABASE_URL: postgres://canvas:canvas@localhost:5432/canvas_replay
+          STAR_JWT_SECRET: ci-replay-secret-not-a-real-key
+          STAR_CANVAS_DOMAIN: 54.252.48.186
+          STAR_PORT: "8099"
+        run: |
+          set +e
+          rust-anything app replay . --build "target/release/star-http"
+          status=$?
+          set -e
+          echo "exit_code=$status" >> "$GITHUB_OUTPUT"
+          cat rust/app-cases/replay-report.md >> "$GITHUB_STEP_SUMMARY" || true
+
+      - name: Restore the placeholder token and the recorded meta
+        if: always()
+        run: |
+          python3 tools/parity/token_tool.py restore rust/app-cases/http
+          python3 tools/parity/meta_tool.py restore rust/app-cases/http
+
+      - name: Check the stable x-canvas-meta fields
+        if: always()
+        env:
+          DATABASE_URL: postgres://canvas:canvas@localhost:5432/canvas_replay
+          STAR_JWT_SECRET: ci-replay-secret-not-a-real-key
+          STAR_CANVAS_DOMAIN: 54.252.48.186
+        run: |
+          # The meta header carries process diagnostics (bytes, cpu, db time)
+          # that no other process can reproduce, so the replay compares the
+          # header as a whole-value wildcard and this check compares the
+          # contract fields inside it: at, dk, o, n, t, i, rlr.
+          set +e
+          python3 tools/parity/meta_tool.py check rust/app-cases/http \
+            --url http://127.0.0.1:8099
+          echo "meta differences: $?" >> "$GITHUB_STEP_SUMMARY"
+          set -e
+
+      - name: Upload the replay report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: replay-report
+          path: migration/rust/app-cases/replay-report.md
+
+      - name: Require the committed report to match this run
+        run: |
+          if [ -f rust/app-cases/replay-report.md ]; then
+            git diff --exit-code -- rust/app-cases/replay-report.md
+          else
+            echo "::warning::no committed replay-report.md to compare against"
+          fi
+
+      - name: Fail when any case regressed
+        if: steps.replay.outputs.exit_code != '0'
+        run: |
+          echo "::error::replay reported failing cases (exit ${{ steps.replay.outputs.exit_code }})"
+          exit 1

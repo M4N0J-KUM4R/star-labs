@@ -1,4 +1,4 @@
-//! star-files domain crate — file metadata tracking (no S3/upload) and folders.
+//! star-files domain crate — file metadata, file bytes and folders.
 //!
 //! Canvas parity (app/models/attachment.rb, lib/api/v1/attachment.rb):
 //! - filename: stored name on disk (unencoded)
@@ -11,8 +11,9 @@
 //!   (Canvas course root folder is named 'course files')
 //! - folder_id: folder row the file belongs to (migration 0036)
 //!
-//! Responses lead with display_name (Canvas behavior). Actual upload/S3
-//! storage is explicitly out of scope — POST records metadata only.
+//! Responses lead with display_name (Canvas behavior). The bytes live in the
+//! store behind `star-storage`; a request without bytes records metadata
+//! only.
 //!
 //! Folders mirror Canvas folders_controller.rb / app/models/folder.rb:
 //! - course root folder is created on demand and named 'course files'
@@ -46,6 +47,19 @@
 //!   `{ message, file_ids }` with 200 (Canvas never sends 204 here).
 //! - GET /courses/{courseId}/content_licenses mirrors licenses: the fixed
 //!   UsageRights.licenses list (lib/content_licenses.rb).
+//!
+//! File bytes (star-storage):
+//! - The bytes of a file live in the store behind `star-storage`; the row
+//!   records the key they live under (`files.storage_key`), their digest
+//!   (`files.md5`) and their state (`files.file_state`).
+//! - POST /courses/{courseId}/files accepts a multipart body and stores the
+//!   bytes; a JSON or form-encoded body keeps the metadata-only behaviour.
+//! - GET /files/{id}/download (and /files/{id}/content) serves the bytes with
+//!   the content type, the length and the disposition Canvas sends
+//!   (`app/helpers/attachment_helper.rb:228`).
+//! - POST /files/{id}/attachment_jwt mints the short-lived token that lets a
+//!   browser fetch a file without an API token
+//!   (`app/models/attachment.rb:2159`).
 
 use axum::{
     extract::{Path, Query, State},
@@ -59,11 +73,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::PgPool;
 
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 
 use star_auth::AuthUser;
 
+mod content;
 mod folders_api;
+mod upload;
 
 // ─── folder constants ──────────────────────────────────────────────────────
 
@@ -83,6 +99,15 @@ const MIXED_LIST_PER_PAGE: i64 = 25;
 // ─── auth helpers ───────────────────────────────────────────────────────────
 
 /// Check if user is enrolled in the course or is admin.
+/// Canvas' course-membership check for reading a context's files/folders.
+///
+/// Canvas' `Course#active_enrollment_allows` runs over
+/// `enrollments.for_user(user).active_or_pending_by_date`
+/// (`app/models/course.rb:2321`), and Canvas' `active` scope is
+/// `workflow_state <> 'deleted'` (`app/models/enrollment.rb:293`) — a
+/// *completed* enrollment (the state Canvas' `DELETE /enrollments/:id`
+/// leaves behind, `app/models/enrollment.rb:957`) still counts as course
+/// membership. Only a deleted enrollment loses the membership.
 async fn user_enrolled_or_admin(
     db: &PgPool,
     user_id: i64,
@@ -96,6 +121,7 @@ async fn user_enrolled_or_admin(
         r#"SELECT EXISTS(
             SELECT 1 FROM enrollments
             WHERE user_id = $1 AND course_id = $2
+              AND workflow_state <> 'deleted'
         )"#,
     )
     .bind(user_id)
@@ -108,6 +134,11 @@ async fn user_enrolled_or_admin(
 /// Check if user has any granular file permission (manage_files_add/edit/delete)
 /// — Canvas RoleOverride::GRANULAR_FILE_PERMISSIONS.
 /// Returns true for admin (full rights) or teacher/TA/designer (manage files).
+///
+/// Canvas grants these through `active_enrollment_allows`, which runs over
+/// `active_or_pending_by_date` (`app/models/enrollment.rb:1438`) — that scope
+/// does *not* list a completed enrollment, so a concluded enrollment keeps the
+/// read rights but loses the course-admin ones.
 async fn user_has_granular_file_perm(
     db: &PgPool,
     user_id: i64,
@@ -122,6 +153,7 @@ async fn user_has_granular_file_perm(
             SELECT 1 FROM enrollments
             WHERE user_id = $1 AND course_id = $2
               AND role IN ('teacher', 'ta', 'designer')
+              AND workflow_state IN ('active', 'invited')
         )"#,
     )
     .bind(user_id)
@@ -132,6 +164,11 @@ async fn user_has_granular_file_perm(
 }
 
 /// Check if user is the teacher of the course or is admin.
+///
+/// Same scope as [`user_has_granular_file_perm`]: Canvas' course-admin
+/// permissions need an enrollment in `active_or_pending_by_date`
+/// (`app/models/enrollment.rb:1438`), so a concluded enrollment does not
+/// count.
 async fn user_teacher_of_course(
     db: &PgPool,
     user_id: i64,
@@ -145,6 +182,7 @@ async fn user_teacher_of_course(
         r#"SELECT EXISTS(
             SELECT 1 FROM enrollments
             WHERE user_id = $1 AND course_id = $2 AND role = 'teacher'
+              AND workflow_state IN ('active', 'invited')
         )"#,
     )
     .bind(user_id)
@@ -168,6 +206,69 @@ async fn user_account_admin(db: &PgPool, user_id: i64, account_id: i64) -> Resul
     .fetch_one(db)
     .await?;
     Ok(row.0)
+}
+
+/// Canvas `Account.site_admin.feature_enabled?` for the `:files_a11y_rewrite`
+/// flag that gates the `folders_and_files`, `all` and `duplicates` endpoints
+/// (`app/controllers/folders_controller.rb:155-168,794`).
+async fn files_a11y_rewrite_enabled(db: &PgPool) -> Result<bool, ApiError> {
+    let root: Option<(i64,)> = sqlx::query_as(
+        "SELECT id FROM accounts WHERE parent_account_id IS NULL AND workflow_state <> 'deleted' \
+         ORDER BY id ASC LIMIT 1",
+    )
+    .fetch_optional(db)
+    .await?;
+    let Some((root_id,)) = root else {
+        return Ok(false);
+    };
+
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM feature_flags \
+         WHERE context_type = 'Account' AND context_id = $1 \
+           AND feature IN ('files_a11y_rewrite', 'files_a11y_folder_duplicates') \
+           AND state = 'enabled'",
+    )
+    .bind(root_id)
+    .fetch_one(db)
+    .await?;
+    Ok(count == 2)
+}
+
+/// Whether the caller may read the group's context.
+///
+/// Canvas' `Group` policy (`app/models/group.rb:662`) grants the group's
+/// permissions when the group's *context* grants the user `:read`:
+///
+/// ```ruby
+/// given { |user, session| !non_collaborative? && (context.is_a?(Account) || context&.grants_right?(user, session, :read) || false) }
+/// ```
+///
+/// so a member of the group's course may read the group without being a group
+/// member.
+async fn user_can_read_group(
+    db: &PgPool,
+    user_id: i64,
+    group_id: i64,
+    role: &str,
+) -> Result<bool, ApiError> {
+    if role == "admin" {
+        return Ok(true);
+    }
+    if user_in_group(db, user_id, group_id).await? {
+        return Ok(true);
+    }
+    let course_id: Option<(Option<i64>,)> = sqlx::query_as(
+        "SELECT course_id FROM groups WHERE id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(group_id)
+    .fetch_optional(db)
+    .await?;
+    if let Some((Some(course_id),)) = course_id {
+        if user_enrolled_or_admin(db, user_id, course_id, role).await? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Canvas Folder#read_contents for Group contexts: accepted membership.
@@ -476,7 +577,7 @@ pub struct FileResponse {
 ///
 /// Metadata only — no upload. display_name defaults to filename when absent
 /// (Canvas `infer_display_name` behavior).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct CreateFileRequest {
     pub filename: String,
     pub display_name: Option<String>,
@@ -527,7 +628,7 @@ pub struct DeleteFolderQuery {
 }
 
 /// Request body for creating a folder (Canvas folders#create).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct CreateFolderRequest {
     pub name: Option<String>,
     pub parent_folder_id: Option<i64>,
@@ -546,7 +647,7 @@ pub struct CreateFolderRequest {
 }
 
 /// Request body for updating a folder (Canvas folders#update).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct UpdateFolderRequest {
     pub name: Option<String>,
     pub parent_folder_id: Option<i64>,
@@ -666,7 +767,7 @@ pub struct ContextFoldersAndFiles {
 }
 
 /// Request body for POST /folders/{id}/files (metadata only, no bytes).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct CreateFolderFileRequest {
     pub filename: String,
     pub display_name: Option<String>,
@@ -720,7 +821,7 @@ pub struct UsageRightsResponse {
 }
 
 /// Request body for PUT /files/{id} (Canvas files#api_update).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct UpdateFileRequest {
     pub name: Option<String>,
     pub parent_folder_id: Option<i64>,
@@ -863,6 +964,15 @@ pub fn router() -> axum::Router<AppState> {
         .route("/files/{id}", get(get_file).delete(delete_file))
         .route("/files/{id}", put(update_file))
         .route("/files/{id}", post(post_file))
+        .route("/files/update_word_count", post(update_word_count))
+        // The bytes of a file (Canvas files#show serves them from
+        // /files/:id/download).
+        .route("/files/{id}/download", get(content::download_file))
+        .route("/files/{id}/content", get(content::download_file))
+        .route(
+            "/files/{id}/attachment_jwt",
+            post(content::mint_attachment_jwt),
+        )
         .route("/files/{id}/public_url", get(get_file_public_url))
         .route("/files/{id}/create_success", get(create_success_get))
         .route("/files/{id}/create_success", post(create_success_post))
@@ -871,6 +981,10 @@ pub fn router() -> axum::Router<AppState> {
             options(create_success_options),
         )
         .route("/files/{id}/reset_verifier", post(reset_verifier))
+        .route(
+            "/rce_linked_file_instfs_ids",
+            post(rce_linked_file_instfs_ids),
+        )
         // Canvas files#icon_metadata (SVG parse).
         .route("/files/{id}/icon_metadata", get(get_icon_metadata))
         .route("/courses/{courseId}/files/{id}", get(get_course_file))
@@ -1080,34 +1194,66 @@ async fn list_course_files(
     Ok(Json(files.into_iter().map(FileResponse::from).collect()))
 }
 
-/// POST /courses/{courseId}/files — create file metadata (enrolled or admin).
+/// POST /courses/{courseId}/files — create a file (enrolled or admin).
 ///
-/// Metadata only: no bytes are stored (upload/S3 out of scope). display_name
-/// defaults to filename if not provided, mirroring Canvas infer_display_name.
+/// A multipart body carries the bytes: they are stored under the key Canvas
+/// derives from the attachment id (`star-storage`), and the row records the
+/// key, the digest and the size. A JSON or form-encoded body keeps the
+/// metadata-only behaviour. display_name defaults to filename if not
+/// provided, mirroring Canvas infer_display_name.
 async fn create_file(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateFileRequest>,
+    upload: upload::UploadRequest,
 ) -> Result<(StatusCode, Json<FileResponse>), ApiError> {
-    if payload.filename.trim().is_empty() {
-        return Err(ApiError::Validation("filename is required".into()));
-    }
-
     let allowed = user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
     if !allowed {
         return Err(ApiError::Forbidden);
     }
 
+    let payload = upload.metadata.clone().unwrap_or_default();
+    let filename = upload
+        .file_name()
+        .map(str::to_string)
+        .unwrap_or_else(|| payload.filename.clone());
+
+    if filename.trim().is_empty() {
+        // Canvas runs the upload preflight after the permission check and
+        // raises there when the request carries no file; its exception
+        // handler answers the generic 500
+        // (app/controllers/application_controller.rb:2325).
+        return Err(ApiError::canvas_internal_error());
+    }
+
     // Canvas infer_display_name: display_name ||= filename (empty -> filename).
     let display_name = match payload.display_name {
         Some(ref d) if !d.trim().is_empty() => d.trim().to_string(),
-        _ => payload.filename.clone(),
+        _ => filename.clone(),
     };
-    let content_type = payload
-        .content_type
+    let content_type = upload
+        .file_content_type()
+        .map(str::to_string)
         .unwrap_or_else(|| "application/octet-stream".into());
-    let size = payload.size.unwrap_or(0);
+
+    // The bytes, when the client sent them.
+    let data = upload.data.as_deref();
+    let size = match data {
+        Some(bytes) => bytes.len() as i64,
+        None => payload.size.unwrap_or(0),
+    };
+    let md5 = data.map(star_storage::md5_hex);
+    let encoding = match data {
+        Some(bytes) if content_type.contains("text") => Some(infer_encoding(bytes)),
+        _ => None,
+    };
+    // A row without bytes has no file data; Canvas marks such an attachment
+    // as errored (`app/models/attachment.rb`).
+    let file_state = if data.is_some() {
+        "available"
+    } else {
+        "errored"
+    };
 
     // A folder_id, when given, must be an active folder in this course. The
     // legacy `folder` text path is derived from the folder's full_name.
@@ -1135,23 +1281,56 @@ async fn create_file(
 
     let row = sqlx::query_as::<_, FileRow>(
         r#"
-        INSERT INTO files (course_id, uploader_id, filename, display_name, content_type, size, folder, folder_id)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        INSERT INTO files (course_id, uploader_id, filename, display_name, content_type, size, folder, folder_id, md5, file_state, encoding)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         RETURNING id, course_id, folder, folder_id, filename, display_name, content_type, size, created_at, updated_at
         "#,
     )
     .bind(course_id)
     .bind(auth.id)
-    .bind(&payload.filename)
+    .bind(&filename)
     .bind(&display_name)
     .bind(&content_type)
     .bind(size)
     .bind(&folder)
     .bind(folder_id)
+    .bind(&md5)
+    .bind(file_state)
+    .bind(&encoding)
     .fetch_one(&state.db)
     .await?;
 
+    // Store the bytes under the key Canvas derives from the attachment id
+    // (`gems/attachment_fu/lib/attachment_fu/backends/file_system_backend.rb:38-58`).
+    if let Some(bytes) = upload.data.as_deref() {
+        let store = star_storage::global_store().map_err(|_| ApiError::canvas_internal_error())?;
+        let key = store.attachment_key(row.id, &filename);
+        if store.put(&key, bytes, Some(&content_type)).await.is_err() {
+            // The row would point at bytes that are not there; drop it.
+            let _ = sqlx::query("DELETE FROM files WHERE id = $1")
+                .bind(row.id)
+                .execute(&state.db)
+                .await;
+            return Err(ApiError::canvas_internal_error());
+        }
+        sqlx::query("UPDATE files SET storage_key = $1 WHERE id = $2")
+            .bind(&key)
+            .bind(row.id)
+            .execute(&state.db)
+            .await?;
+    }
+
     Ok((StatusCode::CREATED, Json(FileResponse::from(row))))
+}
+
+/// Canvas infers the encoding of a text file: UTF-8 when the bytes decode,
+/// empty otherwise (`app/models/attachment.rb:302-344`).
+fn infer_encoding(bytes: &[u8]) -> String {
+    if std::str::from_utf8(bytes).is_ok() {
+        "UTF-8".to_string()
+    } else {
+        String::new()
+    }
 }
 
 /// GET /files/{id} — get a single file (uploader or enrolled or admin)
@@ -1179,31 +1358,132 @@ async fn get_file(
     Ok(Json(FileResponse::from(file)))
 }
 
+/// The body of `POST /files/update_word_count`.
+///
+/// Canvas reads `params[:attachment_jwt]` and `params[:word_count]` out of
+/// whatever the client sent — a form-encoded body in the documented call
+/// (`app/controllers/files_controller.rb:1625-1632`).
+#[derive(Debug, Default, Deserialize)]
+pub struct UpdateWordCountRequest {
+    pub attachment_jwt: Option<String>,
+    /// Canvas reads the word count with `Integer(params[:word_count])`, so a
+    /// number and a numeric string are both good
+    /// (`app/controllers/files_controller.rb:1640`).
+    pub word_count: Option<serde_json::Value>,
+}
+
+/// POST /files/update_word_count — Canvas `files_controller#update_word_count`
+/// (`app/controllers/files_controller.rb:1625-1648`, route
+/// `config/routes.rb:2247`).
+///
+/// Canvas answers a missing parameter with a 400 and a single `message` key
+/// of its own.
+async fn update_word_count(
+    State(state): State<AppState>,
+    _auth: AuthUser,
+    ApiJson(payload): ApiJson<UpdateWordCountRequest>,
+) -> Result<Response, ApiError> {
+    if payload
+        .attachment_jwt
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_none()
+    {
+        return Err(ApiError::canvas_message(
+            StatusCode::BAD_REQUEST,
+            "Missing attachment_jwt param",
+        ));
+    }
+
+    let Some(word_count) = payload.word_count.as_ref() else {
+        return Err(ApiError::canvas_message(
+            StatusCode::BAD_REQUEST,
+            "Missing word_count param",
+        ));
+    };
+
+    // Canvas reads the word count with `Integer(params[:word_count])`
+    // (`app/controllers/files_controller.rb:1640`).
+    let word_count = match word_count {
+        serde_json::Value::Number(number) => number.as_i64(),
+        serde_json::Value::String(text) => text.trim().parse::<i64>().ok(),
+        _ => None,
+    };
+    let Some(word_count) = word_count else {
+        return Err(ApiError::canvas_message(
+            StatusCode::BAD_REQUEST,
+            "Invalid word_count param",
+        ));
+    };
+
+    // Canvas decodes the attachment JWT with `CanvasSecurity.decode_jwt`
+    // (`app/controllers/files_controller.rb:1634`); the port signs the same
+    // claim set with its own secret.
+    let Some(claims) = payload
+        .attachment_jwt
+        .as_deref()
+        .and_then(|token| content::read_attachment_jwt(token.trim(), &state.jwt_secret))
+    else {
+        return Err(ApiError::canvas_message(
+            StatusCode::BAD_REQUEST,
+            "Invalid attachment_jwt param",
+        ));
+    };
+
+    // Canvas uses an explicit find-update, so a missing attachment is a 404
+    // (`app/controllers/files_controller.rb:1646`).
+    let updated = sqlx::query("UPDATE files SET word_count = $1 WHERE id = $2")
+        .bind(word_count)
+        .bind(claims.id)
+        .execute(&state.db)
+        .await?;
+    if updated.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
 /// DELETE /files/{id} — delete a file (uploader or course teacher or admin)
 async fn delete_file(
     State(state): State<AppState>,
     Path(file_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<impl IntoResponse, ApiError> {
-    let existing: Option<(i64, i64)> =
-        sqlx::query_as("SELECT course_id, uploader_id FROM files WHERE id = $1")
+    let existing: Option<(i64, i64, Option<String>)> =
+        sqlx::query_as("SELECT course_id, uploader_id, storage_key FROM files WHERE id = $1")
             .bind(file_id)
             .fetch_optional(&state.db)
             .await?;
 
-    let (course_id, uploader_id) = existing.ok_or(ApiError::NotFound)?;
+    let (course_id, uploader_id, storage_key) = existing.ok_or(ApiError::NotFound)?;
 
     let is_uploader = uploader_id == auth.id;
     let allowed = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
 
     if !is_uploader && !allowed {
-        return Err(ApiError::Forbidden);
+        // Canvas answers a caller who may not delete the file with a 401 and
+        // a single `message` key of its own
+        // (`app/controllers/files_controller.rb:1472`).
+        return Err(ApiError::canvas_message(
+            StatusCode::UNAUTHORIZED,
+            "Unauthorized to delete this file",
+        ));
     }
 
     sqlx::query("DELETE FROM files WHERE id = $1")
         .bind(file_id)
         .execute(&state.db)
         .await?;
+
+    // The bytes go with the row (Canvas destroys the file with the
+    // attachment, `app/models/attachment.rb:2011`).
+    if let Some(storage_key) = storage_key {
+        if let Ok(store) = star_storage::global_store() {
+            let _ = store.delete(&storage_key).await;
+        }
+    }
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1220,7 +1500,7 @@ async fn update_file(
     State(state): State<AppState>,
     Path(file_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<UpdateFileRequest>,
+    ApiJson(payload): ApiJson<UpdateFileRequest>,
 ) -> Result<Response, ApiError> {
     let sql = format!("{ATTACHMENT_SELECT} WHERE f.id = $1 AND f.workflow_state <> 'deleted'");
     let file = sqlx::query_as::<_, AttachmentRow>(&sql)
@@ -1448,7 +1728,7 @@ async fn get_group_file(
             can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
         }
     }
-    if !can_manage && !user_in_group(&state.db, auth.id, group_id).await? {
+    if !can_manage && !user_can_read_group(&state.db, auth.id, group_id, &auth.role).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -1595,6 +1875,80 @@ async fn reset_verifier(
         .await?;
 
     Ok(Json(serde_json::json!({ "uuid": new_uuid })))
+}
+
+/// POST /rce_linked_file_instfs_ids — Canvas
+/// `files#rce_linked_file_instfs_ids`
+/// (`app/controllers/files_controller.rb:1650`).
+///
+/// Canvas resolves the target user from the `user_uuid` parameter and asks
+/// that user for `read_full_profile`; without the parameter there is no user
+/// to ask, so the request is unauthorized (403) — the file urls are never
+/// looked at.
+async fn rce_linked_file_instfs_ids(
+    State(state): State<AppState>,
+    Query(params): Query<Vec<(String, String)>>,
+    auth: AuthUser,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_uuid = params
+        .iter()
+        .find(|(key, _)| key == "user_uuid")
+        .map(|(_, value)| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+
+    let Some(user_uuid) = user_uuid else {
+        return Err(ApiError::Forbidden);
+    };
+
+    let target: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM users WHERE uuid = $1 AND workflow_state <> 'deleted'")
+            .bind(&user_uuid)
+            .fetch_optional(&state.db)
+            .await?;
+
+    let Some((target_id,)) = target else {
+        return Err(ApiError::Forbidden);
+    };
+
+    // `read_full_profile` on the target user: the target themselves, or an
+    // account admin of the target's account.
+    let may_read = target_id == auth.id
+        || sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                SELECT 1 FROM account_users au
+                JOIN accounts a ON a.id = au.account_id
+                WHERE au.user_id = $1 AND au.workflow_state = 'active'
+                  AND a.id = COALESCE(
+                      (SELECT c.account_id FROM courses c
+                        JOIN enrollments e ON e.course_id = c.id
+                        WHERE e.user_id = $2 LIMIT 1),
+                      a.id)
+            )",
+        )
+        .bind(auth.id)
+        .bind(target_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+
+    if !may_read {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Canvas: no file urls given is a 400.
+    let file_urls = params
+        .iter()
+        .filter(|(key, _)| key == "file_urls")
+        .map(|(_, value)| value.clone())
+        .collect::<Vec<_>>();
+    if file_urls.is_empty() {
+        return Err(ApiError::canvas_json(
+            axum::http::StatusCode::BAD_REQUEST,
+            serde_json::json!({ "errors": [{ "message": "No valid file URLs given" }] }),
+        ));
+    }
+
+    Ok(Json(serde_json::json!({ "file_ids": [] })))
 }
 
 /// GET /files/{id}/icon_metadata — Canvas files#icon_metadata.
@@ -2025,7 +2379,7 @@ async fn list_folder_files(
 async fn create_folder(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(payload): Json<CreateFolderRequest>,
+    ApiJson(payload): ApiJson<CreateFolderRequest>,
 ) -> Result<Response, ApiError> {
     create_folder_inner(&state, &auth, payload, None, None).await
 }
@@ -2035,7 +2389,7 @@ async fn create_course_folder(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateFolderRequest>,
+    ApiJson(payload): ApiJson<CreateFolderRequest>,
 ) -> Result<Response, ApiError> {
     create_folder_inner(&state, &auth, payload, Some(course_id), None).await
 }
@@ -2045,7 +2399,7 @@ async fn create_subfolder(
     State(state): State<AppState>,
     Path(parent_folder_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateFolderRequest>,
+    ApiJson(payload): ApiJson<CreateFolderRequest>,
 ) -> Result<Response, ApiError> {
     create_folder_inner(&state, &auth, payload, None, Some(parent_folder_id)).await
 }
@@ -2163,7 +2517,7 @@ async fn update_folder(
     State(state): State<AppState>,
     Path(folder_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<UpdateFolderRequest>,
+    ApiJson(payload): ApiJson<UpdateFolderRequest>,
 ) -> Result<Response, ApiError> {
     let folder = fetch_folder(&state.db, folder_id)
         .await?
@@ -2341,6 +2695,11 @@ async fn list_course_folders_and_files(
     Query(params): Query<FoldersAndFilesQuery>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
+    // Canvas gates the endpoint on the site-admin a11y feature flag
+    // (`app/controllers/folders_controller.rb`).
+    if !files_a11y_rewrite_enabled(&state.db).await? {
+        return Err(ApiError::Forbidden);
+    }
     let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
     let allowed =
         can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
@@ -2358,6 +2717,11 @@ async fn list_folder_all(
     Query(params): Query<FoldersAndFilesQuery>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
+    // Canvas gates the endpoint on the site-admin a11y feature flag
+    // (`app/controllers/folders_controller.rb`).
+    if !files_a11y_rewrite_enabled(&state.db).await? {
+        return Err(ApiError::Forbidden);
+    }
     let folder = fetch_folder(&state.db, folder_id)
         .await?
         .ok_or(ApiError::NotFound)?;
@@ -2724,7 +3088,7 @@ async fn resolve_path_group(
     Query(params): Query<ResolvePathQuery>,
     auth: AuthUser,
 ) -> Result<Response, ApiError> {
-    let can_view_hidden = is_admin(&auth) || user_in_group(&state.db, auth.id, group_id).await?;
+    let can_view_hidden = user_can_read_group(&state.db, auth.id, group_id, &auth.role).await?;
     if !can_view_hidden {
         return Err(ApiError::Forbidden);
     }
@@ -2799,7 +3163,7 @@ async fn show_group_folder(
     Path((group_id, id)): Path<(i64, String)>,
     auth: AuthUser,
 ) -> Result<Json<FolderResponse>, ApiError> {
-    let can_view = is_admin(&auth) || user_in_group(&state.db, auth.id, group_id).await?;
+    let can_view = user_can_read_group(&state.db, auth.id, group_id, &auth.role).await?;
     if !can_view {
         return Err(ApiError::Forbidden);
     }
@@ -2858,7 +3222,7 @@ async fn create_user_folder_ctx(
     State(state): State<AppState>,
     Path(user_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateFolderRequest>,
+    ApiJson(payload): ApiJson<CreateFolderRequest>,
 ) -> Result<Response, ApiError> {
     if auth.id != user_id && !is_admin(&auth) {
         return Err(ApiError::Forbidden);
@@ -2895,25 +3259,32 @@ async fn create_user_folder_ctx(
         };
         insert_folder(&state.db, new_root).await?.id
     };
-    let parent_id = payload.parent_folder_id.unwrap_or(root_id);
-    let parent = fetch_folder(&state.db, parent_id)
-        .await?
-        .ok_or(ApiError::NotFound)?;
-    if parent.context_type != "User" || parent.context_id != user_id {
-        return Ok(canvas_not_found());
-    }
-    let name = normalize_folder_name(payload.name.as_deref());
-    if fetch_child_by_name(&state.db, parent_id, &name)
-        .await?
-        .is_some()
-    {
-        return Err(ApiError::Conflict(format!(
-            "folder '{}' already exists",
-            name
-        )));
-    }
+    // Canvas folders#create falls back to the context's unfiled folder when
+    // the request names no parent (app/controllers/folders_controller.rb:545).
+    let parent = match payload.parent_folder_id {
+        Some(parent_id) => {
+            let parent = fetch_folder(&state.db, parent_id)
+                .await?
+                .ok_or(ApiError::NotFound)?;
+            if parent.context_type != "User" || parent.context_id != user_id {
+                return Ok(canvas_not_found());
+            }
+            parent
+        }
+        None => {
+            let root = fetch_folder(&state.db, root_id)
+                .await?
+                .ok_or(ApiError::NotFound)?;
+            ensure_unfiled_folder(&state.db, root).await?
+        }
+    };
+    let parent_id = parent.id;
+    let requested_name = normalize_folder_name(payload.name.as_deref());
+    // Canvas Folder#prevent_duplicate_name appends the first free " <n>".
+    let siblings = fetch_sibling_names(&state.db, parent_id).await?;
+    let name = dedupe_folder_name(&requested_name, &siblings);
     let position = next_position(&state.db, parent_id).await?;
-    let full_name = format!("{}/{}", parent.full_name, name);
+    let full_name = join_full_name(&parent.full_name, &name);
     // Canvas Folder#hidden= maps the hidden param onto workflow_state
     // 'hidden'/'visible' (app/models/folder.rb), never a raw boolean.
     let workflow_state = if payload.hidden.unwrap_or(false) {
@@ -3057,8 +3428,12 @@ async fn list_user_folder_duplicates(
     if auth.id != user_id && !is_admin(&auth) {
         return Err(ApiError::Forbidden);
     }
-    // Feature flags: files_a11y_rewrite + files_a11y_folder_duplicates.
-    // For now: always accessible (feature flag infrastructure is in star-features).
+    // Canvas gates the endpoint on the site-admin a11y feature flag
+    // (`app/controllers/folders_controller.rb`).
+    if !files_a11y_rewrite_enabled(&state.db).await? {
+        return Err(ApiError::Forbidden);
+    }
+
     let folder = fetch_folder(&state.db, folder_id)
         .await?
         .ok_or(ApiError::NotFound)?;
@@ -3348,6 +3723,11 @@ async fn list_folder_duplicates(
     Path((course_id, folder_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<DuplicatesResponse>, ApiError> {
+    // Canvas gates the endpoint on the site-admin a11y feature flag
+    // (`app/controllers/folders_controller.rb`).
+    if !files_a11y_rewrite_enabled(&state.db).await? {
+        return Err(ApiError::Forbidden);
+    }
     let folder = fetch_folder(&state.db, folder_id)
         .await?
         .ok_or(ApiError::NotFound)?;
@@ -3394,6 +3774,11 @@ async fn list_user_folders_and_files(
     Query(params): Query<FoldersAndFilesQuery>,
     auth: AuthUser,
 ) -> Result<Json<ContextFoldersAndFiles>, ApiError> {
+    // Canvas gates the endpoint on the site-admin a11y feature flag
+    // (`app/controllers/folders_controller.rb`).
+    if !files_a11y_rewrite_enabled(&state.db).await? {
+        return Err(ApiError::Forbidden);
+    }
     // Canvas: only self or an admin may read another user's files.
     if auth.id != user_id && !is_admin(&auth) {
         return Err(ApiError::Forbidden);
@@ -3418,13 +3803,18 @@ async fn list_group_folders_and_files(
     .ok_or(ApiError::NotFound)?;
     let (_, course_id) = group;
 
+    // Canvas gates the endpoint on the site-admin a11y feature flag
+    // (`app/controllers/folders_controller.rb`).
+    if !files_a11y_rewrite_enabled(&state.db).await? {
+        return Err(ApiError::Forbidden);
+    }
     let mut can_manage = is_admin(&auth);
     if !can_manage {
         if let Some(course_id) = course_id {
             can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
         }
     }
-    if !can_manage && !user_in_group(&state.db, auth.id, group_id).await? {
+    if !can_manage && !user_can_read_group(&state.db, auth.id, group_id, &auth.role).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -3500,20 +3890,22 @@ async fn create_folder_file(
     State(state): State<AppState>,
     Path(folder_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateFolderFileRequest>,
+    ApiJson(payload): ApiJson<CreateFolderFileRequest>,
 ) -> Result<Json<AttachmentResponse>, ApiError> {
-    if payload.filename.trim().is_empty() {
-        return Err(ApiError::Validation("filename is required".into()));
-    }
-
     let folder = fetch_folder(&state.db, folder_id)
         .await?
         .ok_or(ApiError::NotFound)?;
     let course_id = folder_course_id(&folder)?;
     // Canvas: creating an attachment requires manage_files_add (teacher).
+    // The permission check runs before the preflight validates the filename
+    // (app/controllers/folders_controller.rb:637-645).
     let allowed = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
     if !allowed {
         return Err(ApiError::Forbidden);
+    }
+
+    if payload.filename.trim().is_empty() {
+        return Err(ApiError::Validation("filename is required".into()));
     }
 
     let display_name = match payload.display_name {
@@ -3557,7 +3949,7 @@ async fn create_account_folder(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateFolderRequest>,
+    ApiJson(payload): ApiJson<CreateFolderRequest>,
 ) -> Result<Response, ApiError> {
     let account: Option<i64> =
         sqlx::query_scalar("SELECT id FROM accounts WHERE id = $1 AND workflow_state <> 'deleted'")
@@ -3960,6 +4352,10 @@ async fn get_course_content_licenses(
 // ─── folder DB helpers ─────────────────────────────────────────────────────
 
 /// Raw folders row with file/subfolder counts (column order matches queries).
+///
+/// The Canvas payload keys the port stores on the row as well (migration
+/// 0264): `hidden` mirrors the workflow state, the two urls are stable per
+/// row, and the per-viewer flags are stored when a client wrote them.
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct FolderRow {
     id: i64,
@@ -3978,6 +4374,12 @@ struct FolderRow {
     updated_at: DateTime<Utc>,
     files_count: i64,
     folders_count: i64,
+    files_url: String,
+    folders_url: String,
+    hidden: bool,
+    hidden_for_user: Option<bool>,
+    locked_for_user: Option<bool>,
+    can_upload: Option<bool>,
 }
 
 const FOLDER_SELECT: &str = r#"
@@ -3985,9 +4387,16 @@ SELECT f.id, f.name, f.full_name, f.context_type, f.context_id,
        f.parent_folder_id, f.workflow_state, f.position, f.locked,
        f.lock_at, f.unlock_at, f.for_submissions,
        f.created_at, f.updated_at,
-       (SELECT count(*) FROM files fi WHERE fi.folder_id = f.id) AS files_count,
-       (SELECT count(*) FROM folders sf
-         WHERE sf.parent_folder_id = f.id AND sf.workflow_state <> 'deleted') AS folders_count
+       COALESCE(f.files_count,
+                (SELECT count(*) FROM files fi WHERE fi.folder_id = f.id)) AS files_count,
+       COALESCE(f.folders_count,
+                (SELECT count(*) FROM folders sf
+                  WHERE sf.parent_folder_id = f.id AND sf.workflow_state <> 'deleted'))
+         AS folders_count,
+       COALESCE(f.files_url, '/api/v1/folders/' || f.id::text || '/files') AS files_url,
+       COALESCE(f.folders_url, '/api/v1/folders/' || f.id::text || '/folders') AS folders_url,
+       COALESCE(f.hidden, f.workflow_state = 'hidden') AS hidden,
+       f.hidden_for_user, f.locked_for_user, f.can_upload
 FROM folders f
 "#;
 
@@ -3998,12 +4407,18 @@ SELECT f.id, f.name, f.full_name, f.context_type, f.context_id,
        f.parent_folder_id, f.workflow_state, f.position, f.locked,
        f.lock_at, f.unlock_at, f.for_submissions,
        f.created_at, f.updated_at,
-       (SELECT count(*) FROM files fi
-         WHERE fi.folder_id = f.id AND fi.hidden = FALSE AND fi.locked = FALSE
-           AND (fi.lock_at IS NULL OR fi.lock_at > now())) AS files_count,
-       (SELECT count(*) FROM folders sf
-         WHERE sf.parent_folder_id = f.id AND sf.workflow_state = 'visible'
-           AND sf.locked = FALSE) AS folders_count
+       COALESCE(f.files_count,
+                (SELECT count(*) FROM files fi
+                  WHERE fi.folder_id = f.id AND fi.hidden = FALSE AND fi.locked = FALSE
+                    AND (fi.lock_at IS NULL OR fi.lock_at > now()))) AS files_count,
+       COALESCE(f.folders_count,
+                (SELECT count(*) FROM folders sf
+                  WHERE sf.parent_folder_id = f.id AND sf.workflow_state = 'visible'
+                    AND sf.locked = FALSE)) AS folders_count,
+       COALESCE(f.files_url, '/api/v1/folders/' || f.id::text || '/files') AS files_url,
+       COALESCE(f.folders_url, '/api/v1/folders/' || f.id::text || '/folders') AS folders_url,
+       COALESCE(f.hidden, f.workflow_state = 'hidden') AS hidden,
+       f.hidden_for_user, f.locked_for_user, f.can_upload
 FROM folders f
 "#;
 
@@ -4110,7 +4525,13 @@ async fn insert_folder(db: &PgPool, folder: NewFolder) -> Result<FolderRow, ApiE
         RETURNING id, name, full_name, context_type, context_id, parent_folder_id,
                   workflow_state, position, locked, lock_at, unlock_at, for_submissions,
                   created_at, updated_at,
-                  0::bigint AS files_count, 0::bigint AS folders_count
+                  0::bigint AS files_count, 0::bigint AS folders_count,
+                  '/api/v1/folders/' || id::text || '/files' AS files_url,
+                  '/api/v1/folders/' || id::text || '/folders' AS folders_url,
+                  (workflow_state = 'hidden') AS hidden,
+                  NULL::boolean AS hidden_for_user,
+                  NULL::boolean AS locked_for_user,
+                  NULL::boolean AS can_upload
         "#,
     )
     .bind(&folder.name)
@@ -4618,7 +5039,7 @@ impl AttachmentResponse {
 impl FolderResponse {
     fn from_row(row: FolderRow, can_manage: bool) -> Self {
         let now = Utc::now();
-        let hidden = row.workflow_state == "hidden";
+        let hidden = row.hidden;
         let currently_locked = row.locked
             || row.lock_at.map(|at| at <= now).unwrap_or(false)
             || row.unlock_at.map(|at| at > now).unwrap_or(false)
@@ -4639,15 +5060,17 @@ impl FolderResponse {
             category: None,
             locked: row.locked,
             all_url: format!("/api/v1/folders/{}/all", row.id),
-            folders_url: format!("/api/v1/folders/{}/folders", row.id),
-            files_url: format!("/api/v1/folders/{}/files", row.id),
+            folders_url: row.folders_url,
+            files_url: row.files_url,
             files_count: row.files_count,
             folders_count: row.folders_count,
             hidden,
-            locked_for_user: !can_manage && currently_locked,
-            hidden_for_user: !can_manage && hidden,
+            locked_for_user: row
+                .locked_for_user
+                .unwrap_or(!can_manage && currently_locked),
+            hidden_for_user: row.hidden_for_user.unwrap_or(!can_manage && hidden),
             for_submissions: row.for_submissions,
-            can_upload: can_manage,
+            can_upload: row.can_upload.unwrap_or(can_manage),
         }
     }
 }
@@ -4730,6 +5153,12 @@ mod tests {
             updated_at: now,
             files_count: 1,
             folders_count: 0,
+            files_url: "/api/v1/folders/7/files".to_string(),
+            folders_url: "/api/v1/folders/7/folders".to_string(),
+            hidden: true,
+            hidden_for_user: None,
+            locked_for_user: None,
+            can_upload: None,
         };
 
         let student = FolderResponse::from_row(row, false);

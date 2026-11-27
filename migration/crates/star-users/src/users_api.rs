@@ -174,36 +174,36 @@ fn canvas_message(status: StatusCode, message: &str) -> UsersApiError {
 pub fn router() -> Router<AppState> {
     Router::new()
         // PseudonymsController
-        .route("/accounts/{account_id}/logins", get(account_logins))
+        .route(
+            "/accounts/{account_id}/logins",
+            get(account_logins).post(create_login),
+        )
         .route("/users/{user_id}/logins", get(user_logins))
-        .route("/accounts/{account_id}/logins", post(create_login))
         .route("/accounts/{account_id}/logins/{id}", put(update_login))
         .route("/users/{user_id}/logins/{id}", delete(destroy_login))
         .route("/users/reset_password", post(forgot_password))
         // CourseNicknamesController
-        .route("/users/self/course_nicknames", get(course_nicknames))
         .route(
             "/users/self/course_nicknames",
-            delete(clear_course_nicknames),
+            get(course_nicknames).delete(clear_course_nicknames),
         )
         .route(
             "/users/self/course_nicknames/{course_id}",
-            get(course_nickname),
-        )
-        .route(
-            "/users/self/course_nicknames/{course_id}",
-            put(set_course_nickname),
-        )
-        .route(
-            "/users/self/course_nicknames/{course_id}",
-            delete(remove_course_nickname),
+            get(course_nickname)
+                .put(set_course_nickname)
+                .delete(remove_course_nickname),
         )
         // Bookmarks::BookmarksController
-        .route("/users/self/bookmarks", get(list_bookmarks))
-        .route("/users/self/bookmarks", post(create_bookmark))
-        .route("/users/self/bookmarks/{id}", get(show_bookmark))
-        .route("/users/self/bookmarks/{id}", put(update_bookmark))
-        .route("/users/self/bookmarks/{id}", delete(destroy_bookmark))
+        .route(
+            "/users/self/bookmarks",
+            get(list_bookmarks).post(create_bookmark),
+        )
+        .route(
+            "/users/self/bookmarks/{id}",
+            get(show_bookmark)
+                .put(update_bookmark)
+                .delete(destroy_bookmark),
+        )
 }
 
 // ---------------------------------------------------------------------------
@@ -780,24 +780,27 @@ async fn pseudonym_passwordable(
     }
 }
 
+/// The `pseudonyms` row the profile lookup reads.
+type PseudonymRecord = (
+    i64,
+    i64,
+    i64,
+    String,
+    Option<String>,
+    Option<String>,
+    Option<i64>,
+    Option<String>,
+    String,
+    NaiveDateTime,
+    Option<i32>,
+    String,
+    Option<String>,
+);
+
 /// Canvas `Pseudonym.active` — every login that is not deleted.
 async fn load_pseudonym(pool: &PgPool, raw_id: &str) -> Result<PseudonymState, ApiError> {
     let id = raw_id.parse::<i64>().map_err(|_| ApiError::NotFound)?;
-    let row: Option<(
-        i64,
-        i64,
-        i64,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-        String,
-        NaiveDateTime,
-        Option<i32>,
-        String,
-        Option<String>,
-    )> = sqlx::query_as(
+    let row: Option<PseudonymRecord> = sqlx::query_as(
         r#"
         SELECT id, user_id, account_id, unique_id, sis_user_id, integration_id,
                authentication_provider_id, declared_user_type, workflow_state, created_at,
@@ -1078,7 +1081,7 @@ async fn insert_pseudonym(pool: &PgPool, new: &NewPseudonym) -> Result<i64, ApiE
 /// Save the changed fields of a login (Canvas `Pseudonym#save`).
 async fn save_pseudonym(pool: &PgPool, state: &PseudonymState) -> Result<(), ApiError> {
     let crypted_password = match state.password.as_deref() {
-        Some(password) => Some(hash_password(password).map_err(|e| ApiError::Db(e))?),
+        Some(password) => Some(hash_password(password).map_err(ApiError::Db)?),
         None => None,
     };
     sqlx::query(

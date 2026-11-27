@@ -27,6 +27,34 @@
 //! Note: [`Role`] values are the star-lms role strings stored in
 //! `enrollments.role` ("student", "teacher", …); [`Role::canvas_enrollment_type`]
 //! returns the Canvas API spelling ("TeacherEnrollment", …).
+//!
+//! # The shared permission layer
+//!
+//! The helpers above grew one route at a time and each one asked its own
+//! question. Canvas does not work that way: a permission is granted by a
+//! *role* in a *context*, and the rules live in the permission registry, not
+//! in the route. The shared layer is:
+//!
+//! * [`registry`] — every permission Canvas declares, with `true_for`,
+//!   `false_for`, `available_to`, `applies_to_concluded`, `account_only`,
+//!   `account_allows` and `restrict_future_enrollments`.
+//! * [`rules`] — the pure decision: *does this role grant this permission in
+//!   this context?* No database needed, so it can be tested directly.
+//! * [`check`] — the lookup: the roles the acting user holds (an enrollment,
+//!   an account membership, a site-admin membership) and the role overrides
+//!   that apply, handed to [`rules`].
+//!
+//! A route asks the layer the same way everywhere:
+//!
+//! ```ignore
+//! star_permissions::check::require(
+//!     &state.db,
+//!     auth.user_id,
+//!     &PermissionContext::Course { course_id },
+//!     "manage_students",
+//! )
+//! .await?;
+//! ```
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -36,6 +64,19 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use sqlx::PgPool;
 use star_common::ApiError;
+
+pub mod check;
+pub mod registry;
+pub mod rules;
+
+pub use check::{
+    can, can_conclude_enrollment, can_delete_enrollment, can_read_account, grants_for, require,
+    require_any, require_read_account, PermissionContext,
+};
+pub use registry::{is_known as is_known_permission, lookup as lookup_permission, PermissionSpec};
+pub use rules::{
+    default_grant, evaluate, AccountScope, Concluded, ContextKind, EnrollmentState, Grant, RoleKind,
+};
 
 /// Canvas enrollment roles understood by star-lms.
 ///
@@ -498,10 +539,19 @@ pub struct RoleOverridesUpdate {
     pub permissions: BTreeMap<String, PermissionUpdate>,
 }
 
-/// Validate a PUT body; returns the built-in role it addresses.
-pub fn validate_role_overrides_update(update: &RoleOverridesUpdate) -> Result<Role, ApiError> {
-    let role = Role::from_builtin_role_id(update.role_id)
-        .ok_or_else(|| ApiError::BadRequest(format!("unknown role_id: {}", update.role_id)))?;
+/// Validate a PUT body; returns the built-in role id it addresses.
+///
+/// The five built-in course roles use ids 1..5 ([`Role::builtin_role_id`]);
+/// the two built-in account roles use 6 and 7
+/// ([`RoleKind::builtin_role_id`]). Canvas generates the ids per root
+/// account, so the port keeps them fixed.
+pub fn validate_role_overrides_update(update: &RoleOverridesUpdate) -> Result<i64, ApiError> {
+    if RoleKind::from_builtin_role_id(update.role_id).is_none() {
+        return Err(ApiError::BadRequest(format!(
+            "unknown role_id: {}",
+            update.role_id
+        )));
+    }
     if update.permissions.is_empty() {
         return Err(ApiError::BadRequest(
             "permissions must not be empty".to_string(),
@@ -510,7 +560,7 @@ pub fn validate_role_overrides_update(update: &RoleOverridesUpdate) -> Result<Ro
     for (permission, change) in &update.permissions {
         change.validate(permission)?;
     }
-    Ok(role)
+    Ok(update.role_id)
 }
 
 /// Whether the account/course context exists (not soft-deleted).
@@ -639,8 +689,7 @@ pub async fn put_role_overrides(
     }
     require_manage_role_overrides(db, user_id, context, context_id).await?;
 
-    let role = validate_role_overrides_update(update)?;
-    let role_id = role.builtin_role_id();
+    let role_id = validate_role_overrides_update(update)?;
 
     let mut tx = db.begin().await?;
     for (permission, change) in &update.permissions {
@@ -779,6 +828,9 @@ pub async fn roles_list(
             role.workflow_state = "built_in".to_string();
         }
     }
+    // Canvas hides the built-in `AccountMembership` role from an account's
+    // role list (`Role#visible?`, `app/models/role.rb:166-168`).
+    rows.retain(|role| !(role.account_id.is_none() && role.name == "AccountMembership"));
     Ok(rows)
 }
 
@@ -1739,7 +1791,7 @@ mod tests {
         let mut body = update_body(&[("read_reports", change(Some(true), Some(true), Some(true)))]);
         assert_eq!(
             validate_role_overrides_update(&body).unwrap(),
-            Role::Teacher
+            Role::Teacher.builtin_role_id()
         );
 
         body.role_id = 999;

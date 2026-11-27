@@ -1142,10 +1142,9 @@ async fn enqueue_outcome_rollup_calculation_honours_the_feature_flag() {
     let response = app
         .client
         .post(format!(
-            "{}/api/v1/enqueue_outcome_rollup_calculation?course_id={}&student_uuid={}",
+            "{}/api/v1/enqueue_outcome_rollup_calculation?course_id={}&student_uuid={prefix}-student-uuid",
             app.base_url,
-            fixture.course_id,
-            format!("{prefix}-student-uuid")
+            fixture.course_id
         ))
         .header(
             "Authorization",
@@ -1206,10 +1205,9 @@ async fn enqueue_outcome_rollup_calculation_honours_the_feature_flag() {
     let enqueued = app
         .client
         .post(format!(
-            "{}/api/v1/enqueue_outcome_rollup_calculation?course_id={}&student_uuid={}",
+            "{}/api/v1/enqueue_outcome_rollup_calculation?course_id={}&student_uuid={prefix}-student-uuid",
             app.base_url,
-            fixture.course_id,
-            format!("{prefix}-student-uuid")
+            fixture.course_id
         ))
         .header(
             "Authorization",

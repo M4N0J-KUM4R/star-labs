@@ -408,60 +408,53 @@ pub fn router() -> Router<AppState> {
         .route("/notifications/{id}", delete(delete_notification))
         .route("/notifications/unread_count", get(unread_count))
         // Notification preferences
+        // User-level policies; Canvas exposes preferences only per
+        // communication channel, so this path has no Canvas route.
         .route(
             "/users/self/notification_preferences",
-            get(list_preferences),
-        )
-        .route(
-            "/users/self/notification_preferences",
-            put(upsert_preference),
+            get(list_preferences).put(upsert_preference),
         )
         // Communication channels + per-channel notification preferences
+        // Canvas serves GET (`communication_channels#index`) and POST
+        // (`communication_channels#create`) on `users/:user_id/communication_channels`
+        // (routes.rb:2052-2053); `self` resolves to the authenticated user.
         .route(
             "/users/self/communication_channels",
-            get(list_communication_channels),
-        )
-        .route(
-            "/users/self/communication_channels",
-            post(create_communication_channel),
+            get(list_communication_channels).post(create_communication_channel),
         )
         .route(
             "/users/self/communication_channels/{id}",
             delete(delete_communication_channel),
         )
+        // Canvas serves GET (`notification_preferences#index`, routes.rb:2067)
+        // and PUT (`notification_preferences#update_all`, routes.rb:2074)
+        // on this path.
         .route(
             "/users/self/communication_channels/{communication_channel_id}/notification_preferences",
-            get(list_channel_preferences),
-        )
-        .route(
-            "/users/self/communication_channels/{communication_channel_id}/notification_preferences",
-            put(update_channel_preferences),
+            get(list_channel_preferences).put(update_channel_preferences),
         )
         .route(
             "/users/self/communication_channels/{communication_channel_id}/notification_preferences/{notification}",
             get(show_channel_preference_self).put(update_channel_preference),
         )
         // User-level notification preferences (Canvas API v1)
+        // User-level aggregation; Canvas has no matching route.
         .route(
             "/users/{user_id}/notification_preferences",
-            get(list_user_preferences),
-        )
-        .route(
-            "/users/{user_id}/notification_preferences",
-            put(update_user_preferences),
+            get(list_user_preferences).put(update_user_preferences),
         )
         // User-scoped communication channels (Canvas API v1)
+        // Canvas `communication_channels#index` / `#create`
+        // (routes.rb:2052-2053) on `users/:user_id/communication_channels`.
         .route(
             "/users/{user_id}/communication_channels",
-            get(list_user_communication_channels),
+            get(list_user_communication_channels).post(create_user_communication_channel),
         )
-        .route(
-            "/users/{user_id}/communication_channels",
-            post(create_user_communication_channel),
-        )
+        // Canvas `destroy` (routes.rb:2062) and `reset_bounce_count`
+        // (routes.rb:2054) share `users/:user_id/communication_channels/:id`.
         .route(
             "/users/{user_id}/communication_channels/{id}",
-            delete(delete_user_communication_channel),
+            delete(delete_user_communication_channel).post(reset_bounce_count),
         )
         // Account bounced-email report (Canvas `bouncing_channel_report`)
         .route(
@@ -469,11 +462,6 @@ pub fn router() -> Router<AppState> {
             get(bounced_communication_channels),
         )
         // communication_channels tail (#62)
-        // Canvas `reset_bounce_count` (routes.rb:2053).
-        .route(
-            "/users/{user_id}/communication_channels/{id}",
-            post(reset_bounce_count),
-        )
         // Canvas `delete_push_token` (routes.rb:2062) — literal self/push
         // segments win over the {type}/{address} params below.
         .route(
@@ -525,29 +513,22 @@ pub fn router() -> Router<AppState> {
             "/users/{user_id}/communication_channels/{communication_channel_id}/notification_preference_categories",
             get(list_channel_preference_categories_scoped),
         )
-        // Per-channel notification preferences, scoped by (type, address)
+        // Per-channel notification preferences, scoped by (type, address).
+        // Canvas `notification_preferences#index`/`#show` (GET, routes.rb:2069,
+        // 2071) and `#update_all`/`#update` (PUT, routes.rb:2075, 2073) share
+        // these paths; writes are self-only — render_unauthorized_action.
         .route(
             "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences",
-            get(index_channel_preferences_by_address),
+            get(index_channel_preferences_by_address).put(update_channel_preferences_by_address),
         )
         .route(
             "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}",
-            get(show_channel_preference_by_address),
+            get(show_channel_preference_by_address).put(update_channel_preference_by_address),
         )
         // User-level preference categories (Canvas `category_index`)
         .route(
             "/users/{user_id}/notification_preference_categories",
             get(list_channel_preference_categories),
-        )
-        // Preference updates, scoped by (type, address) (Canvas `update_all`
-        // and `update`; writes are self-only — render_unauthorized_action)
-        .route(
-            "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences",
-            put(update_channel_preferences_by_address),
-        )
-        .route(
-            "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}",
-            put(update_channel_preference_by_address),
         )
         // Bulk update by category (Canvas `update_preferences_by_category`)
         .route(

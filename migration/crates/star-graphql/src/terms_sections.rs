@@ -66,16 +66,16 @@ struct SectionRow {
 /// Method names are camelCased by the Object derive: `id`, `name`, `startAt`,
 /// `endAt`, `state`, `createdAt`, `updatedAt`.
 pub struct EnrollmentTerm {
-    id: i64,
-    name: String,
-    start_at: Option<DateTime<Utc>>,
-    end_at: Option<DateTime<Utc>>,
-    workflow_state: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) start_at: Option<DateTime<Utc>>,
+    pub(crate) end_at: Option<DateTime<Utc>>,
+    pub(crate) workflow_state: String,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
-#[Object]
+#[Object(name = "Term")]
 impl EnrollmentTerm {
     async fn id(&self) -> ID {
         ID(self.id.to_string())
@@ -111,17 +111,17 @@ impl EnrollmentTerm {
 /// Method names are camelCased by the Object derive: `id`, `name`, `courseId`,
 /// `startAt`, `endAt`, `state`, `createdAt`, `updatedAt`.
 pub struct CourseSection {
-    id: i64,
-    course_id: i64,
-    name: String,
-    start_at: Option<DateTime<Utc>>,
-    end_at: Option<DateTime<Utc>>,
-    workflow_state: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) course_id: i64,
+    pub(crate) name: String,
+    pub(crate) start_at: Option<DateTime<Utc>>,
+    pub(crate) end_at: Option<DateTime<Utc>>,
+    pub(crate) workflow_state: String,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
-#[Object]
+#[Object(name = "Section")]
 impl CourseSection {
     async fn id(&self) -> ID {
         ID(self.id.to_string())
@@ -283,4 +283,40 @@ async fn user_teaches_course(
     .await
     .map_err(db_err)?;
     Ok(row.is_some())
+}
+
+// ---------------------------------------------------------------------------
+// Single-record fetch (Canvas `Query.node` / `Query.legacyNode`)
+// ---------------------------------------------------------------------------
+
+/// Canvas `Query.node(type: Section)` — a course section by legacy id.
+///
+/// Unlike [`fetch_section`] this does not apply the course visibility gate;
+/// the `Node` resolver applies the permission check itself.
+pub(crate) async fn fetch_section_unchecked(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<CourseSection>, async_graphql::Error> {
+    let row: Option<SectionRow> = sqlx::query_as(
+        r#"
+        SELECT id, course_id, name, start_at, end_at, workflow_state, created_at, updated_at
+        FROM course_sections
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(|row| CourseSection {
+        id: row.id,
+        course_id: row.course_id,
+        name: row.name,
+        start_at: row.start_at,
+        end_at: row.end_at,
+        workflow_state: row.workflow_state,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    }))
 }

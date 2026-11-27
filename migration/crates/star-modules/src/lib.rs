@@ -1272,69 +1272,46 @@ pub fn router() -> Router<AppState> {
         .merge(pace_contexts::router())
         // The pace of a section and the pace of a student enrollment.
         .merge(pace_apis::router())
-        .route("/courses/{courseId}/modules", get(list_modules))
-        .route("/courses/{courseId}/modules", post(create_module))
         .route(
-            "/courses/{courseId}/modules/{moduleId}/items",
-            get(list_module_items),
-        )
-        .route(
-            "/courses/{courseId}/modules/{moduleId}",
-            get(get_course_module),
-        )
-        .route(
-            "/courses/{courseId}/modules/{moduleId}",
-            put(update_course_module),
-        )
-        .route(
-            "/courses/{courseId}/modules/{moduleId}",
-            delete(delete_course_module),
+            "/courses/{courseId}/modules",
+            get(list_modules).post(create_module),
         )
         .route(
             "/courses/{courseId}/modules/{moduleId}/items",
-            post(create_course_module_item),
+            get(list_module_items).post(create_course_module_item),
+        )
+        .route(
+            "/courses/{courseId}/modules/{moduleId}",
+            get(get_course_module)
+                .put(update_course_module)
+                .delete(delete_course_module),
         )
         .route(
             "/courses/{courseId}/modules/{moduleId}/items/{itemId}",
-            delete(delete_course_module_item),
+            delete(delete_course_module_item)
+                .put(update_module_scoped_item)
+                .get(get_module_scoped_item),
         )
         .route(
             "/courses/{courseId}/modules/{moduleId}/items/{itemId}/done",
-            put(mark_item_done),
-        )
-        .route(
-            "/courses/{courseId}/modules/{moduleId}/items/{itemId}/done",
-            delete(mark_item_not_done),
+            put(mark_item_done).delete(mark_item_not_done),
         )
         .route(
             "/courses/{courseId}/modules/items/{itemId}",
-            get(get_item_detail),
-        )
-        .route(
-            "/courses/{courseId}/modules/items/{itemId}",
-            put(update_item_detail),
-        )
-        .route(
-            "/courses/{courseId}/modules/items/{itemId}",
-            delete(delete_item_detail),
+            get(get_item_detail)
+                .put(update_item_detail)
+                .delete(delete_item_detail),
         )
         .route(
             "/courses/{courseId}/modules/items/{itemId}/duplicate",
             post(duplicate_item),
         )
-        .route(
-            "/courses/{courseId}/modules/{moduleId}/items/{itemId}",
-            put(update_module_scoped_item),
-        )
-        .route(
-            "/courses/{courseId}/modules/{moduleId}/items/{itemId}",
-            get(get_module_scoped_item),
-        )
         .route("/modules/{id}/items", post(create_or_update_item))
         .route("/modules/{id}/items/{itemId}", delete(delete_module_item))
-        .route("/modules/{id}", get(get_module))
-        .route("/modules/{id}", put(update_module))
-        .route("/modules/{id}", delete(delete_module))
+        .route(
+            "/modules/{id}",
+            get(get_module).put(update_module).delete(delete_module),
+        )
 }
 
 // --------------------------------------------------------------------------

@@ -29,7 +29,7 @@
 //! ## Schema
 //!
 //! The two calendar columns of the account already exist (migration
-//! `0236_account_calendars.sql`); no new DDL is needed:
+//! `0237_account_calendars.sql`); no new DDL is needed:
 //!
 //! ```sql
 //! ALTER TABLE accounts
@@ -223,7 +223,7 @@ async fn index(
         validate_search_term(term)?;
     }
     let (per_page, offset) = page_params(&query);
-    let pattern = search_term.map(|term| like_pattern(term));
+    let pattern = search_term.map(like_pattern);
 
     let rows: Vec<AccountCalendarRow> = sqlx::query_as::<_, AccountCalendarRow>(&index_sql())
         .bind(auth.id)
@@ -361,7 +361,7 @@ async fn bulk_update(
         .collect();
     let mut seen: Vec<&Value> = Vec::new();
     for id in ids.iter() {
-        if seen.iter().any(|other| *other == *id) {
+        if seen.contains(id) {
             return Err(canvas_bad_request("Duplicate IDs"));
         }
         seen.push(*id);
@@ -484,7 +484,7 @@ async fn all_calendars(
 
     let managed = administrated_account_ids(&state.db, auth.id).await?;
     let rows: Vec<AccountCalendarRow> = if search_term.is_some() || filter.is_some() {
-        let pattern = search_term.map(|term| like_pattern(term));
+        let pattern = search_term.map(like_pattern);
         let visible = filter.map(|value| value == "visible");
         sqlx::query_as::<_, AccountCalendarRow>(&all_calendars_search_sql())
             .bind(account.id)
@@ -714,17 +714,26 @@ async fn administrated_account_ids(
          SELECT id FROM admin_accounts UNION SELECT id FROM managed",
         admin_accounts = ADMIN_ACCOUNTS_CTE,
     );
-    let ids: Vec<i64> = sqlx::query_scalar(&sql).bind(user_id).fetch_all(pool).await?;
+    let ids: Vec<i64> = sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
     Ok(ids.into_iter().collect())
 }
 
 /// The accounts the caller is associated with (Canvas `user_account_associations`).
-async fn associated_account_ids(pool: &PgPool, user_id: i64) -> Result<HashSet<i64>, CalendarError> {
+async fn associated_account_ids(
+    pool: &PgPool,
+    user_id: i64,
+) -> Result<HashSet<i64>, CalendarError> {
     let sql = format!(
         "WITH RECURSIVE {assoc_start} SELECT id FROM assoc_chain",
         assoc_start = ASSOC_START_CTE,
     );
-    let ids: Vec<i64> = sqlx::query_scalar(&sql).bind(user_id).fetch_all(pool).await?;
+    let ids: Vec<i64> = sqlx::query_scalar(&sql)
+        .bind(user_id)
+        .fetch_all(pool)
+        .await?;
     Ok(ids.into_iter().collect())
 }
 
@@ -1143,6 +1152,21 @@ impl IntoResponse for CalendarError {
                 })),
             )
                 .into_response(),
+            CalendarError::Api(ApiError::ParameterValidation(errors)) => {
+                let entries: Vec<Value> = errors
+                    .iter()
+                    .map(|error| json!({ "attribute": error.attribute, "message": error.message }))
+                    .collect();
+                (StatusCode::BAD_REQUEST, Json(entries)).into_response()
+            }
+            CalendarError::Api(ApiError::Canvas { status, body }) => {
+                let mut response = (status, body.clone()).into_response();
+                response.headers_mut().insert(
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::HeaderValue::from_static("application/json; charset=utf-8"),
+                );
+                response
+            }
             CalendarError::Canvas(status, body) => (status, Json(body)).into_response(),
         }
     }

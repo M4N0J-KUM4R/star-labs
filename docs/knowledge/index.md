@@ -76,6 +76,7 @@ cause, fix.
 | [[traps/canvas-token-self-expiry]] | a route that ends sessions must not end the replay's own token |
 | [[traps/ci-never-assembled-the-router]] | `cargo test -p` never assembles the app router — that is why the boot bug was invisible |
 | [[traps/star-http-is-the-only-binary]] | the binary is `star-http`; `PORT` is the fallback for `STAR_PORT` |
+| [[traps/front-door-delegation]] | the front door delegates on axum's fallback **and** its method-not-allowed fallback; Canvas answers 404, never 405 |
 
 ## Decisions — why things are the way they are
 

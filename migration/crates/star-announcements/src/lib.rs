@@ -15,7 +15,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{get, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -440,10 +440,9 @@ pub fn router() -> Router<AppState> {
     Router::new()
         // The RSS feeds of a course or a group.
         .merge(external_feeds::router())
-        .route("/courses/{courseId}/announcements", get(list_announcements))
         .route(
             "/courses/{courseId}/announcements",
-            post(create_announcement),
+            get(list_announcements).post(create_announcement),
         )
         .route(
             "/courses/{courseId}/announcements/unread_count",
@@ -451,15 +450,14 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/announcements/{id}/read",
-            put(mark_announcement_read),
+            put(mark_announcement_read).delete(mark_announcement_unread),
         )
         .route(
-            "/courses/{courseId}/announcements/{id}/read",
-            delete(mark_announcement_unread),
+            "/announcements/{id}",
+            get(get_announcement)
+                .put(update_announcement)
+                .delete(delete_announcement),
         )
-        .route("/announcements/{id}", get(get_announcement))
-        .route("/announcements/{id}", put(update_announcement))
-        .route("/announcements/{id}", delete(delete_announcement))
 }
 
 #[cfg(test)]

@@ -156,8 +156,9 @@ def replay_status() -> dict[str, str]:
     m = re.search(r"Passed:\s*(\d+)/(\d+)", text)
     if m:
         passed_count, total = int(m.group(1)), int(m.group(2))
-    # The report lists only failures in detail; a case not listed passed.
-    failures = set(re.findall(r"^- ([a-z0-9\-_]+):", text, re.M))
+    # The report lists only failures in detail, each under a `### <case>`
+    # heading; a case not listed passed.
+    failures = set(re.findall(r"^### ([a-z0-9\-_]+)\s*$", text, re.M))
     status = {}
     for toml in sorted((REPO / "migration" / "rust" / "app-cases" / "http").glob("*.toml")):
         name = toml.stem
@@ -181,7 +182,8 @@ def recorded_cases() -> dict[str, dict]:
 def rust_tables() -> dict[str, set[str]]:
     cols: dict[str, set[str]] = collections.defaultdict(set)
     create = re.compile(r"CREATE TABLE IF NOT EXISTS\s+(\w+)\s*\((.*?)\n\);", re.S | re.I)
-    alter = re.compile(r"ALTER TABLE\s+(\w+)\s+ADD COLUMN(?:\s+IF NOT EXISTS)?\s+(\w+)", re.I)
+    alter = re.compile(r"ALTER TABLE\s+(\w+)\s+(.*?);", re.S | re.I)
+    add_column = re.compile(r"ADD COLUMN(?:\s+IF NOT EXISTS)?\s+(\w+)", re.I)
     for f in sorted((REPO / "migration" / "crates" / "star-db" / "migrations").glob("*.sql")):
         text = f.read_text(errors="ignore")
         for m in create.finditer(text):
@@ -193,8 +195,15 @@ def rust_tables() -> dict[str, set[str]]:
                 if col.upper() in {"PRIMARY", "FOREIGN", "UNIQUE", "CHECK", "CONSTRAINT"}:
                     continue
                 cols[m.group(1)].add(col)
-        for m in alter.finditer(text):
-            cols[m.group(1)].add(m.group(2))
+        # A table that grew through `ALTER TABLE ... ADD COLUMN` has the same
+        # columns as one created with them — and one statement may add several
+        # columns at once.
+        code = "\n".join(
+            line for line in text.split("\n") if not line.strip().startswith("--")
+        )
+        for m in alter.finditer(code):
+            for add in add_column.finditer(m.group(2)):
+                cols[m.group(1)].add(add.group(1))
     return cols
 
 
@@ -289,6 +298,21 @@ def gen_schema_truth(tables: dict[str, set[str]], cases: dict) -> str:
         "group_categories", "folders", "attachments", "assignments",
         "submissions", "conversations", "calendar_events", "rubrics",
     }
+    # Segments that are not a table row of their own: the response is an
+    # embedded object (a permissions map, the course settings document) or
+    # it is not a row at all (preview_html renders a document, ping answers
+    # with a flag).
+    non_resource = {
+        "permissions", "settings", "stats", "statistics", "grades", "grade",
+        "preview_html", "ping",
+    }
+    # Sub-resources that answer with a row of their own table: `/courses/1/
+    # students` answers with users, `/courses/1/front_page` with a wiki page.
+    sub_resource_table = {
+        "students": "users", "users": "users", "recent_students": "users",
+        "search_users": "users", "student_view_student": "users",
+        "content_share_users": "users", "front_page": "wiki_pages",
+    }
     canvas_fields: dict[str, set[str]] = collections.defaultdict(set)
     for name, info in cases.items():
         segs = [s for s in info["path"].split("/") if s]
@@ -298,6 +322,11 @@ def gen_schema_truth(tables: dict[str, set[str]], cases: dict) -> str:
         for s in reversed(segs):
             if s.isdigit() or s.startswith("{"):
                 continue
+            if s in non_resource:
+                break
+            if s in sub_resource_table:
+                table = sub_resource_table[s]
+                break
             if s in seg_table:
                 table = seg_table[s]
                 break

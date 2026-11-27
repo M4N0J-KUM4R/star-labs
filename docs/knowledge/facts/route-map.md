@@ -11,7 +11,7 @@ and what the parity replay says about it. An agent working on a route should
 read this file, then the Canvas file, then the Rust crate — not the whole tree.
 
 Canvas routes: **1403** in **222** controllers.
-Implemented in the port: **497**.
+Implemented in the port: **1163**.
 
 ## `accessibility_course_scans` → `?`
 
@@ -31,72 +31,72 @@ Canvas source: `app/controllers/accessibility_course_statistics_controller.rb`  
 
 ## `account_calendars_api` → `star-calendar`
 
-Canvas source: `app/controllers/account_calendars_api_controller.rb`  ·  routes: 6  ·  implemented: 0
+Canvas source: `app/controllers/account_calendars_api_controller.rb`  ·  routes: 6  ·  implemented: 6
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/account_calendars` | **no** | - | - |
-| GET | `/api/v1/account_calendars/:account_id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/account_calendars` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/visible_calendars_count` | **no** | - | - |
-| PUT | `/api/v1/account_calendars/:account_id` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/account_calendars` | **no** | - | - |
+| GET | `/api/v1/account_calendars` | yes | - | - |
+| GET | `/api/v1/account_calendars/:account_id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/account_calendars` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/visible_calendars_count` | yes | - | - |
+| PUT | `/api/v1/account_calendars/:account_id` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/account_calendars` | yes | - | - |
 
 ## `account_notifications` → `star-accounts`
 
-Canvas source: `app/controllers/account_notifications_controller.rb`  ·  routes: 8  ·  implemented: 5
+Canvas source: `app/controllers/account_notifications_controller.rb`  ·  routes: 8  ·  implemented: 8
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/accounts/:account_id/account_notifications/:id` | yes | - | - |
-| DELETE | `/api/v1/accounts/:account_id/users/:user_id/account_notifications/:id` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/users/:user_id/account_notifications/:id` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/account_notifications` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/account_notifications/:id` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/users/:user_id/account_notifications` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/users/:user_id/account_notifications/:id` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/users/:user_id/account_notifications` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/users/:user_id/account_notifications/:id` | yes | - | - |
 | POST | `/api/v1/accounts/:account_id/account_notifications` | yes | - | - |
 | PUT | `/api/v1/accounts/:account_id/account_notifications/:id` | yes | - | - |
 
 ## `account_reports` → `star-account-reports`
 
-Canvas source: `app/controllers/account_reports_controller.rb`  ·  routes: 6  ·  implemented: 0
+Canvas source: `app/controllers/account_reports_controller.rb`  ·  routes: 6  ·  implemented: 6
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/accounts/:account_id/reports/:report/:id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/reports` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/reports/:report` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/reports/:report/:id` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/reports/:report` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/reports/:report/:id/abort` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/reports/:report/:id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/reports` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/reports/:report` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/reports/:report/:id` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/reports/:report` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/reports/:report/:id/abort` | yes | - | - |
 
 ## `accounts` → `star-accounts`
 
-Canvas source: `app/controllers/accounts_controller.rb`  ·  routes: 22  ·  implemented: 14
+Canvas source: `app/controllers/accounts_controller.rb`  ·  routes: 22  ·  implemented: 22
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/accounts/:account_id/users` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/users` | yes | - | - |
 | DELETE | `/api/v1/accounts/:account_id/users/:user_id` | yes | - | - |
 | GET | `/api/v1/acceptable_use_policy` | yes | `200` | pass |
 | GET | `/api/v1/accounts` | yes | `200` | pass |
-| GET | `/api/v1/accounts/:account_id/accessibility_issue_summary` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/accessibility_issue_summary` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/courses` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/help_links` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/permissions` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/quiz_ip_filters` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/quiz_ip_filters` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/settings` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/sub_accounts` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/terms_of_service` | yes | - | - |
 | GET | `/api/v1/accounts/:id` | yes | - | - |
-| GET | `/api/v1/course_accounts` | **no** | `200` | pass |
+| GET | `/api/v1/course_accounts` | yes | `200` | pass |
 | GET | `/api/v1/course_creation_accounts` | yes | `200` | pass |
-| GET | `/api/v1/horizon_accounts` | **no** | `200` | pass |
-| GET | `/api/v1/manageable_accounts` | yes | `200` | pass |
-| GET | `/api/v1/manually_created_courses_account` | yes | `200` | pass |
-| GET | `/api/v1/settings/environment` | **no** | `200` | pass |
-| PUT | `/api/v1/accounts/:account_id/users/:user_id/restore` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/users/bulk_update` | **no** | - | - |
+| GET | `/api/v1/horizon_accounts` | yes | `200` | pass |
+| GET | `/api/v1/manageable_accounts` | yes | `200` | **FAIL** |
+| GET | `/api/v1/manually_created_courses_account` | yes | `200` | **FAIL** |
+| GET | `/api/v1/settings/environment` | yes | `200` | pass |
+| PUT | `/api/v1/accounts/:account_id/users/:user_id/restore` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/users/bulk_update` | yes | - | - |
 | PUT | `/api/v1/accounts/:id` | yes | - | - |
 
 ## `admins` → `star-accounts`
@@ -112,34 +112,34 @@ Canvas source: `app/controllers/admins_controller.rb`  ·  routes: 4  ·  implem
 
 ## `ai_conversations` → `star-courses`
 
-Canvas source: `app/controllers/ai_conversations_controller.rb`  ·  routes: 8  ·  implemented: 0
+Canvas source: `app/controllers/ai_conversations_controller.rb`  ·  routes: 8  ·  implemented: 8
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id` | **no** | - | - |
-| DELETE | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id/messages/:message_id/feedback/:feedback_id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id/evaluation` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id/messages` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id/messages/:message_id/feedback` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id` | yes | - | - |
+| DELETE | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id/messages/:message_id/feedback/:feedback_id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id/evaluation` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id/messages` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/ai_experiences/:ai_experience_id/conversations/:id/messages/:message_id/feedback` | yes | - | - |
 
 ## `ai_experiences` → `star-courses`
 
-Canvas source: `app/controllers/ai_experiences_controller.rb`  ·  routes: 9  ·  implemented: 0
+Canvas source: `app/controllers/ai_experiences_controller.rb`  ·  routes: 9  ·  implemented: 9
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/courses/:course_id/ai_experiences/:id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/ai_experiences` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/ai_experiences/:id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/ai_experiences/:id/ai_conversations` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/ai_experiences/:id/ai_conversations/:conversation_id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/ai_experiences/:id/edit` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/ai_experiences/new` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/ai_experiences` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/ai_experiences/:id` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/ai_experiences/:id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/ai_experiences` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/ai_experiences/:id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/ai_experiences/:id/ai_conversations` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/ai_experiences/:id/ai_conversations/:conversation_id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/ai_experiences/:id/edit` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/ai_experiences/new` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/ai_experiences` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/ai_experiences/:id` | yes | - | - |
 
 ## `announcements_api` → `?`
 
@@ -153,11 +153,11 @@ Canvas source: `app/controllers/announcements_api_controller.rb`  ·  routes: 3 
 
 ## `anonymous_provisional_grades` → `star-assignments`
 
-Canvas source: `app/controllers/anonymous_provisional_grades_controller.rb`  ·  routes: 1  ·  implemented: 0
+Canvas source: `app/controllers/anonymous_provisional_grades_controller.rb`  ·  routes: 1  ·  implemented: 1
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/courses/:course_id/assignments/:assignment_id/anonymous_provisional_grades/status` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/assignments/:assignment_id/anonymous_provisional_grades/status` | yes | - | - |
 
 ## `app_center` → `?`
 
@@ -195,11 +195,11 @@ Canvas source: `app/controllers/assessment_question_banks_controller.rb`  ·  ro
 
 ## `assignment_extensions` → `star-assignments`
 
-Canvas source: `app/controllers/assignment_extensions_controller.rb`  ·  routes: 1  ·  implemented: 0
+Canvas source: `app/controllers/assignment_extensions_controller.rb`  ·  routes: 1  ·  implemented: 1
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| POST | `/api/v1/courses/:course_id/assignments/:assignment_id/extensions` | **no** | - | - |
+| POST | `/api/v1/courses/:course_id/assignments/:assignment_id/extensions` | yes | - | - |
 
 ## `assignment_groups` → `star-assignment-groups`
 
@@ -292,48 +292,48 @@ Canvas source: `app/controllers/authentication_providers_controller.rb`  ·  rou
 
 ## `blackout_dates` → `star-grading-standards`
 
-Canvas source: `app/controllers/blackout_dates_controller.rb`  ·  routes: 13  ·  implemented: 6
+Canvas source: `app/controllers/blackout_dates_controller.rb`  ·  routes: 13  ·  implemented: 13
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/accounts/:account_id/blackout_dates/:id` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/blackout_dates/:id` | yes | - | - |
 | DELETE | `/api/v1/courses/:course_id/blackout_dates/:id` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/blackout_dates` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/blackout_dates/:id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/blackout_dates/new` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/blackout_dates/:id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/blackout_dates/new` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/blackout_dates` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/blackout_dates/:id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/blackout_dates/new` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/blackout_dates/:id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/blackout_dates/new` | yes | - | - |
 | POST | `/api/v1/accounts/:account_id/blackout_dates` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/blackout_dates` | yes | - | - |
-| PUT | `/api/v1/accounts/:account_id/blackout_dates/:id` | **no** | - | - |
+| PUT | `/api/v1/accounts/:account_id/blackout_dates/:id` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/blackout_dates` | yes | - | - |
-| PUT | `/api/v1/courses/:course_id/blackout_dates/:id` | **no** | - | - |
+| PUT | `/api/v1/courses/:course_id/blackout_dates/:id` | yes | - | - |
 
 ## `block_editor_templates_api` → `star-content`
 
-Canvas source: `app/controllers/block_editor_templates_api_controller.rb`  ·  routes: 6  ·  implemented: 0
+Canvas source: `app/controllers/block_editor_templates_api_controller.rb`  ·  routes: 6  ·  implemented: 6
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/courses/:course_id/block_editor_templates/:id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/block_editor_templates` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/block_editor_templates/can_edit` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/block_editor_templates` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/block_editor_templates/:id/publish` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/block_editor_templates/:id` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/block_editor_templates/:id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/block_editor_templates` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/block_editor_templates/can_edit` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/block_editor_templates` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/block_editor_templates/:id/publish` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/block_editor_templates/:id` | yes | - | - |
 
 ## `bookmarks/bookmarks` → `star-users`
 
-Canvas source: `app/controllers/bookmarks/bookmarks_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/bookmarks/bookmarks_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/users/self/bookmarks/:id` | **no** | - | - |
-| GET | `/api/v1/users/self/bookmarks/` | **no** | - | - |
-| GET | `/api/v1/users/self/bookmarks/:id` | **no** | - | - |
-| POST | `/api/v1/users/self/bookmarks` | **no** | - | - |
-| PUT | `/api/v1/users/self/bookmarks/:id` | **no** | - | - |
+| DELETE | `/api/v1/users/self/bookmarks/:id` | yes | - | - |
+| GET | `/api/v1/users/self/bookmarks/` | yes | - | - |
+| GET | `/api/v1/users/self/bookmarks/:id` | yes | - | - |
+| POST | `/api/v1/users/self/bookmarks` | yes | - | - |
+| PUT | `/api/v1/users/self/bookmarks/:id` | yes | - | - |
 
 ## `brand_configs_api` → `?`
 
@@ -378,37 +378,37 @@ Canvas source: `app/controllers/canvadoc_sessions_controller.rb`  ·  routes: 2 
 
 ## `canvas_career/user_experiences` → `star-accounts`
 
-Canvas source: `app/controllers/canvas_career/user_experiences_controller.rb`  ·  routes: 2  ·  implemented: 0
+Canvas source: `app/controllers/canvas_career/user_experiences_controller.rb`  ·  routes: 2  ·  implemented: 2
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/career/user_experiences` | **no** | - | - |
-| POST | `/api/v1/career/user_experiences` | **no** | - | - |
+| DELETE | `/api/v1/career/user_experiences` | yes | - | - |
+| POST | `/api/v1/career/user_experiences` | yes | - | - |
 
 ## `career_experience` → `star-accounts`
 
-Canvas source: `app/controllers/career_experience_controller.rb`  ·  routes: 4  ·  implemented: 0
+Canvas source: `app/controllers/career_experience_controller.rb`  ·  routes: 4  ·  implemented: 4
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/career/enabled` | **no** | - | - |
-| GET | `/api/v1/career/experience_summary` | **no** | - | - |
-| POST | `/api/v1/career/switch_experience` | **no** | - | - |
-| POST | `/api/v1/career/switch_role` | **no** | - | - |
+| GET | `/api/v1/career/enabled` | yes | - | - |
+| GET | `/api/v1/career/experience_summary` | yes | - | - |
+| POST | `/api/v1/career/switch_experience` | yes | - | - |
+| POST | `/api/v1/career/switch_role` | yes | - | - |
 
 ## `collaborations` → `star-collaborations`
 
-Canvas source: `app/controllers/collaborations_controller.rb`  ·  routes: 7  ·  implemented: 0
+Canvas source: `app/controllers/collaborations_controller.rb`  ·  routes: 7  ·  implemented: 7
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/courses/:course_id/collaborations/:id` | **no** | - | - |
-| DELETE | `/api/v1/groups/:group_id/collaborations/:id` | **no** | - | - |
-| GET | `/api/v1/collaborations/:id/members` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/collaborations` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/potential_collaborators` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/collaborations` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/potential_collaborators` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/collaborations/:id` | yes | - | - |
+| DELETE | `/api/v1/groups/:group_id/collaborations/:id` | yes | - | - |
+| GET | `/api/v1/collaborations/:id/members` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/collaborations` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/potential_collaborators` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/collaborations` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/potential_collaborators` | yes | - | - |
 
 ## `comm_messages_api` → `?`
 
@@ -420,34 +420,34 @@ Canvas source: `app/controllers/comm_messages_api_controller.rb`  ·  routes: 1 
 
 ## `communication_channels` → `star-notifications`
 
-Canvas source: `app/controllers/communication_channels_controller.rb`  ·  routes: 12  ·  implemented: 4
+Canvas source: `app/controllers/communication_channels_controller.rb`  ·  routes: 12  ·  implemented: 12
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/users/:user_id/communication_channels/:id` | yes | - | - |
-| DELETE | `/api/v1/users/:user_id/communication_channels/:type/:address` | **no** | - | - |
-| DELETE | `/api/v1/users/self/communication_channels/push` | **no** | - | - |
+| DELETE | `/api/v1/users/:user_id/communication_channels/:type/:address` | yes | - | - |
+| DELETE | `/api/v1/users/self/communication_channels/push` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/bounced_communication_channels` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/bounced_communication_channels.csv` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/unconfirmed_communication_channels` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/unconfirmed_communication_channels.csv` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/bounced_communication_channels.csv` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/unconfirmed_communication_channels` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/unconfirmed_communication_channels.csv` | yes | - | - |
 | GET | `/api/v1/users/:user_id/communication_channels` | yes | - | - |
-| POST | `/api/v1/accounts/:account_id/bounced_communication_channels/reset` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/unconfirmed_communication_channels/confirm` | **no** | - | - |
+| POST | `/api/v1/accounts/:account_id/bounced_communication_channels/reset` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/unconfirmed_communication_channels/confirm` | yes | - | - |
 | POST | `/api/v1/users/:user_id/communication_channels` | yes | - | - |
-| POST | `/api/v1/users/:user_id/communication_channels/:id` | **no** | - | - |
+| POST | `/api/v1/users/:user_id/communication_channels/:id` | yes | - | - |
 
 ## `conditional_release/rules` → `star-modules`
 
-Canvas source: `app/controllers/conditional_release/rules_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/conditional_release/rules_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/courses/:course_id/mastery_paths/rules/:id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/mastery_paths/rules` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/mastery_paths/rules/:id` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/mastery_paths/rules` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/mastery_paths/rules/:id` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/mastery_paths/rules/:id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/mastery_paths/rules` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/mastery_paths/rules/:id` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/mastery_paths/rules` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/mastery_paths/rules/:id` | yes | - | - |
 
 ## `conditional_release/stats` → `?`
 
@@ -460,94 +460,94 @@ Canvas source: `app/controllers/conditional_release/stats_controller.rb`  ·  ro
 
 ## `conferences` → `star-conferences`
 
-Canvas source: `app/controllers/conferences_controller.rb`  ·  routes: 7  ·  implemented: 0
+Canvas source: `app/controllers/conferences_controller.rb`  ·  routes: 7  ·  implemented: 7
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/conferences` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/conferences` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/conferences` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/conferences` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/conferences/:conference_id/recording_ready` | **no** | - | - |
-| POST | `/api/v1/groups/:group_id/conferences` | **no** | - | - |
-| POST | `/api/v1/groups/:group_id/conferences/:conference_id/recording_ready` | **no** | - | - |
+| GET | `/api/v1/conferences` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/conferences` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/conferences` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/conferences` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/conferences/:conference_id/recording_ready` | yes | - | - |
+| POST | `/api/v1/groups/:group_id/conferences` | yes | - | - |
+| POST | `/api/v1/groups/:group_id/conferences/:conference_id/recording_ready` | yes | - | - |
 
 ## `content_exports_api` → `star-content`
 
-Canvas source: `app/controllers/content_exports_api_controller.rb`  ·  routes: 14  ·  implemented: 3
+Canvas source: `app/controllers/content_exports_api_controller.rb`  ·  routes: 14  ·  implemented: 14
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | GET | `/api/v1/courses/:course_id/content_exports` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/content_exports/:id` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/content_list` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/content_exports` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/content_exports/:id` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/content_exports` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/content_exports/:id` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/content_list` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/content_exports` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/content_exports/:id` | yes | - | - |
+| GET | `/api/v1/users/:user_id/content_exports` | yes | - | - |
+| GET | `/api/v1/users/:user_id/content_exports/:id` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/content_exports` | yes | - | - |
-| POST | `/api/v1/groups/:group_id/content_exports` | **no** | - | - |
-| POST | `/api/v1/users/:user_id/content_exports` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/content_exports/:id` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/content_exports/:id/fail` | **no** | - | - |
-| PUT | `/api/v1/groups/:group_id/content_exports/:id/fail` | **no** | - | - |
-| PUT | `/api/v1/users/:user_id/content_exports/:id/fail` | **no** | - | - |
+| POST | `/api/v1/groups/:group_id/content_exports` | yes | - | - |
+| POST | `/api/v1/users/:user_id/content_exports` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/content_exports/:id` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/content_exports/:id/fail` | yes | - | - |
+| PUT | `/api/v1/groups/:group_id/content_exports/:id/fail` | yes | - | - |
+| PUT | `/api/v1/users/:user_id/content_exports/:id/fail` | yes | - | - |
 
 ## `content_imports` → `star-content`
 
-Canvas source: `app/controllers/content_imports_controller.rb`  ·  routes: 2  ·  implemented: 0
+Canvas source: `app/controllers/content_imports_controller.rb`  ·  routes: 2  ·  implemented: 2
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/courses/:course_id/course_copy/:id` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/course_copy` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/course_copy/:id` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/course_copy` | yes | - | - |
 
 ## `content_migrations` → `star-content`
 
-Canvas source: `app/controllers/content_migrations_controller.rb`  ·  routes: 25  ·  implemented: 6
+Canvas source: `app/controllers/content_migrations_controller.rb`  ·  routes: 25  ·  implemented: 25
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/accounts/:account_id/content_migrations` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/content_migrations/:id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/content_migrations/:id/selective_data` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/content_migrations/migrators` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/content_migrations` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/content_migrations/:id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/content_migrations/:id/selective_data` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/content_migrations/migrators` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/content_migrations` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/content_migrations/:id` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/content_migrations/:id/asset_id_mapping` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/content_migrations/:id/asset_id_mapping` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/content_migrations/:id/selective_data` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/content_migrations/migrators` | yes | - | - |
-| GET | `/api/v1/groups/:group_id/content_migrations` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/content_migrations/:id` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/content_migrations/:id/selective_data` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/content_migrations/migrators` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/content_migrations` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/content_migrations/:id` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/content_migrations/:id/selective_data` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/content_migrations/migrators` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/content_migrations` | **no** | - | - |
+| GET | `/api/v1/groups/:group_id/content_migrations` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/content_migrations/:id` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/content_migrations/:id/selective_data` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/content_migrations/migrators` | yes | - | - |
+| GET | `/api/v1/users/:user_id/content_migrations` | yes | - | - |
+| GET | `/api/v1/users/:user_id/content_migrations/:id` | yes | - | - |
+| GET | `/api/v1/users/:user_id/content_migrations/:id/selective_data` | yes | - | - |
+| GET | `/api/v1/users/:user_id/content_migrations/migrators` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/content_migrations` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/content_migrations` | yes | - | - |
-| POST | `/api/v1/groups/:group_id/content_migrations` | **no** | - | - |
-| POST | `/api/v1/users/:user_id/content_migrations` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/content_migrations/:id` | **no** | - | - |
+| POST | `/api/v1/groups/:group_id/content_migrations` | yes | - | - |
+| POST | `/api/v1/users/:user_id/content_migrations` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/content_migrations/:id` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/content_migrations/:id` | yes | - | - |
-| PUT | `/api/v1/groups/:group_id/content_migrations/:id` | **no** | - | - |
-| PUT | `/api/v1/users/:user_id/content_migrations/:id` | **no** | - | - |
+| PUT | `/api/v1/groups/:group_id/content_migrations/:id` | yes | - | - |
+| PUT | `/api/v1/users/:user_id/content_migrations/:id` | yes | - | - |
 
 ## `content_shares` → `star-content`
 
-Canvas source: `app/controllers/content_shares_controller.rb`  ·  routes: 8  ·  implemented: 0
+Canvas source: `app/controllers/content_shares_controller.rb`  ·  routes: 8  ·  implemented: 8
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/users/:user_id/content_shares/:id` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/content_shares/:id` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/content_shares/received` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/content_shares/sent` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/content_shares/unread_count` | **no** | - | - |
-| POST | `/api/v1/users/:user_id/content_shares` | **no** | - | - |
-| POST | `/api/v1/users/:user_id/content_shares/:id/add_users` | **no** | - | - |
-| PUT | `/api/v1/users/:user_id/content_shares/:id` | **no** | - | - |
+| DELETE | `/api/v1/users/:user_id/content_shares/:id` | yes | - | - |
+| GET | `/api/v1/users/:user_id/content_shares/:id` | yes | - | - |
+| GET | `/api/v1/users/:user_id/content_shares/received` | yes | - | - |
+| GET | `/api/v1/users/:user_id/content_shares/sent` | yes | - | - |
+| GET | `/api/v1/users/:user_id/content_shares/unread_count` | yes | - | - |
+| POST | `/api/v1/users/:user_id/content_shares` | yes | - | - |
+| POST | `/api/v1/users/:user_id/content_shares/:id/add_users` | yes | - | - |
+| PUT | `/api/v1/users/:user_id/content_shares/:id` | yes | - | - |
 
 ## `context_module_items_api` → `star-modules`
 
@@ -591,18 +591,18 @@ Canvas source: `app/controllers/conversations_controller.rb`  ·  routes: 16  ·
 |---|---|---|---|---|
 | DELETE | `/api/v1/conversations/:id` | yes | - | - |
 | DELETE | `/api/v1/conversations/:id/delete_for_all` | yes | - | - |
-| GET | `/api/v1/conversations` | yes | `200` | pass |
+| GET | `/api/v1/conversations` | yes | `200` | **FAIL** |
 | GET | `/api/v1/conversations/:id` | yes | - | - |
 | GET | `/api/v1/conversations/batches` | yes | `200` | pass |
 | GET | `/api/v1/conversations/deleted` | yes | `403` | pass |
-| GET | `/api/v1/conversations/find_recipients` | yes | `200` | pass |
+| GET | `/api/v1/conversations/find_recipients` | yes | `200` | **FAIL** |
 | GET | `/api/v1/conversations/unread_count` | yes | `200` | pass |
-| POST | `/api/v1/conversations` | yes | `200` | pass |
+| POST | `/api/v1/conversations` | yes | `200` | **FAIL** |
 | POST | `/api/v1/conversations/:id/add_message` | yes | - | - |
 | POST | `/api/v1/conversations/:id/add_recipients` | yes | - | - |
 | POST | `/api/v1/conversations/:id/remove_messages` | yes | - | - |
 | POST | `/api/v1/conversations/mark_all_as_read` | yes | `200` | pass |
-| PUT | `/api/v1/conversations` | yes | `200` | pass |
+| PUT | `/api/v1/conversations` | yes | `200` | **FAIL** |
 | PUT | `/api/v1/conversations/:id` | yes | - | - |
 | PUT | `/api/v1/conversations/restore` | yes | `403` | pass |
 
@@ -617,68 +617,68 @@ Canvas source: `app/controllers/course_audit_api_controller.rb`  ·  routes: 2  
 
 ## `course_nicknames` → `star-users`
 
-Canvas source: `app/controllers/course_nicknames_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/course_nicknames_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/users/self/course_nicknames` | **no** | - | - |
-| DELETE | `/api/v1/users/self/course_nicknames/:course_id` | **no** | - | - |
-| GET | `/api/v1/users/self/course_nicknames` | **no** | - | - |
-| GET | `/api/v1/users/self/course_nicknames/:course_id` | **no** | - | - |
-| PUT | `/api/v1/users/self/course_nicknames/:course_id` | **no** | - | - |
+| DELETE | `/api/v1/users/self/course_nicknames` | yes | - | - |
+| DELETE | `/api/v1/users/self/course_nicknames/:course_id` | yes | - | - |
+| GET | `/api/v1/users/self/course_nicknames` | yes | - | - |
+| GET | `/api/v1/users/self/course_nicknames/:course_id` | yes | - | - |
+| PUT | `/api/v1/users/self/course_nicknames/:course_id` | yes | - | - |
 
 ## `course_paces` → `star-modules`
 
-Canvas source: `app/controllers/course_paces_controller.rb`  ·  routes: 8  ·  implemented: 0
+Canvas source: `app/controllers/course_paces_controller.rb`  ·  routes: 8  ·  implemented: 8
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/courses/:course_id/course_pacing/:id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/course_pacing/:id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/course_pacing/new` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/course_pacing` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/course_pacing/:id/publish` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/course_pacing/bulk_create_enrollment_paces` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/course_pacing/compress_dates` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/course_pacing/:id` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/course_pacing/:id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/course_pacing/:id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/course_pacing/new` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/course_pacing` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/course_pacing/:id/publish` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/course_pacing/bulk_create_enrollment_paces` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/course_pacing/compress_dates` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/course_pacing/:id` | yes | - | - |
 
 ## `course_pacing/bulk_student_enrollment_paces_api` → `star-modules`
 
-Canvas source: `app/controllers/course_pacing/bulk_student_enrollment_paces_api_controller.rb`  ·  routes: 1  ·  implemented: 0
+Canvas source: `app/controllers/course_pacing/bulk_student_enrollment_paces_api_controller.rb`  ·  routes: 1  ·  implemented: 1
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/courses/:course_id/bulk_student_enrollments/student_bulk_pace_edit_view` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/bulk_student_enrollments/student_bulk_pace_edit_view` | yes | - | - |
 
 ## `course_pacing/pace_contexts_api` → `star-modules`
 
-Canvas source: `app/controllers/course_pacing/pace_contexts_api_controller.rb`  ·  routes: 1  ·  implemented: 0
+Canvas source: `app/controllers/course_pacing/pace_contexts_api_controller.rb`  ·  routes: 1  ·  implemented: 1
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/courses/:course_id/pace_contexts` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/pace_contexts` | yes | - | - |
 
 ## `course_pacing/section_paces_api` → `star-modules`
 
-Canvas source: `app/controllers/course_pacing/section_paces_api_controller.rb`  ·  routes: 4  ·  implemented: 0
+Canvas source: `app/controllers/course_pacing/section_paces_api_controller.rb`  ·  routes: 4  ·  implemented: 4
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/courses/:course_id/sections/:course_section_id/pace` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/sections/:course_section_id/pace` | **no** | - | - |
-| PATCH | `/api/v1/courses/:course_id/sections/:course_section_id/pace` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/sections/:course_section_id/paces` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/sections/:course_section_id/pace` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/sections/:course_section_id/pace` | yes | - | - |
+| PATCH | `/api/v1/courses/:course_id/sections/:course_section_id/pace` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/sections/:course_section_id/paces` | yes | - | - |
 
 ## `course_pacing/student_enrollment_paces_api` → `star-modules`
 
-Canvas source: `app/controllers/course_pacing/student_enrollment_paces_api_controller.rb`  ·  routes: 4  ·  implemented: 0
+Canvas source: `app/controllers/course_pacing/student_enrollment_paces_api_controller.rb`  ·  routes: 4  ·  implemented: 4
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/courses/:course_id/student_enrollments/:student_enrollment_id/pace` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/student_enrollments/:student_enrollment_id/pace` | **no** | - | - |
-| PATCH | `/api/v1/courses/:course_id/student_enrollments/:student_enrollment_id/pace` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/student_enrollments/:student_enrollment_id/paces` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/student_enrollments/:student_enrollment_id/pace` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/student_enrollments/:student_enrollment_id/pace` | yes | - | - |
+| PATCH | `/api/v1/courses/:course_id/student_enrollments/:student_enrollment_id/pace` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/student_enrollments/:student_enrollment_id/paces` | yes | - | - |
 
 ## `course_reports` → `?`
 
@@ -701,63 +701,63 @@ Canvas source: `app/controllers/course_tag_conversion_controller.rb`  ·  routes
 
 ## `courses` → `star-courses`
 
-Canvas source: `app/controllers/courses_controller.rb`  ·  routes: 38  ·  implemented: 14
+Canvas source: `app/controllers/courses_controller.rb`  ·  routes: 38  ·  implemented: 36
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/courses/:id` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/courses/:id` | **no** | - | - |
 | GET | `/api/v1/courses` | yes | `200` | pass |
-| GET | `/api/v1/courses/:course_id/activity_stream` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/activity_stream` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/activity_stream/summary` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/bulk_user_progress` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/bulk_user_progress` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/content_share_users` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/effective_due_dates` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/link_validation` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/permissions` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/recent_students` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/search_users` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/effective_due_dates` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/link_validation` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/permissions` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/recent_students` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/search_users` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/settings` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/student_view_student` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/students` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/todo` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/student_view_student` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/students` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/todo` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/users` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/users/:id` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/users/:user_id/progress` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/youtube_migration/conversion_status` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/youtube_migration/scan` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/users/:user_id/progress` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/youtube_migration/conversion_status` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/youtube_migration/scan` | yes | - | - |
 | GET | `/api/v1/courses/:id` | yes | - | - |
 | GET | `/api/v1/users/:user_id/courses` | yes | - | - |
 | POST | `/api/v1/accounts/:account_id/courses` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/files` | yes | - | - |
-| POST | `/api/v1/courses/:course_id/link_validation` | **no** | - | - |
+| POST | `/api/v1/courses/:course_id/link_validation` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/ping` | yes | - | - |
-| POST | `/api/v1/courses/:course_id/preview_html` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/reset_content` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/restore/:version_id` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/youtube_migration/convert` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/youtube_migration/scan` | **no** | - | - |
-| POST | `/api/v1/courses/:id/dismiss_migration_limitation_message` | **no** | - | - |
+| POST | `/api/v1/courses/:course_id/preview_html` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/reset_content` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/restore/:version_id` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/youtube_migration/convert` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/youtube_migration/scan` | yes | - | - |
+| POST | `/api/v1/courses/:id/dismiss_migration_limitation_message` | yes | - | - |
 | PUT | `/api/v1/accounts/:account_id/courses` | **no** | - | - |
 | PUT | `/api/v1/courses/:course_id/settings` | yes | - | - |
-| PUT | `/api/v1/courses/:course_id/youtube_migration/scan/:scan_id` | **no** | - | - |
+| PUT | `/api/v1/courses/:course_id/youtube_migration/scan/:scan_id` | yes | - | - |
 | PUT | `/api/v1/courses/:id` | yes | - | - |
-| PUT | `/api/v1/courses/:id/quizzes` | **no** | - | - |
+| PUT | `/api/v1/courses/:id/quizzes` | yes | - | - |
 
 ## `csp_settings` → `star-features`
 
-Canvas source: `app/controllers/csp_settings_controller.rb`  ·  routes: 8  ·  implemented: 0
+Canvas source: `app/controllers/csp_settings_controller.rb`  ·  routes: 8  ·  implemented: 8
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/accounts/:account_id/csp_settings/domains` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/csp_settings` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/csp_settings` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/csp_settings/domains` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/csp_settings/domains/batch_create` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/csp_settings` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/csp_settings/lock` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/csp_settings` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/csp_settings/domains` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/csp_settings` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/csp_settings` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/csp_settings/domains` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/csp_settings/domains/batch_create` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/csp_settings` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/csp_settings/lock` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/csp_settings` | yes | - | - |
 
 ## `custom_data` → `?`
 
@@ -781,15 +781,15 @@ Canvas source: `app/controllers/custom_gradebook_column_data_api_controller.rb` 
 
 ## `custom_gradebook_columns_api` → `star-courses`
 
-Canvas source: `app/controllers/custom_gradebook_columns_api_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/custom_gradebook_columns_api_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/courses/:course_id/custom_gradebook_columns/:id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/custom_gradebook_columns` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/custom_gradebook_columns` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/custom_gradebook_columns/reorder` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/custom_gradebook_columns/:id` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/custom_gradebook_columns/:id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/custom_gradebook_columns` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/custom_gradebook_columns` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/custom_gradebook_columns/reorder` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/custom_gradebook_columns/:id` | yes | - | - |
 
 ## `developer_key_account_bindings` → `?`
 
@@ -842,29 +842,29 @@ Canvas source: `app/controllers/discussion_entries_controller.rb`  ·  routes: 4
 
 ## `discussion_topic_users` → `star-discussions`
 
-Canvas source: `app/controllers/discussion_topic_users_controller.rb`  ·  routes: 2  ·  implemented: 0
+Canvas source: `app/controllers/discussion_topic_users_controller.rb`  ·  routes: 2  ·  implemented: 2
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/courses/:course_id/discussion_topics/:topic_id/messageable_users` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/discussion_topics/:topic_id/messageable_users` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/discussion_topics/:topic_id/messageable_users` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/discussion_topics/:topic_id/messageable_users` | yes | - | - |
 
 ## `discussion_topics` → `star-discussions`
 
-Canvas source: `app/controllers/discussion_topics_controller.rb`  ·  routes: 10  ·  implemented: 4
+Canvas source: `app/controllers/discussion_topics_controller.rb`  ·  routes: 10  ·  implemented: 10
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/courses/:course_id/discussion_topics/:topic_id` | yes | - | - |
-| DELETE | `/api/v1/groups/:group_id/discussion_topics/:topic_id` | **no** | - | - |
+| DELETE | `/api/v1/groups/:group_id/discussion_topics/:topic_id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/discussion_topics` | yes | - | - |
-| GET | `/api/v1/groups/:group_id/discussion_topics` | **no** | - | - |
+| GET | `/api/v1/groups/:group_id/discussion_topics` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/discussion_topics` | yes | - | - |
-| POST | `/api/v1/courses/:course_id/discussion_topics/reorder` | **no** | - | - |
-| POST | `/api/v1/groups/:group_id/discussion_topics` | **no** | - | - |
-| POST | `/api/v1/groups/:group_id/discussion_topics/reorder` | **no** | - | - |
+| POST | `/api/v1/courses/:course_id/discussion_topics/reorder` | yes | - | - |
+| POST | `/api/v1/groups/:group_id/discussion_topics` | yes | - | - |
+| POST | `/api/v1/groups/:group_id/discussion_topics/reorder` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/discussion_topics/:topic_id` | yes | - | - |
-| PUT | `/api/v1/groups/:group_id/discussion_topics/:topic_id` | **no** | - | - |
+| PUT | `/api/v1/groups/:group_id/discussion_topics/:topic_id` | yes | - | - |
 
 ## `discussion_topics_api` → `star-discussions`
 
@@ -933,18 +933,18 @@ Canvas source: `app/controllers/discussion_topics_api_controller.rb`  ·  routes
 
 ## `enrollments_api` → `star-enrollments`
 
-Canvas source: `app/controllers/enrollments_api_controller.rb`  ·  routes: 14  ·  implemented: 12
+Canvas source: `app/controllers/enrollments_api_controller.rb`  ·  routes: 14  ·  implemented: 14
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/courses/:course_id/enrollments/:id` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/enrollments/:id` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/enrollments/:id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/enrollments` | yes | - | - |
 | GET | `/api/v1/sections/:section_id/enrollments` | yes | - | - |
-| GET | `/api/v1/temporary_enrollment_status` | yes | `200` | pass |
+| GET | `/api/v1/temporary_enrollment_status` | yes | `200` | **FAIL** |
 | GET | `/api/v1/users/:user_id/enrollments` | yes | - | - |
 | GET | `/api/v1/users/:user_id/temporary_enrollment_status` | yes | - | - |
-| POST | `/api/v1/accounts/:account_id/bulk_enrollment` | **no** | - | - |
+| POST | `/api/v1/accounts/:account_id/bulk_enrollment` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/enrollments` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/enrollments/:id/accept` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/enrollments/:id/reject` | yes | - | - |
@@ -954,80 +954,80 @@ Canvas source: `app/controllers/enrollments_api_controller.rb`  ·  routes: 14  
 
 ## `eportfolios_api` → `star-eportfolios`
 
-Canvas source: `app/controllers/eportfolios_api_controller.rb`  ·  routes: 7  ·  implemented: 0
+Canvas source: `app/controllers/eportfolios_api_controller.rb`  ·  routes: 7  ·  implemented: 7
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/eportfolios/:id` | **no** | - | - |
-| GET | `/api/v1/eportfolios/:eportfolio_id/pages` | **no** | - | - |
-| GET | `/api/v1/eportfolios/:id` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/eportfolios` | **no** | - | - |
-| PUT | `/api/v1/eportfolios/:eportfolio_id/moderate` | **no** | - | - |
-| PUT | `/api/v1/eportfolios/:eportfolio_id/restore` | **no** | - | - |
-| PUT | `/api/v1/users/:user_id/eportfolios` | **no** | - | - |
+| DELETE | `/api/v1/eportfolios/:id` | yes | - | - |
+| GET | `/api/v1/eportfolios/:eportfolio_id/pages` | yes | - | - |
+| GET | `/api/v1/eportfolios/:id` | yes | - | - |
+| GET | `/api/v1/users/:user_id/eportfolios` | yes | - | - |
+| PUT | `/api/v1/eportfolios/:eportfolio_id/moderate` | yes | - | - |
+| PUT | `/api/v1/eportfolios/:eportfolio_id/restore` | yes | - | - |
+| PUT | `/api/v1/users/:user_id/eportfolios` | yes | - | - |
 
 ## `epub_exports` → `star-content`
 
-Canvas source: `app/controllers/epub_exports_controller.rb`  ·  routes: 3  ·  implemented: 0
+Canvas source: `app/controllers/epub_exports_controller.rb`  ·  routes: 3  ·  implemented: 3
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/courses/:course_id/epub_exports/:id` | **no** | - | - |
-| GET | `/api/v1/epub_exports` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/epub_exports` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/epub_exports/:id` | yes | - | - |
+| GET | `/api/v1/epub_exports` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/epub_exports` | yes | - | - |
 
 ## `errors` → `star-accounts`
 
-Canvas source: `app/controllers/errors_controller.rb`  ·  routes: 1  ·  implemented: 0
+Canvas source: `app/controllers/errors_controller.rb`  ·  routes: 1  ·  implemented: 1
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| POST | `/api/v1/error_reports` | **no** | - | - |
+| POST | `/api/v1/error_reports` | yes | - | - |
 
 ## `external_feeds` → `star-announcements`
 
-Canvas source: `app/controllers/external_feeds_controller.rb`  ·  routes: 6  ·  implemented: 0
+Canvas source: `app/controllers/external_feeds_controller.rb`  ·  routes: 6  ·  implemented: 6
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/courses/:course_id/external_feeds/:external_feed_id` | **no** | - | - |
-| DELETE | `/api/v1/groups/:group_id/external_feeds/:external_feed_id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/external_feeds` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/external_feeds` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/external_feeds` | **no** | - | - |
-| POST | `/api/v1/groups/:group_id/external_feeds` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/external_feeds/:external_feed_id` | yes | - | - |
+| DELETE | `/api/v1/groups/:group_id/external_feeds/:external_feed_id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/external_feeds` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/external_feeds` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/external_feeds` | yes | - | - |
+| POST | `/api/v1/groups/:group_id/external_feeds` | yes | - | - |
 
 ## `external_tools` → `star-lti`
 
-Canvas source: `app/controllers/external_tools_controller.rb`  ·  routes: 25  ·  implemented: 8
+Canvas source: `app/controllers/external_tools_controller.rb`  ·  routes: 25  ·  implemented: 25
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/accounts/:account_id/external_tools/rce_favorites/:id` | yes | - | - |
-| DELETE | `/accounts/:account_id/external_tools/top_nav_favorites/:id` | **no** | - | - |
-| DELETE | `/api/v1/accounts/:account_id/external_tools/:external_tool_id` | **no** | - | - |
-| DELETE | `/api/v1/courses/:course_id/external_tools/:external_tool_id` | **no** | - | - |
-| GET | `/api/lti/accounts/:account_id/jwt_token` | **no** | - | - |
-| GET | `/api/lti/courses/:course_id/jwt_token` | **no** | - | - |
+| DELETE | `/accounts/:account_id/external_tools/top_nav_favorites/:id` | yes | - | - |
+| DELETE | `/api/v1/accounts/:account_id/external_tools/:external_tool_id` | yes | - | - |
+| DELETE | `/api/v1/courses/:course_id/external_tools/:external_tool_id` | yes | - | - |
+| GET | `/api/lti/accounts/:account_id/jwt_token` | yes | - | - |
+| GET | `/api/lti/courses/:course_id/jwt_token` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/external_tools` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/external_tools/:external_tool_id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/external_tools/:external_tool_id/migration_info` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/external_tools/sessionless_launch` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/external_tools/:external_tool_id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/external_tools/:external_tool_id/migration_info` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/external_tools/sessionless_launch` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/external_tools` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/external_tools/:external_tool_id` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/external_tools/:external_tool_id/migration_info` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/external_tools/sessionless_launch` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/external_tools` | **no** | - | - |
-| GET | `/courses/:course_id/external_tools/visible_course_nav_tools` | **no** | - | - |
-| GET | `/external_tools/visible_course_nav_tools` | yes | `404` | pass |
+| GET | `/api/v1/courses/:course_id/external_tools/:external_tool_id/migration_info` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/external_tools/sessionless_launch` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/external_tools` | yes | - | - |
+| GET | `/courses/:course_id/external_tools/visible_course_nav_tools` | yes | - | - |
+| GET | `/external_tools/visible_course_nav_tools` | yes | `404` | **FAIL** |
 | POST | `/accounts/:account_id/external_tools/rce_favorites/:id` | yes | - | - |
-| POST | `/accounts/:account_id/external_tools/top_nav_favorites/:id` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/create_tool_with_verification` | **no** | - | - |
+| POST | `/accounts/:account_id/external_tools/top_nav_favorites/:id` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/create_tool_with_verification` | yes | - | - |
 | POST | `/api/v1/accounts/:account_id/external_tools` | yes | - | - |
-| POST | `/api/v1/courses/:course_id/create_tool_with_verification` | **no** | - | - |
+| POST | `/api/v1/courses/:course_id/create_tool_with_verification` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/external_tools` | yes | - | - |
-| PUT | `/api/v1/accounts/:account_id/external_tools/:external_tool_id` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/external_tools/:external_tool_id` | **no** | - | - |
+| PUT | `/api/v1/accounts/:account_id/external_tools/:external_tool_id` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/external_tools/:external_tool_id` | yes | - | - |
 
 ## `favorites` → `star-dashboard`
 
@@ -1046,31 +1046,31 @@ Canvas source: `app/controllers/favorites_controller.rb`  ·  routes: 8  ·  imp
 
 ## `feature_flags` → `star-features`
 
-Canvas source: `app/controllers/feature_flags_controller.rb`  ·  routes: 17  ·  implemented: 3
+Canvas source: `app/controllers/feature_flags_controller.rb`  ·  routes: 17  ·  implemented: 17
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/accounts/:account_id/features/flags/:feature` | **no** | - | - |
-| DELETE | `/api/v1/courses/:course_id/features/flags/:feature` | **no** | - | - |
-| DELETE | `/api/v1/users/:user_id/features/flags/:feature` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/features/flags/:feature` | yes | - | - |
+| DELETE | `/api/v1/courses/:course_id/features/flags/:feature` | yes | - | - |
+| DELETE | `/api/v1/users/:user_id/features/flags/:feature` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/features` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/features/enabled` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/features/flags/:feature` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/features/enabled` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/features/flags/:feature` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/features` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/features/enabled` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/features/flags/:feature` | **no** | - | - |
-| GET | `/api/v1/features/environment` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/features/enabled` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/features/flags/:feature` | yes | - | - |
+| GET | `/api/v1/features/environment` | yes | - | - |
 | GET | `/api/v1/users/:user_id/features` | yes | - | - |
-| GET | `/api/v1/users/:user_id/features/enabled` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/features/flags/:feature` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/features/early_access_program` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/features/flags/:feature` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/features/flags/:feature` | **no** | - | - |
-| PUT | `/api/v1/users/:user_id/features/flags/:feature` | **no** | - | - |
+| GET | `/api/v1/users/:user_id/features/enabled` | yes | - | - |
+| GET | `/api/v1/users/:user_id/features/flags/:feature` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/features/early_access_program` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/features/flags/:feature` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/features/flags/:feature` | yes | - | - |
+| PUT | `/api/v1/users/:user_id/features/flags/:feature` | yes | - | - |
 
 ## `files` → `star-files`
 
-Canvas source: `app/controllers/files_controller.rb`  ·  routes: 26  ·  implemented: 12
+Canvas source: `app/controllers/files_controller.rb`  ·  routes: 26  ·  implemented: 25
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
@@ -1080,98 +1080,98 @@ Canvas source: `app/controllers/files_controller.rb`  ·  routes: 26  ·  implem
 | GET | `/api/v1/courses/:course_id/files/file_ref/:migration_id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/files/quota` | yes | - | - |
 | GET | `/api/v1/files/:id` | yes | - | - |
-| GET | `/api/v1/files/:id/create_success` | **no** | - | - |
-| GET | `/api/v1/files/:id/create_success` | **no** | - | - |
-| GET | `/api/v1/files/:id/icon_metadata` | **no** | - | - |
+| GET | `/api/v1/files/:id/create_success` | yes | - | - |
+| GET | `/api/v1/files/:id/create_success` | yes | - | - |
+| GET | `/api/v1/files/:id/icon_metadata` | yes | - | - |
 | GET | `/api/v1/files/:id/public_url` | yes | - | - |
 | GET | `/api/v1/folders/:id/files` | yes | - | - |
 | GET | `/api/v1/groups/:group_id/files` | yes | - | - |
 | GET | `/api/v1/groups/:group_id/files/:id` | yes | - | - |
-| GET | `/api/v1/groups/:group_id/files/quota` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/files` | **no** | - | - |
+| GET | `/api/v1/groups/:group_id/files/quota` | yes | - | - |
+| GET | `/api/v1/users/:user_id/files` | yes | - | - |
 | GET | `/api/v1/users/:user_id/files/:id` | yes | - | - |
-| GET | `/api/v1/users/:user_id/files/quota` | **no** | - | - |
-| OPTIONS | `/api/v1/files/:id/create_success` | **no** | - | - |
-| POST | `/api/v1/files/:id` | **no** | - | - |
-| POST | `/api/v1/files/:id/create_success` | **no** | - | - |
-| POST | `/api/v1/files/:id/create_success` | **no** | - | - |
-| POST | `/api/v1/files/:id/reset_verifier` | **no** | - | - |
-| POST | `/api/v1/files/capture` | **no** | `404` | pass |
-| POST | `/api/v1/files/update_word_count` | **no** | `400` | pass |
-| POST | `/api/v1/rce_linked_file_instfs_ids` | **no** | `403` | pass |
+| GET | `/api/v1/users/:user_id/files/quota` | yes | - | - |
+| OPTIONS | `/api/v1/files/:id/create_success` | yes | - | - |
+| POST | `/api/v1/files/:id` | yes | - | - |
+| POST | `/api/v1/files/:id/create_success` | yes | - | - |
+| POST | `/api/v1/files/:id/create_success` | yes | - | - |
+| POST | `/api/v1/files/:id/reset_verifier` | yes | - | - |
+| POST | `/api/v1/files/capture` | **no** | `404` | **FAIL** |
+| POST | `/api/v1/files/update_word_count` | yes | `400` | **FAIL** |
+| POST | `/api/v1/rce_linked_file_instfs_ids` | yes | `403` | pass |
 | PUT | `/api/v1/files/:id` | yes | - | - |
 
 ## `folders` → `star-files`
 
-Canvas source: `app/controllers/folders_controller.rb`  ·  routes: 34  ·  implemented: 14
+Canvas source: `app/controllers/folders_controller.rb`  ·  routes: 34  ·  implemented: 34
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/folders/:id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/folders` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/folders/:id` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/folders/:id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/folders/:id/duplicates` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/folders/by_path` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/folders/by_path/*full_path` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/folders/icon_maker` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/folders/media` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/folders/by_path` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/folders/by_path/*full_path` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/folders/icon_maker` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/folders/media` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/folders_and_files` | yes | - | - |
 | GET | `/api/v1/folders/:id` | yes | - | - |
 | GET | `/api/v1/folders/:id/all` | yes | - | - |
 | GET | `/api/v1/folders/:id/folders` | yes | - | - |
-| GET | `/api/v1/groups/:group_id/folders` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/folders/:id` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/folders/:id/duplicates` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/folders/by_path` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/folders/by_path/*full_path` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/folders/media` | **no** | - | - |
+| GET | `/api/v1/groups/:group_id/folders` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/folders/:id` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/folders/:id/duplicates` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/folders/by_path` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/folders/by_path/*full_path` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/folders/media` | yes | - | - |
 | GET | `/api/v1/groups/:group_id/folders_and_files` | yes | - | - |
-| GET | `/api/v1/users/:user_id/folders` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/folders/:id` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/folders/:id/duplicates` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/folders/by_path` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/folders/by_path/*full_path` | **no** | - | - |
+| GET | `/api/v1/users/:user_id/folders` | yes | - | - |
+| GET | `/api/v1/users/:user_id/folders/:id` | yes | - | - |
+| GET | `/api/v1/users/:user_id/folders/:id/duplicates` | yes | - | - |
+| GET | `/api/v1/users/:user_id/folders/by_path` | yes | - | - |
+| GET | `/api/v1/users/:user_id/folders/by_path/*full_path` | yes | - | - |
 | GET | `/api/v1/users/:user_id/folders_and_files` | yes | - | - |
 | POST | `/api/v1/accounts/:account_id/folders` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/folders` | yes | - | - |
-| POST | `/api/v1/folders/:dest_folder_id/copy_file` | **no** | - | - |
-| POST | `/api/v1/folders/:dest_folder_id/copy_folder` | **no** | - | - |
+| POST | `/api/v1/folders/:dest_folder_id/copy_file` | yes | - | - |
+| POST | `/api/v1/folders/:dest_folder_id/copy_folder` | yes | - | - |
 | POST | `/api/v1/folders/:folder_id/files` | yes | - | - |
 | POST | `/api/v1/folders/:folder_id/folders` | yes | - | - |
-| POST | `/api/v1/groups/:group_id/folders` | **no** | - | - |
-| POST | `/api/v1/users/:user_id/folders` | **no** | - | - |
+| POST | `/api/v1/groups/:group_id/folders` | yes | - | - |
+| POST | `/api/v1/users/:user_id/folders` | yes | - | - |
 | PUT | `/api/v1/folders/:id` | yes | - | - |
 
 ## `grade_change_audit_api` → `star-audit`
 
-Canvas source: `app/controllers/grade_change_audit_api_controller.rb`  ·  routes: 12  ·  implemented: 5
+Canvas source: `app/controllers/grade_change_audit_api_controller.rb`  ·  routes: 12  ·  implemented: 12
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | GET | `/api/v1/audit/grade_change` | yes | - | - |
-| GET | `/api/v1/audit/grade_change/assignments/:assignment_id` | **no** | - | - |
+| GET | `/api/v1/audit/grade_change/assignments/:assignment_id` | yes | - | - |
 | GET | `/api/v1/audit/grade_change/courses/:course_id` | yes | - | - |
 | GET | `/api/v1/audit/grade_change/courses/:course_id/assignments/:assignment_id` | yes | - | - |
-| GET | `/api/v1/audit/grade_change/courses/:course_id/assignments/:assignment_id/graders/:grader_id` | **no** | - | - |
-| GET | `/api/v1/audit/grade_change/courses/:course_id/assignments/:assignment_id/graders/:grader_id/students/:student_id` | **no** | - | - |
-| GET | `/api/v1/audit/grade_change/courses/:course_id/assignments/:assignment_id/students/:student_id` | **no** | - | - |
+| GET | `/api/v1/audit/grade_change/courses/:course_id/assignments/:assignment_id/graders/:grader_id` | yes | - | - |
+| GET | `/api/v1/audit/grade_change/courses/:course_id/assignments/:assignment_id/graders/:grader_id/students/:student_id` | yes | - | - |
+| GET | `/api/v1/audit/grade_change/courses/:course_id/assignments/:assignment_id/students/:student_id` | yes | - | - |
 | GET | `/api/v1/audit/grade_change/courses/:course_id/graders/:grader_id` | yes | - | - |
-| GET | `/api/v1/audit/grade_change/courses/:course_id/graders/:grader_id/students/:student_id` | **no** | - | - |
+| GET | `/api/v1/audit/grade_change/courses/:course_id/graders/:grader_id/students/:student_id` | yes | - | - |
 | GET | `/api/v1/audit/grade_change/courses/:course_id/students/:student_id` | yes | - | - |
-| GET | `/api/v1/audit/grade_change/graders/:grader_id` | **no** | - | - |
-| GET | `/api/v1/audit/grade_change/students/:student_id` | **no** | - | - |
+| GET | `/api/v1/audit/grade_change/graders/:grader_id` | yes | - | - |
+| GET | `/api/v1/audit/grade_change/students/:student_id` | yes | - | - |
 
 ## `gradebook_filters_api` → `star-courses`
 
-Canvas source: `app/controllers/gradebook_filters_api_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/gradebook_filters_api_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/courses/:course_id/gradebook_filters/:id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/gradebook_filters` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/gradebook_filters/:id` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/gradebook_filters` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/gradebook_filters/:id` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/gradebook_filters/:id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/gradebook_filters` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/gradebook_filters/:id` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/gradebook_filters` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/gradebook_filters/:id` | yes | - | - |
 
 ## `gradebook_history_api` → `?`
 
@@ -1214,62 +1214,62 @@ Canvas source: `app/controllers/grading_period_sets_controller.rb`  ·  routes: 
 
 ## `grading_periods` → `star-grading-standards`
 
-Canvas source: `app/controllers/grading_periods_controller.rb`  ·  routes: 8  ·  implemented: 1
+Canvas source: `app/controllers/grading_periods_controller.rb`  ·  routes: 8  ·  implemented: 8
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/accounts/:account_id/grading_periods/:id` | **no** | - | - |
-| DELETE | `/api/v1/courses/:course_id/grading_periods/:id` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/grading_periods/:id` | yes | - | - |
+| DELETE | `/api/v1/courses/:course_id/grading_periods/:id` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/grading_periods` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/grading_periods` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/grading_periods/:id` | **no** | - | - |
-| PATCH | `/api/v1/courses/:course_id/grading_periods/batch_update` | **no** | - | - |
-| PATCH | `/api/v1/grading_period_sets/:set_id/grading_periods/batch_update` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/grading_periods/:id` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/grading_periods` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/grading_periods/:id` | yes | - | - |
+| PATCH | `/api/v1/courses/:course_id/grading_periods/batch_update` | yes | - | - |
+| PATCH | `/api/v1/grading_period_sets/:set_id/grading_periods/batch_update` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/grading_periods/:id` | yes | - | - |
 
 ## `grading_standards_api` → `star-grading-standards`
 
-Canvas source: `app/controllers/grading_standards_api_controller.rb`  ·  routes: 10  ·  implemented: 4
+Canvas source: `app/controllers/grading_standards_api_controller.rb`  ·  routes: 10  ·  implemented: 10
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/accounts/:account_id/grading_standards/:grading_standard_id` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/grading_standards/:grading_standard_id` | yes | - | - |
 | DELETE | `/api/v1/courses/:course_id/grading_standards/:grading_standard_id` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/grading_standards` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/grading_standards/:grading_standard_id` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/grading_standards` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/grading_standards/:grading_standard_id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/grading_standards` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/grading_standards/:grading_standard_id` | yes | - | - |
-| POST | `/api/v1/accounts/:account_id/grading_standards` | **no** | - | - |
+| POST | `/api/v1/accounts/:account_id/grading_standards` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/grading_standards` | yes | - | - |
-| PUT | `/api/v1/accounts/:account_id/grading_standards/:grading_standard_id` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/grading_standards/:grading_standard_id` | **no** | - | - |
+| PUT | `/api/v1/accounts/:account_id/grading_standards/:grading_standard_id` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/grading_standards/:grading_standard_id` | yes | - | - |
 
 ## `group_categories` → `star-groups`
 
-Canvas source: `app/controllers/group_categories_controller.rb`  ·  routes: 16  ·  implemented: 10
+Canvas source: `app/controllers/group_categories_controller.rb`  ·  routes: 16  ·  implemented: 16
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/group_categories/:id` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/group_categories` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/group_categories` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/group_categories/export_tags` | **no** | - | - |
-| GET | `/api/v1/group_categories/:group_category_id/export` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/group_categories/export_tags` | yes | - | - |
+| GET | `/api/v1/group_categories/:group_category_id/export` | yes | - | - |
 | GET | `/api/v1/group_categories/:group_category_id/groups` | yes | - | - |
-| GET | `/api/v1/group_categories/:group_category_id/users` | **no** | - | - |
+| GET | `/api/v1/group_categories/:group_category_id/users` | yes | - | - |
 | GET | `/api/v1/group_categories/:id` | yes | - | - |
 | PATCH | `/api/v1/group_categories/:id` | yes | - | - |
 | POST | `/api/v1/accounts/:account_id/group_categories` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/group_categories` | yes | - | - |
-| POST | `/api/v1/courses/:course_id/group_categories/bulk_manage_differentiation_tag` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/group_categories/import_tags` | **no** | - | - |
+| POST | `/api/v1/courses/:course_id/group_categories/bulk_manage_differentiation_tag` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/group_categories/import_tags` | yes | - | - |
 | POST | `/api/v1/group_categories/:group_category_id/assign_unassigned_members` | yes | - | - |
-| POST | `/api/v1/group_categories/:group_category_id/import` | **no** | - | - |
+| POST | `/api/v1/group_categories/:group_category_id/import` | yes | - | - |
 | PUT | `/api/v1/group_categories/:id` | yes | - | - |
 
 ## `group_memberships` → `star-groups`
 
-Canvas source: `app/controllers/group_memberships_controller.rb`  ·  routes: 11  ·  implemented: 5
+Canvas source: `app/controllers/group_memberships_controller.rb`  ·  routes: 11  ·  implemented: 11
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
@@ -1277,36 +1277,36 @@ Canvas source: `app/controllers/group_memberships_controller.rb`  ·  routes: 11
 | DELETE | `/api/v1/groups/:group_id/users` | yes | - | - |
 | DELETE | `/api/v1/groups/:group_id/users/:id` | yes | - | - |
 | GET | `/api/v1/groups/:group_id/memberships` | yes | - | - |
-| GET | `/api/v1/groups/:group_id/memberships/:id` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/users/:id` | **no** | - | - |
-| PATCH | `/api/v1/groups/:group_id/memberships/:id` | **no** | - | - |
-| PATCH | `/api/v1/groups/:group_id/users/:id` | **no** | - | - |
+| GET | `/api/v1/groups/:group_id/memberships/:id` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/users/:id` | yes | - | - |
+| PATCH | `/api/v1/groups/:group_id/memberships/:id` | yes | - | - |
+| PATCH | `/api/v1/groups/:group_id/users/:id` | yes | - | - |
 | POST | `/api/v1/groups/:group_id/memberships` | yes | - | - |
-| PUT | `/api/v1/groups/:group_id/memberships/:id` | **no** | - | - |
-| PUT | `/api/v1/groups/:group_id/users/:id` | **no** | - | - |
+| PUT | `/api/v1/groups/:group_id/memberships/:id` | yes | - | - |
+| PUT | `/api/v1/groups/:group_id/users/:id` | yes | - | - |
 
 ## `groups` → `star-groups`
 
-Canvas source: `app/controllers/groups_controller.rb`  ·  routes: 17  ·  implemented: 9
+Canvas source: `app/controllers/groups_controller.rb`  ·  routes: 17  ·  implemented: 17
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/groups/:id` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/groups` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/bulk_user_tags` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/groups` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/bulk_user_tags` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/groups` | yes | - | - |
-| GET | `/api/v1/groups/:group_id/activity_stream` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/activity_stream/summary` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/permissions` | **no** | - | - |
+| GET | `/api/v1/groups/:group_id/activity_stream` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/activity_stream/summary` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/permissions` | yes | - | - |
 | GET | `/api/v1/groups/:group_id/users` | yes | - | - |
 | GET | `/api/v1/groups/:id` | yes | - | - |
 | GET | `/api/v1/users/self/groups` | yes | `200` | pass |
 | PATCH | `/api/v1/groups/:id` | yes | - | - |
-| POST | `/api/v1/group_categories/:group_category_id/groups` | **no** | - | - |
-| POST | `/api/v1/groups` | yes | `200` | pass |
-| POST | `/api/v1/groups/:group_id/files` | **no** | - | - |
+| POST | `/api/v1/group_categories/:group_category_id/groups` | yes | - | - |
+| POST | `/api/v1/groups` | yes | `200` | **FAIL** |
+| POST | `/api/v1/groups/:group_id/files` | yes | - | - |
 | POST | `/api/v1/groups/:group_id/invite` | yes | - | - |
-| POST | `/api/v1/groups/:group_id/preview_html` | **no** | - | - |
+| POST | `/api/v1/groups/:group_id/preview_html` | yes | - | - |
 | PUT | `/api/v1/groups/:id` | yes | - | - |
 
 ## `history` → `?`
@@ -1335,32 +1335,32 @@ Canvas source: `app/controllers/inst_access_tokens_controller.rb`  ·  routes: 1
 
 ## `jobs` → `star-jobs`
 
-Canvas source: `app/controllers/jobs_controller.rb`  ·  routes: 3  ·  implemented: 2
+Canvas source: `app/controllers/jobs_controller.rb`  ·  routes: 3  ·  implemented: 3
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | GET | `/api/v1/jobs` | yes | - | - |
 | GET | `/api/v1/jobs/:id` | yes | - | - |
-| POST | `/api/v1/jobs/batch_update` | **no** | - | - |
+| POST | `/api/v1/jobs/batch_update` | yes | - | - |
 
 ## `jobs_v2` → `star-jobs`
 
-Canvas source: `app/controllers/jobs_v2_controller.rb`  ·  routes: 12  ·  implemented: 4
+Canvas source: `app/controllers/jobs_v2_controller.rb`  ·  routes: 12  ·  implemented: 12
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | GET | `/api/v1/jobs2/:bucket` | yes | - | - |
-| GET | `/api/v1/jobs2/:bucket/by_:group` | **no** | - | - |
-| GET | `/api/v1/jobs2/:bucket/by_:group/search` | **no** | - | - |
+| GET | `/api/v1/jobs2/:bucket/by_:group` | yes | - | - |
+| GET | `/api/v1/jobs2/:bucket/by_:group/search` | yes | - | - |
 | GET | `/api/v1/jobs2/:id` | yes | - | - |
 | GET | `/api/v1/jobs2/clusters` | yes | - | - |
-| GET | `/api/v1/jobs2/stuck/singletons` | **no** | - | - |
-| GET | `/api/v1/jobs2/stuck/strands` | **no** | - | - |
-| GET | `/api/v1/jobs2/throttle/check` | **no** | - | - |
+| GET | `/api/v1/jobs2/stuck/singletons` | yes | - | - |
+| GET | `/api/v1/jobs2/stuck/strands` | yes | - | - |
+| GET | `/api/v1/jobs2/throttle/check` | yes | - | - |
 | POST | `/api/v1/jobs2/:id/requeue` | yes | - | - |
-| PUT | `/api/v1/jobs2/manage` | **no** | - | - |
-| PUT | `/api/v1/jobs2/throttle` | **no** | - | - |
-| PUT | `/api/v1/jobs2/unstuck` | **no** | - | - |
+| PUT | `/api/v1/jobs2/manage` | yes | - | - |
+| PUT | `/api/v1/jobs2/throttle` | yes | - | - |
+| PUT | `/api/v1/jobs2/unstuck` | yes | - | - |
 
 ## `jwts` → `?`
 
@@ -1383,16 +1383,16 @@ Canvas source: `app/controllers/late_policy_controller.rb`  ·  routes: 3  ·  i
 
 ## `learn_platform` → `star-accounts`
 
-Canvas source: `app/controllers/learn_platform_controller.rb`  ·  routes: 6  ·  implemented: 0
+Canvas source: `app/controllers/learn_platform_controller.rb`  ·  routes: 6  ·  implemented: 6
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/accounts/:account_id/learn_platform/custom_filters` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/learn_platform/filters` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/learn_platform/organizations/:organization_salesforce_id/products` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/learn_platform/products` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/learn_platform/products/:id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/learn_platform/products_categories` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/learn_platform/custom_filters` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/learn_platform/filters` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/learn_platform/organizations/:organization_salesforce_id/products` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/learn_platform/products` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/learn_platform/products/:id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/learn_platform/products_categories` | yes | - | - |
 
 ## `learning_mastery_gradebook_settings_api` → `?`
 
@@ -1405,25 +1405,25 @@ Canvas source: `app/controllers/learning_mastery_gradebook_settings_api_controll
 
 ## `learning_object_dates` → `star-learning-dates`
 
-Canvas source: `app/controllers/learning_object_dates_controller.rb`  ·  routes: 15  ·  implemented: 8
+Canvas source: `app/controllers/learning_object_dates_controller.rb`  ·  routes: 15  ·  implemented: 15
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | GET | `/api/v1/courses/:course_id/assignments/:assignment_id/date_details` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/discussion_topics/:discussion_topic_id/date_details` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/files/:attachment_id/date_details` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/modules/:context_module_id/date_details` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/files/:attachment_id/date_details` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/modules/:context_module_id/date_details` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/pages/:url_or_id/date_details` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/quizzes/:quiz_id/date_details` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/date_details` | yes | - | - |
-| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/date_details/convert_tag_overrides` | **no** | - | - |
+| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/date_details/convert_tag_overrides` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/discussion_topics/:discussion_topic_id/date_details` | yes | - | - |
-| PUT | `/api/v1/courses/:course_id/discussion_topics/:discussion_topic_id/date_details/convert_tag_overrides` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/files/:attachment_id/date_details` | **no** | - | - |
+| PUT | `/api/v1/courses/:course_id/discussion_topics/:discussion_topic_id/date_details/convert_tag_overrides` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/files/:attachment_id/date_details` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/pages/:url_or_id/date_details` | yes | - | - |
-| PUT | `/api/v1/courses/:course_id/pages/:url_or_id/date_details/convert_tag_overrides` | **no** | - | - |
+| PUT | `/api/v1/courses/:course_id/pages/:url_or_id/date_details/convert_tag_overrides` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/quizzes/:quiz_id/date_details` | yes | - | - |
-| PUT | `/api/v1/courses/:course_id/quizzes/:quiz_id/date_details/convert_tag_overrides` | **no** | - | - |
+| PUT | `/api/v1/courses/:course_id/quizzes/:quiz_id/date_details/convert_tag_overrides` | yes | - | - |
 
 ## `live_assessments/assessments` → `?`
 
@@ -1461,13 +1461,13 @@ Canvas source: `app/controllers/login_controller.rb`  ·  routes: 1  ·  impleme
 
 ## `lti/account_external_tools` → `star-lti`
 
-Canvas source: `app/controllers/lti/account_external_tools_controller.rb`  ·  routes: 4  ·  implemented: 2
+Canvas source: `app/controllers/lti/account_external_tools_controller.rb`  ·  routes: 4  ·  implemented: 4
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/accounts/:account_id/external_tools/:external_tool_id` | **no** | - | - |
+| DELETE | `/accounts/:account_id/external_tools/:external_tool_id` | yes | - | - |
 | GET | `/accounts/:account_id/external_tools` | yes | - | - |
-| GET | `/accounts/:account_id/external_tools/:external_tool_id` | **no** | - | - |
+| GET | `/accounts/:account_id/external_tools/:external_tool_id` | yes | - | - |
 | POST | `/accounts/:account_id/external_tools` | yes | - | - |
 
 ## `lti/account_lookup` → `star-accounts`
@@ -1499,39 +1499,39 @@ Canvas source: `app/controllers/lti/asset_processor_tii_migrations_api_controlle
 
 ## `lti/context_controls` → `star-lti`
 
-Canvas source: `app/controllers/lti/context_controls_controller.rb`  ·  routes: 6  ·  implemented: 0
+Canvas source: `app/controllers/lti/context_controls_controller.rb`  ·  routes: 6  ·  implemented: 6
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/controls/:id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/controls` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/controls/:id` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/controls/bulk` | **no** | - | - |
-| POST | `/api/v1/accounts/:current_account_id/lti_registrations/:registration_id/controls` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/controls/:id` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/controls/:id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/controls` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/controls/:id` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/controls/bulk` | yes | - | - |
+| POST | `/api/v1/accounts/:current_account_id/lti_registrations/:registration_id/controls` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/controls/:id` | yes | - | - |
 
 ## `lti/data_services` → `star-lti`
 
-Canvas source: `app/controllers/lti/data_services_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/lti/data_services_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/accounts/:account_id/data_services/:id` | **no** | - | - |
-| GET | `/accounts/:account_id/data_services` | **no** | - | - |
-| GET | `/accounts/:account_id/data_services/:id` | **no** | - | - |
-| POST | `/accounts/:account_id/data_services` | **no** | - | - |
-| PUT | `/accounts/:account_id/data_services/:id` | **no** | - | - |
+| DELETE | `/accounts/:account_id/data_services/:id` | yes | - | - |
+| GET | `/accounts/:account_id/data_services` | yes | - | - |
+| GET | `/accounts/:account_id/data_services/:id` | yes | - | - |
+| POST | `/accounts/:account_id/data_services` | yes | - | - |
+| PUT | `/accounts/:account_id/data_services/:id` | yes | - | - |
 
 ## `lti/deployments` → `star-lti`
 
-Canvas source: `app/controllers/lti/deployments_controller.rb`  ·  routes: 5  ·  implemented: 2
+Canvas source: `app/controllers/lti/deployments_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments/:id` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments/:id` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments/:id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments/:id/controls` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments/:id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments/:id/controls` | yes | - | - |
 | POST | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments` | yes | - | - |
 
 ## `lti/feature_flags` → `?`
@@ -1583,33 +1583,33 @@ Canvas source: `app/controllers/lti/ims/authorization_controller.rb`  ·  routes
 
 ## `lti/ims/dynamic_registration` → `star-lti`
 
-Canvas source: `app/controllers/lti/ims/dynamic_registration_controller.rb`  ·  routes: 11  ·  implemented: 0
+Canvas source: `app/controllers/lti/ims/dynamic_registration_controller.rb`  ·  routes: 11  ·  implemented: 11
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/lti/accounts/:account_id/dr_iframe` | **no** | - | - |
-| GET | `/api/lti/accounts/:account_id/lti_registration_update_request/uuid/:registration_uuid` | **no** | - | - |
-| GET | `/api/lti/accounts/:account_id/lti_registrations/uuid/:registration_uuid` | **no** | - | - |
-| GET | `/api/lti/accounts/:account_id/registration_token` | **no** | - | - |
-| GET | `/api/lti/accounts/:account_id/registrations/:registration_id` | **no** | - | - |
-| GET | `/api/lti/accounts/:account_id/registrations/:registration_id/view` | **no** | - | - |
-| GET | `/api/lti/accounts/:account_id/registrations/uuid/:registration_uuid` | **no** | - | - |
-| GET | `/api/lti/registrations/:registration_id` | **no** | - | - |
-| POST | `/api/lti/registrations` | **no** | - | - |
-| PUT | `/api/lti/accounts/:account_id/registrations/:registration_id/overlay` | **no** | - | - |
-| PUT | `/api/lti/registrations/:registration_id` | **no** | - | - |
+| GET | `/api/lti/accounts/:account_id/dr_iframe` | yes | - | - |
+| GET | `/api/lti/accounts/:account_id/lti_registration_update_request/uuid/:registration_uuid` | yes | - | - |
+| GET | `/api/lti/accounts/:account_id/lti_registrations/uuid/:registration_uuid` | yes | - | - |
+| GET | `/api/lti/accounts/:account_id/registration_token` | yes | - | - |
+| GET | `/api/lti/accounts/:account_id/registrations/:registration_id` | yes | - | - |
+| GET | `/api/lti/accounts/:account_id/registrations/:registration_id/view` | yes | - | - |
+| GET | `/api/lti/accounts/:account_id/registrations/uuid/:registration_uuid` | yes | - | - |
+| GET | `/api/lti/registrations/:registration_id` | yes | - | - |
+| POST | `/api/lti/registrations` | yes | - | - |
+| PUT | `/api/lti/accounts/:account_id/registrations/:registration_id/overlay` | yes | - | - |
+| PUT | `/api/lti/registrations/:registration_id` | yes | - | - |
 
 ## `lti/ims/line_items` → `star-lti`
 
-Canvas source: `app/controllers/lti/ims/line_items_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/lti/ims/line_items_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/lti/courses/:course_id/line_items/:id` | **no** | - | - |
-| GET | `/api/lti/courses/:course_id/line_items` | **no** | - | - |
-| GET | `/api/lti/courses/:course_id/line_items/:id` | **no** | - | - |
-| POST | `/api/lti/courses/:course_id/line_items` | **no** | - | - |
-| PUT | `/api/lti/courses/:course_id/line_items/:id` | **no** | - | - |
+| DELETE | `/api/lti/courses/:course_id/line_items/:id` | yes | - | - |
+| GET | `/api/lti/courses/:course_id/line_items` | yes | - | - |
+| GET | `/api/lti/courses/:course_id/line_items/:id` | yes | - | - |
+| POST | `/api/lti/courses/:course_id/line_items` | yes | - | - |
+| PUT | `/api/lti/courses/:course_id/line_items/:id` | yes | - | - |
 
 ## `lti/ims/names_and_roles` → `?`
 
@@ -1665,45 +1665,45 @@ Canvas source: `app/controllers/lti/ims/tool_consumer_profile_controller.rb`  ·
 
 ## `lti/ims/tool_proxy` → `star-lti`
 
-Canvas source: `app/controllers/lti/ims/tool_proxy_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/lti/ims/tool_proxy_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/lti/tool_proxy/:tool_proxy_guid` | **no** | - | - |
-| POST | `/api/lti/accounts/:account_id/tool_proxy` | **no** | - | - |
-| POST | `/api/lti/accounts/:account_id/tool_proxy` | **no** | - | - |
-| POST | `/api/lti/courses/:course_id/tool_proxy` | **no** | - | - |
-| POST | `/api/lti/courses/:course_id/tool_proxy` | **no** | - | - |
+| GET | `/api/lti/tool_proxy/:tool_proxy_guid` | yes | - | - |
+| POST | `/api/lti/accounts/:account_id/tool_proxy` | yes | - | - |
+| POST | `/api/lti/accounts/:account_id/tool_proxy` | yes | - | - |
+| POST | `/api/lti/courses/:course_id/tool_proxy` | yes | - | - |
+| POST | `/api/lti/courses/:course_id/tool_proxy` | yes | - | - |
 
 ## `lti/ims/tool_setting` → `star-lti`
 
-Canvas source: `app/controllers/lti/ims/tool_setting_controller.rb`  ·  routes: 12  ·  implemented: 0
+Canvas source: `app/controllers/lti/ims/tool_setting_controller.rb`  ·  routes: 12  ·  implemented: 12
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/lti/tool_proxy/:tool_proxy_guid/accounts/:account_id/resource_link_id/:resource_link_id/tool_setting` | **no** | - | - |
-| GET | `/api/lti/tool_proxy/:tool_proxy_guid/accounts/:account_id/tool_setting` | **no** | - | - |
-| GET | `/api/lti/tool_proxy/:tool_proxy_guid/courses/:course_id/resource_link_id/:resource_link_id/tool_setting` | **no** | - | - |
-| GET | `/api/lti/tool_proxy/:tool_proxy_guid/courses/:course_id/tool_setting` | **no** | - | - |
-| GET | `/api/lti/tool_proxy/:tool_proxy_guid/tool_setting` | **no** | - | - |
-| GET | `/api/lti/tool_settings/:tool_setting_id` | **no** | - | - |
-| PUT | `/api/lti/tool_proxy/:tool_proxy_guid/accounts/:account_id/resource_link_id/:resource_link_id/tool_setting` | **no** | - | - |
-| PUT | `/api/lti/tool_proxy/:tool_proxy_guid/accounts/:account_id/tool_setting` | **no** | - | - |
-| PUT | `/api/lti/tool_proxy/:tool_proxy_guid/courses/:course_id/resource_link_id/:resource_link_id/tool_setting` | **no** | - | - |
-| PUT | `/api/lti/tool_proxy/:tool_proxy_guid/courses/:course_id/tool_setting` | **no** | - | - |
-| PUT | `/api/lti/tool_proxy/:tool_proxy_guid/tool_setting` | **no** | - | - |
-| PUT | `/api/lti/tool_settings/:tool_setting_id` | **no** | - | - |
+| GET | `/api/lti/tool_proxy/:tool_proxy_guid/accounts/:account_id/resource_link_id/:resource_link_id/tool_setting` | yes | - | - |
+| GET | `/api/lti/tool_proxy/:tool_proxy_guid/accounts/:account_id/tool_setting` | yes | - | - |
+| GET | `/api/lti/tool_proxy/:tool_proxy_guid/courses/:course_id/resource_link_id/:resource_link_id/tool_setting` | yes | - | - |
+| GET | `/api/lti/tool_proxy/:tool_proxy_guid/courses/:course_id/tool_setting` | yes | - | - |
+| GET | `/api/lti/tool_proxy/:tool_proxy_guid/tool_setting` | yes | - | - |
+| GET | `/api/lti/tool_settings/:tool_setting_id` | yes | - | - |
+| PUT | `/api/lti/tool_proxy/:tool_proxy_guid/accounts/:account_id/resource_link_id/:resource_link_id/tool_setting` | yes | - | - |
+| PUT | `/api/lti/tool_proxy/:tool_proxy_guid/accounts/:account_id/tool_setting` | yes | - | - |
+| PUT | `/api/lti/tool_proxy/:tool_proxy_guid/courses/:course_id/resource_link_id/:resource_link_id/tool_setting` | yes | - | - |
+| PUT | `/api/lti/tool_proxy/:tool_proxy_guid/courses/:course_id/tool_setting` | yes | - | - |
+| PUT | `/api/lti/tool_proxy/:tool_proxy_guid/tool_setting` | yes | - | - |
+| PUT | `/api/lti/tool_settings/:tool_setting_id` | yes | - | - |
 
 ## `lti/lti_apps` → `star-lti`
 
-Canvas source: `app/controllers/lti/lti_apps_controller.rb`  ·  routes: 4  ·  implemented: 0
+Canvas source: `app/controllers/lti/lti_apps_controller.rb`  ·  routes: 4  ·  implemented: 4
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/accounts/:account_id/lti_apps` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_apps/launch_definitions` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/lti_apps` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/lti_apps/launch_definitions` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_apps` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_apps/launch_definitions` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/lti_apps` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/lti_apps/launch_definitions` | yes | - | - |
 
 ## `lti/membership_service` → `?`
 
@@ -1716,15 +1716,15 @@ Canvas source: `app/controllers/lti/membership_service_controller.rb`  ·  route
 
 ## `lti/originality_reports_api` → `star-lti`
 
-Canvas source: `app/controllers/lti/originality_reports_api_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/lti/originality_reports_api_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/lti/assignments/:assignment_id/files/:file_id/originality_report` | **no** | - | - |
-| GET | `/api/lti/assignments/:assignment_id/submissions/:submission_id/originality_report/:id` | **no** | - | - |
-| POST | `/api/lti/assignments/:assignment_id/submissions/:submission_id/originality_report` | **no** | - | - |
-| PUT | `/api/lti/assignments/:assignment_id/files/:file_id/originality_report` | **no** | - | - |
-| PUT | `/api/lti/assignments/:assignment_id/submissions/:submission_id/originality_report/:id` | **no** | - | - |
+| GET | `/api/lti/assignments/:assignment_id/files/:file_id/originality_report` | yes | - | - |
+| GET | `/api/lti/assignments/:assignment_id/submissions/:submission_id/originality_report/:id` | yes | - | - |
+| POST | `/api/lti/assignments/:assignment_id/submissions/:submission_id/originality_report` | yes | - | - |
+| PUT | `/api/lti/assignments/:assignment_id/files/:file_id/originality_report` | yes | - | - |
+| PUT | `/api/lti/assignments/:assignment_id/submissions/:submission_id/originality_report/:id` | yes | - | - |
 
 ## `lti/plagiarism_assignments_api` → `?`
 
@@ -1744,43 +1744,43 @@ Canvas source: `app/controllers/lti/public_jwk_controller.rb`  ·  routes: 1  ·
 
 ## `lti/registrations` → `star-lti`
 
-Canvas source: `app/controllers/lti/registrations_controller.rb`  ·  routes: 20  ·  implemented: 4
+Canvas source: `app/controllers/lti/registrations_controller.rb`  ·  routes: 20  ·  implemented: 20
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/accounts/:account_id/lti_registrations/:id` | yes | - | - |
-| DELETE | `/api/v1/accounts/:account_id/lti_registrations/:id/bind` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_registration_by_client_id/:client_id` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/lti_registrations/:id/bind` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_registration_by_client_id/:client_id` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/lti_registrations` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/lti_registrations/:id` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/history` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/latest_update_request` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/overlay_history` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/update_requests/:update_request_id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments/:deployment_id/context_search` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/by_utid/:utid` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/check_domain_duplicates` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/lti_registrations/install_status/:client_id` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/history` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/latest_update_request` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/overlay_history` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:id/update_requests/:update_request_id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/:registration_id/deployments/:deployment_id/context_search` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/by_utid/:utid` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/check_domain_duplicates` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/lti_registrations/install_status/:client_id` | yes | - | - |
 | POST | `/api/v1/accounts/:account_id/lti_registrations` | yes | - | - |
-| POST | `/api/v1/accounts/:account_id/lti_registrations/:id/bind` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/lti_registrations/:id/install_from_template` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/lti_registrations/configuration/validate` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/lti_registrations/:id` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/lti_registrations/:id/reset` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/lti_registrations/:id/update_requests/:update_request_id/apply` | **no** | - | - |
+| POST | `/api/v1/accounts/:account_id/lti_registrations/:id/bind` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/lti_registrations/:id/install_from_template` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/lti_registrations/configuration/validate` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/lti_registrations/:id` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/lti_registrations/:id/reset` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/lti_registrations/:id/update_requests/:update_request_id/apply` | yes | - | - |
 
 ## `lti/resource_links` → `star-lti`
 
-Canvas source: `app/controllers/lti/resource_links_controller.rb`  ·  routes: 6  ·  implemented: 0
+Canvas source: `app/controllers/lti/resource_links_controller.rb`  ·  routes: 6  ·  implemented: 6
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/courses/:course_id/lti_resource_links/:id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/lti_resource_links` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/lti_resource_links/:id` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/lti_resource_links` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/lti_resource_links/bulk` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/lti_resource_links/:id` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/lti_resource_links/:id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/lti_resource_links` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/lti_resource_links/:id` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/lti_resource_links` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/lti_resource_links/bulk` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/lti_resource_links/:id` | yes | - | - |
 
 ## `lti/submissions_api` → `?`
 
@@ -1794,15 +1794,15 @@ Canvas source: `app/controllers/lti/submissions_api_controller.rb`  ·  routes: 
 
 ## `lti/subscriptions_api` → `star-lti`
 
-Canvas source: `app/controllers/lti/subscriptions_api_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/lti/subscriptions_api_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/lti/subscriptions/:id` | **no** | - | - |
-| GET | `/api/lti/subscriptions` | **no** | - | - |
-| GET | `/api/lti/subscriptions/:id` | **no** | - | - |
-| POST | `/api/lti/subscriptions` | **no** | - | - |
-| PUT | `/api/lti/subscriptions/:id` | **no** | - | - |
+| DELETE | `/api/lti/subscriptions/:id` | yes | - | - |
+| GET | `/api/lti/subscriptions` | yes | - | - |
+| GET | `/api/lti/subscriptions/:id` | yes | - | - |
+| POST | `/api/lti/subscriptions` | yes | - | - |
+| PUT | `/api/lti/subscriptions/:id` | yes | - | - |
 
 ## `lti/token` → `?`
 
@@ -1815,30 +1815,30 @@ Canvas source: `app/controllers/lti/token_controller.rb`  ·  routes: 2  ·  imp
 
 ## `lti/tool_configurations_api` → `star-lti`
 
-Canvas source: `app/controllers/lti/tool_configurations_api_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/lti/tool_configurations_api_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/lti/developer_keys/:developer_key_id/tool_configuration` | **no** | - | - |
-| GET | `/api/lti/accounts/:account_id/developer_keys/:developer_key_id/tool_configuration` | **no** | - | - |
-| GET | `/api/lti/courses/:course_id/developer_keys/:developer_key_id/tool_configuration` | **no** | - | - |
-| POST | `/api/lti/accounts/:account_id/developer_keys/tool_configuration` | **no** | - | - |
-| PUT | `/api/lti/developer_keys/:developer_key_id/tool_configuration` | **no** | - | - |
+| DELETE | `/api/lti/developer_keys/:developer_key_id/tool_configuration` | yes | - | - |
+| GET | `/api/lti/accounts/:account_id/developer_keys/:developer_key_id/tool_configuration` | yes | - | - |
+| GET | `/api/lti/courses/:course_id/developer_keys/:developer_key_id/tool_configuration` | yes | - | - |
+| POST | `/api/lti/accounts/:account_id/developer_keys/tool_configuration` | yes | - | - |
+| PUT | `/api/lti/developer_keys/:developer_key_id/tool_configuration` | yes | - | - |
 
 ## `lti/tool_proxy` → `star-lti`
 
-Canvas source: `app/controllers/lti/tool_proxy_controller.rb`  ·  routes: 8  ·  implemented: 0
+Canvas source: `app/controllers/lti/tool_proxy_controller.rb`  ·  routes: 8  ·  implemented: 8
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/accounts/:account_id/tool_proxies/:tool_proxy_id` | **no** | - | - |
-| DELETE | `/api/v1/accounts/:account_id/tool_proxies/:tool_proxy_id/update` | **no** | - | - |
-| DELETE | `/api/v1/courses/:course_id/tool_proxies/:tool_proxy_id` | **no** | - | - |
-| DELETE | `/api/v1/courses/:course_id/tool_proxies/:tool_proxy_id/update` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/tool_proxies/:tool_proxy_id` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/tool_proxies/:tool_proxy_id/update` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/tool_proxies/:tool_proxy_id` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/tool_proxies/:tool_proxy_id/update` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/tool_proxies/:tool_proxy_id` | yes | - | - |
+| DELETE | `/api/v1/accounts/:account_id/tool_proxies/:tool_proxy_id/update` | yes | - | - |
+| DELETE | `/api/v1/courses/:course_id/tool_proxies/:tool_proxy_id` | yes | - | - |
+| DELETE | `/api/v1/courses/:course_id/tool_proxies/:tool_proxy_id/update` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/tool_proxies/:tool_proxy_id` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/tool_proxies/:tool_proxy_id/update` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/tool_proxies/:tool_proxy_id` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/tool_proxies/:tool_proxy_id/update` | yes | - | - |
 
 ## `lti/users_api` → `?`
 
@@ -1851,16 +1851,16 @@ Canvas source: `app/controllers/lti/users_api_controller.rb`  ·  routes: 2  · 
 
 ## `lti_api` → `star-lti`
 
-Canvas source: `app/controllers/lti_api_controller.rb`  ·  routes: 6  ·  implemented: 0
+Canvas source: `app/controllers/lti_api_controller.rb`  ·  routes: 6  ·  implemented: 6
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| POST | `/api/lti/v1/caliper/:token` | **no** | - | - |
-| POST | `/api/lti/v1/logout_service/:token` | **no** | - | - |
-| POST | `/api/lti/v1/tools/:tool_id/ext_grade_passback` | **no** | - | - |
-| POST | `/api/lti/v1/tools/:tool_id/grade_passback` | **no** | - | - |
-| POST | `/api/lti/v1/turnitin/outcomes_placement/:tool_id` | **no** | - | - |
-| POST | `/api/lti/v1/xapi/:token` | **no** | - | - |
+| POST | `/api/lti/v1/caliper/:token` | yes | - | - |
+| POST | `/api/lti/v1/logout_service/:token` | yes | - | - |
+| POST | `/api/lti/v1/tools/:tool_id/ext_grade_passback` | yes | - | - |
+| POST | `/api/lti/v1/tools/:tool_id/grade_passback` | yes | - | - |
+| POST | `/api/lti/v1/turnitin/outcomes_placement/:tool_id` | yes | - | - |
+| POST | `/api/lti/v1/xapi/:token` | yes | - | - |
 
 ## `master_courses/master_templates` → `star-courses`
 
@@ -1884,33 +1884,33 @@ Canvas source: `app/controllers/master_courses/master_templates_controller.rb`  
 
 ## `media_objects` → `star-media`
 
-Canvas source: `app/controllers/media_objects_controller.rb`  ·  routes: 10  ·  implemented: 3
+Canvas source: `app/controllers/media_objects_controller.rb`  ·  routes: 10  ·  implemented: 10
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/courses/:course_id/media_attachments` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/media_objects` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/media_attachments` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/media_objects` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/media_attachments` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/media_objects` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/media_attachments` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/media_objects` | yes | - | - |
 | GET | `/api/v1/media_attachments` | yes | - | - |
-| GET | `/api/v1/media_objects` | **no** | - | - |
+| GET | `/api/v1/media_objects` | yes | - | - |
 | POST | `/api/v1/media_attachments` | yes | - | - |
-| POST | `/api/v1/media_objects` | **no** | - | - |
+| POST | `/api/v1/media_objects` | yes | - | - |
 | PUT | `/api/v1/media_attachments/:attachment_id` | yes | - | - |
-| PUT | `/api/v1/media_objects/:media_object_id` | **no** | - | - |
+| PUT | `/api/v1/media_objects/:media_object_id` | yes | - | - |
 
 ## `media_tracks` → `star-media`
 
-Canvas source: `app/controllers/media_tracks_controller.rb`  ·  routes: 6  ·  implemented: 1
+Canvas source: `app/controllers/media_tracks_controller.rb`  ·  routes: 6  ·  implemented: 6
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/media_attachments/:attachment_id/media_tracks` | **no** | - | - |
+| GET | `/api/v1/media_attachments/:attachment_id/media_tracks` | yes | - | - |
 | GET | `/api/v1/media_objects/:media_object_id/media_tracks` | yes | - | - |
-| POST | `/api/v1/media_attachments/:attachment_id/asr` | **no** | - | - |
-| POST | `/api/v1/media_objects/:media_object_id/asr` | **no** | - | - |
-| PUT | `/api/v1/media_attachments/:attachment_id/media_tracks` | **no** | - | - |
-| PUT | `/api/v1/media_objects/:media_object_id/media_tracks` | **no** | - | - |
+| POST | `/api/v1/media_attachments/:attachment_id/asr` | yes | - | - |
+| POST | `/api/v1/media_objects/:media_object_id/asr` | yes | - | - |
+| PUT | `/api/v1/media_attachments/:attachment_id/media_tracks` | yes | - | - |
+| PUT | `/api/v1/media_objects/:media_object_id/media_tracks` | yes | - | - |
 
 ## `microfrontends_release_tag_override` → `?`
 
@@ -1934,35 +1934,35 @@ Canvas source: `app/controllers/microsoft_sync/groups_controller.rb`  ·  routes
 
 ## `migration_issues` → `star-content`
 
-Canvas source: `app/controllers/migration_issues_controller.rb`  ·  routes: 16  ·  implemented: 3
+Canvas source: `app/controllers/migration_issues_controller.rb`  ·  routes: 16  ·  implemented: 16
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/accounts/:account_id/content_migrations/:content_migration_id/migration_issues` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/content_migrations/:content_migration_id/migration_issues/:id` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/content_migrations/:content_migration_id/migration_issues` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/content_migrations/:content_migration_id/migration_issues/:id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/content_migrations/:content_migration_id/migration_issues` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/content_migrations/:content_migration_id/migration_issues/:id` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/content_migrations/:content_migration_id/migration_issues` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/content_migrations/:content_migration_id/migration_issues/:id` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/content_migrations/:content_migration_id/migration_issues` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/content_migrations/:content_migration_id/migration_issues/:id` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/content_migrations/:content_migration_id/migration_issues` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/content_migrations/:content_migration_id/migration_issues/:id` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/content_migrations/:content_migration_id/migration_issues` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/content_migrations/:content_migration_id/migration_issues/:id` | yes | - | - |
+| GET | `/api/v1/users/:user_id/content_migrations/:content_migration_id/migration_issues` | yes | - | - |
+| GET | `/api/v1/users/:user_id/content_migrations/:content_migration_id/migration_issues/:id` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/content_migrations/:content_migration_id/migration_issues` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/content_migrations/:content_migration_id/migration_issues` | yes | - | - |
-| POST | `/api/v1/groups/:group_id/content_migrations/:content_migration_id/migration_issues` | **no** | - | - |
-| POST | `/api/v1/users/:user_id/content_migrations/:content_migration_id/migration_issues` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/content_migrations/:content_migration_id/migration_issues/:id` | **no** | - | - |
+| POST | `/api/v1/groups/:group_id/content_migrations/:content_migration_id/migration_issues` | yes | - | - |
+| POST | `/api/v1/users/:user_id/content_migrations/:content_migration_id/migration_issues` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/content_migrations/:content_migration_id/migration_issues/:id` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/content_migrations/:content_migration_id/migration_issues/:id` | yes | - | - |
-| PUT | `/api/v1/groups/:group_id/content_migrations/:content_migration_id/migration_issues/:id` | **no** | - | - |
-| PUT | `/api/v1/users/:user_id/content_migrations/:content_migration_id/migration_issues/:id` | **no** | - | - |
+| PUT | `/api/v1/groups/:group_id/content_migrations/:content_migration_id/migration_issues/:id` | yes | - | - |
+| PUT | `/api/v1/users/:user_id/content_migrations/:content_migration_id/migration_issues/:id` | yes | - | - |
 
 ## `moderation_set` → `star-assignments`
 
-Canvas source: `app/controllers/moderation_set_controller.rb`  ·  routes: 2  ·  implemented: 0
+Canvas source: `app/controllers/moderation_set_controller.rb`  ·  routes: 2  ·  implemented: 2
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/courses/:course_id/assignments/:assignment_id/moderated_students` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/assignments/:assignment_id/moderated_students` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/assignments/:assignment_id/moderated_students` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/assignments/:assignment_id/moderated_students` | yes | - | - |
 
 ## `module_assignment_overrides` → `?`
 
@@ -1976,11 +1976,11 @@ Canvas source: `app/controllers/module_assignment_overrides_controller.rb`  ·  
 
 ## `notification_preferences` → `star-notifications`
 
-Canvas source: `app/controllers/notification_preferences_controller.rb`  ·  routes: 10  ·  implemented: 6
+Canvas source: `app/controllers/notification_preferences_controller.rb`  ·  routes: 10  ·  implemented: 7
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/users/:user_id/communication_channels/:communication_channel_id/notification_preference_categories` | **no** | - | - |
+| GET | `/api/v1/users/:user_id/communication_channels/:communication_channel_id/notification_preference_categories` | yes | - | - |
 | GET | `/api/v1/users/:user_id/communication_channels/:communication_channel_id/notification_preferences` | yes | - | - |
 | GET | `/api/v1/users/:user_id/communication_channels/:communication_channel_id/notification_preferences/:notification` | yes | - | - |
 | GET | `/api/v1/users/:user_id/communication_channels/:type/:address/notification_preferences` | yes | - | - |
@@ -1993,15 +1993,15 @@ Canvas source: `app/controllers/notification_preferences_controller.rb`  ·  rou
 
 ## `observer_alert_thresholds_api` → `star-enrollments`
 
-Canvas source: `app/controllers/observer_alert_thresholds_api_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/observer_alert_thresholds_api_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/users/:user_id/observer_alert_thresholds/:observer_alert_threshold_id` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/observer_alert_thresholds` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/observer_alert_thresholds/:observer_alert_threshold_id` | **no** | - | - |
-| POST | `/api/v1/users/:user_id/observer_alert_thresholds` | **no** | - | - |
-| PUT | `/api/v1/users/:user_id/observer_alert_thresholds/:observer_alert_threshold_id` | **no** | - | - |
+| DELETE | `/api/v1/users/:user_id/observer_alert_thresholds/:observer_alert_threshold_id` | yes | - | - |
+| GET | `/api/v1/users/:user_id/observer_alert_thresholds` | yes | - | - |
+| GET | `/api/v1/users/:user_id/observer_alert_thresholds/:observer_alert_threshold_id` | yes | - | - |
+| POST | `/api/v1/users/:user_id/observer_alert_thresholds` | yes | - | - |
+| PUT | `/api/v1/users/:user_id/observer_alert_thresholds/:observer_alert_threshold_id` | yes | - | - |
 
 ## `observer_alerts_api` → `?`
 
@@ -2023,63 +2023,63 @@ Canvas source: `app/controllers/observer_pairing_codes_api_controller.rb`  ·  r
 
 ## `outcome_groups_api` → `star-outcomes`
 
-Canvas source: `app/controllers/outcome_groups_api_controller.rb`  ·  routes: 40  ·  implemented: 13
+Canvas source: `app/controllers/outcome_groups_api_controller.rb`  ·  routes: 40  ·  implemented: 38
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/accounts/:account_id/outcome_groups/:id` | yes | - | - |
-| DELETE | `/api/v1/accounts/:account_id/outcome_groups/:id/outcomes/:outcome_id` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/outcome_groups/:id/outcomes/:outcome_id` | yes | - | - |
 | DELETE | `/api/v1/courses/:course_id/outcome_groups/:id` | yes | - | - |
-| DELETE | `/api/v1/courses/:course_id/outcome_groups/:id/outcomes/:outcome_id` | **no** | - | - |
-| DELETE | `/api/v1/global/outcome_groups/:id` | **no** | - | - |
-| DELETE | `/api/v1/global/outcome_groups/:id/outcomes/:outcome_id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/outcome_group_links` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/outcome_groups/:id/outcomes/:outcome_id` | yes | - | - |
+| DELETE | `/api/v1/global/outcome_groups/:id` | yes | - | - |
+| DELETE | `/api/v1/global/outcome_groups/:id/outcomes/:outcome_id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/outcome_group_links` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/outcome_groups` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/outcome_groups/:id` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/outcome_groups/:id/outcomes` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/outcome_groups/:id/outcomes` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/outcome_groups/:id/subgroups` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/outcome_groups/account_chain` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/outcome_groups/account_chain` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/root_outcome_group` | **no** | - | - |
 | GET | `/api/v1/courses/:course_id/outcome_group_links` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/outcome_groups` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/outcome_groups/:id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/outcome_groups/:id/outcomes` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/outcome_groups/:id/subgroups` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/outcome_groups/account_chain` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/outcome_groups/:id/subgroups` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/outcome_groups/account_chain` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/root_outcome_group` | yes | - | - |
-| GET | `/api/v1/global/outcome_groups/:id` | **no** | - | - |
-| GET | `/api/v1/global/outcome_groups/:id/outcomes` | **no** | - | - |
-| GET | `/api/v1/global/outcome_groups/:id/subgroups` | **no** | - | - |
-| GET | `/api/v1/global/outcome_groups/account_chain` | **no** | `500` | pass |
-| GET | `/api/v1/global/root_outcome_group` | **no** | `302` | pass |
-| POST | `/api/v1/accounts/:account_id/outcome_groups/:id/import` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/outcome_groups/:id/outcomes` | **no** | - | - |
+| GET | `/api/v1/global/outcome_groups/:id` | yes | - | - |
+| GET | `/api/v1/global/outcome_groups/:id/outcomes` | yes | - | - |
+| GET | `/api/v1/global/outcome_groups/:id/subgroups` | yes | - | - |
+| GET | `/api/v1/global/outcome_groups/account_chain` | yes | `500` | **FAIL** |
+| GET | `/api/v1/global/root_outcome_group` | yes | `302` | **FAIL** |
+| POST | `/api/v1/accounts/:account_id/outcome_groups/:id/import` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/outcome_groups/:id/outcomes` | yes | - | - |
 | POST | `/api/v1/accounts/:account_id/outcome_groups/:id/subgroups` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/outcome_groups/:id/import` | **no** | - | - |
+| POST | `/api/v1/courses/:course_id/outcome_groups/:id/import` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/outcome_groups/:id/outcomes` | yes | - | - |
-| POST | `/api/v1/courses/:course_id/outcome_groups/:id/subgroups` | **no** | - | - |
-| POST | `/api/v1/global/outcome_groups/:id/import` | **no** | - | - |
-| POST | `/api/v1/global/outcome_groups/:id/outcomes` | **no** | - | - |
-| POST | `/api/v1/global/outcome_groups/:id/subgroups` | **no** | - | - |
+| POST | `/api/v1/courses/:course_id/outcome_groups/:id/subgroups` | yes | - | - |
+| POST | `/api/v1/global/outcome_groups/:id/import` | yes | - | - |
+| POST | `/api/v1/global/outcome_groups/:id/outcomes` | yes | - | - |
+| POST | `/api/v1/global/outcome_groups/:id/subgroups` | yes | - | - |
 | PUT | `/api/v1/accounts/:account_id/outcome_groups/:id` | yes | - | - |
-| PUT | `/api/v1/accounts/:account_id/outcome_groups/:id/outcomes/:outcome_id` | **no** | - | - |
+| PUT | `/api/v1/accounts/:account_id/outcome_groups/:id/outcomes/:outcome_id` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/outcome_groups/:id` | yes | - | - |
-| PUT | `/api/v1/courses/:course_id/outcome_groups/:id/outcomes/:outcome_id` | **no** | - | - |
-| PUT | `/api/v1/global/outcome_groups/:id` | **no** | - | - |
-| PUT | `/api/v1/global/outcome_groups/:id/outcomes/:outcome_id` | **no** | - | - |
+| PUT | `/api/v1/courses/:course_id/outcome_groups/:id/outcomes/:outcome_id` | yes | - | - |
+| PUT | `/api/v1/global/outcome_groups/:id` | yes | - | - |
+| PUT | `/api/v1/global/outcome_groups/:id/outcomes/:outcome_id` | yes | - | - |
 
 ## `outcome_imports_api` → `star-outcomes`
 
-Canvas source: `app/controllers/outcome_imports_api_controller.rb`  ·  routes: 6  ·  implemented: 0
+Canvas source: `app/controllers/outcome_imports_api_controller.rb`  ·  routes: 6  ·  implemented: 6
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/accounts/:account_id/outcome_imports/:id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/outcome_imports/:id/created_group_ids` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/outcome_imports/:id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/outcome_imports/:id/created_group_ids` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/outcome_imports(/group/:learning_outcome_group_id)` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/outcome_imports(/group/:learning_outcome_group_id)` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/outcome_imports/:id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/outcome_imports/:id/created_group_ids` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/outcome_imports/:id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/outcome_imports/:id/created_group_ids` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/outcome_imports(/group/:learning_outcome_group_id)` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/outcome_imports(/group/:learning_outcome_group_id)` | yes | - | - |
 
 ## `outcome_proficiency_api` → `?`
 
@@ -2094,16 +2094,16 @@ Canvas source: `app/controllers/outcome_proficiency_api_controller.rb`  ·  rout
 
 ## `outcome_results` → `star-outcomes`
 
-Canvas source: `app/controllers/outcome_results_controller.rb`  ·  routes: 6  ·  implemented: 0
+Canvas source: `app/controllers/outcome_results_controller.rb`  ·  routes: 6  ·  implemented: 6
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/courses/:course_id/outcome_mastery_distribution` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/outcome_results` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/outcome_rollups` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/outcomes/:outcome_id/contributing_scores` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/assign_outcome_order` | **no** | - | - |
-| POST | `/api/v1/enqueue_outcome_rollup_calculation` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/outcome_mastery_distribution` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/outcome_results` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/outcome_rollups` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/outcomes/:outcome_id/contributing_scores` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/assign_outcome_order` | yes | - | - |
+| POST | `/api/v1/enqueue_outcome_rollup_calculation` | yes | - | - |
 
 ## `outcomes_academic_benchmark_import_api` → `?`
 
@@ -2128,33 +2128,33 @@ Canvas source: `app/controllers/outcomes_api_controller.rb`  ·  routes: 4  ·  
 
 ## `page_views` → `star-search`
 
-Canvas source: `app/controllers/page_views_controller.rb`  ·  routes: 7  ·  implemented: 0
+Canvas source: `app/controllers/page_views_controller.rb`  ·  routes: 7  ·  implemented: 7
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/users/:user_id/page_views` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/page_views/query/:query_id` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/page_views/query/:query_id/results` | **no** | - | - |
-| GET | `/api/v1/users/page_views/query/:query_id` | **no** | - | - |
-| GET | `/api/v1/users/page_views/query/:query_id/results` | **no** | - | - |
-| POST | `/api/v1/users/:user_id/page_views/query` | **no** | - | - |
-| POST | `/api/v1/users/page_views/query` | **no** | - | - |
+| GET | `/api/v1/users/:user_id/page_views` | yes | - | - |
+| GET | `/api/v1/users/:user_id/page_views/query/:query_id` | yes | - | - |
+| GET | `/api/v1/users/:user_id/page_views/query/:query_id/results` | yes | - | - |
+| GET | `/api/v1/users/page_views/query/:query_id` | yes | - | - |
+| GET | `/api/v1/users/page_views/query/:query_id/results` | yes | - | - |
+| POST | `/api/v1/users/:user_id/page_views/query` | yes | - | - |
+| POST | `/api/v1/users/page_views/query` | yes | - | - |
 
 ## `peer_reviews_api` → `star-rubrics`
 
-Canvas source: `app/controllers/peer_reviews_api_controller.rb`  ·  routes: 9  ·  implemented: 4
+Canvas source: `app/controllers/peer_reviews_api_controller.rb`  ·  routes: 9  ·  implemented: 9
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews` | yes | - | - |
-| DELETE | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews` | **no** | - | - |
+| DELETE | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/assignments/:assignment_id/peer_reviews` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews` | yes | - | - |
-| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/peer_reviews` | **no** | - | - |
-| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/assignments/:assignment_id/allocate` | **no** | - | - |
+| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/peer_reviews` | yes | - | - |
+| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/assignments/:assignment_id/allocate` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews` | yes | - | - |
-| POST | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews` | **no** | - | - |
+| POST | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:submission_id/peer_reviews` | yes | - | - |
 
 ## `permissions_help` → `?`
 
@@ -2188,15 +2188,15 @@ Canvas source: `app/controllers/planner_notes_controller.rb`  ·  routes: 5  · 
 
 ## `planner_overrides` → `star-calendar`
 
-Canvas source: `app/controllers/planner_overrides_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/planner_overrides_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/planner/overrides/:id` | **no** | - | - |
-| GET | `/api/v1/planner/overrides` | **no** | - | - |
-| GET | `/api/v1/planner/overrides/:id` | **no** | - | - |
-| POST | `/api/v1/planner/overrides` | **no** | - | - |
-| PUT | `/api/v1/planner/overrides/:id` | **no** | - | - |
+| DELETE | `/api/v1/planner/overrides/:id` | yes | - | - |
+| GET | `/api/v1/planner/overrides` | yes | - | - |
+| GET | `/api/v1/planner/overrides/:id` | yes | - | - |
+| POST | `/api/v1/planner/overrides` | yes | - | - |
+| PUT | `/api/v1/planner/overrides/:id` | yes | - | - |
 
 ## `plugins` → `?`
 
@@ -2209,31 +2209,31 @@ Canvas source: `app/controllers/plugins_controller.rb`  ·  routes: 2  ·  imple
 
 ## `polling/poll_choices` → `star-polling`
 
-Canvas source: `app/controllers/polling/poll_choices_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/polling/poll_choices_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/polls/:poll_id/poll_choices/:id` | **no** | - | - |
-| GET | `/api/v1/polls/:poll_id/poll_choices` | **no** | - | - |
-| GET | `/api/v1/polls/:poll_id/poll_choices/:id` | **no** | - | - |
-| POST | `/api/v1/polls/:poll_id/poll_choices` | **no** | - | - |
-| PUT | `/api/v1/polls/:poll_id/poll_choices/:id` | **no** | - | - |
+| DELETE | `/api/v1/polls/:poll_id/poll_choices/:id` | yes | - | - |
+| GET | `/api/v1/polls/:poll_id/poll_choices` | yes | - | - |
+| GET | `/api/v1/polls/:poll_id/poll_choices/:id` | yes | - | - |
+| POST | `/api/v1/polls/:poll_id/poll_choices` | yes | - | - |
+| PUT | `/api/v1/polls/:poll_id/poll_choices/:id` | yes | - | - |
 
 ## `polling/poll_sessions` → `star-polling`
 
-Canvas source: `app/controllers/polling/poll_sessions_controller.rb`  ·  routes: 9  ·  implemented: 0
+Canvas source: `app/controllers/polling/poll_sessions_controller.rb`  ·  routes: 9  ·  implemented: 9
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/polls/:poll_id/poll_sessions/:id` | **no** | - | - |
-| GET | `/api/v1/poll_sessions/closed` | **no** | - | - |
-| GET | `/api/v1/poll_sessions/opened` | **no** | - | - |
-| GET | `/api/v1/polls/:poll_id/poll_sessions` | **no** | - | - |
-| GET | `/api/v1/polls/:poll_id/poll_sessions/:id` | **no** | - | - |
-| GET | `/api/v1/polls/:poll_id/poll_sessions/:id/close` | **no** | - | - |
-| GET | `/api/v1/polls/:poll_id/poll_sessions/:id/open` | **no** | - | - |
-| POST | `/api/v1/polls/:poll_id/poll_sessions` | **no** | - | - |
-| PUT | `/api/v1/polls/:poll_id/poll_sessions/:id` | **no** | - | - |
+| DELETE | `/api/v1/polls/:poll_id/poll_sessions/:id` | yes | - | - |
+| GET | `/api/v1/poll_sessions/closed` | yes | - | - |
+| GET | `/api/v1/poll_sessions/opened` | yes | - | - |
+| GET | `/api/v1/polls/:poll_id/poll_sessions` | yes | - | - |
+| GET | `/api/v1/polls/:poll_id/poll_sessions/:id` | yes | - | - |
+| GET | `/api/v1/polls/:poll_id/poll_sessions/:id/close` | yes | - | - |
+| GET | `/api/v1/polls/:poll_id/poll_sessions/:id/open` | yes | - | - |
+| POST | `/api/v1/polls/:poll_id/poll_sessions` | yes | - | - |
+| PUT | `/api/v1/polls/:poll_id/poll_sessions/:id` | yes | - | - |
 
 ## `polling/poll_submissions` → `?`
 
@@ -2246,15 +2246,15 @@ Canvas source: `app/controllers/polling/poll_submissions_controller.rb`  ·  rou
 
 ## `polling/polls` → `star-polling`
 
-Canvas source: `app/controllers/polling/polls_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/polling/polls_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/polls/:id` | **no** | - | - |
-| GET | `/api/v1/polls` | **no** | - | - |
-| GET | `/api/v1/polls/:id` | **no** | - | - |
-| POST | `/api/v1/polls` | **no** | - | - |
-| PUT | `/api/v1/polls/:id` | **no** | - | - |
+| DELETE | `/api/v1/polls/:id` | yes | - | - |
+| GET | `/api/v1/polls` | yes | - | - |
+| GET | `/api/v1/polls/:id` | yes | - | - |
+| POST | `/api/v1/polls` | yes | - | - |
+| PUT | `/api/v1/polls/:id` | yes | - | - |
 
 ## `profile` → `star-users`
 
@@ -2276,27 +2276,27 @@ Canvas source: `app/controllers/progress_controller.rb`  ·  routes: 2  ·  impl
 
 ## `provisional_grades` → `star-assignments`
 
-Canvas source: `app/controllers/provisional_grades_controller.rb`  ·  routes: 4  ·  implemented: 0
+Canvas source: `app/controllers/provisional_grades_controller.rb`  ·  routes: 4  ·  implemented: 4
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/courses/:course_id/assignments/:assignment_id/provisional_grades/status` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/assignments/:assignment_id/provisional_grades/publish` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/provisional_grades/:provisional_grade_id/select` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/provisional_grades/bulk_select` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/assignments/:assignment_id/provisional_grades/status` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/assignments/:assignment_id/provisional_grades/publish` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/provisional_grades/:provisional_grade_id/select` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/provisional_grades/bulk_select` | yes | - | - |
 
 ## `pseudonyms` → `star-users`
 
-Canvas source: `app/controllers/pseudonyms_controller.rb`  ·  routes: 6  ·  implemented: 0
+Canvas source: `app/controllers/pseudonyms_controller.rb`  ·  routes: 6  ·  implemented: 6
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/users/:user_id/logins/:id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/logins` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/logins` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/logins` | **no** | - | - |
-| POST | `/api/v1/users/reset_password` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/logins/:id` | **no** | - | - |
+| DELETE | `/api/v1/users/:user_id/logins/:id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/logins` | yes | - | - |
+| GET | `/api/v1/users/:user_id/logins` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/logins` | yes | - | - |
+| POST | `/api/v1/users/reset_password` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/logins/:id` | yes | - | - |
 
 ## `quizzes/course_quiz_extensions` → `?`
 
@@ -2403,16 +2403,16 @@ Canvas source: `app/controllers/quizzes/quiz_submission_files_controller.rb`  ·
 
 ## `quizzes/quiz_submission_questions` → `star-quizzes`
 
-Canvas source: `app/controllers/quizzes/quiz_submission_questions_controller.rb`  ·  routes: 6  ·  implemented: 0
+Canvas source: `app/controllers/quizzes/quiz_submission_questions_controller.rb`  ·  routes: 6  ·  implemented: 6
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/quiz_submissions/:quiz_submission_id/questions` | **no** | - | - |
-| GET | `/quiz_submissions/:quiz_submission_id/questions/:id` | **no** | - | - |
-| GET | `/quiz_submissions/:quiz_submission_id/questions/:id/formatted_answer` | **no** | - | - |
-| POST | `/quiz_submissions/:quiz_submission_id/questions` | **no** | - | - |
-| PUT | `/quiz_submissions/:quiz_submission_id/questions/:id/flag` | **no** | - | - |
-| PUT | `/quiz_submissions/:quiz_submission_id/questions/:id/unflag` | **no** | - | - |
+| GET | `/quiz_submissions/:quiz_submission_id/questions` | yes | - | - |
+| GET | `/quiz_submissions/:quiz_submission_id/questions/:id` | yes | - | - |
+| GET | `/quiz_submissions/:quiz_submission_id/questions/:id/formatted_answer` | yes | - | - |
+| POST | `/quiz_submissions/:quiz_submission_id/questions` | yes | - | - |
+| PUT | `/quiz_submissions/:quiz_submission_id/questions/:id/flag` | yes | - | - |
+| PUT | `/quiz_submissions/:quiz_submission_id/questions/:id/unflag` | yes | - | - |
 
 ## `quizzes/quiz_submission_users` → `?`
 
@@ -2521,25 +2521,25 @@ Canvas source: `app/controllers/rubrics_controller.rb`  ·  routes: 3  ·  imple
 
 ## `rubrics_api` → `star-rubrics`
 
-Canvas source: `app/controllers/rubrics_api_controller.rb`  ·  routes: 15  ·  implemented: 6
+Canvas source: `app/controllers/rubrics_api_controller.rb`  ·  routes: 15  ·  implemented: 15
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/accounts/:account_id/rubrics` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/rubrics/:id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/rubrics/:id/used_locations` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/rubrics/upload/:id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/rubrics/upload/:id/rubrics` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/rubrics` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/rubrics/:id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/rubrics/:id/used_locations` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/rubrics/upload/:id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/rubrics/upload/:id/rubrics` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/rubrics` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/rubrics/:id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/rubrics/:id/used_locations` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/rubrics/upload/:id` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/rubrics/upload/:id/rubrics` | **no** | - | - |
-| GET | `/api/v1/rubrics/upload_template` | yes | `200` | pass |
+| GET | `/api/v1/courses/:course_id/rubrics/upload/:id` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/rubrics/upload/:id/rubrics` | yes | - | - |
+| GET | `/api/v1/rubrics/upload_template` | yes | `200` | **FAIL** |
 | POST | `/api/v1/accounts/:account_id/rubrics/download_rubrics` | yes | - | - |
-| POST | `/api/v1/accounts/:account_id/rubrics/upload` | **no** | - | - |
+| POST | `/api/v1/accounts/:account_id/rubrics/upload` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/rubrics/download_rubrics` | yes | - | - |
-| POST | `/api/v1/courses/:course_id/rubrics/upload` | **no** | - | - |
+| POST | `/api/v1/courses/:course_id/rubrics/upload` | yes | - | - |
 
 ## `scopes_api` → `?`
 
@@ -2555,7 +2555,7 @@ Canvas source: `app/controllers/search_controller.rb`  ·  routes: 4  ·  implem
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/conversations/find_recipients` | yes | `200` | pass |
+| GET | `/api/v1/conversations/find_recipients` | yes | `200` | **FAIL** |
 | GET | `/api/v1/search/all_courses` | **no** | - | - |
 | GET | `/api/v1/search/recipients` | **no** | - | - |
 | GET | `/api/v1/search/rubrics` | **no** | - | - |
@@ -2597,13 +2597,13 @@ Canvas source: `app/controllers/services_api_controller.rb`  ·  routes: 3  ·  
 
 ## `shared_brand_configs` → `star-accounts`
 
-Canvas source: `app/controllers/shared_brand_configs_controller.rb`  ·  routes: 3  ·  implemented: 0
+Canvas source: `app/controllers/shared_brand_configs_controller.rb`  ·  routes: 3  ·  implemented: 3
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/shared_brand_configs/:id` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/shared_brand_configs` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/shared_brand_configs/:id` | **no** | - | - |
+| DELETE | `/api/v1/shared_brand_configs/:id` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/shared_brand_configs` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/shared_brand_configs/:id` | yes | - | - |
 
 ## `sis_api` → `?`
 
@@ -2625,17 +2625,17 @@ Canvas source: `app/controllers/sis_import_errors_api_controller.rb`  ·  routes
 
 ## `sis_imports_api` → `star-sis`
 
-Canvas source: `app/controllers/sis_imports_api_controller.rb`  ·  routes: 7  ·  implemented: 0
+Canvas source: `app/controllers/sis_imports_api_controller.rb`  ·  routes: 7  ·  implemented: 7
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/accounts/:account_id/sis_imports` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/sis_imports/:id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/sis_imports/importing` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/sis_imports` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/sis_imports/:id/abort` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/sis_imports/:id/restore_states` | **no** | - | - |
-| PUT | `/api/v1/accounts/:account_id/sis_imports/abort_all_pending` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/sis_imports` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/sis_imports/:id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/sis_imports/importing` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/sis_imports` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/sis_imports/:id/abort` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/sis_imports/:id/restore_states` | yes | - | - |
+| PUT | `/api/v1/accounts/:account_id/sis_imports/abort_all_pending` | yes | - | - |
 
 ## `smart_search` → `?`
 
@@ -2677,63 +2677,63 @@ Canvas source: `app/controllers/submission_comments_api_controller.rb`  ·  rout
 
 ## `submissions` → `star-assignments`
 
-Canvas source: `app/controllers/submissions_controller.rb`  ·  routes: 2  ·  implemented: 1
+Canvas source: `app/controllers/submissions_controller.rb`  ·  routes: 2  ·  implemented: 2
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | POST | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions` | yes | - | - |
-| POST | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions` | **no** | - | - |
+| POST | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions` | yes | - | - |
 
 ## `submissions_api` → `star-submissions`
 
-Canvas source: `app/controllers/submissions_api_controller.rb`  ·  routes: 44  ·  implemented: 16
+Canvas source: `app/controllers/submissions_api_controller.rb`  ·  routes: 44  ·  implemented: 44
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/read` | yes | - | - |
-| DELETE | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/read` | **no** | - | - |
+| DELETE | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/read` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/assignments/:assignment_id/anonymous_submissions/:anonymous_id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/assignments/:assignment_id/gradeable_students` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/assignments/:assignment_id/submission_summary` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/document_annotations/read` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/rubric_assessments/read` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/rubric_comments/read` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/assignments/gradeable_students` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/document_annotations/read` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/rubric_assessments/read` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/rubric_comments/read` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/assignments/gradeable_students` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/students/submissions` | yes | - | - |
 | GET | `/api/v1/sections/:section_id/assignments/:assignment_id/anonymous_submissions/:anonymous_id` | yes | - | - |
-| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submission_summary` | **no** | - | - |
-| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions` | **no** | - | - |
-| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id` | **no** | - | - |
-| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/document_annotations/read` | **no** | - | - |
-| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/rubric_assessments/read` | **no** | - | - |
-| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/rubric_comments/read` | **no** | - | - |
-| GET | `/api/v1/sections/:section_id/students/submissions` | **no** | - | - |
+| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submission_summary` | yes | - | - |
+| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions` | yes | - | - |
+| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id` | yes | - | - |
+| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/document_annotations/read` | yes | - | - |
+| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/rubric_assessments/read` | yes | - | - |
+| GET | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/rubric_comments/read` | yes | - | - |
+| GET | `/api/v1/sections/:section_id/students/submissions` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/files` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/update_grades` | yes | - | - |
-| POST | `/api/v1/courses/:course_id/submissions/update_grades` | **no** | - | - |
-| POST | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/files` | **no** | - | - |
-| POST | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/update_grades` | **no** | - | - |
-| POST | `/api/v1/sections/:section_id/submissions/update_grades` | **no** | - | - |
+| POST | `/api/v1/courses/:course_id/submissions/update_grades` | yes | - | - |
+| POST | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/files` | yes | - | - |
+| POST | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/update_grades` | yes | - | - |
+| POST | `/api/v1/sections/:section_id/submissions/update_grades` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/anonymous_submissions/:anonymous_id` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id` | yes | - | - |
-| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/document_annotations/read` | **no** | - | - |
+| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/document_annotations/read` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/read` | yes | - | - |
-| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/read/:item` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/rubric_assessments/read` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/rubric_comments/read` | **no** | - | - |
+| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/read/:item` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/rubric_assessments/read` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/assignments/:assignment_id/submissions/:user_id/rubric_comments/read` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/submissions/:user_id/clear_unread` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/submissions/bulk_mark_read` | yes | - | - |
 | PUT | `/api/v1/sections/:section_id/assignments/:assignment_id/anonymous_submissions/:anonymous_id` | yes | - | - |
-| PUT | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id` | **no** | - | - |
-| PUT | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/document_annotations/read` | **no** | - | - |
-| PUT | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/read` | **no** | - | - |
-| PUT | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/read/:item` | **no** | - | - |
-| PUT | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/rubric_assessments/read` | **no** | - | - |
-| PUT | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/rubric_comments/read` | **no** | - | - |
-| PUT | `/api/v1/sections/:section_id/submissions/:user_id/clear_unread` | **no** | - | - |
-| PUT | `/api/v1/sections/:section_id/submissions/bulk_mark_read` | **no** | - | - |
+| PUT | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id` | yes | - | - |
+| PUT | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/document_annotations/read` | yes | - | - |
+| PUT | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/read` | yes | - | - |
+| PUT | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/read/:item` | yes | - | - |
+| PUT | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/rubric_assessments/read` | yes | - | - |
+| PUT | `/api/v1/sections/:section_id/assignments/:assignment_id/submissions/:user_id/rubric_comments/read` | yes | - | - |
+| PUT | `/api/v1/sections/:section_id/submissions/:user_id/clear_unread` | yes | - | - |
+| PUT | `/api/v1/sections/:section_id/submissions/bulk_mark_read` | yes | - | - |
 
 ## `support_helpers/asset_processor` → `?`
 
@@ -2764,17 +2764,17 @@ Canvas source: `app/controllers/support_helpers/submission_lifecycle_manage_cont
 
 ## `support_helpers/turnitin` → `star-lti`
 
-Canvas source: `app/controllers/support_helpers/turnitin_controller.rb`  ·  routes: 7  ·  implemented: 0
+Canvas source: `app/controllers/support_helpers/turnitin_controller.rb`  ·  routes: 7  ·  implemented: 7
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/support_helpers/turnitin/assignment` | **no** | - | - |
-| GET | `/api/v1/support_helpers/turnitin/error2305` | **no** | - | - |
-| GET | `/api/v1/support_helpers/turnitin/expired` | **no** | - | - |
-| GET | `/api/v1/support_helpers/turnitin/md5` | **no** | - | - |
-| GET | `/api/v1/support_helpers/turnitin/pending` | **no** | - | - |
-| GET | `/api/v1/support_helpers/turnitin/refresh_lti_attachment` | **no** | - | - |
-| GET | `/api/v1/support_helpers/turnitin/shard` | **no** | - | - |
+| GET | `/api/v1/support_helpers/turnitin/assignment` | yes | - | - |
+| GET | `/api/v1/support_helpers/turnitin/error2305` | yes | - | - |
+| GET | `/api/v1/support_helpers/turnitin/expired` | yes | - | - |
+| GET | `/api/v1/support_helpers/turnitin/md5` | yes | - | - |
+| GET | `/api/v1/support_helpers/turnitin/pending` | yes | - | - |
+| GET | `/api/v1/support_helpers/turnitin/refresh_lti_attachment` | yes | - | - |
+| GET | `/api/v1/support_helpers/turnitin/shard` | yes | - | - |
 
 ## `syllabus_api` → `?`
 
@@ -2787,27 +2787,27 @@ Canvas source: `app/controllers/syllabus_api_controller.rb`  ·  routes: 2  ·  
 
 ## `tabs` → `star-courses`
 
-Canvas source: `app/controllers/tabs_controller.rb`  ·  routes: 5  ·  implemented: 1
+Canvas source: `app/controllers/tabs_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/accounts/:account_id/tabs` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/tabs` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/tabs` | yes | - | - |
-| GET | `/api/v1/groups/:group_id/tabs` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/tabs` | **no** | - | - |
-| PUT | `/api/v1/courses/:course_id/tabs/:tab_id` | **no** | - | - |
+| GET | `/api/v1/groups/:group_id/tabs` | yes | - | - |
+| GET | `/api/v1/users/:user_id/tabs` | yes | - | - |
+| PUT | `/api/v1/courses/:course_id/tabs/:tab_id` | yes | - | - |
 
 ## `temporary_enrollment_pairings_api` → `star-enrollments`
 
-Canvas source: `app/controllers/temporary_enrollment_pairings_api_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/temporary_enrollment_pairings_api_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/accounts/:account_id/temporary_enrollment_pairings/:id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/temporary_enrollment_pairings` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/temporary_enrollment_pairings/:id` | **no** | - | - |
-| GET | `/api/v1/accounts/:account_id/temporary_enrollment_pairings/new` | **no** | - | - |
-| POST | `/api/v1/accounts/:account_id/temporary_enrollment_pairings` | **no** | - | - |
+| DELETE | `/api/v1/accounts/:account_id/temporary_enrollment_pairings/:id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/temporary_enrollment_pairings` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/temporary_enrollment_pairings/:id` | yes | - | - |
+| GET | `/api/v1/accounts/:account_id/temporary_enrollment_pairings/new` | yes | - | - |
+| POST | `/api/v1/accounts/:account_id/temporary_enrollment_pairings` | yes | - | - |
 
 ## `terms` → `star-courses`
 
@@ -2830,15 +2830,15 @@ Canvas source: `app/controllers/terms_api_controller.rb`  ·  routes: 2  ·  imp
 
 ## `tokens` → `star-users`
 
-Canvas source: `app/controllers/tokens_controller.rb`  ·  routes: 5  ·  implemented: 0
+Canvas source: `app/controllers/tokens_controller.rb`  ·  routes: 5  ·  implemented: 5
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/users/:user_id/tokens/:id` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/tokens/:id` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/user_generated_tokens` | **no** | - | - |
-| POST | `/api/v1/users/:user_id/tokens` | **no** | - | - |
-| PUT | `/api/v1/users/:user_id/tokens/:id` | **no** | - | - |
+| DELETE | `/api/v1/users/:user_id/tokens/:id` | yes | - | - |
+| GET | `/api/v1/users/:user_id/tokens/:id` | yes | - | - |
+| GET | `/api/v1/users/:user_id/user_generated_tokens` | yes | - | - |
+| POST | `/api/v1/users/:user_id/tokens` | yes | - | - |
+| PUT | `/api/v1/users/:user_id/tokens/:id` | yes | - | - |
 
 ## `usage_rights` → `star-files`
 
@@ -2858,72 +2858,72 @@ Canvas source: `app/controllers/usage_rights_controller.rb`  ·  routes: 9  ·  
 
 ## `user_observees` → `star-users`
 
-Canvas source: `app/controllers/user_observees_controller.rb`  ·  routes: 7  ·  implemented: 0
+Canvas source: `app/controllers/user_observees_controller.rb`  ·  routes: 7  ·  implemented: 7
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/users/:user_id/observees/:observee_id` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/observees` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/observees/:observee_id` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/observers` | **no** | - | - |
-| GET | `/api/v1/users/:user_id/observers/:observer_id` | **no** | - | - |
-| POST | `/api/v1/users/:user_id/observees` | **no** | - | - |
-| PUT | `/api/v1/users/:user_id/observees/:observee_id` | **no** | - | - |
+| DELETE | `/api/v1/users/:user_id/observees/:observee_id` | yes | - | - |
+| GET | `/api/v1/users/:user_id/observees` | yes | - | - |
+| GET | `/api/v1/users/:user_id/observees/:observee_id` | yes | - | - |
+| GET | `/api/v1/users/:user_id/observers` | yes | - | - |
+| GET | `/api/v1/users/:user_id/observers/:observer_id` | yes | - | - |
+| POST | `/api/v1/users/:user_id/observees` | yes | - | - |
+| PUT | `/api/v1/users/:user_id/observees/:observee_id` | yes | - | - |
 
 ## `users` → `star-users`
 
-Canvas source: `app/controllers/users_controller.rb`  ·  routes: 39  ·  implemented: 25
+Canvas source: `app/controllers/users_controller.rb`  ·  routes: 39  ·  implemented: 39
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/users/:id` | yes | - | - |
-| DELETE | `/api/v1/users/:id/mobile_sessions` | **no** | - | - |
+| DELETE | `/api/v1/users/:id/mobile_sessions` | yes | - | - |
 | DELETE | `/api/v1/users/:id/sessions` | yes | - | - |
-| DELETE | `/api/v1/users/mobile_sessions` | **no** | `403` | pass |
+| DELETE | `/api/v1/users/mobile_sessions` | yes | `403` | pass |
 | DELETE | `/api/v1/users/self/activity_stream` | yes | `200` | pass |
 | DELETE | `/api/v1/users/self/activity_stream/:id` | yes | - | - |
 | DELETE | `/api/v1/users/self/todo/:asset_string/:purpose` | yes | `400` | pass |
 | GET | `/api/v1/accounts/:account_id/users` | yes | - | - |
-| GET | `/api/v1/dashboard/dashboard_cards` | yes | `200` | pass |
-| GET | `/api/v1/show_k5_dashboard` | **no** | `200` | pass |
+| GET | `/api/v1/dashboard/dashboard_cards` | yes | `200` | **FAIL** |
+| GET | `/api/v1/show_k5_dashboard` | yes | `200` | pass |
 | GET | `/api/v1/users/:id` | yes | - | - |
 | GET | `/api/v1/users/:id/colors` | yes | - | - |
 | GET | `/api/v1/users/:id/colors/:asset_string` | yes | - | - |
 | GET | `/api/v1/users/:id/dashboard_positions` | yes | - | - |
 | GET | `/api/v1/users/:id/graded_submissions` | yes | - | - |
-| GET | `/api/v1/users/:id/new_user_tutorial_statuses` | **no** | - | - |
+| GET | `/api/v1/users/:id/new_user_tutorial_statuses` | yes | - | - |
 | GET | `/api/v1/users/:id/settings` | yes | - | - |
 | GET | `/api/v1/users/:user_id/missing_submissions` | yes | - | - |
-| GET | `/api/v1/users/activity_stream` | **no** | `200` | pass |
+| GET | `/api/v1/users/activity_stream` | yes | `200` | **FAIL** |
 | GET | `/api/v1/users/self/activity_stream` | yes | `200` | pass |
 | GET | `/api/v1/users/self/activity_stream/summary` | yes | `200` | pass |
 | GET | `/api/v1/users/self/todo` | yes | `200` | pass |
 | GET | `/api/v1/users/self/todo_item_count` | yes | `200` | pass |
 | GET | `/api/v1/users/self/upcoming_events` | yes | `200` | pass |
-| POST | `/api/v1/accounts/:account_id/self_registration` | **no** | - | - |
+| POST | `/api/v1/accounts/:account_id/self_registration` | yes | - | - |
 | POST | `/api/v1/accounts/:account_id/users` | yes | - | - |
-| POST | `/api/v1/users/:id/clear_cache` | **no** | - | - |
-| POST | `/api/v1/users/:id/split` | **no** | - | - |
+| POST | `/api/v1/users/:id/clear_cache` | yes | - | - |
+| POST | `/api/v1/users/:id/split` | yes | - | - |
 | POST | `/api/v1/users/:user_id/files` | yes | - | - |
-| POST | `/api/v1/users/self/pandata_events_token` | **no** | `403` | pass |
+| POST | `/api/v1/users/self/pandata_events_token` | yes | `403` | **FAIL** |
 | PUT | `/api/v1/users/:id` | yes | - | - |
 | PUT | `/api/v1/users/:id/colors/:asset_string` | yes | - | - |
 | PUT | `/api/v1/users/:id/dashboard_positions` | yes | - | - |
-| PUT | `/api/v1/users/:id/files_ui_version_preference` | **no** | - | - |
-| PUT | `/api/v1/users/:id/merge_into/:destination_user_id` | **no** | - | - |
-| PUT | `/api/v1/users/:id/merge_into/accounts/:destination_account_id/users/:destination_user_id` | **no** | - | - |
-| PUT | `/api/v1/users/:id/new_user_tutorial_statuses/:page_name` | **no** | - | - |
+| PUT | `/api/v1/users/:id/files_ui_version_preference` | yes | - | - |
+| PUT | `/api/v1/users/:id/merge_into/:destination_user_id` | yes | - | - |
+| PUT | `/api/v1/users/:id/merge_into/accounts/:destination_account_id/users/:destination_user_id` | yes | - | - |
+| PUT | `/api/v1/users/:id/new_user_tutorial_statuses/:page_name` | yes | - | - |
 | PUT | `/api/v1/users/:id/settings` | yes | - | - |
-| PUT | `/api/v1/users/:id/text_editor_preference` | **no** | - | - |
+| PUT | `/api/v1/users/:id/text_editor_preference` | yes | - | - |
 
 ## `web_zip_exports` → `star-content`
 
-Canvas source: `app/controllers/web_zip_exports_controller.rb`  ·  routes: 2  ·  implemented: 0
+Canvas source: `app/controllers/web_zip_exports_controller.rb`  ·  routes: 2  ·  implemented: 2
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/courses/:course_id/web_zip_exports` | **no** | - | - |
-| GET | `/api/v1/courses/:course_id/web_zip_exports/:id` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/web_zip_exports` | yes | - | - |
+| GET | `/api/v1/courses/:course_id/web_zip_exports/:id` | yes | - | - |
 
 ## `what_if_grades_api` → `?`
 
@@ -2936,35 +2936,35 @@ Canvas source: `app/controllers/what_if_grades_api_controller.rb`  ·  routes: 2
 
 ## `wiki_pages_api` → `star-pages`
 
-Canvas source: `app/controllers/wiki_pages_api_controller.rb`  ·  routes: 29  ·  implemented: 20
+Canvas source: `app/controllers/wiki_pages_api_controller.rb`  ·  routes: 29  ·  implemented: 25
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/courses/:course_id/pages/:url_or_id` | yes | - | - |
 | DELETE | `/api/v1/groups/:group_id/pages/:url_or_id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/front_page` | yes | - | - |
-| GET | `/api/v1/courses/:course_id/page_title_availability` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/page_title_availability` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/pages` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/pages/:url_or_id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/pages/:url_or_id/revisions` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/pages/:url_or_id/revisions/:revision_id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/pages/:url_or_id/revisions/latest` | yes | - | - |
 | GET | `/api/v1/groups/:group_id/front_page` | yes | - | - |
-| GET | `/api/v1/groups/:group_id/page_title_availability` | **no** | - | - |
+| GET | `/api/v1/groups/:group_id/page_title_availability` | yes | - | - |
 | GET | `/api/v1/groups/:group_id/pages` | yes | - | - |
 | GET | `/api/v1/groups/:group_id/pages/:url_or_id` | yes | - | - |
 | GET | `/api/v1/groups/:group_id/pages/:url_or_id/revisions` | **no** | - | - |
 | GET | `/api/v1/groups/:group_id/pages/:url_or_id/revisions/:revision_id` | **no** | - | - |
 | GET | `/api/v1/groups/:group_id/pages/:url_or_id/revisions/latest` | **no** | - | - |
 | POST | `/api/v1/courses/:course_id/pages` | yes | - | - |
-| POST | `/api/v1/courses/:course_id/pages/:url_or_id/accessibility/queue_scan` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/pages/:url_or_id/accessibility/scan` | **no** | - | - |
+| POST | `/api/v1/courses/:course_id/pages/:url_or_id/accessibility/queue_scan` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/pages/:url_or_id/accessibility/scan` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/pages/:url_or_id/duplicate` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/pages/:url_or_id/revisions/:revision_id` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/pages_ai/alt_text` | yes | - | - |
 | POST | `/api/v1/groups/:group_id/pages` | yes | - | - |
 | POST | `/api/v1/groups/:group_id/pages/:url_or_id/revisions/:revision_id` | **no** | - | - |
-| POST | `/api/v1/groups/:group_id/pages_ai/alt_text` | **no** | - | - |
+| POST | `/api/v1/groups/:group_id/pages_ai/alt_text` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/front_page` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/pages/:url_or_id` | yes | - | - |
 | PUT | `/api/v1/groups/:group_id/front_page` | yes | - | - |

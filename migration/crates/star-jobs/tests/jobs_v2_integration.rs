@@ -926,12 +926,12 @@ async fn search_counts_matching_groups() {
     assert_eq!(resp.status_code(), 200, "search; body: {}", resp.text());
     let counts: Value = resp.json();
     assert_eq!(
-        counts.get(&format!("{prefix}-Kernel.pp")),
+        counts.get(format!("{prefix}-Kernel.pp")),
         Some(&Value::from(2)),
         "search counts the matching tags: {counts}"
     );
     assert_eq!(
-        counts.get(&format!("{prefix}-Kernel.p")),
+        counts.get(format!("{prefix}-Kernel.p")),
         Some(&Value::from(1)),
         "search counts the matching tags: {counts}"
     );

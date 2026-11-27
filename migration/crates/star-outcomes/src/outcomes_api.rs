@@ -201,55 +201,29 @@ impl From<sqlx::Error> for OutcomeApiError {
     }
 }
 
-/// `Rack::Utils::SYMBOL_TO_STATUS_CODE` key for a status code.
-fn status_symbol(status: StatusCode) -> &'static str {
-    match status {
-        StatusCode::BAD_REQUEST => "bad_request",
-        StatusCode::UNAUTHORIZED => "unauthorized",
-        StatusCode::FORBIDDEN => "forbidden",
-        StatusCode::NOT_FOUND => "not_found",
-        StatusCode::UNPROCESSABLE_ENTITY => "unprocessable_entity",
-        StatusCode::INTERNAL_SERVER_ERROR => "internal_server_error",
-        _ => "error",
-    }
-}
-
 impl IntoResponse for OutcomeApiError {
     fn into_response(self) -> Response {
         match self {
             OutcomeApiError::Api(err) => err.into_response(),
-            OutcomeApiError::Reject { status, message } => (
-                status,
-                Json(json!({ "status": status_symbol(status), "message": message })),
-            )
-                .into_response(),
+            // Canvas `reject!` — `RequestError#error_json`
+            // (`lib/request_error.rb:28-33`). The shared renderer keeps
+            // Canvas' key order (`status` before `message`).
+            OutcomeApiError::Reject { status, message } => {
+                ApiError::canvas_reject(status, message).into_response()
+            }
+            // Canvas `render_json_unauthorized` — the body is rendered by the
+            // shared renderer in `star_common`, so the key order (`status`
+            // before `errors`) is Canvas' and not `serde_json`'s
+            // alphabetical one.
             OutcomeApiError::Unauthorized {
                 authenticated: true,
-            } => (
-                StatusCode::FORBIDDEN,
-                Json(json!({
-                    "status": "unauthorized",
-                    "errors": [{ "message": "user not authorized to perform that action" }]
-                })),
-            )
-                .into_response(),
+            } => ApiError::Forbidden.into_response(),
             OutcomeApiError::Unauthorized {
                 authenticated: false,
-            } => (
-                StatusCode::UNAUTHORIZED,
-                Json(json!({
-                    "status": "unauthenticated",
-                    "errors": [{ "message": "user authorization required" }]
-                })),
-            )
-                .into_response(),
-            OutcomeApiError::NotFound => (
-                StatusCode::NOT_FOUND,
-                Json(json!({
-                    "errors": [{ "message": "The specified resource does not exist." }]
-                })),
-            )
-                .into_response(),
+            } => ApiError::Unauthorized.into_response(),
+            // Canvas `ActiveRecord::RecordNotFound` — `api_error_json`
+            // (`app/controllers/application_controller.rb:2296`).
+            OutcomeApiError::NotFound => ApiError::NotFound.into_response(),
             OutcomeApiError::InvalidContentType => (
                 StatusCode::BAD_REQUEST,
                 Json(json!({ "error": "Invalid content type, UTF-8 required" })),
@@ -2207,10 +2181,10 @@ async fn root_account_id(pool: &PgPool, account_id: i64) -> Result<i64, OutcomeA
 
 /// Canvas `value_to_boolean`.
 fn value_to_boolean(value: Option<&str>) -> bool {
-    match value {
-        Some("true") | Some("1") | Some("t") | Some("T") | Some("yes") => true,
-        _ => false,
-    }
+    matches!(
+        value,
+        Some("true") | Some("1") | Some("t") | Some("T") | Some("yes")
+    )
 }
 
 /// The `page` / `per_page` request parameters.
@@ -2246,7 +2220,7 @@ fn jsonapi_meta(base_url: &str, query: &str, per_page: usize, page: usize, total
     let page_count = if per_page == 0 {
         0
     } else {
-        (total + per_page - 1) / per_page
+        total.div_ceil(per_page)
     };
     let link = |page: usize| format!("{base_url}?{query}&page={page}&per_page={per_page}");
 
@@ -2592,7 +2566,7 @@ fn calculate_rollup_score(
             let mut sorted = scores.clone();
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let mid = sorted.len() / 2;
-            if sorted.len() % 2 == 0 {
+            if sorted.len().is_multiple_of(2) {
                 Some((sorted[mid - 1] + sorted[mid]) / 2.0)
             } else {
                 Some(sorted[mid])
@@ -2709,7 +2683,7 @@ fn calculate_rollup_score(
         Some(result) => {
             let stamp = result.submitted_at.or(result.assessed_at);
             let title = stamp
-                .and_then(|_| result.title.as_ref())
+                .and(result.title.as_ref())
                 .and_then(|value| value.split(", ").nth(1).map(str::to_string));
             (stamp, title)
         }
@@ -2861,7 +2835,7 @@ async fn aggregate_rollups(
             let mut sorted = values.clone();
             sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
             let mid = sorted.len() / 2;
-            if sorted.len() % 2 == 0 {
+            if sorted.len().is_multiple_of(2) {
                 Some((sorted[mid - 1] + sorted[mid]) / 2.0)
             } else {
                 Some(sorted[mid])

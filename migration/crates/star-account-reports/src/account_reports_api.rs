@@ -792,8 +792,8 @@ async fn available_reports(
         .filter(|(key, _)| key == "include" || key == "include[]")
         .map(|(_, value)| value.as_str())
         .collect();
-    let wants_description = includes.iter().any(|value| *value == "description_html");
-    let wants_parameters = includes.iter().any(|value| *value == "parameters_html");
+    let wants_description = includes.contains(&"description_html");
+    let wants_parameters = includes.contains(&"parameters_html");
 
     let last_runs = last_reports(&state.db, context.account_id).await?;
 
@@ -1286,9 +1286,7 @@ async fn report_json(pool: &PgPool, report: &ReportRow) -> Result<Value, ReportE
     map.insert("id".into(), Value::from(report.id));
     map.insert(
         "progress".into(),
-        report
-            .progress
-            .map_or(Value::Null, |value| Value::from(value)),
+        report.progress.map_or(Value::Null, Value::from),
     );
     map.insert(
         "parameters".into(),
@@ -1296,9 +1294,7 @@ async fn report_json(pool: &PgPool, report: &ReportRow) -> Result<Value, ReportE
     );
     map.insert(
         "current_line".into(),
-        report
-            .current_line
-            .map_or(Value::Null, |value| Value::from(value)),
+        report.current_line.map_or(Value::Null, Value::from),
     );
     map.insert(
         "status".into(),

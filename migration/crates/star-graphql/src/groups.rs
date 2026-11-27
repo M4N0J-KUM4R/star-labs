@@ -149,13 +149,13 @@ fn membership_state(workflow_state: &str) -> GroupMembershipState {
 /// columns: see the module doc above.
 #[derive(Debug, Clone)]
 pub struct Group {
-    id: i64,
-    course_id: Option<i64>,
-    group_category_id: Option<i64>,
-    name: String,
-    workflow_state: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) course_id: Option<i64>,
+    pub(crate) group_category_id: Option<i64>,
+    pub(crate) name: String,
+    pub(crate) workflow_state: String,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -165,6 +165,7 @@ impl Group {
     }
 
     /// Canvas `Group._id`: the legacy canvas id (group_type.rb:37).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
@@ -258,6 +259,7 @@ impl GroupMembership {
     }
 
     /// Canvas `GroupMembership._id` (group_membership_type.rb:25).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
@@ -296,14 +298,14 @@ impl GroupMembership {
 /// GroupCategory as the group_categories table (0043).
 #[derive(Debug, Clone)]
 pub struct GroupSet {
-    id: i64,
-    name: String,
-    self_signup: Option<String>,
-    group_limit: Option<i32>,
-    auto_leader: Option<String>,
-    non_collaborative: bool,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) self_signup: Option<String>,
+    pub(crate) group_limit: Option<i32>,
+    pub(crate) auto_leader: Option<String>,
+    pub(crate) non_collaborative: bool,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -313,6 +315,7 @@ impl GroupSet {
     }
 
     /// Canvas `GroupSet._id` (group_set_type.rb:30).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
@@ -627,7 +630,10 @@ pub(crate) async fn fetch_group_set_page(
 }
 
 /// Fetch a single group by id, deleted groups excluded.
-async fn fetch_group(pool: &PgPool, group_id: i64) -> Result<Option<Group>, async_graphql::Error> {
+pub(crate) async fn fetch_group(
+    pool: &PgPool,
+    group_id: i64,
+) -> Result<Option<Group>, async_graphql::Error> {
     let row: Option<GroupRow> = sqlx::query_as(
         r#"
         SELECT id, course_id, group_category_id, name, workflow_state, created_at, updated_at
@@ -643,7 +649,7 @@ async fn fetch_group(pool: &PgPool, group_id: i64) -> Result<Option<Group>, asyn
 }
 
 /// Fetch a single group set by id, deleted categories excluded.
-async fn fetch_group_set(
+pub(crate) async fn fetch_group_set(
     pool: &PgPool,
     category_id: i64,
 ) -> Result<Option<GroupSet>, async_graphql::Error> {
@@ -683,3 +689,7 @@ async fn user_enrolled_in_course(
     .map_err(db_err)?;
     Ok(row.is_some())
 }
+
+// ---------------------------------------------------------------------------
+// Single-record fetch (Canvas `Query.node` / `Query.legacyNode`)
+// ---------------------------------------------------------------------------

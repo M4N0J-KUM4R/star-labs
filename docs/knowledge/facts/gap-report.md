@@ -18,9 +18,9 @@ Canvas something.
 | API routes mounted | 1292 | 767 | **154** |
 | Permissions declared | 160 | 160 | **0** |
 | Models with a table | 351 | 29 | **322** |
-| Columns missing (models with a table) | — | — | **493** |
-| GraphQL types | 621 | 44 | **583** |
-| GraphQL query fields | 28 | 7 | **25** |
+| Columns missing (models with a table) | — | — | **475** |
+| GraphQL types | 621 | 74 | **553** |
+| GraphQL query fields | 28 | 31 | **18** |
 | GraphQL mutations | 100 | 0 | **100** |
 | Behavioural cases passing | 430 recorded | 265 pass / 165 fail | **165** |
 
@@ -52,7 +52,7 @@ Canvas's long tail is LTI, AI surfaces, master templates, reporting and admin.
 | `discovery_pages_api` | 2 |
 | `course_audit_api` | 2 |
 
-### Routes the port registers that Canvas does not mount (161)
+### Routes the port registers that Canvas does not mount (164)
 
 - `/`  (star-graphql, star-ui)
 - `/account_notifications/{}`  (star-accounts)
@@ -98,7 +98,7 @@ the port invented. Each needs a decision: keep as an alias, or delete.
 
 ## Columns the port's tables still owe
 
-28 models, 493 columns total.
+28 models, 475 columns total.
 
 ### `Assignment` — 60 missing
 
@@ -282,7 +282,7 @@ unlock_at
 user_id
 ```
 
-### `Course` — 47 missing
+### `Course` — 38 missing
 
 ```
 abstract_course_id
@@ -294,21 +294,14 @@ archived_at
 career_learning_library_only
 conclude_at
 content_library
-default_view
 default_wiki_editing_roles
 deleted_at
-grade_passback_setting
-grading_standard_id
 group_weighting_scheme
 home_page_announcement_limit
-homeroom_course
 homeroom_course_id
 indexed
 integration_id
-is_public
 latest_outcome_import_id
-license
-locale
 lti_context_id
 open_enrollment
 public_description
@@ -325,12 +318,10 @@ sis_source_id
 stuck_sis_fields
 sync_enrollments_from_homeroom
 tab_configuration
-template
 template_course_id
 time_zone
 turnitin_comments
 turnitin_id
-uuid
 wiki_id
 ```
 
@@ -417,7 +408,7 @@ turnitin_data
 url
 ```
 
-### `User` — 36 missing
+### `User` — 32 missing
 
 ```
 avatar_image_source
@@ -430,7 +421,6 @@ deleted_at
 features_used
 initial_enrollment_type
 instructure_identity_id
-locale
 lti_context_id
 lti_id
 merged_into_user_id
@@ -438,7 +428,6 @@ otp_communication_channel_id
 otp_secret_key_enc
 otp_secret_key_salt
 phone
-preferences
 pronouns
 public
 reminder_time_for_due_dates
@@ -446,12 +435,10 @@ reminder_time_for_grading
 root_account_ids
 school_name
 school_position
-short_name
 show_user_services
 storage_quota
 stuck_sis_fields
 subscribe_to_emails
-time_zone
 turnitin_id
 unread_conversations_count
 uuid
@@ -521,29 +508,6 @@ was_preview
 workflow_state
 ```
 
-### `Group` — 18 missing
-
-```
-avatar_attachment_id
-context_id
-context_type
-default_view
-deleted_at
-is_public
-leader_id
-lti_context_id
-max_membership
-migration_id
-non_collaborative
-root_account_id
-sis_batch_id
-sis_source_id
-storage_quota
-stuck_sis_fields
-uuid
-wiki_id
-```
-
 ### `Rubric` — 16 missing
 
 ```
@@ -565,7 +529,26 @@ rubric_id
 user_id
 ```
 
-### `Enrollment` — 11 missing
+### `Group` — 14 missing
+
+```
+avatar_attachment_id
+context_id
+default_view
+deleted_at
+leader_id
+lti_context_id
+migration_id
+root_account_id
+sis_batch_id
+sis_source_id
+storage_quota
+stuck_sis_fields
+uuid
+wiki_id
+```
+
+### `Enrollment` — 10 missing
 
 ```
 archived_at
@@ -578,7 +561,6 @@ sis_batch_id
 sis_pseudonym_id
 stuck_sis_fields
 temporary_enrollment_pairing_id
-uuid
 ```
 
 ### `Quizzes::QuizQuestion` — 10 missing
@@ -714,21 +696,18 @@ started_at
 
 ## GraphQL
 
-- **types**: 38/621 (6.1%) — 583 missing
-- **queries**: 3/28 (10.7%) — 25 missing
+- **types**: 68/621 (11.0%) — 553 missing
+- **queries**: 10/28 (35.7%) — 18 missing
 - **mutations**: 0/100 (0.0%) — 100 missing
 
 Canvas query root fields the port does not expose:
 
 ```
-account
 accountNotifications
 allCourses
-assignment
 assignmentGroup
 auditLogs
 courseInstructorsConnection
-courses
 enrollmentInvitations
 institutionalTag
 institutionalTagCategory
@@ -739,13 +718,9 @@ learningOutcomeGroup
 legacyNode
 moduleItem
 myInboxSettings
-node
 outcomeCalculationMethod
 outcomeProficiency
 peerReviewSubAssignment
-rubric
-submission
-term
 ```
 
 ## Where to start

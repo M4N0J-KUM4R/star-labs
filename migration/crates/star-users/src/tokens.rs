@@ -37,7 +37,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::PgPool;
 
-use star_auth::AuthUser;
+use star_auth::{hashed_token, AuthUser};
 use star_common::{ApiError, AppState};
 
 /// An `access_tokens` row.
@@ -179,14 +179,20 @@ async fn create_token(
 
     // The token value itself is only rendered when the token is created.
     let value = format!("{}:{}", user_id, uuid::Uuid::new_v4());
+    // Canvas stores the token hashed and keeps the clear value only in
+    // memory (app/models/access_token.rb:312-315); the hash is what the
+    // caller is resolved from.
+    let crypted = hashed_token(&value, &state.jwt_secret);
 
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO access_tokens (user_id, token, scopes, purpose, workflow_state, \
-             permanent_expires_at) \
-         VALUES ($1, $2, $3, $4, 'active', $5) RETURNING id",
+        "INSERT INTO access_tokens (user_id, token, crypted_token, token_hint, scopes, \
+             purpose, workflow_state, permanent_expires_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, 'active', $7) RETURNING id",
     )
     .bind(user_id)
     .bind(&value)
+    .bind(&crypted)
+    .bind(token_hint(&value))
     .bind(fields.scopes.unwrap_or_default())
     .bind(&purpose)
     .bind(parse_expiry(fields.expires_at.as_deref()))
@@ -221,22 +227,33 @@ async fn update_token(
         None => token.permanent_expires_at,
     };
 
-    // Canvas regenerates the token value when the request asks for it.
+    // Canvas regenerates the token value when the request asks for it
+    // (app/controllers/tokens_controller.rb:169-177): a new value, a new
+    // hash and a new hint.
     let regenerate = value_to_boolean(fields.regenerate.as_deref());
     let value = if regenerate {
         Some(format!("{}:{}", user_id, uuid::Uuid::new_v4()))
     } else {
         None
     };
+    let crypted = value
+        .as_deref()
+        .map(|value| hashed_token(value, &state.jwt_secret));
+    let hint = value.as_deref().map(token_hint);
 
     sqlx::query(
         "UPDATE access_tokens SET scopes = $1, purpose = $2, permanent_expires_at = $3, \
-             token = COALESCE($4, token), updated_at = now() WHERE id = $5",
+             token = COALESCE($4, token), \
+             crypted_token = COALESCE($5, crypted_token), \
+             token_hint = COALESCE($6, token_hint), \
+             updated_at = now() WHERE id = $7",
     )
     .bind(&scopes)
     .bind(&purpose)
     .bind(expires_at)
     .bind(&value)
+    .bind(&crypted)
+    .bind(&hint)
     .bind(token.id)
     .execute(&state.db)
     .await?;

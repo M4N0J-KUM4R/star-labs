@@ -13,9 +13,11 @@
 //! | DELETE | `/accounts/{accountId}/grading_standards/{id}` | `destroy`       |
 //!
 //! The path strings are byte-identical to the ones `lib.rs` already registers
-//! for the course scope: matchit normalises parameter names, so a second route
-//! with the same path *shape* but different parameter names is a hard error
-//! (`Insertion failed due to conflict`) when the two routers are merged.
+//! for the course scope, so axum merges the two method routers (GET/DELETE in
+//! `lib.rs`, PUT here) into the GET/PUT/DELETE trio Canvas serves on that
+//! path. A *different* spelling of the same path shape would be a hard error
+//! (`Insertion failed due to conflict`) when the two routers are merged,
+//! because matchit normalises parameter names.
 //!
 //! # DDL
 //!
@@ -755,28 +757,25 @@ async fn destroy_account_grading_standard(
 /// The Canvas `GradingStandardsApiController` routes.
 pub fn router() -> Router<AppState> {
     Router::new()
+        // Canvas `GradingStandardsApiController#context_index` / `#create`
+        // (config/routes.rb:2698 and :2701).
         .route(
             "/accounts/{accountId}/grading_standards",
-            get(context_index_account),
+            get(context_index_account).post(create_account_grading_standard),
         )
-        .route(
-            "/accounts/{accountId}/grading_standards",
-            post(create_account_grading_standard),
-        )
+        // Canvas `GradingStandardsApiController#context_show` / `#update` /
+        // `#destroy` (config/routes.rb:2700, :2704 and :2706).
         .route(
             "/accounts/{accountId}/grading_standards/{id}",
-            get(context_show_account),
+            get(context_show_account)
+                .put(update_account_grading_standard)
+                .delete(destroy_account_grading_standard),
         )
-        .route(
-            "/accounts/{accountId}/grading_standards/{id}",
-            put(update_account_grading_standard),
-        )
-        .route(
-            "/accounts/{accountId}/grading_standards/{id}",
-            delete(destroy_account_grading_standard),
-        )
-        // The path string is byte-identical to the one `lib.rs` registers for
-        // the course scope: matchit rejects the same path shape twice.
+        // Canvas `GradingStandardsApiController#update` for the course scope
+        // (config/routes.rb:2703). The path string is byte-identical to the one
+        // `lib.rs` registers for the same path, so axum merges the two method
+        // routers (GET/DELETE there, PUT here) into the GET/PUT/DELETE trio
+        // Canvas serves on this path.
         .route(
             "/courses/{courseId}/grading_standards/{id}",
             put(update_course_grading_standard),

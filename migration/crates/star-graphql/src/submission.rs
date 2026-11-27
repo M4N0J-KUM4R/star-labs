@@ -37,22 +37,22 @@ use crate::{db_err, decode_cursor, encode_cursor, PageInfo, DEFAULT_PAGE_SIZE, M
 
 /// Row of the `submissions` table (migrations 0001 + 0060).
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct SubmissionRow {
-    id: i64,
-    assignment_id: i64,
-    user_id: i64,
-    attempt: i32,
-    body: Option<String>,
-    score: Option<f64>,
-    submission_type: Option<String>,
-    workflow_state: String,
-    submitted_at: DateTime<Utc>,
-    graded_at: Option<DateTime<Utc>>,
-    excused: bool,
-    late_policy_status: Option<String>,
-    points_deducted: Option<f64>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+pub(crate) struct SubmissionRow {
+    pub(crate) id: i64,
+    pub(crate) assignment_id: i64,
+    pub(crate) user_id: i64,
+    pub(crate) attempt: i32,
+    pub(crate) body: Option<String>,
+    pub(crate) score: Option<f64>,
+    pub(crate) submission_type: Option<String>,
+    pub(crate) workflow_state: String,
+    pub(crate) submitted_at: DateTime<Utc>,
+    pub(crate) graded_at: Option<DateTime<Utc>>,
+    pub(crate) excused: bool,
+    pub(crate) late_policy_status: Option<String>,
+    pub(crate) points_deducted: Option<f64>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 // ---------------------------------------------------------------------------
@@ -67,6 +67,9 @@ struct SubmissionRow {
 #[derive(Debug, Clone, SimpleObject)]
 pub struct Submission {
     pub id: ID,
+    /// Canvas `Submission._id` — the legacy canvas id.
+    #[graphql(name = "_id")]
+    pub _id: ID,
     pub assignment_id: ID,
     pub user_id: ID,
     pub attempt: i32,
@@ -92,6 +95,7 @@ impl From<SubmissionRow> for Submission {
     fn from(row: SubmissionRow) -> Self {
         Submission {
             id: ID(row.id.to_string()),
+            _id: ID(row.id.to_string()),
             assignment_id: ID(row.assignment_id.to_string()),
             user_id: ID(row.user_id.to_string()),
             attempt: row.attempt,
@@ -241,4 +245,59 @@ async fn user_teaches_course(
     .await
     .map_err(db_err)?;
     Ok(row.is_some())
+}
+
+// ---------------------------------------------------------------------------
+// Single-record fetch (Canvas `Query.node` / `Query.legacyNode`)
+// ---------------------------------------------------------------------------
+
+/// Canvas `Query.node(type: Submission)` — a submission by legacy id.
+pub(crate) async fn fetch_submission(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<Submission>, async_graphql::Error> {
+    let row: Option<SubmissionRow> = sqlx::query_as(
+        r#"
+        SELECT id, assignment_id, user_id, attempt, body, score::float8 AS score,
+               submission_type, workflow_state, submitted_at, graded_at, excused,
+               late_policy_status, points_deducted::float8 AS points_deducted,
+               created_at, updated_at
+        FROM submissions
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(Into::into))
+}
+
+/// Canvas `Query.submission(assignmentId:, userId:)` — the user's latest
+/// submission for an assignment.
+pub(crate) async fn fetch_submission_by_assignment_and_user(
+    pool: &PgPool,
+    assignment_id: i64,
+    user_id: i64,
+) -> Result<Option<Submission>, async_graphql::Error> {
+    let row: Option<SubmissionRow> = sqlx::query_as(
+        r#"
+        SELECT id, assignment_id, user_id, attempt, body, score::float8 AS score,
+               submission_type, workflow_state, submitted_at, graded_at, excused,
+               late_policy_status, points_deducted::float8 AS points_deducted,
+               created_at, updated_at
+        FROM submissions
+        WHERE assignment_id = $1 AND user_id = $2
+        ORDER BY attempt DESC, id DESC
+        LIMIT 1
+        "#,
+    )
+    .bind(assignment_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(Into::into))
 }

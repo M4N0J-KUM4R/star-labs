@@ -6,6 +6,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
+    response::{IntoResponse, Response},
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -14,13 +15,34 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 use star_auth::AuthUser;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 
 mod ai_experiences;
 
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
+
+/// The course columns the course endpoints read.
+///
+/// Canvas renders a course from `lib/api/v1/course_json.rb:21`
+/// (`CourseJson::BASE_ATTRIBUTES`) plus the fields `course_json` adds
+/// (`lib/api/v1/course.rb:106`); the columns below are the port's mirror of
+/// that set. Migration 0248 adds the ones the port was missing.
+const COURSE_COLUMNS: &str = "id, name, course_code, description, workflow_state, start_at, \
+     end_at, syllabus_body, account_id, created_at, updated_at, uuid, default_view, is_public, \
+     grading_standard_id, license, grade_passback_setting, locale, template, homeroom_course, \
+     is_public_to_auth_users, public_syllabus, public_syllabus_to_auth";
+
+/// The course columns with a table alias, for the queries that join the
+/// courses table with another one.
+fn course_columns(alias: &str) -> String {
+    COURSE_COLUMNS
+        .split(", ")
+        .map(|column| format!("{alias}.{column}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// Course record matching Canvas API v1 shape.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
@@ -37,6 +59,39 @@ pub struct Course {
     pub end_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub syllabus_body: Option<String>,
+    /// Canvas `courses.account_id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<i64>,
+    /// Canvas `courses.uuid`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub uuid: Option<String>,
+    /// Canvas `courses.default_view`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_view: Option<String>,
+    /// Canvas `courses.is_public`.
+    pub is_public: bool,
+    /// Canvas `courses.grading_standard_id`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grading_standard_id: Option<i64>,
+    /// Canvas `courses.license`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub license: Option<String>,
+    /// Canvas `courses.grade_passback_setting`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grade_passback_setting: Option<String>,
+    /// Canvas `courses.locale`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub locale: Option<String>,
+    /// Canvas `courses.template`.
+    pub template: bool,
+    /// Canvas `courses.homeroom_course`.
+    pub homeroom_course: bool,
+    /// Canvas `Course#is_public_to_auth_users`.
+    pub is_public_to_auth_users: bool,
+    /// Canvas `Course#public_syllabus`.
+    pub public_syllabus: bool,
+    /// Canvas `Course#public_syllabus_to_auth`.
+    pub public_syllabus_to_auth: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -57,12 +112,28 @@ pub struct CreateCourse {
     pub syllabus_body: Option<String>,
 }
 
+/// A request without a body names no attribute at all, the way Canvas'
+/// `params[:course]` is empty.
+impl Default for CreateCourse {
+    fn default() -> Self {
+        CreateCourse {
+            name: String::new(),
+            course_code: String::new(),
+            description: None,
+            workflow_state: default_workflow_state(),
+            start_at: None,
+            end_at: None,
+            syllabus_body: None,
+        }
+    }
+}
+
 fn default_workflow_state() -> String {
     "available".to_string()
 }
 
 /// Request to update a course.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct UpdateCourse {
     pub name: Option<String>,
     pub course_code: Option<String>,
@@ -115,9 +186,10 @@ impl From<EnrollmentRow> for EnrollmentWithUser {
 }
 
 /// Request to create an enrollment.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct CreateEnrollment {
-    pub user_id: i64,
+    #[serde(default)]
+    pub user_id: Option<i64>,
     pub role: Option<String>,
 }
 
@@ -362,7 +434,42 @@ pub async fn check_teacher_or_admin(
     }
 
     let row: Option<(i32,)> = sqlx::query_as(
-        r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' LIMIT 1"#,
+        r#"SELECT 1 FROM enrollments
+           WHERE user_id = $1 AND course_id = $2 AND role = 'teacher'
+             AND workflow_state IN ('active', 'invited')
+           LIMIT 1"#,
+    )
+    .bind(user_id)
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(row.is_some())
+}
+
+/// Canvas `read_roster` on a course.
+///
+/// The permission carries `applies_to_concluded`
+/// (`config/initializers/permissions_registry.rb:1775`), so Canvas keeps it
+/// for a *concluded* teacher / TA / designer enrollment
+/// (`app/models/course.rb:2200`). The course-admin rights do not have that
+/// carve-out.
+pub async fn check_can_read_roster(
+    pool: &PgPool,
+    user_id: i64,
+    course_id: i64,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    if is_admin(auth) {
+        return Ok(true);
+    }
+
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"SELECT 1 FROM enrollments
+           WHERE user_id = $1 AND course_id = $2
+             AND role IN ('teacher', 'ta', 'designer')
+             AND workflow_state IN ('active', 'invited', 'completed')
+           LIMIT 1"#,
     )
     .bind(user_id)
     .bind(course_id)
@@ -458,19 +565,20 @@ async fn list_courses(
             .fetch_one(&state.db)
             .await?;
 
-        let courses: Vec<Course> = sqlx::query_as(
+        let sql = format!(
             r#"
-            SELECT id, name, course_code, description, workflow_state, start_at, end_at, syllabus_body, created_at, updated_at
+            SELECT {COURSE_COLUMNS}
             FROM courses
             WHERE workflow_state != 'deleted'
             ORDER BY created_at DESC, id DESC
             LIMIT $1 OFFSET $2
-            "#,
-        )
-        .bind(per_page)
-        .bind(offset)
-        .fetch_all(&state.db)
-        .await?;
+            "#
+        );
+        let courses: Vec<Course> = sqlx::query_as(&sql)
+            .bind(per_page)
+            .bind(offset)
+            .fetch_all(&state.db)
+            .await?;
 
         return Ok(Json(PaginatedCourses {
             total: total_row,
@@ -490,21 +598,23 @@ async fn list_courses(
     .fetch_one(&state.db)
     .await?;
 
-    let courses: Vec<Course> = sqlx::query_as(
+    let sql = format!(
         r#"
-        SELECT DISTINCT c.id, c.name, c.course_code, c.description, c.workflow_state, c.start_at, c.end_at, c.syllabus_body, c.created_at, c.updated_at
+        SELECT DISTINCT {}
         FROM courses c
         JOIN enrollments e ON e.course_id = c.id
         WHERE e.user_id = $1 AND c.workflow_state != 'deleted'
         ORDER BY c.created_at DESC, c.id DESC
         LIMIT $2 OFFSET $3
         "#,
-    )
-    .bind(auth.id)
-    .bind(per_page)
-    .bind(offset)
-    .fetch_all(&state.db)
-    .await?;
+        course_columns("c"),
+    );
+    let courses: Vec<Course> = sqlx::query_as(&sql)
+        .bind(auth.id)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await?;
 
     Ok(Json(PaginatedCourses {
         total: total_row,
@@ -545,10 +655,6 @@ async fn create_course_record(
     payload: CreateCourse,
     account_id: Option<i64>,
 ) -> Result<Course, ApiError> {
-    if !is_teacher(auth) {
-        return Err(ApiError::Forbidden);
-    }
-
     if let Some(account_id) = account_id {
         let account_exists: Option<(i32,)> =
             sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
@@ -558,19 +664,27 @@ async fn create_course_record(
         if account_exists.is_none() {
             return Err(ApiError::NotFound);
         }
+        // Canvas courses#create checks the account's `create_courses` right
+        // before it looks at the payload
+        // (app/controllers/courses_controller.rb:923-931).
+        if !check_account_admin(pool, auth.id, account_id, auth).await? {
+            return Err(ApiError::Forbidden);
+        }
+    } else if !is_teacher(auth) {
+        return Err(ApiError::Forbidden);
     }
 
     validate_create_course(&payload)?;
 
     let course: Course = match account_id {
         Some(account_id) => {
-            sqlx::query_as(
+            sqlx::query_as(&format!(
                 r#"
                 INSERT INTO courses (name, course_code, description, workflow_state, start_at, end_at, syllabus_body, account_id)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-                RETURNING id, name, course_code, description, workflow_state, start_at, end_at, syllabus_body, created_at, updated_at
+                RETURNING {COURSE_COLUMNS}
                 "#,
-            )
+            ))
             .bind(&payload.name)
             .bind(&payload.course_code)
             .bind(&payload.description)
@@ -583,13 +697,13 @@ async fn create_course_record(
             .await?
         }
         None => {
-            sqlx::query_as(
+            sqlx::query_as(&format!(
                 r#"
                 INSERT INTO courses (name, course_code, description, workflow_state, start_at, end_at, syllabus_body)
                 VALUES ($1, $2, $3, $4, $5, $6, $7)
-                RETURNING id, name, course_code, description, workflow_state, start_at, end_at, syllabus_body, created_at, updated_at
+                RETURNING {COURSE_COLUMNS}
                 "#,
-            )
+            ))
             .bind(&payload.name)
             .bind(&payload.course_code)
             .bind(&payload.description)
@@ -622,7 +736,7 @@ async fn create_course_record(
 async fn create_course(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(payload): Json<CreateCourse>,
+    ApiJson(payload): ApiJson<CreateCourse>,
 ) -> Result<(StatusCode, Json<Course>), ApiError> {
     let course = create_course_record(&state.db, &auth, payload, None).await?;
     Ok((StatusCode::CREATED, Json(course)))
@@ -639,7 +753,7 @@ async fn create_course_in_account(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateCourse>,
+    ApiJson(payload): ApiJson<CreateCourse>,
 ) -> Result<(StatusCode, Json<Course>), ApiError> {
     let course = create_course_record(&state.db, &auth, payload, Some(account_id)).await?;
     Ok((StatusCode::CREATED, Json(course)))
@@ -664,15 +778,16 @@ pub async fn load_course_for_viewer(
     course_id: i64,
     auth: &AuthUser,
 ) -> Result<Course, ApiError> {
-    let course: Option<Course> = sqlx::query_as(
+    let sql = format!(
         r#"
-        SELECT id, name, course_code, description, workflow_state, start_at, end_at, syllabus_body, created_at, updated_at
+        SELECT {COURSE_COLUMNS}
         FROM courses WHERE id = $1
-        "#,
-    )
-    .bind(course_id)
-    .fetch_optional(db)
-    .await?;
+        "#
+    );
+    let course: Option<Course> = sqlx::query_as(&sql)
+        .bind(course_id)
+        .fetch_optional(db)
+        .await?;
 
     let course = course.ok_or(ApiError::NotFound)?;
 
@@ -688,18 +803,19 @@ async fn update_course(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<UpdateCourse>,
+    ApiJson(payload): ApiJson<UpdateCourse>,
 ) -> Result<Json<Course>, ApiError> {
     // Check course exists
-    let existing: Option<Course> = sqlx::query_as(
+    let sql = format!(
         r#"
-        SELECT id, name, course_code, description, workflow_state, start_at, end_at, syllabus_body, created_at, updated_at
+        SELECT {COURSE_COLUMNS}
         FROM courses WHERE id = $1
-        "#,
-    )
-    .bind(course_id)
-    .fetch_optional(&state.db)
-    .await?;
+        "#
+    );
+    let existing: Option<Course> = sqlx::query_as(&sql)
+        .bind(course_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let existing = existing.ok_or(ApiError::NotFound)?;
 
@@ -725,35 +841,63 @@ async fn update_course(
     let end_at = payload.end_at.or(existing.end_at);
     let syllabus_body = payload.syllabus_body.or(existing.syllabus_body);
 
-    let updated: Course = sqlx::query_as(
+    let sql = format!(
         r#"
         UPDATE courses
         SET name = $2, course_code = $3, description = $4, workflow_state = $5,
             start_at = $6, end_at = $7, syllabus_body = $8, updated_at = now()
         WHERE id = $1
-        RETURNING id, name, course_code, description, workflow_state, start_at, end_at, syllabus_body, created_at, updated_at
-        "#,
-    )
-    .bind(course_id)
-    .bind(&name)
-    .bind(&course_code)
-    .bind(&description)
-    .bind(&workflow_state)
-    .bind(start_at)
-    .bind(end_at)
-    .bind(&syllabus_body)
-    .fetch_one(&state.db)
-    .await?;
+        RETURNING {COURSE_COLUMNS}
+        "#
+    );
+    let updated: Course = sqlx::query_as(&sql)
+        .bind(course_id)
+        .bind(&name)
+        .bind(&course_code)
+        .bind(&description)
+        .bind(&workflow_state)
+        .bind(start_at)
+        .bind(end_at)
+        .bind(&syllabus_body)
+        .fetch_one(&state.db)
+        .await?;
 
     Ok(Json(updated))
 }
 
 /// DELETE /courses/{id} — soft-delete a course (admin only: sets workflow_state = 'deleted')
+/// The `event` argument of `DELETE /courses/{id}`.
+#[derive(Debug, Default, Deserialize)]
+pub struct CourseEventQuery {
+    pub event: Option<String>,
+}
+
+/// DELETE /courses/{id} — Canvas `CoursesController#destroy`
+/// (`app/controllers/courses_controller.rb:1541-1576`).
+///
+/// Canvas' order is: the course has to exist (404), then the `event`
+/// argument has to be one of `delete`/`conclude` (400), and only then is the
+/// permission checked (403).
 async fn delete_course(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-) -> Result<StatusCode, ApiError> {
+    Query(query): Query<CourseEventQuery>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    if !course_exists(&state.db, course_id).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    let event = query.event.as_deref().unwrap_or("");
+    if !matches!(event, "delete" | "conclude") {
+        // Canvas renders this failure with a single `message` key of its own
+        // (`app/controllers/courses_controller.rb:1543-1546`).
+        return Err(ApiError::canvas_message(
+            StatusCode::BAD_REQUEST,
+            "Only \"delete\" and \"conclude\" events are allowed.",
+        ));
+    }
+
     if !is_admin(&auth) {
         return Err(ApiError::Forbidden);
     }
@@ -768,7 +912,11 @@ async fn delete_course(
         return Err(ApiError::NotFound);
     }
 
-    Ok(StatusCode::NO_CONTENT)
+    // Canvas answers `render json: { params[:event] => success }`
+    // (`app/controllers/courses_controller.rb:1572`).
+    let mut body = serde_json::Map::new();
+    body.insert(event.to_string(), serde_json::Value::Bool(true));
+    Ok(Json(serde_json::Value::Object(body)))
 }
 
 /// POST /courses/{id}/enrollments — create an enrollment (course teacher or admin)
@@ -777,8 +925,19 @@ async fn create_enrollment(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateEnrollment>,
+    ApiJson(payload): ApiJson<CreateEnrollment>,
 ) -> Result<(StatusCode, Json<EnrollmentWithUser>), ApiError> {
+    // Canvas reads `params[:enrollment]` first and answers
+    // `{"message":"No parameters given"}` when the request names no
+    // enrollment attribute at all
+    // (app/controllers/enrollments_api_controller.rb:680-682).
+    let Some(user_id) = payload.user_id else {
+        return Err(ApiError::canvas_json(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "message": "No parameters given" }),
+        ));
+    };
+
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
@@ -817,7 +976,7 @@ async fn create_enrollment(
         VALUES ($1, $2, $3)
         "#,
     )
-    .bind(payload.user_id)
+    .bind(user_id)
     .bind(course_id)
     .bind(role)
     .execute(&state.db)
@@ -828,7 +987,7 @@ async fn create_enrollment(
         Err(sqlx::Error::Database(db_err)) if db_err.code().as_deref() == Some("23505") => {
             return Err(ApiError::Conflict(format!(
                 "user {} is already enrolled in course {} as {}",
-                payload.user_id, course_id, role
+                user_id, course_id, role
             )));
         }
         Err(e) => return Err(ApiError::Db(e.to_string())),
@@ -860,7 +1019,14 @@ async fn list_enrollments(
     auth: AuthUser,
     Query(pag): Query<Pagination>,
 ) -> Result<Json<PaginatedEnrollments>, ApiError> {
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+    // Canvas `EnrollmentsApiController#index`
+    // (`app/controllers/enrollments_api_controller.rb:1180`) needs
+    // `read_roster` / `view_all_grades` / `manage_grades`. `read_roster`
+    // carries `applies_to_concluded: %w[TeacherEnrollment TaEnrollment
+    // DesignerEnrollment]`
+    // (`config/initializers/permissions_registry.rb:1775`), so a *concluded*
+    // teacher enrollment still grants it — unlike the course-admin rights.
+    if !check_can_read_roster(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -896,27 +1062,93 @@ async fn list_enrollments(
     }))
 }
 
-/// DELETE /courses/{id}/enrollments/{userId} — remove an enrollment (course teacher or admin)
+/// DELETE /courses/{id}/enrollments/{enrollmentId} — Canvas
+/// `EnrollmentsApiController#destroy`
+/// (`app/controllers/enrollments_api_controller.rb:947`).
+///
+/// The path parameter is the **enrollment id**, not a user id, and the
+/// request has no `task` parameter, so Canvas *concludes* the enrollment
+/// instead of deleting it: `Enrollment#conclude` sets
+/// `workflow_state = "completed"` (`app/models/enrollment.rb:957`). Only
+/// `task=delete` removes the row.
+///
+/// A concluded enrollment keeps the course membership for reading: Canvas'
+/// `not_inactive_by_date` scope still counts a completed enrollment
+/// (`app/models/enrollment.rb:1454`), so `Course`'s `:read` policy still
+/// answers for the user. The course-admin permissions (`manage_enrollments`,
+/// `manage_rubrics`, …) do go away, because `active_or_pending_by_date` does
+/// not list "completed" (`app/models/enrollment.rb:1438`).
+///
+/// Canvas answers `200` with the enrollment JSON.
 async fn delete_enrollment(
     State(state): State<AppState>,
-    Path((course_id, user_id)): Path<(i64, i64)>,
+    Path((course_id, enrollment_id)): Path<(i64, i64)>,
     auth: AuthUser,
-) -> Result<StatusCode, ApiError> {
+) -> Result<Json<serde_json::Value>, ApiError> {
+    // Canvas loads the enrollment first: a missing id is a 404 even for a
+    // caller without the course permission.
+    let enrollment: Option<(i64, i64, String, String)> = sqlx::query_as(
+        r#"SELECT id, user_id, role, workflow_state
+           FROM enrollments
+           WHERE id = $1 AND course_id = $2"#,
+    )
+    .bind(enrollment_id)
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let (enrollment_id, user_id, role, workflow_state) = enrollment.ok_or(ApiError::NotFound)?;
+
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
-    let result = sqlx::query(r#"DELETE FROM enrollments WHERE course_id = $1 AND user_id = $2"#)
-        .bind(course_id)
-        .bind(user_id)
-        .execute(&state.db)
-        .await?;
+    let result = sqlx::query(
+        "UPDATE enrollments \
+         SET workflow_state = 'completed', updated_at = now() \
+         WHERE id = $1 AND course_id = $2",
+    )
+    .bind(enrollment_id)
+    .bind(course_id)
+    .execute(&state.db)
+    .await?;
 
     if result.rows_affected() == 0 {
         return Err(ApiError::NotFound);
     }
 
-    Ok(StatusCode::NO_CONTENT)
+    let user_name: Option<(String,)> = sqlx::query_as("SELECT name FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_optional(&state.db)
+        .await?;
+
+    Ok(Json(serde_json::json!({
+        "id": enrollment_id,
+        "user_id": user_id,
+        "course_id": course_id,
+        "type": enrollment_type(&role),
+        "enrollment_state": workflow_state,
+        "user": { "id": user_id, "name": user_name.map(|(name,)| name).unwrap_or_default() },
+    })))
+}
+
+/// Canvas enrollment `type` — the role stored on the row mapped to Canvas'
+/// enrollment type names (`TeacherEnrollment`, `StudentEnrollment`, …).
+fn enrollment_type(role: &str) -> String {
+    match role {
+        "teacher" => "TeacherEnrollment".to_string(),
+        "ta" => "TaEnrollment".to_string(),
+        "designer" => "DesignerEnrollment".to_string(),
+        "observer" => "ObserverEnrollment".to_string(),
+        "student_view" => "StudentViewEnrollment".to_string(),
+        other => {
+            if other == "student" {
+                "StudentEnrollment".to_string()
+            } else {
+                format!("{}Enrollment", other)
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1434,7 +1666,9 @@ pub struct CourseSettings {
     pub friendly_name: Option<String>,
     pub default_due_time: String,
     pub conditional_release: bool,
-    pub default_student_gradebook_view: Option<String>,
+    /// Canvas `add_setting :default_student_gradebook_view, boolean: true`
+    /// (app/models/course.rb:4127) — a boolean, not a string.
+    pub default_student_gradebook_view: Option<bool>,
 }
 
 impl Default for CourseSettings {
@@ -1447,7 +1681,9 @@ impl Default for CourseSettings {
             allow_student_discussion_editing: true,
             allow_student_discussion_reporting: true,
             allow_student_anonymous_discussion_topics: false,
-            use_default_discussion_settings: true,
+            // Canvas `add_setting :use_default_discussion_settings, boolean: true,
+            // default: false` (app/models/course.rb:4123).
+            use_default_discussion_settings: false,
             default_discussion_settings: Value::Object(Map::new()),
             filter_speed_grader_by_student_group: false,
             grading_standard_enabled: false,
@@ -1461,7 +1697,9 @@ impl Default for CourseSettings {
             usage_rights_required: false,
             restrict_student_past_view: false,
             restrict_student_future_view: false,
-            restrict_quantitative_data: None,
+            // Canvas `add_setting :restrict_quantitative_data, boolean: true,
+            // default: false` (app/models/course.rb:4141).
+            restrict_quantitative_data: Some(false),
             show_announcements_on_home_page: false,
             home_page_announcement_limit: None,
             syllabus_course_summary: true,
@@ -1476,7 +1714,9 @@ impl Default for CourseSettings {
             friendly_name: None,
             default_due_time: DEFAULT_DUE_TIME.to_string(),
             conditional_release: false,
-            default_student_gradebook_view: None,
+            // Canvas `add_setting :default_student_gradebook_view, boolean: true,
+            // default: false` (app/models/course.rb:4127).
+            default_student_gradebook_view: Some(false),
         }
     }
 }
@@ -1511,7 +1751,7 @@ pub struct UpdateCourseSettings {
     pub friendly_name: Option<String>,
     pub conditional_release: Option<bool>,
     pub default_due_time: Option<String>,
-    pub default_student_gradebook_view: Option<String>,
+    pub default_student_gradebook_view: Option<bool>,
 }
 
 impl CourseSettings {
@@ -1688,7 +1928,7 @@ async fn update_course_settings(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<UpdateCourseSettings>,
+    ApiJson(payload): ApiJson<UpdateCourseSettings>,
 ) -> Result<Json<CourseSettings>, ApiError> {
     if !course_exists(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
@@ -1773,6 +2013,26 @@ pub struct PaginatedBulkUserProgress {
 
 type StudentActivityRow = (i64, Option<i64>, Option<i64>, Option<i64>);
 
+/// Is the course module based?
+///
+/// Canvas' `Course#module_based?` is true when the course has modules with
+/// completion requirements. Both progress endpoints answer a 400 for a course
+/// that is not module based, and they answer it **before** they read any
+/// progress data.
+async fn course_is_module_based(pool: &PgPool, course_id: i64) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM modules
+        WHERE course_id = $1 AND workflow_state <> 'deleted'
+        LIMIT 1
+        "#,
+    )
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
 /// GET /courses/{courseId}/bulk_user_progress — Canvas
 /// `CoursesController#bulk_user_progress`.
 ///
@@ -1790,6 +2050,17 @@ async fn bulk_user_progress(
     }
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
+    }
+
+    // Canvas answers a course that is not module based with a 400 before it
+    // looks at any progress
+    // (`app/controllers/courses_controller.rb:4031-4036`).
+    if !course_is_module_based(&state.db, course_id).await? {
+        return Err(ApiError::canvas_error_object(
+            StatusCode::BAD_REQUEST,
+            "No progress available because this course is not module based \
+             (meaning, it does not have modules and module completion requirements).",
+        ));
     }
 
     let (page, per_page, offset) = Pagination {
@@ -1853,9 +2124,12 @@ async fn bulk_user_progress(
 }
 
 /// POST /courses/{courseId}/dismiss_migration_limitation_message — Canvas
-/// `CoursesController#dismiss_migration_limitation_message`.
+/// `CoursesController#dismiss_migration_limitation_msg`
+/// (`app/controllers/courses_controller.rb:4182-4191`).
 ///
-/// Feature-flagged; always returns 200 OK and does nothing.
+/// Canvas only asks for a logged in caller ("you must be logged in to use
+/// this endpoint") — there is no permission check. It destroys the alert the
+/// user has for the course and answers 404 when the user has none.
 async fn dismiss_migration_limitation_message(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
@@ -1864,9 +2138,23 @@ async fn dismiss_migration_limitation_message(
     if !course_exists(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
     }
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
+
+    let deleted =
+        sqlx::query("DELETE FROM quiz_migration_alerts WHERE course_id = $1 AND user_id = $2")
+            .bind(course_id)
+            .bind(auth.id)
+            .execute(&state.db)
+            .await?;
+
+    if deleted.rows_affected() == 0 {
+        // Canvas renders this failure with a single `message` key of its own
+        // (`app/controllers/courses_controller.rb:4189`).
+        return Err(ApiError::canvas_message(
+            StatusCode::NOT_FOUND,
+            "Quiz migration alert not found",
+        ));
     }
+
     Ok(Json(serde_json::json!({ "success": true })))
 }
 
@@ -1916,7 +2204,7 @@ async fn effective_due_dates(
 }
 
 /// Query params for POST /courses/{courseId}/link_validation (start job).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct LinkValidationStart {
     pub urls: Vec<String>,
 }
@@ -1938,20 +2226,17 @@ async fn start_link_validation(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(_payload): Json<LinkValidationStart>,
-) -> Result<(StatusCode, Json<LinkValidationJob>), ApiError> {
+    ApiJson(_payload): ApiJson<LinkValidationStart>,
+) -> Result<(StatusCode, Json<Value>), ApiError> {
     if !course_exists(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
     }
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
-    let job = LinkValidationJob {
-        id: format!("lv-{course_id}-1"),
-        workflow_state: "completed".to_string(),
-        data: serde_json::json!({ "broken_links": [] }),
-    };
-    Ok((StatusCode::ACCEPTED, Json(job)))
+    // Canvas `start_link_validation` answers `{"success": true}` with a 200
+    // (app/controllers/courses_controller.rb:4347-4352).
+    Ok((StatusCode::OK, Json(serde_json::json!({ "success": true }))))
 }
 
 /// GET /courses/{courseId}/link_validation — Canvas
@@ -1984,7 +2269,7 @@ async fn preview_html(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<Map<String, Value>>,
+    ApiJson(payload): ApiJson<Map<String, Value>>,
 ) -> Result<Json<Value>, ApiError> {
     if !course_exists(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
@@ -2002,7 +2287,7 @@ async fn preview_html(
 }
 
 /// Batch-quiz selection update payload (Canvas `new_quizzes_selection_update`).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct NewQuizzesSelectionUpdate {
     pub quiz_ids: Vec<i64>,
     pub selection: String,
@@ -2017,8 +2302,8 @@ async fn update_course_quizzes(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<NewQuizzesSelectionUpdate>,
-) -> Result<Json<Value>, ApiError> {
+    ApiJson(payload): ApiJson<NewQuizzesSelectionUpdate>,
+) -> Result<Response, ApiError> {
     if !course_exists(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
     }
@@ -2026,7 +2311,9 @@ async fn update_course_quizzes(
         return Err(ApiError::Forbidden);
     }
     let _ = payload;
-    Ok(Json(serde_json::json!({ "success": true })))
+    // Canvas answers 204 with no body
+    // (app/controllers/courses_controller.rb: new_quizzes_selection_update).
+    Ok(StatusCode::NO_CONTENT.into_response())
 }
 
 /// POST /courses/{courseId}/reset_content — Canvas
@@ -2133,12 +2420,18 @@ pub struct PaginatedStudents {
 ///
 /// Returns enrolled students ordered by name. Deprecated — prefer
 /// GET /courses/:id/users with enrollment_type=student.
+///
+/// Canvas renders this list as a **bare array**, not as a pagination
+/// envelope (`app/controllers/courses_controller.rb:1124-1132`):
+///
+/// ```ruby
+/// render json: proxy.map { |u| user_json(u, @current_user, session) }
+/// ```
 async fn list_students(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Query(query): Query<StudentsQuery>,
-) -> Result<Json<PaginatedStudents>, ApiError> {
+) -> Result<Json<Vec<CourseStudent>>, ApiError> {
     if !course_exists(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
     }
@@ -2146,49 +2439,33 @@ async fn list_students(
         return Err(ApiError::Forbidden);
     }
 
-    let (page, per_page, offset) = Pagination {
-        page: query.page,
-        per_page: query.per_page,
-    }
-    .resolve();
-
-    let (total,): (i64,) = sqlx::query_as(
-        r#"
-        SELECT COUNT(DISTINCT e.user_id)
-        FROM enrollments e
-        JOIN users u ON u.id = e.user_id
-        WHERE e.course_id = $1 AND e.role = 'student'
-        "#,
-    )
-    .bind(course_id)
-    .fetch_one(&state.db)
-    .await?;
-
     let rows: Vec<CourseUserRow> = sqlx::query_as(
         r#"
         SELECT DISTINCT ON (u.id)
                u.id, u.name,
                COALESCE(u.sortable_name, u.name) AS sortable_name,
-               u.email, e.role, u.created_at
+               u.email, e.role, u.created_at,
+               COALESCE(u.sis_user_id, p.sis_user_id) AS sis_user_id,
+               COALESCE(u.integration_id, p.integration_id) AS integration_id,
+               COALESCE(u.login_id, p.unique_id) AS login_id
         FROM enrollments e
         JOIN users u ON u.id = e.user_id
+        LEFT JOIN LATERAL (
+            SELECT ps.sis_user_id, ps.integration_id, ps.unique_id
+            FROM pseudonyms ps
+            WHERE ps.user_id = u.id AND ps.workflow_state = 'active'
+            ORDER BY ps.id
+            LIMIT 1
+        ) p ON TRUE
         WHERE e.course_id = $1 AND e.role = 'student'
         ORDER BY u.id, (e.role = 'teacher') DESC, e.role
-        LIMIT $2 OFFSET $3
         "#,
     )
     .bind(course_id)
-    .bind(per_page)
-    .bind(offset)
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(PaginatedStudents {
-        data: rows.into_iter().map(Into::into).collect(),
-        page,
-        per_page,
-        total,
-    }))
+    Ok(Json(rows.into_iter().map(CourseStudent::from).collect()))
 }
 
 /// Query params for GET /courses/{courseId}/todo.
@@ -2228,41 +2505,13 @@ async fn course_todo(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Query(query): Query<TodoQuery>,
-) -> Result<Json<PaginatedTodo>, ApiError> {
+) -> Result<Json<Vec<TodoItem>>, ApiError> {
     if !course_exists(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
     }
     if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
-
-    let (page, per_page, offset) = Pagination {
-        page: query.page,
-        per_page: query.per_page,
-    }
-    .resolve();
-
-    // Count todo items (assignments with no submission or ungraded submissions).
-    let (total,): (i64,) = sqlx::query_as(
-        r#"
-        SELECT COUNT(DISTINCT a.id)
-        FROM assignments a
-        WHERE a.course_id = $1
-          AND a.due_at IS NOT NULL
-          AND (
-            NOT EXISTS (SELECT 1 FROM submissions s WHERE s.assignment_id = a.id AND s.user_id = $2)
-            OR EXISTS (
-                SELECT 1 FROM submissions s
-                WHERE s.assignment_id = a.id AND s.user_id = $2 AND s.score IS NULL
-            )
-          )
-        "#,
-    )
-    .bind(course_id)
-    .bind(auth.id)
-    .fetch_one(&state.db)
-    .await?;
 
     let items: Vec<(String, String, Option<DateTime<Utc>>, String)> = sqlx::query_as(
         r#"
@@ -2277,13 +2526,10 @@ async fn course_todo(
           AND a.due_at IS NOT NULL
           AND (s.id IS NULL OR s.score IS NULL)
         ORDER BY a.id, a.due_at ASC
-        LIMIT $3 OFFSET $4
         "#,
     )
     .bind(course_id)
     .bind(auth.id)
-    .bind(per_page)
-    .bind(offset)
     .fetch_all(&state.db)
     .await?;
 
@@ -2299,12 +2545,9 @@ async fn course_todo(
         })
         .collect();
 
-    Ok(Json(PaginatedTodo {
-        data,
-        page,
-        per_page,
-        total,
-    }))
+    // Canvas renders the todo list as a **bare array**
+    // (`app/controllers/courses_controller.rb:1479-1503`).
+    Ok(Json(data))
 }
 
 /// GET /courses/{courseId}/users/{userId}/progress — Canvas
@@ -2334,6 +2577,19 @@ async fn user_progress(
     .await?;
     if enrolled.is_none() {
         return Err(ApiError::NotFound);
+    }
+
+    // Canvas' `CourseProgress#to_json` answers a course that is not module
+    // based — or a user who is not enrolled as a student — with a 400
+    // (`app/models/course_progress.rb:214`,
+    // `app/controllers/courses_controller.rb:790`).
+    if !course_is_module_based(&state.db, course_id).await? {
+        return Err(ApiError::canvas_error_object(
+            StatusCode::BAD_REQUEST,
+            "no progress available because this course is not module based \
+             (has modules and module completion requirements) or the user is \
+             not enrolled as a student in this course",
+        ));
     }
 
     let (page_views, participation_count, total_activity_time): (
@@ -2398,7 +2654,7 @@ async fn youtube_convert(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<Map<String, Value>>,
+    ApiJson(payload): ApiJson<Map<String, Value>>,
 ) -> Result<Json<Value>, ApiError> {
     if !course_exists(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
@@ -2407,7 +2663,10 @@ async fn youtube_convert(
         return Err(ApiError::Forbidden);
     }
     let _ = payload;
-    Ok(Json(serde_json::json!({ "success": true })))
+    // Canvas raises on this route (the migration service needs a scan id and
+    // an embed) and its exception handler answers the generic 500
+    // (app/controllers/application_controller.rb:2325).
+    Err(ApiError::canvas_internal_error())
 }
 
 /// Query params for YouTube scan endpoints.
@@ -2443,7 +2702,7 @@ async fn youtube_scan_start(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<Map<String, Value>>,
+    ApiJson(payload): ApiJson<Map<String, Value>>,
 ) -> Result<Json<Value>, ApiError> {
     if !course_exists(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
@@ -2452,7 +2711,9 @@ async fn youtube_scan_start(
         return Err(ApiError::Forbidden);
     }
     let _ = payload;
-    Ok(Json(serde_json::json!({ "success": true })))
+    // Canvas raises on this route and its exception handler answers the
+    // generic 500 (app/controllers/application_controller.rb:2325).
+    Err(ApiError::canvas_internal_error())
 }
 
 /// PUT /courses/{courseId}/youtube_migration/scan/{scanId} — Canvas
@@ -2463,7 +2724,7 @@ async fn youtube_scan_update(
     State(state): State<AppState>,
     Path((course_id, scan_id)): Path<(i64, String)>,
     auth: AuthUser,
-    Json(payload): Json<Map<String, Value>>,
+    ApiJson(payload): ApiJson<Map<String, Value>>,
 ) -> Result<Json<Value>, ApiError> {
     if !course_exists(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
@@ -2594,7 +2855,7 @@ async fn list_recent_students(
     Path(course_id): Path<i64>,
     auth: AuthUser,
     Query(query): Query<RecentStudentsQuery>,
-) -> Result<Json<PaginatedRecentStudents>, ApiError> {
+) -> Result<Json<Vec<RecentStudent>>, ApiError> {
     if !course_exists(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
     }
@@ -2603,23 +2864,11 @@ async fn list_recent_students(
         return Err(ApiError::Forbidden);
     }
 
-    let (page, per_page, offset) = Pagination {
+    let (_page, per_page, offset) = Pagination {
         page: query.page,
         per_page: query.per_page,
     }
     .resolve();
-
-    let (total,): (i64,) = sqlx::query_as(
-        r#"
-        SELECT COUNT(DISTINCT e.user_id)
-        FROM enrollments e
-        JOIN users u ON u.id = e.user_id
-        WHERE e.course_id = $1 AND e.role = 'student' AND u.last_login IS NOT NULL
-        "#,
-    )
-    .bind(course_id)
-    .fetch_one(&state.db)
-    .await?;
 
     let students: Vec<RecentStudent> = sqlx::query_as(
         r#"
@@ -2641,12 +2890,9 @@ async fn list_recent_students(
     .fetch_all(&state.db)
     .await?;
 
-    Ok(Json(PaginatedRecentStudents {
-        data: students,
-        page,
-        per_page,
-        total,
-    }))
+    // Canvas renders the list as a **bare array**
+    // (`app/controllers/courses_controller.rb:1443-1452`).
+    Ok(Json(students))
 }
 
 /// Query params for GET /courses/{courseId}/search_users (Canvas subset).
@@ -2749,9 +2995,19 @@ async fn search_course_users(
         SELECT DISTINCT ON (u.id)
                u.id, u.name,
                COALESCE(u.sortable_name, u.name) AS sortable_name,
-               u.email, e.role, u.created_at
+               u.email, e.role, u.created_at,
+               COALESCE(u.sis_user_id, p.sis_user_id) AS sis_user_id,
+               COALESCE(u.integration_id, p.integration_id) AS integration_id,
+               COALESCE(u.login_id, p.unique_id) AS login_id
         FROM enrollments e
         JOIN users u ON u.id = e.user_id
+        LEFT JOIN LATERAL (
+            SELECT ps.sis_user_id, ps.integration_id, ps.unique_id
+            FROM pseudonyms ps
+            WHERE ps.user_id = u.id AND ps.workflow_state = 'active'
+            ORDER BY ps.id
+            LIMIT 1
+        ) p ON TRUE
         WHERE e.course_id = $1
           AND ($2::text IS NULL OR u.name ILIKE $2 OR u.email ILIKE $2)
           AND ($3::text IS NULL OR e.role = $3)
@@ -2790,13 +3046,18 @@ struct CourseUserRow {
     email: String,
     role: String,
     created_at: DateTime<Utc>,
+    sis_user_id: Option<String>,
+    integration_id: Option<String>,
+    login_id: Option<String>,
 }
 
 /// Canvas `user_json` subset returned by the course roster endpoints.
 ///
 /// `short_name` mirrors Canvas (`User#short_name` falls back to the full
 /// name); `role` is the user's course enrollment role (this LMS stores one
-/// row per enrollment rather than Canvas enrollment objects).
+/// row per enrollment rather than Canvas enrollment objects). The SIS and
+/// login keys come from the user's pseudonym, like Canvas
+/// (`lib/api/v1/user.rb:75`, :76 and :84).
 #[derive(Debug, Clone, Serialize)]
 pub struct CourseUser {
     pub id: i64,
@@ -2806,6 +3067,25 @@ pub struct CourseUser {
     pub email: String,
     pub role: String,
     pub created_at: DateTime<Utc>,
+    pub sis_user_id: Option<String>,
+    pub integration_id: Option<String>,
+    pub login_id: Option<String>,
+}
+
+/// Canvas `user_json` as the deprecated `/courses/{id}/students` endpoint
+/// answers it: the user attributes and the SIS/login keys, without the
+/// enrollment fields (`app/controllers/courses_controller.rb:1124-1132`
+/// renders `proxy.map { |u| user_json(u, @current_user, session) }`).
+#[derive(Debug, Clone, Serialize)]
+pub struct CourseStudent {
+    pub id: i64,
+    pub name: String,
+    pub created_at: DateTime<Utc>,
+    pub sortable_name: String,
+    pub short_name: String,
+    pub sis_user_id: Option<String>,
+    pub integration_id: Option<String>,
+    pub login_id: Option<String>,
 }
 
 impl From<CourseUserRow> for CourseUser {
@@ -2818,6 +3098,24 @@ impl From<CourseUserRow> for CourseUser {
             email: row.email,
             role: row.role,
             created_at: row.created_at,
+            sis_user_id: row.sis_user_id,
+            integration_id: row.integration_id,
+            login_id: row.login_id,
+        }
+    }
+}
+
+impl From<CourseUserRow> for CourseStudent {
+    fn from(row: CourseUserRow) -> Self {
+        CourseStudent {
+            id: row.id,
+            short_name: row.name.clone(),
+            name: row.name,
+            created_at: row.created_at,
+            sortable_name: row.sortable_name,
+            sis_user_id: row.sis_user_id,
+            integration_id: row.integration_id,
+            login_id: row.login_id,
         }
     }
 }
@@ -2884,14 +3182,25 @@ async fn list_course_users(
     // One row per user; teacher is preferred when several roles exist.
     let rows: Vec<CourseUserRow> = sqlx::query_as(
         r#"
-        SELECT id, name, sortable_name, email, role, created_at
+        SELECT id, name, sortable_name, email, role, created_at,
+               sis_user_id, integration_id, login_id
         FROM (
             SELECT DISTINCT ON (u.id)
                    u.id, u.name,
                    COALESCE(u.sortable_name, u.name) AS sortable_name,
-                   u.email, e.role, u.created_at
+                   u.email, e.role, u.created_at,
+                   COALESCE(u.sis_user_id, p.sis_user_id) AS sis_user_id,
+                   COALESCE(u.integration_id, p.integration_id) AS integration_id,
+                   COALESCE(u.login_id, p.unique_id) AS login_id
             FROM enrollments e
             JOIN users u ON u.id = e.user_id
+        LEFT JOIN LATERAL (
+            SELECT ps.sis_user_id, ps.integration_id, ps.unique_id
+            FROM pseudonyms ps
+            WHERE ps.user_id = u.id AND ps.workflow_state = 'active'
+            ORDER BY ps.id
+            LIMIT 1
+        ) p ON TRUE
             WHERE e.course_id = $1
               AND ($2::text IS NULL OR u.name ILIKE $2 OR u.email ILIKE $2)
             ORDER BY u.id, (e.role = 'teacher') DESC, e.role
@@ -2935,9 +3244,19 @@ async fn get_course_user(
         SELECT DISTINCT ON (u.id)
                u.id, u.name,
                COALESCE(u.sortable_name, u.name) AS sortable_name,
-               u.email, e.role, u.created_at
+               u.email, e.role, u.created_at,
+               COALESCE(u.sis_user_id, p.sis_user_id) AS sis_user_id,
+               COALESCE(u.integration_id, p.integration_id) AS integration_id,
+               COALESCE(u.login_id, p.unique_id) AS login_id
         FROM enrollments e
         JOIN users u ON u.id = e.user_id
+        LEFT JOIN LATERAL (
+            SELECT ps.sis_user_id, ps.integration_id, ps.unique_id
+            FROM pseudonyms ps
+            WHERE ps.user_id = u.id AND ps.workflow_state = 'active'
+            ORDER BY ps.id
+            LIMIT 1
+        ) p ON TRUE
         WHERE e.course_id = $1 AND u.id = $2
         ORDER BY u.id, (e.role = 'teacher') DESC, e.role
         "#,
@@ -3140,16 +3459,21 @@ async fn list_content_share_users(
             .await?;
     let (account_id,) = account_id.ok_or(ApiError::NotFound)?;
 
-    if !check_account_admin(&state.db, auth.id, account_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
+    // Canvas rejects a request without a search term **before** it checks the
+    // permission (`app/controllers/courses_controller.rb:1380-1381`), and it
+    // answers with the `reject!` body
+    // (`lib/request_error.rb:28-33`).
     let search_term = query
         .search_term
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .ok_or_else(|| ApiError::BadRequest("Search term required".into()))?;
+        .ok_or_else(|| ApiError::canvas_reject(StatusCode::BAD_REQUEST, "Search term required"))?;
+
+    if !check_account_admin(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
     let pattern = format!("%{search_term}%");
 
     let users: Vec<ContentShareUser> = sqlx::query_as(
@@ -3222,19 +3546,20 @@ async fn list_user_courses(
         return Err(ApiError::Forbidden);
     }
 
-    let courses: Vec<Course> = sqlx::query_as(
+    let sql = format!(
         r#"
-        SELECT DISTINCT c.id, c.name, c.course_code, c.description, c.workflow_state,
-               c.start_at, c.end_at, c.syllabus_body, c.created_at, c.updated_at
+        SELECT DISTINCT {}
         FROM courses c
         JOIN enrollments e ON e.course_id = c.id
         WHERE e.user_id = $1 AND c.workflow_state != 'deleted'
         ORDER BY c.created_at DESC, c.id DESC
         "#,
-    )
-    .bind(user_id)
-    .fetch_all(&state.db)
-    .await?;
+        course_columns("c"),
+    );
+    let courses: Vec<Course> = sqlx::query_as(&sql)
+        .bind(user_id)
+        .fetch_all(&state.db)
+        .await?;
 
     Ok(Json(courses))
 }
@@ -4654,37 +4979,45 @@ pub fn router() -> Router<AppState> {
     Router::new()
         // Canvas AiExperiencesController / AiConversationsController.
         .merge(ai_experiences::router())
-        .route("/courses", get(list_courses))
-        .route("/courses", post(create_course))
+        .route("/courses", get(list_courses).post(create_course))
         .route("/accounts/{id}/courses", post(create_course_in_account))
-        .route("/courses/{id}", get(get_course))
-        .route("/courses/{id}", put(update_course))
-        .route("/courses/{id}", delete(delete_course))
-        .route("/courses/{id}/enrollments", post(create_enrollment))
-        .route("/courses/{id}/enrollments", get(list_enrollments))
         .route(
-            "/courses/{id}/enrollments/{userId}",
+            "/courses/{id}",
+            get(get_course).put(update_course).delete(delete_course),
+        )
+        .route(
+            "/courses/{id}/enrollments",
+            post(create_enrollment).get(list_enrollments),
+        )
+        .route(
+            "/courses/{id}/enrollments/{enrollmentId}",
             delete(delete_enrollment),
         )
         // Enrollment terms (Canvas API v1)
-        .route("/accounts/{accountId}/terms", get(list_terms))
-        .route("/accounts/{accountId}/terms", post(create_term))
-        .route("/accounts/{accountId}/terms/{id}", get(get_account_term))
-        .route("/accounts/{accountId}/terms/{id}", put(update_account_term))
+        .route(
+            "/accounts/{accountId}/terms",
+            get(list_terms).post(create_term),
+        )
         .route(
             "/accounts/{accountId}/terms/{id}",
-            delete(delete_account_term),
+            get(get_account_term)
+                .put(update_account_term)
+                .delete(delete_account_term),
         )
-        .route("/terms/{id}", get(get_term))
-        .route("/terms/{id}", put(update_term))
-        .route("/terms/{id}", delete(delete_term))
+        .route(
+            "/terms/{id}",
+            get(get_term).put(update_term).delete(delete_term),
+        )
         // Course sections (Canvas API v1)
-        .route("/courses/{courseId}/sections", get(list_sections))
-        .route("/courses/{courseId}/sections", post(create_section))
+        .route(
+            "/courses/{courseId}/sections",
+            get(list_sections).post(create_section),
+        )
         .route("/courses/{courseId}/sections/{id}", get(get_course_section))
-        .route("/sections/{id}", get(get_section))
-        .route("/sections/{id}", put(update_section))
-        .route("/sections/{id}", delete(delete_section))
+        .route(
+            "/sections/{id}",
+            get(get_section).put(update_section).delete(delete_section),
+        )
         // Course settings, roster, navigation tabs and permissions
         .route(
             "/courses/{courseId}/settings",
@@ -5121,13 +5454,13 @@ mod db_tests {
     #[sqlx::test]
     async fn test_create_and_get_course(pool: PgPool) {
         // Create a course
-        let course: Course = sqlx::query_as(
+        let course: Course = sqlx::query_as(&format!(
             r#"
             INSERT INTO courses (name, course_code, description)
             VALUES ('Rust 101', 'RUST-101', 'Intro to Rust')
-            RETURNING id, name, course_code, description, created_at, updated_at
+            RETURNING {COURSE_COLUMNS}
             "#,
-        )
+        ))
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -5136,9 +5469,9 @@ mod db_tests {
         assert_eq!(course.course_code, "RUST-101");
 
         // Fetch it back
-        let found: Option<Course> = sqlx::query_as(
-            r#"SELECT id, name, course_code, description, created_at, updated_at FROM courses WHERE id = $1"#,
-        )
+        let found: Option<Course> = sqlx::query_as(&format!(
+            r#"SELECT {COURSE_COLUMNS} FROM courses WHERE id = $1"#,
+        ))
         .bind(course.id)
         .fetch_optional(&pool)
         .await
@@ -5157,13 +5490,13 @@ mod db_tests {
             .expect("test requires at least one user in the database");
 
         // Create course
-        let course: Course = sqlx::query_as(
+        let course: Course = sqlx::query_as(&format!(
             r#"
             INSERT INTO courses (name, course_code)
             VALUES ('DB Test Course', 'DB-TEST')
-            RETURNING id, name, course_code, description, created_at, updated_at
+            RETURNING {COURSE_COLUMNS}
             "#,
-        )
+        ))
         .fetch_one(&pool)
         .await
         .unwrap();

@@ -6,14 +6,14 @@ use axum::{
     extract::{Path, Query, State},
     http::{header, StatusCode},
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{delete, get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use star_auth::AuthUser;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 
 mod peer_reviews_api;
 mod rubrics_api;
@@ -328,14 +328,28 @@ async fn check_enrolled_or_admin(
     if is_admin(auth) {
         return Ok(true);
     }
+    // Canvas' course membership check runs over `active_or_pending_by_date`
+    // (`app/models/enrollment.rb:1438`); its `active` scope is
+    // `workflow_state <> 'deleted'` (`app/models/enrollment.rb:293`), so a
+    // concluded enrollment still counts as membership.
     let row: Option<(i32,)> = sqlx::query_as(
-        r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1"#,
+        r#"SELECT 1 FROM enrollments
+           WHERE user_id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+           LIMIT 1"#,
     )
     .bind(user_id)
     .bind(course_id)
     .fetch_optional(pool)
     .await?;
     Ok(row.is_some())
+}
+
+/// Canvas grants `manage_rubrics` on the account
+/// (`app/models/account.rb:2418`), and the built-in course roles do not carry
+/// it: the recorded corpus answers 403 for a course teacher and for an admin
+/// of the course' own account. The port holds the right on the root account.
+fn check_manage_rubrics_in_course(auth: &AuthUser) -> bool {
+    is_admin(auth)
 }
 
 async fn check_teacher_or_admin(
@@ -347,8 +361,14 @@ async fn check_teacher_or_admin(
     if is_admin(auth) {
         return Ok(true);
     }
+    // Canvas grants the course-admin permissions through
+    // `active_or_pending_by_date` (`app/models/enrollment.rb:1438`), which
+    // does not list a completed enrollment.
     let row: Option<(i32,)> = sqlx::query_as(
-        r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' LIMIT 1"#,
+        r#"SELECT 1 FROM enrollments
+           WHERE user_id = $1 AND course_id = $2 AND role = 'teacher'
+             AND workflow_state IN ('active', 'invited')
+           LIMIT 1"#,
     )
     .bind(user_id)
     .bind(course_id)
@@ -1399,11 +1419,13 @@ async fn list_used_locations(
     Path((course_id, rubric_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<Vec<UsedLocationCourse>>, ApiError> {
-    verify_rubric_course(&state.db, course_id, rubric_id).await?;
-
+    // Canvas checks `manage_rubrics` on the course *before* it looks the
+    // rubric up (`app/controllers/rubrics_api_controller.rb:293`), so a
+    // caller without the right gets 403 even for a missing rubric.
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
+    verify_rubric_course(&state.db, course_id, rubric_id).await?;
 
     let rows: Vec<UsedLocationRow> = sqlx::query_as(
         r#"
@@ -1594,7 +1616,7 @@ impl RubricImportResponse {
 }
 
 /// Request body for POST .../rubrics/upload.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct UploadRubricRequest {
     pub attachment_id: Option<i64>,
 }
@@ -1643,9 +1665,9 @@ async fn upload_rubric(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<UploadRubricRequest>,
+    ApiJson(payload): ApiJson<UploadRubricRequest>,
 ) -> Result<(StatusCode, Json<RubricImportResponse>), ApiError> {
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+    if !check_manage_rubrics_in_course(&auth) {
         return Err(ApiError::Forbidden);
     }
 
@@ -1801,6 +1823,12 @@ async fn get_course_rubric(
     Path((course_id, rubric_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<RubricResponse>, ApiError> {
+    // Canvas checks `manage_rubrics` on the course *before* it looks the
+    // rubric up (`app/controllers/rubrics_api_controller.rb:293`), so a
+    // caller without the right gets 403 even for a missing rubric.
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
     verify_rubric_course(&state.db, course_id, rubric_id).await?;
     get_rubric(State(state), Path(rubric_id), auth).await
 }
@@ -1839,7 +1867,7 @@ Rubric 1,Criteria 1,Criteria 1 Description,false,Rating 1,Rating 1 Description,2
 Rubric 1,Criteria 2,Criteria 2 Description,false,Criteria 2 Rating 1,Rating Description,1,Criteria 2 Rating 2,Rating 2 Description,1\n";
 
 /// `rubric_ids` from a Canvas export request (array or comma-separated ids).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct DownloadRubrics {
     #[serde(default)]
     pub rubric_ids: Option<Vec<i64>>,
@@ -2021,7 +2049,7 @@ async fn download_course_rubrics(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(params): Json<DownloadRubrics>,
+    ApiJson(params): ApiJson<DownloadRubrics>,
 ) -> Result<Response, ApiError> {
     let course_exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM courses WHERE id = $1")
         .bind(course_id)
@@ -2074,7 +2102,7 @@ async fn download_account_rubrics(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
-    Json(params): Json<DownloadRubrics>,
+    ApiJson(params): ApiJson<DownloadRubrics>,
 ) -> Result<Response, ApiError> {
     if !is_admin(&auth) {
         return Err(ApiError::Forbidden);
@@ -2130,33 +2158,34 @@ pub fn router() -> Router<AppState> {
         .merge(rubrics_api::router())
         // The peer reviews of an assignment.
         .merge(peer_reviews_api::router())
-        .route("/courses/{courseId}/rubrics", post(create_rubric))
-        .route("/courses/{courseId}/rubrics", get(list_course_rubrics))
-        .route("/courses/{courseId}/rubrics/{id}", get(get_course_rubric))
         .route(
-            "/courses/{courseId}/rubrics/{id}",
-            put(update_course_rubric),
+            "/courses/{courseId}/rubrics",
+            get(list_course_rubrics).post(create_rubric),
         )
         .route(
             "/courses/{courseId}/rubrics/{id}",
-            delete(delete_course_rubric),
-        )
-        .route("/rubrics/{id}", get(get_rubric))
-        .route("/rubrics/{id}", put(update_rubric))
-        .route("/rubrics/{id}", delete(delete_rubric))
-        .route("/rubrics/{rubricId}/assessments", post(create_assessment))
-        .route("/rubrics/{rubricId}/assessments", get(list_assessments))
-        .route(
-            "/courses/{courseId}/rubrics/{rubricId}/assessments",
-            post(create_course_assessment),
+            get(get_course_rubric)
+                .put(update_course_rubric)
+                .delete(delete_course_rubric),
         )
         .route(
-            "/courses/{courseId}/rubrics/{rubricId}/assessments",
-            get(list_course_assessments),
+            "/rubrics/{id}",
+            get(get_rubric).put(update_rubric).delete(delete_rubric),
         )
-        .route("/rubric_assessments/{id}", get(get_rubric_assessment))
-        .route("/rubric_assessments/{id}", put(update_rubric_assessment))
-        .route("/rubric_assessments/{id}", delete(delete_rubric_assessment))
+        .route(
+            "/rubrics/{rubricId}/assessments",
+            get(list_assessments).post(create_assessment),
+        )
+        .route(
+            "/courses/{courseId}/rubrics/{rubricId}/assessments",
+            get(list_course_assessments).post(create_course_assessment),
+        )
+        .route(
+            "/rubric_assessments/{id}",
+            get(get_rubric_assessment)
+                .put(update_rubric_assessment)
+                .delete(delete_rubric_assessment),
+        )
         .route(
             "/courses/{courseId}/rubrics/{rubricId}/used_locations",
             get(list_used_locations),

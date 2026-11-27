@@ -96,12 +96,12 @@ const MODULE_ITEM_JOIN_SQL: &str = "FROM module_items mi \
 /// without backing columns: see the module doc above.
 #[derive(Debug, Clone)]
 pub struct Module {
-    id: i64,
-    name: String,
-    position: i32,
-    workflow_state: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) position: i32,
+    pub(crate) workflow_state: String,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -111,6 +111,7 @@ impl Module {
     }
 
     /// Canvas `Module._id`: the legacy canvas id (module_type.rb:119).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
@@ -181,14 +182,14 @@ impl Module {
 /// backing columns: see the module doc above.
 #[derive(Debug, Clone)]
 pub struct ModuleItem {
-    id: i64,
-    module_id: i64,
-    title: Option<String>,
-    indent: i32,
-    position: i32,
-    workflow_state: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) module_id: i64,
+    pub(crate) title: Option<String>,
+    pub(crate) indent: i32,
+    pub(crate) position: i32,
+    pub(crate) workflow_state: String,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -198,6 +199,7 @@ impl ModuleItem {
     }
 
     /// Canvas `ModuleItem._id`: the legacy canvas id (module_item_type.rb:54).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
@@ -416,7 +418,7 @@ async fn fetch_module_item_page(
 }
 
 /// Fetch a single module by id (used by `ModuleItem.module`).
-async fn fetch_module(
+pub(crate) async fn fetch_module(
     pool: &PgPool,
     module_id: i64,
 ) -> Result<Option<Module>, async_graphql::Error> {
@@ -516,4 +518,46 @@ async fn user_enrolled_in_course(
     .await
     .map_err(db_err)?;
     Ok(row.is_some())
+}
+
+// ---------------------------------------------------------------------------
+// Single-record fetch (Canvas `Query.node` / `Query.legacyNode`)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Single-record fetch (Canvas `Query.node` / `Query.legacyNode`)
+// ---------------------------------------------------------------------------
+
+/// Canvas `Query.node(type: ModuleItem)` — a module item by legacy id.
+///
+/// Unlike [`fetch_module_item`] this does not apply the course visibility
+/// gate; the `Node` resolver applies the permission check itself.
+pub(crate) async fn fetch_module_item_unchecked(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<ModuleItem>, async_graphql::Error> {
+    let row: Option<ModuleItemRow> = sqlx::query_as(&format!(
+        r#"
+        SELECT mi.id, mi.module_id, mi.position,
+               mi.indent, mi.workflow_state, mi.created_at, mi.updated_at,
+               {MODULE_ITEM_TITLE_SQL}
+        {MODULE_ITEM_JOIN_SQL}
+        WHERE mi.id = $1
+        "#
+    ))
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(|row| ModuleItem {
+        id: row.id,
+        module_id: row.module_id,
+        title: row.title,
+        indent: row.indent,
+        position: row.position,
+        workflow_state: row.workflow_state,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    }))
 }

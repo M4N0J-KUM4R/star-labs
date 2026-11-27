@@ -162,6 +162,7 @@ async fn seed_collaboration_tool(pool: &PgPool, prefix: &str, course_id: i64, ac
 }
 
 /// One `collaborations` row.
+#[allow(clippy::too_many_arguments)]
 async fn seed_collaboration(
     pool: &PgPool,
     prefix: &str,
@@ -721,7 +722,7 @@ async fn anonymous_requests_are_401() {
         format!("/groups/{group}/collaborations"),
         format!("/courses/{course}/potential_collaborators"),
         format!("/groups/{group}/potential_collaborators"),
-        format!("/collaborations/1/members"),
+        "/collaborations/1/members".to_string(),
     ] {
         let resp = server.get(&path).await;
         assert_eq!(resp.status_code(), 401, "path {path}: {}", resp.text());

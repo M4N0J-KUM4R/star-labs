@@ -82,10 +82,10 @@ struct ConversationParticipantRow {
 /// `conversationParticipantsConnection`, `createdAt`, `updatedAt`.
 #[derive(Debug, Clone)]
 pub struct Conversation {
-    id: i64,
-    subject: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) subject: String,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -96,6 +96,7 @@ impl Conversation {
 
     /// Canvas `Conversation._id`: the legacy canvas id
     /// (conversation_type.rb:28).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
@@ -184,6 +185,7 @@ impl ConversationMessage {
 
     /// Canvas `ConversationMessage._id`
     /// (conversation_message_type.rb:26).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
@@ -227,6 +229,7 @@ impl ConversationParticipant {
 
     /// Canvas `ConversationParticipant._id`
     /// (conversation_participant_type.rb:26).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
@@ -488,7 +491,7 @@ async fn fetch_participant_page(
 }
 
 /// Fetch a single conversation by id.
-async fn fetch_conversation(
+pub(crate) async fn fetch_conversation(
     pool: &PgPool,
     conversation_id: i64,
 ) -> Result<Option<Conversation>, async_graphql::Error> {
@@ -530,3 +533,7 @@ async fn caller_participates(
     .map_err(db_err)?;
     Ok(row.is_some())
 }
+
+// ---------------------------------------------------------------------------
+// Single-record fetch (Canvas `Query.node` / `Query.legacyNode`)
+// ---------------------------------------------------------------------------

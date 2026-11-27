@@ -227,6 +227,7 @@ struct ConferenceRow {
     context_id: i64,
     context_type: String,
     start_at: Option<DateTime<Utc>>,
+    started_at: Option<DateTime<Utc>>,
     description: Option<String>,
     duration: Option<f64>,
     ended_at: Option<DateTime<Utc>>,
@@ -835,7 +836,10 @@ async fn can_create_conferences(
             let Some((Some(course_id),)) = course else {
                 return Ok(false);
             };
-            can_create_conferences(db, auth, Context::Course(course_id)).await
+            // A group resolves to its course, so the recursion is one level
+            // deep. The compiler cannot prove that, so the recursive call is
+            // boxed: an async fn that calls itself needs indirection.
+            Box::pin(can_create_conferences(db, auth, Context::Course(course_id))).await
         }
     }
 }
@@ -1482,7 +1486,7 @@ async fn create_conference(
     }
 
     let row = load_conference(state, conference_id).await?;
-    let participants = fetch_participants(state, &[row.clone()]).await?;
+    let participants = fetch_participants(&state.db, std::slice::from_ref(&row)).await?;
     let ids = participants.get(&row.id).map(Vec::as_slice).unwrap_or(&[]);
     Ok(Json(model_conference_json(&row, ids, &base)).into_response())
 }
@@ -1811,7 +1815,7 @@ async fn member_ids(
                         .iter()
                         .filter(|(_, value)| scalar_text(value).as_deref() == Some("1"))
                         .filter_map(|(key, _)| key.parse::<i64>().ok())
-                        .filter(|id| **id > 0)
+                        .filter(|id| *id > 0)
                         .collect());
                 }
             }
@@ -1936,7 +1940,7 @@ async fn for_user(
 async fn recording_ready_course(
     State(state): State<AppState>,
     Path((course_id, conference_id)): Path<(i64, i64)>,
-    raw_query: RawQuery,
+    RawQuery(raw_query): RawQuery,
     body: Bytes,
 ) -> Result<Response, ApiError> {
     recording_ready(
@@ -1953,7 +1957,7 @@ async fn recording_ready_course(
 async fn recording_ready_group(
     State(state): State<AppState>,
     Path((group_id, conference_id)): Path<(i64, i64)>,
-    raw_query: RawQuery,
+    RawQuery(raw_query): RawQuery,
     body: Bytes,
 ) -> Result<Response, ApiError> {
     recording_ready(

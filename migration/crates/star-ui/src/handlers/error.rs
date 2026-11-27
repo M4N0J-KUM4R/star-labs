@@ -79,6 +79,14 @@ pub fn from_api_error(err: &ApiError, origin: &str) -> ErrorPage {
         ),
         ApiError::Validation(msg) => (StatusCode::UNPROCESSABLE_ENTITY, msg.as_str()),
         ApiError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.as_str()),
+        ApiError::ParameterValidation(errors) => (
+            StatusCode::BAD_REQUEST,
+            errors
+                .first()
+                .map(|error| error.message.as_str())
+                .unwrap_or("The request could not be processed."),
+        ),
+        ApiError::Canvas { status, body } => (*status, body.as_str()),
         ApiError::Db(_) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             "Something went wrong on our side.",

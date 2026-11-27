@@ -18,7 +18,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{get, put},
+    routing::get,
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -604,34 +604,18 @@ pub fn router() -> Router<AppState> {
         .merge(learning_object_dates_api::router())
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/date_details",
-            get(get_assignment_dates),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/date_details",
-            put(put_assignment_dates),
+            get(get_assignment_dates).put(put_assignment_dates),
         )
         .route(
             "/courses/{courseId}/quizzes/{quizId}/date_details",
-            get(get_quiz_dates),
-        )
-        .route(
-            "/courses/{courseId}/quizzes/{quizId}/date_details",
-            put(put_quiz_dates),
+            get(get_quiz_dates).put(put_quiz_dates),
         )
         .route(
             "/courses/{courseId}/discussion_topics/{topicId}/date_details",
-            get(get_topic_dates),
-        )
-        .route(
-            "/courses/{courseId}/discussion_topics/{topicId}/date_details",
-            put(put_topic_dates),
+            get(get_topic_dates).put(put_topic_dates),
         )
         .route(
             "/courses/{courseId}/pages/{urlOrId}/date_details",
-            get(get_page_dates),
-        )
-        .route(
-            "/courses/{courseId}/pages/{urlOrId}/date_details",
-            put(put_page_dates),
+            get(get_page_dates).put(put_page_dates),
         )
 }

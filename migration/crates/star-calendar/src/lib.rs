@@ -47,18 +47,18 @@ use axum::{
     extract::{Path, Query, RawQuery, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::PgPool;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 
 use star_auth::AuthUser;
 
-mod account_calendars;
+mod account_calendars_api;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -94,10 +94,43 @@ pub struct CreateCalendarEvent {
     pub start_at: DateTime<Utc>,
     pub end_at: Option<DateTime<Utc>>,
     pub location_name: Option<String>,
+    /// Canvas reads the context from `params[:calendar_event][:context_code]`
+    /// (app/controllers/calendar_events_api_controller.rb:1586).
+    #[serde(default)]
+    pub context_code: Option<String>,
+    /// The nested `calendar_event` object Canvas reads its attributes from.
+    #[serde(default)]
+    pub calendar_event: Option<Value>,
+}
+
+/// The context an event is created in: Canvas reads it from the nested
+/// `calendar_event` object first and from a flat `context_code` second.
+impl CreateCalendarEvent {
+    pub fn context_code(&self) -> Option<&str> {
+        self.calendar_event
+            .as_ref()
+            .and_then(|event| event.get("context_code"))
+            .and_then(|code| code.as_str())
+            .or(self.context_code.as_deref())
+    }
+}
+
+impl Default for CreateCalendarEvent {
+    fn default() -> Self {
+        CreateCalendarEvent {
+            title: String::new(),
+            description: None,
+            start_at: Utc::now(),
+            end_at: None,
+            location_name: None,
+            context_code: None,
+            calendar_event: None,
+        }
+    }
 }
 
 /// Request body for updating a calendar event (PUT).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct UpdateCalendarEvent {
     pub title: Option<String>,
     pub description: Option<String>,
@@ -248,7 +281,7 @@ async fn create_calendar_event(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateCalendarEvent>,
+    ApiJson(payload): ApiJson<CreateCalendarEvent>,
 ) -> Result<(StatusCode, Json<CalendarEvent>), ApiError> {
     // Check teacher or admin permission
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
@@ -423,7 +456,7 @@ async fn update_calendar_event(
     State(state): State<AppState>,
     Path(id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<UpdateCalendarEvent>,
+    ApiJson(payload): ApiJson<UpdateCalendarEvent>,
 ) -> Result<Json<CalendarEvent>, ApiError> {
     // Fetch existing to get course_id for auth check
     let existing: Option<CalendarEvent> = sqlx::query_as(
@@ -3150,12 +3183,29 @@ fn parse_calendar_range(params: &CalendarRangeParams) -> (NaiveDate, NaiveDate) 
     normalize_calendar_range(start_date, end_date)
 }
 
-/// POST /calendar_events — create a personal event on the caller's calendar.
+/// POST /calendar_events — create an event in the calendar the request names.
 async fn create_own_calendar_event(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(payload): Json<CreateCalendarEvent>,
+    ApiJson(payload): ApiJson<CreateCalendarEvent>,
 ) -> Result<(StatusCode, Json<CalendarEvent>), ApiError> {
+    // Canvas resolves the calendar from the request's context code and
+    // answers 404 when the request names none
+    // (app/controllers/calendar_events_api_controller.rb:1585-1588).
+    let Some(context_code) = payload.context_code() else {
+        return Err(ApiError::NotFound);
+    };
+    let (course_id, user_id) = match split_context_code(context_code) {
+        Some(("course", id)) => {
+            if !check_teacher_or_admin(&state.db, auth.id, id, &auth).await? {
+                return Err(ApiError::Forbidden);
+            }
+            (Some(id), None)
+        }
+        Some(("user", id)) => (None, Some(id)),
+        _ => return Err(ApiError::NotFound),
+    };
+
     if payload.title.trim().is_empty() {
         return Err(ApiError::Validation("title cannot be empty".into()));
     }
@@ -3163,11 +3213,12 @@ async fn create_own_calendar_event(
     let row: CalendarEvent = sqlx::query_as(
         r#"
         INSERT INTO calendar_events (course_id, user_id, title, description, start_at, end_at, workflow_state, location_name)
-        VALUES (NULL, $1, $2, $3, $4, $5, 'active', $6)
+        VALUES ($1, $2, $3, $4, $5, $6, 'active', $7)
         RETURNING id, course_id, user_id, title, description, start_at, end_at, workflow_state, location_name, created_at, updated_at
         "#,
     )
-    .bind(auth.id)
+    .bind(course_id)
+    .bind(user_id.unwrap_or(auth.id))
     .bind(&payload.title)
     .bind(&payload.description)
     .bind(payload.start_at)
@@ -3177,6 +3228,13 @@ async fn create_own_calendar_event(
     .await?;
 
     Ok((StatusCode::CREATED, Json(row)))
+}
+
+/// Canvas' asset string for a context: `course_1`, `user_2`, ...
+fn split_context_code(context_code: &str) -> Option<(&str, i64)> {
+    let (kind, id) = context_code.split_once('_')?;
+    let id = id.parse::<i64>().ok()?;
+    Some((kind, id))
 }
 
 /// GET /users/{userId}/calendar_events — Canvas `user_index`.
@@ -3284,7 +3342,7 @@ async fn list_visible_contexts(
 async fn save_selected_contexts(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(payload): Json<SaveSelectedContexts>,
+    ApiJson(payload): ApiJson<SaveSelectedContexts>,
 ) -> Result<Json<Value>, ApiError> {
     save_calendar_preferences(&state.db, auth.id, payload.selected_contexts, None, None).await?;
     Ok(Json(json!({ "status": "ok" })))
@@ -3294,7 +3352,7 @@ async fn save_selected_contexts(
 async fn save_enabled_account_calendars(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(payload): Json<SaveEnabledAccountCalendars>,
+    ApiJson(payload): ApiJson<SaveEnabledAccountCalendars>,
 ) -> Result<Json<Value>, ApiError> {
     let mark_feature_as_seen = payload.mark_feature_as_seen.as_ref().map(truthy_value);
 
@@ -3589,25 +3647,28 @@ async fn delete_planner_override(
 pub fn router() -> Router<AppState> {
     Router::new()
         // The calendars of the accounts.
-        .merge(account_calendars::router())
+        .merge(account_calendars_api::router())
         // Planner overrides
-        .route("/planner/overrides", get(list_planner_overrides))
-        .route("/planner/overrides", post(create_planner_override))
-        .route("/planner/overrides/{id}", get(get_planner_override))
-        .route("/planner/overrides/{id}", put(update_planner_override))
-        .route("/planner/overrides/{id}", delete(delete_planner_override))
+        .route(
+            "/planner/overrides",
+            get(list_planner_overrides).post(create_planner_override),
+        )
+        .route(
+            "/planner/overrides/{id}",
+            get(get_planner_override)
+                .put(update_planner_override)
+                .delete(delete_planner_override),
+        )
         // Course-scoped
         .route(
             "/courses/{courseId}/calendar_events",
-            post(create_calendar_event),
-        )
-        .route(
-            "/courses/{courseId}/calendar_events",
-            get(list_course_calendar_events),
+            post(create_calendar_event).get(list_course_calendar_events),
         )
         // Global (user calendar)
-        .route("/calendar_events", get(list_user_calendar_events))
-        .route("/calendar_events", post(create_own_calendar_event))
+        .route(
+            "/calendar_events",
+            get(list_user_calendar_events).post(create_own_calendar_event),
+        )
         .route(
             "/users/{userId}/calendar_events",
             get(list_calendar_events_for_user),
@@ -3625,9 +3686,12 @@ pub fn router() -> Router<AppState> {
             post(save_enabled_account_calendars),
         )
         // Singleton
-        .route("/calendar_events/{id}", get(get_calendar_event))
-        .route("/calendar_events/{id}", put(update_calendar_event))
-        .route("/calendar_events/{id}", delete(delete_calendar_event))
+        .route(
+            "/calendar_events/{id}",
+            get(get_calendar_event)
+                .put(update_calendar_event)
+                .delete(delete_calendar_event),
+        )
         // Planner notes (current user only)
         .route(
             "/planner_notes",
@@ -3644,9 +3708,12 @@ pub fn router() -> Router<AppState> {
             "/appointment_groups",
             get(list_appointment_groups).post(create_appointment_group),
         )
-        .route("/appointment_groups/{id}", get(get_appointment_group))
-        .route("/appointment_groups/{id}", put(update_appointment_group))
-        .route("/appointment_groups/{id}", delete(delete_appointment_group))
+        .route(
+            "/appointment_groups/{id}",
+            get(get_appointment_group)
+                .put(update_appointment_group)
+                .delete(delete_appointment_group),
+        )
         .route(
             "/appointment_groups/{id}/users",
             get(list_appointment_group_users),

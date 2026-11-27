@@ -59,14 +59,14 @@ use axum::{
     extract::{Path, Query, RawQuery, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use star_auth::AuthUser;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 
 use std::collections::HashMap;
 
@@ -168,7 +168,7 @@ pub struct UpdateTopic {
 }
 
 /// Request body for creating a discussion entry.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct CreateEntry {
     pub message: String,
     pub parent_id: Option<i64>,
@@ -181,7 +181,7 @@ pub struct UpdateEntry {
 }
 
 /// Request body for replying to a discussion entry.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct CreateReply {
     pub message: String,
 }
@@ -527,7 +527,7 @@ async fn create_entry(
     State(state): State<AppState>,
     Path((course_id, topic_id)): Path<(i64, i64)>,
     auth: AuthUser,
-    Json(payload): Json<CreateEntry>,
+    ApiJson(payload): ApiJson<CreateEntry>,
 ) -> Result<(StatusCode, Json<DiscussionEntry>), ApiError> {
     // Verify topic exists and user is enrolled.
     let topic: Option<(i64,)> = sqlx::query_as(
@@ -822,16 +822,14 @@ async fn add_reply(
     State(state): State<AppState>,
     Path((course_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
     auth: AuthUser,
-    Json(payload): Json<CreateReply>,
+    ApiJson(payload): ApiJson<CreateReply>,
 ) -> Result<(StatusCode, Json<DiscussionEntry>), ApiError> {
     ensure_topic_in_course(&state.db, course_id, topic_id).await?;
 
-    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
     // Canvas `all_entries(@topic).find(params[:entry_id])` -> 404 when the
-    // parent is missing, deleted, or belongs to another topic.
+    // parent is missing, deleted, or belongs to another topic. The lookup
+    // runs before the permission check
+    // (app/controllers/discussion_topics_api_controller.rb:792).
     let parent: Option<(i64,)> = sqlx::query_as(
         "SELECT topic_id FROM discussion_entries WHERE id = $1 AND workflow_state <> 'deleted'",
     )
@@ -841,6 +839,10 @@ async fn add_reply(
     let (parent_topic_id,) = parent.ok_or(ApiError::NotFound)?;
     if parent_topic_id != topic_id {
         return Err(ApiError::NotFound);
+    }
+
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
     }
 
     if payload.message.trim().is_empty() {
@@ -2322,7 +2324,7 @@ async fn group_create_entry(
     State(state): State<AppState>,
     Path((group_id, topic_id)): Path<(i64, i64)>,
     auth: AuthUser,
-    Json(payload): Json<CreateEntry>,
+    ApiJson(payload): ApiJson<CreateEntry>,
 ) -> Result<(StatusCode, Json<DiscussionEntry>), ApiError> {
     let ctx = TopicContext::Group(group_id);
     ensure_ctx_topic(&state.db, ctx, topic_id).await?;
@@ -2539,13 +2541,12 @@ async fn group_add_reply(
     State(state): State<AppState>,
     Path((group_id, topic_id, entry_id)): Path<(i64, i64, i64)>,
     auth: AuthUser,
-    Json(payload): Json<CreateReply>,
+    ApiJson(payload): ApiJson<CreateReply>,
 ) -> Result<(StatusCode, Json<DiscussionEntry>), ApiError> {
     let ctx = TopicContext::Group(group_id);
     ensure_ctx_topic(&state.db, ctx, topic_id).await?;
-    if !check_ctx_read_access(&state.db, ctx, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // The parent entry is looked up before the permission check, like Canvas
+    // (app/controllers/discussion_topics_api_controller.rb:792).
     let parent: Option<(i64,)> = sqlx::query_as(
         "SELECT topic_id FROM discussion_entries WHERE id = $1 AND workflow_state <> 'deleted'",
     )
@@ -2555,6 +2556,9 @@ async fn group_add_reply(
     let (parent_topic_id,) = parent.ok_or(ApiError::NotFound)?;
     if parent_topic_id != topic_id {
         return Err(ApiError::NotFound);
+    }
+    if !check_ctx_read_access(&state.db, ctx, &auth).await? {
+        return Err(ApiError::Forbidden);
     }
     if payload.message.trim().is_empty() {
         return Err(ApiError::Validation("message cannot be empty".into()));
@@ -4114,24 +4118,17 @@ async fn group_messageable_users(
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/courses/{courseId}/discussion_topics", post(create_topic))
-        .route("/courses/{courseId}/discussion_topics", get(list_topics))
-        .route("/courses/{courseId}/discussion_topics/{id}", get(get_topic))
         .route(
-            "/courses/{courseId}/discussion_topics/{id}",
-            put(update_topic),
+            "/courses/{courseId}/discussion_topics",
+            post(create_topic).get(list_topics),
         )
         .route(
             "/courses/{courseId}/discussion_topics/{id}",
-            delete(delete_topic),
+            get(get_topic).put(update_topic).delete(delete_topic),
         )
         .route(
             "/courses/{courseId}/discussion_topics/{topicId}/entries",
-            post(create_entry),
-        )
-        .route(
-            "/courses/{courseId}/discussion_topics/{topicId}/entries",
-            get(list_entries),
+            post(create_entry).get(list_entries),
         )
         .route(
             "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}",
@@ -4139,7 +4136,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/replies",
-            post(add_reply),
+            post(add_reply).get(course_list_replies),
         )
         .route(
             "/courses/{courseId}/discussion_topics/{topicId}/read",
@@ -4159,19 +4156,11 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/discussion_topics/{topicId}/summaries",
-            get(find_course_summary),
-        )
-        .route(
-            "/courses/{courseId}/discussion_topics/{topicId}/summaries",
-            post(find_or_create_course_summary),
+            get(find_course_summary).post(find_or_create_course_summary),
         )
         .route(
             "/groups/{groupId}/discussion_topics/{topicId}/summaries",
-            get(find_group_summary),
-        )
-        .route(
-            "/groups/{groupId}/discussion_topics/{topicId}/summaries",
-            post(find_or_create_group_summary),
+            get(find_group_summary).post(find_or_create_group_summary),
         )
         .route(
             "/courses/{courseId}/discussion_topics/update_discussion_types",
@@ -4182,9 +4171,12 @@ pub fn router() -> Router<AppState> {
             put(migrate_disallow),
         )
         // Group-context topics and entries (Canvas group discussion parity).
+        // Canvas `show` / `:update` / `:destroy` share one path.
         .route(
             "/groups/{groupId}/discussion_topics/{topicId}",
-            get(group_show_topic),
+            get(group_show_topic)
+                .put(group_update_topic)
+                .delete(group_delete_topic),
         )
         .route(
             "/groups/{groupId}/discussion_topics/{topicId}/entries",
@@ -4215,10 +4207,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/groups/{groupId}/discussion_topics/{topicId}/subscribed",
             put(group_subscribe_topic).delete(group_unsubscribe_topic),
-        )
-        .route(
-            "/courses/{courseId}/discussion_topics/{topicId}/entries/{entryId}/replies",
-            get(course_list_replies),
         )
         // read_all variants (context-level and topic-level).
         .route(
@@ -4326,10 +4314,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/groups/{groupId}/discussion_topics",
             get(group_list_topics).post(group_create_topic),
-        )
-        .route(
-            "/groups/{groupId}/discussion_topics/{topicId}",
-            put(group_update_topic).delete(group_delete_topic),
         )
         // Reorder pinned topics (Canvas discussion_topics#reorder).
         .route(

@@ -270,6 +270,7 @@ async fn seed_conference(
 }
 
 /// A conference that started `minutes` ago (and optionally ends later).
+#[allow(clippy::too_many_arguments)]
 async fn seed_timed_conference(
     pool: &PgPool,
     context_type: &str,

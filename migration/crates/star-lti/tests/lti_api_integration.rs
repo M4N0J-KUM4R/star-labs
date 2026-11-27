@@ -60,13 +60,6 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
     Some((server, pool, run_prefix()))
 }
 
-fn auth(user_id: i64, role: &str) -> String {
-    format!(
-        "Bearer {}",
-        star_auth::create_token(user_id, role, JWT_SECRET).expect("mint token")
-    )
-}
-
 async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO users (name, email, password_hash, role) \
@@ -117,7 +110,7 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
 /// The OAuth 1.0a header of a signed request.
 fn oauth_header(path: &str, nonce: &str) -> String {
     let timestamp = chrono::Utc::now().timestamp();
-    let mut normalized = vec![
+    let mut normalized = [
         percent_encode(CONSUMER_KEY),
         percent_encode(nonce),
         percent_encode("HMAC-SHA1"),

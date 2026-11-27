@@ -33,7 +33,7 @@ use axum::{
     body::Bytes,
     extract::{Path, RawQuery, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -941,19 +941,13 @@ async fn annotation_notification(
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/submissions/{submissionId}/comments", post(create_comment))
-        .route("/submissions/{submissionId}/comments", get(list_comments))
         .route(
-            "/submissions/{submissionId}/comments/{commentId}",
-            get(get_comment),
+            "/submissions/{submissionId}/comments",
+            get(list_comments).post(create_comment),
         )
         .route(
             "/submissions/{submissionId}/comments/{commentId}",
-            put(update_comment),
-        )
-        .route(
-            "/submissions/{submissionId}/comments/{commentId}",
-            delete(delete_comment),
+            get(get_comment).put(update_comment).delete(delete_comment),
         )
         // Comment read state
         .route(
@@ -967,11 +961,7 @@ pub fn router() -> Router<AppState> {
         // Canvas nested aliases — resolve submission by course/assignment/user
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments",
-            post(create_comment_nested),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments",
-            get(list_comments_nested),
+            get(list_comments_nested).post(create_comment_nested),
         )
         // Metadata-only comment file upload (Canvas SubmissionCommentsApiController#create_file)
         .route(
@@ -980,15 +970,9 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}",
-            get(get_comment_nested),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}",
-            put(update_comment_nested),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}",
-            delete(delete_comment_nested),
+            get(get_comment_nested)
+                .put(update_comment_nested)
+                .delete(delete_comment_nested),
         )
         // Annotation notification (Canvas SubmissionCommentsApiController
         // #annotation_notification, issue #55). Canvas declares this route

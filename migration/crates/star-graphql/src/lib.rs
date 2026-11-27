@@ -49,20 +49,44 @@ mod files;
 mod groups;
 mod modules;
 mod mutations;
+mod node;
 mod pages;
+mod query_root;
 mod quiz;
+mod root_data;
+mod root_mutations;
+mod root_types;
 mod submission;
 mod terms_sections;
 
-use assignment::AssignmentConnection;
+// The `Node` interface (`node.rs`) is public, so every type it can return
+// has to be publicly reachable. These re-exports are that reachability;
+// the modules themselves stay private.
+pub use assignment::Assignment;
+pub use assignment::AssignmentConnection;
+pub use conversations::Conversation;
 use conversations::ConversationParticipantConnection;
+pub use course_user_fields::Account;
 use course_user_fields::{CoursePermissions, UserConnection};
+pub use discussion_topic::DiscussionTopic;
 use discussion_topic::DiscussionTopicConnection;
 use files::FolderConnection;
+pub use files::{File, Folder};
+pub use groups::{Group, GroupSet};
 use groups::{GroupConnection, GroupSetConnection};
 use modules::ModuleConnection;
+pub use modules::{Module, ModuleItem};
+pub use node::{Node, NodeType};
 use pages::PageConnection;
+pub use pages::{Page, Progress};
 use quiz::QuizConnection;
+pub use root_types::{
+    AccountNotification, AssignmentGroup, AuditLogs, InboxSettings, InstitutionalTag,
+    InstitutionalTagCategory, InternalSetting, LearningOutcome, LearningOutcomeGroup,
+    OutcomeCalculationMethod, OutcomeProficiency, PeerReviewSubAssignment, Rubric,
+    SubmissionComment,
+};
+pub use submission::Submission;
 use terms_sections::{CourseSection, EnrollmentTerm};
 
 // ---------------------------------------------------------------------------
@@ -154,16 +178,16 @@ struct EnrollmentRow {
 /// `updatedAt`, `enrollmentsConnection`, `assignmentsConnection`,
 /// `usersConnection`, `account`, `permissions`.
 pub struct Course {
-    id: i64,
-    name: String,
-    course_code: String,
-    syllabus_body: Option<String>,
-    workflow_state: String,
-    start_at: Option<DateTime<Utc>>,
-    end_at: Option<DateTime<Utc>>,
-    account_id: Option<i64>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) course_code: String,
+    pub(crate) syllabus_body: Option<String>,
+    pub(crate) workflow_state: String,
+    pub(crate) start_at: Option<DateTime<Utc>>,
+    pub(crate) end_at: Option<DateTime<Utc>>,
+    pub(crate) account_id: Option<i64>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -446,19 +470,19 @@ impl Course {
 /// `enrollmentsConnection`.
 #[derive(Debug, Clone)]
 pub struct User {
-    id: i64,
-    name: String,
-    email: String,
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) email: String,
     /// Canvas `User.sisId`. star-lms has no SIS columns yet, so this is null
     /// for now; the field is kept for shape parity.
-    sis_user_id: Option<String>,
+    pub(crate) sis_user_id: Option<String>,
     /// Canvas `User.sortableName` (`users.sortable_name`, migration 0008);
     /// coalesced onto `name` by the root fetches, never null.
-    sortable_name: String,
+    pub(crate) sortable_name: String,
     /// Canvas `User.avatarUrl` — backed by `user_profiles.avatar_url`
     /// (migration 0051); users without a profile row resolve null.
-    avatar_url: Option<String>,
-    created_at: DateTime<Utc>,
+    pub(crate) avatar_url: Option<String>,
+    pub(crate) created_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -641,178 +665,7 @@ pub(crate) async fn fetch_user(
 // Query root
 // ---------------------------------------------------------------------------
 
-pub struct Query;
-
-#[Object]
-impl Query {
-    /// `course(id: ID!)` — visible to enrolled users (any role) and admins;
-    /// unknown or unauthorized ids resolve to null, like Canvas.
-    async fn course(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> Result<Option<Course>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let course_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid course id"))?;
-
-        let row: Option<CourseRow> = sqlx::query_as(
-            r#"
-            SELECT id, name, course_code, syllabus_body, workflow_state,
-                   start_at, end_at, account_id, created_at, updated_at
-            FROM courses
-            WHERE id = $1
-            "#,
-        )
-        .bind(course_id)
-        .fetch_optional(&gctx.pool)
-        .await
-        .map_err(db_err)?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-
-        if !gctx.is_admin()
-            && !user_enrolled_in_course(&gctx.pool, gctx.auth_user.id, course_id).await?
-        {
-            return Ok(None);
-        }
-
-        Ok(Some(Course {
-            id: row.id,
-            name: row.name,
-            course_code: row.course_code,
-            syllabus_body: row.syllabus_body,
-            workflow_state: row.workflow_state,
-            start_at: row.start_at,
-            end_at: row.end_at,
-            account_id: row.account_id,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        }))
-    }
-
-    /// `user(id: ID!)` — any authenticated caller may read the basic profile
-    /// shape; `enrollmentsConnection` enforces self/admin/shared-teacher.
-    async fn user(&self, ctx: &Context<'_>, id: ID) -> Result<Option<User>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let user_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid user id"))?;
-
-        let row: Option<UserRow> = sqlx::query_as(
-            r#"
-            SELECT u.id, u.name, u.email,
-                   COALESCE(u.sortable_name, u.name) AS sortable_name,
-                   up.avatar_url,
-                   u.created_at
-            FROM users u
-            LEFT JOIN user_profiles up ON up.user_id = u.id
-            WHERE u.id = $1
-            "#,
-        )
-        .bind(user_id)
-        .fetch_optional(&gctx.pool)
-        .await
-        .map_err(db_err)?;
-
-        Ok(row.map(|row| User {
-            id: row.id,
-            name: row.name,
-            email: row.email,
-            sis_user_id: None,
-            sortable_name: row.sortable_name,
-            avatar_url: row.avatar_url,
-            created_at: row.created_at,
-        }))
-    }
-
-    /// `enrollmentTerm(id: ID!)` — any authenticated caller may read the
-    /// basic term shape; unknown ids resolve to null, like Canvas.
-    async fn enrollment_term(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> Result<Option<EnrollmentTerm>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let term_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid term id"))?;
-
-        terms_sections::fetch_term(&gctx.pool, term_id).await
-    }
-
-    /// `courseSection(id: ID!)` — visible to enrolled users of the course
-    /// (any role), teachers of the course, and admins; everyone else gets
-    /// null, mirroring `course(id)` visibility.
-    async fn course_section(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> Result<Option<CourseSection>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let section_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid section id"))?;
-
-        terms_sections::fetch_section(&gctx.pool, gctx.auth_user.id, gctx.is_admin(), section_id)
-            .await
-    }
-
-    /// `moduleItem(id: ID!)` — Canvas `Query.moduleItem`
-    /// (query_type.rb:275). Visible to enrolled users of the item's course
-    /// (any role) and admins; everyone else gets null.
-    async fn module_item(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> Result<Option<modules::ModuleItem>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let item_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid module item id"))?;
-        modules::fetch_module_item(&gctx.pool, gctx.auth_user.id, gctx.is_admin(), item_id).await
-    }
-
-    /// `folder(id: ID!)` — Canvas `Query.folder` (query_type.rb:410).
-    /// The folder's context gates visibility: enrolled users of the
-    /// context course (any role) and admins; everyone else gets null.
-    async fn folder(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> Result<Option<files::Folder>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let folder_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid folder id"))?;
-        files::fetch_folder_authorized(&gctx.pool, gctx.auth_user.id, gctx.is_admin(), folder_id)
-            .await
-    }
-
-    /// `progress(id: ID!)` — star-lms exposure of the Canvas `Progress`
-    /// orphan type. Canvas reaches Progress only through mutation payloads
-    /// (canvas_schema.rb:137); the REST progress endpoints have no GraphQL
-    /// root in Canvas. star-lms exposes the read by id so the type is
-    /// reachable: the caller must own the progress row or be an admin,
-    /// mirroring the REST progress handler's ownership gate.
-    async fn progress(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> Result<Option<pages::Progress>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let progress_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid progress id"))?;
-        let progress = pages::fetch_progress(&gctx.pool, progress_id).await?;
-        match progress {
-            Some(p) if gctx.is_admin() || p.owner_is(gctx.auth_user.id) => Ok(Some(p)),
-            _ => Ok(None),
-        }
-    }
-}
+pub use query_root::Query;
 
 // ---------------------------------------------------------------------------
 // Mutation root (issue #29: Batch A — assignment create/update/delete)
@@ -825,13 +678,19 @@ impl Query {
 /// `state: deleted` — Canvas has no `deleteAssignment` mutation and neither
 /// do we (spec §2.1). Batches B–E land with their own issues.
 #[derive(MergedObject, Default)]
-pub struct Mutation(mutations::AssignmentMutations);
+pub struct Mutation(
+    mutations::AssignmentMutations,
+    root_mutations::RootMutations,
+);
 
 impl Mutation {
     fn new() -> Self {
-        // `AssignmentMutations` is a unit struct; clippy's
+        // `AssignmentMutations` and `RootMutations` are unit structs; clippy's
         // default_constructed_unit_structs rejects `::default()` under -D warnings.
-        Mutation(mutations::AssignmentMutations)
+        Mutation(
+            mutations::AssignmentMutations,
+            root_mutations::RootMutations,
+        )
     }
 }
 
@@ -839,7 +698,7 @@ impl Mutation {
 // Permission helpers (same DB checks as the star-enrollments REST handlers)
 // ---------------------------------------------------------------------------
 
-async fn user_enrolled_in_course(
+pub(crate) async fn user_enrolled_in_course(
     pool: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -1014,4 +873,139 @@ async fn graphql_handler(
 
     let resp = schema.execute(req.into_inner()).await;
     GraphQLResponse::from(resp).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Row loaders shared by the query root and the node resolver
+// ---------------------------------------------------------------------------
+
+/// Load a course by id without a permission check.
+///
+/// The permission check lives in [`fetch_course_authorized`].
+pub(crate) async fn fetch_course(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<Course>, async_graphql::Error> {
+    let row: Option<CourseRow> = sqlx::query_as(
+        r#"
+        SELECT id, name, course_code, syllabus_body, workflow_state,
+               start_at, end_at, account_id, created_at, updated_at
+        FROM courses
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(|row| Course {
+        id: row.id,
+        name: row.name,
+        course_code: row.course_code,
+        syllabus_body: row.syllabus_body,
+        workflow_state: row.workflow_state,
+        start_at: row.start_at,
+        end_at: row.end_at,
+        account_id: row.account_id,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    }))
+}
+
+/// Load a course by id and apply the Canvas `course(id)` visibility rule:
+/// enrolled users of the course (any role) and admins see it, everyone
+/// else gets null.
+pub(crate) async fn fetch_course_authorized(
+    pool: &PgPool,
+    user_id: i64,
+    is_admin: bool,
+    id: i64,
+) -> Result<Option<Course>, async_graphql::Error> {
+    let Some(course) = fetch_course(pool, id).await? else {
+        return Ok(None);
+    };
+    if !is_admin && !user_enrolled_in_course(pool, user_id, id).await? {
+        return Ok(None);
+    }
+    Ok(Some(course))
+}
+
+/// Load courses by id without a permission check.
+pub(crate) async fn fetch_courses_by_ids(
+    pool: &PgPool,
+    ids: &[i64],
+) -> Result<Vec<Course>, async_graphql::Error> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<CourseRow> = sqlx::query_as(
+        r#"
+        SELECT id, name, course_code, syllabus_body, workflow_state,
+               start_at, end_at, account_id, created_at, updated_at
+        FROM courses
+        WHERE id = ANY($1)
+        ORDER BY id
+        "#,
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| Course {
+            id: row.id,
+            name: row.name,
+            course_code: row.course_code,
+            syllabus_body: row.syllabus_body,
+            workflow_state: row.workflow_state,
+            start_at: row.start_at,
+            end_at: row.end_at,
+            account_id: row.account_id,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+        .collect())
+}
+
+/// Load an enrollment by id without a permission check.
+pub(crate) async fn fetch_enrollment(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<Enrollment>, async_graphql::Error> {
+    let row: Option<EnrollmentRow> = sqlx::query_as(
+        r#"
+        SELECT id, user_id, course_id, role, workflow_state, created_at, updated_at
+        FROM enrollments
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(Enrollment::from))
+}
+
+/// Whether the user teaches the course the assignment belongs to.
+///
+/// Canvas gates a submission on the caller's teacher rights over the
+/// assignment's course.
+pub(crate) async fn user_teaches_course_by_assignment(
+    pool: &PgPool,
+    user_id: i64,
+    assignment_id: i64,
+) -> Result<bool, async_graphql::Error> {
+    let course: Option<(i64,)> = sqlx::query_as("SELECT course_id FROM assignments WHERE id = $1")
+        .bind(assignment_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(db_err)?;
+    let Some((course_id,)) = course else {
+        return Ok(false);
+    };
+    user_teaches_course(pool, user_id, course_id).await
 }

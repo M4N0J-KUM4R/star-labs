@@ -52,10 +52,25 @@ PATH_TABLE = {
 }
 
 # Segments that are not a table of their own: the response is an embedded
-# object (permissions, settings, statistics), not a row.
+# object (permissions, settings, statistics), or it is not a row at all
+# (preview_html renders a document, ping answers with a flag).
 NON_RESOURCE = {
     "permissions", "settings", "stats", "statistics", "grades", "grade",
     "enrollment_state", "read", "status", "available", "self",
+    "preview_html", "ping",
+}
+
+# Sub-resources that answer with a row of their own table. `/courses/1/students`
+# answers with users and `/courses/1/front_page` answers with a wiki page, so
+# those bodies are not rows of the course or the group.
+SUB_RESOURCE_TABLE = {
+    "students": "users",
+    "users": "users",
+    "recent_students": "users",
+    "search_users": "users",
+    "student_view_student": "users",
+    "content_share_users": "users",
+    "front_page": "wiki_pages",
 }
 
 CONTROLLER_TABLE = {
@@ -82,6 +97,8 @@ CONTROLLER_TABLE = {
 CREATE = re.compile(
     r"CREATE TABLE IF NOT EXISTS\s+(\w+)\s*\((.*?)\n\);", re.S | re.I
 )
+ALTER = re.compile(r"ALTER TABLE\s+(\w+)\s+(.*?);", re.S | re.I)
+ADD_COLUMN = re.compile(r"ADD COLUMN(?:\s+IF NOT EXISTS)?\s+(\w+)", re.I)
 
 
 def rust_columns(migrations: Path) -> dict[str, set[str]]:
@@ -100,6 +117,16 @@ def rust_columns(migrations: Path) -> dict[str, set[str]]:
                     continue
                 names.add(col)
             cols.setdefault(table, set()).update(names)
+        # A table that grew through `ALTER TABLE ... ADD COLUMN` has the same
+        # columns as one created with them. Without this the tool reports
+        # every column a migration added as missing.
+        code = "\n".join(
+            line for line in text.split("\n") if not line.strip().startswith("--")
+        )
+        for m in ALTER.finditer(code):
+            table, statement = m.group(1), m.group(2)
+            for add in ADD_COLUMN.finditer(statement):
+                cols.setdefault(table, set()).add(add.group(1))
     return cols
 
 
@@ -109,7 +136,8 @@ def json_keys(body: str) -> list[str]:
     An error envelope is not a row: Canvas answers `{"errors": [...]}` or
     `{"error": ...}` for a denied or missing request, and those keys are not
     columns of anything. They are skipped, or every table would appear to owe
-    an `errors` column.
+    an `errors` column. The same goes for the single-key flash answers
+    (`{"message": ...}`, `{"status": ..., "message": ...}`).
     """
     text = body.strip()
     if not text or text == "[..]":
@@ -123,6 +151,8 @@ def json_keys(body: str) -> list[str]:
     if not isinstance(data, dict):
         return []
     if "errors" in data or "error" in data:
+        return []
+    if set(data.keys()) <= {"message", "status", "ok"}:
         return []
     return sorted(data.keys())
 
@@ -157,6 +187,10 @@ def main() -> int:
             if seg in NON_RESOURCE:
                 # The response is an embedded object, not a row: stop here.
                 break
+            if seg in SUB_RESOURCE_TABLE:
+                # The response is a row of the sub-resource's own table.
+                table = SUB_RESOURCE_TABLE[seg]
+                break
             if seg in PATH_TABLE:
                 table = PATH_TABLE[seg]
                 break
@@ -172,10 +206,18 @@ def main() -> int:
 
     print(f"{'table':<22} {'cases':>6}  missing columns (Canvas returns them, Rust has no column)")
     print("-" * 100)
-    for table in sorted(debt, key=lambda t: -len(debt[t])):
+    for table in sorted(debt, key=lambda t: (-len(debt[t]), t)):
         print(f"{table:<22} {seen.get(table,0):>6}  {len(debt[table])}")
         for k in sorted(debt[table]):
             print(f"{'':<30}{k}")
+    unmeasured = sorted(set(PATH_TABLE.values()) - set(seen))
+    if unmeasured:
+        print()
+        print(
+            "no recorded row body for: "
+            + ", ".join(unmeasured)
+            + "  (the corpus has no recorded response of that table)"
+        )
     print()
     total = sum(len(v) for v in debt.values())
     print(f"total missing columns across {len(debt)} tables: {total}")

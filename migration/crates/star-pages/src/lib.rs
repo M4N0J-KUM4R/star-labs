@@ -44,10 +44,9 @@ use axum::{
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use sqlx::PgPool;
 
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 
 use star_auth::AuthUser;
 
@@ -81,7 +80,7 @@ pub struct PageDetail {
 }
 
 /// Request body for POST /courses/{courseId}/pages.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct CreatePage {
     pub title: String,
     pub body: Option<String>,
@@ -91,7 +90,7 @@ pub struct CreatePage {
 }
 
 /// Request body for PUT /pages/{id}.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Default)]
 pub struct UpdatePage {
     pub title: Option<String>,
     pub body: Option<String>,
@@ -222,7 +221,6 @@ pub struct FrontPage {
 
 /// Canvas `require_wiki_page` body for a course without a front page.
 enum FrontPageError {
-    NoFrontPage,
     Api(ApiError),
     Db(sqlx::Error),
 }
@@ -242,11 +240,6 @@ impl From<sqlx::Error> for FrontPageError {
 impl IntoResponse for FrontPageError {
     fn into_response(self) -> Response {
         match self {
-            FrontPageError::NoFrontPage => (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "message": "No front page has been set" })),
-            )
-                .into_response(),
             FrontPageError::Api(err) => err.into_response(),
             FrontPageError::Db(err) => ApiError::from(err).into_response(),
         }
@@ -529,12 +522,15 @@ async fn user_enrolled_or_admin(
     if is_admin(auth) {
         return Ok(true);
     }
-    let row: Option<(i32,)> =
-        sqlx::query_as("SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1")
-            .bind(user_id)
-            .bind(course_id)
-            .fetch_optional(db)
-            .await?;
+    let row: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM enrollments
+             WHERE user_id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+             LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(course_id)
+    .fetch_optional(db)
+    .await?;
     Ok(row.is_some())
 }
 
@@ -549,7 +545,10 @@ async fn user_teacher_of_course(
         return Ok(true);
     }
     let row: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' LIMIT 1",
+        "SELECT 1 FROM enrollments
+         WHERE user_id = $1 AND course_id = $2 AND role = 'teacher'
+           AND workflow_state IN ('active', 'invited')
+         LIMIT 1",
     )
     .bind(user_id)
     .bind(course_id)
@@ -817,7 +816,7 @@ async fn create_page(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreatePage>,
+    ApiJson(payload): ApiJson<CreatePage>,
 ) -> Result<(StatusCode, Json<PageDetail>), ApiError> {
     // Check teacher access
     if !user_teacher_of_course(&state.db, auth.id, course_id, &auth).await? {
@@ -914,7 +913,7 @@ async fn update_page(
     State(state): State<AppState>,
     Path(page_id): Path<String>,
     auth: AuthUser,
-    Json(payload): Json<UpdatePage>,
+    ApiJson(payload): ApiJson<UpdatePage>,
 ) -> Result<Json<PageDetail>, ApiError> {
     // Get page to find course_id (soft-deleted pages are not editable)
     let (page_id_num, course_id) = resolve_page(&state.db, &page_id)
@@ -1044,7 +1043,12 @@ async fn get_front_page(
 ) -> Result<Json<FrontPage>, FrontPageError> {
     let page = load_front_page(&state.db, course_id)
         .await?
-        .ok_or(FrontPageError::NoFrontPage)?;
+        // Canvas answers a course without a designated front page with
+        // `{"message":"No front page has been set"}` — 404
+        // (`app/controllers/wiki_pages_api_controller.rb:781`).
+        .ok_or_else(|| {
+            ApiError::canvas_message(StatusCode::NOT_FOUND, "No front page has been set")
+        })?;
 
     if !user_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden.into());
@@ -1231,10 +1235,10 @@ async fn update_course_page(
     State(state): State<AppState>,
     Path((course_id, page_id)): Path<(i64, String)>,
     auth: AuthUser,
-    Json(payload): Json<UpdatePage>,
+    ApiJson(payload): ApiJson<UpdatePage>,
 ) -> Result<Json<PageDetail>, ApiError> {
     ensure_page_in_course(&state.db, course_id, &page_id).await?;
-    update_page(State(state), Path(page_id), auth, Json(payload)).await
+    update_page(State(state), Path(page_id), auth, ApiJson(payload)).await
 }
 
 /// DELETE /courses/{courseId}/pages/{id} — Canvas v1 alias for DELETE /pages/{id}.
@@ -1569,11 +1573,16 @@ async fn ensure_group_read_access(
     if membership.is_some() {
         return Ok(());
     }
-    let teacher: Option<(i32,)> = sqlx::query_as(
+    // Canvas' `Group` policy (`app/models/group.rb:662`) grants the group's
+    // permissions when the group's context grants the user `:read`, so a
+    // member of the group's course may read the group without being a group
+    // member. Canvas' course `:read` still holds for a concluded enrollment
+    // (`not_inactive_by_date`, `app/models/enrollment.rb:1454`).
+    let member: Option<(i32,)> = sqlx::query_as(
         r#"
         SELECT 1 FROM enrollments e
         JOIN groups g ON g.course_id = e.course_id
-        WHERE g.id = $1 AND e.user_id = $2 AND e.role = 'teacher'
+        WHERE g.id = $1 AND e.user_id = $2 AND e.workflow_state <> 'deleted'
         LIMIT 1
         "#,
     )
@@ -1581,7 +1590,7 @@ async fn ensure_group_read_access(
     .bind(auth.id)
     .fetch_optional(db)
     .await?;
-    if teacher.is_some() {
+    if member.is_some() {
         return Ok(());
     }
     Err(ApiError::Forbidden)
@@ -1619,9 +1628,10 @@ async fn ensure_group_manage_access(
 ///
 /// Canvas serves group wikis through the same pages API, but wiki pages are
 /// course-scoped in this schema (`pages` has no group column), so no page can
-/// belong to a group context. After the context and read-access checks the
-/// endpoint therefore declines with 403, mirroring the star-discussions
-/// group-summaries pattern.
+/// belong to a group context. The index therefore answers with the empty
+/// page list Canvas returns for a group whose wiki holds no pages — the
+/// context and read-access checks still run first, so a caller without read
+/// access on the group gets 403.
 async fn list_group_pages(
     State(state): State<AppState>,
     Path(group_id): Path<i64>,
@@ -1629,7 +1639,7 @@ async fn list_group_pages(
 ) -> Result<Json<Vec<PageSummary>>, ApiError> {
     ensure_group(&state.db, group_id).await?;
     ensure_group_read_access(&state.db, group_id, &auth).await?;
-    Err(ApiError::Forbidden)
+    Ok(Json(Vec::new()))
 }
 
 /// POST /groups/{groupId}/pages — Canvas group wiki pages#create (declined).
@@ -1699,7 +1709,13 @@ async fn show_group_front_page(
 ) -> Result<Json<FrontPage>, ApiError> {
     ensure_group(&state.db, group_id).await?;
     ensure_group_read_access(&state.db, group_id, &auth).await?;
-    Err(ApiError::Forbidden)
+    // No page can live in a group context in this schema, so Canvas' answer
+    // for a group without a front page is the same 404 it gives for a course
+    // without one (`app/controllers/wiki_pages_api_controller.rb:781`).
+    Err(ApiError::canvas_message(
+        StatusCode::NOT_FOUND,
+        "No front page has been set",
+    ))
 }
 
 /// PUT /groups/{groupId}/front_page — Canvas group wiki `update_front_page`

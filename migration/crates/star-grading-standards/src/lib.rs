@@ -24,7 +24,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, patch, post, put},
+    routing::{delete, get, patch, post},
     Json, Router,
 };
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Utc};
@@ -2768,32 +2768,26 @@ async fn batch_update_periods(
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        // Canvas `GradingStandardsApiController#create` / `#context_index`
+        // (config/routes.rb:2697 and :2702).
         .route(
             "/courses/{courseId}/grading_standards",
-            post(create_grading_standard),
-        )
-        .route(
-            "/courses/{courseId}/grading_standards",
-            get(list_grading_standards),
+            post(create_grading_standard).get(list_grading_standards),
         )
         .route("/courses/{courseId}/final_grade", get(get_final_grade))
-        .route("/grading_standards/{id}", get(get_grading_standard))
-        .route("/grading_standards/{id}", delete(delete_grading_standard))
         .route(
-            "/courses/{courseId}/grading_standards/{id}",
-            get(get_course_grading_standard),
+            "/grading_standards/{id}",
+            get(get_grading_standard).delete(delete_grading_standard),
         )
+        // Canvas `GradingStandardsApiController#context_show` / `#destroy`
+        // (config/routes.rb:2699 and :2705).
         .route(
             "/courses/{courseId}/grading_standards/{id}",
-            delete(delete_course_grading_standard),
+            get(get_course_grading_standard).delete(delete_course_grading_standard),
         )
         .route(
             "/accounts/{accountId}/grading_periods",
-            get(list_account_grading_periods),
-        )
-        .route(
-            "/accounts/{accountId}/grading_periods",
-            post(create_account_grading_period),
+            get(list_account_grading_periods).post(create_account_grading_period),
         )
         // Canvas GradingPeriodsController — the course and set scopes.
         .route(
@@ -2818,43 +2812,39 @@ pub fn router() -> Router<AppState> {
             "/grading_period_sets/{setId}/grading_periods/batch_update",
             patch(set_batch_update_grading_periods),
         )
-        .route("/grading_periods/{id}", get(get_grading_period))
-        .route("/grading_periods/{id}", put(update_grading_period))
-        .route("/grading_periods/{id}", delete(delete_grading_period))
         .route(
-            "/accounts/{accountId}/grading_schemes",
-            get(list_account_grading_schemes),
+            "/grading_periods/{id}",
+            get(get_grading_period)
+                .put(update_grading_period)
+                .delete(delete_grading_period),
         )
         .route(
             "/accounts/{accountId}/grading_schemes",
-            post(create_account_grading_scheme),
-        )
-        .route("/grading_schemes/{id}", get(get_grading_scheme))
-        .route("/grading_schemes/{id}", put(update_grading_scheme))
-        .route("/grading_schemes/{id}", delete(delete_grading_scheme))
-        .route(
-            "/courses/{courseId}/blackout_dates",
-            get(list_course_blackout_dates),
+            get(list_account_grading_schemes).post(create_account_grading_scheme),
         )
         .route(
-            "/courses/{courseId}/blackout_dates",
-            post(create_course_blackout_date),
+            "/grading_schemes/{id}",
+            get(get_grading_scheme)
+                .put(update_grading_scheme)
+                .delete(delete_grading_scheme),
         )
         .route(
             "/courses/{courseId}/blackout_dates",
-            put(bulk_update_course_blackout_dates),
+            get(list_course_blackout_dates)
+                .post(create_course_blackout_date)
+                .put(bulk_update_course_blackout_dates),
         )
+        // Canvas `BlackoutDatesController#show` / `#update` / `#destroy`
+        // (config/routes.rb:2972, :2974 and :2976).
         .route(
             "/courses/{courseId}/blackout_dates/{id}",
-            delete(delete_course_blackout_date),
+            get(show_course_blackout_date)
+                .put(update_course_blackout_date)
+                .delete(delete_course_blackout_date),
         )
         .route(
             "/courses/{courseId}/blackout_dates/new",
             get(new_course_blackout_date),
-        )
-        .route(
-            "/courses/{courseId}/blackout_dates/{id}",
-            get(show_course_blackout_date).put(update_course_blackout_date),
         )
         .route(
             "/accounts/{accountId}/blackout_dates/new",
@@ -2868,11 +2858,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/accounts/{accountId}/blackout_dates",
-            get(list_account_blackout_dates),
-        )
-        .route(
-            "/accounts/{accountId}/blackout_dates",
-            post(create_account_blackout_date),
+            get(list_account_blackout_dates).post(create_account_blackout_date),
         )
 }
 

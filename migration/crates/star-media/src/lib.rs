@@ -16,7 +16,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{get, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -359,7 +359,7 @@ async fn update_media_attachment(
 ///
 /// Canvas media-object track listing is scoped to `user_id = current_user`;
 /// `include[]=content|webvtt_content|updated_at|created_at` adds those fields.
-async fn list_media_tracks(
+pub(crate) async fn list_media_tracks(
     State(state): State<AppState>,
     Path(id): Path<i64>,
     Query(query): Query<HashMap<String, String>>,
@@ -433,8 +433,9 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .merge(media_objects::router())
         .merge(media_tracks::router())
-        .route("/media_attachments", get(list_media_attachments))
-        .route("/media_attachments", post(create_media_attachment))
+        .route(
+            "/media_attachments",
+            get(list_media_attachments).post(create_media_attachment),
+        )
         .route("/media_attachments/{id}", put(update_media_attachment))
-        .route("/media_objects/{id}/media_tracks", get(list_media_tracks))
 }

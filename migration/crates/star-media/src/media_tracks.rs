@@ -39,7 +39,7 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
-use crate::media_objects::{can_add_captions, can_read_context, find_context, MediaObjectRow};
+use crate::media_objects::{can_add_captions, can_read_context, MediaObjectRow};
 
 /// A `media_tracks` row.
 #[derive(Debug, sqlx::FromRow)]
@@ -85,7 +85,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/media_objects/{media_object_id}/media_tracks",
-            axum::routing::put(update_object_tracks),
+            get(crate::list_media_tracks).put(update_object_tracks),
         )
         .route(
             "/media_objects/{media_object_id}/asr",
@@ -330,10 +330,7 @@ async fn create_asr(
     let media_object = load_media_object(&state.db, media_object_id, attachment_id).await?;
     require_update(&state.db, auth, &media_object).await?;
 
-    let locale = body
-        .map(|Json(body)| body.locale)
-        .flatten()
-        .unwrap_or_default();
+    let locale = body.and_then(|Json(body)| body.locale).unwrap_or_default();
     if locale.is_empty() || !locale.chars().all(|c| c.is_ascii_alphabetic() || c == '-') {
         return Err(ApiError::BadRequest(
             "Invalid or missing locale parameter".to_string(),

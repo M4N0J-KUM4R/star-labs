@@ -293,6 +293,7 @@ impl From<QuizSubmissionRow> for QuizSubmission {
 /// `createdAt`, `updatedAt`. `answers` is the raw JSON payload Canvas also
 /// stores as text.
 #[derive(Debug, Clone, SimpleObject)]
+#[graphql(name = "QuizItem")]
 pub struct QuizQuestion {
     pub id: ID,
     pub quiz_id: ID,
