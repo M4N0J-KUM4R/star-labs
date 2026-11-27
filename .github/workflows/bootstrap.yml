@@ -84,8 +84,12 @@ jobs:
       - name: Check shell scripts
         if: needs.changes.outputs.lab == 'true'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y shellcheck
+          # The runner image carries a Microsoft package source that answers
+          # 403 for the runner's IP, and that makes the whole update fail.
+          # shellcheck is in the Ubuntu archive, so the update of the other
+          # sources carries on and only the install has to succeed.
+          sudo apt-get update || true
+          sudo apt-get install -y --no-install-recommends shellcheck
           shellcheck -S warning infra/user-data.sh infra/user-data-migration.sh scripts/lab-up.sh scripts/lab-compute-up.sh scripts/lab-data-up.sh scripts/lab-deploy.sh scripts/lab-down.sh scripts/lab-workers-up.sh scripts/lab-workers-remote.sh
       - name: Lint CloudFormation
         if: needs.changes.outputs.lab == 'true'
