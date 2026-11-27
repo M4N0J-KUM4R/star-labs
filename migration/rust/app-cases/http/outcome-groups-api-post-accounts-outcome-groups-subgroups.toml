@@ -3,7 +3,7 @@ method = "POST"
 path = "/api/v1/accounts/6/outcome_groups/2/subgroups"
 
 [request.headers]
-Authorization = "Bearer c55d0731ffb0240ad824ab398d92be2a4b930c9af0a5f76a74df263902080ed6"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 404

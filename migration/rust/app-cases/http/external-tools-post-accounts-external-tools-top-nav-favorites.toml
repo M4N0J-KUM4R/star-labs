@@ -3,7 +3,7 @@ method = "POST"
 path = "/accounts/6/external_tools/top_nav_favorites/1"
 
 [request.headers]
-Authorization = "Bearer c55d0731ffb0240ad824ab398d92be2a4b930c9af0a5f76a74df263902080ed6"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 404
@@ -14,7 +14,7 @@ content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
 content-type = "text/html"
 pragma = "no-cache"
 referrer-policy = "no-referrer-when-downgrade"
-x-canvas-meta = "[..]"
+x-canvas-meta = "b=2074132;m=2074132;u=0.[..];y=0.00;d=0.[..];rlr=[..].[..];"
 x-content-type-options = "nosniff"
 x-download-options = "noopen"
 x-permitted-cross-domain-policies = "none"

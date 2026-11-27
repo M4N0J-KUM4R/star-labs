@@ -3,7 +3,7 @@ method = "PUT"
 path = "/api/v1/courses/1/assignments/1/submissions/1/rubric_assessments/read"
 
 [request.headers]
-Authorization = "Bearer c55d0731ffb0240ad824ab398d92be2a4b930c9af0a5f76a74df263902080ed6"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 404
