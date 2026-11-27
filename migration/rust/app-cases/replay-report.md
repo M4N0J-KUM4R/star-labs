@@ -2,7 +2,7 @@
 
 Build: `target/debug/star-http`
 
-Passed: 115/460
+Passed: 109/460
 
 Fallback rate: not reported by this build
 
@@ -10,24 +10,24 @@ Fallback rate: not reported by this build
 
 | Cases | Id | Where | Kind |
 | ---: | --- | --- | --- |
-| 215 | `d04de58a` | `header cache-control` | text |
-| 72 | `59f5f378` | `status` | 200→404 |
+| 221 | `d04de58a` | `header cache-control` | text |
+| 77 | `59f5f378` | `status` | 200→404 |
 | 43 | `84139eb4` | `header pragma` | missing key |
-| 35 | `4e1b1758` | `header link` | missing key |
-| 35 | `d506e5b1` | `body $.status` | missing key |
+| 38 | `d506e5b1` | `body $.status` | missing key |
+| 37 | `4e1b1758` | `header link` | missing key |
+| 35 | `bf07e579` | `status` | 403→404 |
+| 34 | `862e729b` | `body $` | type |
 | 34 | `6b521040` | `body` | text |
-| 32 | `862e729b` | `body $` | type |
-| 31 | `bf07e579` | `status` | 403→404 |
-| 30 | `e06d529c` | `header set-cookie` | text |
-| 30 | `59f5f078` | `status` | 200→403 |
-| 23 | `8e66a14e` | `body $.id` | missing key |
-| 22 | `7ec02a16` | `body $.errors[].message` | value |
+| 31 | `e06d529c` | `header set-cookie` | text |
+| 31 | `59f5f078` | `status` | 200→403 |
+| 24 | `8e66a14e` | `body $.id` | missing key |
+| 24 | `7ec02a16` | `body $.errors[].message` | value |
 | 21 | `5a352777` | `body` | lines added |
-| 18 | `84764fab` | `status` | 404→403 |
+| 20 | `84764fab` | `status` | 404→403 |
 | 17 | `9c827749` | `body $.errors` | type |
-| 16 | `1388bc4e` | `body $` | length |
 | 16 | `d088d7d7` | `body $.message` | missing key |
 | 15 | `0da8054c` | `header content-type` | text |
+| 14 | `1388bc4e` | `body $` | length |
 | 13 | `ea00df59` | `status` | 400→403 |
 | 13 | `ea00de59` | `status` | 400→404 |
 | 12 | `451c2498` | `status` | 204→404 |
@@ -37,16 +37,14 @@ Fallback rate: not reported by this build
 | 6 | `847351ab` | `status` | 404→415 |
 | 6 | `b0ad2aee` | `body $.read` | missing key |
 | 6 | `7ad71360` | `body $.revision_id` | missing key |
-| 5 | `d62ae6e8` | `body` | lines missing |
 | 5 | `e9fdd959` | `status` | 400→415 |
 | 5 | `7a1c3f36` | `body $.errors[].code` | missing key |
-| 4 | `ce5768af` | `body $.id` | value |
 | 4 | `b61a6028` | `status` | 500→200 |
 | 4 | `c99aa66e` | `body $.errors` | missing key |
+| 4 | `4b262163` | `body $[].id` | value |
+| 4 | `d62ae6e8` | `body` | lines missing |
 | 4 | `ea7fde28` | `status` | 500→404 |
-| 3 | `ad489779` | `status` | 403→204 |
-| 3 | `8caa558f` | `header content-type` | missing key |
-| 3 | `4b262163` | `body $[].id` | value |
+| 3 | `ce5768af` | `body $.id` | value |
 | 3 | `847652ab` | `status` | 404→400 |
 | 3 | `946b26c3` | `header location` | missing key |
 | 3 | `0d525965` | `header link` | text |
@@ -57,14 +55,12 @@ Fallback rate: not reported by this build
 | 2 | `5292d478` | `status` | 200→500 |
 | 2 | `96a328ab` | `status` | 404→200 |
 | 2 | `7e12c68a` | `body $.html` | missing key |
-| 2 | `ad489379` | `status` | 403→200 |
 | 2 | `ea836b28` | `status` | 500→415 |
 | 2 | `0191ac8c` | `status` | 201→404 |
 | 2 | `59f5ef78` | `status` | 200→400 |
 | 2 | `7a19789b` | `body $.migration_running` | missing key |
 | 2 | `e0eac659` | `status` | 400→503 |
 | 2 | `4cb102ff` | `status` | 401→404 |
-| 2 | `2e708528` | `body $.quota` | value |
 | 2 | `16ab684f` | `header access-control-allow-credentials` | missing key |
 | 2 | `f39553a0` | `header access-control-allow-headers` | missing key |
 | 2 | `0895895f` | `header access-control-allow-methods` | missing key |
@@ -72,6 +68,8 @@ Fallback rate: not reported by this build
 | 2 | `06ffc01c` | `header access-control-request-method` | missing key |
 | 2 | `19fe84fe` | `status` | 401→200 |
 | 2 | `e5f63a90` | `header content-transfer-encoding` | missing key |
+| 2 | `ad489779` | `status` | 403→204 |
+| 2 | `8caa558f` | `header content-type` | missing key |
 | 2 | `97540306` | `body $.join_level` | value |
 | 2 | `34dd3427` | `body $.context_type` | missing key |
 | 2 | `f810c4ea` | `status` | 302→403 |
@@ -94,12 +92,15 @@ Fallback rate: not reported by this build
 | 1 | `16f83452` | `body $.use_default_discussion_settings` | value |
 | 1 | `9a628c86` | `body $.created_at` | missing key |
 | 1 | `2fd06ba3` | `body $.success` | missing key |
+| 1 | `ad489379` | `status` | 403→200 |
 | 1 | `45192798` | `status` | 204→415 |
 | 1 | `139c3d9d` | `body $.allow_final_grade_override` | missing key |
 | 1 | `7d67a581` | `body $.unread_entries` | missing key |
 | 1 | `451c2998` | `status` | 204→403 |
 | 1 | `ea7fe228` | `status` | 500→400 |
 | 1 | `f810c9ea` | `status` | 302→404 |
+| 1 | `2e708528` | `body $.quota` | value |
+| 1 | `c37ba3e2` | `body $.quota` | missing key |
 | 1 | `00c26cb1` | `header content-disposition` | missing key |
 | 1 | `bd14c25e` | `body $.participate` | missing key |
 | 1 | `fa3db4ca` | `body $.duplicates` | missing key |
@@ -121,13 +122,13 @@ Fallback rate: not reported by this build
 
 Arguments: `GET /api/v1/acceptable_use_policy`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨o⟩3fPxdo8fPnET3uek…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨%⟩2F80u%2FVSZzUjVE…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%3D[..]_[..]_[..]_[..].[..].[..]; path=/; httponly
-+ _csrf_token=o3fPxdo8fPnET3uekValuql82MS3H5Wr0yHzn26oww%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=%2F80u%2FVSZzUjVEeQ6INwcDixNKs4GcZ%2FOlq9e%2FsNaOw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### accounts-get-accounts-237
@@ -350,13 +351,13 @@ body:
 
 Arguments: `GET /api/v1/manageable_accounts`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨O⟩W5fIsyLyCWkD4iJJ…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨j⟩1Da73em3s%2BKGYQ…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]-[..]-[..].[..]; path=/; httponly
-+ _csrf_token=OW5fIsyLyCWkD4iJJy18yCU7m2sS4hzPbZ%2Fria6%2Bgw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=j1Da73em3s%2BKGYQj3DY92N3x8FMi0MUdPoCvVRn9%2Bw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $ (length), length 2 expected, 0 got
@@ -415,12 +416,12 @@ body:
 
 Arguments: `DELETE /api/v1/courses/1/assignments/1`
 
-at status (403→204)
+at status (403→404)
 
 status:
 
 ```diff
-expected 403, got 204
+expected 403, got 404
 ```
 
 at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
@@ -432,15 +433,6 @@ header cache-control:
 + no-cache
 ```
 
-at header content-type (missing key)
-
-header content-type:
-
-```diff
-- application/json; charset=utf-8
-(missing)
-```
-
 at header pragma (missing key)
 
 header pragma:
@@ -450,13 +442,13 @@ header pragma:
 (missing)
 ```
 
-at body (lines missing), line 1, length 93 expected, 0 got
+at body $.status (missing key)
 
 body:
 
 ```diff
 - {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
-(trailing newline: expected false, got true)
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### calendar-events-api-delete-calendar-events
@@ -804,13 +796,13 @@ body:
 
 Arguments: `POST /api/v1/conversations/1/add_recipients`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨q⟩9qd4SLgRDOp%2BDQ…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨z⟩%2FbbkewVO%2FGVH…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..] [..]_[..]-[..].[..].[..]; path=/; httponly
-+ _csrf_token=q9qd4SLgRDOp%2BDQKWk18gE3zKRw0foI17zbJ4yA%2Bjg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=z%2FbbkewVO%2FGVHQNEOzwFLaH7mFrOyWH2TAPV%2Fed35Q%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### courses-delete-courses
@@ -866,20 +858,20 @@ body:
 
 ```diff
 - {"id":1,"name":"Parity Course","course_code":"PARITY","account_id":6,"created_at":"2026-11-26T20:10:16Z","start_at":null,"default_view":"modules","enrollment_term_id":6,"is_public":null,"grading_standard_id":null,"root_account_id":6,"uuid":"vjyH5dTcmA5kYHx39sliWmwHoWQjDUPZxcwwNz8f","license":null,"grade_passback_setting":null,"end_at":null,"public_syllabus":false,"public_syllabus_to_auth":false,"storage_quota_mb":500,"is_public_to_auth_users":false,"homeroom_course":false,"course_color":null,"friendly_name":null,"hide_final_grades":false,"apply_assignment_group_weights":false,"calendar":{"ics":"http://127.0.0.1:[..]/feeds/calendars/course_vjyH5dTcmA5kYHx39sliWmwHoWQjDUPZxcwwNz8f.ics"},"time_zone":"America/Denver","blueprint":false,"template":false,"sis_course_id":null,"sis_import_id":null,"integration_id":null,"enrollments":[{"type":"teacher","role":"TeacherEnrollment","role_id":44,"user_id":1,"enrollment_state":"active","limit_privileges_to_course_section":false}],"workflow_state":"available","restrict_enrollments_to_course_dates":false}
-+ {"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:63915/feeds/calendars/course_Course_fbf3e6470fa64795a4185539e94aff32e9a34226.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:58:47.510144Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":1,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"fbf3e6470fa64795a4185539e94aff32e9a34226","workflow_state":"available"}
++ {"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:65361/feeds/calendars/course_Course_fbf3e6470fa64795a4185539e94aff32e9a34226.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:58:47.510144Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":1,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"fbf3e6470fa64795a4185539e94aff32e9a34226","workflow_state":"available"}
 ```
 
 ### courses-get-courses-activity-stream-summary
 
 Arguments: `GET /api/v1/courses/1/activity_stream/summary`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨7⟩BVhGuEgPLpFo6FHP…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨f⟩sGEgeV0CPIjlC5JI…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]_[..].[..].[..]; path=/; httponly
-+ _csrf_token=7BVhGuEgPLpFo6FHPFYRRrILILIvd1T%2BF02Ge0JQ6g%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=fsGEgeV0CPIjlC5JIiAGstE7Dl5BwnLpHtO8C8wHmQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### courses-get-courses-bulk-user-progress
@@ -962,15 +954,6 @@ body:
 ### courses-get-courses-permissions
 
 Arguments: `GET /api/v1/courses/1/permissions`
-
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨2⟩IahQOTgdlasvkyRu…"
-
-header set-cookie:
-
-```diff
-- _csrf_token=[..]%[..]%[..]%3D[..]_[..]_[..].[..]; path=/; httponly
-+ _csrf_token=2IahQOTgdlasvkyRuUSRiLqibv1uhYukjc3HffvfKA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
-```
 
 at body $.read_outcomes (missing key)
 
@@ -1085,7 +1068,7 @@ at body $ (type), expected array, got object
 body:
 
 ```diff
-- [{"context_type":"Course","course_id":1,"context_name":"Parity Course","context_short_name":"PARITY","type":"grading","ignore":"http://127.0.0.1:[..]/api/v1/users/self/todo/assignment_1/grading?permanent=0","ignore_permanently":"http://127.0.0.1:[..]/api/v1/users/self/todo/assignment_1/grading?permanent=1","assignment":{"id":1,"position":1,"description":null,"points_possible":100.0,"grading_type":"points","created_at":"2026-11-26T20:29:17Z","updated_at":"2026-11-27T14:51:03Z","due_at":null,"final_grader_id":null,"grader_count":0,"graders_anonymous_to_graders":false,"grader_comments_visible_to_graders":true,"grader_names_visible_to_final_grader":true,"lock_at":null,"unlock_at":null,"assignment_group_id":1,"peer_reviews":false,"anonymous_peer_reviews":false,"automatic_peer_reviews":false,"intra_group_peer_reviews":false,"post_to_sis":false,"grade_group_students_individually":false,"group_category_id":null,"grading_standard_id":null,"moderated_grading":false,"hide_in_gradebook":false,"omit_from_final_grade":false,"suppress_assignment":false,"anonymous_instructor_annotations":false,"anonymous_grading":false,"allowed_attempts":-1,"annotatable_attachment_id":null,"secure_params":"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJsdGlfYXNzaWdubWVudF9pZCI6IjFjZTM5OGVlLTZjMzAtNDMzOS05MzIwLWQ2MGExYTQ0MjFjMyJ9.nf26L1W2MrwC_qn8fM3wW0BZwLAMYkiwM37Ru20S1eY","lti_context_id":"1ce398ee-6c30-4339-9320-d60a1a4421c3","course_id":1,"name":"Parity Assignment","submission_types":["online_text_entry"],"has_submitted_submissions":true,"due_date_required":false,"max_name_length":255,"in_closed_grading_period":false,"graded_submissions_exist":false,"is_quiz_assignment":false,"can_duplicate":true,"original_course_id":null,"original_assignment_id":null,"original_lti_resource_link_id":null,"original_assignment_name":null,"original_quiz_id":null,"workflow_state":"published","important_dates":false,"muted":true,"html_url":"http://127.0.0.1:[..]/courses/1/assignments/1","speed_grader_url":"http://127.0.0.1:[..]/courses/1/gradebook/speed_grader?assignment_id=1","has_overrides":false,"needs_grading_count":1,"sis_assignment_id":null,"integration_id":null,"integration_data":{},"all_dates":[{"due_at":null,"unlock_at":null,"lock_at":null,"title":"Everyone","base":true}],"published":true,"unpublishable":false,"only_visible_to_overrides":false,"visible_to_everyone":true,"locked_for_user":false,"submissions_download_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions?zip=1","post_manually":false,"anonymize_students":false,"new_quizzes_anonymous_participants":false,"require_lockdown_browser":false,"restrict_quantitative_data":false},"html_url":"http://127.0.0.1:[..]/courses/1/gradebook/speed_grader?assignment_id=1","needs_grading_count":1}]
+- [{"context_type":"Course","course_id":1,"context_name":"Parity Course","context_short_name":"PARITY","type":"grading","ignore":"http://127.0.0.1:[..]/api/v1/users/self/todo/assignment_1/grading?permanent=0","ignore_permanently":"http://127.0.0.1:[..]/api/v1/users/self/todo/assignment_1/grading?permanent=1","assignment":{"id":1,"position":1,"description":null,"points_possible":100.0,"grading_type":"points","created_at":"2026-11-26T20:29:17Z","updated_at":"2026-11-27T14:51:03Z","due_at":null,"final_grader_id":null,"grader_count":0,"graders_anonymous_to_graders":false,"grader_comments_visible_to_graders":true,"grader_names_visible_to_final_grader":true,"lock_at":null,"unlock_at":null,"assignment_group_id":1,"peer_reviews":false,"anonymous_peer_reviews":false,"automatic_peer_reviews":false,"intra_group_peer_reviews":false,"post_to_sis":false,"grade_group_students_individually":false,"group_category_id":null,"grading_standard_id":null,"moderated_grading":false,"hide_in_gradebook":false,"omit_from_final_grade":false,"suppress_assignment":false,"anonymous_instructor_annotations":false,"anonymous_grading":false,"allowed_attempts":-1,"annotatable_attachment_id":null,"secure_params":"[..]","lti_context_id":"1ce398ee-6c30-4339-9320-d60a1a4421c3","course_id":1,"name":"Parity Assignment","submission_types":["online_text_entry"],"has_submitted_submissions":true,"due_date_required":false,"max_name_length":255,"in_closed_grading_period":false,"graded_submissions_exist":false,"is_quiz_assignment":false,"can_duplicate":true,"original_course_id":null,"original_assignment_id":null,"original_lti_resource_link_id":null,"original_assignment_name":null,"original_quiz_id":null,"workflow_state":"published","important_dates":false,"muted":true,"html_url":"http://127.0.0.1:[..]/courses/1/assignments/1","speed_grader_url":"http://127.0.0.1:[..]/courses/1/gradebook/speed_grader?assignment_id=1","has_overrides":false,"needs_grading_count":1,"sis_assignment_id":null,"integration_id":null,"integration_data":{},"all_dates":[{"due_at":null,"unlock_at":null,"lock_at":null,"title":"Everyone","base":true}],"published":true,"unpublishable":false,"only_visible_to_overrides":false,"visible_to_everyone":true,"locked_for_user":false,"submissions_download_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions?zip=1","post_manually":false,"anonymize_students":false,"new_quizzes_anonymous_participants":false,"require_lockdown_browser":false,"restrict_quantitative_data":false},"html_url":"http://127.0.0.1:[..]/courses/1/gradebook/speed_grader?assignment_id=1","needs_grading_count":1}]
 + {"data":[],"page":1,"per_page":50,"total":0}
 ```
 
@@ -1193,7 +1176,7 @@ body:
 
 ```diff
 - [{"id":1,"name":"Parity Course","course_code":"PARITY","account_id":6,"created_at":"2026-11-26T20:10:16Z","start_at":null,"default_view":"modules","enrollment_term_id":6,"is_public":null,"grading_standard_id":null,"root_account_id":6,"uuid":"vjyH5dTcmA5kYHx39sliWmwHoWQjDUPZxcwwNz8f","license":null,"grade_passback_setting":null,"end_at":null,"public_syllabus":false,"public_syllabus_to_auth":false,"storage_quota_mb":500,"is_public_to_auth_users":false,"homeroom_course":false,"course_color":null,"friendly_name":null,"apply_assignment_group_weights":false,"calendar":{"ics":"http://127.0.0.1:[..]/feeds/calendars/course_vjyH5dTcmA5kYHx39sliWmwHoWQjDUPZxcwwNz8f.ics"},"time_zone":"America/Denver","blueprint":false,"template":false,"sis_course_id":null,"sis_import_id":null,"integration_id":null,"enrollments":[{"type":"teacher","role":"TeacherEnrollment","role_id":44,"user_id":1,"enrollment_state":"active","limit_privileges_to_course_section":false}],"hide_final_grades":false,"workflow_state":"available","restrict_enrollments_to_course_dates":false}]
-+ [{"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:63915/feeds/calendars/course_Course_7843d183d1bb4022b4558a1913bc6103fb7494bc.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:58:47.510144Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":5,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"7843d183d1bb4022b4558a1913bc6103fb7494bc","workflow_state":"available"},{"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:63915/feeds/calendars/course_Course_ea7badb3e42241dda841d5802f6c73b83696c09f.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:58:47.510144Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":3,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"ea7badb3e42241dda841d5802f6c73b83696c09f","workflow_state":"available"},{"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:63915/feeds/calendars/course_Course_fbf3e6470fa64795a4185539e94aff32e9a34226.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:58:47.510144Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":1,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"fbf3e6470fa64795a4185539e94aff32e9a34226","workflow_state":"available"}]
++ [{"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:65361/feeds/calendars/course_Course_7843d183d1bb4022b4558a1913bc6103fb7494bc.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:58:47.510144Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":5,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"7843d183d1bb4022b4558a1913bc6103fb7494bc","workflow_state":"available"},{"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:65361/feeds/calendars/course_Course_ea7badb3e42241dda841d5802f6c73b83696c09f.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:58:47.510144Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":3,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"ea7badb3e42241dda841d5802f6c73b83696c09f","workflow_state":"available"},{"account_id":6,"apply_assignment_group_weights":false,"blueprint":false,"calendar":{"ics":"http://127.0.0.1:65361/feeds/calendars/course_Course_fbf3e6470fa64795a4185539e94aff32e9a34226.ics"},"course_code":"PARITY","course_color":null,"created_at":"2026-11-27T14:58:47.510144Z","default_view":"modules","end_at":null,"enrollment_term_id":null,"friendly_name":null,"grade_passback_setting":null,"grading_standard_id":null,"hide_final_grades":false,"homeroom_course":false,"id":1,"is_public":null,"is_public_to_auth_users":null,"license":null,"name":"Parity Course","public_syllabus":null,"public_syllabus_to_auth":null,"restrict_enrollments_to_course_dates":false,"root_account_id":null,"start_at":null,"storage_quota_mb":null,"template":false,"time_zone":null,"uuid":"fbf3e6470fa64795a4185539e94aff32e9a34226","workflow_state":"available"}]
 ```
 
 ### courses-get-users-courses
@@ -1644,6 +1627,19 @@ body:
 (trailing newline: expected true, got false)
 ```
 
+### discussion-topics-api-delete-groups-discussion-topics-entries-read
+
+Arguments: `DELETE /api/v1/groups/1/discussion_topics/1/entries/1/read`
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨c⟩RsTFfuQAMS9a15KG…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]_[..].[..]; path=/; httponly
++ _csrf_token=cRsTFfuQAMS9a15KG3GcMsYrSTS0lrRBZALKEoKkZw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
+```
+
 ### discussion-topics-api-get-courses-discussion-topics-entries-replies
 
 Arguments: `GET /api/v1/courses/1/discussion_topics/1/entries/1/replies`
@@ -1773,13 +1769,13 @@ header pragma:
 (missing)
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨J⟩zCpItCnqw3MiceRB…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨V⟩yfoBJxTD5h%2FxIO…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]%[..]%3D[..]_[..]_[..]_[..].[..]_[..].[..]; path=/; httponly
-+ _csrf_token=JzCpItCnqw3MiceRBZhbqakwSOR3zVjGA0gz%2BQ4jRA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=VyfoBJxTD5h%2FxIOePKREy0Mj0eKW8BvO8mj99cx%2BAg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.status (missing key)
@@ -2097,13 +2093,13 @@ header cache-control:
 + no-cache
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨5⟩yaknVaD0qEQz9qj0…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨F⟩HOGp9VXg5jpDVfx9…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..].[..]-[..]-[..].[..].[..]; path=/; httponly
-+ _csrf_token=5yaknVaD0qEQz9qj041GmMMedoM1Aew6gzJFbCzQ%2FA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=FHOGp9VXg5jpDVfx9K6YU9FNQALGh9UWhM37UHxAkw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body, line 1, column 3, char 2: expected "{\"⟨i⟩d\":", got "{\"⟨e⟩rrors\":[{\"messag…"
@@ -2266,26 +2262,26 @@ body:
 
 Arguments: `POST /api/v1/groups/1/discussion_topics/1/entries`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨l⟩Uu5ZpD2RerFGMagM…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨m⟩hJ%2Bv%2F3fTXong…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%3D[..]_[..]_[..]-[..].[..]; path=/; httponly
-+ _csrf_token=lUu5ZpD2RerFGMagM7YK6nUzqXViZeP3MXAStTwixg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=mhJ%2Bv%2F3fTXongyJZ7AedIETfrR81ITRJAkihabHnwQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### discussion-topics-api-post-groups-discussion-topics-insights
 
 Arguments: `POST /api/v1/groups/1/discussion_topics/1/insights`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨P⟩OQE6av%2BAMdkCBb…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨d⟩M0QsmjfDkATMnyH%…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..]-[..].[..]; path=/; httponly
-+ _csrf_token=POQE6av%2BAMdkCBbZIKW7X5nJyWSzNSFyRz9nOrYZdQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=dM0QsmjfDkATMnyH%2F5D2LnBxNM%2B3vgTzbj9P%2BEoMxA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### discussion-topics-api-put-courses-discussion-topics-entries-read
@@ -2300,13 +2296,13 @@ status:
 expected 204, got 404
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨d⟩vnmgjO0skjQWmVST…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨l⟩vKsOjvMf8Sx54TTK…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]%[..]_[..]-[..].[..]; path=/; httponly
-+ _csrf_token=dvnmgjO0skjQWmVST2FB2f2JxUIxyJygYfeZnFfj4Q%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=lvKsOjvMf8Sx54TTKaATcX535NacI6JLJURHxQVkBg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body (lines added), line 1, length 0 expected, 65 got
@@ -2514,13 +2510,13 @@ body:
 
 Arguments: `PUT /api/v1/groups/1/discussion_topics/1/read_all`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨4⟩qqkmxsvaXhg7tGlR…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨h⟩PsbCJ1tEHLUuSbgj…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]%[..]%[..]%[..]%3D[..]_[..]_[..]-[..].[..]_[..].[..]; path=/; httponly
-+ _csrf_token=4qqkmxsvaXhg7tGlRXECUIdhe8ThDl5SZfcQKy%2BuJA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=hPsbCJ1tEHLUuSbgjllLpZxcSxjNOxaTFf7pcR3jug%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### enrollments-api-delete-courses-enrollments
@@ -2755,13 +2751,13 @@ header pragma:
 (missing)
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨m⟩o%2BqGY9HyuVCtDk…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨2⟩UhSsn7BLVvNULMJo…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%3D[..]_[..]_[..]_[..]-[..].[..]; path=/; httponly
-+ _csrf_token=mo%2BqGY9HyuVCtDkDO%2Fn2hsQQRhiSpIoT5XAMufZSHg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=2UhSsn7BLVvNULMJoxrMVI69%2FohDaAr9Zc1qPAY0%2Bg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.status (missing key)
@@ -3031,13 +3027,13 @@ body:
 
 Arguments: `GET /api/lti/courses/1/jwt_token`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨8⟩zmNC8NvpOgB75jMf…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨O⟩7sBf0dnQmbZZIi8A…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]-[..].[..]; path=/; httponly
-+ _csrf_token=8zmNC8NvpOgB75jMfwen3nwe9WIhbMUadu8olA4mpw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=O7sBf0dnQmbZZIi8ALezcwlsQsSLlEk6Ppy4jRNonw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### external-tools-get-courses-external-tools-316
@@ -3061,13 +3057,13 @@ header cache-control:
 + no-cache
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨Q⟩9y6K7R7Dla44kCTg…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨o⟩4GunLo6X%2FGNbb7…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]%[..]%[..]%[..]_[..].[..]; path=/; httponly
-+ _csrf_token=Q9y6K7R7Dla44kCTg8tw1qCzNORg1c1%2Bdyue5aoZ0A%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=o4GunLo6X%2FGNbb76hLJIzwb%2FabGDf6XNPN%2FWgWq1og%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.id (missing key)
@@ -3364,13 +3360,13 @@ status:
 expected 404, got 415
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨J⟩LG3JMBk%2Bjb%2F8…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨8⟩iy0o9mPyOMtl%2Fo…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]_[..]_[..]-[..].[..]; path=/; httponly
-+ _csrf_token=JLG3JMBk%2Bjb%2F8UHHM8MheDWDDxIXYsuqGwY2f7g%2B%2Bw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=8iy0o9mPyOMtl%2Fo2J7WiQYv9MvrVaJ2hPV2r%2FdQNCw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨E⟩xpected request …"
@@ -3444,6 +3440,19 @@ body:
 ```diff
 - {"quota":500000000,"quota_used":0}
 + {"quota":50000000,"quota_used":0}
+```
+
+### files-get-courses-files
+
+Arguments: `GET /api/v1/courses/1/files`
+
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨v⟩5OnTCNvzhydpYTTJ…"
+
+header set-cookie:
+
+```diff
+- _csrf_token=[..]%[..]%[..]%[..]%3D[..]_[..]_[..]_[..]_[..].[..]; path=/; httponly
++ _csrf_token=v5OnTCNvzhydpYTTJA3MOqIJQ9qhKIFZvH0zvKA8zA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### files-get-files-create-success
@@ -3636,13 +3645,69 @@ body:
 
 Arguments: `GET /api/v1/groups/1/files/quota`
 
-at body $.quota (value): expected 50000000, got 0
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.quota (missing key)
 
 body:
 
 ```diff
 - {"quota":50000000,"quota_used":0}
-+ {"quota":0,"quota_used":0}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### files-get-groups-files
+
+Arguments: `GET /api/v1/groups/1/files`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at header link (missing key)
+
+header link:
+
+```diff
+- <http://127.0.0.1:[..]/api/v1/groups/1/files?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/groups/1/files?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/groups/1/files?page=1&per_page=10>; rel="last"
+(missing)
+```
+
+at body $ (type), expected array, got object
+
+body:
+
+```diff
+- []
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### files-get-users-files-439
@@ -3666,13 +3731,13 @@ header cache-control:
 + no-store
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨n⟩h%2FCn%2FdHPdPF4…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨k⟩xY%2BP4Z5EfPS6fs…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..]-[..]-[..].[..].[..]; path=/; httponly
-+ _csrf_token=nh%2FCn%2FdHPdPF4BeUNSVCxhwpP8ZNAFGwEgy2q0SKKQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=kxY%2BP4Z5EfPS6fsHsqxE0jyUYF%2FTrOVtsVOkgcHZkw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨u⟩ser not authoriz…"
@@ -4004,13 +4069,13 @@ header cache-control:
 
 Arguments: `GET '/api/v1/courses/1/folders/by_path/*full_path'`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨f⟩yAyCiYMeDunIcgJj…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨d⟩sInf4PPm5jjx5TFz…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]%3D[..]_[..]_[..]-[..].[..]; path=/; httponly
-+ _csrf_token=fyAyCiYMeDunIcgJjrgm1lxQU%2BeVcRssuJ5qW1l4aQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=dsInf4PPm5jjx5TFzi5RnY4jXjia%2FJf%2BL2WkRlmknQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### folders-get-courses-folders-by-path
@@ -4023,7 +4088,7 @@ body:
 
 ```diff
 - [{"id":1,"name":"course files","full_name":"course files","position":null,"parent_folder_id":null,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-26T20:29:16Z","updated_at":"2026-11-27T13:00:59Z","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/1/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/1/files","files_count":0,"folders_count":[..],"hidden":null,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}]
-+ [{"id":2,"name":"Parity Folder","full_name":"course files/Parity Folder","position":1,"parent_folder_id":null,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:58:47.510144Z","updated_at":"2026-11-27T14:58:47.510144Z","category":null,"locked":false,"all_url":"/api/v1/folders/2/all","folders_url":"/api/v1/folders/2/folders","files_url":"/api/v1/folders/2/files","files_count":0,"folders_count":0,"hidden":false,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}]
++ [{"id":2,"name":"Parity Folder","full_name":"course files/Parity Folder","position":1,"parent_folder_id":null,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:58:47.510144Z","updated_at":"2026-11-27T14:58:47.510144Z","category":null,"locked":false,"all_url":"/api/v1/folders/2/all","folders_url":"/api/v1/folders/2/folders","files_url":"/api/v1/folders/2/files","files_count":0,"folders_count":3,"hidden":false,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}]
 ```
 
 ### folders-get-courses-folders-duplicates
@@ -4069,13 +4134,13 @@ body:
 
 Arguments: `GET /api/v1/courses/1/folders`
 
-at header link, line 1, column 19, char 18: expected "…ttp://127.0.0.1:⟨⟩", got "…ttp://127.0.0.1:⟨6⟩3915/api/v1/cour…"
+at header link, line 1, column 19, char 18: expected "…ttp://127.0.0.1:⟨⟩", got "…ttp://127.0.0.1:⟨6⟩5361/api/v1/cour…"
 
 header link:
 
 ```diff
 - <http://127.0.0.1:[..]/api/v1/courses/1/folders?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/courses/1/folders?page=2&per_page=10>; rel="next",<http://127.0.0.1:[..]/api/v1/courses/1/folders?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/courses/1/folders?page=2&per_page=10>; rel="last"
-+ <http://127.0.0.1:63915/api/v1/courses/1/folders?page=1&per_page=10>; rel="current",<http://127.0.0.1:63915/api/v1/courses/1/folders?page=1&per_page=10>; rel="first",<http://127.0.0.1:63915/api/v1/courses/1/folders?page=1&per_page=10>; rel="last"
++ <http://127.0.0.1:65361/api/v1/courses/1/folders?page=1&per_page=10>; rel="current",<http://127.0.0.1:65361/api/v1/courses/1/folders?page=1&per_page=10>; rel="first",<http://127.0.0.1:65361/api/v1/courses/1/folders?page=1&per_page=10>; rel="last"
 ```
 
 ### folders-get-folders-all
@@ -4142,13 +4207,13 @@ header cache-control:
 + no-cache
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨T⟩xk15u7jcMtZLBr2F…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨r⟩fPK7vdnvW06Fge%2…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]%[..]%3D[..]_[..]_[..]_[..]_[..]-[..].[..]; path=/; httponly
-+ _csrf_token=Txk15u7jcMtZLBr2FWR93QCmfRm1iIECWfFUAIdIQw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=rfPK7vdnvW06Fge%2Bbp%2FBdocMIpnKDD%2FG7W%2BernLoHQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body, line 1, column 3, char 2: expected "{\"⟨i⟩d\":1,\"name\":\"cou…", got "{\"⟨e⟩rrors\":[{\"messag…"
@@ -4160,9 +4225,17 @@ body:
 + {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
-### folders-get-groups-folders-and-files
+### folders-get-groups-folders-400
 
-Arguments: `GET /api/v1/groups/1/folders_and_files`
+Arguments: `GET /api/v1/groups/1/folders/1`
+
+at status (404→403)
+
+status:
+
+```diff
+expected 404, got 403
+```
 
 at header cache-control, line 1, column 4, char 3: expected "no-⟨c⟩ache", got "no-⟨s⟩tore"
 
@@ -4171,45 +4244,177 @@ header cache-control:
 ```diff
 - no-cache
 + no-store
+```
+
+at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨u⟩ser not authoriz…"
+
+body:
+
+```diff
+- {"errors":[{"message":"The specified resource does not exist."}]}
++ {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
+```
+
+### folders-get-groups-folders-and-files
+
+Arguments: `GET /api/v1/groups/1/folders_and_files`
+
+at status (403→404)
+
+status:
+
+```diff
+expected 403, got 404
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### folders-get-groups-folders-by-path-403
+
+Arguments: `GET '/api/v1/groups/1/folders/by_path/*full_path'`
+
+at status (404→403)
+
+status:
+
+```diff
+expected 404, got 403
+```
+
+at header cache-control, line 1, column 4, char 3: expected "no-⟨c⟩ache", got "no-⟨s⟩tore"
+
+header cache-control:
+
+```diff
+- no-cache
++ no-store
+```
+
+at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨u⟩ser not authoriz…"
+
+body:
+
+```diff
+- {"errors":[{"message":"The specified resource does not exist."}]}
++ {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
 ```
 
 ### folders-get-groups-folders-by-path
 
 Arguments: `GET /api/v1/groups/1/folders/by_path`
 
-at body $[0].id (value): expected 4, got 3
+at status (200→403)
+
+status:
+
+```diff
+expected 200, got 403
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-store"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-store
+```
+
+at body $ (type), expected array, got object
 
 body:
 
 ```diff
 - [{"id":4,"name":"files","full_name":"files","position":null,"parent_folder_id":null,"context_type":"Group","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-26T20:48:28Z","updated_at":"2026-11-26T20:48:28Z","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/4/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/4/files","files_count":0,"folders_count":2,"hidden":null,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}]
-+ [{"id":3,"name":"files","full_name":"files","position":1,"parent_folder_id":null,"context_type":"Group","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T13:34:33.663738Z","updated_at":"2026-11-27T13:34:33.663738Z","category":null,"locked":false,"all_url":"/api/v1/folders/3/all","folders_url":"/api/v1/folders/3/folders","files_url":"/api/v1/folders/3/files","files_count":0,"folders_count":2,"hidden":false,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}]
++ {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
 ```
 
 ### folders-get-groups-folders-duplicates
 
 Arguments: `GET /api/v1/groups/1/folders/1/duplicates`
 
-at header cache-control, line 1, column 4, char 3: expected "no-⟨c⟩ache", got "no-⟨s⟩tore"
+at status (403→404)
 
-header cache-control:
+status:
 
 ```diff
-- no-cache
-+ no-store
+expected 403, got 404
+```
+
+at body $.status (missing key)
+
+body:
+
+```diff
+- {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### folders-get-groups-folders-media
 
 Arguments: `GET /api/v1/groups/1/folders/media`
 
-at body $.id (value): expected 12, got 4
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body $.id (missing key)
 
 body:
 
 ```diff
 - {"id":12,"name":"Uploaded Media","full_name":"files/Uploaded Media","position":1,"parent_folder_id":4,"context_type":"Group","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T12:33:08Z","updated_at":"2026-11-27T12:33:08Z","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/12/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/12/files","files_count":0,"folders_count":0,"hidden":true,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
-+ {"id":4,"name":"Uploaded Media","full_name":"files/Uploaded Media","position":1,"parent_folder_id":3,"context_type":"Group","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T13:34:33.666914Z","updated_at":"2026-11-27T13:34:33.666914Z","category":null,"locked":false,"all_url":"/api/v1/folders/4/all","folders_url":"/api/v1/folders/4/folders","files_url":"/api/v1/folders/4/files","files_count":0,"folders_count":0,"hidden":true,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
++ {"errors":[{"message":"The specified resource does not exist."}]}
+```
+
+### folders-get-groups-folders
+
+Arguments: `GET /api/v1/groups/1/folders`
+
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at header link (missing key)
+
+header link:
+
+```diff
+- <http://127.0.0.1:[..]/api/v1/groups/1/folders?page=1&per_page=10>; rel="current",<http://127.0.0.1:[..]/api/v1/groups/1/folders?page=1&per_page=10>; rel="first",<http://127.0.0.1:[..]/api/v1/groups/1/folders?page=1&per_page=10>; rel="last"
+(missing)
 ```
 
 ### folders-get-users-folders-442
@@ -4392,13 +4597,13 @@ body:
 
 Arguments: `POST /api/v1/courses/1/folders`
 
-at body, line 1, column 7, char 6: expected "{\"id\":⟨⟩", got "{\"id\":⟨3⟩9,\"name\":\"New Fo…"
+at body, line 1, column 7, char 6: expected "{\"id\":⟨⟩", got "{\"id\":⟨4⟩1,\"name\":\"New Fo…"
 
 body:
 
 ```diff
 - {"id":[..],"name":"New Folder [..]","full_name":"course files/unfiled/New Folder [..]","position":[..],"parent_folder_id":3,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:[..]:[..]","updated_at":"2026-11-27T14:[..]:[..]","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/[..]/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/[..]/files","files_count":0,"folders_count":0,"hidden":null,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
-+ {"id":39,"name":"New Folder","full_name":"course files/Parity Folder/unfiled/New Folder","position":1,"parent_folder_id":38,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T15:00:16.394858Z","updated_at":"2026-11-27T15:00:16.394858Z","category":null,"locked":false,"all_url":"/api/v1/folders/39/all","folders_url":"/api/v1/folders/39/folders","files_url":"/api/v1/folders/39/files","files_count":0,"folders_count":0,"hidden":false,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
++ {"id":41,"name":"New Folder 2","full_name":"course files/Parity Folder/unfiled/New Folder 2","position":2,"parent_folder_id":38,"context_type":"Course","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T15:03:47.338839Z","updated_at":"2026-11-27T15:03:47.338839Z","category":null,"locked":false,"all_url":"/api/v1/folders/41/all","folders_url":"/api/v1/folders/41/folders","files_url":"/api/v1/folders/41/files","files_count":0,"folders_count":0,"hidden":false,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
 ```
 
 ### folders-post-folders-copy-file
@@ -4434,13 +4639,13 @@ status:
 expected 400, got 415
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨2⟩k6%2BTTsKiH4y29G…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨f⟩QhEChLxQSZt40sP7…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..]_[..]_[..]-[..].[..].[..]; path=/; httponly
-+ _csrf_token=2k6%2BTTsKiH4y29GDwhH%2FYWJXvlcyZJQxbI6u1rNaYA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=fQhEChLxQSZt40sP780RRBQB3%2BSdIYL%2BslHZoScMBA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.message (missing key)
@@ -4507,13 +4712,30 @@ body:
 
 Arguments: `POST /api/v1/groups/1/folders`
 
-at body, line 1, column 7, char 6: expected "{\"id\":⟨⟩", got "{\"id\":⟨4⟩0,\"name\":\"New Fo…"
+at status (200→404)
+
+status:
+
+```diff
+expected 200, got 404
+```
+
+at header cache-control, line 1, column 1, char 0: expected "⟨m⟩ax-age=0, privat…", got "⟨n⟩o-cache"
+
+header cache-control:
+
+```diff
+- max-age=0, private, must-revalidate
++ no-cache
+```
+
+at body, line 1, column 3, char 2: expected "{\"⟨i⟩d\":", got "{\"⟨e⟩rrors\":[{\"messag…"
 
 body:
 
 ```diff
 - {"id":[..],"name":"New Folder [..]","full_name":"files/unfiled/New Folder [..]","position":[..],"parent_folder_id":17,"context_type":"Group","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T14:[..]:[..]","updated_at":"2026-11-27T14:[..]:[..]","locked":false,"folders_url":"http://127.0.0.1:[..]/api/v1/folders/[..]/folders","files_url":"http://127.0.0.1:[..]/api/v1/folders/[..]/files","files_count":0,"folders_count":0,"hidden":null,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
-+ {"id":40,"name":"New Folder 5","full_name":"files/unfiled/New Folder 5","position":5,"parent_folder_id":8,"context_type":"Group","context_id":1,"unlock_at":null,"lock_at":null,"created_at":"2026-11-27T15:00:16.443153Z","updated_at":"2026-11-27T15:00:16.443153Z","category":null,"locked":false,"all_url":"/api/v1/folders/40/all","folders_url":"/api/v1/folders/40/folders","files_url":"/api/v1/folders/40/files","files_count":0,"folders_count":0,"hidden":false,"locked_for_user":false,"hidden_for_user":false,"for_submissions":false,"can_upload":true}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### folders-put-folders
@@ -4550,21 +4772,21 @@ body:
 
 Arguments: `DELETE /api/v1/group_categories/1`
 
-at status (403→200)
+at status (403→404)
 
 status:
 
 ```diff
-expected 403, got 200
+expected 403, got 404
 ```
 
-at header cache-control, line 1, column 1, char 0: expected "⟨n⟩o-store", got "⟨m⟩ax-age=0, privat…"
+at header cache-control, line 1, column 4, char 3: expected "no-⟨s⟩tore", got "no-⟨c⟩ache"
 
 header cache-control:
 
 ```diff
 - no-store
-+ max-age=0, private, must-revalidate
++ no-cache
 ```
 
 at header pragma (missing key)
@@ -4582,7 +4804,7 @@ body:
 
 ```diff
 - {"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
-+ {"id":1,"name":"Parity Category","role":null,"self_signup":null,"self_signup_end_at":null,"group_limit":null,"auto_leader":null,"context_type":"Course","course_id":1,"account_id":6,"non_collaborative":false,"protected":false,"allows_multiple_memberships":false,"is_member":false,"created_at":"2026-11-27T14:58:47.510144Z"}
++ {"errors":[{"message":"The specified resource does not exist."}]}
 ```
 
 ### group-categories-get-accounts-group-categories
@@ -4615,13 +4837,13 @@ header link:
 (missing)
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨b⟩Cro5elHCx29hbagS…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨e⟩OQ6gbr4ev1z1obzS…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..] [..]_[..]-[..]-[..]-[..]-[..].[..]; path=/; httponly
-+ _csrf_token=bCro5elHCx29hbagSo25hTQJLIg19auUrlU99o3pOw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=eOQ6gbr4ev1z1obzSP0%2FeDLS%2BopdsTy8oRDneALlEA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $ (type), expected array, got object
@@ -4925,7 +5147,7 @@ body:
 
 ```diff
 - {"status":"unauthorized"}
-+ {"completion":0,"context_id":1,"context_type":"Course","created_at":"2026-11-27T15:00:16.589936+00:00","id":10,"message":null,"tag":"course_tag_import","updated_at":"2026-11-27T15:00:16.589976+00:00","url":"http://localhost:3000/api/v1/progress/10","user_id":1,"workflow_state":"running"}
++ {"completion":0,"context_id":1,"context_type":"Course","created_at":"2026-11-27T15:03:47.558019+00:00","id":11,"message":null,"tag":"course_tag_import","updated_at":"2026-11-27T15:03:47.558060+00:00","url":"http://localhost:3000/api/v1/progress/11","user_id":1,"workflow_state":"running"}
 ```
 
 ### group-categories-post-courses-group-categories
@@ -5281,13 +5503,13 @@ status:
 expected 500, got 404
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨Y⟩7gqGRfCCJMIIV6hw…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨i⟩SwmMY8LAAFYQfZ%2…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]%3D[..]_[..]_[..].[..]; path=/; httponly
-+ _csrf_token=Y7gqGRfCCJMIIV6hwupXHQoxv8F7zVsFgKZ1PR9vGw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=iSwmMY8LAAFYQfZ%2F2kx60mwVFCRTZN2j17P4TYn0QQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body, line 1, column 24, char 23: expected "…s\":[{\"message\":\"⟨A⟩n error occurred…", got "…s\":[{\"message\":\"⟨T⟩he specified res…"
@@ -5363,13 +5585,13 @@ body:
 
 Arguments: `POST /api/v1/groups`
 
-at body, line 1, column 7, char 6: expected "{\"id\":⟨⟩", got "{\"id\":⟨1⟩0,\"name\":\"898b0c…"
+at body, line 1, column 7, char 6: expected "{\"id\":⟨⟩", got "{\"id\":⟨1⟩1,\"name\":\"448cac…"
 
 body:
 
 ```diff
 - {"id":[..],"name":"[..]","description":null,"is_public":false,"join_level":"invitation_only","group_category_id":2,"max_membership":null,"created_at":"2026-11-27T14:[..]:[..]","members_count":1,"storage_quota_mb":50,"permissions":{"create_discussion_topic":true,"join":false,"create_announcement":true},"context_type":"Account","account_id":4,"context_name":"Default Account","avatar_url":null,"role":"communities","leader":null,"users":[{"id":1,"name":"Parity User","created_at":"2026-11-26T20:10:15Z","sortable_name":"User, Parity","short_name":"Parity User"}],"group_category":{"id":2,"name":"Communities","role":"communities","self_signup":null,"self_signup_end_at":null,"group_limit":null,"auto_leader":null,"created_at":"2026-11-26T20:48:31Z","context_type":"Account","account_id":4,"protected":true,"allows_multiple_memberships":true,"is_member":true},"has_submission":false,"concluded":false,"non_collaborative":false}
-+ {"id":10,"name":"898b0c25-31c3-4389-a423-c24375f007cd","description":null,"is_public":false,"join_level":"invitation_only","group_category_id":null,"max_membership":null,"created_at":"2026-11-27T15:00:16.816473Z","members_count":0,"storage_quota_mb":null,"context_type":"Account","course_id":null,"context_name":"Canvas Root","avatar_url":null,"role":null,"leader":null,"has_submission":false,"concluded":false,"non_collaborative":false}
++ {"id":11,"name":"448caca2-1756-4e05-9f66-6d613058b5b6","description":null,"is_public":false,"join_level":"invitation_only","group_category_id":null,"max_membership":null,"created_at":"2026-11-27T15:03:47.789619Z","members_count":0,"storage_quota_mb":null,"context_type":"Account","course_id":null,"context_name":"Canvas Root","avatar_url":null,"role":null,"leader":null,"has_submission":false,"concluded":false,"non_collaborative":false}
 ```
 
 ### groups-put-groups
@@ -5944,13 +6166,13 @@ status:
 expected 400, got 404
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨J⟩qgK0kor6DtVPv5Ll…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨X⟩LhY25e46onUoQeQ2…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..].[..]-[..].[..]; path=/; httponly
-+ _csrf_token=JqgK0kor6DtVPv5LlYUcSKSlSQe6kwHR8X4ItdvFUw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=XLhY25e46onUoQeQ2HZ0QWKDh%2FDJHqVBdNffT4EfPQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body, line 1, column 1, char 0: expected "⟨\"⟩error\"", got "⟨{⟩\"errors\":[{\"mess…"
@@ -6145,16 +6367,16 @@ header link:
 
 ```diff
 - </api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="current",</api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="first",</api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="last"
-+ <http://127.0.0.1:63915/api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="current",<http://127.0.0.1:63915/api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="first",<http://127.0.0.1:63915/api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="last"
++ <http://127.0.0.1:65361/api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="current",<http://127.0.0.1:65361/api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="first",<http://127.0.0.1:65361/api/v1/courses/1/outcome_groups/account_chain?page=1&per_page=10>; rel="last"
 ```
 
-at body $ (length), length 1 expected, 0 got
+at body $[0].id (value): expected 1, got 10
 
 body:
 
 ```diff
 - [{"id":1,"title":"Parity Account","description":"Account level outcomes group.","dontImport":true,"url":"/api/v1/accounts/6/outcome_groups/1","subgroups_url":"/api/v1/accounts/6/outcome_groups/1/subgroups","outcomes_url":"/api/v1/accounts/6/outcome_groups/1/outcomes"}]
-+ []
++ [{"can_edit":true,"context_id":1,"context_type":"Course","course_id":1,"created_at":"2026-11-27T15:00:17.276774Z","description":null,"id":10,"import_url":"/api/v1/courses/1/outcome_groups/10/import","outcomes_url":"/api/v1/courses/1/outcome_groups/10/outcomes","parent_outcome_group_id":null,"subgroups_url":"/api/v1/courses/1/outcome_groups/10/subgroups","title":"Parity Course","updated_at":"2026-11-27T15:00:17.276774Z","url":"/api/v1/courses/1/outcome_groups/10","vendor_guid":null,"workflow_state":"active"}]
 ```
 
 ### outcome-groups-api-get-courses-outcome-groups-outcomes
@@ -6239,13 +6461,13 @@ body:
 
 Arguments: `GET /api/v1/courses/1/outcome_groups`
 
-at body $ (length), length 1 expected, 0 got
+at body $[0].id (value): expected 2, got 10
 
 body:
 
 ```diff
 - [{"id":2,"title":"Parity Course","vendor_guid":null,"url":"/api/v1/courses/1/outcome_groups/2","subgroups_url":"/api/v1/courses/1/outcome_groups/2/subgroups","outcomes_url":"/api/v1/courses/1/outcome_groups/2/outcomes","can_edit":true,"import_url":"/api/v1/courses/1/outcome_groups/2/import","context_id":1,"context_type":"Course","description":null}]
-+ []
++ [{"id":10,"course_id":1,"context_type":"Course","context_id":1,"title":"Parity Course","workflow_state":"active","created_at":"2026-11-27T15:00:17.276774Z","updated_at":"2026-11-27T15:00:17.276774Z"}]
 ```
 
 ### outcome-groups-api-get-courses-root-outcome-group
@@ -6275,7 +6497,7 @@ at body (lines added), line 1, length 0 expected, 511 got
 body:
 
 ```diff
-+ {"can_edit":true,"context_id":1,"context_type":"Course","course_id":1,"created_at":"2026-11-27T15:00:17.276774Z","description":null,"id":10,"import_url":"/api/v1/courses/1/outcome_groups/10/import","outcomes_url":"/api/v1/courses/1/outcome_groups/10/outcomes","parent_outcome_group_id":null,"subgroups_url":"/api/v1/courses/1/outcome_groups/10/subgroups","title":"Parity Course","updated_at":"2026-11-27T15:00:17.276774Z","url":"/api/v1/courses/1/outcome_groups/10","vendor_guid":null,"workflow_state":"active"}
++ {"can_edit":true,"context_id":1,"context_type":"Course","course_id":1,"created_at":"2026-11-27T15:00:17.276774Z","description":null,"id":10,"import_url":"/api/v1/courses/1/outcome_groups/10/import","outcomes_url":"/api/v1/courses/1/outcome_groups/10/outcomes","parent_outcome_group_id":null,"subgroups_url":"/api/v1/courses/1/outcome_groups/10/subgroups","title":"Parity Course","updated_at":"2026-11-27T15:03:48.240650Z","url":"/api/v1/courses/1/outcome_groups/10","vendor_guid":null,"workflow_state":"active"}
 (trailing newline: expected true, got false)
 ```
 
@@ -6378,13 +6600,13 @@ header cache-control:
 + no-store
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨%⟩2FYOeZs1lbOxGmLK…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨s⟩F8E%2FJzIZjIsnGc…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]%[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..].[..]-[..]_[..]_[..].[..].[..]; path=/; httponly
-+ _csrf_token=%2FYOeZs1lbOxGmLK7j7LIOaOSO7WgI35rAbGvlCZVWw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=sF8E%2FJzIZjIsnGcflVpBQ7UPNNjiMMvjLF%2B8f%2BC3gA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨u⟩ser not authoriz…"
@@ -7270,13 +7492,13 @@ header cache-control:
 + no-cache
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨V⟩mfGnKPQhAbqo4y20…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨W⟩T4%2B%2FUBsoHVDI…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]%3D[..]_[..]_[..].[..].[..].[..]; path=/; httponly
-+ _csrf_token=VmfGnKPQhAbqo4y20rOOidOdo5qTDaIOObetSnuLNA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=WT4%2B%2FUBsoHVDIZpqxhg8MK9fI7fKQqSYjVEe4sffyg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.read (missing key)
@@ -7408,13 +7630,13 @@ header cache-control:
 + no-cache
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨N⟩YkiVjVanxzDkvyVO…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨q⟩2uF%2ByObB6scaQl…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%3D[..]_[..]_[..]_[..].[..]_[..].[..]; path=/; httponly
-+ _csrf_token=NYkiVjVanxzDkvyVOJx3m%2Fz2QcIwPEGnLY2QRbwp7w%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=q2uF%2ByObB6scaQlzQLu3gHDhqJoGyBnj2NGFjdH9nA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.read (missing key)
@@ -7529,13 +7751,13 @@ body:
 
 Arguments: `GET /api/v1/sections/3/students/submissions`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨t⟩R0NBbZo%2BedTcqc…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨j⟩EUFMDulA33PqYxuu…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]%[..]%[..]%[..]_[..]_[..]_[..].[..]; path=/; httponly
-+ _csrf_token=tR0NBbZo%2BedTcqcbqZmHidRUQwXyPG%2FsKImDWzZmww%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=jEUFMDulA33PqYxuuXFYM8QzJse0KgjYcewlVngahA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 ### submissions-api-post-courses-assignments-submissions-files
@@ -7868,13 +8090,13 @@ status:
 expected 404, got 415
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨3⟩juxx6FHpq%2FL%2F…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨p⟩NhwK1H4nAwtmxGEq…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]-[..]_[..].[..]; path=/; httponly
-+ _csrf_token=3juxx6FHpq%2FL%2Fm2nrXM88mWH%2B9fpSIKAeN2NlDWkzw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=pNhwK1H4nAwtmxGEqQhmvLsJ7y6wLSrcAuz01%2Fx0Iw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.errors[0].message, char 0: expected "⟨T⟩he specified res…", got "⟨E⟩xpected request …"
@@ -8179,13 +8401,13 @@ body:
 
 Arguments: `GET /api/v1/users/activity_stream`
 
-at header link, line 1, column 19, char 18: expected "…ttp://127.0.0.1:⟨⟩", got "…ttp://127.0.0.1:⟨6⟩3915/api/v1/user…"
+at header link, line 1, column 19, char 18: expected "…ttp://127.0.0.1:⟨⟩", got "…ttp://127.0.0.1:⟨6⟩5361/api/v1/user…"
 
 header link:
 
 ```diff
 - <http://127.0.0.1:[..]/api/v1/users/self/activity_stream?page=1&per_page=21>; rel="current",<http://127.0.0.1:[..]/api/v1/users/self/activity_stream?page=1&per_page=21>; rel="first",<http://127.0.0.1:[..]/api/v1/users/self/activity_stream?page=1&per_page=21>; rel="last"
-+ <http://127.0.0.1:63915/api/v1/users/activity_stream?page=1&per_page=21>; rel="current",<http://127.0.0.1:63915/api/v1/users/activity_stream?page=1&per_page=21>; rel="first",<http://127.0.0.1:63915/api/v1/users/activity_stream?page=1&per_page=21>; rel="last"
++ <http://127.0.0.1:65361/api/v1/users/activity_stream?page=1&per_page=21>; rel="current",<http://127.0.0.1:65361/api/v1/users/activity_stream?page=1&per_page=21>; rel="first",<http://127.0.0.1:65361/api/v1/users/activity_stream?page=1&per_page=21>; rel="last"
 ```
 
 ### users-get-users-colors-434
@@ -8382,13 +8604,13 @@ body:
 
 Arguments: `GET /api/v1/users/self/todo_item_count`
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨E⟩2ugdeQz9jTroWLx9…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨X⟩nztE51pxMeYWeDvh…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%3D[..]_[..]_[..].[..].[..]; path=/; httponly
-+ _csrf_token=E2ugdeQz9jTroWLx9W1tb8jZcSYPk4o6lOZhUaXljA%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=XnztE51pxMeYWeDvhQ%2FXRNy58KXeBImqUo7cUksufw%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.needs_grading_count (value): expected 1, got 0
@@ -8409,7 +8631,7 @@ at body $ (length), length 1 expected, 0 got
 body:
 
 ```diff
-- [{"context_type":"Course","course_id":1,"context_name":"Parity Course","context_short_name":"PARITY","type":"grading","ignore":"http://127.0.0.1:[..]/api/v1/users/self/todo/assignment_1/grading?permanent=0","ignore_permanently":"http://127.0.0.1:[..]/api/v1/users/self/todo/assignment_1/grading?permanent=1","assignment":{"id":1,"position":1,"description":null,"points_possible":100.0,"grading_type":"points","created_at":"2026-11-26T20:29:17Z","updated_at":"2026-11-27T14:51:03Z","due_at":null,"final_grader_id":null,"grader_count":0,"graders_anonymous_to_graders":false,"grader_comments_visible_to_graders":true,"grader_names_visible_to_final_grader":true,"lock_at":null,"unlock_at":null,"assignment_group_id":1,"peer_reviews":false,"anonymous_peer_reviews":false,"automatic_peer_reviews":false,"intra_group_peer_reviews":false,"post_to_sis":false,"grade_group_students_individually":false,"group_category_id":null,"grading_standard_id":null,"moderated_grading":false,"hide_in_gradebook":false,"omit_from_final_grade":false,"suppress_assignment":false,"anonymous_instructor_annotations":false,"anonymous_grading":false,"allowed_attempts":-1,"annotatable_attachment_id":null,"secure_params":"eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJsdGlfYXNzaWdubWVudF9pZCI6IjFjZTM5OGVlLTZjMzAtNDMzOS05MzIwLWQ2MGExYTQ0MjFjMyJ9.nf26L1W2MrwC_qn8fM3wW0BZwLAMYkiwM37Ru20S1eY","lti_context_id":"1ce398ee-6c30-4339-9320-d60a1a4421c3","course_id":1,"name":"Parity Assignment","submission_types":["online_text_entry"],"has_submitted_submissions":true,"due_date_required":false,"max_name_length":255,"in_closed_grading_period":false,"graded_submissions_exist":false,"is_quiz_assignment":false,"can_duplicate":true,"original_course_id":null,"original_assignment_id":null,"original_lti_resource_link_id":null,"original_assignment_name":null,"original_quiz_id":null,"workflow_state":"published","important_dates":false,"muted":true,"html_url":"http://127.0.0.1:[..]/courses/1/assignments/1","speed_grader_url":"http://127.0.0.1:[..]/courses/1/gradebook/speed_grader?assignment_id=1","has_overrides":false,"needs_grading_count":1,"sis_assignment_id":null,"integration_id":null,"integration_data":{},"all_dates":[{"due_at":null,"unlock_at":null,"lock_at":null,"title":"Everyone","base":true}],"published":true,"unpublishable":false,"only_visible_to_overrides":false,"visible_to_everyone":true,"locked_for_user":false,"submissions_download_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions?zip=1","post_manually":false,"anonymize_students":false,"new_quizzes_anonymous_participants":false,"require_lockdown_browser":false,"restrict_quantitative_data":false},"html_url":"http://127.0.0.1:[..]/courses/1/gradebook/speed_grader?assignment_id=1","needs_grading_count":1}]
+- [{"context_type":"Course","course_id":1,"context_name":"Parity Course","context_short_name":"PARITY","type":"grading","ignore":"http://127.0.0.1:[..]/api/v1/users/self/todo/assignment_1/grading?permanent=0","ignore_permanently":"http://127.0.0.1:[..]/api/v1/users/self/todo/assignment_1/grading?permanent=1","assignment":{"id":1,"position":1,"description":null,"points_possible":100.0,"grading_type":"points","created_at":"2026-11-26T20:29:17Z","updated_at":"2026-11-27T14:51:03Z","due_at":null,"final_grader_id":null,"grader_count":0,"graders_anonymous_to_graders":false,"grader_comments_visible_to_graders":true,"grader_names_visible_to_final_grader":true,"lock_at":null,"unlock_at":null,"assignment_group_id":1,"peer_reviews":false,"anonymous_peer_reviews":false,"automatic_peer_reviews":false,"intra_group_peer_reviews":false,"post_to_sis":false,"grade_group_students_individually":false,"group_category_id":null,"grading_standard_id":null,"moderated_grading":false,"hide_in_gradebook":false,"omit_from_final_grade":false,"suppress_assignment":false,"anonymous_instructor_annotations":false,"anonymous_grading":false,"allowed_attempts":-1,"annotatable_attachment_id":null,"secure_params":"[..]","lti_context_id":"1ce398ee-6c30-4339-9320-d60a1a4421c3","course_id":1,"name":"Parity Assignment","submission_types":["online_text_entry"],"has_submitted_submissions":true,"due_date_required":false,"max_name_length":255,"in_closed_grading_period":false,"graded_submissions_exist":false,"is_quiz_assignment":false,"can_duplicate":true,"original_course_id":null,"original_assignment_id":null,"original_lti_resource_link_id":null,"original_assignment_name":null,"original_quiz_id":null,"workflow_state":"published","important_dates":false,"muted":true,"html_url":"http://127.0.0.1:[..]/courses/1/assignments/1","speed_grader_url":"http://127.0.0.1:[..]/courses/1/gradebook/speed_grader?assignment_id=1","has_overrides":false,"needs_grading_count":1,"sis_assignment_id":null,"integration_id":null,"integration_data":{},"all_dates":[{"due_at":null,"unlock_at":null,"lock_at":null,"title":"Everyone","base":true}],"published":true,"unpublishable":false,"only_visible_to_overrides":false,"visible_to_everyone":true,"locked_for_user":false,"submissions_download_url":"http://127.0.0.1:[..]/courses/1/assignments/1/submissions?zip=1","post_manually":false,"anonymize_students":false,"new_quizzes_anonymous_participants":false,"require_lockdown_browser":false,"restrict_quantitative_data":false},"html_url":"http://127.0.0.1:[..]/courses/1/gradebook/speed_grader?assignment_id=1","needs_grading_count":1}]
 + []
 ```
 
@@ -8892,13 +9114,13 @@ header cache-control:
 + no-cache
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨C⟩Uk5Oqo4gsZ9nZYcK…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨k⟩nRh%2FTJZWbBapbk…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%3D[..]_[..]_[..]-[..].[..]; path=/; httponly
-+ _csrf_token=CUk5Oqo4gsZ9nZYcKu2epGw7FJZ5Wx1n1IPEoblUZQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=knRh%2FTJZWbBapbkm1La8PafkR%2Bjmff%2FxhCzJRc7ZuQ%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $.revision_id (missing key)
@@ -8970,13 +9192,13 @@ header link:
 (missing)
 ```
 
-at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨n⟩ftkLKKtyPs1RYDmA…"
+at header set-cookie, line 1, column 13, char 12: expected "_csrf_token=⟨⟩", got "_csrf_token=⟨J⟩05jcS%2FZO42USr4…"
 
 header set-cookie:
 
 ```diff
 - _csrf_token=[..]%[..]%[..]%[..]%3D%3D; path=/, log_session_id=[..]; path=/; httponly, _normandy_session=[..].[..]-[..].[..]; path=/; httponly
-+ _csrf_token=nftkLKKtyPs1RYDmAUWvTMJQ1LGVxarAV1ADAsJV8g%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
++ _csrf_token=J05jcS%2FZO42USr4MiLZlbc5hEMyntXmGBIcesEkexg%3D%3D; path=/, log_session_id=6e704008d9998acd89bc6f83b1154193; path=/; httponly, _normandy_session=6e704008d9998acd89bc6f83b1154193.6e704008d9998acd89bc6f83b1154193; path=/; httponly
 ```
 
 at body $ (type), expected array, got object
