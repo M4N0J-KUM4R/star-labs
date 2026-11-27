@@ -1,0 +1,29 @@
+[request]
+method = "GET"
+path = "/api/v1/rubrics/upload_template"
+
+[request.headers]
+Authorization = "Bearer __REPLAY_TOKEN__"
+
+[response]
+status = 200
+
+[response.headers]
+cache-control = "max-age=0, private, must-revalidate"
+content-disposition = """attachment; filename="import_rubric_template.csv"; filename*=UTF-8''import_rubric_template.csv"""
+content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
+content-transfer-encoding = "binary"
+content-type = "text/csv"
+referrer-policy = "no-referrer-when-downgrade"
+set-cookie = "[..]"
+x-canvas-meta = "at=10000000000007;dk=10000000000001;o=rubrics_api;n=upload_template;b=2067028;m=2067028;u=0.[..];y=0.00;d=0.00;rlr=600.0;"
+x-canvas-user-id = "10000000000001"
+x-content-type-options = "nosniff"
+x-download-options = "noopen"
+x-permitted-cross-domain-policies = "none"
+x-rate-limit-remaining = "600.0"
+x-request-context-id = "[..]-[..]-[..]-[..]-[..]"
+x-request-cost = "0.[..]"
+x-runtime = "0.[..]"
+x-session-id = "[..]"
+x-xss-protection = "1; mode=block"
