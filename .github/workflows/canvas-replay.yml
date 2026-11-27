@@ -104,6 +104,23 @@ jobs:
           # created here so the recorded ids resolve.
           python3 tools/parity/seed_replay_db.py
 
+      - name: Check the cutover front door
+        # The front door is the cutover mechanism: with STAR_CANVAS_ORIGIN
+        # set, the port answers the routes it owns and sends the rest to the
+        # Canvas instance the deployment still runs. This starts the release
+        # binary against a mock upstream and checks both halves — a path the
+        # port does not own comes from the upstream, a path it does own is
+        # answered by the port, and with no origin the port delegates
+        # nothing.
+        env:
+          DATABASE_URL: postgres://canvas:canvas@localhost:5432/canvas_replay
+          STAR_JWT_SECRET: ci-replay-secret-not-a-real-key
+        run: |
+          python3 tools/parity/front_door_check.py \
+            --binary target/release/star-http \
+            --database-url "$DATABASE_URL" \
+            --jwt-secret "$STAR_JWT_SECRET"
+
       - name: Inject the replay token
         env:
           STAR_JWT_SECRET: ci-replay-secret-not-a-real-key
