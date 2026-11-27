@@ -1,0 +1,73 @@
+name: Knowledge vault is current
+
+# The agent knowledge vault's facts are generated from committed artefacts.
+# If they are stale, an agent reading them gets a wrong answer with full
+# confidence — the exact failure the vault exists to prevent.
+#
+# So: regenerate, and fail if the committed copy differs. Same pattern as the
+# parity replay report.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'migration/parity/**'
+      - 'migration/rust/app-cases/**'
+      - 'migration/crates/star-db/migrations/**'
+      - 'migration/tools/knowledge/**'
+      - 'docs/knowledge/**'
+      - '.github/workflows/knowledge-check.yml'
+  pull_request:
+    paths:
+      - 'migration/parity/**'
+      - 'migration/rust/app-cases/**'
+      - 'migration/crates/star-db/migrations/**'
+      - 'migration/tools/knowledge/**'
+      - 'docs/knowledge/**'
+      - '.github/workflows/knowledge-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  knowledge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: migration
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Regenerate the knowledge facts
+        run: python3 tools/knowledge/gen_knowledge.py
+
+      - name: Regenerate the gap report
+        run: python3 tools/knowledge/gen_gap_report.py
+
+      - name: Regenerate the per-family briefs
+        run: python3 tools/knowledge/gen_briefs.py
+
+      - name: Require the committed knowledge to match
+        run: |
+          if ! git diff --exit-code -- docs/knowledge/; then
+            echo "::error::docs/knowledge/ is stale. Run:"
+            echo "  python3 tools/knowledge/gen_knowledge.py"
+            echo "  python3 tools/knowledge/gen_gap_report.py"
+            echo "  python3 tools/knowledge/gen_briefs.py"
+            git diff --stat -- docs/knowledge/
+            exit 1
+          fi
+
+      - name: Show what changed
+        if: always()
+        run: git diff --stat -- docs/knowledge/ || true
