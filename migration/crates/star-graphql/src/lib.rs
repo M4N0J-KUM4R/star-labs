@@ -93,8 +93,8 @@ pub use conversations::Conversation;
 use conversations::ConversationParticipantConnection;
 pub use course_user_fields::Account;
 use course_user_fields::{CoursePermissions, UserConnection};
-pub use discussion_topic::DiscussionTopic;
-use discussion_topic::DiscussionTopicConnection;
+pub use discussion_topic::Discussion;
+use discussion_topic::DiscussionConnection;
 use external_tools::ExternalToolConnection;
 use files::FolderConnection;
 pub use files::{File, Folder};
@@ -415,7 +415,7 @@ impl Course {
         ctx: &Context<'_>,
         first: Option<i32>,
         after: Option<String>,
-    ) -> Result<Option<DiscussionTopicConnection>, async_graphql::Error> {
+    ) -> Result<Option<DiscussionConnection>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         Ok(Some(
             discussion_topic::fetch_discussion_topic_page(
@@ -444,7 +444,7 @@ impl Course {
     async fn outcome_groups(
         &self,
         ctx: &Context<'_>,
-    ) -> Result<Vec<outcomes_media::LearningOutcomeGroup>, async_graphql::Error> {
+    ) -> Result<Vec<crate::root_types::LearningOutcomeGroup>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         outcomes_media::fetch_course_outcome_groups(&gctx.pool, self.id).await
     }

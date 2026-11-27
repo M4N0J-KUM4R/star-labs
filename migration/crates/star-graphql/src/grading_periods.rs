@@ -157,6 +157,36 @@ async fn fetch_periods_for_group(
         .collect())
 }
 
+/// One grading period by id — Canvas `Grades.gradingPeriod`.
+pub(crate) async fn fetch_grading_period(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<GradingPeriod>, async_graphql::Error> {
+    let row: Option<GradingPeriodRow> = sqlx::query_as(
+        r#"
+        SELECT id, title, start_date, end_date,
+               close_date, weight, created_at, updated_at
+        FROM grading_periods
+        WHERE id = $1 AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(|r| GradingPeriod {
+        id: ID(r.id.to_string()),
+        title: r.title,
+        start_date: r.start_date,
+        end_date: r.end_date,
+        close_date: r.close_date,
+        weight: r.weight,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+    }))
+}
+
 /// The course's grading period group (course_id row, active), or null when
 /// the course has none — Canvas `course.gradingPeriods` resolves through
 /// `GradingPeriodGroup.for_course(course)`.

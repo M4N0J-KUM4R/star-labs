@@ -11,22 +11,12 @@
 
 use async_graphql::{Context, Object, SimpleObject, ID};
 use chrono::{DateTime, Utc};
-use sqlx::PgPool;
 
 use crate::{db_err, graphql_enums_inputs as leaf, GraphQLContext};
 
 // ---------------------------------------------------------------------------
 // Module family (0001 modules, 0002 module_items, 0039 completions)
 // ---------------------------------------------------------------------------
-
-/// Canvas `ModulePrerequisite` (module_type.rb) — a module that must be
-/// completed first. star-lms modules table has no prerequisite rows:
-/// the list resolves empty (documented omission).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct ModulePrerequisite {
-    pub id: ID,
-    pub title: Option<String>,
-}
 
 /// Canvas `ModuleCompletionRequirement` (module_item_type.rb): the
 /// requirement type + minimum score. Backed by module_items columns
@@ -39,99 +29,11 @@ pub struct ModuleCompletionRequirement {
     pub min_score: Option<f64>,
 }
 
-/// Canvas `ModuleItemMasterCourseRestriction` — master-course locking
-/// state for an item (0107 master_courses). star-lms tracks the course
-/// level only (documented subset).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct ModuleItemMasterCourseRestriction {
-    pub locked: bool,
-}
-
-/// Canvas `ModuleItem` (module_item_type.rb, subset).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct ModuleItem {
-    pub id: ID,
-    pub module_id: ID,
-    pub title: Option<String>,
-    pub position: Option<i32>,
-    pub indent: Option<i32>,
-    pub r#type: String,
-    pub content_id: Option<ID>,
-    pub workflow_state: Option<String>,
-    pub completion_requirement: Option<ModuleCompletionRequirement>,
-    pub master_course_restrictions: Option<ModuleItemMasterCourseRestriction>,
-}
-
-/// Canvas `Module` (module_type.rb, subset).
-#[derive(Debug, Clone)]
-pub struct Module {
-    pub id: i64,
-    pub course_id: i64,
-    pub name: String,
-    pub position: i32,
-    pub workflow_state: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[Object]
-impl Module {
-    async fn id(&self) -> ID {
-        ID(self.id.to_string())
-    }
-
-    /// Canvas `_id` on module fields resolves through the owning course.
-    async fn course_id(&self) -> ID {
-        ID(self.course_id.to_string())
-    }
-
-    async fn name(&self) -> &str {
-        &self.name
-    }
-
-    async fn position(&self) -> i32 {
-        self.position
-    }
-
-    async fn workflow_state(&self) -> &str {
-        &self.workflow_state
-    }
-
-    /// The module's items (position order, deleted filtered).
-    async fn module_items(
-        &self,
-        ctx: &Context<'_>,
-    ) -> Result<Vec<ModuleItem>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        fetch_module_items(&gctx.pool, self.id).await
-    }
-
-    /// Canvas `prerequisites` — star-lms modules carry no prerequisite
-    /// rows (documented omission: always empty).
-    async fn prerequisites(&self) -> Vec<ModulePrerequisite> {
-        Vec::new()
-    }
-
-    async fn created_at(&self) -> DateTime<Utc> {
-        self.created_at
-    }
-
-    async fn updated_at(&self) -> DateTime<Utc> {
-        self.updated_at
-    }
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-struct ModuleItemRow {
-    id: i64,
-    module_id: i64,
-    title: Option<String>,
-    position: Option<i32>,
-    indent: Option<i32>,
-    item_type: String,
-    item_id: Option<i64>,
-    workflow_state: Option<String>,
-}
+// NOTE: the `Module`, `ModuleItem`, `ModulePrerequisite` and
+// `ModuleItemMasterCourseRestriction` objects live in `modules.rs` — they
+// are the only ones in the schema (they answer `Query.moduleItem`,
+// `Course.modulesConnection` and the `Node` interface), and they carry the
+// Canvas field names.
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct StreamItemRow {
@@ -140,43 +42,6 @@ struct StreamItemRow {
     title: Option<String>,
     context_code: Option<String>,
     created_at: Option<DateTime<Utc>>,
-}
-
-/// Fetch a module's items (position order; deleted filtered).
-async fn fetch_module_items(
-    pool: &PgPool,
-    module_id: i64,
-) -> Result<Vec<ModuleItem>, async_graphql::Error> {
-    let rows: Vec<ModuleItemRow> = sqlx::query_as(
-        r#"
-            SELECT id, module_id, title, position, indent, item_type,
-                   item_id, workflow_state
-            FROM module_items
-            WHERE module_id = $1 AND workflow_state <> 'deleted'
-            ORDER BY position, id
-            "#,
-    )
-    .bind(module_id)
-    .fetch_all(pool)
-    .await
-    .map_err(db_err)?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| ModuleItem {
-            id: ID(r.id.to_string()),
-            module_id: ID(r.module_id.to_string()),
-            title: r.title,
-            position: r.position,
-            indent: r.indent,
-            r#type: r.item_type,
-            content_id: r.item_id.map(|v| ID(v.to_string())),
-            workflow_state: r.workflow_state,
-            // requirement metadata not carried by the star-db shape
-            completion_requirement: None,
-            master_course_restrictions: None,
-        })
-        .collect())
 }
 
 /// Canvas `ModuleProgression` / `ModuleProgressionStatistics` /
@@ -307,17 +172,8 @@ pub struct DiscussionEntryVersion {
 // Submission family (0001 submissions + 0026 comments + 0108 moderation)
 // ---------------------------------------------------------------------------
 
-/// Canvas `SubmissionComment` (submission_comment_type.rb, subset).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct SubmissionComment {
-    pub id: ID,
-    pub submission_id: ID,
-    pub author_id: ID,
-    pub comment: String,
-    pub created_at: Option<DateTime<Utc>>,
-    pub updated_at: Option<DateTime<Utc>>,
-    pub edited_at: Option<DateTime<Utc>>,
-}
+// NOTE: the `SubmissionComment` object lives in `root_types.rs` — it is the
+// only one in the schema (it answers `Query.submission`).
 
 /// Canvas `SubmissionDraft` (submission_draft_type.rb, subset backed by
 /// 0225 submission_drafts).
@@ -352,23 +208,9 @@ pub struct SubmissionStatistics {
     pub count: i32,
 }
 
-/// Canvas `Grades` (grades_type.rb) — a user's course-grade rollup.
-#[derive(Debug, Clone, SimpleObject)]
-pub struct Grades {
-    pub user_id: ID,
-    pub course_id: ID,
-    pub current_score: Option<f64>,
-    pub final_score: Option<f64>,
-    pub current_grade: Option<String>,
-    pub final_grade: Option<String>,
-}
-
-/// Canvas `GradesEnrollmentFilter` — filter input for grades.
-#[derive(Debug, Clone, async_graphql::InputObject)]
-pub struct GradesEnrollmentFilter {
-    pub enrollment_states: Option<Vec<String>>,
-    pub enrollment_types: Option<Vec<String>>,
-}
+// NOTE: the `Grades`, `GradesConnection`, `GradesEdge` and
+// `GradesEnrollmentFilter` types live in `root_types.rs` — they are the only
+// ones in the schema (they answer `AssignmentGroup.gradesConnection`).
 
 /// Canvas `GradeState`-carrying `GraderIdentity` (grader_identity_type.rb)
 /// — who graded, with anonymity masking. Canvas masks names for
@@ -420,15 +262,8 @@ pub struct PeerReviewDates {
     pub due_at: Option<DateTime<Utc>>,
 }
 
-/// Canvas `PeerReviewSubAssignment` (peer_review_sub_assignment_type.rb;
-/// 0230 sub_assignments where sub_assignment_tag = 'peer_review').
-#[derive(Debug, Clone, SimpleObject)]
-pub struct PeerReviewSubAssignment {
-    pub id: ID,
-    pub assignment_id: ID,
-    pub title: Option<String>,
-    pub workflow_state: Option<String>,
-}
+// NOTE: the `PeerReviewSubAssignment` object lives in `root_types.rs` — it
+// is the only one in the schema (it answers `Query.peerReviewSubAssignment`).
 
 /// Canvas `PeerReviews` (peer_reviews_type.rb) — the reviewer pairing
 /// for an assignment (0230 peer_reviews).
@@ -529,19 +364,8 @@ pub struct RubricAssessmentRating {
     pub rating_id: Option<String>,
 }
 
-/// Canvas `RubricAssociation` (rubric_association_type.rb; 0071).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct RubricAssociation {
-    pub id: ID,
-    pub rubric_id: ID,
-    pub association_id: ID,
-    pub association_type: Option<String>,
-    pub context_id: Option<ID>,
-    pub title: Option<String>,
-    pub use_for_grading: Option<bool>,
-    pub hide_score_total: Option<bool>,
-    pub bookmarked: Option<bool>,
-}
+// NOTE: the `RubricAssociation` object lives in `root_types.rs` — it is the
+// only one in the schema (it answers `Rubric.rubricAssociationForContext`).
 
 /// Canvas `AssignmentRubricAssessment` — a rubric assessment scoped to
 /// an assignment (0023 with course/association context).
@@ -622,29 +446,9 @@ pub struct UsageRights {
     pub license: Option<String>,
 }
 
-/// Canvas `ContentTagContent` / `ContentTag` (content_tag_type.rb; 0223
-/// content_tags — the module-item polymorphic join).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct ContentTag {
-    pub id: ID,
-    pub content_id: Option<ID>,
-    pub content_type: Option<String>,
-    pub context_id: Option<ID>,
-    pub context_type: Option<String>,
-    pub title: Option<String>,
-    pub tag_type: Option<String>,
-    pub context_module_id: Option<ID>,
-    pub position: Option<i32>,
-}
-
-/// Canvas `ContentTagContent` — the resolved polymorphic target, given
-/// as its id/type pair (documented subset).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct ContentTagContent {
-    pub id: ID,
-    pub r#type: String,
-    pub title: Option<String>,
-}
+// NOTE: the `ContentTag` / `ContentTagContent` / `ContentTagConnection`
+// types live in `root_types.rs` — they are the only ones in the schema
+// (they answer `LearningOutcomeGroup.outcomes`).
 
 /// Canvas `CourseSettings` (course_settings_type.rb; 0055
 /// course_settings JSONB on the course).
@@ -858,12 +662,8 @@ pub struct Recipients {
     pub contexts: Vec<MessageableContext>,
 }
 
-/// Canvas `MutationLog` — payload-echo metadata on mutations.
-#[derive(Debug, Clone, SimpleObject)]
-pub struct MutationLog {
-    pub mutation_name: String,
-    pub success: bool,
-}
+// NOTE: the `MutationLog` object lives in `root_types.rs` — it is the only
+// one in the schema (it is exposed through `AuditLogs.mutationLogs`).
 
 /// Canvas `ProgressContext` (progress_type.rb) — what a Progress row
 /// belongs to (0127 progress).
@@ -879,36 +679,10 @@ pub struct AdhocStudents {
     pub user_ids: Option<Vec<ID>>,
 }
 
-/// Canvas `InstructorCourseInfo` / `InstructorEnrollmentInfo` /
-/// `InstructorUserInfo` / `InstructorWithEnrollments`
-/// (instructor_info_type.rb family) — flattened teacher listing.
-#[derive(Debug, Clone, SimpleObject)]
-pub struct InstructorUserInfo {
-    pub id: ID,
-    pub name: Option<String>,
-    pub email: Option<String>,
-}
-
-/// Canvas `InstructorCourseInfo`.
-#[derive(Debug, Clone, SimpleObject)]
-pub struct InstructorCourseInfo {
-    pub id: ID,
-    pub name: Option<String>,
-}
-
-/// Canvas `InstructorEnrollmentInfo`.
-#[derive(Debug, Clone, SimpleObject)]
-pub struct InstructorEnrollmentInfo {
-    pub course: InstructorCourseInfo,
-    pub user: InstructorUserInfo,
-}
-
-/// Canvas `InstructorWithEnrollments`.
-#[derive(Debug, Clone, SimpleObject)]
-pub struct InstructorWithEnrollments {
-    pub user: InstructorUserInfo,
-    pub enrollments: Vec<InstructorEnrollmentInfo>,
-}
+// NOTE: the `InstructorCourseInfo` / `InstructorEnrollmentInfo` /
+// `InstructorUserInfo` / `InstructorWithEnrollments` objects live in
+// `root_types.rs` — they are the only ones in the schema (they answer
+// `Course.instructorsConnection`).
 
 /// Canvas `DateHash` / `DateHashSet` — Canvas maps dates to value sets;
 /// materialized as wrapper objects (documented deviation).

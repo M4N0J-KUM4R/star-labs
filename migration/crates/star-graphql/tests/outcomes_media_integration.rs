@@ -172,7 +172,8 @@ async fn outcomes_and_groups_nested_shape() {
         &server,
         &auth(teacher, "teacher"),
         "query ($id: ID!) { course(id: $id) { outcomeGroups { id title \
-         outcomes { id title description displayName createdAt updatedAt } } \
+         outcomes { nodes { ... on LearningOutcome { id title description displayName \
+         createdAt updatedAt } } } } \
          outcomesConnection(first: 10) { edges { node { id title } } \
          pageInfo { hasNextPage } } } }",
         json!({ "id": course.to_string() }),
@@ -186,7 +187,9 @@ async fn outcomes_and_groups_nested_shape() {
     let g = &groups[0];
     assert_eq!(g["id"], group.to_string(), "{body}");
     assert_eq!(g["title"], "Core Skills", "{body}");
-    let outcomes = g["outcomes"].as_array().expect("outcomes");
+    // Canvas' `LearningOutcomeGroup.outcomes` is a `ContentTagConnection`
+    // whose nodes are the `ContentTagContent` union (LearningOutcome).
+    let outcomes = g["outcomes"]["nodes"].as_array().expect("outcomes");
     assert_eq!(outcomes.len(), 2, "deleted link filtered: {body}");
     assert_eq!(outcomes[0]["id"], o1.to_string(), "{body}");
     assert_eq!(outcomes[0]["displayName"], "Analytical skill", "{body}");

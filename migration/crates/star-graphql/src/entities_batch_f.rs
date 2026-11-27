@@ -17,29 +17,10 @@ use crate::graphql_enums_inputs as leaf;
 // Institutional tags (0224 institutional_tags / _categories / _associations)
 // ---------------------------------------------------------------------------
 
-/// Canvas `InstitutionalTag`
-/// (institutional_tag_type.rb; 0224 institutional_tags).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct InstitutionalTag {
-    pub id: ID_,
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub category_id: Option<ID_>,
-    pub sis_source_id: Option<String>,
-    pub workflow_state: Option<String>,
-}
-
-/// Canvas `InstitutionalTagCategory`
-/// (institutional_tag_category_type.rb; 0224).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct InstitutionalTagCategory {
-    pub id: ID_,
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub account_id: Option<ID_>,
-    pub sis_source_id: Option<String>,
-    pub workflow_state: Option<String>,
-}
+// NOTE: the `InstitutionalTag` and `InstitutionalTagCategory` objects live
+// in `root_types.rs` — they are the only ones in the schema (they also
+// answer `Query.institutionalTag`, `Query.institutionalTagCategory` and the
+// `Node` interface), and they carry the Canvas field names.
 
 /// Canvas `InstitutionalTagAssociation`
 /// (institutional_tag_association_type.rb; 0224).
@@ -167,12 +148,9 @@ pub struct AuditEvent {
     pub created_at: Option<DateTime<Utc>>,
 }
 
-/// Canvas `AuditLogs` — the paged audit log surface (connection shape
-/// documented as a list; Canvas exposes it through Course/Account).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct AuditLogs {
-    pub events: Vec<AuditEvent>,
-}
+// NOTE: the `AuditLogs` object lives in `root_types.rs` — it is the only one
+// in the schema (it answers `Query.auditLogs` and exposes Canvas'
+// `mutationLogs` connection).
 
 // ---------------------------------------------------------------------------
 // AI grading (0225 auto_grade_results)
@@ -284,19 +262,8 @@ pub struct StandardGradeStatus {
 // Inbox / speedgrader settings (0224 inbox_settings, 0230 speed_grader_settings)
 // ---------------------------------------------------------------------------
 
-/// Canvas `InboxSettings` (inbox_settings_type.rb; 0224 inbox_settings).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct InboxSettings {
-    pub id: ID_,
-    pub user_id: ID_,
-    pub use_signature: Option<bool>,
-    pub signature: Option<String>,
-    pub use_out_of_office: Option<bool>,
-    pub out_of_office_first_date: Option<DateTime<Utc>>,
-    pub out_of_office_last_date: Option<DateTime<Utc>>,
-    pub out_of_office_subject: Option<String>,
-    pub out_of_office_message: Option<String>,
-}
+// NOTE: the `InboxSettings` object lives in `root_types.rs` — it is the only
+// one in the schema (it answers `Query.myInboxSettings`).
 
 /// Canvas `SpeedGraderSettings` (speed_grader_settings_type.rb; 0230
 /// speed_grader_settings JSONB).
@@ -325,39 +292,10 @@ pub struct MediaSource {
 // Outcomes (0225 proficiency / calculation / alignment)
 // ---------------------------------------------------------------------------
 
-/// Canvas `ProficiencyRating` (proficiency_rating_type.rb; 0225
-/// outcome_proficiency_ratings).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct ProficiencyRating {
-    pub id: ID_,
-    pub description: Option<String>,
-    pub points: Option<f64>,
-    pub mastery: Option<bool>,
-    pub color: Option<String>,
-}
-
-/// Canvas `OutcomeProficiency` (outcome_proficiency_type.rb; 0225
-/// outcome_proficiencies + ratings).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct OutcomeProficiency {
-    pub id: ID_,
-    pub context_id: Option<ID_>,
-    pub context_type: Option<String>,
-    pub workflow_state: Option<String>,
-    pub ratings: Vec<ProficiencyRating>,
-}
-
-/// Canvas `OutcomeCalculationMethod` (outcome_calculation_method_type.rb;
-/// 0225 outcome_calculation_methods).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct OutcomeCalculationMethod {
-    pub id: ID_,
-    pub context_id: Option<ID_>,
-    pub context_type: Option<String>,
-    pub calculation_method: Option<String>,
-    pub calculation_int: Option<i32>,
-    pub workflow_state: Option<String>,
-}
+// NOTE: the `ProficiencyRating`, `OutcomeProficiency` and
+// `OutcomeCalculationMethod` objects live in `root_types.rs` — they are the
+// only ones in the schema (they answer `Query.outcomeProficiency` and
+// `Query.outcomeCalculationMethod` and the `Node` interface).
 
 /// Canvas `OutcomeAlignment` (outcome_alignment_type.rb; 0044
 /// outcome_alignments).
@@ -448,12 +386,6 @@ pub struct CommentBankItem {
 // Internal settings (0230 internal_settings)
 // ---------------------------------------------------------------------------
 
-/// Canvas `InternalSetting` (internal_setting_type.rb; 0230
-/// internal_settings).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct InternalSetting {
-    pub id: ID_,
-    pub name: Option<String>,
-    pub value: Option<String>,
-    pub description: Option<String>,
-}
+// NOTE: the `InternalSetting` object lives in `root_types.rs` — it is the
+// only one in the schema (it answers `Query.internalSetting` and the `Node`
+// interface).

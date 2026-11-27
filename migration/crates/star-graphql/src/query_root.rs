@@ -38,10 +38,10 @@
 //! }
 //! ```
 //!
-//! Three more fields are exposed by star-lms and are **not** in Canvas:
-//! `enrollmentTerm`, `courseSection` and `progress`. They stay for the
-//! existing star-lms clients; the Canvas-named `term` is the one that
-//! matches Canvas.
+//! Four more fields are exposed by star-lms and are **not** in Canvas:
+//! `enrollmentTerm`, `courseSection`, `progress` and `mediaObject`. They
+//! stay for the existing star-lms clients; the Canvas-named `term` is the
+//! one that matches Canvas.
 
 use async_graphql::{Context, Object, ID};
 
@@ -108,7 +108,13 @@ impl Query {
             Some(id) => Some(parse_relay_or_legacy_id(&id.0, "Account")?),
             None => None,
         };
-        root_data::fetch_account_notifications(&gctx.pool, gctx.auth_user.id, account_id).await
+        root_data::fetch_account_notifications(
+            &gctx.pool,
+            gctx.auth_user.id,
+            account_id,
+            gctx.is_admin(),
+        )
+        .await
     }
 
     // -----------------------------------------------------------------
@@ -937,7 +943,7 @@ mod tests {
     }
 
     #[test]
-    fn query_root_only_adds_the_three_documented_star_lms_fields() {
+    fn query_root_only_adds_the_four_documented_star_lms_fields() {
         let fields = query_root_fields();
         let canvas: Vec<&str> = CANVAS_QUERY_ROOT.iter().map(|(name, _, _)| *name).collect();
 
@@ -947,14 +953,15 @@ mod tests {
                 canvas.contains(&name.as_str())
                     || name == "enrollmentTerm"
                     || name == "courseSection"
-                    || name == "progress",
+                    || name == "progress"
+                    || name == "mediaObject",
                 "unexpected root field `{name}`"
             );
         }
         assert_eq!(
             fields.len(),
-            canvas.len() + 3,
-            "the query root must expose Canvas' 28 fields plus the three star-lms extensions"
+            canvas.len() + 4,
+            "the query root must expose Canvas' 28 fields plus the four star-lms extensions"
         );
     }
 }

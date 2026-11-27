@@ -14,11 +14,11 @@ use sqlx::PgPool;
 use crate::{
     db_err,
     root_types::{
-        AccountNotification, AssignmentGroup, InstitutionalTag, InstitutionalTagCategory,
-        InstitutionalTagConnection, InstitutionalTagEdge, InstructorCourseInfo,
-        InstructorEnrollmentInfo, InstructorUserInfo, InstructorWithEnrollments,
-        InstructorWithEnrollmentsConnection, InternalSetting, LearningOutcome,
-        LearningOutcomeGroup, OutcomeCalculationMethod, OutcomeProficiency,
+        AccountNotification, AssignmentGroup, EnrollmentRole, InstitutionalTag,
+        InstitutionalTagCategory, InstitutionalTagConnection, InstitutionalTagEdge,
+        InstructorCourseInfo, InstructorEnrollmentInfo, InstructorUserInfo,
+        InstructorWithEnrollments, InstructorWithEnrollmentsConnection, InternalSetting,
+        LearningOutcome, LearningOutcomeGroup, OutcomeCalculationMethod, OutcomeProficiency,
         PeerReviewSubAssignment, ProficiencyRating, ProficiencyRatingConnection,
         ProficiencyRatingEdge, Rubric, RubricCriterion, RubricRating, TotalCountPageInfo,
     },
@@ -73,24 +73,36 @@ const ACCOUNT_NOTIFICATION_COLUMNS: &str = r#"
 
 /// Canvas `Query.accountNotifications` — the notifications for the current
 /// user, optionally scoped to one account.
+///
+/// Canvas (`app/graphql/types/query_type.rb` →
+/// `AccountNotification.for_user_and_account`):
+/// * a site administrator sees every notification of the account;
+/// * anybody else sees only the notifications addressed to them
+///   (`user_id = caller`);
+/// * only notifications inside their window (`start_at <= now < end_at`) and
+///   not deleted are listed.
 pub(crate) async fn fetch_account_notifications(
     pool: &PgPool,
     user_id: i64,
     account_id: Option<i64>,
+    is_admin: bool,
 ) -> Result<Vec<AccountNotification>, async_graphql::Error> {
     let rows: Vec<AccountNotificationRow> = sqlx::query_as(&format!(
         r#"
         SELECT {ACCOUNT_NOTIFICATION_COLUMNS}
         FROM account_notifications n
         LEFT JOIN accounts a ON a.id = n.account_id
-        WHERE n.user_id = $1
-          AND n.workflow_state <> 'deleted'
+        WHERE n.workflow_state <> 'deleted'
+          AND n.start_at <= now()
+          AND n.end_at >= now()
+          AND ($3::boolean OR n.user_id = $1)
           AND ($2::bigint IS NULL OR n.account_id = $2)
         ORDER BY n.id
         "#
     ))
     .bind(user_id)
     .bind(account_id)
+    .bind(is_admin)
     .fetch_all(pool)
     .await
     .map_err(db_err)?;
@@ -128,6 +140,9 @@ struct AssignmentGroupRow {
     workflow_state: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    drop_lowest: Option<i32>,
+    drop_highest: Option<i32>,
+    never_drop: Option<Vec<i64>>,
 }
 
 /// Canvas `Query.assignmentGroup`.
@@ -137,10 +152,12 @@ pub(crate) async fn fetch_assignment_group(
 ) -> Result<Option<AssignmentGroup>, async_graphql::Error> {
     let row: Option<AssignmentGroupRow> = sqlx::query_as(
         r#"
-        SELECT id, course_id, name, position, group_weight, workflow_state,
-               created_at, updated_at
-        FROM assignment_groups
-        WHERE id = $1
+        SELECT g.id, g.course_id, g.name, g.position, g.group_weight,
+               g.workflow_state, g.created_at, g.updated_at,
+               r.drop_lowest, r.drop_highest, r.never_drop
+        FROM assignment_groups g
+        LEFT JOIN assignment_group_rules r ON r.assignment_group_id = g.id
+        WHERE g.id = $1
         "#,
     )
     .bind(id)
@@ -157,6 +174,9 @@ pub(crate) async fn fetch_assignment_group(
         workflow_state: row.workflow_state,
         created_at: row.created_at,
         updated_at: row.updated_at,
+        drop_lowest: row.drop_lowest,
+        drop_highest: row.drop_highest,
+        never_drop: row.never_drop,
     }))
 }
 
@@ -362,6 +382,87 @@ pub(crate) async fn count_institutional_tag_associations(
     .await
     .map_err(db_err)?;
     Ok(row.map(|r| r.0).unwrap_or(0))
+}
+
+/// Canvas `InstitutionalTag.usersConnection` — the users the tag is
+/// associated with (star-db's `institutional_tag_associations`).
+pub(crate) async fn fetch_institutional_tag_users(
+    pool: &PgPool,
+    tag_id: i64,
+    first: Option<i32>,
+    after: Option<&str>,
+) -> Result<crate::course_user_fields::UserConnection, async_graphql::Error> {
+    #[derive(Debug, Clone, sqlx::FromRow)]
+    struct TagUserRow {
+        id: i64,
+        name: String,
+        email: String,
+        sortable_name: String,
+        avatar_url: Option<String>,
+        created_at: DateTime<Utc>,
+    }
+
+    let page_size = first.unwrap_or(DEFAULT_PAGE_SIZE).clamp(1, MAX_PAGE_SIZE) as usize;
+    let after_id = match after {
+        None => None,
+        Some(cursor) => Some(
+            crate::decode_cursor(cursor)
+                .ok_or_else(|| async_graphql::Error::new("invalid cursor"))?,
+        ),
+    };
+
+    let rows: Vec<TagUserRow> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT ON (u.id)
+               u.id, u.name, u.email,
+               COALESCE(u.sortable_name, u.name) AS sortable_name,
+               up.avatar_url,
+               u.created_at
+        FROM institutional_tag_associations a
+        JOIN users u ON u.id = a.user_id
+        LEFT JOIN user_profiles up ON up.user_id = u.id
+        WHERE a.institutional_tag_id = $1
+          AND a.workflow_state <> 'deleted'
+          AND ($2::bigint IS NULL OR u.id > $2)
+        ORDER BY u.id
+        LIMIT $3
+        "#,
+    )
+    .bind(tag_id)
+    .bind(after_id)
+    .bind((page_size + 1) as i64)
+    .fetch_all(pool)
+    .await
+    .map_err(db_err)?;
+
+    let has_next_page = rows.len() > page_size;
+    let mut rows = rows;
+    rows.truncate(page_size);
+
+    let edges: Vec<crate::course_user_fields::UserEdge> = rows
+        .into_iter()
+        .map(|row| crate::course_user_fields::UserEdge {
+            cursor: crate::encode_cursor(row.id),
+            node: crate::User {
+                id: row.id,
+                name: row.name,
+                email: row.email,
+                sis_user_id: None,
+                sortable_name: row.sortable_name,
+                avatar_url: row.avatar_url,
+                created_at: row.created_at,
+            },
+        })
+        .collect();
+    let end_cursor = edges.last().map(|edge| edge.cursor.clone());
+
+    Ok(crate::course_user_fields::UserConnection {
+        edges,
+        page_info: PageInfo {
+            has_next_page,
+            end_cursor,
+        },
+    })
 }
 
 /// Canvas `InstitutionalTagCategory.associationsCount`.
@@ -609,6 +710,199 @@ pub(crate) async fn count_group_outcomes(
     Ok(row.map(|r| r.0).unwrap_or(0))
 }
 
+/// Canvas `Rubric.rubricAssociationForContext` — the rubric's association
+/// with the course it belongs to (star-db's `rubric_associations`).
+pub(crate) async fn fetch_rubric_association(
+    pool: &PgPool,
+    rubric_id: i64,
+    course_id: i64,
+) -> Result<Option<crate::root_types::RubricAssociation>, async_graphql::Error> {
+    #[derive(Debug, Clone, sqlx::FromRow)]
+    struct RubricAssociationRow {
+        id: i64,
+        association_id: i64,
+        association_type: String,
+        use_for_grading: bool,
+        hide_score_total: bool,
+        hide_points: bool,
+        hide_outcome_results: bool,
+    }
+
+    let row: Option<RubricAssociationRow> = sqlx::query_as(
+        r#"
+        SELECT id, association_id, association_type, use_for_grading,
+               hide_score_total, hide_points, hide_outcome_results
+        FROM rubric_associations
+        WHERE rubric_id = $1 AND context_id = $2 AND context_type = 'Course'
+        ORDER BY id
+        LIMIT 1
+        "#,
+    )
+    .bind(rubric_id)
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(|row| crate::root_types::RubricAssociation {
+        id: row.id,
+        association_id: row.association_id.to_string(),
+        association_type: row.association_type,
+        use_for_grading: row.use_for_grading,
+        hide_score_total: row.hide_score_total,
+        hide_points: row.hide_points,
+        hide_outcome_results: row.hide_outcome_results,
+    }))
+}
+
+/// Canvas `AssignmentGroup.gradesConnection` — the students' grade rollups
+/// for an assignment group (star-db's `scores` table).
+pub(crate) async fn fetch_grades_connection(
+    pool: &PgPool,
+    assignment_group_id: i64,
+    filter: Option<&crate::root_types::GradesEnrollmentFilter>,
+    group: crate::root_types::AssignmentGroup,
+) -> Result<crate::root_types::GradesConnection, async_graphql::Error> {
+    #[derive(Debug, Clone, sqlx::FromRow)]
+    struct ScoreRow {
+        id: i64,
+        enrollment_id: i64,
+        grading_period_id: Option<i64>,
+        current_score: Option<f64>,
+        final_score: Option<f64>,
+        override_score: Option<f64>,
+        unposted_current_score: Option<f64>,
+        unposted_final_score: Option<f64>,
+        custom_grade_status_id: Option<i64>,
+        workflow_state: String,
+    }
+
+    let enrollment_ids: Option<Vec<i64>> =
+        filter.and_then(|f| f.enrollment_ids.as_ref()).map(|ids| {
+            ids.iter()
+                .filter_map(|id| id.parse::<i64>().ok())
+                .collect::<Vec<i64>>()
+        });
+
+    let rows: Vec<ScoreRow> = sqlx::query_as(
+        r#"
+        SELECT id, enrollment_id, grading_period_id, current_score, final_score,
+               override_score, unposted_current_score, unposted_final_score,
+               custom_grade_status_id, workflow_state
+        FROM scores
+        WHERE assignment_group_id = $1
+          AND ($2::bigint[] IS NULL OR enrollment_id = ANY($2))
+        ORDER BY enrollment_id, id
+        "#,
+    )
+    .bind(assignment_group_id)
+    .bind(enrollment_ids)
+    .fetch_all(pool)
+    .await
+    .map_err(db_err)?;
+
+    let mut edges = Vec::with_capacity(rows.len());
+    let mut nodes = Vec::with_capacity(rows.len());
+    for row in rows {
+        let node = crate::root_types::Grades {
+            enrollment_id: row.enrollment_id,
+            grading_period_id: row.grading_period_id,
+            current_score: row.current_score,
+            final_score: row.final_score,
+            override_score: row.override_score,
+            unposted_current_score: row.unposted_current_score,
+            unposted_final_score: row.unposted_final_score,
+            custom_grade_status_id: row.custom_grade_status_id,
+            state: if row.workflow_state == "deleted" {
+                crate::graphql_enums_inputs::GradeState::Deleted
+            } else {
+                crate::graphql_enums_inputs::GradeState::Active
+            },
+            assignment_group: Some(group.clone()),
+        };
+        nodes.push(node.clone());
+        edges.push(crate::root_types::GradesEdge {
+            cursor: crate::encode_cursor(row.id),
+            node,
+        });
+    }
+    let end_cursor = edges.last().map(|edge| edge.cursor.clone());
+
+    Ok(crate::root_types::GradesConnection {
+        edges,
+        nodes,
+        page_info: PageInfo {
+            has_next_page: false,
+            end_cursor,
+        },
+    })
+}
+
+/// Canvas `LearningOutcomeGroup.outcomes` — the group's outcomes as a
+/// `ContentTagConnection` (the link row is the `ContentTag`).
+pub(crate) async fn fetch_content_tag_connection(
+    pool: &PgPool,
+    group_id: i64,
+) -> Result<crate::root_types::ContentTagConnection, async_graphql::Error> {
+    #[derive(Debug, Clone, sqlx::FromRow)]
+    struct ContentTagRow {
+        link_id: i64,
+        #[sqlx(flatten)]
+        outcome: LearningOutcomeRow,
+    }
+
+    let rows: Vec<ContentTagRow> = sqlx::query_as(
+        r#"
+        SELECT l.id AS link_id, o.id, o.title, o.description, o.display_name,
+               o.context_id, o.context_type, o.calculation_int, o.calculation_method,
+               o.mastery_points, o.points_possible, o.assessed, o.vendor_guid,
+               o.workflow_state, o.created_at, o.updated_at
+        FROM learning_outcome_links l
+        JOIN learning_outcomes o ON o.id = l.outcome_id
+        WHERE l.outcome_group_id = $1
+          AND l.workflow_state <> 'deleted'
+          AND o.workflow_state <> 'deleted'
+        ORDER BY o.id
+        "#,
+    )
+    .bind(group_id)
+    .fetch_all(pool)
+    .await
+    .map_err(db_err)?;
+
+    let mut edges = Vec::with_capacity(rows.len());
+    let mut nodes = Vec::with_capacity(rows.len());
+    for row in rows {
+        let link_id = row.link_id;
+        let outcome = learning_outcome_from_row(row.outcome);
+        nodes.push(crate::root_types::ContentTagContent::LearningOutcome(
+            outcome.clone(),
+        ));
+        edges.push(crate::root_types::ContentTag {
+            id: async_graphql::ID(link_id.to_string()),
+            legacy_id: async_graphql::ID(link_id.to_string()),
+            cursor: crate::encode_cursor(link_id),
+            node: Some(crate::root_types::ContentTagContent::LearningOutcome(
+                outcome,
+            )),
+            group: None,
+            can_unlink: None,
+            created_at: None,
+            updated_at: None,
+        });
+    }
+    let end_cursor = edges.last().map(|edge| edge.cursor.clone());
+
+    Ok(crate::root_types::ContentTagConnection {
+        edges,
+        nodes,
+        page_info: PageInfo {
+            has_next_page: false,
+            end_cursor,
+        },
+    })
+}
+
 // ---------------------------------------------------------------------------
 // InboxSettings
 // ---------------------------------------------------------------------------
@@ -733,6 +1027,18 @@ struct ProficiencyRatingRow {
     mastery: bool,
 }
 
+/// A row of `outcome_proficiency_ratings` (migration 0225) — Canvas' rating
+/// scale for an `OutcomeProficiency`. Carries the colour column that
+/// `proficiency_ratings` (the learning-outcome scale) does not have.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct OutcomeProficiencyRatingRow {
+    id: i64,
+    description: String,
+    points: f64,
+    mastery: bool,
+    color: Option<String>,
+}
+
 /// Canvas `LearningOutcome.ratings`.
 pub(crate) async fn fetch_proficiency_ratings(
     pool: &PgPool,
@@ -758,27 +1064,30 @@ pub(crate) async fn fetch_proficiency_ratings(
             description: row.description,
             points: row.points,
             mastery: row.mastery,
+            color: None,
         })
         .collect())
 }
 
 /// Canvas `OutcomeProficiency.proficiencyRatingsConnection`.
+///
+/// Canvas' `OutcomeProficiency` owns its rating scale through
+/// `outcome_proficiency_ratings` (migration 0225), so the connection reads
+/// that table by `outcome_proficiency_id`.
 pub(crate) async fn fetch_proficiency_rating_connection(
     pool: &PgPool,
-    context_id: i64,
-    context_type: &str,
+    outcome_proficiency_id: i64,
 ) -> Result<ProficiencyRatingConnection, async_graphql::Error> {
-    let rows: Vec<ProficiencyRatingRow> = sqlx::query_as(
+    let rows: Vec<OutcomeProficiencyRatingRow> = sqlx::query_as(
         r#"
-        SELECT id, description, points, mastery
-        FROM proficiency_ratings
-        WHERE context_id = $1 AND context_type = $2
+        SELECT id, description, points, mastery, color
+        FROM outcome_proficiency_ratings
+        WHERE outcome_proficiency_id = $1
           AND workflow_state <> 'deleted'
         ORDER BY points DESC, id
         "#,
     )
-    .bind(context_id)
-    .bind(context_type)
+    .bind(outcome_proficiency_id)
     .fetch_all(pool)
     .await
     .map_err(db_err)?;
@@ -792,6 +1101,7 @@ pub(crate) async fn fetch_proficiency_rating_connection(
                 description: row.description,
                 points: row.points,
                 mastery: row.mastery,
+                color: row.color,
             },
         })
         .collect();
@@ -817,6 +1127,8 @@ struct RubricRow {
     title: String,
     points_possible: f64,
     workflow_state: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -845,7 +1157,7 @@ pub(crate) async fn fetch_rubric(
     let row: Option<RubricRow> = sqlx::query_as(
         r#"
         SELECT id, course_id, title, points_possible::float8 AS points_possible,
-               workflow_state
+               workflow_state, created_at, updated_at
         FROM rubrics
         WHERE id = $1
         "#,
@@ -895,6 +1207,7 @@ pub(crate) async fn fetch_rubric(
                 .filter(|rating| rating.criterion_id == criterion.id)
                 .map(|rating| RubricRating {
                     id: rating.id,
+                    rubric_id: criterion.rubric_id,
                     criterion_id: rating.criterion_id,
                     description: rating.description.clone(),
                     points: rating.points,
@@ -916,6 +1229,8 @@ pub(crate) async fn fetch_rubric(
         points_possible: row.points_possible,
         workflow_state: row.workflow_state,
         criteria,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
     }))
 }
 
@@ -1176,29 +1491,36 @@ pub(crate) async fn fetch_course_instructors(
         .filter_map(|user_id| {
             let enrollments = grouped.get(&user_id)?;
             let first_row = enrollments.first()?;
+            let user = InstructorUserInfo {
+                id: ID(user_id.to_string()),
+                legacy_id: ID(user_id.to_string()),
+                name: first_row.user_name.clone(),
+                email: Some(first_row.user_email.clone()),
+                short_name: None,
+                sortable_name: first_row.sortable_name.clone(),
+                avatar_url: first_row.avatar_url.clone(),
+            };
             Some(InstructorWithEnrollments {
-                user: InstructorUserInfo {
-                    id: ID(user_id.to_string()),
-                    name: first_row.user_name.clone(),
-                    email: Some(first_row.user_email.clone()),
-                    short_name: None,
-                    sortable_name: first_row.sortable_name.clone(),
-                    avatar_url: first_row.avatar_url.clone(),
-                },
+                user: user.clone(),
                 enrollments: enrollments
                     .iter()
                     .map(|row| InstructorEnrollmentInfo {
                         course: InstructorCourseInfo {
                             id: ID(row.course_id.to_string()),
+                            legacy_id: ID(row.course_id.to_string()),
                             name: row.course_name.clone(),
                             course_code: row.course_code.clone(),
                         },
                         enrollment_state: row.enrollment_state.clone(),
-                        role: row.enrollment_role.clone(),
+                        role: EnrollmentRole {
+                            legacy_id: None,
+                            name: Some(row.enrollment_role.clone()),
+                        },
                         enrollment_type: row
                             .enrollment_type
                             .clone()
                             .unwrap_or_else(|| "TeacherEnrollment".to_string()),
+                        user: user.clone(),
                     })
                     .collect(),
             })

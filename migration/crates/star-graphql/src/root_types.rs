@@ -23,7 +23,7 @@
 //! - `app/graphql/types/audit_logs_type.rb`
 //! - `app/graphql/types/instructor_connection_type.rb`
 
-use async_graphql::{Context, Object, SimpleObject, ID};
+use async_graphql::{Context, InputObject, Object, SimpleObject, Union, ID};
 use chrono::{DateTime, Utc};
 
 use crate::PageInfo;
@@ -129,7 +129,16 @@ impl AccountNotification {
 /// Canvas shape: `_id: ID!`, `createdAt: DateTime`, `groupWeight: Float`,
 /// `id: ID!`, `name: String`, `position: Int`, `sisId: String`,
 /// `state: AssignmentGroupState!`, `updatedAt: DateTime`,
-/// `assignmentsConnection: AssignmentConnection!`.
+/// `assignmentsConnection: AssignmentConnection!`, `rules: AssignmentGroupRules`.
+///
+/// This is the single `AssignmentGroup` in the schema: the older
+/// `assignment_group.rs` copy was folded into this type (it carried the
+/// `rules` payload and the `drop_lowest` / `drop_highest` / `never_drop`
+/// columns that star-db keeps in `assignment_group_rules`, migration 0049).
+///
+/// Deviation: `courseId` is a star-lms extension — Canvas does not expose it
+/// on `AssignmentGroup`, but the port needs the owning course to resolve
+/// `assignmentsConnection`.
 #[derive(Debug, Clone)]
 pub struct AssignmentGroup {
     pub(crate) id: i64,
@@ -140,6 +149,15 @@ pub struct AssignmentGroup {
     pub(crate) workflow_state: String,
     pub(crate) created_at: DateTime<Utc>,
     pub(crate) updated_at: DateTime<Utc>,
+    /// Canvas `AssignmentGroup.rules.dropLowest` — from
+    /// `assignment_group_rules` (migration 0049); `None` when the group has
+    /// no rules row.
+    pub(crate) drop_lowest: Option<i32>,
+    /// Canvas `AssignmentGroup.rules.dropHighest`.
+    pub(crate) drop_highest: Option<i32>,
+    /// Canvas `AssignmentGroup.rules.neverDrop` — the assignment ids that
+    /// are never dropped from the grade calculation.
+    pub(crate) never_drop: Option<Vec<i64>>,
 }
 
 #[Object]
@@ -158,17 +176,34 @@ impl AssignmentGroup {
         ID(self.course_id.to_string())
     }
 
-    async fn name(&self) -> &str {
-        &self.name
+    async fn name(&self) -> Option<&str> {
+        Some(self.name.as_str())
     }
 
-    async fn position(&self) -> i32 {
-        self.position
+    async fn position(&self) -> Option<i32> {
+        Some(self.position)
     }
 
     /// Canvas `AssignmentGroup.groupWeight`.
-    async fn group_weight(&self) -> f64 {
-        self.group_weight
+    async fn group_weight(&self) -> Option<f64> {
+        Some(self.group_weight)
+    }
+
+    /// Canvas `AssignmentGroup.rules` — an `AssignmentGroupRules` object,
+    /// null when the group has no `assignment_group_rules` row (Canvas's nil
+    /// `AssignmentGroup#rules`).
+    async fn rules(&self) -> Option<crate::assignment_group::AssignmentGroupRules> {
+        if self.drop_lowest.is_none() && self.drop_highest.is_none() && self.never_drop.is_none() {
+            return None;
+        }
+        Some(crate::assignment_group::AssignmentGroupRules {
+            drop_lowest: self.drop_lowest,
+            drop_highest: self.drop_highest,
+            never_drop: self
+                .never_drop
+                .as_ref()
+                .map(|ids| ids.iter().map(|id| ID(id.to_string())).collect::<Vec<ID>>()),
+        })
     }
 
     /// Canvas `AssignmentGroup.state` — the `AssignmentGroupState` enum
@@ -186,12 +221,12 @@ impl AssignmentGroup {
         None
     }
 
-    async fn created_at(&self) -> DateTime<Utc> {
-        self.created_at
+    async fn created_at(&self) -> Option<DateTime<Utc>> {
+        Some(self.created_at)
     }
 
-    async fn updated_at(&self) -> DateTime<Utc> {
-        self.updated_at
+    async fn updated_at(&self) -> Option<DateTime<Utc>> {
+        Some(self.updated_at)
     }
 
     /// Canvas `AssignmentGroup.assignmentsConnection` — the assignments that
@@ -210,6 +245,25 @@ impl AssignmentGroup {
                 self.id,
                 first,
                 after.as_deref(),
+            )
+            .await?,
+        ))
+    }
+
+    /// Canvas `AssignmentGroup.gradesConnection` — the students' grade
+    /// rollups for this group (star-db's `scores` table).
+    async fn grades_connection(
+        &self,
+        ctx: &Context<'_>,
+        filter: Option<GradesEnrollmentFilter>,
+    ) -> Result<Option<GradesConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<crate::GraphQLContext>()?;
+        Ok(Some(
+            crate::root_data::fetch_grades_connection(
+                &gctx.pool,
+                self.id,
+                filter.as_ref(),
+                self.clone(),
             )
             .await?,
         ))
@@ -296,6 +350,26 @@ impl InstitutionalTag {
     ) -> Result<Option<InstitutionalTagCategory>, async_graphql::Error> {
         let gctx = ctx.data::<crate::GraphQLContext>()?;
         crate::root_data::fetch_institutional_tag_category(&gctx.pool, self.category_id).await
+    }
+
+    /// Canvas `InstitutionalTag.usersConnection` — the users this tag is
+    /// associated with (star-db's `institutional_tag_associations`).
+    async fn users_connection(
+        &self,
+        ctx: &Context<'_>,
+        first: Option<i32>,
+        after: Option<String>,
+    ) -> Result<Option<crate::course_user_fields::UserConnection>, async_graphql::Error> {
+        let gctx = ctx.data::<crate::GraphQLContext>()?;
+        Ok(Some(
+            crate::root_data::fetch_institutional_tag_users(
+                &gctx.pool,
+                self.id,
+                first,
+                after.as_deref(),
+            )
+            .await?,
+        ))
     }
 }
 
@@ -650,6 +724,17 @@ impl LearningOutcomeGroup {
         crate::root_data::count_group_outcomes(&gctx.pool, self.id).await
     }
 
+    /// Canvas `LearningOutcomeGroup.outcomes` — the outcomes linked to this
+    /// group, as a `ContentTagConnection` (Canvas' `union ContentTagContent
+    /// = LearningOutcome`).
+    async fn outcomes(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<ContentTagConnection, async_graphql::Error> {
+        let gctx = ctx.data::<crate::GraphQLContext>()?;
+        crate::root_data::fetch_content_tag_connection(&gctx.pool, self.id).await
+    }
+
     async fn created_at(&self) -> DateTime<Utc> {
         self.created_at
     }
@@ -738,6 +823,263 @@ impl InboxSettings {
     async fn updated_at(&self) -> DateTime<Utc> {
         self.updated_at
     }
+}
+
+// ---------------------------------------------------------------------------
+// Grades family (Canvas `AssignmentGroup.gradesConnection`)
+// ---------------------------------------------------------------------------
+
+/// Canvas `Grades` (`app/graphql/types/grades_type.rb`) — one student's
+/// grade rollup inside an assignment group.
+///
+/// Canvas shape: `assignmentGroup: AssignmentGroup`, `currentGrade: String`,
+/// `currentScore: Float`, `customGradeStatusId: ID`, `enrollment: Enrollment`,
+/// `finalGrade: String`, `finalScore: Float`, `gradingPeriod: GradingPeriod`,
+/// `htmlUrl: URL`, `overrideGrade: String`, `overrideScore: Float`,
+/// `state: GradeState!`, `unpostedCurrentGrade: String`,
+/// `unpostedCurrentScore: Float`, `unpostedFinalGrade: String`,
+/// `unpostedFinalScore: Float`.
+#[derive(Debug, Clone)]
+pub struct Grades {
+    pub(crate) enrollment_id: i64,
+    pub(crate) grading_period_id: Option<i64>,
+    pub(crate) current_score: Option<f64>,
+    pub(crate) final_score: Option<f64>,
+    pub(crate) override_score: Option<f64>,
+    pub(crate) unposted_current_score: Option<f64>,
+    pub(crate) unposted_final_score: Option<f64>,
+    pub(crate) custom_grade_status_id: Option<i64>,
+    pub(crate) state: crate::graphql_enums_inputs::GradeState,
+    pub(crate) assignment_group: Option<AssignmentGroup>,
+}
+
+#[Object]
+impl Grades {
+    /// Canvas `Grades.assignmentGroup` — the group this rollup belongs to.
+    async fn assignment_group(&self) -> Option<AssignmentGroup> {
+        self.assignment_group.clone()
+    }
+
+    /// Canvas `Grades.currentGrade` — the letter grade. star-db has no
+    /// grading-standard resolution for this scope (deviation: null).
+    async fn current_grade(&self) -> Option<String> {
+        None
+    }
+
+    /// Canvas `Grades.currentScore`.
+    async fn current_score(&self) -> Option<f64> {
+        self.current_score
+    }
+
+    /// Canvas `Grades.customGradeStatusId`.
+    async fn custom_grade_status_id(&self) -> Option<ID> {
+        self.custom_grade_status_id.map(|id| ID(id.to_string()))
+    }
+
+    /// Canvas `Grades.enrollment` — the enrollment this rollup is for.
+    async fn enrollment(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<crate::Enrollment>, async_graphql::Error> {
+        let gctx = ctx.data::<crate::GraphQLContext>()?;
+        crate::fetch_enrollment(&gctx.pool, self.enrollment_id).await
+    }
+
+    /// Canvas `Grades.finalGrade` — the letter grade (deviation: null, see
+    /// `currentGrade`).
+    async fn final_grade(&self) -> Option<String> {
+        None
+    }
+
+    /// Canvas `Grades.finalScore`.
+    async fn final_score(&self) -> Option<f64> {
+        self.final_score
+    }
+
+    /// Canvas `Grades.gradingPeriod` — the grading period this rollup was
+    /// computed for.
+    async fn grading_period(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<crate::grading_periods::GradingPeriod>, async_graphql::Error> {
+        let Some(period_id) = self.grading_period_id else {
+            return Ok(None);
+        };
+        let gctx = ctx.data::<crate::GraphQLContext>()?;
+        crate::grading_periods::fetch_grading_period(&gctx.pool, period_id).await
+    }
+
+    /// Canvas `Grades.htmlUrl` — star-lms does not build Canvas grade URLs
+    /// (deviation: null).
+    async fn html_url(&self) -> Option<String> {
+        None
+    }
+
+    /// Canvas `Grades.overrideGrade` — the letter grade (deviation: null,
+    /// see `currentGrade`).
+    async fn override_grade(&self) -> Option<String> {
+        None
+    }
+
+    /// Canvas `Grades.overrideScore`.
+    async fn override_score(&self) -> Option<f64> {
+        self.override_score
+    }
+
+    /// Canvas `Grades.state`.
+    async fn state(&self) -> crate::graphql_enums_inputs::GradeState {
+        self.state
+    }
+
+    /// Canvas `Grades.unpostedCurrentGrade` (deviation: null, see
+    /// `currentGrade`).
+    async fn unposted_current_grade(&self) -> Option<String> {
+        None
+    }
+
+    /// Canvas `Grades.unpostedCurrentScore`.
+    async fn unposted_current_score(&self) -> Option<f64> {
+        self.unposted_current_score
+    }
+
+    /// Canvas `Grades.unpostedFinalGrade` (deviation: null, see
+    /// `currentGrade`).
+    async fn unposted_final_grade(&self) -> Option<String> {
+        None
+    }
+
+    /// Canvas `Grades.unpostedFinalScore`.
+    async fn unposted_final_score(&self) -> Option<f64> {
+        self.unposted_final_score
+    }
+}
+
+/// Canvas `GradesEdge` — `cursor` + `node`.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct GradesEdge {
+    pub cursor: String,
+    pub node: Grades,
+}
+
+/// Canvas `GradesConnection` — `edges`, `nodes`, `pageInfo`.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct GradesConnection {
+    pub edges: Vec<GradesEdge>,
+    pub nodes: Vec<Grades>,
+    pub page_info: PageInfo,
+}
+
+/// Canvas `GradesEnrollmentFilter` — `enrollmentIds: [ID!]`.
+#[derive(Debug, Clone, InputObject)]
+pub struct GradesEnrollmentFilter {
+    pub enrollment_ids: Option<Vec<ID>>,
+}
+
+/// Canvas GraphQL `RubricAssociation`
+/// (`app/graphql/types/rubric_association_type.rb`) — the link between a
+/// rubric and the course / assignment it is associated with.
+///
+/// Canvas shape: `_id: ID!`, `associationId: String!`, `associationType:
+/// String!`, `hideOutcomeResults: Boolean!`, `hidePoints: Boolean!`,
+/// `hideScoreTotal: Boolean!`, `savedComments: String`, `useForGrading:
+/// Boolean!`.
+#[derive(Debug, Clone)]
+pub struct RubricAssociation {
+    pub(crate) id: i64,
+    pub(crate) association_id: String,
+    pub(crate) association_type: String,
+    pub(crate) use_for_grading: bool,
+    pub(crate) hide_score_total: bool,
+    pub(crate) hide_points: bool,
+    pub(crate) hide_outcome_results: bool,
+}
+
+#[Object]
+impl RubricAssociation {
+    #[graphql(name = "_id")]
+
+    async fn _id(&self) -> ID {
+        ID(self.id.to_string())
+    }
+
+    /// Canvas `RubricAssociation.associationId`.
+    async fn association_id(&self) -> &str {
+        &self.association_id
+    }
+
+    /// Canvas `RubricAssociation.associationType`.
+    async fn association_type(&self) -> &str {
+        &self.association_type
+    }
+
+    /// Canvas `RubricAssociation.useForGrading`.
+    async fn use_for_grading(&self) -> bool {
+        self.use_for_grading
+    }
+
+    /// Canvas `RubricAssociation.hideScoreTotal`.
+    async fn hide_score_total(&self) -> bool {
+        self.hide_score_total
+    }
+
+    /// Canvas `RubricAssociation.hidePoints`.
+    async fn hide_points(&self) -> bool {
+        self.hide_points
+    }
+
+    /// Canvas `RubricAssociation.hideOutcomeResults`.
+    async fn hide_outcome_results(&self) -> bool {
+        self.hide_outcome_results
+    }
+
+    /// Canvas `RubricAssociation.savedComments` — star-db's
+    /// `rubric_associations` table has no saved-comments column
+    /// (deviation: null).
+    async fn saved_comments(&self) -> Option<&str> {
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ContentTag family (Canvas `ContentTagConnection`)
+// ---------------------------------------------------------------------------
+
+/// Canvas `ContentTagContent` union
+/// (`app/graphql/types/content_tag_content_type.rb`) — the only member
+/// Canvas declares is `LearningOutcome`.
+#[derive(Debug, Clone, Union)]
+pub enum ContentTagContent {
+    /// A learning outcome linked into an outcome group.
+    LearningOutcome(LearningOutcome),
+}
+
+/// Canvas `ContentTag` (`app/graphql/types/content_tag_type.rb`) — the link
+/// between an outcome group and one of its outcomes.
+///
+/// Canvas shape: `_id: ID!`, `canUnlink: Boolean`, `createdAt: DateTime`,
+/// `cursor: String!`, `group: LearningOutcomeGroup`, `id: ID!`,
+/// `node: ContentTagContent`, `updatedAt: DateTime`.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct ContentTag {
+    pub id: ID,
+    /// Canvas `ContentTag._id` — the legacy Canvas id.
+    #[graphql(name = "_id")]
+    pub legacy_id: ID,
+    pub cursor: String,
+    pub node: Option<ContentTagContent>,
+    pub group: Option<LearningOutcomeGroup>,
+    pub can_unlink: Option<bool>,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
+/// Canvas `ContentTagConnection` — `edges: [ContentTag]`,
+/// `nodes: [ContentTagContent]`, `pageInfo: PageInfo!`.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct ContentTagConnection {
+    pub edges: Vec<ContentTag>,
+    pub nodes: Vec<ContentTagContent>,
+    pub page_info: PageInfo,
 }
 
 // ---------------------------------------------------------------------------
@@ -848,12 +1190,7 @@ impl OutcomeProficiency {
         ctx: &Context<'_>,
     ) -> Result<ProficiencyRatingConnection, async_graphql::Error> {
         let gctx = ctx.data::<crate::GraphQLContext>()?;
-        crate::root_data::fetch_proficiency_rating_connection(
-            &gctx.pool,
-            self.context_id,
-            &self.context_type,
-        )
-        .await
+        crate::root_data::fetch_proficiency_rating_connection(&gctx.pool, self.id).await
     }
 }
 
@@ -862,12 +1199,19 @@ impl OutcomeProficiency {
 ///
 /// Canvas shape: `_id: ID!`, `color: String`, `description: String`,
 /// `mastery: Boolean!`, `points: Float!`.
+///
+/// This is the single `ProficiencyRating` in the schema: the older
+/// `entities_batch_f.rs` copy was folded into this type.
 #[derive(Debug, Clone)]
 pub struct ProficiencyRating {
     pub(crate) id: i64,
     pub(crate) description: String,
     pub(crate) points: f64,
     pub(crate) mastery: bool,
+    /// Canvas `ProficiencyRating.color` — `outcome_proficiency_ratings.color`
+    /// for context-level ratings; the `proficiency_ratings` table has no
+    /// colour column (deviation: null there).
+    pub(crate) color: Option<String>,
 }
 
 #[Object]
@@ -882,8 +1226,8 @@ impl ProficiencyRating {
         ID(self.id.to_string())
     }
 
-    async fn description(&self) -> &str {
-        &self.description
+    async fn description(&self) -> Option<&str> {
+        Some(self.description.as_str())
     }
 
     async fn points(&self) -> f64 {
@@ -894,10 +1238,9 @@ impl ProficiencyRating {
         self.mastery
     }
 
-    /// Canvas `ProficiencyRating.color` — star-db has no colour column
-    /// (deviation: always null).
+    /// Canvas `ProficiencyRating.color`.
     async fn color(&self) -> Option<&str> {
-        None
+        self.color.as_deref()
     }
 }
 
@@ -928,6 +1271,13 @@ pub struct ProficiencyRatingConnection {
 /// `hideScoreTotal: Boolean!`, `id: ID!`, `pointsPossible: Float`,
 /// `ratingOrder: String!`, `title: String`, `unassessed: Boolean!`,
 /// `workflowState: String!`.
+///
+/// This is the single `Rubric` in the schema: the older `rubrics.rs` copy
+/// was folded into this type (it carried the `createdAt` / `updatedAt`
+/// columns and the position-ordered criteria / ratings hydration).
+///
+/// Deviation: `courseId`, `createdAt` and `updatedAt` are star-lms
+/// extensions — Canvas does not expose them on `Rubric`.
 #[derive(Debug, Clone)]
 pub struct Rubric {
     pub(crate) id: i64,
@@ -936,6 +1286,10 @@ pub struct Rubric {
     pub(crate) points_possible: f64,
     pub(crate) workflow_state: String,
     pub(crate) criteria: Vec<RubricCriterion>,
+    /// star-lms extension (not in Canvas' `Rubric`).
+    pub(crate) created_at: DateTime<Utc>,
+    /// star-lms extension (not in Canvas' `Rubric`).
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -955,18 +1309,28 @@ impl Rubric {
     }
 
     /// Canvas `Rubric.title`.
-    async fn title(&self) -> &str {
-        &self.title
+    async fn title(&self) -> Option<&str> {
+        Some(self.title.as_str())
     }
 
     /// Canvas `Rubric.pointsPossible`.
-    async fn points_possible(&self) -> f64 {
-        self.points_possible
+    async fn points_possible(&self) -> Option<f64> {
+        Some(self.points_possible)
     }
 
     /// Canvas `Rubric.workflowState`.
     async fn workflow_state(&self) -> &str {
         &self.workflow_state
+    }
+
+    /// star-lms extension (not in Canvas' `Rubric`).
+    async fn created_at(&self) -> Option<DateTime<Utc>> {
+        Some(self.created_at)
+    }
+
+    /// star-lms extension (not in Canvas' `Rubric`).
+    async fn updated_at(&self) -> Option<DateTime<Utc>> {
+        Some(self.updated_at)
     }
 
     /// Canvas `Rubric.criteria` — the criteria that make up this rubric.
@@ -1005,8 +1369,16 @@ impl Rubric {
     }
 
     /// Canvas `Rubric.hasRubricAssociations`.
-    async fn has_rubric_associations(&self) -> bool {
-        false
+    async fn has_rubric_associations(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<bool, async_graphql::Error> {
+        let gctx = ctx.data::<crate::GraphQLContext>()?;
+        Ok(
+            crate::root_data::fetch_rubric_association(&gctx.pool, self.id, self.course_id)
+                .await?
+                .is_some(),
+        )
     }
 
     /// Canvas `Rubric.hidePoints`.
@@ -1015,13 +1387,29 @@ impl Rubric {
     }
 
     /// Canvas `Rubric.hideScoreTotal`.
-    async fn hide_score_total(&self) -> bool {
-        false
+    async fn hide_score_total(&self, ctx: &Context<'_>) -> Result<bool, async_graphql::Error> {
+        let gctx = ctx.data::<crate::GraphQLContext>()?;
+        Ok(
+            crate::root_data::fetch_rubric_association(&gctx.pool, self.id, self.course_id)
+                .await?
+                .map(|association| association.hide_score_total)
+                .unwrap_or(false),
+        )
     }
 
     /// Canvas `Rubric.unassessed`.
     async fn unassessed(&self) -> bool {
         false
+    }
+
+    /// Canvas `Rubric.rubricAssociationForContext` — the rubric's
+    /// association for the course it belongs to.
+    async fn rubric_association_for_context(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<Option<RubricAssociation>, async_graphql::Error> {
+        let gctx = ctx.data::<crate::GraphQLContext>()?;
+        crate::root_data::fetch_rubric_association(&gctx.pool, self.id, self.course_id).await
     }
 }
 
@@ -1060,13 +1448,13 @@ impl RubricCriterion {
     }
 
     /// Canvas `RubricCriterion.description`.
-    async fn description(&self) -> &str {
-        &self.description
+    async fn description(&self) -> Option<&str> {
+        Some(self.description.as_str())
     }
 
     /// Canvas `RubricCriterion.points`.
-    async fn points(&self) -> f64 {
-        self.points
+    async fn points(&self) -> Option<f64> {
+        Some(self.points)
     }
 
     /// Canvas `RubricCriterion.position` — the criterion's order in the
@@ -1105,16 +1493,28 @@ impl RubricCriterion {
     async fn ratings(&self) -> Vec<RubricRating> {
         self.ratings.clone()
     }
+
+    /// Canvas `RubricCriterion.outcome` — the learning outcome this
+    /// criterion measures. star-db's `rubric_criteria` table has no outcome
+    /// link (deviation: always null, like `learningOutcomeId`).
+    async fn outcome(&self) -> Option<LearningOutcome> {
+        None
+    }
 }
 
 /// Canvas GraphQL `RubricRating`
 /// (`app/graphql/types/rubric_rating_type.rb`).
 ///
-/// Canvas shape: `_id: ID!`, `criterionId: ID!`, `description: String!`,
-/// `id: ID!`, `points: Float!`.
+/// Canvas shape: `_id: ID!`, `description: String!`, `longDescription: String`,
+/// `points: Float!`, `rubricId: ID!`.
+///
+/// Deviation: `id` and `criterionId` are star-lms extensions — Canvas
+/// exposes the rating's legacy id as `_id` and links it to the rubric (not
+/// to the criterion).
 #[derive(Debug, Clone)]
 pub struct RubricRating {
     pub(crate) id: i64,
+    pub(crate) rubric_id: i64,
     pub(crate) criterion_id: i64,
     pub(crate) description: String,
     pub(crate) points: f64,
@@ -1133,6 +1533,12 @@ impl RubricRating {
         ID(self.id.to_string())
     }
 
+    /// Canvas `RubricRating.rubricId` — the rubric this rating belongs to.
+    async fn rubric_id(&self) -> ID {
+        ID(self.rubric_id.to_string())
+    }
+
+    /// star-lms extension (not in Canvas' `RubricRating`).
     async fn criterion_id(&self) -> ID {
         ID(self.criterion_id.to_string())
     }
@@ -1145,8 +1551,15 @@ impl RubricRating {
         self.points
     }
 
+    /// star-lms extension (not in Canvas' `RubricRating`).
     async fn position(&self) -> i32 {
         self.position
+    }
+
+    /// Canvas `RubricRating.longDescription` — star-db's `rubric_ratings`
+    /// table has no long-description column (deviation: always null).
+    async fn long_description(&self) -> Option<&str> {
+        None
     }
 }
 
@@ -1314,6 +1727,9 @@ pub struct MutationLogConnection {
 ///
 /// Canvas shape: `enrollments: [InstructorEnrollmentInfo!]!`,
 /// `user: InstructorUserInfo!`.
+///
+/// This is the single `InstructorWithEnrollments` in the schema: the older
+/// `entities_modules_discussions_submissions.rs` copy was folded in.
 #[derive(Debug, Clone, SimpleObject)]
 pub struct InstructorWithEnrollments {
     pub enrollments: Vec<InstructorEnrollmentInfo>,
@@ -1321,27 +1737,66 @@ pub struct InstructorWithEnrollments {
 }
 
 /// Canvas GraphQL `InstructorEnrollmentInfo`.
+///
+/// Canvas shape: `course: InstructorCourseInfo!`, `enrollmentState: String!`,
+/// `role: EnrollmentRole!`, `type: String!`.
+///
+/// Deviation: `user` is a star-lms extension — the older
+/// `InstructorEnrollmentInfo` copy exposed the instructor on the enrollment
+/// too, and Canvas reaches the user through
+/// `InstructorWithEnrollments.user`.
 #[derive(Debug, Clone, SimpleObject)]
 pub struct InstructorEnrollmentInfo {
     pub course: InstructorCourseInfo,
     pub enrollment_state: String,
-    pub role: String,
+    pub role: EnrollmentRole,
     #[graphql(name = "type")]
     pub enrollment_type: String,
+    pub user: InstructorUserInfo,
+}
+
+/// Canvas GraphQL `EnrollmentRole`
+/// (`app/graphql/types/enrollment_type.rb`) — the role record of an
+/// enrollment.
+///
+/// Canvas shape: `_id: ID`, `name: String`.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct EnrollmentRole {
+    /// Canvas `EnrollmentRole._id` — the legacy Canvas id.
+    #[graphql(name = "_id")]
+    pub legacy_id: Option<ID>,
+    pub name: Option<String>,
 }
 
 /// Canvas GraphQL `InstructorCourseInfo`.
+///
+/// Canvas shape: `_id: ID!`, `courseCode: String`, `name: String!`.
+///
+/// Deviation: `id` is a star-lms extension — Canvas exposes the course's
+/// legacy id as `_id` only.
 #[derive(Debug, Clone, SimpleObject)]
 pub struct InstructorCourseInfo {
     pub id: ID,
+    /// Canvas `InstructorCourseInfo._id` — the legacy Canvas course id.
+    #[graphql(name = "_id")]
+    pub legacy_id: ID,
     pub name: String,
     pub course_code: Option<String>,
 }
 
 /// Canvas GraphQL `InstructorUserInfo`.
+///
+/// Canvas shape: `_id: ID!`, `avatarUrl: URL`, `email: String`,
+/// `name: String!`, `shortName: String`, `sortableName: String`.
+///
+/// Deviation: `id` is a star-lms extension — Canvas exposes the user's
+/// legacy id as `_id` only.
 #[derive(Debug, Clone, SimpleObject)]
 pub struct InstructorUserInfo {
     pub id: ID,
+    /// Canvas `InstructorUserInfo._id` — the legacy Canvas user id.
+    #[graphql(name = "_id")]
+    pub legacy_id: ID,
     pub name: String,
     pub email: Option<String>,
     pub short_name: Option<String>,
@@ -1540,7 +1995,7 @@ node_id_from_id_field!(crate::Account);
 node_id_from_id_field!(crate::Assignment);
 node_id_from_id_field!(crate::Conversation);
 node_id_from_id_field!(crate::Course);
-node_id_from_id_field!(crate::DiscussionTopic);
+node_id_from_id_field!(crate::Discussion);
 node_id_from_id_field!(crate::Enrollment);
 node_id_from_id_field!(crate::File);
 node_id_from_id_field!(crate::Folder);

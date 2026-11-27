@@ -54,18 +54,11 @@ pub struct Noop {
     pub noop: bool,
 }
 
-/// Canvas `NodeType` interface discriminator enum. Canvas exposes the
-/// interface; star-lms materializes it as an enum of the node kinds the
-/// `node(id:)` root query resolves (documented shape).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
-pub enum NodeType {
-    Course,
-    User,
-    Assignment,
-    Submission,
-    DiscussionTopic,
-}
-
+// NOTE: `NodeType` lives in `node.rs` — Canvas' `NodeType` enum lists every
+// node-able kind and `node.rs` is the only place that resolves them, so this
+// module must not declare a second `NodeType` (async-graphql's registry
+// panics on duplicate GraphQL names).
+//
 // ---------------------------------------------------------------------------
 // Ordering / direction enums + inputs
 // ---------------------------------------------------------------------------
@@ -184,7 +177,10 @@ pub struct EnrollmentsSortInputType {
 pub struct EnrollmentFilterInput {
     pub states: Option<Vec<EnrollmentWorkflowState>>,
     pub types: Option<Vec<EnrollmentType>>,
-    pub roles: Option<Vec<EnrollmentRole>>,
+    /// Canvas' `EnrollmentFilterInput.roles` filters on the enrollment
+    /// *kind* (`StudentEnrollment`, `TeacherEnrollment`, ...) — the same
+    /// values as `types`.
+    pub roles: Option<Vec<EnrollmentType>>,
 }
 
 /// Canvas `CourseSectionsFilter`.
@@ -306,20 +302,11 @@ pub struct SubmissionHistoryFilterInput {
     pub attempts: Option<Vec<i32>>,
 }
 
-/// Canvas `AssignmentGroupState` enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
-pub enum AssignmentGroupState {
-    Active,
-    Deleted,
-}
-
-/// Canvas `AssignmentState` enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
-pub enum AssignmentState {
-    Unpublished,
-    Published,
-    Deleted,
-}
+// NOTE: `AssignmentGroupState` lives in `root_types.rs` (the
+// `AssignmentGroup` object) and `AssignmentState` lives in `mutations.rs`
+// (the assignment create/update inputs). Canvas names both enums exactly
+// that way and each one must exist once in the schema, so this module must
+// not declare a second copy.
 
 /// Canvas `SubmissionState` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
@@ -384,11 +371,14 @@ pub enum DraftableSubmissionType {
     MediaRecording,
 }
 
-/// Canvas `GradeState` enum.
+/// Canvas `GradeState` enum — the state of a grade rollup row
+/// (`active` / `deleted`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
 pub enum GradeState {
-    Graded,
-    Pending,
+    #[graphql(name = "active")]
+    Active,
+    #[graphql(name = "deleted")]
+    Deleted,
 }
 
 /// Canvas `EnrollmentType` enum (Canvas Enrollment::Type).
@@ -416,16 +406,10 @@ pub enum EnrollmentWorkflowState {
     Suspended,
 }
 
-/// Canvas `EnrollmentRole` enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
-pub enum EnrollmentRole {
-    Student,
-    Teacher,
-    Ta,
-    Designer,
-    Observer,
-    Custom,
-}
+// NOTE: Canvas' `EnrollmentRole` is an *object* (`type EnrollmentRole {
+// _id: ID, name: String }`), not an enum — it lives in `root_types.rs`
+// next to `InstructorEnrollmentInfo`. The enrollment *kind* enum is
+// `EnrollmentType` below.
 
 /// Canvas `CourseWorkflowState` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
@@ -538,14 +522,7 @@ pub enum ModuleCompletionStatus {
     Unstarted,
 }
 
-/// Canvas `ProgressState` enum (Canvas Progress#workflow_state).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
-pub enum ProgressState {
-    Queued,
-    Running,
-    Completed,
-    Failed,
-}
+// NOTE: `ProgressState` lives in `pages.rs` (the `Progress` object).
 
 /// Canvas `ExternalToolState` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
@@ -579,20 +556,9 @@ pub enum DiscussionParticipantFilter {
     Replies,
 }
 
-/// Canvas `DiscussionTopicAnonymousStateType` enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
-pub enum DiscussionTopicAnonymousStateType {
-    Off,
-    Partial,
-    Full,
-}
-
-/// Canvas `DiscussionTopicDiscussionType` enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
-pub enum DiscussionTopicDiscussionType {
-    SideComment,
-    Threaded,
-}
+// NOTE: `DiscussionTopicAnonymousStateType` and
+// `DiscussionTopicDiscussionType` live in `root_mutations.rs` (the
+// discussion-topic mutation inputs).
 
 /// Canvas `DiscussionEntryPinningType` enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
@@ -680,13 +646,4 @@ pub enum EligibilityIssueLevel {
     Info,
     Warning,
     Error,
-}
-
-/// Canvas `ProficiencyRatingInput`.
-#[derive(Debug, Clone, InputObject)]
-pub struct ProficiencyRatingInput {
-    pub description: Option<String>,
-    pub points: f64,
-    pub mastery: Option<bool>,
-    pub color: Option<String>,
 }

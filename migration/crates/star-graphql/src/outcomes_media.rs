@@ -43,23 +43,10 @@ use crate::{
 // Database rows
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, sqlx::FromRow)]
-struct OutcomeRow {
-    id: i64,
-    title: String,
-    description: Option<String>,
-    display_name: Option<String>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-struct OutcomeGroupRow {
-    id: i64,
-    title: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
+// The outcome rows carry the full Canvas column set; the shared
+// `root_data` row types and their mappers are reused so the objects built
+// here are the same ones `Query.learningOutcome` returns.
+use crate::root_data::{learning_outcome_from_row, LearningOutcomeRow};
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct MediaObjectRow {
@@ -85,59 +72,11 @@ struct MediaTrackRow {
 // GraphQL types — outcomes
 // ---------------------------------------------------------------------------
 
-/// Canvas GraphQL `LearningOutcome`
-/// (`app/graphql/types/learning_outcome_type.rb`, subset).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct LearningOutcome {
-    pub id: ID,
-    pub title: String,
-    pub description: Option<String>,
-    /// Canvas `displayName` — the friendlier label (nullable).
-    pub display_name: Option<String>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-/// Canvas GraphQL `LearningOutcomeGroup`
-/// (`app/graphql/types/learning_outcome_group_type.rb`, subset) with
-/// its linked outcomes (Canvas nests outcomes through
-/// `ContentTag`-style links; star-lms uses `learning_outcome_links`).
-#[derive(Debug, Clone)]
-pub struct LearningOutcomeGroup {
-    pub id: i64,
-    pub title: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[Object]
-impl LearningOutcomeGroup {
-    async fn id(&self) -> ID {
-        ID(self.id.to_string())
-    }
-
-    async fn title(&self) -> &str {
-        &self.title
-    }
-
-    /// The outcomes linked to this group (active links only, id
-    /// order).
-    async fn outcomes(
-        &self,
-        ctx: &Context<'_>,
-    ) -> Result<Vec<LearningOutcome>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        fetch_group_outcomes(&gctx.pool, self.id).await
-    }
-
-    async fn created_at(&self) -> DateTime<Utc> {
-        self.created_at
-    }
-
-    async fn updated_at(&self) -> DateTime<Utc> {
-        self.updated_at
-    }
-}
+// NOTE: the `LearningOutcome` and `LearningOutcomeGroup` objects live in
+// `root_types.rs` — they are the only ones in the schema (they answer
+// `Query.learningOutcome`, `Query.learningOutcomeGroup` and the `Node`
+// interface), and they carry the Canvas field names. The group's linked
+// outcomes are exposed as Canvas' `ContentTagConnection`.
 
 // ---------------------------------------------------------------------------
 // GraphQL types — media
@@ -211,7 +150,7 @@ impl MediaObject {
 #[derive(Debug, Clone, SimpleObject)]
 pub struct LearningOutcomeEdge {
     pub cursor: String,
-    pub node: LearningOutcome,
+    pub node: crate::root_types::LearningOutcome,
 }
 
 /// Relay connection for learning outcomes.
@@ -229,10 +168,11 @@ pub struct LearningOutcomeConnection {
 pub(crate) async fn fetch_course_outcome_groups(
     pool: &PgPool,
     course_id: i64,
-) -> Result<Vec<LearningOutcomeGroup>, async_graphql::Error> {
-    let rows: Vec<OutcomeGroupRow> = sqlx::query_as(
+) -> Result<Vec<crate::root_types::LearningOutcomeGroup>, async_graphql::Error> {
+    let rows: Vec<crate::root_data::LearningOutcomeGroupRow> = sqlx::query_as(
         r#"
-        SELECT id, title, created_at, updated_at
+        SELECT id, title, description, context_id, context_type, vendor_guid,
+               workflow_state, created_at, updated_at
         FROM learning_outcome_groups
         WHERE course_id = $1 AND workflow_state <> 'deleted'
         ORDER BY id
@@ -245,47 +185,7 @@ pub(crate) async fn fetch_course_outcome_groups(
 
     Ok(rows
         .into_iter()
-        .map(|r| LearningOutcomeGroup {
-            id: r.id,
-            title: r.title,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-        })
-        .collect())
-}
-
-/// The outcomes linked to a group (active links, id order).
-async fn fetch_group_outcomes(
-    pool: &PgPool,
-    group_id: i64,
-) -> Result<Vec<LearningOutcome>, async_graphql::Error> {
-    let rows: Vec<OutcomeRow> = sqlx::query_as(
-        r#"
-        SELECT o.id, o.title, o.description, o.display_name,
-               o.created_at, o.updated_at
-        FROM learning_outcomes o
-        JOIN learning_outcome_links l ON l.outcome_id = o.id
-        WHERE l.outcome_group_id = $1
-          AND l.workflow_state = 'active'
-          AND o.workflow_state <> 'deleted'
-        ORDER BY o.id
-        "#,
-    )
-    .bind(group_id)
-    .fetch_all(pool)
-    .await
-    .map_err(db_err)?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| LearningOutcome {
-            id: ID(r.id.to_string()),
-            title: r.title,
-            description: r.description,
-            display_name: r.display_name,
-            created_at: r.created_at,
-            updated_at: r.updated_at,
-        })
+        .map(crate::root_data::learning_outcome_group_from_row)
         .collect())
 }
 
@@ -308,9 +208,12 @@ pub(crate) async fn fetch_course_outcome_page(
         }
     };
 
-    let mut rows: Vec<OutcomeRow> = sqlx::query_as(
+    let mut rows: Vec<LearningOutcomeRow> = sqlx::query_as(
         r#"
         SELECT DISTINCT o.id, o.title, o.description, o.display_name,
+               o.context_id, o.context_type, o.calculation_int,
+               o.calculation_method, o.mastery_points, o.points_possible,
+               o.assessed, o.vendor_guid, o.workflow_state,
                o.created_at, o.updated_at
         FROM learning_outcomes o
         JOIN learning_outcome_links l ON l.outcome_id = o.id
@@ -340,14 +243,7 @@ pub(crate) async fn fetch_course_outcome_page(
             let id = r.id;
             LearningOutcomeEdge {
                 cursor: encode_cursor(id),
-                node: LearningOutcome {
-                    id: ID(r.id.to_string()),
-                    title: r.title,
-                    description: r.description,
-                    display_name: r.display_name,
-                    created_at: r.created_at,
-                    updated_at: r.updated_at,
-                },
+                node: learning_outcome_from_row(r),
             }
         })
         .collect();

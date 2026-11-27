@@ -72,26 +72,61 @@ impl AssignmentMutations {
 // Input types
 // ---------------------------------------------------------------------------
 
-/// Canvas `AssignmentState` enum (`app/graphql/types/assignment_state_type.rb`).
-/// The full Canvas enum also carries `duplicating`/`importing_verification`
-/// etc.; those states never appear in mutation inputs, so this slice accepts
-/// only the three the mutations can actually write. Values outside the enum
-/// fail GraphQL input coercion before any handler runs (Canvas behaves the
-/// same way for unknown enum values).
+/// Canvas `AssignmentState` enum
+/// (`app/graphql/types/assignment_type.rb` — the nested `AssignmentStateType`).
+///
+/// Canvas shape (`canvas-src/schema.graphql`): `deleted`, `duplicating`,
+/// `fail_to_import`, `failed_to_clone_outcome_alignment`,
+/// `failed_to_duplicate`, `failed_to_migrate`, `importing`, `migrating`,
+/// `outcome_alignment_cloning`, `published`, `unpublished`.
+///
+/// The variants are named exactly as Canvas names them (the GraphQL value is
+/// the lower-case `workflow_state`), so the enum is usable both as the
+/// `state` input of `CreateAssignmentInput` / `UpdateAssignmentInput` and as
+/// the `state` output of an assignment. Values outside the enum fail
+/// GraphQL input coercion before any handler runs (Canvas behaves the same
+/// way for unknown enum values).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
 pub enum AssignmentState {
-    Published,
-    Unpublished,
+    #[graphql(name = "deleted")]
     Deleted,
+    #[graphql(name = "duplicating")]
+    Duplicating,
+    #[graphql(name = "fail_to_import")]
+    FailToImport,
+    #[graphql(name = "failed_to_clone_outcome_alignment")]
+    FailedToCloneOutcomeAlignment,
+    #[graphql(name = "failed_to_duplicate")]
+    FailedToDuplicate,
+    #[graphql(name = "failed_to_migrate")]
+    FailedToMigrate,
+    #[graphql(name = "importing")]
+    Importing,
+    #[graphql(name = "migrating")]
+    Migrating,
+    #[graphql(name = "outcome_alignment_cloning")]
+    OutcomeAlignmentCloning,
+    #[graphql(name = "published")]
+    Published,
+    #[graphql(name = "unpublished")]
+    Unpublished,
 }
 
 impl AssignmentState {
     /// The `assignments.workflow_state` value this state maps onto.
     fn workflow_state(self) -> &'static str {
         match self {
+            AssignmentState::Deleted => "deleted",
+            AssignmentState::Duplicating => "duplicating",
+            AssignmentState::FailToImport => "fail_to_import",
+            AssignmentState::FailedToCloneOutcomeAlignment => "failed_to_clone_outcome_alignment",
+            AssignmentState::FailedToDuplicate => "failed_to_duplicate",
+            AssignmentState::FailedToMigrate => "failed_to_migrate",
+            AssignmentState::Importing => "importing",
+            AssignmentState::Migrating => "migrating",
+            AssignmentState::OutcomeAlignmentCloning => "outcome_alignment_cloning",
             AssignmentState::Published => "published",
             AssignmentState::Unpublished => "unpublished",
-            AssignmentState::Deleted => "deleted",
         }
     }
 }

@@ -23,7 +23,7 @@
 //! in star-lms anyone enrolled can list rubrics). Deleted rubrics are
 //! filtered (Canvas `Rubric.active`).
 
-use async_graphql::{Object, SimpleObject, ID};
+use async_graphql::SimpleObject;
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
@@ -39,6 +39,7 @@ struct RubricRow {
     course_id: i64,
     title: String,
     points_possible: f64,
+    workflow_state: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -46,6 +47,7 @@ struct RubricRow {
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct CriterionRow {
     id: i64,
+    rubric_id: i64,
     description: String,
     points: f64,
     position: i32,
@@ -63,102 +65,16 @@ struct RatingRow {
 // GraphQL types
 // ---------------------------------------------------------------------------
 
-/// Canvas GraphQL `RubricRating`
-/// (`app/graphql/types/rubric_rating_type.rb`, subset).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct RubricRating {
-    pub id: ID,
-    pub description: String,
-    pub points: f64,
-    pub position: i32,
-}
-
-/// Canvas GraphQL `RubricCriterion`
-/// (`app/graphql/types/rubric_criterion_type.rb`, subset) with its
-/// nested ratings, position-ordered.
-#[derive(Debug, Clone)]
-pub struct RubricCriterion {
-    pub id: i64,
-    pub description: String,
-    pub points: f64,
-    pub position: i32,
-    pub ratings: Vec<RubricRating>,
-}
-
-#[Object]
-impl RubricCriterion {
-    async fn id(&self) -> ID {
-        ID(self.id.to_string())
-    }
-
-    async fn description(&self) -> &str {
-        &self.description
-    }
-
-    async fn points(&self) -> f64 {
-        self.points
-    }
-
-    async fn position(&self) -> i32 {
-        self.position
-    }
-
-    /// The criterion's ratings, position-ordered.
-    async fn ratings(&self) -> &[RubricRating] {
-        &self.ratings
-    }
-}
-
-/// Canvas GraphQL `Rubric` (`app/graphql/types/rubric_type.rb`, subset).
-#[derive(Debug, Clone)]
-pub struct Rubric {
-    pub id: i64,
-    pub course_id: i64,
-    pub title: String,
-    pub points_possible: f64,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub criteria: Vec<RubricCriterion>,
-}
-
-#[Object]
-impl Rubric {
-    async fn id(&self) -> ID {
-        ID(self.id.to_string())
-    }
-
-    async fn course_id(&self) -> ID {
-        ID(self.course_id.to_string())
-    }
-
-    async fn title(&self) -> &str {
-        &self.title
-    }
-
-    async fn points_possible(&self) -> f64 {
-        self.points_possible
-    }
-
-    /// The rubric's criteria with nested ratings, position-ordered
-    /// (Canvas `Rubric#rubric_criteria` ordering).
-    async fn criteria(&self) -> &[RubricCriterion] {
-        &self.criteria
-    }
-
-    async fn created_at(&self) -> DateTime<Utc> {
-        self.created_at
-    }
-
-    async fn updated_at(&self) -> DateTime<Utc> {
-        self.updated_at
-    }
-}
+// NOTE: the `Rubric`, `RubricCriterion` and `RubricRating` objects live in
+// `root_types.rs` — they are the only ones in the schema (they also answer
+// `Query.rubric` and the `Node` interface), and they carry the Canvas
+// fields (`workflowState`, `buttonDisplay`, `ratingOrder`, ...).
 
 /// Relay connection edge: `edges { cursor node }`.
 #[derive(Debug, Clone, SimpleObject)]
 pub struct RubricEdge {
     pub cursor: String,
-    pub node: Rubric,
+    pub node: crate::root_types::Rubric,
 }
 
 /// Relay connection for rubrics.
@@ -176,10 +92,10 @@ pub struct RubricConnection {
 async fn hydrate_criteria(
     pool: &PgPool,
     rubric_id: i64,
-) -> Result<Vec<RubricCriterion>, async_graphql::Error> {
+) -> Result<Vec<crate::root_types::RubricCriterion>, async_graphql::Error> {
     let criteria: Vec<CriterionRow> = sqlx::query_as(
         r#"
-        SELECT id, description, points::float8 AS points, position
+        SELECT id, rubric_id, description, points::float8 AS points, position
         FROM rubric_criteria
         WHERE rubric_id = $1
         ORDER BY position, id
@@ -204,15 +120,18 @@ async fn hydrate_criteria(
         .fetch_all(pool)
         .await
         .map_err(db_err)?;
-        out.push(RubricCriterion {
+        out.push(crate::root_types::RubricCriterion {
             id: c.id,
+            rubric_id: c.rubric_id,
             description: c.description,
             points: c.points,
             position: c.position,
             ratings: ratings
                 .into_iter()
-                .map(|r| RubricRating {
-                    id: ID(r.id.to_string()),
+                .map(|r| crate::root_types::RubricRating {
+                    id: r.id,
+                    rubric_id,
+                    criterion_id: c.id,
                     description: r.description,
                     points: r.points,
                     position: r.position,
@@ -243,7 +162,7 @@ pub(crate) async fn fetch_rubric_page(
     let mut rows: Vec<RubricRow> = sqlx::query_as(
         r#"
         SELECT id, course_id, title, points_possible::float8 AS points_possible,
-               created_at, updated_at
+               workflow_state, created_at, updated_at
         FROM rubrics
         WHERE course_id = $1
           AND workflow_state <> 'deleted'
@@ -268,14 +187,15 @@ pub(crate) async fn fetch_rubric_page(
         let criteria = hydrate_criteria(pool, row.id).await?;
         edges.push(RubricEdge {
             cursor: encode_cursor(id),
-            node: Rubric {
+            node: crate::root_types::Rubric {
                 id: row.id,
                 course_id: row.course_id,
                 title: row.title,
                 points_possible: row.points_possible,
+                workflow_state: row.workflow_state,
+                criteria,
                 created_at: row.created_at,
                 updated_at: row.updated_at,
-                criteria,
             },
         });
     }

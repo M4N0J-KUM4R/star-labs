@@ -21,7 +21,7 @@
 //! `available|deleted` states and deleted ones are filtered here, like
 //! Canvas's `AssignmentGroup.active` scope).
 
-use async_graphql::{Object, SimpleObject, ID};
+use async_graphql::{SimpleObject, ID};
 use chrono::{DateTime, Utc};
 use sqlx::PgPool;
 
@@ -38,6 +38,7 @@ struct AssignmentGroupRow {
     name: String,
     position: i32,
     group_weight: f64,
+    workflow_state: String,
     drop_lowest: Option<i32>,
     drop_highest: Option<i32>,
     never_drop: Option<Vec<i64>>,
@@ -62,78 +63,16 @@ pub struct AssignmentGroupRules {
     pub never_drop: Option<Vec<ID>>,
 }
 
-/// Canvas GraphQL `AssignmentGroup`
-/// (`app/graphql/types/assignment_group_type.rb`, subset): `id`,
-/// `courseId`, `name`, `position`, `groupWeight`, `rules`, `createdAt`,
-/// `updatedAt`.
-#[derive(Debug, Clone)]
-pub struct AssignmentGroup {
-    pub id: i64,
-    pub course_id: i64,
-    pub name: String,
-    pub position: i32,
-    pub group_weight: f64,
-    pub drop_lowest: Option<i32>,
-    pub drop_highest: Option<i32>,
-    pub never_drop: Option<Vec<i64>>,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[Object]
-impl AssignmentGroup {
-    async fn id(&self) -> ID {
-        ID(self.id.to_string())
-    }
-
-    async fn course_id(&self) -> ID {
-        ID(self.course_id.to_string())
-    }
-
-    async fn name(&self) -> &str {
-        &self.name
-    }
-
-    async fn position(&self) -> i32 {
-        self.position
-    }
-
-    /// Canvas `groupWeight` — a fraction of the final grade
-    /// (0 when unweighted, like the column default).
-    async fn group_weight(&self) -> f64 {
-        self.group_weight
-    }
-
-    /// Canvas `rules` — an `AssignmentGroupRules` object, null when the
-    /// group has no rules row.
-    async fn rules(&self) -> Option<AssignmentGroupRules> {
-        if self.drop_lowest.is_none() && self.drop_highest.is_none() && self.never_drop.is_none() {
-            return None;
-        }
-        Some(AssignmentGroupRules {
-            drop_lowest: self.drop_lowest,
-            drop_highest: self.drop_highest,
-            never_drop: self
-                .never_drop
-                .as_ref()
-                .map(|ids| ids.iter().map(|id| ID(id.to_string())).collect::<Vec<ID>>()),
-        })
-    }
-
-    async fn created_at(&self) -> DateTime<Utc> {
-        self.created_at
-    }
-
-    async fn updated_at(&self) -> DateTime<Utc> {
-        self.updated_at
-    }
-}
+// NOTE: the `AssignmentGroup` object itself lives in `root_types.rs` — it is
+// the only `AssignmentGroup` in the schema (it also answers
+// `Query.assignmentGroup` and the `Node` interface), and it carries the
+// `rules` payload built from the `assignment_group_rules` columns above.
 
 /// Relay connection edge: `edges { cursor node }`.
 #[derive(Debug, Clone, SimpleObject)]
 pub struct AssignmentGroupEdge {
     pub cursor: String,
-    pub node: AssignmentGroup,
+    pub node: crate::root_types::AssignmentGroup,
 }
 
 /// Relay connection for assignment groups.
@@ -168,6 +107,7 @@ pub(crate) async fn fetch_assignment_group_page(
         r#"
         SELECT g.id, g.course_id, g.name, g.position,
                g.group_weight::float8 AS group_weight,
+               g.workflow_state,
                r.drop_lowest, r.drop_highest, r.never_drop,
                g.created_at, g.updated_at
         FROM assignment_groups g
@@ -195,12 +135,13 @@ pub(crate) async fn fetch_assignment_group_page(
             let id = row.id;
             AssignmentGroupEdge {
                 cursor: encode_cursor(id),
-                node: AssignmentGroup {
+                node: crate::root_types::AssignmentGroup {
                     id: row.id,
                     course_id: row.course_id,
                     name: row.name,
                     position: row.position,
                     group_weight: row.group_weight,
+                    workflow_state: row.workflow_state,
                     drop_lowest: row.drop_lowest,
                     drop_highest: row.drop_highest,
                     never_drop: row.never_drop,

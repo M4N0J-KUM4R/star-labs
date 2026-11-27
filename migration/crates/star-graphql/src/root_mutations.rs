@@ -246,7 +246,9 @@ impl RootMutations {
 /// (`app/graphql/types/discussion_topic_context_type_type.rb`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, async_graphql::Enum)]
 pub enum DiscussionTopicContextType {
+    #[graphql(name = "Course")]
     Course,
+    #[graphql(name = "Group")]
     Group,
 }
 
@@ -656,14 +658,14 @@ pub struct RejectEnrollmentInvitationPayload {
 /// Canvas `CreateDiscussionTopicPayload`.
 #[derive(Debug, Clone, SimpleObject)]
 pub struct CreateDiscussionTopicPayload {
-    pub discussion_topic: Option<crate::discussion_topic::DiscussionTopic>,
+    pub discussion_topic: Option<crate::discussion_topic::Discussion>,
     pub errors: Option<Vec<ValidationError>>,
 }
 
 /// Canvas `UpdateDiscussionTopicPayload`.
 #[derive(Debug, Clone, SimpleObject)]
 pub struct UpdateDiscussionTopicPayload {
-    pub discussion_topic: Option<crate::discussion_topic::DiscussionTopic>,
+    pub discussion_topic: Option<crate::discussion_topic::Discussion>,
     pub errors: Option<Vec<ValidationError>>,
 }
 
@@ -677,7 +679,7 @@ pub struct DeleteDiscussionTopicPayload {
 /// Canvas `SubscribeToDiscussionTopicPayload`.
 #[derive(Debug, Clone, SimpleObject)]
 pub struct SubscribeToDiscussionTopicPayload {
-    pub discussion_topic: Option<crate::discussion_topic::DiscussionTopic>,
+    pub discussion_topic: Option<crate::discussion_topic::Discussion>,
     pub errors: Option<Vec<ValidationError>>,
 }
 
@@ -1391,6 +1393,18 @@ pub async fn create_learning_outcome(
         return Err(async_graphql::Error::new("insufficient permission"));
     }
 
+    // Canvas' `LearningOutcome` validates the title's presence
+    // (`validates :short_description, :workflow_state, presence: true`).
+    if input.title.trim().is_empty() {
+        return Ok(CreateLearningOutcomePayload {
+            learning_outcome: None,
+            errors: Some(vec![ValidationError {
+                attribute: Some("title".to_string()),
+                message: "Title can't be blank".to_string(),
+            }]),
+        });
+    }
+
     let row: crate::root_data::LearningOutcomeRow = sqlx::query_as(
         r#"
         INSERT INTO learning_outcomes (
@@ -1463,6 +1477,18 @@ pub async fn update_learning_outcome(
         return Err(async_graphql::Error::new("insufficient permissions"));
     }
 
+    // Canvas' `LearningOutcome` validates the title's presence
+    // (`validates :short_description, :workflow_state, presence: true`).
+    if input.title.trim().is_empty() {
+        return Ok(UpdateLearningOutcomePayload {
+            learning_outcome: None,
+            errors: Some(vec![ValidationError {
+                attribute: Some("title".to_string()),
+                message: "Title can't be blank".to_string(),
+            }]),
+        });
+    }
+
     let row: crate::root_data::LearningOutcomeRow = sqlx::query_as(
         r#"
         UPDATE learning_outcomes
@@ -1501,6 +1527,15 @@ pub async fn update_learning_outcome(
 
 /// `createLearningOutcomeGroup(input: CreateLearningOutcomeGroupInput!)`.
 ///
+/// The parent row of a `createLearningOutcomeGroup` mutation — the group
+/// the new child group inherits its context from.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct LearningOutcomeGroupParentRow {
+    course_id: Option<i64>,
+    context_id: Option<i64>,
+    context_type: Option<String>,
+}
+
 /// Canvas creates a **child** of the group named by `id`.
 pub async fn create_learning_outcome_group(
     pool: &PgPool,
@@ -1509,9 +1544,9 @@ pub async fn create_learning_outcome_group(
 ) -> Result<CreateLearningOutcomeGroupPayload, async_graphql::Error> {
     let parent_id = parse_typed_id(&input.id.0, "LearningOutcomeGroup")?;
 
-    let parent: Option<(i64, Option<i64>, Option<String>)> = sqlx::query_as(
+    let parent: Option<LearningOutcomeGroupParentRow> = sqlx::query_as(
         r#"
-        SELECT id, context_id, context_type
+        SELECT course_id, context_id, context_type
         FROM learning_outcome_groups
         WHERE id = $1 AND workflow_state <> 'deleted'
         "#,
@@ -1521,7 +1556,7 @@ pub async fn create_learning_outcome_group(
     .await
     .map_err(db_err)?;
 
-    let Some((_id, context_id, context_type)) = parent else {
+    let Some(parent) = parent else {
         return Err(async_graphql::Error::new("Group not found"));
     };
     if !is_admin {
@@ -1531,18 +1566,19 @@ pub async fn create_learning_outcome_group(
     let row: crate::root_data::LearningOutcomeGroupRow = sqlx::query_as(
         r#"
         INSERT INTO learning_outcome_groups (
-            title, description, context_id, context_type, vendor_guid,
+            course_id, title, description, context_id, context_type, vendor_guid,
             workflow_state, created_at, updated_at
         )
-        VALUES ($1, $2, $3, $4, $5, 'active', now(), now())
+        VALUES ($1, $2, $3, $4, $5, $6, 'active', now(), now())
         RETURNING id, title, description, context_id, context_type, vendor_guid,
                   workflow_state, created_at, updated_at
         "#,
     )
+    .bind(parent.course_id)
     .bind(&input.title)
     .bind(&input.description)
-    .bind(context_id)
-    .bind(&context_type)
+    .bind(parent.context_id)
+    .bind(&parent.context_type)
     .bind(&input.vendor_guid)
     .fetch_one(pool)
     .await

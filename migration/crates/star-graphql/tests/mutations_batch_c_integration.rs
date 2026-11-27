@@ -200,18 +200,20 @@ async fn discussion_update_delete_round_trip() {
     .await;
     assert!(body["data"]["updateDiscussionEntry"].is_null(), "{body}");
 
-    // Blank title on topic update → payload validation error.
+    // Blank title on topic update: Canvas' `DiscussionTopic` only caps the
+    // title length (`validates :title, length: { maximum: ... }`), so a blank
+    // title is written through like any other value.
     let body = gql_post(
         &server,
         &auth(teacher, "teacher"),
         "mutation ($input: UpdateDiscussionTopicInput!) { updateDiscussionTopic(input: $input) \
-         { discussionTopic { id } errors { attribute message } } }",
+         { discussionTopic { id title } errors { attribute message } } }",
         json!({ "input": { "discussionTopicId": topic.to_string(), "title": "  " } }),
     )
     .await;
     let p = &body["data"]["updateDiscussionTopic"];
-    assert!(p["discussionTopic"].is_null(), "{body}");
-    assert_eq!(p["errors"][0]["attribute"], "title", "{body}");
+    assert_eq!(p["discussionTopic"]["id"], topic.to_string(), "{body}");
+    assert!(p["errors"].is_null(), "{body}");
 
     // Teacher deletes the entry (moderation), then the topic.
     let body = gql_post(
@@ -227,16 +229,23 @@ async fn discussion_update_delete_round_trip() {
         "{body}"
     );
 
+    // Canvas' `DeleteDiscussionTopicInput` takes the topic's `id` and the
+    // payload answers with `discussionTopicId` + `errors`.
     let body = gql_post(
         &server,
         &auth(teacher, "teacher"),
         "mutation ($input: DeleteDiscussionTopicInput!) { deleteDiscussionTopic(input: $input) \
-         { success } }",
-        json!({ "input": { "discussionTopicId": topic.to_string() } }),
+         { discussionTopicId errors { attribute message } } }",
+        json!({ "input": { "id": topic.to_string() } }),
     )
     .await;
     assert_eq!(
-        body["data"]["deleteDiscussionTopic"]["success"], true,
+        body["data"]["deleteDiscussionTopic"]["discussionTopicId"],
+        topic.to_string(),
+        "{body}"
+    );
+    assert!(
+        body["data"]["deleteDiscussionTopic"]["errors"].is_null(),
         "{body}"
     );
 
@@ -265,21 +274,32 @@ async fn outcome_group_and_outcome_crud() {
         return;
     };
 
-    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let course = seed_course(&pool, &prefix, "OutCourse").await;
-    seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
 
-    // createLearningOutcomeGroup (teacher).
+    // Canvas' `createLearningOutcomeGroup` builds a CHILD group of an
+    // existing group (`get_group(input[:id])`), so the course's root group
+    // is seeded first — outside GraphQL, like Canvas does.
+    let parent_group_id: i64 = sqlx::query_scalar(
+        "INSERT INTO learning_outcome_groups (course_id, context_id, context_type, title) \
+         VALUES ($1, $1, 'Course', 'Root') RETURNING id",
+    )
+    .bind(course)
+    .fetch_one(&pool)
+    .await
+    .expect("seed root outcome group");
+
+    // createLearningOutcomeGroup (admin).
     let body = gql_post(
         &server,
-        &auth(teacher, "teacher"),
+        &auth(admin, "admin"),
         "mutation ($input: CreateLearningOutcomeGroupInput!) \
          { createLearningOutcomeGroup(input: $input) \
          { learningOutcomeGroup { id title updatedAt } errors { message } } }",
         json!({ "input": {
-            "courseId": course.to_string(),
+            "id": parent_group_id.to_string(),
             "title": "Skills"
         } }),
     )
@@ -293,13 +313,13 @@ async fn outcome_group_and_outcome_crud() {
         "{body}"
     );
 
-    // Student cannot create a group.
+    // A caller without the outcome-management right cannot create a group.
     let body = gql_post(
         &server,
         &auth(student, "student"),
         "mutation ($input: CreateLearningOutcomeGroupInput!) \
          { createLearningOutcomeGroup(input: $input) { learningOutcomeGroup { id } } }",
-        json!({ "input": { "courseId": course.to_string(), "title": "Nope" } }),
+        json!({ "input": { "id": parent_group_id.to_string(), "title": "Nope" } }),
     )
     .await;
     assert!(
@@ -310,11 +330,11 @@ async fn outcome_group_and_outcome_crud() {
     // createLearningOutcome into the group.
     let body = gql_post(
         &server,
-        &auth(teacher, "teacher"),
+        &auth(admin, "admin"),
         "mutation ($input: CreateLearningOutcomeInput!) { createLearningOutcome(input: $input) \
          { learningOutcome { id title description displayName } errors { message } } }",
         json!({ "input": {
-            "outcomeGroupId": group_id,
+            "groupId": group_id,
             "title": "Analysis",
             "displayName": "Analytical"
         } }),
@@ -332,10 +352,10 @@ async fn outcome_group_and_outcome_crud() {
     // updateLearningOutcome.
     let body = gql_post(
         &server,
-        &auth(teacher, "teacher"),
+        &auth(admin, "admin"),
         "mutation ($input: UpdateLearningOutcomeInput!) { updateLearningOutcome(input: $input) \
          { learningOutcome { id title description } errors { message } } }",
-        json!({ "input": { "outcomeId": outcome_id, "title": "Deep Analysis" } }),
+        json!({ "input": { "id": outcome_id, "title": "Deep Analysis" } }),
     )
     .await;
     assert_eq!(
@@ -346,11 +366,11 @@ async fn outcome_group_and_outcome_crud() {
     // updateLearningOutcomeGroup.
     let body = gql_post(
         &server,
-        &auth(teacher, "teacher"),
+        &auth(admin, "admin"),
         "mutation ($input: UpdateLearningOutcomeGroupInput!) \
          { updateLearningOutcomeGroup(input: $input) \
          { learningOutcomeGroup { id title } errors { message } } }",
-        json!({ "input": { "outcomeGroupId": group_id, "title": "Core Skills" } }),
+        json!({ "input": { "id": group_id, "title": "Core Skills" } }),
     )
     .await;
     assert_eq!(
@@ -361,10 +381,10 @@ async fn outcome_group_and_outcome_crud() {
     // Blank title → payload validation error.
     let body = gql_post(
         &server,
-        &auth(teacher, "teacher"),
+        &auth(admin, "admin"),
         "mutation ($input: CreateLearningOutcomeInput!) { createLearningOutcome(input: $input) \
          { learningOutcome { id } errors { attribute message } } }",
-        json!({ "input": { "outcomeGroupId": group_id, "title": "  " } }),
+        json!({ "input": { "groupId": group_id, "title": "  " } }),
     )
     .await;
     let p = &body["data"]["createLearningOutcome"];
@@ -374,7 +394,7 @@ async fn outcome_group_and_outcome_crud() {
     // deleteLearningOutcome, then deleteLearningOutcomeGroup.
     let body = gql_post(
         &server,
-        &auth(teacher, "teacher"),
+        &auth(admin, "admin"),
         "mutation ($input: DeleteLearningOutcomeInput!) { deleteLearningOutcome(input: $input) \
          { success } }",
         json!({ "input": { "outcomeId": outcome_id } }),
@@ -387,7 +407,7 @@ async fn outcome_group_and_outcome_crud() {
 
     let body = gql_post(
         &server,
-        &auth(teacher, "teacher"),
+        &auth(admin, "admin"),
         "mutation ($input: DeleteLearningOutcomeGroupInput!) \
          { deleteLearningOutcomeGroup(input: $input) { success } }",
         json!({ "input": { "outcomeGroupId": group_id } }),
@@ -458,11 +478,12 @@ async fn rubric_comment_preference_dismiss_round_trip() {
             .await
             .expect("seed account");
     let notification: i64 = sqlx::query_scalar(
-        "INSERT INTO account_notifications (account_id, subject, message, start_at, end_at) \
-         VALUES ($1, 'Notice', 'Hello', now() - interval '1 hour', now() + interval '1 day') \
+        "INSERT INTO account_notifications (account_id, user_id, subject, message, start_at, end_at) \
+         VALUES ($1, $2, 'Notice', 'Hello', now() - interval '1 hour', now() + interval '1 day') \
          RETURNING id",
     )
     .bind(account_id)
+    .bind(student)
     .fetch_one(&pool)
     .await
     .expect("seed notification");
@@ -615,17 +636,18 @@ async fn rubric_comment_preference_dismiss_round_trip() {
         "{body}"
     );
 
-    // dismissAccountNotification: valid window succeeds.
+    // dismissAccountNotification: the recipient dismisses it. Canvas'
+    // `DismissAccountNotificationPayload` carries only `errors`.
     let body = gql_post(
         &server,
         &auth(student, "student"),
         "mutation ($input: DismissAccountNotificationInput!) \
-         { dismissAccountNotification(input: $input) { success } }",
-        json!({ "input": { "accountNotificationId": notification.to_string() } }),
+         { dismissAccountNotification(input: $input) { errors { attribute message } } }",
+        json!({ "input": { "notificationId": notification.to_string() } }),
     )
     .await;
-    assert_eq!(
-        body["data"]["dismissAccountNotification"]["success"], true,
+    assert!(
+        body["data"]["dismissAccountNotification"]["errors"].is_null(),
         "{body}"
     );
 
@@ -634,8 +656,8 @@ async fn rubric_comment_preference_dismiss_round_trip() {
         &server,
         &auth(student, "student"),
         "mutation ($input: DismissAccountNotificationInput!) \
-         { dismissAccountNotification(input: $input) { success } }",
-        json!({ "input": { "accountNotificationId": "999999999" } }),
+         { dismissAccountNotification(input: $input) { errors { attribute message } } }",
+        json!({ "input": { "notificationId": "999999999" } }),
     )
     .await;
     assert!(
