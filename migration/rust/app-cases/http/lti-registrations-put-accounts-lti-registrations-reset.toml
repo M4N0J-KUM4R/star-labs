@@ -1,9 +1,9 @@
 [request]
 method = "PUT"
-path = "/api/v1/accounts/6/lti_registrations/2/reset"
+path = "/api/v1/accounts/6/lti_registrations/3/reset"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 404

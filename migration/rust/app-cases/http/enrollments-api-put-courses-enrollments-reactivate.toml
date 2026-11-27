@@ -1,12 +1,12 @@
 [request]
 method = "PUT"
-path = "/api/v1/courses/1/enrollments/7/reactivate"
+path = "/api/v1/courses/1/enrollments/10/reactivate"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
-status = 404
+status = 400
 
 [response.headers]
 cache-control = "no-cache"

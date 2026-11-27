@@ -1,9 +1,9 @@
 [request]
 method = "PUT"
-path = "/api/v1/sections/2/assignments/1/submissions/1/rubric_assessments/read"
+path = "/api/v1/sections/3/assignments/1/submissions/1/rubric_assessments/read"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 404

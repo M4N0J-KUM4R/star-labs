@@ -3,7 +3,7 @@ method = "GET"
 path = "/api/v1/groups/1/activity_stream"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 404

@@ -3,7 +3,7 @@ method = "POST"
 path = "/api/v1/accounts/6/rubrics/download_rubrics"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 400

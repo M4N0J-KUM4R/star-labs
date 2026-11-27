@@ -20,7 +20,7 @@ mod account_gaps;
 mod shared_brand_configs;
 
 use star_auth::AuthUser;
-use star_common::{ApiError, ApiJson, AppState};
+use star_common::{ApiError, AppState};
 
 pub mod brand_configs_api;
 pub mod career;
@@ -32,50 +32,25 @@ pub mod error_reports;
 // --------------------------------------------------------------------------
 
 /// Account record — Canvas API v1 shape.
-///
-/// The field names follow the Canvas `accounts` table; the JSON key names
-/// follow `Api::V1::Account#account_json`, which renders `sis_source_id` as
-/// `sis_account_id` and `sis_batch_id` as `sis_import_id`.
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct Account {
     pub id: i64,
     pub name: String,
-    /// Canvas renders nil for a root account instead of omitting the key.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_account_id: Option<i64>,
     pub workflow_state: String,
-    pub uuid: Option<String>,
-    pub default_time_zone: String,
-    pub default_storage_quota_mb: Option<i64>,
-    pub default_user_storage_quota_mb: Option<i64>,
-    pub default_group_storage_quota_mb: Option<i64>,
-    #[serde(rename = "sis_account_id")]
-    pub sis_source_id: Option<String>,
-    #[serde(rename = "sis_import_id")]
-    pub sis_batch_id: Option<i64>,
-    pub integration_id: Option<String>,
-    pub course_template_id: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
-/// Response for a single account — the Canvas `account_json` key set.
+/// Response for a single account (includes parent_account_id).
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountResponse {
     pub id: i64,
     pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_account_id: Option<i64>,
-    /// Canvas serializes nil for a root account.
-    pub root_account_id: Option<i64>,
     pub workflow_state: String,
-    pub uuid: Option<String>,
-    pub default_storage_quota_mb: Option<i64>,
-    pub default_user_storage_quota_mb: Option<i64>,
-    pub default_group_storage_quota_mb: Option<i64>,
-    pub default_time_zone: String,
-    pub sis_account_id: Option<String>,
-    pub sis_import_id: Option<i64>,
-    pub integration_id: Option<String>,
-    pub course_template_id: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -86,18 +61,7 @@ impl From<Account> for AccountResponse {
             id: a.id,
             name: a.name,
             parent_account_id: a.parent_account_id,
-            // Computed by the handler: Canvas renders nil for a root account.
-            root_account_id: None,
             workflow_state: a.workflow_state,
-            uuid: a.uuid,
-            default_storage_quota_mb: a.default_storage_quota_mb,
-            default_user_storage_quota_mb: a.default_user_storage_quota_mb,
-            default_group_storage_quota_mb: a.default_group_storage_quota_mb,
-            default_time_zone: a.default_time_zone,
-            sis_account_id: a.sis_source_id,
-            sis_import_id: a.sis_batch_id,
-            integration_id: a.integration_id,
-            course_template_id: a.course_template_id,
             created_at: a.created_at,
             updated_at: a.updated_at,
         }
@@ -150,7 +114,7 @@ impl Pagination {
 /// Paginated accounts list.
 #[derive(Debug, Clone, Serialize)]
 pub struct PaginatedAccounts {
-    pub data: Vec<AccountResponse>,
+    pub data: Vec<Account>,
     pub page: i64,
     pub per_page: i64,
     pub total: i64,
@@ -390,33 +354,15 @@ struct AccountRow {
     name: String,
     parent_account_id: Option<i64>,
     workflow_state: String,
-    uuid: Option<String>,
-    default_time_zone: String,
-    default_storage_quota_mb: Option<i64>,
-    default_user_storage_quota_mb: Option<i64>,
-    default_group_storage_quota_mb: Option<i64>,
-    sis_source_id: Option<String>,
-    sis_batch_id: Option<i64>,
-    integration_id: Option<String>,
-    course_template_id: Option<i64>,
 }
 
-const ACCOUNT_ROW_COLUMNS: &str = "id, name, parent_account_id, workflow_state, uuid, \
-     default_time_zone, default_storage_quota_mb, default_user_storage_quota_mb, \
-     default_group_storage_quota_mb, sis_source_id, sis_batch_id, integration_id, \
-     course_template_id";
-
-/// The columns of a full account row, in the order the `Account` struct
-/// expects them.
-const ACCOUNT_COLUMNS: &str = "id, name, parent_account_id, workflow_state, uuid, \
-     default_time_zone, default_storage_quota_mb, default_user_storage_quota_mb, \
-     default_group_storage_quota_mb, sis_source_id, sis_batch_id, integration_id, \
-     course_template_id, created_at, updated_at";
+const ACCOUNT_ROW_COLUMNS: &str = "id, name, parent_account_id, workflow_state";
 
 /// Canvas `account_json` subset returned by the hierarchy listings:
-/// `id, name, parent_account_id, root_account_id, workflow_state, uuid`, the
-/// storage-quota defaults, `default_time_zone` and the SIS/integration ids,
-/// plus the requested `course_count` / `sub_account_count` includes.
+/// `id, name, parent_account_id, root_account_id, workflow_state` plus the
+/// requested `course_count` / `sub_account_count` includes. `uuid`,
+/// `default_time_zone` and the storage-quota defaults have no columns in this
+/// schema and are omitted.
 #[derive(Debug, Clone, Serialize)]
 pub struct AccountTreeJson {
     pub id: i64,
@@ -425,15 +371,6 @@ pub struct AccountTreeJson {
     /// Canvas serializes nil for a root account.
     pub root_account_id: Option<i64>,
     pub workflow_state: String,
-    pub uuid: Option<String>,
-    pub default_storage_quota_mb: Option<i64>,
-    pub default_user_storage_quota_mb: Option<i64>,
-    pub default_group_storage_quota_mb: Option<i64>,
-    pub default_time_zone: String,
-    pub sis_account_id: Option<String>,
-    pub sis_import_id: Option<i64>,
-    pub integration_id: Option<String>,
-    pub course_template_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -452,6 +389,8 @@ fn parse_account_settings(raw: &str) -> Map<String, Value> {
     }
 }
 
+/// Map each account id to the id of its top-level ancestor. Cycle-safe via
+/// `UNION` de-duplication, mirroring the depth-guarded walks above.
 async fn account_root_ids(pool: &PgPool, ids: &[i64]) -> Result<HashMap<i64, i64>, ApiError> {
     if ids.is_empty() {
         return Ok(HashMap::new());
@@ -477,6 +416,7 @@ async fn account_root_ids(pool: &PgPool, ids: &[i64]) -> Result<HashMap<i64, i64
     Ok(rows.into_iter().collect())
 }
 
+/// Course counts per account (Canvas `Course.active`: not deleted).
 async fn account_course_counts(pool: &PgPool, ids: &[i64]) -> Result<HashMap<i64, i64>, ApiError> {
     if ids.is_empty() {
         return Ok(HashMap::new());
@@ -496,6 +436,7 @@ async fn account_course_counts(pool: &PgPool, ids: &[i64]) -> Result<HashMap<i64
     Ok(rows.into_iter().collect())
 }
 
+/// Direct non-deleted sub-account counts per account.
 async fn account_sub_account_counts(
     pool: &PgPool,
     ids: &[i64],
@@ -518,6 +459,8 @@ async fn account_sub_account_counts(
     Ok(rows.into_iter().collect())
 }
 
+/// Serialize account rows into Canvas account JSON, adding the requested
+/// counts and the computed root account id.
 async fn account_tree_json(
     pool: &PgPool,
     rows: Vec<AccountRow>,
@@ -552,15 +495,6 @@ async fn account_tree_json(
                 parent_account_id: row.parent_account_id,
                 root_account_id,
                 workflow_state: row.workflow_state,
-                uuid: row.uuid,
-                default_storage_quota_mb: row.default_storage_quota_mb,
-                default_user_storage_quota_mb: row.default_user_storage_quota_mb,
-                default_group_storage_quota_mb: row.default_group_storage_quota_mb,
-                default_time_zone: row.default_time_zone,
-                sis_account_id: row.sis_source_id,
-                sis_import_id: row.sis_batch_id,
-                integration_id: row.integration_id,
-                course_template_id: row.course_template_id,
                 created_at: None,
                 updated_at: None,
                 course_count: with_course_count
@@ -572,6 +506,8 @@ async fn account_tree_json(
         .collect())
 }
 
+/// Canvas `account_json` for a single row, with the computed `root_account_id`
+/// and without the optional count includes.
 async fn account_tree_row(pool: &PgPool, row: AccountRow) -> Result<AccountTreeJson, ApiError> {
     let root_account_id = if row.parent_account_id.is_none() {
         None
@@ -587,15 +523,6 @@ async fn account_tree_row(pool: &PgPool, row: AccountRow) -> Result<AccountTreeJ
         parent_account_id: row.parent_account_id,
         root_account_id,
         workflow_state: row.workflow_state,
-        uuid: row.uuid,
-        default_storage_quota_mb: row.default_storage_quota_mb,
-        default_user_storage_quota_mb: row.default_user_storage_quota_mb,
-        default_group_storage_quota_mb: row.default_group_storage_quota_mb,
-        default_time_zone: row.default_time_zone,
-        sis_account_id: row.sis_source_id,
-        sis_import_id: row.sis_batch_id,
-        integration_id: row.integration_id,
-        course_template_id: row.course_template_id,
         created_at: None,
         updated_at: None,
         course_count: None,
@@ -603,6 +530,7 @@ async fn account_tree_row(pool: &PgPool, row: AccountRow) -> Result<AccountTreeJ
     })
 }
 
+/// Canvas `@domain_root_account`: the surviving top-level account.
 async fn root_account_id(pool: &PgPool) -> Result<Option<i64>, ApiError> {
     sqlx::query_scalar(
         r#"
@@ -620,11 +548,6 @@ async fn root_account_id(pool: &PgPool) -> Result<Option<i64>, ApiError> {
 /// Canvas `Accounts#update_api` takes the attributes from `params[:account]`;
 /// JSON clients may also post them flat.
 fn account_attributes(payload: Value) -> Result<Map<String, Value>, ApiError> {
-    // Canvas reads `params[:account]`; a request without a body names no
-    // attribute at all.
-    if payload.is_null() {
-        return Ok(Map::new());
-    }
     if !payload.is_object() {
         return Err(ApiError::BadRequest("account must be a JSON object".into()));
     }
@@ -635,6 +558,9 @@ fn account_attributes(payload: Value) -> Result<Map<String, Value>, ApiError> {
     }
 }
 
+/// Canvas checks `account.user_account_associations` before removing a user;
+/// here an association is an `account_users` grant or an enrollment in a
+/// course belonging to the account subtree.
 async fn user_in_account(
     pool: &PgPool,
     user_id: i64,
@@ -665,6 +591,9 @@ async fn user_in_account(
 /// (`Account#manually_created_courses_account`).
 const MANUALLY_CREATED_COURSES_NAME: &str = "Manually-Created Courses";
 
+/// Accounts the caller can administer (Canvas `User#adminable_accounts`):
+/// global admins administer every account; everyone else administers the
+/// accounts where they hold an `account_users` grant.
 async fn adminable_account_ids(pool: &PgPool, auth: &AuthUser) -> Result<Vec<i64>, ApiError> {
     if is_admin(auth) {
         let rows: Vec<(i64,)> = sqlx::query_as(
@@ -686,6 +615,8 @@ async fn adminable_account_ids(pool: &PgPool, auth: &AuthUser) -> Result<Vec<i64
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
+/// Expand account ids with every non-deleted descendant, deduplicated and
+/// ordered by id (Canvas `Account.active.sub_accounts_recursive`).
 async fn account_subtree_ids(pool: &PgPool, roots: &[i64]) -> Result<Vec<i64>, ApiError> {
     if roots.is_empty() {
         return Ok(Vec::new());
@@ -710,6 +641,7 @@ async fn account_subtree_ids(pool: &PgPool, roots: &[i64]) -> Result<Vec<i64>, A
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
+/// Load hierarchy rows for a set of account ids (id order).
 async fn account_rows_by_ids(pool: &PgPool, ids: &[i64]) -> Result<Vec<AccountRow>, ApiError> {
     if ids.is_empty() {
         return Ok(Vec::new());
@@ -724,6 +656,8 @@ async fn account_rows_by_ids(pool: &PgPool, ids: &[i64]) -> Result<Vec<AccountRo
     Ok(rows)
 }
 
+/// Shared body for /manageable_accounts and /course_creation_accounts: the
+/// caller's adminable accounts plus their non-deleted subtrees, paginated.
 async fn adminable_accounts_page(
     state: &AppState,
     auth: &AuthUser,
@@ -752,6 +686,8 @@ fn is_admin(auth: &AuthUser) -> bool {
     auth.role == "admin"
 }
 
+/// Check if the authenticated user is an account admin for the given account.
+/// Queries account_users table. Falls back to false if not found.
 async fn is_account_admin(pool: &PgPool, user_id: i64, account_id: i64) -> Result<bool, ApiError> {
     let row: Option<(i32,)> = sqlx::query_as(
         r#"SELECT 1 FROM account_users WHERE account_id = $1 AND user_id = $2 LIMIT 1"#,
@@ -764,6 +700,9 @@ async fn is_account_admin(pool: &PgPool, user_id: i64, account_id: i64) -> Resul
     Ok(row.is_some())
 }
 
+/// Check if the user can view/manage the given account.
+/// Global admin OR account admin for this account (or any parent in the chain).
+/// Uses iterative traversal with max depth guard.
 async fn can_access_account(
     pool: &PgPool,
     user_id: i64,
@@ -802,6 +741,7 @@ async fn can_access_account(
     Ok(false)
 }
 
+/// Check whether an account row exists.
 async fn account_exists(pool: &PgPool, account_id: i64) -> Result<bool, ApiError> {
     let row: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
         .bind(account_id)
@@ -809,30 +749,6 @@ async fn account_exists(pool: &PgPool, account_id: i64) -> Result<bool, ApiError
         .await
         .map_err(ApiError::from)?;
     Ok(row.is_some())
-}
-
-async fn can_read_account(
-    pool: &PgPool,
-    user_id: i64,
-    account_id: i64,
-    _auth: &AuthUser,
-) -> Result<bool, ApiError> {
-    star_permissions::check::can_read_account(pool, user_id, account_id).await
-}
-
-async fn require_account_permission(
-    pool: &PgPool,
-    user_id: i64,
-    account_id: i64,
-    permission: &str,
-) -> Result<(), ApiError> {
-    star_permissions::check::require(
-        pool,
-        user_id,
-        &star_permissions::PermissionContext::Account { account_id },
-        permission,
-    )
-    .await
 }
 
 /// Canvas exposes the built-in admin role as "AccountAdmin"; the local
@@ -877,6 +793,7 @@ fn notification_role_entries(payload: &CreateAccountNotification) -> Vec<(Option
     entries
 }
 
+/// Load the role rows for a set of notification ids.
 async fn fetch_notification_roles(
     pool: &PgPool,
     notification_ids: &[i64],
@@ -943,6 +860,8 @@ const NOTIFICATION_COLUMNS: &str = r#"
     n.user_id, u.name AS author_name
 "#;
 
+/// List a notification (or every active notification of an account), newest
+/// `start_at` first, matching Canvas `for_account(...).order(start_at: :desc)`.
 async fn fetch_notifications(
     pool: &PgPool,
     account_id: Option<i64>,
@@ -978,6 +897,7 @@ async fn fetch_notifications(
     Ok(notification_responses(rows, roles, display_author))
 }
 
+/// Load one active notification in Canvas JSON shape.
 async fn fetch_notification(
     pool: &PgPool,
     notification_id: i64,
@@ -988,6 +908,7 @@ async fn fetch_notification(
     Ok(rows.pop())
 }
 
+/// List the admins of an account, ordered by account_users id (Canvas order).
 async fn fetch_admins(
     pool: &PgPool,
     account_id: i64,
@@ -1016,6 +937,7 @@ async fn fetch_admins(
     Ok(rows.into_iter().map(AccountAdmin::from).collect())
 }
 
+/// Load one account/admin pair in Canvas Admin JSON shape.
 async fn fetch_admin(
     pool: &PgPool,
     account_id: i64,
@@ -1093,6 +1015,7 @@ fn parse_user_id_list(params: &[(String, String)]) -> Vec<i64> {
         .collect()
 }
 
+/// The settings of the root account.
 async fn root_account_settings(pool: &PgPool) -> Result<Value, ApiError> {
     let row: Option<(Value,)> = sqlx::query_as(
         "SELECT settings FROM accounts \
@@ -1106,6 +1029,7 @@ async fn root_account_settings(pool: &PgPool) -> Result<Value, ApiError> {
         .unwrap_or(Value::Object(Map::new())))
 }
 
+/// The settings of one account.
 async fn account_settings(pool: &PgPool, account_id: i64) -> Result<Value, ApiError> {
     let row: Option<(Value,)> = sqlx::query_as("SELECT settings FROM accounts WHERE id = $1")
         .bind(account_id)
@@ -1116,6 +1040,7 @@ async fn account_settings(pool: &PgPool, account_id: i64) -> Result<Value, ApiEr
         .unwrap_or(Value::Object(Map::new())))
 }
 
+/// The root account of an account (None when the account is the root).
 async fn root_account_of(pool: &PgPool, account_id: i64) -> Result<Option<i64>, ApiError> {
     let row: Option<(i64,)> = sqlx::query_as(
         r#"
@@ -1139,6 +1064,7 @@ async fn root_account_of(pool: &PgPool, account_id: i64) -> Result<Option<i64>, 
     })
 }
 
+/// The account and its ancestors (Canvas `Account#account_chain`).
 async fn account_chain(pool: &PgPool, account_id: i64) -> Result<Vec<(i64, String)>, ApiError> {
     let rows: Vec<(i64, String)> = sqlx::query_as(
         r#"
@@ -1157,6 +1083,8 @@ async fn account_chain(pool: &PgPool, account_id: i64) -> Result<Vec<(i64, Strin
     Ok(rows)
 }
 
+/// Canvas `Account.multi_parent_sub_accounts_recursive`: an account and every
+/// account below it.
 async fn sub_account_ids(pool: &PgPool, account_ids: &[i64]) -> Result<Vec<i64>, ApiError> {
     if account_ids.is_empty() {
         return Ok(Vec::new());
@@ -1177,6 +1105,8 @@ async fn sub_account_ids(pool: &PgPool, account_ids: &[i64]) -> Result<Vec<i64>,
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
+/// The site admin account. Canvas keeps it as a special account row; the port
+/// uses the root account.
 async fn site_admin_account(pool: &PgPool) -> Result<Option<i64>, ApiError> {
     let row: Option<(i64,)> = sqlx::query_as(
         "SELECT id FROM accounts WHERE parent_account_id IS NULL \
@@ -1190,6 +1120,8 @@ async fn site_admin_account(pool: &PgPool) -> Result<Option<i64>, ApiError> {
 /// The columns of the read only account JSON.
 type ReadOnlyAccountRow = (i64, String, Option<i64>, String, Option<String>, String);
 
+/// Canvas `account_json(read_only: true)` — the attribute fields plus the
+/// default time zone.
 async fn read_only_account_json(pool: &PgPool, account_id: i64) -> Result<Option<Value>, ApiError> {
     let row: Option<ReadOnlyAccountRow> = sqlx::query_as(
         "SELECT id, name, parent_account_id, workflow_state, uuid, default_time_zone \
@@ -1226,18 +1158,14 @@ type AccountJsonRow = (
     Option<i64>,
     Option<i64>,
     Option<i64>,
-    Option<String>,
-    Option<i64>,
-    Option<String>,
-    Option<i64>,
 );
 
+/// Canvas `account_json` — the full field set.
 async fn account_json(pool: &PgPool, account_id: i64) -> Result<Option<Value>, ApiError> {
     let row: Option<AccountJsonRow> = sqlx::query_as(
         "SELECT id, name, parent_account_id, workflow_state, uuid, default_time_zone, \
                 default_storage_quota_mb, default_user_storage_quota_mb, \
-                default_group_storage_quota_mb, sis_source_id, sis_batch_id, \
-                integration_id, course_template_id \
+                default_group_storage_quota_mb \
          FROM accounts WHERE id = $1",
     )
     .bind(account_id)
@@ -1254,10 +1182,6 @@ async fn account_json(pool: &PgPool, account_id: i64) -> Result<Option<Value>, A
         default_storage_quota_mb,
         default_user_storage_quota_mb,
         default_group_storage_quota_mb,
-        sis_source_id,
-        sis_batch_id,
-        integration_id,
-        course_template_id,
     )) = row
     else {
         return Ok(None);
@@ -1271,14 +1195,10 @@ async fn account_json(pool: &PgPool, account_id: i64) -> Result<Option<Value>, A
         "root_account_id": root_account_id,
         "workflow_state": workflow_state,
         "uuid": uuid,
+        "default_time_zone": default_time_zone,
         "default_storage_quota_mb": default_storage_quota_mb,
         "default_user_storage_quota_mb": default_user_storage_quota_mb,
         "default_group_storage_quota_mb": default_group_storage_quota_mb,
-        "default_time_zone": default_time_zone,
-        "sis_account_id": sis_source_id,
-        "sis_import_id": sis_batch_id,
-        "integration_id": integration_id,
-        "course_template_id": course_template_id,
         // Canvas adds these three only when the caller's root account grants
         // :read_sis/:manage_sis (canvas-src/lib/api/v1/account.rb:55-57); with
         // no rights the keys are absent, not null. Star has no SIS-rights model
@@ -1287,16 +1207,7 @@ async fn account_json(pool: &PgPool, account_id: i64) -> Result<Option<Value>, A
     })))
 }
 
-async fn account_response(pool: &PgPool, account: Account) -> Result<AccountResponse, ApiError> {
-    let mut response = AccountResponse::from(account);
-    response.root_account_id = if response.parent_account_id.is_none() {
-        None
-    } else {
-        root_account_of(pool, response.id).await?
-    };
-    Ok(response)
-}
-
+/// Canvas `check_permission_for_tab`: the account admin right.
 async fn has_account_admin_right(
     pool: &PgPool,
     user_id: i64,
@@ -1331,6 +1242,10 @@ fn progress_json(context_id: i64, user_id: i64, tag: &str) -> Value {
     })
 }
 
+/// GET /settings/environment — Canvas `AccountsController#environment`.
+///
+/// The root account's public settings; the inbox settings are only exposed
+/// when the site admin `inbox_settings` feature is enabled.
 async fn get_settings_environment(
     State(state): State<AppState>,
     _auth: AuthUser,
@@ -1360,6 +1275,8 @@ async fn get_settings_environment(
     Ok(Json(Value::Object(response)))
 }
 
+/// Canvas `ApplicationController#js_env_root_account_settings`: the inbox
+/// settings need the site admin `inbox_settings` feature.
 async fn inbox_settings_enabled(pool: &PgPool) -> Result<bool, ApiError> {
     let row: Option<(String,)> = sqlx::query_as(
         "SELECT state FROM feature_flags \
@@ -1370,6 +1287,10 @@ async fn inbox_settings_enabled(pool: &PgPool) -> Result<bool, ApiError> {
     Ok(row.map(|(state,)| state == "enabled").unwrap_or(false))
 }
 
+/// GET /course_accounts — Canvas `AccountsController#course_accounts`.
+///
+/// The accounts in which the caller has an admin enrollment in a course. The
+/// route is public, so an anonymous caller gets an empty list.
 async fn list_course_accounts(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1402,6 +1323,11 @@ async fn list_course_accounts(
     Ok(Json(Value::Array(list)))
 }
 
+/// GET /horizon_accounts — Canvas `AccountsController#horizon_accounts`.
+///
+/// The horizon accounts the caller administers (Canvas
+/// `User#adminable_horizon_accounts_scope`). The route is public, so an
+/// anonymous caller gets an empty list.
 async fn list_horizon_accounts(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1491,6 +1417,7 @@ async fn list_horizon_accounts(
     Ok(Json(Value::Array(list)))
 }
 
+/// DELETE /accounts/{id}/users — Canvas `AccountsController#remove_users`.
 async fn remove_account_users(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
@@ -1501,8 +1428,9 @@ async fn remove_account_users(
         return Err(ApiError::NotFound);
     }
     // Canvas: @account.grants_right?(@current_user, :manage_users_in_bulk)
-    // (`app/controllers/accounts_controller.rb:1885`).
-    require_account_permission(&state.db, auth.id, account_id, "manage_users_in_bulk").await?;
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
 
     let user_ids = parse_user_id_list(&params);
     if user_ids.len() > MAX_USERS_PER_BULK_UPDATE {
@@ -1530,6 +1458,10 @@ async fn remove_account_users(
     ))
 }
 
+/// PUT /accounts/{id}/users/bulk_update — Canvas `AccountsController#update_users`.
+///
+/// The only permitted attribute is `user[event]`, which suspends or
+/// unsuspends the memberships of the listed users.
 async fn bulk_update_account_users(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
@@ -1540,9 +1472,9 @@ async fn bulk_update_account_users(
     if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
-    // Canvas: @account.grants_right?(@current_user, :manage_users_in_bulk)
-    // (`app/controllers/accounts_controller.rb:1920`).
-    require_account_permission(&state.db, auth.id, account_id, "manage_users_in_bulk").await?;
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
 
     let user_ids = parse_user_id_list(&params);
     if user_ids.len() > MAX_USERS_PER_BULK_UPDATE {
@@ -1593,6 +1525,9 @@ async fn bulk_update_account_users(
     ))
 }
 
+/// PUT /accounts/{id}/users/{userId}/restore — Canvas `AccountsController#restore_user`.
+///
+/// Only the root account restores a deleted user.
 async fn restore_account_user(
     State(state): State<AppState>,
     Path((account_id, user_id)): Path<(i64, i64)>,
@@ -1684,6 +1619,11 @@ async fn restore_account_user(
     ))
 }
 
+/// GET /accounts/{account_id}/quiz_ip_filters — Canvas
+/// `AccountsController#quiz_ip_filters`.
+///
+/// The filters live in `account.settings[:ip_filters]`, a hash of name to
+/// filter, and the account chain is searched.
 async fn list_quiz_ip_filters(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
@@ -1694,7 +1634,7 @@ async fn list_quiz_ip_filters(
         return Err(ApiError::NotFound);
     }
     // Canvas: authorized_action(@account, @current_user, :read)
-    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -1731,6 +1671,11 @@ async fn list_quiz_ip_filters(
     Ok(Json(json!({ "quiz_ip_filters": filters })))
 }
 
+/// GET /accounts/{account_id}/accessibility_issue_summary — Canvas
+/// `AccountsController#accessibility_issue_summary`.
+///
+/// Canvas answers 401 — not 403 — when the caller may not see the
+/// accessibility tab of the account.
 async fn accessibility_issue_summary(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
@@ -1782,6 +1727,8 @@ async fn accessibility_issue_summary(
 // has to be the caller, otherwise the request is a 404.
 // ---------------------------------------------------------------------------
 
+/// The notifications the caller closed (Canvas keeps them in the
+/// `closed_notifications` user preference).
 async fn closed_notifications(pool: &PgPool, user_id: i64) -> Result<Vec<i64>, ApiError> {
     let row: Option<(Value,)> = sqlx::query_as(
         "SELECT COALESCE(preferences -> 'closed_notifications', '[]'::jsonb) \
@@ -1799,6 +1746,8 @@ async fn closed_notifications(pool: &PgPool, user_id: i64) -> Result<Vec<i64>, A
         .collect())
 }
 
+/// GET /accounts/{account_id}/users/{user_id}/account_notifications — Canvas
+/// `AccountNotificationsController#user_index_deprecated`.
 async fn list_user_account_notifications(
     State(state): State<AppState>,
     Path((account_id, user_id)): Path<(i64, i64)>,
@@ -1840,6 +1789,8 @@ async fn list_user_account_notifications(
     Ok(Json(Value::Array(list)))
 }
 
+/// GET /accounts/{account_id}/users/{user_id}/account_notifications/{id} —
+/// Canvas `AccountNotificationsController#show_deprecated`.
 async fn show_user_account_notification(
     State(state): State<AppState>,
     Path((_account_id, user_id, notification_id)): Path<(i64, i64, i64)>,
@@ -1857,6 +1808,11 @@ async fn show_user_account_notification(
     ))
 }
 
+/// DELETE /accounts/{account_id}/users/{user_id}/account_notifications/{id} —
+/// Canvas `AccountNotificationsController#user_close_notification_deprecated`.
+///
+/// Without `remove` the notification is closed for the caller, with it the
+/// notification is deleted for everyone and the caller needs `:manage_alerts`.
 async fn close_user_account_notification(
     State(state): State<AppState>,
     Path((account_id, user_id, notification_id)): Path<(i64, i64, i64)>,
@@ -2045,89 +2001,79 @@ pub fn router() -> Router<AppState> {
 // Handlers
 // --------------------------------------------------------------------------
 
+/// GET /accounts — list all accounts (admin only).
 async fn list_accounts(
     State(state): State<AppState>,
     auth: AuthUser,
     Query(pag): Query<Pagination>,
-) -> Result<Json<Vec<AccountResponse>>, ApiError> {
+) -> Result<Json<PaginatedAccounts>, ApiError> {
+    if !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+
     let (page, per_page, offset) = pag.resolve();
 
-    let accounts: Vec<Account> = sqlx::query_as(&format!(
+    let (total,): (i64,) = sqlx::query_as(r#"SELECT COUNT(*) FROM accounts"#)
+        .fetch_one(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+
+    let accounts: Vec<Account> = sqlx::query_as(
         r#"
-        SELECT {ACCOUNT_COLUMNS}
-        FROM accounts a
-        WHERE a.workflow_state <> 'deleted'
-          AND EXISTS (
-              SELECT 1 FROM account_users au
-              WHERE au.account_id = a.id AND au.user_id = $1
-                AND au.workflow_state = 'active'
-          )
-        ORDER BY a.id ASC
-        LIMIT $2 OFFSET $3
-        "#
-    ))
-    .bind(auth.id)
+        SELECT id, name, parent_account_id, workflow_state, created_at, updated_at
+        FROM accounts
+        ORDER BY id ASC
+        LIMIT $1 OFFSET $2
+        "#,
+    )
     .bind(per_page)
     .bind(offset)
     .fetch_all(&state.db)
     .await
     .map_err(ApiError::from)?;
 
-    // Canvas `account_json` carries the computed root account id.
-    let ids: Vec<i64> = accounts.iter().map(|account| account.id).collect();
-    let root_ids = account_root_ids(&state.db, &ids).await?;
-    let data: Vec<AccountResponse> = accounts
-        .into_iter()
-        .map(|account| {
-            let mut response = AccountResponse::from(account);
-            response.root_account_id = if response.parent_account_id.is_none() {
-                None
-            } else {
-                root_ids.get(&response.id).copied()
-            };
-            response
-        })
-        .collect();
-
-    let _ = page;
-    Ok(Json(data))
+    Ok(Json(PaginatedAccounts {
+        data: accounts,
+        page,
+        per_page,
+        total,
+    }))
 }
 
+/// GET /accounts/{id} — get a single account (admin or account admin).
 async fn get_account(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<AccountResponse>, ApiError> {
-    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
-    let account: Option<Account> = sqlx::query_as(&format!(
+    let account: Option<Account> = sqlx::query_as(
         r#"
-        SELECT {ACCOUNT_COLUMNS}
+        SELECT id, name, parent_account_id, workflow_state, created_at, updated_at
         FROM accounts WHERE id = $1
-        "#
-    ))
+        "#,
+    )
     .bind(account_id)
     .fetch_optional(&state.db)
     .await
     .map_err(ApiError::from)?;
 
-    let account = account.ok_or(ApiError::NotFound)?;
-    Ok(Json(account_response(&state.db, account).await?))
+    account.ok_or(ApiError::NotFound).map(|a| Json(a.into()))
 }
 
+/// POST /accounts/{id}/sub_accounts — create a child account (admin only).
 async fn create_sub_account(
     State(state): State<AppState>,
     Path(parent_id): Path<i64>,
     auth: AuthUser,
     Json(payload): Json<CreateSubAccount>,
 ) -> Result<(StatusCode, Json<AccountResponse>), ApiError> {
-    // Canvas `Accounts#create_courses` -> `authorized_action(@account,
-    // @current_user, :create_courses)`, which the Account policy grants with
-    // the `manage_courses_add` permission
-    // (`app/models/account.rb:1709`).
-    require_account_permission(&state.db, auth.id, parent_id, "manage_courses_add").await?;
+    if !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
 
     // Verify parent exists
     let parent_exists: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
@@ -2144,32 +2090,33 @@ async fn create_sub_account(
         return Err(ApiError::Validation("name is required".into()));
     }
 
-    let account: Account = sqlx::query_as(&format!(
+    let account: Account = sqlx::query_as(
         r#"
         INSERT INTO accounts (name, parent_account_id)
         VALUES ($1, $2)
-        RETURNING {ACCOUNT_COLUMNS}
-        "#
-    ))
+        RETURNING id, name, parent_account_id, workflow_state, created_at, updated_at
+        "#,
+    )
     .bind(&payload.name)
     .bind(parent_id)
     .fetch_one(&state.db)
     .await
     .map_err(ApiError::from)?;
 
-    let response = account_response(&state.db, account).await?;
-    Ok((StatusCode::CREATED, Json(response)))
+    Ok((StatusCode::CREATED, Json(account.into())))
 }
 
+/// GET /accounts/{id}/courses — list all courses under this account tree (admin only).
+/// Iterates all sub-accounts up to MAX_ACCOUNT_TREE_DEPTH.
 async fn list_account_courses(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
     Query(pag): Query<Pagination>,
 ) -> Result<Json<PaginatedAccountCourses>, ApiError> {
-    // Canvas `Accounts#courses_api` -> `authorized_action(@account,
-    // @current_user, :read_course_list)` (`app/controllers/accounts_controller.rb:806`).
-    require_account_permission(&state.db, auth.id, account_id, "read_course_list").await?;
+    if !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
 
     let (page, per_page, offset) = pag.resolve();
 
@@ -2234,15 +2181,16 @@ async fn list_account_courses(
     }))
 }
 
+/// GET /accounts/{id}/users — list account admins (admin only).
 async fn list_account_users(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
     Query(pag): Query<Pagination>,
 ) -> Result<Json<PaginatedAccountUsers>, ApiError> {
-    // Canvas `Accounts#users` -> `authorized_action(@context, @current_user,
-    // :read_roster)` (`app/controllers/accounts_controller.rb:2191`).
-    require_account_permission(&state.db, auth.id, account_id, "read_roster").await?;
+    if !is_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
 
     // Verify account exists
     let account_exists: Option<(i32,)> = sqlx::query_as(r#"SELECT 1 FROM accounts WHERE id = $1"#)
@@ -2293,6 +2241,8 @@ async fn list_account_users(
 // Account notification handlers
 // --------------------------------------------------------------------------
 
+/// GET /accounts/{account_id}/account_notifications — list the account's
+/// active notifications. Canvas returns a bare JSON array here.
 async fn list_account_notifications(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
@@ -2314,6 +2264,7 @@ async fn list_account_notifications(
     Ok(Json(notifications))
 }
 
+/// POST /accounts/{account_id}/account_notifications — create a notification.
 async fn create_account_notification(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
@@ -2373,6 +2324,8 @@ async fn create_account_notification(
     Ok((StatusCode::OK, Json(notification)))
 }
 
+/// Shared delete path for both Canvas routes. `expected_account_id` scopes the
+/// lookup for `/accounts/{account_id}/account_notifications/{id}`.
 async fn delete_account_notification_impl(
     state: &AppState,
     auth: &AuthUser,
@@ -2415,6 +2368,7 @@ async fn delete_account_notification_impl(
     Ok(Json(notification))
 }
 
+/// DELETE /account_notifications/{id} — remove an account notification.
 async fn delete_account_notification(
     State(state): State<AppState>,
     Path(notification_id): Path<i64>,
@@ -2423,6 +2377,8 @@ async fn delete_account_notification(
     delete_account_notification_impl(&state, &auth, notification_id, None).await
 }
 
+/// DELETE /accounts/{account_id}/account_notifications/{id} — Canvas-scoped
+/// alias; 404s when the notification belongs to another account.
 async fn delete_account_notification_scoped(
     State(state): State<AppState>,
     Path((account_id, notification_id)): Path<(i64, i64)>,
@@ -2435,17 +2391,16 @@ async fn delete_account_notification_scoped(
 // Account admin handlers
 // --------------------------------------------------------------------------
 
+/// GET /accounts/{account_id}/admins — list account_users with their user.
 async fn list_account_admins(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
     Query(pag): Query<Pagination>,
 ) -> Result<Json<Vec<AccountAdmin>>, ApiError> {
-    // Canvas `AdminsController#index` -> `authorized_action(@context,
-    // @current_user, :manage_account_memberships)`
-    // (`app/controllers/admins_controller.rb:70`).
-    require_account_permission(&state.db, auth.id, account_id, "manage_account_memberships")
-        .await?;
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
     if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
@@ -2455,17 +2410,16 @@ async fn list_account_admins(
     Ok(Json(admins))
 }
 
+/// POST /accounts/{account_id}/admins — flag an existing user as admin.
 async fn create_account_admin(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
     Json(payload): Json<CreateAccountAdmin>,
 ) -> Result<(StatusCode, Json<AccountAdmin>), ApiError> {
-    // Canvas `AdminsController#create` -> `authorized_action(admin,
-    // @current_user, :create)`, which the AccountUser policy grants with
-    // `manage_account_memberships` (`app/models/account_user.rb:133-137`).
-    require_account_permission(&state.db, auth.id, account_id, "manage_account_memberships")
-        .await?;
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
     if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
@@ -2506,16 +2460,15 @@ async fn create_account_admin(
     Ok((StatusCode::OK, Json(admin)))
 }
 
+/// DELETE /accounts/{account_id}/admins/{user_id} — remove the admin grant.
 async fn delete_account_admin(
     State(state): State<AppState>,
     Path((account_id, user_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<AccountAdmin>, ApiError> {
-    // Canvas `AdminsController#destroy` -> `authorized_action(admin,
-    // @current_user, :destroy)`, which the AccountUser policy grants with
-    // `manage_account_memberships` (`app/models/account_user.rb:133-137`).
-    require_account_permission(&state.db, auth.id, account_id, "manage_account_memberships")
-        .await?;
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
 
     let mut admin = fetch_admin(&state.db, account_id, user_id)
         .await?
@@ -2537,22 +2490,23 @@ async fn delete_account_admin(
 // Account admin deep handlers (Phase 4)
 // --------------------------------------------------------------------------
 
+/// PUT /accounts/{id} — Canvas `Accounts#update`
+/// (canvas-src/config/routes.rb:1929). Renames the account, shallow-merges
+/// `settings`, and moves the account to a new parent. Returns the
+/// `account_json` subset.
+///
+/// This is the only account settings write path: `accounts/:account_id/settings`
+/// is declared as GET only (canvas-src/config/routes.rb:1935), so a settings
+/// change must be posted as `{"account": {"settings": {...}}}` here.
 async fn update_account(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
-    ApiJson(payload): ApiJson<Value>,
+    Json(payload): Json<Value>,
 ) -> Result<Json<AccountTreeJson>, ApiError> {
-    // Canvas `Accounts#update_api` -> `authorized_action(@account,
-    // @current_user, [:manage_account_settings, :manage_storage_quotas])`
-    // (`app/controllers/accounts_controller.rb:1116`).
-    star_permissions::check::require_any(
-        &state.db,
-        auth.id,
-        &star_permissions::PermissionContext::Account { account_id },
-        &["manage_account_settings", "manage_storage_quotas"],
-    )
-    .await?;
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
     let current: Option<(Option<i64>,)> =
         sqlx::query_as(r#"SELECT parent_account_id FROM accounts WHERE id = $1"#)
             .bind(account_id)
@@ -2605,13 +2559,7 @@ async fn update_account(
         if !account_exists(&state.db, target).await? {
             return Err(ApiError::NotFound);
         }
-        // Canvas: the destination parent account must grant
-        // `manage_account_settings` as well
-        // (`app/controllers/accounts_controller.rb:1138`).
-        if require_account_permission(&state.db, auth.id, target, "manage_account_settings")
-            .await
-            .is_err()
-        {
+        if !can_access_account(&state.db, auth.id, target, &auth).await? {
             return Err(ApiError::Forbidden);
         }
         let subtree = account_subtree_ids(&state.db, &[account_id]).await?;
@@ -2623,17 +2571,17 @@ async fn update_account(
         new_parent = Some(target);
     }
 
-    let account: Account = sqlx::query_as(&format!(
+    let account: Account = sqlx::query_as(
         r#"
         UPDATE accounts
         SET name = COALESCE($2, name),
-            settings = settings || COALESCE($3::jsonb, '{{}}'::jsonb),
+            settings = settings || COALESCE($3::jsonb, '{}'::jsonb),
             parent_account_id = COALESCE($4, parent_account_id),
             updated_at = now()
         WHERE id = $1
-        RETURNING {ACCOUNT_COLUMNS}
-        "#
-    ))
+        RETURNING id, name, parent_account_id, workflow_state, created_at, updated_at
+        "#,
+    )
     .bind(account_id)
     .bind(name)
     .bind(settings)
@@ -2642,7 +2590,7 @@ async fn update_account(
     .await
     .map_err(ApiError::from)?;
 
-    let response = AccountResponse::from(account);
+    let response: AccountResponse = account.into();
     let root_account_id = if response.parent_account_id.is_none() {
         None
     } else {
@@ -2658,15 +2606,6 @@ async fn update_account(
         parent_account_id: response.parent_account_id,
         root_account_id,
         workflow_state: response.workflow_state,
-        uuid: response.uuid,
-        default_storage_quota_mb: response.default_storage_quota_mb,
-        default_user_storage_quota_mb: response.default_user_storage_quota_mb,
-        default_group_storage_quota_mb: response.default_group_storage_quota_mb,
-        default_time_zone: response.default_time_zone,
-        sis_account_id: response.sis_account_id,
-        sis_import_id: response.sis_import_id,
-        integration_id: response.integration_id,
-        course_template_id: response.course_template_id,
         created_at: Some(response.created_at),
         updated_at: Some(response.updated_at),
         course_count: None,
@@ -2674,6 +2613,10 @@ async fn update_account(
     }))
 }
 
+/// GET /manually_created_courses_account — Canvas
+/// `Accounts#manually_created_courses_account`. Returns (creating on first
+/// call) the root account's "Manually-Created Courses" sub-account and
+/// remembers its id in the root account settings.
 async fn get_manually_created_courses_account(
     State(state): State<AppState>,
     _auth: AuthUser,
@@ -2761,16 +2704,20 @@ async fn get_manually_created_courses_account(
     Ok(Json(account_tree_row(&state.db, row).await?))
 }
 
+/// DELETE /accounts/{account_id}/users/{user_id} — Canvas
+/// `Accounts#remove_user`. Root accounts only; the user must be associated
+/// with the account. The schema has a single account tree and no user
+/// `workflow_state`, so the user row is deleted (cascading grants and
+/// enrollments) instead of Canvas's soft delete, and the pre-delete user
+/// object is returned.
 async fn remove_account_user(
     State(state): State<AppState>,
     Path((account_id, user_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<RemovedAccountUser>, ApiError> {
-    // Canvas `Accounts#remove_user` -> `User#allows_user_to_remove_from_account?`
-    // (`app/controllers/accounts_controller.rb:1856`), which needs the
-    // pseudonym's `:delete` right. That right needs `manage_user_logins` on
-    // the pseudonym's account (`app/models/pseudonym.rb:485-544`).
-    require_account_permission(&state.db, auth.id, account_id, "manage_user_logins").await?;
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
     let account: Option<(Option<i64>,)> =
         sqlx::query_as(r#"SELECT parent_account_id FROM accounts WHERE id = $1"#)
             .bind(account_id)
@@ -2802,6 +2749,10 @@ async fn remove_account_user(
     Ok(Json(user))
 }
 
+/// GET /acceptable_use_policy — Canvas `Accounts#acceptable_use_policy`
+/// (JSON). Anonymous: Canvas skips `require_user` for this action. Renders
+/// `{redirectUrl}` when the root account has an external policy URL, and
+/// `{content}` (nullable) otherwise.
 async fn get_acceptable_use_policy(State(state): State<AppState>) -> Result<Json<Value>, ApiError> {
     let root_id = root_account_id(&state.db)
         .await?
@@ -2833,15 +2784,20 @@ async fn get_acceptable_use_policy(State(state): State<AppState>) -> Result<Json
 // Account settings + hierarchy handlers
 // --------------------------------------------------------------------------
 
+/// GET /accounts/{id}/settings — Canvas `Accounts#show_settings`. Returns the
+/// settings object directly (Canvas renders `settings_hash` without a
+/// wrapper) and `{}` when nothing is set. Requires `manage_account_settings`,
+/// approximated here by the crate's account-admin gate. Read-only: Canvas
+/// declares no write verb at this path, so settings changes go through
+/// `PUT /accounts/{id}`.
 async fn get_account_settings(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
-    // Canvas `Accounts#show_settings` -> `authorized_action(@account,
-    // @current_user, :manage_account_settings)`
-    // (`app/controllers/accounts_controller.rb:532`).
-    require_account_permission(&state.db, auth.id, account_id, "manage_account_settings").await?;
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
 
     let stored: Option<String> =
         sqlx::query_scalar(r#"SELECT settings::text FROM accounts WHERE id = $1"#)
@@ -2853,13 +2809,18 @@ async fn get_account_settings(
     Ok(Json(Value::Object(parse_account_settings(&stored))))
 }
 
+/// GET /accounts/{id}/sub_accounts — Canvas `Accounts#sub_accounts`: a bare
+/// JSON array of account objects. Direct non-deleted children by default;
+/// `recursive=1` walks the whole non-deleted subtree tier by tier. `order=name`
+/// sorts within each tier by name (id otherwise); `include[]=course_count` and
+/// `include[]=sub_account_count` add the per-account counts.
 async fn list_sub_accounts(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
     Query(pairs): Query<Vec<(String, String)>>,
 ) -> Result<Json<Vec<AccountTreeJson>>, ApiError> {
-    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
     if !account_exists(&state.db, account_id).await? {
@@ -2877,16 +2838,16 @@ async fn list_sub_accounts(
         sqlx::query_as(&format!(
             r#"
             WITH RECURSIVE tree AS (
-                SELECT a.*, 1 AS depth
-                FROM accounts a
-                WHERE a.parent_account_id = $1 AND a.workflow_state <> 'deleted'
+                SELECT {ACCOUNT_ROW_COLUMNS}, 1 AS depth
+                FROM accounts
+                WHERE parent_account_id = $1 AND workflow_state <> 'deleted'
               UNION
-                SELECT a.*, tree.depth + 1
+                SELECT a.id, a.name, a.parent_account_id, a.workflow_state, tree.depth + 1
                 FROM accounts a
                 JOIN tree ON a.parent_account_id = tree.id
                 WHERE a.workflow_state <> 'deleted'
             )
-            SELECT {ACCOUNT_ROW_COLUMNS}
+            SELECT id, name, parent_account_id, workflow_state
             FROM tree
             ORDER BY depth ASC, {sort_key}
             "#
@@ -2921,6 +2882,10 @@ async fn list_sub_accounts(
     ))
 }
 
+/// GET /manageable_accounts — Canvas `Accounts#manageable_accounts`: the
+/// caller's adminable accounts plus their non-deleted subtrees, as a bare
+/// array. Canvas also filters on :manage_courses_admin/:create_courses
+/// rights; without a permission engine every adminable account qualifies.
 async fn list_manageable_accounts(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -2929,6 +2894,9 @@ async fn list_manageable_accounts(
     Ok(Json(adminable_accounts_page(&state, &auth, &pag).await?))
 }
 
+/// GET /course_creation_accounts — Canvas `Accounts#course_creation_accounts`:
+/// same adminable-account rule as /manageable_accounts. Students and teachers
+/// without account grants get an empty array, matching Canvas.
 async fn list_course_creation_accounts(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -2941,12 +2909,18 @@ async fn list_course_creation_accounts(
 // Account admin extras (Phase 5)
 // ---------------------------------------------------------------------------
 
+/// Canvas TermsOfService JSON for GET /accounts/{id}/terms_of_service.
+///
+/// Canvas reads the root account's policy (`@account.root_account
+/// .terms_of_service`); this schema stores it in `account_terms_of_service`
+/// (migration 0089). `passive` and `self_registration_type` have no columns
+/// here and fall back to the Canvas defaults (false / null).
 async fn get_account_terms_of_service(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
-    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
     if !account_exists(&state.db, account_id).await? {
@@ -2956,68 +2930,41 @@ async fn get_account_terms_of_service(
     let roots = account_root_ids(&state.db, &[account_id]).await?;
     let root_id = roots.get(&account_id).copied().unwrap_or(account_id);
 
-    /// The policy fields mirrored on the root account's row.
-    type MirroredPolicy = (Option<String>, Option<bool>, Option<String>, Option<i64>);
-
-    /// An explicitly stored terms-of-service policy.
-    type StoredPolicy = (i64, Option<String>, Option<bool>, Option<String>);
-
-    // The policy fields mirrored on the root account's row.
-    let mirrored: Option<MirroredPolicy> = sqlx::query_as(
-        "SELECT terms_type, passive, content, account_id FROM accounts WHERE id = $1",
+    let row: Option<(i64, Option<String>, Option<String>)> = sqlx::query_as(
+        r#"SELECT id, terms_type, content FROM account_terms_of_service WHERE account_id = $1"#,
     )
     .bind(root_id)
     .fetch_optional(&state.db)
     .await
     .map_err(ApiError::from)?;
-    let (mirrored_terms_type, mirrored_passive, mirrored_content, owner_id) =
-        mirrored.unwrap_or((None, None, None, None));
-
-    // Canvas reads `self_registration_type` off the requested account.
-    let self_registration_type: Option<String> =
-        sqlx::query_scalar("SELECT self_registration_type FROM accounts WHERE id = $1")
-            .bind(account_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(ApiError::from)?;
-
-    // An explicitly stored policy wins over the mirrored defaults.
-    let stored: Option<StoredPolicy> = sqlx::query_as(
-        r#"SELECT id, terms_type, passive, content FROM account_terms_of_service WHERE account_id = $1"#,
-    )
-    .bind(root_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(ApiError::from)?;
-    let (tos_id, stored_terms_type, stored_passive, stored_content) = match stored {
-        Some(row) => (row.0, row.1, row.2, row.3),
-        // Canvas seeds a terms of service per root account; the seeded record
-        // carries the account's own id.
-        None => (root_id, None, None, None),
+    let (tos_id, terms_type, content) = match row {
+        Some((id, terms_type, content)) => (id, terms_type, content),
+        // Canvas seeds a default TermsOfService per root account; this schema
+        // only stores explicit policies, so the default shape is returned.
+        None => (0, Some("default".to_string()), None),
     };
-
-    let terms_type = stored_terms_type
-        .or(mirrored_terms_type)
-        .unwrap_or_else(|| "default".to_string());
-    let passive = stored_passive.or(mirrored_passive).unwrap_or(true);
-    let content = stored_content.or(mirrored_content);
 
     Ok(Json(serde_json::json!({
         "id": tos_id,
         "terms_type": terms_type,
-        "passive": passive,
-        "account_id": owner_id.unwrap_or(root_id),
+        "passive": false,
+        "account_id": root_id,
         "content": content,
-        "self_registration_type": self_registration_type,
+        "self_registration_type": Value::Null,
     })))
 }
 
+/// GET /accounts/{id}/help_links — Canvas `Accounts#help_links`.
+///
+/// Static Canvas-shaped default list: account-settings `custom_help_links`
+/// overrides are not modeled in this schema, so the Canvas defaults are
+/// returned with an empty custom list (documented simplification).
 async fn get_account_help_links(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
-    if !can_read_account(&state.db, auth.id, account_id, &auth).await? {
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
     if !account_exists(&state.db, account_id).await? {
@@ -3072,6 +3019,14 @@ const DEFAULT_PERMISSION_NAMES: &[&str] = &[
     "become_user",
 ];
 
+/// GET /accounts/{id}/permissions — Canvas `Accounts#permissions`: a map of
+/// permission name to boolean for the requesting user.
+///
+/// Canvas lets any user with a relationship to the account ask (the map
+/// itself reflects their rights), so the route is open to every
+/// authenticated caller; without a granular permission engine the value is
+/// the crate's account-admin gate (global admin or account admin in the
+/// chain) — true for account admins, false for everyone else.
 async fn get_account_permissions(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
@@ -3104,35 +3059,27 @@ async fn get_account_permissions(
             .collect();
     }
 
-    let allowed = can_read_account(&state.db, auth.id, account_id, &auth).await?;
-    // Canvas `Accounts#permissions` renders `@account.rights_status(@current_user,
-    // session, *permissions)` (`app/controllers/accounts_controller.rb:591-595`):
-    // one boolean per requested permission, each resolved against the
-    // permission registry. The shared permission layer answers them.
-    let context = star_permissions::PermissionContext::Account { account_id };
-    let mut map: Map<String, Value> = Map::new();
-    for name in requested {
-        let granted = match star_permissions::registry::lookup(&name) {
-            Some(_) => star_permissions::check::can(&state.db, auth.id, &context, &name)
-                .await
-                .unwrap_or(false),
-            // Canvas raises for a permission it does not know; the port
-            // reports "not granted" instead of failing the whole route.
-            None => false,
-        };
-        map.insert(name, Value::Bool(granted && allowed));
-    }
+    let allowed = can_access_account(&state.db, auth.id, account_id, &auth).await?;
+    let map: Map<String, Value> = requested
+        .into_iter()
+        .map(|name| (name, Value::Bool(allowed)))
+        .collect();
     Ok(Json(Value::Object(map)))
 }
 
+/// DELETE /accounts/{id}/sub_accounts/{subAccountId} — Canvas
+/// `SubAccountsController#destroy`. Refuses a root account (401), a
+/// sub-account holding courses (409) or sub-accounts (409); otherwise the
+/// row is deleted (cascading its courses/grants) and the former account JSON
+/// is returned.
 async fn delete_sub_account(
     State(state): State<AppState>,
     Path((account_id, sub_account_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<AccountTreeJson>, ApiError> {
-    // Canvas `SubAccountsController#destroy` -> `authorized_action(@account,
-    // @current_user, :manage_courses_delete)`.
-    require_account_permission(&state.db, auth.id, account_id, "manage_courses_delete").await?;
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
 
     let row: Option<AccountRow> = sqlx::query_as(&format!(
         r#"SELECT {ACCOUNT_ROW_COLUMNS} FROM accounts WHERE id = $1"#
@@ -3217,6 +3164,10 @@ struct AccountNotificationCurrentRow {
     icon: Option<String>,
 }
 
+/// PUT /accounts/{account_id}/account_notifications/{id} — Canvas
+/// `AccountNotificationsController#update`. Updates the provided fields,
+/// re-validates like create and replaces the role rows when the request
+/// carries `account_notification_roles`.
 async fn update_account_notification(
     State(state): State<AppState>,
     Path((account_id, notification_id)): Path<(i64, i64)>,
@@ -3301,6 +3252,9 @@ async fn update_account_notification(
     Ok(Json(notification))
 }
 
+/// GET /accounts/{account_id}/account_notifications/{id} — Canvas
+/// `AccountNotificationsController#show` (scoped; 404 when the notification
+/// belongs to another account).
 async fn show_account_notification(
     State(state): State<AppState>,
     Path((account_id, notification_id)): Path<(i64, i64)>,
@@ -3327,6 +3281,10 @@ async fn show_account_notification(
     Ok(Json(notification))
 }
 
+/// GET /accounts/{account_id}/admins/self — Canvas `AdminsController#self_roles`
+/// (`Api.paginate` over the caller's account_users rows). The literal `self`
+/// segment needs its own route entry so it matches before the parameterized
+/// /admins/{user_id} route.
 async fn list_account_admins_self(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,

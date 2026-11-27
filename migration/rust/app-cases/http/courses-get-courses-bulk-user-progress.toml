@@ -3,7 +3,7 @@ method = "GET"
 path = "/api/v1/courses/1/bulk_user_progress"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 400

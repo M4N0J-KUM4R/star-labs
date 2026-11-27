@@ -3,7 +3,7 @@ method = "PUT"
 path = "/api/v1/courses/1/discussion_topics/migrate_disallow"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 404

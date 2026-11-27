@@ -3,7 +3,7 @@ method = "PUT"
 path = "/api/v1/accounts/6/courses"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 400

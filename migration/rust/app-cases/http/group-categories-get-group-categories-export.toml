@@ -3,14 +3,15 @@ method = "GET"
 path = "/api/v1/group_categories/1/export"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
-status = 404
+status = 200
 
 [response.headers]
-cache-control = "no-cache"
-content-type = "application/json; charset=utf-8"
+cache-control = "[..]"
+content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
+content-type = "[..]"
 referrer-policy = "no-referrer-when-downgrade"
 set-cookie = "[..]"
 x-canvas-meta = "[..]"

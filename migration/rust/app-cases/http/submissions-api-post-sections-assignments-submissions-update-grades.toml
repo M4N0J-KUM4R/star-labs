@@ -1,9 +1,9 @@
 [request]
 method = "POST"
-path = "/api/v1/sections/2/assignments/1/submissions/update_grades"
+path = "/api/v1/sections/3/assignments/1/submissions/update_grades"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
 status = 400

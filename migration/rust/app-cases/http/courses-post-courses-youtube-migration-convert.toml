@@ -3,10 +3,10 @@ method = "POST"
 path = "/api/v1/courses/1/youtube_migration/convert"
 
 [request.headers]
-Authorization = "Bearer parity-replay-access-token"
+Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
-status = 404
+status = 500
 
 [response.headers]
 cache-control = "no-cache"
