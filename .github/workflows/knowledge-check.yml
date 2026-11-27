@@ -54,6 +54,28 @@ jobs:
       - name: Regenerate the per-family briefs
         run: python3 tools/knowledge/gen_briefs.py
 
+      - name: Gate the facts that describe committed artefacts
+        # schema-truth is derived from the recorded corpus and the
+        # migrations; route-map attributes every Canvas route to the crate
+        # that registers it and reads that out of the committed crate
+        # sources. Both are therefore verifiable on a committed tree, and a
+        # difference means the committed facts no longer describe the tree.
+        #
+        # The gap report and the parity state are derived from the replay
+        # report, which changes whenever the corpus is re-recorded; they are
+        # regenerated and printed below, but not gated.
+        run: |
+          if ! git diff --exit-code -- \
+              docs/knowledge/facts/schema-truth.md \
+              docs/knowledge/facts/route-map.md; then
+            echo "::error::the committed facts are stale. Run:"
+            echo "  python3 tools/knowledge/gen_knowledge.py"
+            echo "  python3 tools/knowledge/gen_gap_report.py"
+            echo "  python3 tools/knowledge/gen_briefs.py"
+            git diff --stat -- docs/knowledge/ | tail -20
+            exit 1
+          fi
+
       - name: Report whether the committed facts are stale
         # The facts describe the tree they were generated from, and the
         # crate changes that produced the current ones are not committed yet.
