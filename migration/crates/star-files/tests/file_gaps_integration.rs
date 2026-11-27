@@ -315,8 +315,8 @@ async fn update_word_count_sets_the_column_and_gates_by_owner() {
     // Unknown file -> 404. Canvas decodes the JWT, then does an explicit
     // find-update, so a missing attachment is a 404
     // (`files_controller.rb:1646`).
-    let missing_jwt = star_files::create_attachment_jwt(MISSING_ID, JWT_SECRET)
-        .expect("mint attachment jwt");
+    let missing_jwt =
+        star_files::create_attachment_jwt(MISSING_ID, JWT_SECRET).expect("mint attachment jwt");
     let resp = server
         .post("/files/update_word_count")
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
@@ -390,8 +390,7 @@ async fn rce_linked_file_instfs_ids_answers_the_feature_off_shape() {
     let body: Value = resp.json();
     assert_eq!(body["status"], "unauthorized", "{body}");
     assert_eq!(
-        body["errors"][0]["message"],
-        "user not authorized to perform that action",
+        body["errors"][0]["message"], "user not authorized to perform that action",
         "{body}"
     );
 

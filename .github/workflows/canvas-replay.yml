@@ -123,7 +123,7 @@ jobs:
             --database-url "$DATABASE_URL" \
             --jwt-secret "$STAR_JWT_SECRET"
 
-      - name: Inject the replay token
+      - name: Inject the replay token and wildcard the volatile meta fields
         env:
           STAR_JWT_SECRET: ci-replay-secret-not-a-real-key
           STAR_REPLAY_TOKEN: ci-replay-access-token-not-a-real-token
@@ -134,6 +134,14 @@ jobs:
         run: |
           python3 tools/parity/token_tool.py inject rust/app-cases/http \
             "$STAR_REPLAY_TOKEN"
+          # `x-canvas-meta` carries the request's contract fields (at, dk, o,
+          # n, t, i, rlr) and the answering process's diagnostics (bytes, cpu,
+          # db time) side by side. No other process reproduces the
+          # diagnostics, so the whole header is wildcarded here and the
+          # contract fields are compared by the `meta_tool.py check` step
+          # below. Without this the replay compares a timing against a
+          # timing and every case fails.
+          python3 tools/parity/meta_tool.py normalize rust/app-cases/http
 
       - name: Replay the recorded Canvas cases
         id: replay
