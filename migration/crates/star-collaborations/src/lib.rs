@@ -419,14 +419,28 @@ type PotentialUserRow = (i64, String, Option<String>, String, String, DateTime<U
 /// `Api.paginate`): a top-level `items` array with the repo's
 /// `meta.pagination` envelope alongside it (same shape as star-eportfolios).
 fn paginated_array(items: Vec<Value>, page: i64, per_page: i64, total: i64) -> Response {
-    (
-        StatusCode::OK,
-        Json(json!({
-            "items": items,
-            "meta": {"pagination": {"page": page, "per_page": per_page, "total": total}},
-        })),
-    )
-        .into_response()
+    // Canvas renders the collection itself: `render json: collaborations.map`
+    // (app/controllers/collaborations_controller.rb:141). The pagination
+    // travels in the `Link` header (`Api.paginate`, lib/api.rb:412-413),
+    // which the response middleware builds from the request.
+    let mut response = (StatusCode::OK, Json(items)).into_response();
+    let headers = response.headers_mut();
+    headers.insert(
+        "x-total-count",
+        axum::http::HeaderValue::from_str(&total.to_string())
+            .unwrap_or(axum::http::HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "x-per-page",
+        axum::http::HeaderValue::from_str(&per_page.to_string())
+            .unwrap_or(axum::http::HeaderValue::from_static("0")),
+    );
+    headers.insert(
+        "x-page",
+        axum::http::HeaderValue::from_str(&page.to_string())
+            .unwrap_or(axum::http::HeaderValue::from_static("1")),
+    );
+    response
 }
 
 /// Collaboration JSON (lib/api/v1/collaboration.rb whitelist + user_name +
