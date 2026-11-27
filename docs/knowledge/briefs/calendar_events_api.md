@@ -20,17 +20,17 @@ names. Do not explore the repo.
 | DELETE | `/api/v1/calendar_events/:id` | yes | - | - |
 | GET | `/api/v1/calendar_events` | yes | `200` | pass |
 | GET | `/api/v1/calendar_events/:id` | yes | - | - |
-| GET | `/api/v1/calendar_events/:id/participants` | **no** | - | - |
+| GET | `/api/v1/calendar_events/:id/participants` | yes | - | - |
 | GET | `/api/v1/calendar_events/visible_contexts` | yes | `200` | pass |
-| GET | `/api/v1/courses/:course_id/calendar_events/timetable` | **no** | - | - |
+| GET | `/api/v1/courses/:course_id/calendar_events/timetable` | yes | - | - |
 | GET | `/api/v1/users/:user_id/calendar_events` | yes | - | - |
 | POST | `/api/v1/calendar_events` | yes | `200` | pass |
 | POST | `/api/v1/calendar_events/:id/reservations` | yes | - | - |
-| POST | `/api/v1/calendar_events/:id/reservations/:participant_id` | **no** | - | - |
-| POST | `/api/v1/calendar_events/save_enabled_account_calendars` | yes | `200` | pass |
+| POST | `/api/v1/calendar_events/:id/reservations/:participant_id` | yes | - | - |
+| POST | `/api/v1/calendar_events/save_enabled_account_calendars` | yes | `200` | **FAIL** |
 | POST | `/api/v1/calendar_events/save_selected_contexts` | yes | `200` | pass |
-| POST | `/api/v1/courses/:course_id/calendar_events/timetable` | **no** | - | - |
-| POST | `/api/v1/courses/:course_id/calendar_events/timetable_events` | **no** | - | - |
+| POST | `/api/v1/courses/:course_id/calendar_events/timetable` | yes | - | - |
+| POST | `/api/v1/courses/:course_id/calendar_events/timetable_events` | yes | - | - |
 | PUT | `/api/v1/calendar_events/:id` | yes | - | - |
 
 ## The answer must look like the recorded body

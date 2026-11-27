@@ -12,11 +12,41 @@ field the port still owes Canvas — the recorded body is the spec.
 
 ## `accounts`
 
-_No non-error recorded response for this table yet._
+Rust columns: 49  ·  missing vs Canvas: **17**
+
+```
+admin_nickname
+created_by
+description
+developer_key_id
+dynamic_registration_url
+icon_url
+ims_registration_id
+inherited
+internal_service
+lock_deploying
+lti_version
+manual_configuration_id
+pending_update
+reinstall_disabled
+template_registration_id
+updated_by
+vendor
+```
 
 ## `assignments`
 
-_No non-error recorded response for this table yet._
+Rust columns: 79  ·  missing vs Canvas: **7**
+
+```
+avatar_image_url
+display_name
+graded
+html_url
+not_submitted
+pronouns
+ungraded
+```
 
 ## `attachments`
 
@@ -24,45 +54,164 @@ _No non-error recorded response for this table yet._
 
 ## `calendar_events`
 
-_No non-error recorded response for this table yet._
+Rust columns: 16  ·  missing vs Canvas: **19**
+
+```
+all_context_codes
+child_events_count
+context_color
+context_name
+created_at
+description
+end_at
+hidden
+html_url
+id
+location_name
+rrule
+series_uuid
+start_at
+title
+type
+updated_at
+url
+workflow_state
+```
 
 ## `conversations`
 
-_No non-error recorded response for this table yet._
+Rust columns: 12  ·  missing vs Canvas: **3**
+
+```
+attribute
+message
+unread_count
+```
 
 ## `courses`
 
-_No non-error recorded response for this table yet._
+Rust columns: 56  ·  missing vs Canvas: **24**
+
+```
+assessed
+can_unlink
+completion
+context_id
+context_name
+context_short_name
+context_type
+course_color
+course_id
+friendly_name
+html_url
+ignore
+ignore_permanently
+message
+needs_grading_count
+quiz_lti
+sis_course_id
+sis_import_id
+storage_quota_mb
+success
+tag
+type
+url
+user_id
+```
 
 ## `enrollments`
 
-_No non-error recorded response for this table yet._
+Rust columns: 49  ·  missing vs Canvas: **1**
+
+```
+sis_import_id
+```
 
 ## `folders`
 
-_No non-error recorded response for this table yet._
+Rust columns: 32  ·  missing vs Canvas: **0**
+
+All recorded fields exist as columns.
 
 ## `group_categories`
 
-_No non-error recorded response for this table yet._
+Rust columns: 21  ·  missing vs Canvas: **10**
+
+```
+allows_multiple_memberships
+completion
+is_member
+message
+protected
+sis_group_category_id
+sis_import_id
+tag
+url
+user_id
+```
 
 ## `groups`
 
-_No non-error recorded response for this table yet._
+Rust columns: 35  ·  missing vs Canvas: **2**
+
+```
+sis_group_id
+sis_import_id
+```
 
 ## `rubrics`
 
-_No non-error recorded response for this table yet._
+Rust columns: 19  ·  missing vs Canvas: **9**
+
+```
+account_id
+attachment_id
+button_display
+data
+error_count
+progress
+rating_order
+root_account_id
+user_id
+```
 
 ## `submissions`
 
-_No non-error recorded response for this table yet._
+Rust columns: 37  ·  missing vs Canvas: **9**
+
+```
+custom_grade_status_id
+entered_grade
+entered_score
+grading_period_id
+missing
+preview_url
+read
+seconds_late
+sticker
+```
 
 ## `users`
 
-_No non-error recorded response for this table yet._
+Rust columns: 54  ·  missing vs Canvas: **13**
 
-**Total missing columns across these tables: 0.**
+```
+assignments_needing_submitting
+context_name
+context_short_name
+context_type
+course_id
+hidden
+html_url
+ignore
+ignore_permanently
+ignored
+last_login
+needs_grading_count
+type
+```
+
+**Total missing columns across these tables: 114.**
 
 To close one: add an idempotent migration in
 `migration/crates/star-db/migrations/` (never edit an existing one),

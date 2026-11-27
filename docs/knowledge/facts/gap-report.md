@@ -22,7 +22,7 @@ Canvas something.
 | GraphQL types | 621 | 275 | **418** |
 | GraphQL query fields | 28 | 32 | **18** |
 | GraphQL mutations | 100 | 0 | **100** |
-| Behavioural cases passing | 460 recorded | 212 pass / 248 fail | **248** |
+| Behavioural cases passing | 460 recorded | 112 pass / 348 fail | **348** |
 
 ## Routes Canvas mounts that the port does not
 
@@ -33,7 +33,7 @@ Canvas's long tail is LTI, AI surfaces, master templates, reporting and admin.
 |---|---:|
 | `folders` | 3 |
 
-### Routes the port registers that Canvas does not mount (188)
+### Routes the port registers that Canvas does not mount (187)
 
 - `/`  (star-graphql, star-ui)
 - `/account_notifications/{}`  (star-accounts)

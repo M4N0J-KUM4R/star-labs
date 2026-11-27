@@ -11,7 +11,7 @@ and what the parity replay says about it. An agent working on a route should
 read this file, then the Canvas file, then the Rust crate — not the whole tree.
 
 Canvas routes: **1410** in **222** controllers.
-Implemented in the port: **1397**.
+Implemented in the port: **1399**.
 
 ## `accessibility_course_scans` → `star-courses`
 
@@ -79,7 +79,7 @@ Canvas source: `app/controllers/accounts_controller.rb`  ·  routes: 22  ·  imp
 | DELETE | `/api/v1/accounts/:account_id/users` | yes | - | - |
 | DELETE | `/api/v1/accounts/:account_id/users/:user_id` | yes | - | - |
 | GET | `/api/v1/acceptable_use_policy` | yes | `200` | pass |
-| GET | `/api/v1/accounts` | yes | `200` | pass |
+| GET | `/api/v1/accounts` | yes | `200` | **FAIL** |
 | GET | `/api/v1/accounts/:account_id/accessibility_issue_summary` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/courses` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/help_links` | yes | - | - |
@@ -89,11 +89,11 @@ Canvas source: `app/controllers/accounts_controller.rb`  ·  routes: 22  ·  imp
 | GET | `/api/v1/accounts/:account_id/sub_accounts` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/terms_of_service` | yes | - | - |
 | GET | `/api/v1/accounts/:id` | yes | - | - |
-| GET | `/api/v1/course_accounts` | yes | `200` | pass |
-| GET | `/api/v1/course_creation_accounts` | yes | `200` | pass |
+| GET | `/api/v1/course_accounts` | yes | `200` | **FAIL** |
+| GET | `/api/v1/course_creation_accounts` | yes | `200` | **FAIL** |
 | GET | `/api/v1/horizon_accounts` | yes | `200` | pass |
-| GET | `/api/v1/manageable_accounts` | yes | `200` | pass |
-| GET | `/api/v1/manually_created_courses_account` | yes | `200` | pass |
+| GET | `/api/v1/manageable_accounts` | yes | `200` | **FAIL** |
+| GET | `/api/v1/manually_created_courses_account` | yes | `200` | **FAIL** |
 | GET | `/api/v1/settings/environment` | yes | `200` | pass |
 | PUT | `/api/v1/accounts/:account_id/users/:user_id/restore` | yes | - | - |
 | PUT | `/api/v1/accounts/:account_id/users/bulk_update` | yes | - | - |
@@ -361,7 +361,7 @@ Canvas source: `app/controllers/calendar_events_api_controller.rb`  ·  routes: 
 | POST | `/api/v1/calendar_events` | yes | `200` | pass |
 | POST | `/api/v1/calendar_events/:id/reservations` | yes | - | - |
 | POST | `/api/v1/calendar_events/:id/reservations/:participant_id` | yes | - | - |
-| POST | `/api/v1/calendar_events/save_enabled_account_calendars` | yes | `200` | pass |
+| POST | `/api/v1/calendar_events/save_enabled_account_calendars` | yes | `200` | **FAIL** |
 | POST | `/api/v1/calendar_events/save_selected_contexts` | yes | `200` | pass |
 | POST | `/api/v1/courses/:course_id/calendar_events/timetable` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/calendar_events/timetable_events` | yes | - | - |
@@ -594,8 +594,8 @@ Canvas source: `app/controllers/conversations_controller.rb`  ·  routes: 16  ·
 | GET | `/api/v1/conversations` | yes | `200` | pass |
 | GET | `/api/v1/conversations/:id` | yes | - | - |
 | GET | `/api/v1/conversations/batches` | yes | `200` | pass |
-| GET | `/api/v1/conversations/deleted` | yes | `200` | **FAIL** |
-| GET | `/api/v1/conversations/find_recipients` | yes | `200` | pass |
+| GET | `/api/v1/conversations/deleted` | yes | `403` | pass |
+| GET | `/api/v1/conversations/find_recipients` | yes | `200` | **FAIL** |
 | GET | `/api/v1/conversations/unread_count` | yes | `200` | pass |
 | POST | `/api/v1/conversations` | yes | `200` | pass |
 | POST | `/api/v1/conversations/:id/add_message` | yes | - | - |
@@ -604,7 +604,7 @@ Canvas source: `app/controllers/conversations_controller.rb`  ·  routes: 16  ·
 | POST | `/api/v1/conversations/mark_all_as_read` | yes | `200` | pass |
 | PUT | `/api/v1/conversations` | yes | `200` | pass |
 | PUT | `/api/v1/conversations/:id` | yes | - | - |
-| PUT | `/api/v1/conversations/restore` | yes | `400` | **FAIL** |
+| PUT | `/api/v1/conversations/restore` | yes | `403` | pass |
 
 ## `course_audit_api` → `star-auth`
 
@@ -707,7 +707,7 @@ Canvas source: `app/controllers/courses_controller.rb`  ·  routes: 38  ·  impl
 |---|---|---|---|---|
 | DELETE | `/api/v1/courses/:id` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/courses/:id` | yes | - | - |
-| GET | `/api/v1/courses` | yes | `200` | pass |
+| GET | `/api/v1/courses` | yes | `200` | **FAIL** |
 | GET | `/api/v1/courses/:course_id/activity_stream` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/activity_stream/summary` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/bulk_user_progress` | yes | - | - |
@@ -2518,13 +2518,13 @@ Canvas source: `app/controllers/rubric_associations_controller.rb`  ·  routes: 
 
 ## `rubrics` → `star-rubrics`
 
-Canvas source: `app/controllers/rubrics_controller.rb`  ·  routes: 3  ·  implemented: 1
+Canvas source: `app/controllers/rubrics_controller.rb`  ·  routes: 3  ·  implemented: 3
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| DELETE | `/api/v1/courses/:course_id/rubrics/:id` | **no** | - | - |
+| DELETE | `/api/v1/courses/:course_id/rubrics/:id` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/rubrics` | yes | - | - |
-| PUT | `/api/v1/courses/:course_id/rubrics/:id` | **no** | - | - |
+| PUT | `/api/v1/courses/:course_id/rubrics/:id` | yes | - | - |
 
 ## `rubrics_api` → `star-rubrics`
 
@@ -2542,7 +2542,7 @@ Canvas source: `app/controllers/rubrics_api_controller.rb`  ·  routes: 15  ·  
 | GET | `/api/v1/courses/:course_id/rubrics/:id/used_locations` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/rubrics/upload/:id` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/rubrics/upload/:id/rubrics` | yes | - | - |
-| GET | `/api/v1/rubrics/upload_template` | yes | `200` | pass |
+| GET | `/api/v1/rubrics/upload_template` | yes | `200` | **FAIL** |
 | POST | `/api/v1/accounts/:account_id/rubrics/download_rubrics` | yes | - | - |
 | POST | `/api/v1/accounts/:account_id/rubrics/upload` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/rubrics/download_rubrics` | yes | - | - |
@@ -2562,7 +2562,7 @@ Canvas source: `app/controllers/search_controller.rb`  ·  routes: 4  ·  implem
 
 | verb | Canvas path | implemented | recorded case | replay |
 |---|---|---|---|---|
-| GET | `/api/v1/conversations/find_recipients` | yes | `200` | pass |
+| GET | `/api/v1/conversations/find_recipients` | yes | `200` | **FAIL** |
 | GET | `/api/v1/search/all_courses` | yes | - | - |
 | GET | `/api/v1/search/recipients` | yes | - | - |
 | GET | `/api/v1/search/rubrics` | yes | - | - |
@@ -2886,13 +2886,13 @@ Canvas source: `app/controllers/users_controller.rb`  ·  routes: 39  ·  implem
 | DELETE | `/api/v1/users/:id` | yes | - | - |
 | DELETE | `/api/v1/users/:id/mobile_sessions` | yes | - | - |
 | DELETE | `/api/v1/users/:id/sessions` | yes | - | - |
-| DELETE | `/api/v1/users/mobile_sessions` | yes | `401` | **FAIL** |
-| DELETE | `/api/v1/users/self/activity_stream` | yes | `401` | **FAIL** |
+| DELETE | `/api/v1/users/mobile_sessions` | yes | `403` | pass |
+| DELETE | `/api/v1/users/self/activity_stream` | yes | `200` | pass |
 | DELETE | `/api/v1/users/self/activity_stream/:id` | yes | - | - |
-| DELETE | `/api/v1/users/self/todo/:asset_string/:purpose` | yes | `401` | **FAIL** |
+| DELETE | `/api/v1/users/self/todo/:asset_string/:purpose` | yes | `400` | pass |
 | GET | `/api/v1/accounts/:account_id/users` | yes | - | - |
-| GET | `/api/v1/dashboard/dashboard_cards` | yes | `401` | **FAIL** |
-| GET | `/api/v1/show_k5_dashboard` | yes | `401` | **FAIL** |
+| GET | `/api/v1/dashboard/dashboard_cards` | yes | `200` | **FAIL** |
+| GET | `/api/v1/show_k5_dashboard` | yes | `200` | pass |
 | GET | `/api/v1/users/:id` | yes | - | - |
 | GET | `/api/v1/users/:id/colors` | yes | - | - |
 | GET | `/api/v1/users/:id/colors/:asset_string` | yes | - | - |
@@ -2901,18 +2901,18 @@ Canvas source: `app/controllers/users_controller.rb`  ·  routes: 39  ·  implem
 | GET | `/api/v1/users/:id/new_user_tutorial_statuses` | yes | - | - |
 | GET | `/api/v1/users/:id/settings` | yes | - | - |
 | GET | `/api/v1/users/:user_id/missing_submissions` | yes | - | - |
-| GET | `/api/v1/users/activity_stream` | yes | `401` | **FAIL** |
-| GET | `/api/v1/users/self/activity_stream` | yes | `401` | **FAIL** |
-| GET | `/api/v1/users/self/activity_stream/summary` | yes | `401` | **FAIL** |
-| GET | `/api/v1/users/self/todo` | yes | `401` | **FAIL** |
-| GET | `/api/v1/users/self/todo_item_count` | yes | `401` | **FAIL** |
-| GET | `/api/v1/users/self/upcoming_events` | yes | `401` | **FAIL** |
+| GET | `/api/v1/users/activity_stream` | yes | `200` | **FAIL** |
+| GET | `/api/v1/users/self/activity_stream` | yes | `200` | pass |
+| GET | `/api/v1/users/self/activity_stream/summary` | yes | `200` | pass |
+| GET | `/api/v1/users/self/todo` | yes | `200` | **FAIL** |
+| GET | `/api/v1/users/self/todo_item_count` | yes | `200` | **FAIL** |
+| GET | `/api/v1/users/self/upcoming_events` | yes | `200` | pass |
 | POST | `/api/v1/accounts/:account_id/self_registration` | yes | - | - |
 | POST | `/api/v1/accounts/:account_id/users` | yes | - | - |
 | POST | `/api/v1/users/:id/clear_cache` | yes | - | - |
 | POST | `/api/v1/users/:id/split` | yes | - | - |
 | POST | `/api/v1/users/:user_id/files` | yes | - | - |
-| POST | `/api/v1/users/self/pandata_events_token` | yes | `401` | **FAIL** |
+| POST | `/api/v1/users/self/pandata_events_token` | yes | `403` | **FAIL** |
 | PUT | `/api/v1/users/:id` | yes | - | - |
 | PUT | `/api/v1/users/:id/colors/:asset_string` | yes | - | - |
 | PUT | `/api/v1/users/:id/dashboard_positions` | yes | - | - |

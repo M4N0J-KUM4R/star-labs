@@ -19,18 +19,18 @@ names. Do not explore the repo.
 |---|---|---|---|---|
 | DELETE | `/api/v1/conversations/:id` | yes | - | - |
 | DELETE | `/api/v1/conversations/:id/delete_for_all` | yes | - | - |
-| GET | `/api/v1/conversations` | yes | `200` | **FAIL** |
+| GET | `/api/v1/conversations` | yes | `200` | pass |
 | GET | `/api/v1/conversations/:id` | yes | - | - |
 | GET | `/api/v1/conversations/batches` | yes | `200` | pass |
 | GET | `/api/v1/conversations/deleted` | yes | `403` | pass |
 | GET | `/api/v1/conversations/find_recipients` | yes | `200` | **FAIL** |
 | GET | `/api/v1/conversations/unread_count` | yes | `200` | pass |
-| POST | `/api/v1/conversations` | yes | `200` | **FAIL** |
+| POST | `/api/v1/conversations` | yes | `200` | pass |
 | POST | `/api/v1/conversations/:id/add_message` | yes | - | - |
 | POST | `/api/v1/conversations/:id/add_recipients` | yes | - | - |
 | POST | `/api/v1/conversations/:id/remove_messages` | yes | - | - |
 | POST | `/api/v1/conversations/mark_all_as_read` | yes | `200` | pass |
-| PUT | `/api/v1/conversations` | yes | `200` | **FAIL** |
+| PUT | `/api/v1/conversations` | yes | `200` | pass |
 | PUT | `/api/v1/conversations/:id` | yes | - | - |
 | PUT | `/api/v1/conversations/restore` | yes | `403` | pass |
 

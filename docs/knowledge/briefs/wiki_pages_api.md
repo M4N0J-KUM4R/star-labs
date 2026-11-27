@@ -30,9 +30,9 @@ names. Do not explore the repo.
 | GET | `/api/v1/groups/:group_id/page_title_availability` | yes | - | - |
 | GET | `/api/v1/groups/:group_id/pages` | yes | - | - |
 | GET | `/api/v1/groups/:group_id/pages/:url_or_id` | yes | - | - |
-| GET | `/api/v1/groups/:group_id/pages/:url_or_id/revisions` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/pages/:url_or_id/revisions/:revision_id` | **no** | - | - |
-| GET | `/api/v1/groups/:group_id/pages/:url_or_id/revisions/latest` | **no** | - | - |
+| GET | `/api/v1/groups/:group_id/pages/:url_or_id/revisions` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/pages/:url_or_id/revisions/:revision_id` | yes | - | - |
+| GET | `/api/v1/groups/:group_id/pages/:url_or_id/revisions/latest` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/pages` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/pages/:url_or_id/accessibility/queue_scan` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/pages/:url_or_id/accessibility/scan` | yes | - | - |
@@ -40,7 +40,7 @@ names. Do not explore the repo.
 | POST | `/api/v1/courses/:course_id/pages/:url_or_id/revisions/:revision_id` | yes | - | - |
 | POST | `/api/v1/courses/:course_id/pages_ai/alt_text` | yes | - | - |
 | POST | `/api/v1/groups/:group_id/pages` | yes | - | - |
-| POST | `/api/v1/groups/:group_id/pages/:url_or_id/revisions/:revision_id` | **no** | - | - |
+| POST | `/api/v1/groups/:group_id/pages/:url_or_id/revisions/:revision_id` | yes | - | - |
 | POST | `/api/v1/groups/:group_id/pages_ai/alt_text` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/front_page` | yes | - | - |
 | PUT | `/api/v1/courses/:course_id/pages/:url_or_id` | yes | - | - |
