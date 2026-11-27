@@ -3,7 +3,7 @@ method = "GET"
 path = "/api/v1/accounts/6/external_tools/sessionless_launch"
 
 [request.headers]
-Authorization = "Bearer __REPLAY_TOKEN__"
+Authorization = "Bearer parity-replay-access-token"
 
 [response]
 status = 400

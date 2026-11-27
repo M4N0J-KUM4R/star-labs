@@ -946,8 +946,8 @@
       "total": 3
     },
     "rubrics": {
-      "implemented": 1,
-      "pct": 33.3,
+      "implemented": 3,
+      "pct": 100.0,
       "total": 3
     },
     "rubrics_api": {
@@ -10990,6 +10990,22 @@
       "verb": "POST"
     },
     {
+      "action": "update",
+      "controller": "rubrics",
+      "normalized_path": "courses/{}/rubrics/{}",
+      "path": "/api/v1/courses/:course_id/rubrics/:id",
+      "ui_referenced": false,
+      "verb": "PUT"
+    },
+    {
+      "action": "destroy",
+      "controller": "rubrics",
+      "normalized_path": "courses/{}/rubrics/{}",
+      "path": "/api/v1/courses/:course_id/rubrics/:id",
+      "ui_referenced": false,
+      "verb": "DELETE"
+    },
+    {
       "action": "create",
       "controller": "rubric_associations",
       "normalized_path": "courses/{}/rubric_associations",
@@ -13006,8 +13022,8 @@
     "graphql_query_root_fields_star": 32,
     "graphql_types": 246,
     "graphql_types_implemented": 245,
-    "implemented_rest_pct": 99.9,
-    "implemented_rest_routes": 1408,
+    "implemented_rest_pct": 100.0,
+    "implemented_rest_routes": 1410,
     "js_env_call_sites": 490,
     "js_env_files": 124,
     "js_env_files_implemented": 1,
@@ -13033,8 +13049,8 @@
       "web_nested": 26,
       "web_verb_mismatch": 11
     },
-    "star_route_calls": 1173,
-    "star_route_registrations": 1590,
+    "star_route_calls": 1175,
+    "star_route_registrations": 1592,
     "star_tables": 397,
     "star_test_calls_excluded": 3,
     "star_unparsed_calls": 0,

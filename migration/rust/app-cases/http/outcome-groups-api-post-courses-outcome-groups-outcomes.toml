@@ -3,7 +3,7 @@ method = "POST"
 path = "/api/v1/courses/1/outcome_groups/2/outcomes"
 
 [request.headers]
-Authorization = "Bearer __REPLAY_TOKEN__"
+Authorization = "Bearer parity-replay-access-token"
 
 [response]
 status = 404

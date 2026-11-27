@@ -3,7 +3,7 @@ method = "PUT"
 path = "/api/v1/sections/2/assignments/1/submissions/1/rubric_comments/read"
 
 [request.headers]
-Authorization = "Bearer __REPLAY_TOKEN__"
+Authorization = "Bearer parity-replay-access-token"
 
 [response]
 status = 404

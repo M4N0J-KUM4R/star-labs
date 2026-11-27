@@ -12,9 +12,7 @@ field the port still owes Canvas — the recorded body is the spec.
 
 ## `accounts`
 
-Rust columns: 30  ·  missing vs Canvas: **0**
-
-All recorded fields exist as columns.
+_No non-error recorded response for this table yet._
 
 ## `assignments`
 
@@ -30,13 +28,7 @@ _No non-error recorded response for this table yet._
 
 ## `conversations`
 
-Rust columns: 5  ·  missing vs Canvas: **3**
-
-```
-attribute
-message
-unread_count
-```
+_No non-error recorded response for this table yet._
 
 ## `courses`
 
@@ -44,15 +36,11 @@ _No non-error recorded response for this table yet._
 
 ## `enrollments`
 
-Rust columns: 31  ·  missing vs Canvas: **0**
-
-All recorded fields exist as columns.
+_No non-error recorded response for this table yet._
 
 ## `folders`
 
-Rust columns: 23  ·  missing vs Canvas: **0**
-
-All recorded fields exist as columns.
+_No non-error recorded response for this table yet._
 
 ## `group_categories`
 
@@ -60,9 +48,7 @@ _No non-error recorded response for this table yet._
 
 ## `groups`
 
-Rust columns: 22  ·  missing vs Canvas: **0**
-
-All recorded fields exist as columns.
+_No non-error recorded response for this table yet._
 
 ## `rubrics`
 
@@ -74,16 +60,9 @@ _No non-error recorded response for this table yet._
 
 ## `users`
 
-Rust columns: 26  ·  missing vs Canvas: **4**
+_No non-error recorded response for this table yet._
 
-```
-assignments_needing_submitting
-hidden
-ignored
-needs_grading_count
-```
-
-**Total missing columns across these tables: 7.**
+**Total missing columns across these tables: 0.**
 
 To close one: add an idempotent migration in
 `migration/crates/star-db/migrations/` (never edit an existing one),

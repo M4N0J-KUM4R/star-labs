@@ -15,53 +15,37 @@ Canvas something.
 
 | Dimension | Canvas | Port | Gap |
 |---|---:|---:|---:|
-| API routes mounted | 1292 | 767 | **154** |
+| API routes mounted | 1292 | 918 | **3** |
 | Permissions declared | 160 | 160 | **0** |
-| Models with a table | 351 | 29 | **322** |
-| Columns missing (models with a table) | — | — | **475** |
-| GraphQL types | 621 | 74 | **553** |
-| GraphQL query fields | 28 | 31 | **18** |
+| Models with a table | 351 | 32 | **319** |
+| Columns missing (models with a table) | — | — | **440** |
+| GraphQL types | 621 | 275 | **418** |
+| GraphQL query fields | 28 | 32 | **18** |
 | GraphQL mutations | 100 | 0 | **100** |
-| Behavioural cases passing | 430 recorded | 265 pass / 165 fail | **165** |
+| Behavioural cases passing | 460 recorded | 212 pass / 248 fail | **248** |
 
 ## Routes Canvas mounts that the port does not
 
-154 path shapes. The list is long; the shape of it is not:
+3 path shapes. The list is long; the shape of it is not:
 Canvas's long tail is LTI, AI surfaces, master templates, reporting and admin.
 
 | Canvas controller | routes not ported |
 |---|---:|
-| `gradebook_history_api` | 4 |
-| `calendar_events_api` | 4 |
-| `context_module_items_api` | 4 |
 | `folders` | 3 |
-| `brand_configs_api` | 3 |
-| `sections` | 3 |
-| `authentication_audit_api` | 3 |
-| `observer_alerts_api` | 3 |
-| `notification_preferences` | 3 |
-| `services_api` | 3 |
-| `search` | 3 |
-| `wiki_pages_api` | 3 |
-| `assessment_question_banks` | 3 |
-| `asset_processor` | 3 |
-| `outcomes_academic_benchmark_import_api` | 3 |
-| `custom_gradebook_column_data_api` | 3 |
-| `announcements_api` | 3 |
-| `smart_search` | 3 |
-| `discovery_pages_api` | 2 |
-| `course_audit_api` | 2 |
 
-### Routes the port registers that Canvas does not mount (164)
+### Routes the port registers that Canvas does not mount (188)
 
 - `/`  (star-graphql, star-ui)
 - `/account_notifications/{}`  (star-accounts)
 - `/accounts/{}/data_services`  (star-lti)
 - `/accounts/{}/data_services/{}`  (star-lti)
+- `/accounts/{}/deep_linking_response`  (star-lti)
+- `/accounts/{}/feature_flags/{}`  (star-lti)
 - `/accounts/{}/grading_schemes`  (star-grading-standards)
 - `/accounts/{}/outcome_imports/group/{}`  (star-outcomes)
 - `/accounts/{}/role_overrides`  (star-permissions)
 - `/announcements/{}`  (star-announcements)
+- `/api/lti/accounts/{}/authorize`  (star-lti)
 - `/api/lti/accounts/{}/developer_keys/tool_configuration`  (star-lti)
 - `/api/lti/accounts/{}/developer_keys/{}/tool_configuration`  (star-lti)
 - `/api/lti/accounts/{}/dr_iframe`  (star-lti)
@@ -73,17 +57,14 @@ Canvas's long tail is LTI, AI surfaces, master templates, reporting and admin.
 - `/api/lti/accounts/{}/registrations/{}`  (star-lti)
 - `/api/lti/accounts/{}/registrations/{}/overlay`  (star-lti)
 - `/api/lti/accounts/{}/registrations/{}/view`  (star-lti)
+- `/api/lti/accounts/{}/tool_consumer_profile`  (star-lti)
+- `/api/lti/accounts/{}/tool_consumer_profile/{}`  (star-lti)
 - `/api/lti/accounts/{}/tool_proxy`  (star-lti)
-- `/api/lti/assignments/{}/files/{}/originality_report`  (star-lti)
-- `/api/lti/assignments/{}/submissions/{}/originality_report`  (star-lti)
-- `/api/lti/assignments/{}/submissions/{}/originality_report/{}`  (star-lti)
-- `/api/lti/courses/{}/developer_keys/{}/tool_configuration`  (star-lti)
-- `/api/lti/courses/{}/jwt_token`  (star-lti)
-- `/api/lti/courses/{}/line_items`  (star-lti)
-- `/api/lti/courses/{}/line_items/{}`  (star-lti)
-- `/api/lti/courses/{}/tool_proxy`  (star-lti)
-- `/api/lti/developer_keys/{}/tool_configuration`  (star-lti)
-- `/api/lti/registrations`  (star-lti)
+- `/api/lti/advantage_token`  (star-lti)
+- `/api/lti/asset_processor_eulas/{}/deployment`  (star-lti)
+- `/api/lti/asset_processor_eulas/{}/user`  (star-lti)
+- `/api/lti/asset_processors/discussion_notices/{}/{}/resubmit_all`  (star-lti)
+- `/api/lti/asset_processors/{}/assets/{}`  (star-lti)
 
 These are either Canvas aliases the introspection does not list, or routes
 the port invented. Each needs a decision: keep as an alias, or delete.
@@ -98,137 +79,7 @@ the port invented. Each needs a decision: keep as an alias, or delete.
 
 ## Columns the port's tables still owe
 
-28 models, 475 columns total.
-
-### `Assignment` — 60 missing
-
-```
-ab_guid
-all_day
-all_day_date
-allowed_attempts
-allowed_extensions
-annotatable_attachment_id
-anonymous_instructor_annotations
-anonymous_peer_reviews
-automatic_peer_reviews
-cloned_item_id
-context_id
-context_type
-copied
-could_be_locked
-duplicate_of_id
-duplication_started_at
-freeze_on_copy
-grade_group_students_individually
-grader_section_id
-grading_standard_id
-grading_type
-group_category_id
-has_sub_assignments
-hide_in_gradebook
-important_dates
-importing_started_at
-integration_data
-integration_id
-intra_group_peer_reviews
-lock_at
-lti_context_id
-mastery_score
-max_score
-migrate_from_id
-migration_id
-min_score
-omit_from_final_grade
-only_visible_to_overrides
-parent_assignment_id
-peer_review_across_sections
-peer_review_submission_required
-peer_reviews_assigned
-peer_reviews_due_at
-position
-post_to_sis
-root_account_id
-rubric_self_assessment_enabled
-settings
-sis_source_id
-sub_assignment_tag
-submission_types
-submissions_downloads
-suppress_assignment
-time_zone_edited
-turnitin_enabled
-turnitin_id
-turnitin_settings
-type
-unlock_at
-vericite_enabled
-```
-
-### `Assignment::HardCoded` — 60 missing
-
-```
-ab_guid
-all_day
-all_day_date
-allowed_attempts
-allowed_extensions
-annotatable_attachment_id
-anonymous_instructor_annotations
-anonymous_peer_reviews
-automatic_peer_reviews
-cloned_item_id
-context_id
-context_type
-copied
-could_be_locked
-duplicate_of_id
-duplication_started_at
-freeze_on_copy
-grade_group_students_individually
-grader_section_id
-grading_standard_id
-grading_type
-group_category_id
-has_sub_assignments
-hide_in_gradebook
-important_dates
-importing_started_at
-integration_data
-integration_id
-intra_group_peer_reviews
-lock_at
-lti_context_id
-mastery_score
-max_score
-migrate_from_id
-migration_id
-min_score
-omit_from_final_grade
-only_visible_to_overrides
-parent_assignment_id
-peer_review_across_sections
-peer_review_submission_required
-peer_reviews_assigned
-peer_reviews_due_at
-position
-post_to_sis
-root_account_id
-rubric_self_assessment_enabled
-settings
-sis_source_id
-sub_assignment_tag
-submission_types
-submissions_downloads
-suppress_assignment
-time_zone_edited
-turnitin_enabled
-turnitin_id
-turnitin_settings
-type
-unlock_at
-vericite_enabled
-```
+31 models, 440 columns total.
 
 ### `Announcement` — 47 missing
 
@@ -282,7 +133,172 @@ unlock_at
 user_id
 ```
 
-### `Course` — 38 missing
+### `Attachment` — 39 missing
+
+```
+category
+cloned_item_id
+content_type
+context_id
+context_type
+could_be_locked
+created_at
+deleted_at
+display_name
+encoding
+file_state
+filename
+folder_id
+id
+instfs_uuid
+lock_at
+locked
+md5
+media_entry_id
+migration_id
+modified_at
+namespace
+need_notify
+only_visible_to_overrides
+position
+replacement_attachment_id
+root_account_id
+root_attachment_id
+size
+unlock_at
+updated_at
+upload_error_message
+usage_rights_id
+user_id
+uuid
+viewed_at
+visibility_level
+word_count
+workflow_state
+```
+
+### `Assignment` — 36 missing
+
+```
+ab_guid
+all_day
+all_day_date
+annotatable_attachment_id
+anonymous_instructor_annotations
+anonymous_peer_reviews
+automatic_peer_reviews
+copied
+could_be_locked
+duplicate_of_id
+duplication_started_at
+freeze_on_copy
+grade_group_students_individually
+grader_section_id
+has_sub_assignments
+hide_in_gradebook
+important_dates
+importing_started_at
+lti_context_id
+mastery_score
+max_score
+migrate_from_id
+migration_id
+min_score
+parent_assignment_id
+peer_review_across_sections
+peer_review_submission_required
+rubric_self_assessment_enabled
+settings
+sub_assignment_tag
+submissions_downloads
+suppress_assignment
+time_zone_edited
+turnitin_id
+type
+vericite_enabled
+```
+
+### `Assignment::HardCoded` — 36 missing
+
+```
+ab_guid
+all_day
+all_day_date
+annotatable_attachment_id
+anonymous_instructor_annotations
+anonymous_peer_reviews
+automatic_peer_reviews
+copied
+could_be_locked
+duplicate_of_id
+duplication_started_at
+freeze_on_copy
+grade_group_students_individually
+grader_section_id
+has_sub_assignments
+hide_in_gradebook
+important_dates
+importing_started_at
+lti_context_id
+mastery_score
+max_score
+migrate_from_id
+migration_id
+min_score
+parent_assignment_id
+peer_review_across_sections
+peer_review_submission_required
+rubric_self_assessment_enabled
+settings
+sub_assignment_tag
+submissions_downloads
+suppress_assignment
+time_zone_edited
+turnitin_id
+type
+vericite_enabled
+```
+
+### `Pseudonym` — 34 missing
+
+```
+account_id
+authentication_provider_id
+communication_channel_id
+created_at
+crypted_password
+current_login_at
+current_login_ip
+declared_user_type
+deleted_at
+failed_login_count
+id
+integration_id
+last_login_at
+last_login_ip
+last_request_at
+login_count
+password_auto_generated
+password_salt
+perishable_token
+persistence_token
+position
+reset_password_token
+single_access_token
+sis_batch_id
+sis_communication_channel_id
+sis_ssha
+sis_user_id
+stuck_sis_fields
+unique_id
+unique_id_normalized
+unique_ids
+updated_at
+user_id
+workflow_state
+```
+
+### `Course` — 28 missing
 
 ```
 abstract_course_id
@@ -299,116 +315,23 @@ deleted_at
 group_weighting_scheme
 home_page_announcement_limit
 homeroom_course_id
-indexed
-integration_id
 latest_outcome_import_id
 lti_context_id
-open_enrollment
-public_description
 replacement_course_id
-restrict_enrollments_to_course_dates
-root_account_id
-self_enrollment
 self_enrollment_code
 self_enrollment_limit
 show_announcements_on_home_page
 show_public_context_messages
 sis_batch_id
-sis_source_id
 stuck_sis_fields
 sync_enrollments_from_homeroom
 tab_configuration
-template_course_id
-time_zone
 turnitin_comments
 turnitin_id
 wiki_id
 ```
 
-### `Quizzes::Quiz` — 37 missing
-
-```
-anonymous_submissions
-assignment_group_id
-assignment_id
-cant_go_back
-cloned_item_id
-context_id
-context_type
-could_be_locked
-deleted_at
-disable_timer_autosubmission
-due_at
-hide_correct_answers_at
-hide_results
-ip_filter
-last_assignment_id
-last_edited_at
-lock_at
-lockdown_browser_monitor_data
-migration_id
-one_question_at_a_time
-one_time_results
-only_visible_to_overrides
-published_at
-question_count
-quiz_data
-require_lockdown_browser
-require_lockdown_browser_for_results
-require_lockdown_browser_monitor
-root_account_id
-scoring_policy
-show_correct_answers
-show_correct_answers_at
-show_correct_answers_last_attempt
-shuffle_answers
-unlock_at
-unpublished_question_count
-workflow_state
-```
-
-### `Submission` — 36 missing
-
-```
-attachment_id
-attachment_ids
-body_word_count
-cached_due_date
-cached_quiz_lti
-cached_tardiness
-course_id
-custom_grade_status_id
-grade
-grade_matches_current_submission
-graded_anonymously
-grading_period_id
-group_id
-last_comment_at
-lti_id
-lti_user_id
-media_comment_id
-media_comment_type
-media_object_id
-posted_at
-posted_comments_at
-processed
-proxy_submitter_id
-published_grade
-published_score
-quiz_submission_id
-real_submitter_id
-redo_request
-resource_link_lookup_uuid
-root_account_id
-seconds_late_override
-sticker
-student_entered_score
-submission_comments_count
-turnitin_data
-url
-```
-
-### `User` — 32 missing
+### `User` — 26 missing
 
 ```
 avatar_image_source
@@ -417,67 +340,29 @@ avatar_image_url
 avatar_state
 browser_locale
 crocodoc_id
-deleted_at
 features_used
 initial_enrollment_type
 instructure_identity_id
 lti_context_id
-lti_id
 merged_into_user_id
 otp_communication_channel_id
-otp_secret_key_enc
 otp_secret_key_salt
 phone
 pronouns
 public
 reminder_time_for_due_dates
 reminder_time_for_grading
-root_account_ids
 school_name
 school_position
 show_user_services
 storage_quota
-stuck_sis_fields
 subscribe_to_emails
 turnitin_id
 unread_conversations_count
-uuid
 visible_inbox_types
 ```
 
-### `Account` — 27 missing
-
-```
-allow_sis_import
-allowed_services
-brand_config_md5
-current_sis_batch_id
-default_group_storage_quota
-default_locale
-default_storage_quota
-default_user_storage_quota
-deleted_at
-external_status
-grading_standard_id
-last_successful_sis_batch_id
-latest_outcome_import_id
-lti_context_id
-lti_guid
-membership_types
-root_account_id
-show_section_name_as_course_name
-storage_quota
-stuck_sis_fields
-turnitin_account_id
-turnitin_comments
-turnitin_crypted_secret
-turnitin_host
-turnitin_originality
-turnitin_pledge
-turnitin_salt
-```
-
-### `Quizzes::QuizSubmission` — 26 missing
+### `Quizzes::QuizSubmission` — 25 missing
 
 ```
 attempt
@@ -495,7 +380,6 @@ quiz_data
 quiz_id
 quiz_points_possible
 quiz_version
-root_account_id
 score
 score_before_regrade
 started_at
@@ -508,62 +392,113 @@ was_preview
 workflow_state
 ```
 
-### `Rubric` — 16 missing
+### `Submission` — 24 missing
 
 ```
-button_display
+attachment_id
+attachment_ids
+body_word_count
+cached_quiz_lti
+cached_tardiness
+course_id
+custom_grade_status_id
+grading_period_id
+last_comment_at
+lti_id
+lti_user_id
+media_object_id
+posted_comments_at
+proxy_submitter_id
+published_grade
+published_score
+quiz_submission_id
+real_submitter_id
+resource_link_lookup_uuid
+root_account_id
+seconds_late_override
+sticker
+submission_comments_count
+turnitin_data
+```
+
+### `Account` — 22 missing
+
+```
+brand_config_md5
+current_sis_batch_id
+default_group_storage_quota
+default_locale
+default_storage_quota
+default_user_storage_quota
+deleted_at
+external_status
+grading_standard_id
+last_successful_sis_batch_id
+latest_outcome_import_id
+lti_context_id
+lti_guid
+membership_types
+show_section_name_as_course_name
+storage_quota
+stuck_sis_fields
+turnitin_comments
+turnitin_crypted_secret
+turnitin_host
+turnitin_originality
+turnitin_salt
+```
+
+### `Quizzes::Quiz` — 21 missing
+
+```
+anonymous_submissions
+assignment_group_id
+cant_go_back
+cloned_item_id
+context_id
+context_type
+disable_timer_autosubmission
+last_edited_at
+lockdown_browser_monitor_data
+migration_id
+one_time_results
+only_visible_to_overrides
+published_at
+question_count
+quiz_data
+require_lockdown_browser
+require_lockdown_browser_for_results
+require_lockdown_browser_monitor
+show_correct_answers_last_attempt
+unpublished_question_count
+workflow_state
+```
+
+### `Collaboration` — 19 missing
+
+```
+collaboration_type
 context_code
 context_id
 context_type
+created_at
 data
-description
-free_form_criterion_comments
-hide_points
-hide_score_total
-migration_id
-public
-rating_order
-reusable
-root_account_id
-rubric_id
-user_id
-```
-
-### `Group` — 14 missing
-
-```
-avatar_attachment_id
-context_id
-default_view
 deleted_at
-leader_id
-lti_context_id
-migration_id
+description
+document_id
+id
+resource_link_lookup_uuid
 root_account_id
-sis_batch_id
-sis_source_id
-storage_quota
-stuck_sis_fields
+title
+type
+updated_at
+url
+user_id
 uuid
-wiki_id
+workflow_state
 ```
 
-### `Enrollment` — 10 missing
-
-```
-archived_at
-completed_at
-grade_publishing_message
-grade_publishing_status
-last_publish_attempt_at
-self_enrolled
-sis_batch_id
-sis_pseudonym_id
-stuck_sis_fields
-temporary_enrollment_pairing_id
-```
-
-### `Quizzes::QuizQuestion` — 10 missing
+### `Quizzes::QuizQuestion` — 9 missing
 
 ```
 assessment_question_id
@@ -574,11 +509,36 @@ position
 question_data
 quiz_group_id
 quiz_id
-root_account_id
 workflow_state
 ```
 
-### `MicrosoftSync::Group` — 8 missing
+### `Group` — 8 missing
+
+```
+avatar_attachment_id
+default_view
+deleted_at
+leader_id
+lti_context_id
+sis_batch_id
+stuck_sis_fields
+wiki_id
+```
+
+### `Rubric` — 8 missing
+
+```
+button_display
+context_code
+data
+hide_points
+rating_order
+root_account_id
+rubric_id
+user_id
+```
+
+### `MicrosoftSync::Group` — 7 missing
 
 ```
 debug_info
@@ -588,10 +548,9 @@ last_error_report_id
 last_manually_synced_at
 last_synced_at
 ms_group_id
-root_account_id
 ```
 
-### `Quizzes::QuizGroup` — 8 missing
+### `Quizzes::QuizGroup` — 7 missing
 
 ```
 assessment_question_bank_id
@@ -601,30 +560,16 @@ pick_count
 position
 question_points
 quiz_id
-root_account_id
 ```
 
-### `Conversation` — 7 missing
+### `Enrollment` — 5 missing
 
 ```
-context_id
-context_type
-has_attachments
-has_media_objects
-private_hash
-root_account_ids
-tags
-```
-
-### `Quizzes::QuizSubmissionEvent` — 6 missing
-
-```
-attempt
-client_timestamp
-event_data
-event_type
-quiz_submission_id
-root_account_id
+archived_at
+grade_publishing_message
+grade_publishing_status
+last_publish_attempt_at
+temporary_enrollment_pairing_id
 ```
 
 ### `Quizzes::QuizStatistics` — 5 missing
@@ -637,13 +582,23 @@ quiz_id
 report_type
 ```
 
-### `Folder` — 4 missing
+### `Quizzes::QuizSubmissionEvent` — 5 missing
 
 ```
-cloned_item_id
-root_account_id
-submission_context_code
-unique_type
+attempt
+client_timestamp
+event_data
+event_type
+quiz_submission_id
+```
+
+### `Conversation` — 4 missing
+
+```
+context_id
+context_type
+private_hash
+tags
 ```
 
 ### `Delayed::Backend::ActiveRecord::Job` — 3 missing
@@ -662,14 +617,6 @@ assessment_id
 possible
 ```
 
-### `Progress` — 3 missing
-
-```
-cache_key_context
-delayed_job_id
-results
-```
-
 ### `Quizzes::QuizQuestionRegrade` — 3 missing
 
 ```
@@ -686,17 +633,9 @@ quiz_version
 user_id
 ```
 
-### `Quizzes::QuizRegradeRun` — 3 missing
-
-```
-finished_at
-quiz_regrade_id
-started_at
-```
-
 ## GraphQL
 
-- **types**: 68/621 (11.0%) — 553 missing
+- **types**: 203/621 (32.7%) — 418 missing
 - **queries**: 10/28 (35.7%) — 18 missing
 - **mutations**: 0/100 (0.0%) — 100 missing
 

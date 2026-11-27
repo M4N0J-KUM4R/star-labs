@@ -3,7 +3,7 @@ method = "POST"
 path = "/api/v1/files/update_word_count"
 
 [request.headers]
-Authorization = "Bearer __REPLAY_TOKEN__"
+Authorization = "Bearer parity-replay-access-token"
 
 [response]
 status = 400

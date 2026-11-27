@@ -3,7 +3,7 @@ method = "GET"
 path = "/api/v1/groups/1/pages/front-page/revisions"
 
 [request.headers]
-Authorization = "Bearer __REPLAY_TOKEN__"
+Authorization = "Bearer parity-replay-access-token"
 
 [response]
 status = 401
@@ -15,7 +15,7 @@ content-type = "application/json; charset=utf-8"
 referrer-policy = "no-referrer-when-downgrade"
 set-cookie = "_csrf_token=[..]%3D%3D; path=/"
 www-authenticate = 'Bearer realm="canvas-lms"'
-x-canvas-meta = "b=2074132;m=2074132;u=0.02;y=0.00;d=0.00;rlr=600.0;"
+x-canvas-meta = "[..]"
 x-content-type-options = "nosniff"
 x-download-options = "noopen"
 x-permitted-cross-domain-policies = "none"

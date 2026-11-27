@@ -2007,6 +2007,27 @@ async fn download_account_rubrics(
 // Router
 // ---------------------------------------------------------------------------
 
+/// PUT /courses/{courseId}/rubrics/{id}  → 200 (Canvas nested alias).
+async fn update_course_rubric(
+    State(state): State<AppState>,
+    Path((course_id, rubric_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateRubric>,
+) -> Result<Json<RubricResponse>, ApiError> {
+    verify_rubric_course(&state.db, course_id, rubric_id).await?;
+    update_rubric(State(state), Path(rubric_id), auth, Json(payload)).await
+}
+
+/// DELETE /courses/{courseId}/rubrics/{id}  → 204 (Canvas nested alias).
+async fn delete_course_rubric(
+    State(state): State<AppState>,
+    Path((course_id, rubric_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    verify_rubric_course(&state.db, course_id, rubric_id).await?;
+    delete_rubric(State(state), Path(rubric_id), auth).await
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(rubrics_api::router())
@@ -2014,6 +2035,14 @@ pub fn router() -> Router<AppState> {
         .route("/courses/{courseId}/rubrics", post(create_rubric))
         .route("/courses/{courseId}/rubrics", get(list_course_rubrics))
         .route("/courses/{courseId}/rubrics/{id}", get(get_course_rubric))
+        .route(
+            "/courses/{courseId}/rubrics/{id}",
+            put(update_course_rubric),
+        )
+        .route(
+            "/courses/{courseId}/rubrics/{id}",
+            delete(delete_course_rubric),
+        )
 
 
         .route("/rubrics/{id}", get(get_rubric))

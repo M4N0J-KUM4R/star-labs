@@ -6,7 +6,7 @@ Measured, deterministic output. Canvas source is not committed; refresh the mani
 
 | Area | Implemented | Total | Coverage |
 |---|---:|---:|---:|
-| REST API routes | 1408 | 1410 | 99.9% |
+| REST API routes | 1410 | 1410 | 100.0% |
 | REST routes referenced from `ui/` | 503 | 503 | 100.0% |
 | GraphQL files | 1 | 390 | 0.3% |
 | GraphQL object types | 245 | 246 | 99.6% |
@@ -23,9 +23,9 @@ Missing Canvas schema tables (3): `assignment_embeddings`, `discussion_topic_emb
 Star-only tables: 102 (star-db `CREATE TABLE` names with no Canvas `create_table` counterpart; includes the 7 `aua_logs_0..6` partitions Canvas creates in a Ruby loop).
 Route shape contracts are the golden request/response pairs under `parity/behavior/golden/canvas/`, compared by `tools/parity/golden_differ.py`.
 
-Implemented REST route count: **1408 / 1410** (99.9%).
+Implemented REST route count: **1410 / 1410** (100.0%).
 
-Star registrations: 1590 route/method pairs from 1173 `.route(...)` calls (0 unparsed); 168 have no Canvas match and are listed as extras below.
+Star registrations: 1592 route/method pairs from 1175 `.route(...)` calls (0 unparsed); 168 have no Canvas match and are listed as extras below.
 
 Excluded before counting: 3 `.route(...)` calls inside `#[cfg(test)]` or `#[test]` bodies, 0 calls in `.rs` files no `mod` declaration reaches (not compiled, so not registered).
 
@@ -173,6 +173,7 @@ Canvas source sizes: 390 GraphQL files (246 object types, 100 mutations), 688 mo
 | `outcomes_academic_benchmark_import_api` | 3 | 3 | 100.0% |
 | `rubric_assessments` | 3 | 3 | 100.0% |
 | `rubric_associations` | 3 | 3 | 100.0% |
+| `rubrics` | 3 | 3 | 100.0% |
 | `services_api` | 3 | 3 | 100.0% |
 | `shared_brand_configs` | 3 | 3 | 100.0% |
 | `smart_search` | 3 | 3 | 100.0% |
@@ -253,7 +254,6 @@ Canvas source sizes: 390 GraphQL files (246 object types, 100 mutations), 688 mo
 | `quizzes/quiz_statistics` | 1 | 1 | 100.0% |
 | `quizzes/quiz_submission_files` | 1 | 1 | 100.0% |
 | `quizzes_next/quizzes_api` | 1 | 1 | 100.0% |
-| `rubrics` | 1 | 3 | 33.3% |
 | `scopes_api` | 1 | 1 | 100.0% |
 | `study_assist` | 1 | 1 | 100.0% |
 | `support_helpers/submission_lifecycle_manage` | 1 | 1 | 100.0% |

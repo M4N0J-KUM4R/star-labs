@@ -3,7 +3,7 @@ method = "GET"
 path = "/courses/1/external_tools/visible_course_nav_tools"
 
 [request.headers]
-Authorization = "Bearer __REPLAY_TOKEN__"
+Authorization = "Bearer parity-replay-access-token"
 
 [response]
 status = 404
@@ -14,7 +14,7 @@ content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
 content-type = "text/html"
 referrer-policy = "no-referrer-when-downgrade"
 set-cookie = "[..]"
-x-canvas-meta = "o=external_tools;n=show;b=2074132;m=2074132;u=0.[..];y=0.00;d=0.[..];rlr=600.0;"
+x-canvas-meta = "[..]"
 x-content-type-options = "nosniff"
 x-download-options = "noopen"
 x-permitted-cross-domain-policies = "none"
