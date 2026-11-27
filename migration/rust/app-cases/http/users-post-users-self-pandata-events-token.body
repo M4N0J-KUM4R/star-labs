@@ -1,1 +1,1 @@
-{"message":"Developer key not authorized"}
+{"errors":[{"message":"Invalid access token."}]}

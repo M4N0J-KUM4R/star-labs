@@ -302,7 +302,7 @@ async fn users_still_linked(
     observer_id: i64,
     student_id: i64,
 ) -> Result<bool, ApiError> {
-    let row: Option<(i64,)> = sqlx::query_as(
+    let row: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM observer_enrollments \
          WHERE observer_id = $1 AND user_id = $2 LIMIT 1",
     )

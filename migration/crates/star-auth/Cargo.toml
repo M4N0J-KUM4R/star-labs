@@ -17,8 +17,9 @@ argon2 = { workspace = true }
 jsonwebtoken = { workspace = true }
 hmac = { workspace = true }
 sha1 = { workspace = true }
+sha2 = { workspace = true }
+rsa = "0.9"
 thiserror = { workspace = true }
-axum-test = { workspace = true }
 tokio = { workspace = true }
 [dev-dependencies]
 axum-macros = "0.5"

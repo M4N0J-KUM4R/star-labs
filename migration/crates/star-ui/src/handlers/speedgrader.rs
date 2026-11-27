@@ -1,5 +1,5 @@
 //! SpeedGrader-style grading workflow handlers (issue #108) — Canvas
-//! `gradebooks#speedgrader`, server-rendered.
+//! `gradebooks#speed_grader`, server-rendered.
 //!
 //! Distinct from the gradebook LIST view (#71): this is the per-student
 //! grading queue. The left nav lists every enrolled student (Canvas order:
@@ -312,7 +312,7 @@ async fn render_page(
                 pill_label: pill_label.to_string(),
                 selected: s.user_id == student_id,
                 url: format!(
-                    "/courses/{course_id}/gradebook/speedgrader\
+                    "/courses/{course_id}/gradebook/speed_grader\
                      ?assignment_id={assignment_id}&student_id={}",
                     s.user_id
                 ),
@@ -417,7 +417,7 @@ async fn render_page(
         comments,
         rubric,
         error: input.error,
-        form_action: format!("/courses/{course_id}/gradebook/speedgrader/grade"),
+        form_action: format!("/courses/{course_id}/gradebook/update_submission"),
     };
     (jar, page).into_response()
 }
@@ -575,7 +575,7 @@ async fn build_rubric_view(
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// GET /courses/{id}/gradebook/speedgrader — the grading queue.
+/// GET /courses/{id}/gradebook/speed_grader — the grading queue.
 ///
 /// Teacher-or-admin only. `?assignment_id=` selects the assignment (default
 /// the first by group+position); `?student_id=` the student (default the
@@ -608,7 +608,7 @@ pub async fn speedgrader(
     .await
 }
 
-/// POST /courses/{id}/gradebook/speedgrader/grade — the ONE grading form.
+/// POST /courses/{id}/gradebook/update_submission — the ONE grading form.
 ///
 /// CSRF double-submit on the raw body (the rubric picks are dynamic
 /// `criterion_<id>` fields, so the body is decoded with
@@ -812,7 +812,7 @@ pub async fn speedgrader_grade(
     }
 
     let location = format!(
-        "/courses/{course_id}/gradebook/speedgrader\
+        "/courses/{course_id}/gradebook/speed_grader\
          ?assignment_id={assignment_id}&student_id={student_id}&graded=1"
     );
     (StatusCode::SEE_OTHER, [("location", location.as_str())]).into_response()

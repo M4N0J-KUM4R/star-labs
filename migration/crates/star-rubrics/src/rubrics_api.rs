@@ -412,11 +412,9 @@ fn validate_args(args: &ShowArgs) -> Option<Value> {
         return None;
     }
 
-    let body: Map<String, Value> = errs
-        .into_iter()
-        .map(|(key, message)| (key, json!([message])))
-        .collect();
-    Some(Value::Object(body))
+    // Canvas renders the errors map as-is — every value a plain string
+    // (rubrics_api_controller.rb:524-540).
+    Some(Value::Object(errs.into_iter().collect()))
 }
 
 // ---------------------------------------------------------------------------
@@ -814,6 +812,7 @@ pub async fn upload_account_rubric(
     .await?;
 
     let import = import_response(&state.db, import).await?;
+    // Canvas renders the import JSON with the default status — 200.
     Ok((StatusCode::OK, Json(import)).into_response())
 }
 

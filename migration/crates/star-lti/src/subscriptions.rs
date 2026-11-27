@@ -363,7 +363,7 @@ async fn validate_tool_context(
     };
 
     // The tool proxy has to be active in the context of the subscription.
-    let active: Option<(i64,)> = sqlx::query_as(
+    let active: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM lti_tool_proxies \
          WHERE id = $1 AND workflow_state = 'active' \
            AND (context_id = $2 OR context_id = $3) LIMIT 1",

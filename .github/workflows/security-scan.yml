@@ -1,0 +1,39 @@
+# Secret scanning (issue #106 security pass).
+#
+# Scans the whole repository for leaked credentials (API keys, tokens,
+# private keys) with gitleaks. Runs on every PR and push so a leaked secret
+# fails the checks block before merge, mirroring the dependency audit in
+# production-build.yml. A .gitleaks.toml allowlist keeps the CI test
+# fixtures (dummy JWT secrets, obviously-fake tokens in tests) from firing
+# false positives.
+
+name: Secret scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  gitleaks:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: secrets may have been added and "removed" in a
+          # later commit; the scan must see every blob on push events.
+          fetch-depth: 0
+      - name: Scan for leaked secrets
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -12,13 +12,15 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+
+mod custom_data;
+mod observer_alerts_api;
+mod user_gaps;
 use star_auth::{hash_password, AuthUser};
 use star_common::{ApiError, ApiJson, AppState};
 use std::collections::BTreeMap;
 
 pub mod users_api;
-
-mod tokens;
 
 // --------------------------------------------------------------------------
 // Domain types
@@ -941,8 +943,10 @@ fn parse_dashboard_position(value: &serde_json::Value) -> Option<i64> {
 
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(custom_data::custom_data_routes())
+        .merge(observer_alerts_api::observer_alerts_routes())
+        .merge(user_gaps::user_gaps_routes())
         .merge(users_api::router())
-        .merge(tokens::router())
         .route("/users", get(list_users))
         .route("/users/self", get(get_self))
         .route(

@@ -1,0 +1,49 @@
+{% extends "layouts/course.html" %}
+{# Quiz editor — Canvas quizzes#edit, which renders the `:new` template
+   (quizzes/quizzes_controller.rb:359, :431). Server-rendered stand-in for the
+   React editor: the quiz-details fields only, POSTed to the member path with
+   Rails' hidden `_method=patch` so it reaches Canvas' PATCH/PUT route. #}
+{% block content %}
+  <div id="quiz_edit" class="quiz-edit content_underline_links">
+    <h1 class="quiz-edit-heading">Quiz Details</h1>
+    <form id="quiz_edit_form" class="quiz-edit-form" method="post" action="{{ form_action }}">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <input type="hidden" name="_method" value="patch">
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="quiz_title">Quiz Title</label>
+        <input class="ic-Input" type="text" id="quiz_title" name="title" value="{{ title_value }}" required>
+      </div>
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="quiz_description">Quiz Instructions</label>
+        <textarea class="ic-Input" id="quiz_description" name="description" rows="5" placeholder="Add instructions for this quiz">{{ description_value }}</textarea>
+      </div>
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="quiz_points_possible">Points Possible</label>
+        <input class="ic-Input" type="number" id="quiz_points_possible" name="points_possible" min="0" step="0.5" value="{{ points_value }}">
+      </div>
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="quiz_available_from">Available From</label>
+        <input class="ic-Input" type="datetime-local" id="quiz_available_from" name="available_from" value="{{ available_from_value }}">
+      </div>
+
+      <div class="ic-Form-control">
+        <label class="ic-Label" for="quiz_available_until">Until</label>
+        <input class="ic-Input" type="datetime-local" id="quiz_available_until" name="available_until" value="{{ available_until_value }}">
+      </div>
+
+      <div class="ic-Form-control ic-Form-control--checkbox">
+        <input type="checkbox" id="quiz_published" name="published" value="true"{% if published %} checked{% endif %}>
+        <label class="ic-Label" for="quiz_published">Published</label>
+      </div>
+
+      <div class="quiz-edit-actions">
+        <button type="submit" class="btn btn-primary" id="quiz_edit_save">Save</button>
+        <a class="btn" href="/courses/{{ course_id }}/quizzes/{{ quiz_id }}">Cancel</a>
+      </div>
+    </form>
+  </div>
+{% endblock content %}

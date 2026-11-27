@@ -1,9 +1,9 @@
 [request]
 method = "PUT"
-path = "/api/v1/sections/1/submissions/bulk_mark_read"
+path = "/api/v1/sections/2/submissions/bulk_mark_read"
 
 [request.headers]
-Authorization = "Bearer __REPLAY_TOKEN__"
+Authorization = "Bearer c55d0731ffb0240ad824ab398d92be2a4b930c9af0a5f76a74df263902080ed6"
 
 [response]
 status = 204
@@ -13,8 +13,7 @@ cache-control = "no-cache"
 content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
 referrer-policy = "no-referrer-when-downgrade"
 set-cookie = "[..]"
-x-canvas-meta = "at=10000000000007;dk=10000000000001;o=submissions_api;n=mark_bulk_submissions_as_read;t=Course;i=1;b=2067028;m=2067028;u=0.02;y=0.00;d=0.00;rlr=600.0;"
-x-canvas-user-id = "10000000000001"
+x-canvas-meta = "[..]"
 x-content-type-options = "nosniff"
 x-download-options = "noopen"
 x-permitted-cross-domain-policies = "none"
@@ -22,5 +21,4 @@ x-rate-limit-remaining = "600.0"
 x-request-context-id = "[..]-[..]-[..]-[..]-[..]"
 x-request-cost = "0.[..]"
 x-runtime = "0.[..]"
-x-session-id = "[..]"
 x-xss-protection = "1; mode=block"

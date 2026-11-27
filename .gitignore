@@ -1,5 +1,5 @@
 __pycache__/
 *.pyc
 
-# macOS
-.DS_Store
+# Canvas LMS upstream reference clone
+canvas-lms/

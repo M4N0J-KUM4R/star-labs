@@ -176,8 +176,8 @@ async fn create(
 
     let id: i64 = sqlx::query_scalar(
         "INSERT INTO external_feeds (user_id, context_id, context_type, url, header_match, \
-             verbosity, created_at) \
-         VALUES ($1, $2, $3, $4, $5, $6, now()) RETURNING id",
+             verbosity, created_at, updated_at) \
+         VALUES ($1, $2, $3, $4, $5, $6, now(), now()) RETURNING id",
     )
     .bind(auth.id)
     .bind(context.context_id())
@@ -277,7 +277,7 @@ async fn require_announcement_right(
     if auth.role == "admin" {
         return Ok(());
     }
-    let row: Option<(i64,)> = match context {
+    let row: Option<(i32,)> = match context {
         FeedContext::Course(course_id) => {
             sqlx::query_as(
                 "SELECT 1 FROM enrollments \
@@ -380,6 +380,6 @@ async fn feed_json(db: &PgPool, feed: &ExternalFeed) -> Result<Value, ApiError> 
         "created_at": feed.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "verbosity": feed.verbosity,
         "display_name": display_name,
-        "external_feed_entries_count": count,
+        "external_feed_entries_count": count.0,
     }))
 }

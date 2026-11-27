@@ -3,11 +3,14 @@
 //! Exercises the real auth router (POST /auth/register, POST /auth/login,
 //! GET /auth/me, POST /auth/logout), the Canvas developer key routes
 //! (GET/POST /developer_keys, GET/PUT/DELETE /developer_keys/{id}), the
-//! OAuth2 token endpoint (POST /login/oauth2/token) and the personal access
-//! token routes (GET/POST /tokens, GET/DELETE /tokens/{id}) through
-//! axum-test against a real Postgres, plus the public helpers
-//! (hash_password/verify_password, create_token/verify_token,
-//! fetch_user_by_id via GET /auth/me) and the AuthUser extractor.
+//! OAuth2 token endpoint (POST /login/oauth2/token) and the Canvas
+//! access-token routes (GET /users/:user_id/user_generated_tokens,
+//! POST/GET/PUT/DELETE /users/:user_id/tokens[...], where :user_id is `self`
+//! or a numeric id) through axum-test against a real Postgres, plus the
+//! public helpers (hash_password/verify_password, create_token/verify_token,
+//! fetch_user_by_id via GET /auth/me) and the AuthUser extractor. The full
+//! OAuth2 authorization-code flow (auth -> code -> exchange -> refresh ->
+//! revoke -> JWKS -> InstAccess) lives in oauth2_flow_integration.rs.
 //!
 //! Conventions (mirrors the rest of the workspace):
 //! - DB-backed tests are skipped cleanly when DATABASE_URL is not set
@@ -90,11 +93,12 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
     Some((server, pool, prefix))
 }
 
-/// Same merge pattern as star-http::build_api_router, restricted to the
-/// auth crate.
+/// Same merge pattern as star-http::build_api_router + the root-level login
+/// router, restricted to the auth crate.
 fn star_auth_router(state: AppState) -> axum::Router {
     axum::Router::new()
         .merge(star_auth::router())
+        .merge(star_auth::login_router())
         .with_state(state)
 }
 
@@ -144,8 +148,13 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
         .bind(format!("{prefix}%"))
         .execute(pool)
         .await;
-    // SSO settings were updated in-place; we do not clean them up since they
-    // are account-level and the test account is shared infrastructure.
+    // Dedicated accounts are deleted by prefix (issue #75); their
+    // authentication_providers cascade and their sso settings live in the
+    // account row, so nothing leaks between runs.
+    let _ = sqlx::query("DELETE FROM accounts WHERE name LIKE $1")
+        .bind(format!("{prefix}%"))
+        .execute(pool)
+        .await;
 }
 
 // ---------------------------------------------------------------------------
@@ -971,11 +980,13 @@ async fn developer_keys_update_partial_and_admin_only() {
 }
 
 // ---------------------------------------------------------------------------
-// OAuth2 token endpoint (POST /login/oauth2/token)
+// OAuth2 token endpoint (POST /login/oauth2/token) — grant-level parity.
+// The full auth-code flow (auth -> code -> exchange) lives in
+// oauth2_flow_integration.rs.
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn oauth2_token_client_credentials_and_refresh_rotation() {
+async fn oauth2_token_client_credentials_grant() {
     let Some((server, pool, prefix)) = setup().await else {
         eprintln!("SKIP: DATABASE_URL not set");
         return;
@@ -984,13 +995,57 @@ async fn oauth2_token_client_credentials_and_refresh_rotation() {
     let admin = seed_user(&pool, &prefix, "OAuthAdmin", "admin").await;
     let name = format!("{prefix}-OAuthKey");
 
+    // A key WITHOUT an external client-credentials audience is rejected,
+    // like Canvas SymmetricClientCredentialsProvider#assertion_method_permitted?.
+    let resp = server
+        .post("/developer_keys")
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "developer_key": {
+                "name": format!("{name}-internal"),
+                "scopes": ["url:GET|/api/v1/courses"]
+            }
+        }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "create internal key: {}",
+        resp.text()
+    );
+    let internal: Value = resp.json();
+    let internal_id = internal["id"].as_i64().expect("key id");
+    let internal_secret = internal["api_key"].as_str().expect("api_key").to_string();
+
+    let resp = server
+        .post("/login/oauth2/token")
+        .text(format!(
+            "grant_type=client_credentials&client_id={internal_id}&client_secret={internal_secret}"
+        ))
+        .content_type("application/x-www-form-urlencoded")
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        400,
+        "internal audience key: {}",
+        resp.text()
+    );
+    let error: Value = resp.json();
+    assert_eq!(error["error"], "invalid_request");
+    assert_eq!(
+        error["error_description"],
+        "assertion method not supported for this grant_type"
+    );
+
+    // The real key: external audience + configured scopes.
     let resp = server
         .post("/developer_keys")
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({
             "developer_key": {
                 "name": name,
-                "scopes": ["url:GET|/api/v1/courses"]
+                "scopes": ["url:GET|/api/v1/courses"],
+                "client_credentials_audience": "external"
             }
         }))
         .await;
@@ -1019,75 +1074,106 @@ async fn oauth2_token_client_credentials_and_refresh_rotation() {
     assert_eq!(token["token_type"], "Bearer");
     assert_eq!(token["expires_in"], 3600);
     assert_eq!(token["scope"], "url:GET|/api/v1/courses");
+    // Canvas service tokens are signed JWTs, not stored opaque tokens — no
+    // refresh_token and no access_tokens row.
     let access_token = token["access_token"]
         .as_str()
         .expect("access_token")
         .to_string();
-    let refresh_token = token["refresh_token"]
-        .as_str()
-        .expect("refresh_token")
-        .to_string();
-    assert_eq!(access_token.len(), 64);
-    assert_eq!(refresh_token.len(), 64);
-
-    // The token row is persisted for the key.
-    let (stored,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM access_tokens
-         WHERE developer_key_id = $1 AND token = $2 AND workflow_state = 'active'",
-    )
-    .bind(key_id)
-    .bind(&access_token)
-    .fetch_one(&pool)
-    .await
-    .expect("count tokens");
-    assert_eq!(stored, 1);
-
-    // JSON bodies are accepted too; refreshing rotates access and refresh
-    // tokens in place.
-    let resp = server
-        .post("/login/oauth2/token")
-        .json(&json!({
-            "grant_type": "refresh_token",
-            "client_id": key_id.to_string(),
-            "client_secret": api_key,
-            "refresh_token": refresh_token,
-        }))
-        .await;
-    assert_eq!(resp.status_code(), 200, "refresh: {}", resp.text());
-    let refreshed: Value = resp.json();
-    assert_eq!(refreshed["token_type"], "Bearer");
-    let new_access = refreshed["access_token"].as_str().expect("new access");
-    let new_refresh = refreshed["refresh_token"].as_str().expect("new refresh");
-    assert_ne!(new_access, access_token.as_str());
-    assert_ne!(new_refresh, refresh_token.as_str());
-
-    // The consumed refresh token is no longer valid.
-    let form = format!(
-        "grant_type=refresh_token&client_id={key_id}&client_secret={api_key}\
-         &refresh_token={refresh_token}"
+    assert_eq!(
+        access_token.split('.').count(),
+        3,
+        "client_credentials access_token is a JWT: {access_token}"
     );
+    assert!(
+        token.get("refresh_token").is_none(),
+        "service tokens carry no refresh_token: {token}"
+    );
+    let (stored,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM access_tokens WHERE developer_key_id = $1")
+            .bind(key_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count tokens");
+    assert_eq!(stored, 0, "client_credentials JWTs are not persisted");
+
+    // HTTP Basic authentication is accepted (Canvas
+    // oauth2_provider#token reads Basic credentials).
+    let basic = base64_encode(&format!("{key_id}:{api_key}"));
     let resp = server
         .post("/login/oauth2/token")
-        .text(form)
+        .text("grant_type=client_credentials&scope=url%3AGET%7C%2Fapi%2Fv1%2Fcourses".to_string())
+        .content_type("application/x-www-form-urlencoded")
+        .add_header(axum::http::header::AUTHORIZATION, format!("Basic {basic}"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "basic auth: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["token_type"], "Bearer");
+
+    // A scope outside the key's configured scopes is invalid_scope.
+    let resp = server
+        .post("/login/oauth2/token")
+        .text(format!(
+            "grant_type=client_credentials&client_id={key_id}&client_secret={api_key}\
+             &scope=url%3AGET%7C%2Fapi%2Fv1%2Faccounts"
+        ))
         .content_type("application/x-www-form-urlencoded")
         .await;
-    assert_eq!(resp.status_code(), 400, "stale refresh: {}", resp.text());
-    let stale_error: Value = resp.json();
-    assert_eq!(stale_error["error"], "invalid_grant");
+    assert_eq!(resp.status_code(), 400, "bad scope: {}", resp.text());
+    let error: Value = resp.json();
+    assert_eq!(error["error"], "invalid_scope");
+    assert_eq!(error["error_description"], "url:GET|/api/v1/accounts");
 
-    // Wrong client secret is an invalid_client, matching Canvas.
-    let form =
-        format!("grant_type=client_credentials&client_id={key_id}&client_secret=wrong-secret");
+    // Wrong client secret is invalid_client with the WWW-Authenticate
+    // header, matching Canvas.
     let resp = server
         .post("/login/oauth2/token")
-        .text(form)
+        .text(format!(
+            "grant_type=client_credentials&client_id={key_id}&client_secret=wrong-secret"
+        ))
         .content_type("application/x-www-form-urlencoded")
         .await;
     assert_eq!(resp.status_code(), 401, "wrong secret: {}", resp.text());
     let secret_error: Value = resp.json();
     assert_eq!(secret_error["error"], "invalid_client");
+    assert_eq!(secret_error["error_description"], "invalid client");
+
+    // Unknown grant types and bare requests fail with Canvas's
+    // unsupported_grant_type error.
+    let resp = server
+        .post("/login/oauth2/token")
+        .text("grant_type=password&client_id=1&client_secret=x".to_string())
+        .content_type("application/x-www-form-urlencoded")
+        .await;
+    assert_eq!(resp.status_code(), 400, "password grant: {}", resp.text());
+    let unsupported: Value = resp.json();
+    assert_eq!(unsupported["error"], "unsupported_grant_type");
 
     cleanup(&pool, &prefix).await;
+}
+
+/// Standard base64 for the HTTP Basic tests.
+fn base64_encode(input: &str) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let bytes = input.as_bytes();
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let mut buffer = [0u8; 3];
+        buffer[..chunk.len()].copy_from_slice(chunk);
+        let value = u32::from_be_bytes([0, buffer[0], buffer[1], buffer[2]]);
+        out.push(ALPHABET[(value >> 18) as usize & 63] as char);
+        out.push(ALPHABET[(value >> 12) as usize & 63] as char);
+        if chunk.len() > 1 {
+            out.push(ALPHABET[(value >> 6) as usize & 63] as char);
+        }
+        if chunk.len() > 2 {
+            out.push(ALPHABET[value as usize & 63] as char);
+        }
+    }
+    let pad = (3 - bytes.len() % 3) % 3;
+    for _ in 0..pad {
+        out.push('=');
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1215,13 +1301,13 @@ async fn authuser_resolves_role_from_db_and_rejects_deleted_users() {
 }
 
 // ---------------------------------------------------------------------------
-// Personal access tokens (GET/POST /tokens, GET/DELETE /tokens/{id})
+// Canvas access tokens (/users/:user_id/tokens, :user_id = self | numeric)
 // ---------------------------------------------------------------------------
 
-/// POST /tokens as `user` and return the parsed Canvas `Token` body.
+/// POST /users/self/tokens as `user` and return the parsed Canvas `Token` body.
 async fn create_personal_token(server: &TestServer, user: i64, role: &str, body: Value) -> Value {
     let resp = server
-        .post("/tokens")
+        .post("/users/self/tokens")
         .add_header(axum::http::header::AUTHORIZATION, auth(user, role))
         .json(&body)
         .await;
@@ -1296,26 +1382,32 @@ async fn tokens_create_list_show_and_destroy() {
     assert_eq!(stored_hint.as_deref(), Some(hint.as_str()));
     assert_eq!(key_id, None);
 
-    // List: the token appears with its visible value masked to the hint.
-    let resp = server
-        .get("/tokens")
-        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
-        .await;
-    assert_eq!(resp.status_code(), 200, "list tokens: {}", resp.text());
-    let listed: Value = resp.json();
-    let listed = listed
-        .as_array()
-        .expect("list is an array")
-        .iter()
-        .find(|token| token["id"] == id)
-        .expect("created token in list");
-    assert_eq!(listed["visible_token"], format!("{hint}..."));
-    assert_eq!(listed["scopes"][0], "url:GET|/api/v1/courses");
+    // List (self and numeric paths): the token appears with its visible
+    // value masked to the hint.
+    for list_path in [
+        "/users/self/user_generated_tokens".to_string(),
+        format!("/users/{user}/user_generated_tokens"),
+    ] {
+        let resp = server
+            .get(&list_path)
+            .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+            .await;
+        assert_eq!(resp.status_code(), 200, "list {list_path}: {}", resp.text());
+        let listed: Value = resp.json();
+        let listed = listed
+            .as_array()
+            .expect("list is an array")
+            .iter()
+            .find(|token| token["id"] == id)
+            .unwrap_or_else(|| panic!("created token missing from {list_path}"));
+        assert_eq!(listed["visible_token"], format!("{hint}..."));
+        assert_eq!(listed["scopes"][0], "url:GET|/api/v1/courses");
+    }
 
     // Show by id and by token_hint both resolve the same token.
     for key in [id.to_string(), hint.clone()] {
         let resp = server
-            .get(&format!("/tokens/{key}"))
+            .get(&format!("/users/self/tokens/{key}"))
             .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
             .await;
         assert_eq!(resp.status_code(), 200, "show {key}: {}", resp.text());
@@ -1324,9 +1416,45 @@ async fn tokens_create_list_show_and_destroy() {
         assert_eq!(shown["visible_token"], format!("{hint}..."));
     }
 
+    // PUT update: purpose and scopes change; the visible token stays masked
+    // when not regenerating (Canvas tokens#update).
+    let resp = server
+        .put(&format!("/users/self/tokens/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .json(&json!({
+            "token": {
+                "purpose": "renamed purpose",
+                "scopes": ["url:GET|/api/v1/courses"]
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "update: {}", resp.text());
+    let updated: Value = resp.json();
+    assert_eq!(updated["purpose"], "renamed purpose");
+    assert_eq!(updated["scopes"].as_array().unwrap().len(), 1);
+    assert_eq!(updated["visible_token"], format!("{hint}..."));
+
+    // PUT regenerate: a fresh full token value is revealed exactly once.
+    let resp = server
+        .put(&format!("/users/self/tokens/{id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .json(&json!({ "token": { "regenerate": true } }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "regenerate: {}", resp.text());
+    let regenerated: Value = resp.json();
+    let new_full = regenerated["visible_token"].as_str().expect("full token");
+    assert_eq!(new_full.len(), 64);
+    assert_ne!(new_full, full_token.as_str());
+    let (stored_new,): (String,) = sqlx::query_as("SELECT token FROM access_tokens WHERE id = $1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .expect("row after regenerate");
+    assert_eq!(stored_new, new_full);
+
     // Delete is a soft delete; the token leaves the list and is 404 after.
     let resp = server
-        .delete(&format!("/tokens/{id}"))
+        .delete(&format!("/users/self/tokens/{id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "delete: {}", resp.text());
@@ -1342,7 +1470,7 @@ async fn tokens_create_list_show_and_destroy() {
     assert_eq!(state, "deleted");
 
     let resp = server
-        .get("/tokens")
+        .get("/users/self/user_generated_tokens")
         .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
         .await;
     let remaining: Value = resp.json();
@@ -1356,12 +1484,12 @@ async fn tokens_create_list_show_and_destroy() {
     );
 
     let resp = server
-        .get(&format!("/tokens/{id}"))
+        .get(&format!("/users/self/tokens/{id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
         .await;
     assert_eq!(resp.status_code(), 404, "show deleted: {}", resp.text());
     let resp = server
-        .delete(&format!("/tokens/{id}"))
+        .delete(&format!("/users/self/tokens/{id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
         .await;
     assert_eq!(resp.status_code(), 404, "repeat delete: {}", resp.text());
@@ -1379,10 +1507,10 @@ async fn tokens_require_auth_and_validate_params() {
     let user = seed_user(&pool, &prefix, "TokenValidation", "student").await;
 
     // Anonymous requests are rejected.
-    let resp = server.get("/tokens").await;
+    let resp = server.get("/users/self/user_generated_tokens").await;
     assert_eq!(resp.status_code(), 401, "anonymous list: {}", resp.text());
     let resp = server
-        .post("/tokens")
+        .post("/users/self/tokens")
         .json(&json!({ "token": { "purpose": "nope" } }))
         .await;
     assert_eq!(resp.status_code(), 401, "anonymous create: {}", resp.text());
@@ -1390,7 +1518,7 @@ async fn tokens_require_auth_and_validate_params() {
     // Missing or blank purpose: Canvas `{"message": ...}` error array, 400.
     for purpose in [Value::Null, json!("   ")] {
         let resp = server
-            .post("/tokens")
+            .post("/users/self/tokens")
             .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
             .json(&json!({ "token": { "purpose": purpose } }))
             .await;
@@ -1406,7 +1534,7 @@ async fn tokens_require_auth_and_validate_params() {
 
     // Unparseable expiration dates are rejected like Canvas.
     let resp = server
-        .post("/tokens")
+        .post("/users/self/tokens")
         .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
         .json(&json!({
             "token": { "purpose": "bad date", "expires_at": "next tuesday" }
@@ -1416,9 +1544,17 @@ async fn tokens_require_auth_and_validate_params() {
     let error: Value = resp.json();
     assert_eq!(error[0]["message"], "Invalid expiration date format");
 
+    // Non-numeric user ids (other than self) are 404, like Canvas's API user
+    // resolution.
+    let resp = server
+        .get("/users/not-a-number/user_generated_tokens")
+        .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 404, "bad user id: {}", resp.text());
+
     // Unknown ids are 404, and validation created no rows.
     let resp = server
-        .get("/tokens/999999999")
+        .get("/users/self/tokens/999999999")
         .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
         .await;
     assert_eq!(resp.status_code(), 404, "unknown token: {}", resp.text());
@@ -1441,6 +1577,7 @@ async fn tokens_are_scoped_to_their_owner() {
 
     let owner = seed_user(&pool, &prefix, "TokenIsolationOwner", "teacher").await;
     let other = seed_user(&pool, &prefix, "TokenIsolationOther", "student").await;
+    let admin = seed_user(&pool, &prefix, "TokenIsolationAdmin", "admin").await;
 
     let created = create_personal_token(
         &server,
@@ -1451,29 +1588,43 @@ async fn tokens_are_scoped_to_their_owner() {
     .await;
     let id = created["id"].as_i64().expect("token id");
 
-    // Another user cannot see it in their list, read it, or delete it.
+    // Another (non-admin) user cannot list the owner's user-generated tokens
+    // (Canvas render_unauthorized_action -> 401)...
     let resp = server
-        .get("/tokens")
+        .get(&format!("/users/{owner}/user_generated_tokens"))
         .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
         .await;
-    assert_eq!(resp.status_code(), 200, "other list: {}", resp.text());
-    let other_list: Value = resp.json();
-    assert!(
-        other_list
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|token| token["id"] != id),
-        "another user's token leaked into the list: {other_list}"
-    );
+    assert_eq!(resp.status_code(), 401, "other list: {}", resp.text());
 
-    for method in ["GET", "DELETE"] {
-        let path = format!("/tokens/{id}");
+    // ...cannot create a token for the owner...
+    let resp = server
+        .post(&format!("/users/{owner}/tokens"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+        .json(&json!({ "token": { "purpose": "sneaky" } }))
+        .await;
+    assert_eq!(resp.status_code(), 401, "other create: {}", resp.text());
+
+    // ...and cannot read the owner's token (401, Canvas
+    // render_unauthorized_action on the read right) or modify it (404,
+    // Canvas RecordNotFound fallback for update/destroy).
+    let path = format!("/users/{owner}/tokens/{id}");
+    let resp = server
+        .get(&path)
+        .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        401,
+        "GET by another user: {}",
+        resp.text()
+    );
+    for method in ["PUT", "DELETE"] {
         let resp = match method {
-            "GET" => {
+            "PUT" => {
                 server
-                    .get(&path)
+                    .put(&path)
                     .add_header(axum::http::header::AUTHORIZATION, auth(other, "student"))
+                    .json(&json!({ "token": { "purpose": "steal" } }))
                     .await
             }
             _ => {
@@ -1491,9 +1642,99 @@ async fn tokens_are_scoped_to_their_owner() {
         );
     }
 
-    // The failed delete left the token active and usable by its owner.
+    // Admins may list the owner's user-generated tokens and create tokens
+    // for them; tokens created for someone else start `pending`
+    // (Canvas tokens#create).
     let resp = server
-        .get(&format!("/tokens/{id}"))
+        .get(&format!("/users/{owner}/user_generated_tokens"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "admin list: {}", resp.text());
+    let admin_list: Value = resp.json();
+    assert!(
+        admin_list
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|token| token["id"] == id),
+        "owner token missing from admin list: {admin_list}"
+    );
+
+    let resp = server
+        .post(&format!("/users/{owner}/tokens"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "token": { "purpose": "admin created" } }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "admin create: {}", resp.text());
+    let for_other: Value = resp.json();
+    assert_eq!(for_other["workflow_state"], "pending");
+    assert_eq!(for_other["user_id"], owner);
+    let pending_id = for_other["id"].as_i64().expect("pending id");
+
+    // Regenerating while acting on another user's token resets it to pending.
+    let resp = server
+        .put(&format!("/users/{owner}/tokens/{pending_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({ "token": { "regenerate": true } }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "admin regenerate: {}", resp.text());
+    assert_eq!(resp.json::<Value>()["workflow_state"], "pending");
+
+    // An expired token cannot be regenerated without a new expiration date
+    // (Canvas tokens#update). The token value is prefixed to stay unique
+    // across parallel runs (access_tokens.token is UNIQUE).
+    let expired_token = format!("{prefix}-expired-token-value");
+    let expired_id: i64 = sqlx::query_scalar(
+        r#"
+        INSERT INTO access_tokens
+            (user_id, developer_key_id, token, token_hint, purpose,
+             permanent_expires_at, workflow_state)
+        VALUES ($1, NULL, $2, $3, 'already expired',
+                now() - interval '1 hour', 'active')
+        RETURNING id
+        "#,
+    )
+    .bind(owner)
+    .bind(&expired_token)
+    .bind(&expired_token[..5])
+    .fetch_one(&pool)
+    .await
+    .expect("seed expired token");
+    let resp = server
+        .put(&format!("/users/{owner}/tokens/{expired_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "teacher"))
+        .json(&json!({ "token": { "regenerate": true } }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        400,
+        "expired regenerate: {}",
+        resp.text()
+    );
+    let error: Value = resp.json();
+    assert_eq!(
+        error["errors"]["message"],
+        "cannot regenerate an expired token without a new expiration date"
+    );
+
+    // ...but regenerating WITH a new expiration date succeeds.
+    let resp = server
+        .put(&format!("/users/{owner}/tokens/{expired_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(owner, "teacher"))
+        .json(&json!({
+            "token": { "regenerate": true, "expires_at": "2031-01-01T00:00:00Z" }
+        }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        200,
+        "expired regenerate + date: {}",
+        resp.text()
+    );
+
+    // The failed attempts left the owner's token active and usable.
+    let resp = server
+        .get(&format!("/users/{owner}/tokens/{id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(owner, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 200, "owner show: {}", resp.text());
@@ -1506,20 +1747,15 @@ async fn tokens_are_scoped_to_their_owner() {
 // Authentication providers + SSO settings
 // ---------------------------------------------------------------------------
 
-/// Seed a real account row for auth-providers tests (needed because the
-/// FK references accounts.id). Uses id 1 which should exist from prior
-/// migrations.
-async fn seed_account_if_needed(pool: &PgPool) {
-    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM accounts WHERE id = 1")
-        .fetch_optional(pool)
+/// Distinct account per mutating test (issue #75): never the shared root
+/// account 1 — parallel provider/sso writes there overwrite each other and
+/// leak into every sibling's assertions.
+async fn seed_unique_account(pool: &PgPool, prefix: &str, tag: &str) -> i64 {
+    sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+        .bind(format!("{prefix}-{tag}"))
+        .fetch_one(pool)
         .await
-        .expect("check account");
-    if exists.is_none() {
-        sqlx::query("INSERT INTO accounts (id, name) VALUES (1, 'Test Account') ON CONFLICT (id) DO NOTHING")
-            .execute(pool)
-            .await
-            .expect("seed account");
-    }
+        .expect("seed unique account")
 }
 
 #[tokio::test]
@@ -1529,25 +1765,27 @@ async fn auth_providers_crud_requires_admin() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
 
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
 
     // Anonymous → 401.
-    let resp = server.get("/accounts/1/authentication_providers").await;
+    let resp = server
+        .get(&format!("/accounts/{account}/authentication_providers"))
+        .await;
     assert_eq!(resp.status_code(), 401, "anonymous list: {}", resp.text());
 
     // Student → 403.
     let resp = server
-        .get("/accounts/1/authentication_providers")
+        .get(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "student list: {}", resp.text());
 
     // Admin → 200 (empty list, account has no providers yet).
     let resp = server
-        .get("/accounts/1/authentication_providers")
+        .get(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(resp.status_code(), 200, "admin list: {}", resp.text());
@@ -1564,13 +1802,13 @@ async fn auth_providers_create_show_update_delete() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "Admin2", "admin").await;
     let admin_auth = auth(admin, "admin");
 
     // POST create a SAML provider with settings.
     let create_resp = server
-        .post("/accounts/1/authentication_providers")
+        .post(&format!("/accounts/{account}/authentication_providers"))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .json(&json!({
             "authentication_provider": {
@@ -1597,7 +1835,7 @@ async fn auth_providers_create_show_update_delete() {
     // GET show.
     let show_resp = server
         .get(&format!(
-            "/accounts/1/authentication_providers/{provider_id}"
+            "/accounts/{account}/authentication_providers/{provider_id}"
         ))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .await;
@@ -1607,7 +1845,7 @@ async fn auth_providers_create_show_update_delete() {
     // PUT update: change log_in_url and position.
     let update_resp = server
         .put(&format!(
-            "/accounts/1/authentication_providers/{provider_id}"
+            "/accounts/{account}/authentication_providers/{provider_id}"
         ))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .json(&json!({
@@ -1632,7 +1870,7 @@ async fn auth_providers_create_show_update_delete() {
     // DELETE soft-deletes.
     let delete_resp = server
         .delete(&format!(
-            "/accounts/1/authentication_providers/{provider_id}"
+            "/accounts/{account}/authentication_providers/{provider_id}"
         ))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .await;
@@ -1647,7 +1885,7 @@ async fn auth_providers_create_show_update_delete() {
     // GET after delete → 404.
     let gone_resp = server
         .get(&format!(
-            "/accounts/1/authentication_providers/{provider_id}"
+            "/accounts/{account}/authentication_providers/{provider_id}"
         ))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .await;
@@ -1668,13 +1906,13 @@ async fn sso_settings_show_and_update() {
         return;
     };
 
-    seed_account_if_needed(&pool).await;
+    let account = seed_unique_account(&pool, &prefix, "Acct").await;
     let admin = seed_user(&pool, &prefix, "Admin3", "admin").await;
     let admin_auth = auth(admin, "admin");
 
     // GET sso_settings returns current values (may be nulls).
     let get_resp = server
-        .get("/accounts/1/sso_settings")
+        .get(&format!("/accounts/{account}/sso_settings"))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .await;
     assert_eq!(
@@ -1688,7 +1926,7 @@ async fn sso_settings_show_and_update() {
 
     // PUT update sso_settings.
     let update_resp = server
-        .put("/accounts/1/sso_settings")
+        .put(&format!("/accounts/{account}/sso_settings"))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .json(&json!({
             "sso_settings": {
@@ -1718,11 +1956,131 @@ async fn sso_settings_show_and_update() {
 
     // GET reflects the update.
     let get2_resp = server
-        .get("/accounts/1/sso_settings")
+        .get(&format!("/accounts/{account}/sso_settings"))
         .add_header(axum::http::header::AUTHORIZATION, &admin_auth)
         .await;
     let get2_body: Value = get2_resp.json::<serde_json::Value>()["sso_settings"].clone();
     assert_eq!(get2_body["login_handle_name"], "Username");
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #106 — failed-login lockout (Canvas LoginRegistry parity:
+// lib/canvas/security/password_policy.rb DEFAULT_LOGIN_ATTEMPTS=10,
+// login_registry.rb audit_login / too_many_attempts).
+// ---------------------------------------------------------------------------
+
+/// The limiter itself: counting, locking at the Canvas threshold, the
+/// 30-minute release window, and success clearing the counter.
+#[tokio::test]
+async fn login_rate_limiter_counts_locks_and_releases() {
+    let limiter = star_auth::LoginRateLimiter::default();
+    let email = "lockout-user@test.local";
+
+    assert!(!limiter.is_locked(email));
+    // Nine failures: still allowed (Canvas locks ON the 10th consecutive
+    // failure — the 10th request is the one that gets refused).
+    for _ in 0..9 {
+        assert!(!limiter.record_failure(email));
+        assert!(!limiter.is_locked(email), "nine failures must not lock");
+    }
+    // The tenth failure locks the account.
+    assert!(limiter.record_failure(email));
+    assert!(limiter.is_locked(email), "tenth failure locks");
+
+    // A different account is unaffected.
+    assert!(!limiter.is_locked("other-user@test.local"));
+
+    // Success clears the counter even mid-count.
+    limiter.record_success(email);
+    assert!(!limiter.is_locked(email));
+    for _ in 0..5 {
+        assert!(!limiter.record_failure(email));
+    }
+    assert!(!limiter.is_locked(email), "counter restarted from zero");
+
+    // Emails are normalized: case and surrounding whitespace share one
+    // budget (the handlers lower-case before lookup).
+    assert!(!limiter.record_failure("  CaseUser@Test.Local "));
+    assert!(!limiter.record_failure("caseuser@test.local"));
+    assert!(!limiter.is_locked("CASEUSER@test.local"));
+}
+
+/// Through the real route: ten wrong passwords lock the account, the
+/// eleventh is a 403 even with the CORRECT password (Canvas refuses
+/// :too_many_attempts before checking credentials), and a fresh account
+/// with the right password still logs in.
+#[tokio::test]
+async fn login_locks_after_ten_failed_attempts() {
+    let Some((server, pool, prefix)) = setup().await else {
+        eprintln!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let email = format!("{prefix}-lockout@test.local");
+    let created = server
+        .post("/auth/register")
+        .json(&json!({
+            "name": "Lockout Target",
+            "email": email,
+            "password": "correct-horse-battery"
+        }))
+        .await;
+    assert_eq!(
+        created.status_code(),
+        201,
+        "setup register: {}",
+        created.text()
+    );
+
+    // Ten failed attempts: first nine answer 401 ...
+    for attempt in 1..=9 {
+        let resp = server
+            .post("/auth/login")
+            .json(&json!({ "email": email, "password": "not-the-password" }))
+            .await;
+        assert_eq!(
+            resp.status_code(),
+            401,
+            "attempt {attempt} should still be 401"
+        );
+    }
+    // ... the tenth failure locks.
+    let resp = server
+        .post("/auth/login")
+        .json(&json!({ "email": email, "password": "not-the-password" }))
+        .await;
+    assert_eq!(resp.status_code(), 401, "the tenth failure itself is 401");
+
+    // Now even the CORRECT password is refused while locked.
+    let resp = server
+        .post("/auth/login")
+        .json(&json!({ "email": email, "password": "correct-horse-battery" }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        403,
+        "locked account with correct password: {}",
+        resp.text()
+    );
+
+    // A different account is untouched by the lock.
+    let other_email = format!("{prefix}-bystander@test.local");
+    let created = server
+        .post("/auth/register")
+        .json(&json!({
+            "name": "Bystander",
+            "email": other_email,
+            "password": "correct-horse-battery"
+        }))
+        .await;
+    assert_eq!(created.status_code(), 201, "bystander register");
+    let resp = server
+        .post("/auth/login")
+        .json(&json!({ "email": other_email, "password": "correct-horse-battery" }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "bystander logs in normally");
 
     cleanup(&pool, &prefix).await;
 }

@@ -2,7 +2,7 @@
 //!
 //! Owns main(), router assembly, auth middleware, and graceful shutdown.
 
-use axum::{routing::get, Extension, Json, Router};
+use axum::{middleware, routing::get, Extension, Json, Router};
 use sqlx::postgres::PgPoolOptions;
 use star_common::AppState;
 use std::{env, net::SocketAddr};
@@ -126,11 +126,41 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .route("/health", get(health))
         // Server-rendered UI shell (star-ui, spec p5): top level, NOT under
         // /api/v1 — /, /login, /logout, /dashboard, /courses/:id, /static.
-        .merge(star_ui::router())
+        // It is the app's fallback rather than a merge: `star_ui::app` carries
+        // Rails' `_method` override, which has to run ahead of routing, and
+        // none of the root-mounted routers below own a path the shell
+        // registers, so the two shapes answer the same requests.
+        .fallback_service(star_ui::app(state.clone()))
         // Canvas serves the LTI Advantage family at /api/lti (outside
         // /api/v1), so the router carries the prefix and is merged here.
         .merge(star_lti::lti_advantage_router())
-        .nest("/api/v1", api_router)
+        // Canvas serves the login/oauth2 family (auth, token, revoke, jwks)
+        // at the top level, outside /api/v1 (config/routes.rb:3087-3094).
+        .merge(star_auth::login_router())
+        // The sis/lti-security gap routes Canvas serves outside /api/v1
+        // (the "/api/sis" and "/api/lti" route sets) — root-mounted like
+        // the LTI Advantage family above.
+        .merge(star_auth::small_controllers_root_routes())
+        // The port-C gap routes Canvas serves outside /api/v1:
+        // /canvadoc_session (canvadoc_sessions_controller show/create) and
+        // /api/sis/courses/:course_id/disable_post_to_sis
+        // (disable_post_to_sis_api_controller) — root-mounted like the sets
+        // above; the route strings carry their full paths.
+        .merge(star_courses::root_routes())
+        // Canvas' browser code authenticates the web session, not an API token:
+        // `AnnouncementsApiController < ApplicationController`
+        // (app/controllers/announcements_api_controller.rb:26) and `window.ENV`
+        // carries no access token (app/controllers/application_controller.rb:264-309).
+        // This layer gives the Svelte shell the same shape — it rewrites the
+        // `star_session` cookie into the `Authorization` header `AuthUser` already
+        // verifies, behind an origin check plus the CSRF double-submit on unsafe
+        // methods. Bearer clients are untouched: an existing header short-circuits it.
+        .nest(
+            "/api/v1",
+            api_router.layer(middleware::from_fn(
+                star_ui::session_bridge::bridge_session_to_bearer,
+            )),
+        )
         // Canvas serves its GraphQL API at /api/graphql (outside /api/v1).
         .nest("/api/graphql", star_graphql::router())
         // The front door: a request the port has no route for — or no route
@@ -178,6 +208,7 @@ fn build_api_router(origin: Option<std::sync::Arc<star_proxy::CanvasOrigin>>) ->
         .merge(star_dashboard::router())
         .merge(star_quizzes::router())
         .merge(star_assignment_groups::router())
+        .merge(star_gradebook::router())
         .merge(star_accounts::router())
         .merge(star_calendar::router())
         .merge(star_conversations::router())
@@ -215,4 +246,8 @@ fn build_api_router(origin: Option<std::sync::Arc<star_proxy::CanvasOrigin>>) ->
     // panics on a duplicate method ("Overlapping method route") — the
     // application could not start at all.
     // crates/star-http/tests/router_conflicts.rs is the gate for this.
+    // NOTE: star_pages / star_modules / star_announcements are NOT merged
+    // here — star-content/src/lib.rs already merges their routers (lines
+    // 56-58). Merging them here as well panics axum at startup with
+    // "Overlapping method route" (e.g. GET /pages/{id} registered twice).
 }

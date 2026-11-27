@@ -1,0 +1,34 @@
+{
+  "route": "GET /api/v1/courses/:course_id/blueprint_templates/:template_id/associated_courses",
+  "source": "canvas-src/app/controllers/master_courses/master_templates_controller.rb:286 (course_summary_json(course, can_read_sis:, include_teachers: true)); canvas-src/lib/api/v1/master_courses.rb:111-123 -- :113 api_json only: %w[id name course_code], :114 sis_course_id only with :read_sis/:manage_sis, :115 term_name = course.enrollment_term.name UNCONDITIONALLY, :116 concluded only behind the ux_list_concluded_courses_in_bp site-admin feature, :117-122 teacher_count when cached else a teachers array of user_display_json. Nullability from canvas-src/db/migrate/20101210192618_init_canvas_db.rb: courses.name :177 and courses.course_code :194 are plain t.string (nullable), courses.enrollment_term :198 is t.references null: false, and enrollment_terms.name :2367 is a nullable t.string, so term_name is required but nullable.",
+  "shape": {
+    "$list": {
+      "id": "integer",
+      "name": {
+        "$nullable": "string"
+      },
+      "course_code": {
+        "$nullable": "string"
+      },
+      "term_name": {
+        "$nullable": "string"
+      },
+      "sis_course_id": {
+        "$optional": {
+          "$nullable": "string"
+        }
+      },
+      "concluded": {
+        "$optional": "boolean"
+      },
+      "teacher_count": {
+        "$optional": "integer"
+      },
+      "teachers": {
+        "$optional": {
+          "$list": "any"
+        }
+      }
+    }
+  }
+}

@@ -9,6 +9,8 @@
 //! coordinator; this file exercises them through that router.
 
 use axum::http::header::AUTHORIZATION;
+mod support;
+
 use axum_test::TestServer;
 use serde_json::{json, Value};
 use sqlx::PgPool;
@@ -87,6 +89,19 @@ async fn seed_account(pool: &PgPool, prefix: &str, name: &str, parent: Option<i6
     .fetch_one(pool)
     .await
     .expect("seed account")
+}
+
+#[allow(dead_code)]
+async fn seed_account_admin(pool: &PgPool, account_id: i64, user_id: i64) {
+    sqlx::query(
+        "INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, 'admin') \
+         ON CONFLICT (account_id, user_id) DO NOTHING",
+    )
+    .bind(account_id)
+    .bind(user_id)
+    .execute(pool)
+    .await
+    .expect("seed account admin");
 }
 
 async fn seed_course(pool: &PgPool, prefix: &str, name: &str, account_id: i64) -> i64 {
@@ -504,6 +519,24 @@ async fn overlay_history_and_history_return_collections() {
     let body: Value = response.json();
     assert_eq!(body, json!([]));
 
+    // Canvas validates the limit only for a registration that carries an
+    // overlay (registrations_controller.rb:1968-1985); without one the
+    // answer stays [] whatever the limit says.
+    let response = server
+        .post(&format!("/accounts/{account}/lti_registrations"))
+        .add_header(AUTHORIZATION, auth(admin, "admin"))
+        .json(&json!({
+            "name": format!("{prefix}-overlay-tool"),
+            "vendor": "Example Vendor",
+            "configuration": tool_configuration(),
+            "overlay": { "privacy_level": "public" },
+        }))
+        .await;
+    assert_eq!(response.status_code(), 201, "body: {}", response.text());
+    let id = response.json::<Value>()["id"]
+        .as_i64()
+        .expect("registration id");
+
     // An invalid limit is a 422.
     let response = server
         .get(&format!(
@@ -704,12 +737,9 @@ async fn bind_unbind_and_install_from_template_manage_the_bindings() {
     enable_feature(&pool, account, "lti_registrations_templates").await;
 
     // A template registration owned by the site admin (the root account).
-    let site_admin_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id ASC LIMIT 1",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("site admin account");
+    // The read-only lookup lives in `tests/support` — see that module's
+    // docs for why it is not inlined here.
+    let site_admin_id = support::site_admin_id(&pool).await;
     let template =
         create_registration(&server, site_admin_id, admin, &prefix, tool_configuration()).await;
     let template_id = template["id"].as_i64().expect("template id");

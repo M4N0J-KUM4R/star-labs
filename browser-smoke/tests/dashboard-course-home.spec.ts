@@ -32,9 +32,10 @@ test.describe('journey 2: dashboard -> course home', () => {
   test('front-page course: tab order, front page body, course ENV', async ({ page }) => {
     await login(page, TEACHER_EMAIL, SMOKE_PASSWORD);
 
+    // The card the dashboard bundle rendered from /api/v1/dashboard/dashboard_cards.
     await page
       .locator(
-        `.ic-DashboardCard[data-course-id="${COURSE_FRONT_PAGE_ID}"] a.ic-DashboardCard__link`,
+        `.ic-DashboardCard:has(a.ic-DashboardCard__link[href="/courses/${COURSE_FRONT_PAGE_ID}"]) a.ic-DashboardCard__link`,
       )
       .click();
     await expect(page).toHaveURL(new RegExp(`/courses/${COURSE_FRONT_PAGE_ID}/?$`));

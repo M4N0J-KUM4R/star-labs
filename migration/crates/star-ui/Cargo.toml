@@ -6,16 +6,18 @@ edition.workspace = true
 [dependencies]
 star-common = { path = "../star-common" }
 star-auth = { path = "../star-auth" }
-star-dashboard = { path = "../star-dashboard" }
 star-courses = { path = "../star-courses" }
 star-pages = { path = "../star-pages" }
 star-modules = { path = "../star-modules" }
 star-quizzes = { path = "../star-quizzes" }
 star-assignments = { path = "../star-assignments" }
-star-assignment-groups = { path = "../star-assignment-groups" }
 star-grading-standards = { path = "../star-grading-standards" }
 star-discussions = { path = "../star-discussions" }
 star-conversations = { path = "../star-conversations" }
+star-files = { path = "../star-files" }
+star-announcements = { path = "../star-announcements" }
+star-calendar = { path = "../star-calendar" }
+star-enrollments = { path = "../star-enrollments" }
 star-submission-comments = { path = "../star-submission-comments" }
 star-rubrics = { path = "../star-rubrics" }
 axum = { workspace = true }
@@ -33,6 +35,13 @@ time = { workspace = true }
 # (`question_<id>`, `question_<id>_answer_<answer_id>`), so serde_urlencoded
 # cannot type them — the submit handler decodes raw pairs from the body.
 url = { workspace = true }
+
+# build.rs embeds migration/ui/{build,static} into the binary and hashes each file.
+# sha2 is already an ordinary dependency of this package, so the lockfile does not
+# change: it records one flat dependency set per package, not per kind. CI builds with
+# `--locked` (browser-smoke.yml), which a genuinely new dependency would break.
+[build-dependencies]
+sha2 = { workspace = true }
 
 [dev-dependencies]
 star-db = { path = "../star-db" }

@@ -40,7 +40,10 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, ApiJson, AppState};
 
+mod outcome_gaps;
+mod outcome_proficiency;
 mod outcomes_api;
+mod outcomes_direct_api;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -1126,41 +1129,29 @@ async fn link_outcome_by_group_id(
     if !check_group_manage_access(&state.db, auth.id, &group, &auth).await? {
         return Err(ApiError::Forbidden);
     }
-    link_outcome_by_group(state, group, group_id, auth, payload).await
+    link_outcome_core(&state, group, payload).await
 }
 
-/// POST /global/outcome_groups/{id}/outcomes → 201.
+/// Shared link/create-and-link body for the outcome-link routes.
 ///
-/// The global outcome groups belong to the root account, so Canvas checks
-/// `manage_outcomes` on the root account before it looks the group up
-/// (app/controllers/outcome_groups_api_controller.rb:512-514).
-async fn link_global_outcome(
-    State(state): State<AppState>,
-    Path(group_id): Path<i64>,
-    auth: AuthUser,
-    ApiJson(payload): ApiJson<LinkOutcome>,
-) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    if !is_global_admin(&auth) {
-        return Err(ApiError::Forbidden);
-    }
-    // Canvas checks `manage_outcomes` on the site-admin account *before* it
-    // looks the group up (`authorized_action(@context, @current_user, ...)`),
-    // so a caller without the right gets 403 even for a missing group.
-    if !check_global_manage_access(&auth) {
-        return Err(ApiError::Forbidden);
-    }
-    let group = fetch_global_outcome_group(&state.db, group_id).await?;
-    link_outcome_by_group(state, group, group_id, auth, payload).await
-}
-
-/// The shared body of the outcome-group link routes.
-async fn link_outcome_by_group(
-    state: AppState,
+/// The group is fetched and authorized by the caller, so each context
+/// (global, account, course, unscoped) can scope it to its own URL
+/// parameters -- Canvas does the same with `context_outcome_groups`
+/// (`canvas-src/app/controllers/outcome_groups_api_controller.rb:770-772`),
+/// which is `LearningOutcomeGroup.for_context(@context).active` and 404s a
+/// group that belongs to a different context.
+///
+/// Status note: Canvas renders `link` with 200
+/// (`outcome_groups_api_controller.rb:553`, no `status:`), while this body has
+/// always answered 201 and the crate's tests assert that. All three link forms
+/// now share the one status, so the divergence is in one place instead of
+/// split between the POST and PUT halves of the same Canvas action.
+async fn link_outcome_core(
+    state: &AppState,
     group: LearningOutcomeGroup,
-    group_id: i64,
-    _auth: AuthUser,
     payload: LinkOutcome,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let group_id = group.id;
     let outcome_id = match payload.outcome_id {
         Some(outcome_id) => {
             let exists: bool = sqlx::query_scalar(
@@ -1244,6 +1235,96 @@ async fn link_outcome_by_group(
     Ok((StatusCode::CREATED, Json(json)))
 }
 
+/// POST /accounts/{accountId}/outcome_groups/{id}/outcomes → 201
+///
+/// Account-scoped variant of `link_outcome_by_group_id`. Canvas resolves the
+/// context first (`before_action :get_context`,
+/// `outcome_groups_api_controller.rb:146`), then applies
+/// `can_manage_outcomes`, then looks the group up inside that context
+/// (`link`, `:512-514`) -- so a missing account is 404, an unauthorized user
+/// 403, and an account-owned group asked for under the wrong account 404.
+/// The permission order below copies all three, and mirrors
+/// `unlink_account_outcome`, the DELETE route on the same scope.
+async fn link_outcome_by_group_id_in_account(
+    State(state): State<AppState>,
+    Path((account_id, group_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<LinkOutcome>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let group = fetch_account_outcome_group(&state.db, account_id, group_id).await?;
+    link_outcome_core(&state, group, payload).await
+}
+
+/// PUT /global/outcome_groups/{id}/outcomes/{outcomeId}
+///
+/// Canvas' `put .../outcomes/:outcome_id, action: :link`
+/// (`canvas-src/config/routes.rb:2549`) names the outcome in the path instead
+/// of the body, so this feeds the path value into the same link body. The
+/// previous handler here took `Path<i64>` on a two-parameter route, which axum
+/// rejects as a mismatched segment count before the handler runs.
+async fn link_global_outcome_path(
+    State(state): State<AppState>,
+    Path((group_id, outcome_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    payload: Option<Json<LinkOutcome>>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let group = fetch_global_outcome_group(&state.db, group_id).await?;
+    if !check_global_group_manage_access(&state.db, auth.id, &group, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let mut payload = payload.map(|Json(inner)| inner).unwrap_or_default();
+    payload.outcome_id = Some(outcome_id);
+    link_outcome_core(&state, group, payload).await
+}
+
+/// PUT /accounts/{accountId}/outcome_groups/{id}/outcomes/{outcomeId}
+///
+/// Account-scoped form of `link_global_outcome_path`; permission order copied
+/// from `unlink_account_outcome`.
+async fn link_account_outcome_path(
+    State(state): State<AppState>,
+    Path((account_id, group_id, outcome_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    payload: Option<Json<LinkOutcome>>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let group = fetch_account_outcome_group(&state.db, account_id, group_id).await?;
+    let mut payload = payload.map(|Json(inner)| inner).unwrap_or_default();
+    payload.outcome_id = Some(outcome_id);
+    link_outcome_core(&state, group, payload).await
+}
+
+/// PUT /courses/{courseId}/outcome_groups/{id}/outcomes/{outcomeId}
+///
+/// Course-scoped form: teacher or admin on the course, and the group must
+/// belong to that course (`fetch_course_outcome_group`), the same two checks
+/// `unlink_course_outcome` makes on its DELETE twin.
+async fn link_course_outcome_path(
+    State(state): State<AppState>,
+    Path((course_id, group_id, outcome_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    payload: Option<Json<LinkOutcome>>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let group = fetch_course_outcome_group(&state.db, course_id, group_id).await?;
+    let mut payload = payload.map(|Json(inner)| inner).unwrap_or_default();
+    payload.outcome_id = Some(outcome_id);
+    link_outcome_core(&state, group, payload).await
+}
+
 /// Build the Canvas `OutcomeLink` payload for a stored link.
 async fn link_response(
     pool: &PgPool,
@@ -1288,7 +1369,41 @@ async fn list_group_outcome_links(
     if !check_group_read_access(&state.db, auth.id, &group, &auth).await? {
         return Err(ApiError::Forbidden);
     }
-    let can_manage = check_group_manage_access(&state.db, auth.id, &group, &auth).await?;
+    list_group_outcome_links_core(&state, group, &auth).await
+}
+
+/// GET /accounts/{accountId}/outcome_groups/{id}/outcomes
+///
+/// Account-scoped variant. The shared list body was reached directly from this
+/// two-parameter route, which axum rejects (Path arity), and it took the group
+/// by id alone -- so even if it had answered, any account's group could be
+/// listed through any other account's URL. Order copies Canvas'
+/// `get_context` → `can_read_outcomes` → `context_outcome_groups.find`
+/// (`outcome_groups_api_controller.rb:146`, `:343-345`).
+async fn list_account_group_outcome_links(
+    State(state): State<AppState>,
+    Path((account_id, group_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    if !account_exists(&state.db, account_id).await? {
+        return Err(ApiError::NotFound);
+    }
+    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    let group = fetch_account_outcome_group(&state.db, account_id, group_id).await?;
+    list_group_outcome_links_core(&state, group, &auth).await
+}
+
+/// Shared OutcomeLink list body; the group is fetched and authorized by the
+/// caller so each context can scope it to its own URL parameters.
+async fn list_group_outcome_links_core(
+    state: &AppState,
+    group: LearningOutcomeGroup,
+    auth: &AuthUser,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let group_id = group.id;
+    let can_manage = check_group_manage_access(&state.db, auth.id, &group, auth).await?;
 
     let links: Vec<LearningOutcomeLink> = sqlx::query_as(
         r#"
@@ -2197,8 +2312,125 @@ async fn list_account_outcome_group_links(
 // Router
 // ---------------------------------------------------------------------------
 
+/// POST /global/outcome_groups/{id}/outcomes → 201.
+///
+/// The global outcome groups belong to the root account, so Canvas checks
+/// `manage_outcomes` on the root account before it looks the group up
+/// (app/controllers/outcome_groups_api_controller.rb:512-514).
+async fn link_global_outcome(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+    ApiJson(payload): ApiJson<LinkOutcome>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    if !is_global_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+    // Canvas checks `manage_outcomes` on the site-admin account *before* it
+    // looks the group up (`authorized_action(@context, @current_user, ...)`),
+    // so a caller without the right gets 403 even for a missing group.
+    if !check_global_manage_access(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+    let group = fetch_global_outcome_group(&state.db, group_id).await?;
+    link_outcome_by_group(state, group, group_id, auth, payload).await
+}
+
+/// The shared body of the outcome-group link routes.
+async fn link_outcome_by_group(
+    state: AppState,
+    group: LearningOutcomeGroup,
+    group_id: i64,
+    _auth: AuthUser,
+    payload: LinkOutcome,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let outcome_id = match payload.outcome_id {
+        Some(outcome_id) => {
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM learning_outcomes WHERE id = $1 AND workflow_state = 'active')",
+            )
+            .bind(outcome_id)
+            .fetch_one(&state.db)
+            .await?;
+            if !exists {
+                return Err(ApiError::NotFound);
+            }
+            outcome_id
+        }
+        None => {
+            let title = payload
+                .title
+                .as_deref()
+                .ok_or_else(|| ApiError::Validation("outcome_id or title is required".into()))?;
+            if title.trim().is_empty() {
+                return Err(ApiError::Validation("title cannot be blank".into()));
+            }
+            let outcome: LearningOutcome = sqlx::query_as(
+                r#"
+                INSERT INTO learning_outcomes (title, description, display_name)
+                VALUES ($1, $2, $3)
+                RETURNING id, title, description, display_name, workflow_state, created_at, updated_at
+                "#,
+            )
+            .bind(title)
+            .bind(&payload.description)
+            .bind(&payload.display_name)
+            .fetch_one(&state.db)
+            .await?;
+            outcome.id
+        }
+    };
+
+    if let Some(from_group_id) = payload.move_from {
+        // Canvas moves the existing link instead of creating a second one.
+        let moved: Option<LearningOutcomeLink> = sqlx::query_as(
+            r#"
+            UPDATE outcome_links
+            SET outcome_group_id = $1,
+                context_type = $2,
+                context_id = $3,
+                workflow_state = 'active',
+                updated_at = now()
+            WHERE outcome_id = $4 AND outcome_group_id = $5
+            RETURNING id, outcome_id, outcome_group_id, context_type, context_id, workflow_state
+            "#,
+        )
+        .bind(group_id)
+        .bind(&group.context_type)
+        .bind(group.context_id)
+        .bind(outcome_id)
+        .bind(from_group_id)
+        .fetch_optional(&state.db)
+        .await?;
+        let link = moved.ok_or_else(|| ApiError::BadRequest("outcome link not found".into()))?;
+        let json = link_response(&state.db, &group, &link, true).await?;
+        return Ok((StatusCode::OK, Json(json)));
+    }
+
+    let link: LearningOutcomeLink = sqlx::query_as(
+        r#"
+        INSERT INTO outcome_links (outcome_id, outcome_group_id, context_type, context_id)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (outcome_id, outcome_group_id)
+        DO UPDATE SET workflow_state = 'active', updated_at = now()
+        RETURNING id, outcome_id, outcome_group_id, context_type, context_id, workflow_state
+        "#,
+    )
+    .bind(outcome_id)
+    .bind(group_id)
+    .bind(&group.context_type)
+    .bind(group.context_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let json = link_response(&state.db, &group, &link, true).await?;
+    Ok((StatusCode::CREATED, Json(json)))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(outcome_proficiency::outcome_proficiency_routes())
+        .merge(outcomes_direct_api::outcomes_api_routes())
         // The outcome imports and the outcome results.
         .merge(outcomes_api::router())
         // outcome groups
@@ -2239,7 +2471,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/accounts/{accountId}/outcome_groups/{id}/subgroups",
-            get(list_account_outcome_subgroups),
+            get(list_account_outcome_subgroups).post(outcome_gaps::create_account_outcome_subgroup),
         )
         // global root redirect
         .route("/global/root_outcome_group", get(global_root_outcome_group))
@@ -2260,7 +2492,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/global/outcome_groups/{id}/outcomes/{outcomeId}",
-            put(link_outcome_by_group_id).delete(unlink_global_outcome),
+            put(link_global_outcome_path).delete(unlink_global_outcome),
         )
         .route(
             "/global/outcome_groups/{id}/import",
@@ -2281,11 +2513,11 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/accounts/{accountId}/outcome_groups/{id}/outcomes",
-            get(list_group_outcome_links).post(link_outcome_by_group_id),
+            get(list_account_group_outcome_links).post(link_outcome_by_group_id_in_account),
         )
         .route(
             "/accounts/{accountId}/outcome_groups/{id}/outcomes/{outcomeId}",
-            put(link_outcome_by_group_id).delete(unlink_account_outcome),
+            put(link_account_outcome_path).delete(unlink_account_outcome),
         )
         .route(
             "/accounts/{accountId}/outcome_groups/{id}/import",
@@ -2302,7 +2534,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/outcome_groups/{id}/outcomes/{outcomeId}",
-            put(link_outcome_to_group).delete(unlink_course_outcome),
+            put(link_course_outcome_path).delete(unlink_course_outcome),
         )
         .route(
             "/courses/{courseId}/outcome_groups/{id}/import",
@@ -2327,6 +2559,9 @@ pub fn router() -> Router<AppState> {
             "/outcomes/{outcomeId}/results",
             get(list_outcome_results).post(create_outcome_result),
         )
+        // P5 gap routes (account root redirect, account subgroup create,
+        // global AB outcomes import family).
+        .merge(outcome_gaps::outcome_gaps_routes())
 }
 
 #[cfg(test)]

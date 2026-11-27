@@ -1,15 +1,24 @@
 //! Quiz-taking journey handlers (issue #109, canvas-reference.md §8).
 //!
 //! Server-rendered Canvas `quizzes` journey: list, teacher new-quiz form,
-//! show, take (all questions in ONE form), bulk submit with server-side
-//! grading, and results. All routes are course-gated through
+//! editor (+ member save), show, take (all questions in ONE form), bulk submit
+//! with server-side grading, and results. All routes are course-gated through
 //! `star_courses::load_course_for_viewer` (404-before-403) — the shell cannot
 //! bypass `/api/v1` authorization.
 //!
 //! Deviations from Canvas (documented in the PR):
 //! - Canvas answers each question via `POST /quiz_submissions/:id/answer`
 //!   (missing in star-quizzes); the shell bulk-submits the whole form to
-//!   `POST .../submissions/{sid}/submit` and grades server-side in one go.
+//!   Canvas' take-form target, the submissions COLLECTION path
+//!   `POST /courses/{id}/quizzes/{qid}/submissions`
+//!   (`course_quiz_quiz_submissions_path`,
+//!   app/presenters/quizzes/take_quiz_presenter.rb:167-168), which resolves the
+//!   attempt from the current user the way
+//!   app/controllers/quizzes/quiz_submissions_controller.rb:60-61 does, and
+//!   grades server-side in one go.
+//! - Canvas' `/edit` boots the React editor (questions, banks, settings) from
+//!   `quizzes#edit`'s `render :new`; the shell serves the quiz-details fields
+//!   only, since question editing lives behind the REST question routes.
 //! - Canvas shows a Due date from assignment overrides; star-quizzes has no
 //!   `due_at` (due dates live in `learning_object_dates`), so the show page
 //!   renders only Available / Until.
@@ -22,7 +31,7 @@
 
 use askama::Template;
 use axum::body::Bytes;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum_extra::extract::{CookieJar, Form};
@@ -663,27 +672,6 @@ pub struct QuizzesPage {
     pub is_teacher: bool,
 }
 
-/// GET /courses/{id}/quizzes/new — the teacher-only creation form.
-#[derive(Template)]
-#[template(path = "quiz_new.html")]
-pub struct QuizNewPage {
-    pub title: String,
-    pub body_class: String,
-    pub css_url: String,
-    pub env_json: String,
-    pub notices: Vec<String>,
-    pub user_name: String,
-    pub active_path: &'static str,
-    pub breadcrumb: Vec<(String, String)>,
-    pub csrf_token: String,
-    pub unread_badge: i64,
-    pub tabs: Vec<star_courses::CourseTab>,
-    pub active_context_tab: String,
-    pub course_name: String,
-    pub course_id: i64,
-    pub error: String,
-}
-
 /// GET /courses/{id}/quizzes/{qid} — the show page (both roles).
 #[derive(Template)]
 #[template(path = "quiz_show.html")]
@@ -848,61 +836,12 @@ pub async fn quiz_list(
     (jar, html_response(page.render(), "quiz list")).into_response()
 }
 
-/// GET /courses/{id}/quizzes/new — teacher-only minimal creation form.
-///
-/// Phase 1 has NO question editor: questions are added through the seed or
-/// the REST question endpoints (documented deviation).
-pub async fn quiz_new(
-    State(app): State<AppState>,
-    Path(course_id): Path<i64>,
-    user: SessionUser,
-    jar: CookieJar,
-) -> Response {
-    let origin = crate::request_origin();
-
-    let ctx = match course_context(&app, &user, course_id, &origin).await {
-        Ok(ctx) => ctx,
-        Err(resp) => return *resp,
-    };
-    let env = course_env(&ctx, &user, &origin, "quizzes", course_id);
-    let (jar, csrf_token) = ensure_csrf(jar);
-
-    if !ctx.is_teacher {
-        return from_api_error(&ApiError::Forbidden, &crate::request_origin()).into_response();
-    }
-
-    let page = QuizNewPage {
-        title: format!("{} - New Quiz", ctx.course.name),
-        body_class: format!(
-            "with-left-side course-menu-expanded context-course_{course_id} quizzes"
-        ),
-        css_url: assets::app_css_url(),
-        env_json: env.to_json_string(),
-        notices: Vec::new(),
-        user_name: ctx.user_name,
-        active_path: "courses",
-        breadcrumb: vec![
-            ("Dashboard".to_string(), "/dashboard".to_string()),
-            (ctx.course.name.clone(), format!("/courses/{course_id}")),
-            (
-                "Quizzes".to_string(),
-                format!("/courses/{course_id}/quizzes"),
-            ),
-        ],
-        csrf_token: csrf_token.clone(),
-        unread_badge: ctx.unread_badge,
-        tabs: ctx.tabs,
-        active_context_tab: "quizzes".to_string(),
-        course_name: ctx.course.name,
-        course_id,
-        error: String::new(),
-    };
-    (jar, html_response(page.render(), "quiz new")).into_response()
-}
-
 #[derive(Deserialize)]
 pub struct QuizNewForm {
     pub _csrf: String,
+    /// Optional, exactly as Canvas: `POST quizzes/new` from the index button
+    /// sends no title at all and the model names the row "Unnamed Quiz".
+    #[serde(default)]
     pub title: String,
     #[serde(default)]
     pub description: String,
@@ -916,9 +855,18 @@ pub struct QuizNewForm {
     pub published: String,
 }
 
-/// POST /courses/{id}/quizzes/new — create from the minimal form (teacher
-/// only). Mirrors the REST create's validation (non-blank title, default
-/// points 0) and redirects 303 to the new quiz's show page.
+/// POST /courses/{id}/quizzes/new — Canvas' `quizzes#new`, which CREATES.
+///
+/// The route is POST-only on purpose (`post "quizzes/new"`,
+/// canvas config/routes.rb:446, with `resources :quizzes, except: :new` at
+/// :447) because creating the draft is not idempotent, and the action saves
+/// the row and redirects (app/controllers/quizzes/quizzes_controller.rb:343).
+/// A blank title is not an error there — `validates :title, allow_nil: true`
+/// and `self.title = "Unnamed Quiz" if title.blank?`
+/// (app/models/quizzes/quiz.rb:58, :161).
+///
+/// Canvas' `new` redirects to the editor url; that page is `quiz_edit` below
+/// and this port serves it, so the redirect matches (:352-355).
 pub async fn quiz_create(
     State(app): State<AppState>,
     Path(course_id): Path<i64>,
@@ -941,61 +889,23 @@ pub async fn quiz_create(
         Ok(ctx) => ctx,
         Err(resp) => return *resp,
     };
-    let env = course_env(&ctx, &user, &origin, "quizzes", course_id);
-    let (_jar, csrf_token) = ensure_csrf(jar);
+    let (_jar, _csrf_token) = ensure_csrf(jar);
 
     if !ctx.is_teacher {
         return from_api_error(&ApiError::Forbidden, &origin).into_response();
     }
 
-    // Same validation as the REST create handler.
-    if form.title.trim().is_empty() {
-        let page = QuizNewPage {
-            title: format!("{} - New Quiz", ctx.course.name),
-            body_class: format!(
-                "with-left-side course-menu-expanded context-course_{course_id} quizzes"
-            ),
-            css_url: assets::app_css_url(),
-            env_json: env.to_json_string(),
-            notices: Vec::new(),
-            user_name: ctx.user_name,
-            active_path: "courses",
-            breadcrumb: vec![
-                ("Dashboard".to_string(), "/dashboard".to_string()),
-                (ctx.course.name.clone(), format!("/courses/{course_id}")),
-                (
-                    "Quizzes".to_string(),
-                    format!("/courses/{course_id}/quizzes"),
-                ),
-            ],
-            csrf_token: csrf_token.clone(),
-            unread_badge: ctx.unread_badge,
-            tabs: ctx.tabs,
-            active_context_tab: "quizzes".to_string(),
-            course_name: ctx.course.name,
-            course_id,
-            error: "Title is required.".to_string(),
-        };
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            html_response(page.render(), "quiz new"),
-        )
-            .into_response();
-    }
+    // Canvas' default title, not a validation failure (quiz.rb:161).
+    let title = {
+        let raw = form.title.trim();
+        if raw.is_empty() {
+            "Unnamed Quiz".to_string()
+        } else {
+            raw.to_string()
+        }
+    };
 
     let points: f64 = form.points_possible.trim().parse().unwrap_or(0.0);
-    let parse_ts = |raw: &str| -> Option<chrono::DateTime<chrono::Utc>> {
-        if raw.trim().is_empty() {
-            return None;
-        }
-        if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(raw.trim()) {
-            return Some(ts.with_timezone(&chrono::Utc));
-        }
-        // datetime-local form values carry no offset; treat them as UTC.
-        chrono::NaiveDateTime::parse_from_str(raw.trim(), "%Y-%m-%dT%H:%M")
-            .ok()
-            .map(|naive| naive.and_utc())
-    };
     let published = matches!(form.published.as_str(), "true" | "1" | "on" | "yes");
 
     let new_id: i64 = match sqlx::query_scalar(
@@ -1008,12 +918,12 @@ pub async fn quiz_create(
         "#,
     )
     .bind(course_id)
-    .bind(form.title.trim())
+    .bind(&title)
     .bind(form.description.trim())
     .bind(points)
     .bind(published)
-    .bind(parse_ts(&form.available_from))
-    .bind(parse_ts(&form.available_until))
+    .bind(parse_form_ts(&form.available_from))
+    .bind(parse_form_ts(&form.available_until))
     .fetch_one(&app.db)
     .await
     {
@@ -1027,7 +937,264 @@ pub async fn quiz_create(
         StatusCode::SEE_OTHER,
         [(
             "location",
-            format!("/courses/{course_id}/quizzes/{new_id}").as_str(),
+            format!("/courses/{course_id}/quizzes/{new_id}/edit").as_str(),
+        )],
+    )
+        .into_response()
+}
+
+/// Parse a quiz availability field from a form.
+///
+/// Shared by `quiz_create` and `quiz_update` so the two write paths cannot
+/// drift on what a submitted timestamp means.
+fn parse_form_ts(raw: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if raw.trim().is_empty() {
+        return None;
+    }
+    if let Ok(ts) = chrono::DateTime::parse_from_rfc3339(raw.trim()) {
+        return Some(ts.with_timezone(&chrono::Utc));
+    }
+    // datetime-local form values carry no offset; treat them as UTC.
+    chrono::NaiveDateTime::parse_from_str(raw.trim(), "%Y-%m-%dT%H:%M")
+        .ok()
+        .map(|naive| naive.and_utc())
+}
+
+/// Render `f64` without a trailing `.0` (12 -> "12", 12.5 -> "12.5"), which is
+/// what an `<input type="number" value=…>` wants.
+fn trim_points(v: f64) -> String {
+    if v.fract() == 0.0 {
+        format!("{}", v as i64)
+    } else {
+        format!("{v}")
+    }
+}
+
+/// Quiz-details form values, shared by the editor GET and the member save.
+///
+/// Canvas' editor posts the nested `params[:quiz]` hash (`get_quiz_params`,
+/// quizzes_controller.rb:1189, used by `update` at :493) and the availability
+/// pair arrives as `unlock_at`/`lock_at` (lib/api/v1/quiz.rb:54,35); our
+/// `quizzes` table names the same two columns `available_from`/`available_until`
+/// — so the field set here is the one `quiz_create` already accepts.
+#[derive(Deserialize)]
+pub struct QuizEditForm {
+    pub _csrf: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub points_possible: String,
+    #[serde(default)]
+    pub available_from: String,
+    #[serde(default)]
+    pub available_until: String,
+    #[serde(default)]
+    pub published: String,
+}
+
+/// `?title=` is the only query param Canvas' editor reads.
+#[derive(Deserialize, Default)]
+pub struct QuizEditQuery {
+    #[serde(default)]
+    pub title: Option<String>,
+}
+
+/// `?saved=1` is the editor's PRG notice on the show page.
+#[derive(Deserialize, Default)]
+pub struct QuizShowQuery {
+    #[serde(default)]
+    pub saved: Option<String>,
+}
+
+/// The quiz editor page (Canvas' `quizzes#edit`, which renders `:new`).
+#[derive(Template)]
+#[template(path = "quiz_edit.html")]
+pub struct QuizEditPage {
+    pub title: String,
+    pub body_class: String,
+    pub css_url: String,
+    pub env_json: String,
+    pub notices: Vec<String>,
+    pub user_name: String,
+    pub active_path: &'static str,
+    pub breadcrumb: Vec<(String, String)>,
+    pub csrf_token: String,
+    pub unread_badge: i64,
+    pub tabs: Vec<star_courses::CourseTab>,
+    pub active_context_tab: String,
+    pub course_name: String,
+    pub course_id: i64,
+    pub quiz_id: i64,
+    pub form_action: String,
+    pub title_value: String,
+    pub description_value: String,
+    pub points_value: String,
+    pub available_from_value: String,
+    pub available_until_value: String,
+    pub published: bool,
+}
+
+/// GET /courses/{id}/quizzes/{qid}/edit — the quiz editor.
+///
+/// Canvas' `quizzes#edit` (quizzes_controller.rb:359) is gated by
+/// `authorized_action(@quiz, @current_user, :update)` — a caller without the
+/// update right gets 403 — and ends in `render :new` (:431), the template that
+/// boots the React editor (`js_bundle :quizzes`, :429). Ours is the
+/// server-rendered equivalent of that page: the quiz-details fields, posting
+/// PATCH to the member path through the `_method` shim.
+pub async fn quiz_edit(
+    State(app): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    Query(query): Query<QuizEditQuery>,
+    user: SessionUser,
+    jar: CookieJar,
+) -> Response {
+    let origin = crate::request_origin();
+
+    let ctx = match course_context(&app, &user, course_id, &origin).await {
+        Ok(ctx) => ctx,
+        Err(resp) => return *resp,
+    };
+    if !ctx.is_teacher {
+        return from_api_error(&ApiError::Forbidden, &origin).into_response();
+    }
+
+    let quiz = match quiz_in_course(&app.db, course_id, quiz_id).await {
+        Ok(quiz) => quiz,
+        Err(response) => return *response,
+    };
+
+    let env = course_env(&ctx, &user, &origin, "quizzes", course_id);
+    let (jar, csrf_token) = ensure_csrf(jar);
+
+    // Canvas pushes the stored title onto the crumb (:367) before it applies
+    // the params overrides (:369), so a `?title=` handoff shows in the form
+    // while the crumb keeps the saved name.
+    let crumb_title = quiz.title.clone();
+    let title_value = query.title.unwrap_or(quiz.title);
+
+    let page = QuizEditPage {
+        title: format!("{} - {crumb_title}", ctx.course.name),
+        body_class: format!(
+            "with-left-side course-menu-expanded context-course_{course_id} quizzes form"
+        ),
+        css_url: assets::app_css_url(),
+        env_json: env.to_json_string(),
+        notices: Vec::new(),
+        user_name: ctx.user_name,
+        active_path: "courses",
+        breadcrumb: vec![
+            ("Dashboard".to_string(), "/dashboard".to_string()),
+            (ctx.course.name.clone(), format!("/courses/{course_id}")),
+            (
+                "Quizzes".to_string(),
+                format!("/courses/{course_id}/quizzes"),
+            ),
+            (
+                crumb_title,
+                format!("/courses/{course_id}/quizzes/{quiz_id}"),
+            ),
+        ],
+        csrf_token,
+        unread_badge: ctx.unread_badge,
+        tabs: ctx.tabs,
+        active_context_tab: "quizzes".to_string(),
+        course_name: ctx.course.name,
+        course_id,
+        quiz_id,
+        form_action: format!("/courses/{course_id}/quizzes/{quiz_id}"),
+        title_value,
+        description_value: quiz.description.unwrap_or_default(),
+        points_value: trim_points(quiz.points_possible),
+        available_from_value: quiz
+            .available_from
+            .map(|d| d.format("%Y-%m-%dT%H:%M").to_string())
+            .unwrap_or_default(),
+        available_until_value: quiz
+            .available_until
+            .map(|d| d.format("%Y-%m-%dT%H:%M").to_string())
+            .unwrap_or_default(),
+        published: quiz.published,
+    };
+    (jar, html_response(page.render(), "quiz editor")).into_response()
+}
+
+/// PATCH/PUT /courses/{id}/quizzes/{qid} — save the editor form.
+///
+/// The browser submits `POST` with Rails' hidden `_method=patch` field and
+/// `crate::method_override` rewrites the verb before routing, which is how the
+/// form reaches Canvas' `PATCH`/`PUT` member route (`resources :quizzes`,
+/// config/routes.rb:447). `quizzes#update` (:493) checks the same `:update`
+/// right and its HTML branch flashes and redirects to the show url (:612-613).
+pub async fn quiz_update(
+    State(app): State<AppState>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
+    user: SessionUser,
+    jar: CookieJar,
+    Form(form): Form<QuizEditForm>,
+) -> Response {
+    let origin = crate::request_origin();
+
+    let ctx = match course_context(&app, &user, course_id, &origin).await {
+        Ok(ctx) => ctx,
+        Err(resp) => return *resp,
+    };
+    if !ctx.is_teacher {
+        return from_api_error(&ApiError::Forbidden, &origin).into_response();
+    }
+    if !check_csrf(&jar, &form._csrf) {
+        return from_api_error(&ApiError::Forbidden, &origin).into_response();
+    }
+
+    // A quiz outside this course is a 404 before any write.
+    if let Err(response) = quiz_in_course(&app.db, course_id, quiz_id).await {
+        return *response;
+    }
+
+    // Canvas' model names a blank quiz ("Unnamed Quiz", quiz.rb:161) rather
+    // than failing validation, same as the create path.
+    let title = {
+        let raw = form.title.trim();
+        if raw.is_empty() {
+            "Unnamed Quiz".to_string()
+        } else {
+            raw.to_string()
+        }
+    };
+    let points: f64 = form.points_possible.trim().parse().unwrap_or(0.0);
+    let published = matches!(form.published.as_str(), "true" | "1" | "on" | "yes");
+
+    if let Err(e) = sqlx::query(
+        r#"UPDATE quizzes
+           SET title = $1, description = NULLIF($2, ''), points_possible = $3,
+               published = $4, available_from = $5, available_until = $6,
+               updated_at = now()
+           WHERE id = $7 AND course_id = $8"#,
+    )
+    .bind(&title)
+    .bind(form.description.trim())
+    .bind(points)
+    .bind(published)
+    .bind(parse_form_ts(&form.available_from))
+    .bind(parse_form_ts(&form.available_until))
+    .bind(quiz_id)
+    .bind(course_id)
+    .execute(&app.db)
+    .await
+    {
+        return from_api_error(&ApiError::from(e), &origin).into_response();
+    }
+
+    // Canvas' `flash[:notice]` ("Quiz successfully updated") reaches the show
+    // page; this shell carries the same message as a PRG query param, the
+    // convention handlers::settings already uses.
+    (
+        StatusCode::SEE_OTHER,
+        [(
+            "location",
+            format!("/courses/{course_id}/quizzes/{quiz_id}?saved=1").as_str(),
         )],
     )
         .into_response()
@@ -1040,6 +1207,7 @@ pub async fn quiz_create(
 pub async fn quiz_show(
     State(app): State<AppState>,
     Path((course_id, quiz_id)): Path<(i64, i64)>,
+    Query(query): Query<QuizShowQuery>,
     user: SessionUser,
     jar: CookieJar,
 ) -> Response {
@@ -1118,7 +1286,13 @@ pub async fn quiz_show(
         ),
         css_url: assets::app_css_url(),
         env_json: env.to_json_string(),
-        notices: Vec::new(),
+        notices: if query.saved.is_some() {
+            // Canvas' `flash[:notice]` from `quizzes#update` (:612), which
+            // redirects here; this shell carries it as the `?saved=1` PRG param.
+            vec!["Quiz successfully updated".to_string()]
+        } else {
+            Vec::new()
+        },
         user_name: ctx.user_name,
         active_path: "courses",
         breadcrumb: vec![
@@ -1331,15 +1505,20 @@ pub async fn quiz_take(
         quiz_title: quiz.title,
         instructions_html: quiz.description.unwrap_or_default(),
         questions,
-        submit_url: format!(
-            "/courses/{course_id}/quizzes/{quiz_id}/submissions/{}/submit",
-            submission.id
-        ),
+        submit_url: format!("/courses/{course_id}/quizzes/{quiz_id}/submissions"),
     };
     (jar, html_response(page.render(), "quiz take")).into_response()
 }
 
-/// POST /courses/{id}/quizzes/{qid}/submissions/{sid}/submit — bulk submit.
+/// POST /courses/{id}/quizzes/{qid}/submissions — bulk submit.
+///
+/// Canvas' take form posts to this collection path
+/// (`course_quiz_quiz_submissions_path`,
+/// app/presenters/quizzes/take_quiz_presenter.rb:167-168) and resolves the
+/// attempt from the current user, not from an id in the URL
+/// (`@quiz.quiz_submissions.where(user_id: @current_user).first`,
+/// app/controllers/quizzes/quiz_submissions_controller.rb:60-61) — so this
+/// handler does the same lookup `quiz_take` already used to paint the form.
 ///
 /// The Canvas API's `POST /quiz_submissions/:id/answer` is not implemented in
 /// star-quizzes, so the shell grades the whole form server-side (documented
@@ -1349,7 +1528,7 @@ pub async fn quiz_take(
 /// timestamp stamps. 303 to the results page.
 pub async fn quiz_submit(
     State(app): State<AppState>,
-    Path((course_id, quiz_id, submission_id)): Path<(i64, i64, i64)>,
+    Path((course_id, quiz_id)): Path<(i64, i64)>,
     user: SessionUser,
     jar: CookieJar,
     body: Bytes,
@@ -1376,18 +1555,14 @@ pub async fn quiz_submit(
         return *response;
     }
 
-    let submission = match load_submission(&app.db, quiz_id, submission_id).await {
+    let submission = match load_my_submission(&app.db, quiz_id, user.id).await {
         Ok(Some(sub)) => sub,
         Ok(None) => {
             return from_api_error(&ApiError::NotFound, &crate::request_origin()).into_response()
         }
         Err(e) => return from_api_error(&e, &crate::request_origin()).into_response(),
     };
-
-    // Only the owning student may submit (Canvas quiz_submission_allowed?).
-    if submission.user_id != user.id {
-        return from_api_error(&ApiError::Forbidden, &crate::request_origin()).into_response();
-    }
+    let submission_id = submission.id;
 
     // One shot per attempt: submitting a finished attempt goes to results.
     if matches!(

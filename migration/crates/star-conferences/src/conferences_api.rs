@@ -124,7 +124,7 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::{DateTime, Duration, NaiveDateTime, Utc};
+use chrono::{DateTime, Duration, NaiveDateTime, TimeZone, Utc};
 use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 use star_auth::AuthUser;
@@ -226,12 +226,13 @@ struct ConferenceRow {
     conference_key: Option<String>,
     context_id: i64,
     context_type: String,
-    start_at: Option<DateTime<Utc>>,
-    started_at: Option<DateTime<Utc>>,
+    // `web_conferences` comes from the canvas-schema dump (migration 0225);
+    // its timestamps are `timestamp` (no time zone).
+    start_at: Option<NaiveDateTime>,
     description: Option<String>,
     duration: Option<f64>,
-    ended_at: Option<DateTime<Utc>>,
-    end_at: Option<DateTime<Utc>>,
+    ended_at: Option<NaiveDateTime>,
+    end_at: Option<NaiveDateTime>,
     context_code: Option<String>,
 }
 
@@ -839,6 +840,8 @@ async fn can_create_conferences(
             // A group resolves to its course, so the recursion is one level
             // deep. The compiler cannot prove that, so the recursive call is
             // boxed: an async fn that calls itself needs indirection.
+            // Box the recursive Group → Course delegation (E0733: async
+            // recursion requires boxing).
             Box::pin(can_create_conferences(db, auth, Context::Course(course_id))).await
         }
     }
@@ -1178,13 +1181,13 @@ fn api_conference_json(row: &ConferenceRow, participant_ids: &[i64], base: &str)
         "description": row.description,
         "conference_type": row.conference_type,
         "duration": row.duration.map(|duration| duration as i64),
-        "started_at": row.started_at,
-        "ended_at": row.ended_at,
+        "started_at": row.start_at.map(|at| Utc.from_utc_datetime(&at)),
+        "ended_at": row.ended_at.map(|at| Utc.from_utc_datetime(&at)),
         "conference_key": row.conference_key,
         "context_type": row.context_type,
         "context_id": row.context_id,
-        "start_at": row.start_at,
-        "end_at": row.end_at,
+        "start_at": row.start_at.map(|at| Utc.from_utc_datetime(&at)),
+        "end_at": row.end_at.map(|at| Utc.from_utc_datetime(&at)),
         "join_url": Value::Null,
         "url": conference_url(base, &row.context_type, row.context_id, row.id),
         "has_advanced_settings": false,
@@ -1203,14 +1206,14 @@ fn model_conference_json(row: &ConferenceRow, participant_ids: &[i64], base: &st
         "description": row.description,
         "conference_type": row.conference_type,
         "duration": row.duration,
-        "started_at": row.started_at,
-        "ended_at": row.ended_at,
+        "started_at": row.start_at.map(|at| Utc.from_utc_datetime(&at)),
+        "ended_at": row.ended_at.map(|at| Utc.from_utc_datetime(&at)),
         "user_ids": participant_ids,
         "context_id": row.context_id,
         "context_type": row.context_type,
         "context_code": row.context_code,
-        "start_at": row.start_at,
-        "end_at": row.end_at,
+        "start_at": row.start_at.map(|at| Utc.from_utc_datetime(&at)),
+        "end_at": row.end_at.map(|at| Utc.from_utc_datetime(&at)),
         "join_url": Value::Null,
         "url": conference_url(base, &row.context_type, row.context_id, row.id),
     })

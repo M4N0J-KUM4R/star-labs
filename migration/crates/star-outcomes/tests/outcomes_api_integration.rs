@@ -111,11 +111,21 @@ async fn setup() -> Option<TestApp> {
 
     star_db::MIGRATOR.run(&pool).await.expect("run migrations");
 
-    for statement in OUTCOMES_DDL {
-        sqlx::query(statement)
-            .execute(&pool)
-            .await
-            .expect("apply the outcome DDL");
+    // Serialize the one-shot DDL across the parallel tests of this binary:
+    // concurrent `CREATE INDEX IF NOT EXISTS` statements race on the catalog
+    // check and can both try to insert the same pg_class row.
+    static DDL_MUTEX: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+    {
+        // tokio Mutex: the guard may span the awaited DDL statements (the
+        // std::sync guard held across await was clippy await_holding_lock).
+        let _ddl_guard = DDL_MUTEX.lock().await;
+        for statement in OUTCOMES_DDL {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("apply the outcome DDL");
+        }
     }
 
     let state = AppState {
@@ -155,21 +165,15 @@ struct Fixture {
 /// Seed an account, a course, a teacher, a student, one outcome with a rubric
 /// criterion, a group, a link, an alignment and one outcome result.
 async fn seed(pool: &PgPool, prefix: &str) -> Fixture {
-    let root_account_id: i64 = sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id LIMIT 1",
-    )
-    .fetch_one(pool)
-    .await
-    .expect("find the root account");
-
-    let account_id: i64 = sqlx::query_scalar(
-        "INSERT INTO accounts (name, parent_account_id) VALUES ($1, $2) RETURNING id",
-    )
-    .bind(format!("{prefix}-account"))
-    .bind(root_account_id)
-    .fetch_one(pool)
-    .await
-    .expect("seed account");
+    // A DEDICATED root account per fixture (test isolation, issue #75): the
+    // course's account chain root is the fixture's own account, so the
+    // `outcomes_rollup_propagation` flag toggles only ever touch it.
+    let account_id: i64 =
+        sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+            .bind(format!("{prefix}-account"))
+            .fetch_one(pool)
+            .await
+            .expect("seed account");
 
     let course_id: i64 = sqlx::query_scalar(
         "INSERT INTO courses (name, course_code, account_id) VALUES ($1, $2, $3) RETURNING id",
@@ -501,6 +505,59 @@ async fn outcome_import_create_accepts_a_multipart_attachment() {
     let body: Value = response.json().await.expect("decode the body");
     assert_eq!(body["workflow_state"], "created");
     assert_eq!(body["data"]["import_type"], "instructure_csv");
+
+    cleanup(&app.pool, &fixture).await;
+}
+
+/// Canvas' optional `/group/:learning_outcome_group_id` route form records the
+/// target group on the import (`outcome_imports.learning_outcome_group_id`).
+#[tokio::test]
+async fn outcome_import_create_in_group_path_stores_the_group_id() {
+    let Some(app) = setup().await else {
+        return;
+    };
+    let prefix = run_prefix();
+    let fixture = seed(&app.pool, &prefix).await;
+
+    let boundary = "----staroutcomesgroupboundary";
+    let body = format!(
+        "--{boundary}\r\n\
+         Content-Disposition: form-data; name=\"attachment\"; filename=\"outcomes.csv\"\r\n\
+         Content-Type: text/csv\r\n\r\n\
+         {IMPORT_CSV}\r\n\
+         --{boundary}--\r\n"
+    );
+
+    let response = app
+        .client
+        .post(format!(
+            "{}/api/v1/courses/{}/outcome_imports/group/{}",
+            app.base_url, fixture.course_id, fixture.group_id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
+        .header(
+            "Content-Type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(body)
+        .send()
+        .await
+        .expect("create the grouped import");
+
+    assert_eq!(response.status(), 200);
+    let created: Value = response.json().await.expect("decode the body");
+    assert_eq!(created["workflow_state"], "created");
+
+    let stored: Option<i64> =
+        sqlx::query_scalar("SELECT learning_outcome_group_id FROM outcome_imports WHERE id = $1")
+            .bind(created["id"].as_i64().expect("import id"))
+            .fetch_one(&app.pool)
+            .await
+            .expect("read back the group id");
+    assert_eq!(stored, Some(fixture.group_id));
 
     cleanup(&app.pool, &fixture).await;
 }
@@ -916,6 +973,421 @@ async fn outcome_rollups_aggregates_the_course_when_asked() {
     cleanup(&app.pool, &fixture).await;
 }
 
+/// Seed an extra enrolled student with one outcome result row (the same shape
+/// the fixture seeds) and return the user id.
+///
+/// The slug is unique for the whole test binary: a test may call this helper
+/// several times against one fixture prefix (the aggregate-stat test needs two
+/// extra students), and the users email/uuid are unique-constrained. Each test
+/// owns a distinct prefix (pid + millis + per-run index), so a process-wide
+/// slug counter keeps every generated email unique per run.
+async fn seed_extra_student_with_result(
+    pool: &PgPool,
+    prefix: &str,
+    course_id: i64,
+    outcome_id: i64,
+    alignment_id: i64,
+    assignment_id: i64,
+    score: f64,
+) -> i64 {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static EXTRA_STUDENT: AtomicU32 = AtomicU32::new(1);
+    let slug = format!(
+        "extra-student-{}",
+        EXTRA_STUDENT.fetch_add(1, Ordering::Relaxed)
+    );
+    let user_id = seed_user(pool, prefix, &slug, "student").await;
+    seed_enrollment(pool, user_id, course_id, "student").await;
+    sqlx::query(
+        "INSERT INTO learning_outcome_results
+            (outcome_id, user_id, score, context_code, content_tag_id, association_type,
+             association_id, workflow_state, possible, percent, title, submitted_at)
+         VALUES ($1, $2, $3, $4, $5, 'Assignment', $6, 'active', 10, $7, 'Quiz 1, Extra', LOCALTIMESTAMP)",
+    )
+    .bind(outcome_id)
+    .bind(user_id)
+    .bind(score)
+    .bind(format!("course_{course_id}"))
+    .bind(alignment_id)
+    .bind(assignment_id)
+    .bind(score / 10.0)
+    .execute(pool)
+    .await
+    .expect("seed the extra result");
+    user_id
+}
+
+/// The outcome alignment row the fixture created.
+async fn fixture_alignment_id(pool: &PgPool, outcome_id: i64) -> i64 {
+    sqlx::query_scalar("SELECT id FROM outcome_alignments WHERE outcome_id = $1 LIMIT 1")
+        .bind(outcome_id)
+        .fetch_one(pool)
+        .await
+        .expect("read the fixture alignment")
+}
+
+/// Delete extra users seeded by a test.
+async fn delete_extra_users(pool: &PgPool, user_ids: &[i64]) {
+    sqlx::query("DELETE FROM users WHERE id = ANY($1)")
+        .bind(user_ids.to_vec())
+        .execute(pool)
+        .await
+        .expect("cleanup the extra users");
+}
+
+#[tokio::test]
+async fn outcome_rollups_aggregate_stat_picks_the_median_and_rejects_unknown_stats() {
+    let Some(app) = setup().await else {
+        return;
+    };
+    let prefix = run_prefix();
+    let fixture = seed(&app.pool, &prefix).await;
+    let alignment_id = fixture_alignment_id(&app.pool, fixture.outcome_id).await;
+    let student_b = seed_extra_student_with_result(
+        &app.pool,
+        &prefix,
+        fixture.course_id,
+        fixture.outcome_id,
+        alignment_id,
+        fixture.assignment_id,
+        5.0,
+    )
+    .await;
+    let student_c = seed_extra_student_with_result(
+        &app.pool,
+        &prefix,
+        fixture.course_id,
+        fixture.outcome_id,
+        alignment_id,
+        fixture.assignment_id,
+        4.0,
+    )
+    .await;
+
+    // Per-user scores 9, 5, 4: the mean is 6.0, the median is 5.0.
+    let mean = app
+        .client
+        .get(format!(
+            "{}/api/v1/courses/{}/outcome_rollups?aggregate=course",
+            app.base_url, fixture.course_id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
+        .send()
+        .await
+        .expect("read the mean aggregate");
+    assert_eq!(mean.status(), 200);
+    let mean: Value = mean.json().await.expect("decode the body");
+    assert_eq!(mean["rollups"][0]["scores"][0]["score"], 6.0);
+    // The aggregate count sums the contributing results.
+    assert_eq!(mean["rollups"][0]["scores"][0]["count"], 3);
+
+    let median = app
+        .client
+        .get(format!(
+            "{}/api/v1/courses/{}/outcome_rollups?aggregate=course&aggregate_stat=median",
+            app.base_url, fixture.course_id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
+        .send()
+        .await
+        .expect("read the median aggregate");
+    assert_eq!(median.status(), 200);
+    let median: Value = median.json().await.expect("decode the body");
+    assert_eq!(median["rollups"][0]["scores"][0]["score"], 5.0);
+
+    // An unknown aggregate_stat is rejected.
+    let bogus = app
+        .client
+        .get(format!(
+            "{}/api/v1/courses/{}/outcome_rollups?aggregate=course&aggregate_stat=bogus",
+            app.base_url, fixture.course_id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
+        .send()
+        .await
+        .expect("read with a bogus aggregate_stat");
+    assert_eq!(bogus.status(), 400);
+    let bogus: Value = bogus.json().await.expect("decode the body");
+    assert_eq!(bogus["message"], "invalid aggregate_stat parameter value");
+
+    delete_extra_users(&app.pool, &[student_b, student_c]).await;
+    cleanup(&app.pool, &fixture).await;
+}
+
+#[tokio::test]
+async fn outcome_rollups_filter_by_section_and_conflict_with_user_ids() {
+    let Some(app) = setup().await else {
+        return;
+    };
+    let prefix = run_prefix();
+    let fixture = seed(&app.pool, &prefix).await;
+    let alignment_id = fixture_alignment_id(&app.pool, fixture.outcome_id).await;
+
+    // A second student enrolled in a dedicated section of the course.
+    let section_id: i64 = sqlx::query_scalar(
+        "INSERT INTO course_sections (course_id, name) VALUES ($1, $2) RETURNING id",
+    )
+    .bind(fixture.course_id)
+    .bind(format!("{prefix}-section"))
+    .fetch_one(&app.pool)
+    .await
+    .expect("seed the section");
+    let section_student = seed_extra_student_with_result(
+        &app.pool,
+        &prefix,
+        fixture.course_id,
+        fixture.outcome_id,
+        alignment_id,
+        fixture.assignment_id,
+        5.0,
+    )
+    .await;
+    sqlx::query("UPDATE enrollments SET course_section_id = $1 WHERE user_id = $2")
+        .bind(section_id)
+        .bind(section_student)
+        .execute(&app.pool)
+        .await
+        .expect("bind the enrollment to the section");
+
+    // `section_id` restricts the rollups to the section's students.
+    let response = app
+        .client
+        .get(format!(
+            "{}/api/v1/courses/{}/outcome_rollups?section_id={}",
+            app.base_url, fixture.course_id, section_id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
+        .send()
+        .await
+        .expect("read the section rollups");
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.expect("decode the body");
+    let rollups = body["rollups"].as_array().expect("the rollups array");
+    assert_eq!(rollups.len(), 1);
+    assert_eq!(rollups[0]["links"]["user"], section_student.to_string());
+    assert_eq!(rollups[0]["links"]["section"], section_id.to_string());
+    assert_eq!(rollups[0]["scores"][0]["score"], 5.0);
+
+    // `user_ids[]` and `section_id` cannot be combined.
+    let conflict = app
+        .client
+        .get(format!(
+            "{}/api/v1/courses/{}/outcome_rollups?user_ids[]={}&section_id={}",
+            app.base_url, fixture.course_id, fixture.student_id, section_id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
+        .send()
+        .await
+        .expect("read the rollups with both filters");
+    assert_eq!(conflict.status(), 400);
+    let conflict: Value = conflict.json().await.expect("decode the body");
+    assert_eq!(
+        conflict["message"],
+        "cannot specify both user_ids and section_id"
+    );
+
+    // A section outside the course is rejected.
+    let invalid = app
+        .client
+        .get(format!(
+            "{}/api/v1/courses/{}/outcome_rollups?section_id=999999",
+            app.base_url, fixture.course_id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
+        .send()
+        .await
+        .expect("read the rollups with an unknown section");
+    assert_eq!(invalid.status(), 400);
+    let invalid: Value = invalid.json().await.expect("decode the body");
+    assert_eq!(invalid["message"], "invalid section id");
+
+    delete_extra_users(&app.pool, &[section_student]).await;
+    cleanup(&app.pool, &fixture).await;
+}
+
+#[tokio::test]
+async fn outcome_rollups_students_may_read_their_own_rollup() {
+    let Some(app) = setup().await else {
+        return;
+    };
+    let prefix = run_prefix();
+    let fixture = seed(&app.pool, &prefix).await;
+
+    // A student without grade rights must name `user_ids[]`; naming
+    // themselves succeeds.
+    let response = app
+        .client
+        .get(format!(
+            "{}/api/v1/courses/{}/outcome_rollups?user_ids[]={}",
+            app.base_url, fixture.course_id, fixture.student_id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.student_id)),
+        )
+        .send()
+        .await
+        .expect("read the own rollup");
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.expect("decode the body");
+    let rollups = body["rollups"].as_array().expect("the rollups array");
+    assert_eq!(rollups.len(), 1);
+    assert_eq!(rollups[0]["links"]["user"], fixture.student_id.to_string());
+    assert_eq!(rollups[0]["scores"][0]["score"], 9.0);
+    assert_eq!(rollups[0]["scores"][0]["count"], 1);
+    assert_eq!(
+        rollups[0]["scores"][0]["links"]["outcome"],
+        fixture.outcome_id.to_string()
+    );
+
+    cleanup(&app.pool, &fixture).await;
+}
+
+#[tokio::test]
+async fn outcome_rollups_include_the_linked_collections() {
+    let Some(app) = setup().await else {
+        return;
+    };
+    let prefix = run_prefix();
+    let fixture = seed(&app.pool, &prefix).await;
+
+    let response = app
+        .client
+        .get(format!(
+            "{}/api/v1/courses/{}/outcome_rollups?include[]=users&include[]=outcomes\
+             &include[]=outcome_groups&include[]=outcome_links",
+            app.base_url, fixture.course_id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
+        .send()
+        .await
+        .expect("read the rollups with includes");
+
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.expect("decode the body");
+
+    let users = body["linked"]["users"].as_array().expect("linked users");
+    assert_eq!(users.len(), 1);
+    assert_eq!(users[0]["id"], fixture.student_id.to_string());
+
+    let outcomes = body["linked"]["outcomes"]
+        .as_array()
+        .expect("linked outcomes");
+    assert_eq!(outcomes.len(), 1);
+    assert_eq!(outcomes[0]["id"], fixture.outcome_id);
+    assert_eq!(outcomes[0]["group_id"], fixture.group_id.to_string());
+
+    let groups = body["linked"]["outcome_groups"]
+        .as_array()
+        .expect("linked outcome groups");
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["id"], fixture.group_id);
+
+    let links = body["linked"]["outcome_links"]
+        .as_array()
+        .expect("linked outcome links");
+    assert_eq!(links.len(), 1);
+    assert_eq!(links[0]["outcome_id"], fixture.outcome_id);
+    assert_eq!(links[0]["outcome_group_id"], fixture.group_id);
+
+    cleanup(&app.pool, &fixture).await;
+}
+
+#[tokio::test]
+async fn outcome_results_include_hidden_rows_only_when_asked() {
+    let Some(app) = setup().await else {
+        return;
+    };
+    let prefix = run_prefix();
+    let fixture = seed(&app.pool, &prefix).await;
+    let alignment_id = fixture_alignment_id(&app.pool, fixture.outcome_id).await;
+
+    // A hidden result row for the fixture student (score 3).
+    sqlx::query(
+        "INSERT INTO learning_outcome_results
+            (outcome_id, user_id, score, context_code, content_tag_id, association_type,
+             association_id, workflow_state, possible, percent, hidden, title, submitted_at)
+         VALUES ($1, $2, 3, $3, $4, 'Assignment', $5, 'active', 10, 0.3, TRUE, 'Quiz 1, Hidden', LOCALTIMESTAMP)",
+    )
+    .bind(fixture.outcome_id)
+    .bind(fixture.student_id)
+    .bind(format!("course_{}", fixture.course_id))
+    .bind(alignment_id)
+    .bind(fixture.assignment_id)
+    .execute(&app.pool)
+    .await
+    .expect("seed the hidden result");
+
+    // By default hidden rows are not returned.
+    let response = app
+        .client
+        .get(format!(
+            "{}/api/v1/courses/{}/outcome_results",
+            app.base_url, fixture.course_id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
+        .send()
+        .await
+        .expect("read the results");
+    assert_eq!(response.status(), 200);
+    let body: Value = response.json().await.expect("decode the body");
+    let results = body["outcome_results"].as_array().expect("the results");
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["score"], 9.0);
+
+    // `include_hidden=true` adds them.
+    let with_hidden = app
+        .client
+        .get(format!(
+            "{}/api/v1/courses/{}/outcome_results?include_hidden=true",
+            app.base_url, fixture.course_id
+        ))
+        .header(
+            "Authorization",
+            format!("Bearer {}", app.token(fixture.teacher_id)),
+        )
+        .send()
+        .await
+        .expect("read the results with hidden rows");
+    assert_eq!(with_hidden.status(), 200);
+    let with_hidden: Value = with_hidden.json().await.expect("decode the body");
+    let hidden_results = with_hidden["outcome_results"]
+        .as_array()
+        .expect("the results");
+    assert_eq!(hidden_results.len(), 2);
+    let scores: Vec<f64> = hidden_results
+        .iter()
+        .map(|r| r["score"].as_f64().expect("score"))
+        .collect();
+    assert!(scores.contains(&9.0) && scores.contains(&3.0));
+
+    cleanup(&app.pool, &fixture).await;
+}
+
 #[tokio::test]
 async fn mastery_distribution_buckets_the_students_into_the_ratings() {
     let Some(app) = setup().await else {
@@ -1120,12 +1592,9 @@ async fn enqueue_outcome_rollup_calculation_honours_the_feature_flag() {
     let prefix = run_prefix();
     let fixture = seed(&app.pool, &prefix).await;
 
-    let site_admin: i64 = sqlx::query_scalar(
-        "SELECT id FROM accounts WHERE parent_account_id IS NULL ORDER BY id LIMIT 1",
-    )
-    .fetch_one(&app.pool)
-    .await
-    .expect("the site admin account");
+    // The flag lives on the fixture's own dedicated root account (the
+    // course's account chain root) — never on the shared root account.
+    let site_admin = fixture.account_id;
 
     // The flag is off by default: the endpoint answers `204 No Content`.
     sqlx::query(
@@ -1139,12 +1608,12 @@ async fn enqueue_outcome_rollup_calculation_honours_the_feature_flag() {
     .await
     .expect("disable the feature flag");
 
+    let student_uuid = format!("{prefix}-student-uuid");
     let response = app
         .client
         .post(format!(
-            "{}/api/v1/enqueue_outcome_rollup_calculation?course_id={}&student_uuid={prefix}-student-uuid",
-            app.base_url,
-            fixture.course_id
+            "{}/api/v1/enqueue_outcome_rollup_calculation?course_id={}&student_uuid={}",
+            app.base_url, fixture.course_id, student_uuid
         ))
         .header(
             "Authorization",
@@ -1202,12 +1671,12 @@ async fn enqueue_outcome_rollup_calculation_honours_the_feature_flag() {
     let missing: Value = missing.json().await.expect("decode the body");
     assert_eq!(missing["error"], "Invalid course or student");
 
+    let student_uuid = format!("{prefix}-student-uuid");
     let enqueued = app
         .client
         .post(format!(
-            "{}/api/v1/enqueue_outcome_rollup_calculation?course_id={}&student_uuid={prefix}-student-uuid",
-            app.base_url,
-            fixture.course_id
+            "{}/api/v1/enqueue_outcome_rollup_calculation?course_id={}&student_uuid={}",
+            app.base_url, fixture.course_id, student_uuid
         ))
         .header(
             "Authorization",

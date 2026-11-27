@@ -270,17 +270,17 @@ async fn seed_conference(
 }
 
 /// A conference that started `minutes` ago (and optionally ends later).
-#[allow(clippy::too_many_arguments)]
-async fn seed_timed_conference(
-    pool: &PgPool,
-    context_type: &str,
+struct TimedConference<'a> {
+    context_type: &'a str,
     context_id: i64,
     user_id: i64,
-    title: &str,
-    conference_type: &str,
+    title: &'a str,
+    conference_type: &'a str,
     started_minutes_ago: i64,
     ends_in_minutes: Option<i64>,
-) -> i64 {
+}
+
+async fn seed_timed_conference(pool: &PgPool, seed: TimedConference<'_>) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO web_conferences ( \
              title, conference_type, context_id, context_type, user_id, started_at, ended_at, \
@@ -292,13 +292,13 @@ async fn seed_timed_conference(
              NOW(), NOW(), 1 \
          ) RETURNING id",
     )
-    .bind(title)
-    .bind(conference_type)
-    .bind(context_id)
-    .bind(context_type)
-    .bind(user_id)
-    .bind(started_minutes_ago.to_string())
-    .bind(ends_in_minutes.map(|minutes| minutes.to_string()))
+    .bind(seed.title)
+    .bind(seed.conference_type)
+    .bind(seed.context_id)
+    .bind(seed.context_type)
+    .bind(seed.user_id)
+    .bind(seed.started_minutes_ago.to_string())
+    .bind(seed.ends_in_minutes.map(|minutes| minutes.to_string()))
     .fetch_one(pool)
     .await
     .expect("seed conference")
@@ -751,35 +751,41 @@ async fn for_user_filters_the_live_conferences() {
 
     let live = seed_timed_conference(
         &pool,
-        "Course",
-        course_id,
-        teacher,
-        &format!("{prefix}-live"),
-        &conference_type,
-        30,
-        Some(30),
+        TimedConference {
+            context_type: "Course",
+            context_id: course_id,
+            user_id: teacher,
+            title: &format!("{prefix}-live"),
+            conference_type: &conference_type,
+            started_minutes_ago: 30,
+            ends_in_minutes: Some(30),
+        },
     )
     .await;
     let zombie = seed_timed_conference(
         &pool,
-        "Course",
-        course_id,
-        teacher,
-        &format!("{prefix}-zombie"),
-        &conference_type,
-        60 * 24 * 2,
-        None,
+        TimedConference {
+            context_type: "Course",
+            context_id: course_id,
+            user_id: teacher,
+            title: &format!("{prefix}-zombie"),
+            conference_type: &conference_type,
+            started_minutes_ago: 60 * 24 * 2,
+            ends_in_minutes: None,
+        },
     )
     .await;
     let future = seed_timed_conference(
         &pool,
-        "Course",
-        course_id,
-        teacher,
-        &format!("{prefix}-future"),
-        &conference_type,
-        -60,
-        None,
+        TimedConference {
+            context_type: "Course",
+            context_id: course_id,
+            user_id: teacher,
+            title: &format!("{prefix}-future"),
+            conference_type: &conference_type,
+            started_minutes_ago: -60,
+            ends_in_minutes: None,
+        },
     )
     .await;
     seed_participant(&pool, live, student, "attendee").await;

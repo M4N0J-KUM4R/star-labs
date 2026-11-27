@@ -43,13 +43,21 @@ async fn unknown_path_is_404() {
         return;
     };
 
-    // A path this crate will own once routes land. With the scaffold's empty
-    // router it must 404 (axum default fallback), never 500 or open.
-    let resp = server.get("/accounts/1/sis_imports_extra").await;
+    // The sis_imports routes have landed (issue lane): the real route now
+    // answers 401 without auth instead of the scaffold 404.
+    let resp = server.get("/accounts/999999999/sis_imports").await;
+    assert_eq!(
+        resp.status_code(),
+        401,
+        "implemented route must require auth; body: {}",
+        resp.text()
+    );
+    // A genuinely unknown path still falls through to axum's 404.
+    let resp = server.get("/accounts/999999999/sis_imports_extra").await;
     assert_eq!(
         resp.status_code(),
         404,
-        "scaffold must 404 on unimplemented paths; body: {}",
+        "unknown paths must 404; body: {}",
         resp.text()
     );
 }

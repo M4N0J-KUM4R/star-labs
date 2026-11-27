@@ -244,9 +244,10 @@ async fn admin_creates_lists_and_shows_registration() {
     let list: Value = response.json();
     assert_eq!(list["data"][0]["configuration"]["title"], "Configured Tool");
 
-    // Show: configuration and binding are always present.
+    // Show: configuration and binding are always present. Canvas declares the
+    // registration surface only under an account scope, so this is the show.
     let response = server
-        .get(&format!("/lti_registrations/{id}"))
+        .get(&format!("/accounts/{account}/lti_registrations/{id}"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(response.status_code(), 200, "body: {}", response.text());
@@ -255,16 +256,9 @@ async fn admin_creates_lists_and_shows_registration() {
     assert_eq!(shown["configuration"]["title"], "Configured Tool");
     assert_eq!(shown["account_binding"]["workflow_state"], "on");
 
-    // Canvas-nested alias resolves the same registration.
-    let response = server
-        .get(&format!("/accounts/{account}/lti_registrations/{id}"))
-        .add_header(AUTHORIZATION, auth(admin, "admin"))
-        .await;
-    assert_eq!(response.status_code(), 200, "nested show");
-
     // Students cannot read registrations.
     let response = server
-        .get(&format!("/lti_registrations/{id}"))
+        .get(&format!("/accounts/{account}/lti_registrations/{id}"))
         .add_header(AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(response.status_code(), 403, "student show");
@@ -394,7 +388,7 @@ async fn deployments_lifecycle_and_soft_delete() {
 
     let registration = create_registration(&server, root, admin, &prefix).await;
     let id = registration["id"].as_i64().expect("registration id");
-    let deployments_path = format!("/lti_registrations/{id}/deployments");
+    let deployments_path = format!("/accounts/{root}/lti_registrations/{id}/deployments");
 
     // Account deployment defaults to the registration's account.
     let response = server
@@ -451,7 +445,7 @@ async fn deployments_lifecycle_and_soft_delete() {
         .await;
     assert_eq!(response.status_code(), 404, "missing course");
 
-    // Both list routes return bare arrays.
+    // The Canvas-nested list route returns a bare array.
     let response = server
         .get(&deployments_path)
         .add_header(AUTHORIZATION, auth(admin, "admin"))
@@ -460,17 +454,9 @@ async fn deployments_lifecycle_and_soft_delete() {
     let deployments: Value = response.json();
     assert_eq!(deployments.as_array().expect("array").len(), 2);
 
-    let response = server
-        .get(&format!(
-            "/accounts/{root}/lti_registrations/{id}/deployments"
-        ))
-        .add_header(AUTHORIZATION, auth(admin, "admin"))
-        .await;
-    assert_eq!(response.status_code(), 200, "nested list");
-
     // Soft delete returns the registration with workflow_state deleted.
     let response = server
-        .delete(&format!("/lti_registrations/{id}"))
+        .delete(&format!("/accounts/{root}/lti_registrations/{id}"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(response.status_code(), 200, "body: {}", response.text());
@@ -479,7 +465,7 @@ async fn deployments_lifecycle_and_soft_delete() {
 
     // Deleted registrations disappear from show and list.
     let response = server
-        .get(&format!("/lti_registrations/{id}"))
+        .get(&format!("/accounts/{root}/lti_registrations/{id}"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(response.status_code(), 404, "show after delete");

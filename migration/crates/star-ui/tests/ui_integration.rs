@@ -37,7 +37,7 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
         db: pool.clone(),
         jwt_secret: JWT_SECRET.to_string(),
     };
-    let server = TestServer::new(star_ui::router().with_state(state)).expect("build TestServer");
+    let server = TestServer::new(star_ui::app(state)).expect("build TestServer");
     Some((server, pool, run_prefix()))
 }
 
@@ -66,14 +66,16 @@ async fn seed_course(pool: &PgPool, prefix: &str, name: &str, workflow_state: &s
     .expect("seed course")
 }
 
-async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str) {
-    sqlx::query("INSERT INTO enrollments (user_id, course_id, role) VALUES ($1, $2, $3)")
-        .bind(user_id)
-        .bind(course_id)
-        .bind(role)
-        .execute(pool)
-        .await
-        .expect("seed enrollment");
+async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str) -> i64 {
+    sqlx::query_scalar(
+        "INSERT INTO enrollments (user_id, course_id, role) VALUES ($1, $2, $3) RETURNING id",
+    )
+    .bind(user_id)
+    .bind(course_id)
+    .bind(role)
+    .fetch_one(pool)
+    .await
+    .expect("seed enrollment")
 }
 
 async fn seed_front_page(pool: &PgPool, course_id: i64, title: &str, body: &str) -> i64 {
@@ -118,7 +120,7 @@ async fn login(server: &TestServer, email: &str, password: &str) -> (String, Str
         .value()
         .to_string();
     let resp = server
-        .post("/login")
+        .post("/login/canvas")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
             csrf.clone(),
@@ -224,7 +226,7 @@ async fn login_sets_session_cookie_and_rejects_bad_credentials() {
         .value()
         .to_string();
     let resp = server
-        .post("/login")
+        .post("/login/canvas")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
             csrf.clone(),
@@ -258,7 +260,7 @@ async fn login_sets_session_cookie_and_rejects_bad_credentials() {
         .value()
         .to_string();
     let wrong = server
-        .post("/login")
+        .post("/login/canvas")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
             csrf2.clone(),
@@ -286,7 +288,7 @@ async fn login_sets_session_cookie_and_rejects_bad_credentials() {
         .value()
         .to_string();
     let unknown = server
-        .post("/login")
+        .post("/login/canvas")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
             csrf3.clone(),
@@ -300,7 +302,10 @@ async fn login_sets_session_cookie_and_rejects_bad_credentials() {
     cleanup(&pool, &prefix).await;
 }
 
-/// AC2/CSRF: POST /login with a mismatched _csrf token answers 403.
+/// AC2/CSRF: POST /login/canvas with a mismatched _csrf token answers 403.
+/// Regression (2026-11-23 403 reports): a request with no `star_csrf` cookie
+/// at all must also be rejected, and `GET /login` must be `no-store` so a
+/// cached page can never embed a token that no longer matches the cookie.
 #[tokio::test]
 async fn login_csrf_mismatch_is_403() {
     let Some((server, _pool, _prefix)) = setup().await else {
@@ -308,15 +313,97 @@ async fn login_csrf_mismatch_is_403() {
         return;
     };
     let resp = server
-        .post("/login")
+        .post("/login/canvas")
         .form(&serde_json::json!({"email": "a@b.c", "password": "x", "_csrf": "deadbeef"}))
         .await;
     assert_eq!(resp.status_code(), 403);
 }
 
-/// AC3 + AC4 + AC8: dashboard renders 200 with the 18 phase-1 ENV keys of the
-/// right types, one card per enrolled course linking /courses/{id}, an
-/// unpublished style for unpublished courses, and only hashed asset links.
+/// Regression (2026-11-23 403 reports): a POST with no `star_csrf` cookie at
+/// all (stale/cleared cookie) is rejected 403 even when a token is present.
+#[tokio::test]
+async fn login_csrf_missing_cookie_is_403() {
+    let Some((server, _pool, _prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let resp = server
+        .post("/login/canvas")
+        .form(&serde_json::json!({"email": "a@b.c", "password": "x", "_csrf": "deadbeef"}))
+        .await;
+    assert_eq!(resp.status_code(), 403);
+}
+
+/// Regression (2026-11-23 403 reports): the login page must not be cacheable,
+/// so a cached form can never pair a stale CSRF token with a newer cookie.
+#[tokio::test]
+async fn login_page_is_no_store() {
+    let Some((server, _pool, _prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let resp = server.get("/login").await;
+    assert_eq!(resp.status_code(), 200);
+    let cache = resp
+        .headers()
+        .get("cache-control")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(
+        cache, "no-store",
+        "login page must send Cache-Control: no-store"
+    );
+}
+
+/// Regression: the global nav Calendar link must point at the global
+/// /calendar page (it previously linked /dashboard).
+///
+/// It asks for `/calendar` rather than `/dashboard` because `/dashboard` is now the
+/// shell boot document and its nav comes from the bundle at runtime
+/// (`ui/src/lib/components/AppHeader.svelte:98-103`), so no server-rendered nav exists
+/// there to read. `browser-smoke/tests/dashboard-shell-styles` covers the bundle's own
+/// link; this covers every Askama page, which still renders
+/// `templates/layouts/authenticated.html:19`.
+#[tokio::test]
+async fn global_nav_calendar_link_points_to_calendar() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let user = seed_user(&pool, &prefix, "navcaluser", "student", "not-a-real-hash").await;
+    let token = star_auth::create_token(user, "student", JWT_SECRET).expect("mint");
+    let resp = server
+        .get("/calendar?month=2026-11")
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            token.clone(),
+        ))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    let link = body
+        .split("global_nav_calendar_link")
+        .nth(1)
+        .expect("global nav calendar link present");
+    let link = &link[..link.len().min(400)];
+    assert!(
+        link.contains("href=\"/calendar\""),
+        "global_nav_calendar_link must href /calendar, got: {link}"
+    );
+}
+
+/// AC3 + AC4 + AC8: `/dashboard` is the shell boot document with the 18 phase-1 ENV
+/// keys of the right types, Canvas' own dashboard sheets linked in cascade order, and
+/// only hashed asset links.
+///
+/// The card grid and the To Do list are no longer in this document: Canvas renders them
+/// from `GET /api/v1/dashboard/dashboard_cards` and `GET /api/v1/users/self/todo`, and
+/// those payloads are asserted in `star-dashboard/tests/dashboard_integration.rs`
+/// (`dashboard_cards_return_menu_cards_ordered_by_position`,
+/// `todo_lists_grading_and_submitting_items_with_canvas_shape`) and their DOM in
+/// `browser-smoke/tests/dashboard-shell-styles.spec.ts`.
 #[tokio::test]
 async fn dashboard_renders_cards_and_env_contract() {
     let Some((server, pool, prefix)) = setup().await else {
@@ -325,10 +412,6 @@ async fn dashboard_renders_cards_and_env_contract() {
     };
 
     let user = seed_user(&pool, &prefix, "dashuser", "student", "not-a-real-hash").await;
-    let published = seed_course(&pool, &prefix, "Published Course", "available").await;
-    let unpublished = seed_course(&pool, &prefix, "Draft Course", "unpublished").await;
-    seed_enrollment(&pool, user, published, "student").await;
-    seed_enrollment(&pool, user, unpublished, "student").await;
 
     let token = star_auth::create_token(user, "student", JWT_SECRET).expect("mint");
     let resp = server
@@ -382,42 +465,47 @@ async fn dashboard_renders_cards_and_env_contract() {
     assert!(env["files_domain"].is_string());
     assert!(env["notices"].is_array());
 
-    // Global nav.
-    assert!(body.contains("ic-app-header"));
-    assert!(body.contains("global_nav_dashboard_link"));
-
-    // One card per enrolled course, linking /courses/{id}.
-    assert!(body.contains(&format!("data-course-id=\"{published}\"")));
-    assert!(body.contains(&format!("href=\"/courses/{published}\"")));
-    assert!(body.contains(&format!("data-course-id=\"{unpublished}\"")));
-    // Unpublished style per the API's published flag.
-    assert!(body.contains("ic-DashboardCard__unpublished"));
-
-    // AC8: hashed asset link present; sole inline <script> is the ENV block.
-    let hash = star_ui::assets::app_css_hash();
+    // AC8: the boot document, then Canvas' dashboard sheets on top of the common set.
     assert!(
-        body.contains(&format!("/static/{hash}/app.css")),
-        "hashed CSS link missing"
+        body.contains("kit.start(app, element)"),
+        "boot script missing"
     );
+    assert!(
+        body.contains("/_app/immutable/entry/start."),
+        "entry link missing"
+    );
+    for bundle in ["tokens", "common", "dashboard", "dashboard_card"] {
+        assert!(
+            body.contains(&format!("data-canvas-bundle=\"{bundle}\"")),
+            "Canvas sheet {bundle} missing from the cascade"
+        );
+    }
+    // `with-right-side` is what Canvas' layout adds because user_dashboard provides
+    // :right_side (app/views/users/user_dashboard.html.erb:84); the To Do panel sits in
+    // that aside and `.with-right-side` sizes it (app/stylesheets/base/_layout.scss:78).
+    assert!(
+        body.contains("<body class=\"primary-nav-expanded with-right-side\""),
+        "body class missing: {:?}",
+        body.chars().take(300).collect::<String>()
+    );
+
+    // Two inline <script> tags and no more: the one `shell::render` injects with this
+    // user's `window.ENV`, and SvelteKit's own boot block, which is a bare `<script>`
+    // too (`ui/build/index.html`: `__sveltekit_… = { base }` plus `kit.start(…)`).
+    // A third would mean per-request data reached the cacheable bundle.
     let script_count = body.matches("<script>").count();
     let env_block_count = body.matches("window.ENV = ").count();
     assert_eq!(
-        script_count, 1,
-        "exactly one inline <script> (the ENV block)"
+        script_count, 2,
+        "the ENV block and the boot block, nothing else"
     );
     assert_eq!(env_block_count, 1);
 
-    // Static asset serves with immutable caching; wrong hash 404s.
-    let asset = server.get(&format!("/static/{hash}/app.css")).await;
-    assert_eq!(asset.status_code(), 200);
-    let cache_control = asset
-        .headers()
-        .get("cache-control")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    assert!(cache_control.contains("immutable"));
-    let bad = server.get("/static/wrong-hash/app.css").await;
-    assert_eq!(bad.status_code(), 404);
+    // One user's document must never be cached.
+    assert!(resp.headers()["cache-control"]
+        .to_str()
+        .unwrap_or_default()
+        .contains("no-store"));
 
     cleanup(&pool, &prefix).await;
 }
@@ -587,7 +675,7 @@ async fn logout_invalidates_session_server_side() {
         .value()
         .to_string();
     let login = server
-        .post("/login")
+        .post("/login/canvas")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
             csrf.clone(),
@@ -624,9 +712,12 @@ async fn logout_invalidates_session_server_side() {
             .expect("query");
     assert!(before.unwrap().0.is_none(), "last_logged_out starts null");
 
-    // Logout (CSRF double-submit).
+    // Logout (CSRF double-submit). Canvas' verb is
+    // `delete "logout" => "login#destroy"` (config/routes.rb:930), which is what
+    // the nav form reaches through the `_method` override; this request asserts
+    // the verb directly.
     let resp = server
-        .post("/logout")
+        .delete("/logout")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_session",
             session.clone(),
@@ -637,7 +728,7 @@ async fn logout_invalidates_session_server_side() {
         ))
         .form(&serde_json::json!({"_csrf": login_csrf}))
         .await;
-    assert_eq!(resp.status_code(), 303, "logout redirects");
+    assert_eq!(resp.status_code(), 303, "logout redirects: {}", resp.text());
     assert_eq!(resp.headers().get("location").unwrap(), "/login");
 
     // after: last_logged_out is stamped in the DB.
@@ -649,7 +740,51 @@ async fn logout_invalidates_session_server_side() {
             .expect("query");
     assert!(
         after.unwrap().0.is_some(),
-        "last_logged_out must be stamped by POST /logout"
+        "last_logged_out must be stamped by DELETE /logout"
+    );
+
+    // The nav's actual byte-shape is Rails' `form_tag logout_path,
+    // method: :delete` (app/views/login/logout_confirm.html.erb:39): a POST
+    // with a hidden `_method=delete`. That form must land on the same handler.
+    let page = server.get("/login").await;
+    let csrf2 = page
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+    let relogin = server
+        .post("/login/canvas")
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf2.clone(),
+        ))
+        .form(&serde_json::json!({"email": email, "password": "Password123!", "_csrf": csrf2}))
+        .await;
+    assert_eq!(relogin.status_code(), 303, "second login succeeds");
+    let session2 = relogin
+        .cookies()
+        .get("star_session")
+        .expect("session")
+        .value()
+        .to_string();
+    let resp = server
+        .post("/logout")
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_session",
+            session2,
+        ))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf2.clone(),
+        ))
+        .form(&serde_json::json!({"_method": "delete", "_csrf": csrf2}))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        303,
+        "POST + _method=delete reaches delete \"logout\": {}",
+        resp.text()
     );
 
     // The old session cookie is rejected: /dashboard redirects to /login.
@@ -711,7 +846,7 @@ async fn next_param_round_trips_through_login() {
         .value()
         .to_string();
     let resp = server
-        .post("/login")
+        .post("/login/canvas")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
             csrf.clone(),
@@ -907,7 +1042,7 @@ async fn discussions_index_teacher_button_and_unread_marker() {
     // Teacher: create button present.
     let resp = get_with_session(
         &server,
-        &format!("/courses/{course}/discussions"),
+        &format!("/courses/{course}/discussion_topics"),
         &teacher_token,
     )
     .await;
@@ -919,7 +1054,7 @@ async fn discussions_index_teacher_button_and_unread_marker() {
     // Student: no create button, unread marker on the un-viewed topic.
     let resp = get_with_session(
         &server,
-        &format!("/courses/{course}/discussions"),
+        &format!("/courses/{course}/discussion_topics"),
         &student_token,
     )
     .await;
@@ -939,7 +1074,7 @@ async fn discussions_index_teacher_button_and_unread_marker() {
     // Student opens the topic: marker clears in the index afterwards.
     let resp = get_with_session(
         &server,
-        &format!("/courses/{course}/discussions/{topic}"),
+        &format!("/courses/{course}/discussion_topics/{topic}"),
         &student_token,
     )
     .await;
@@ -947,7 +1082,7 @@ async fn discussions_index_teacher_button_and_unread_marker() {
 
     let resp = get_with_session(
         &server,
-        &format!("/courses/{course}/discussions"),
+        &format!("/courses/{course}/discussion_topics"),
         &student_token,
     )
     .await;
@@ -1228,7 +1363,11 @@ async fn assignments_index_roles_and_grouping() {
     cleanup(&pool, &prefix).await;
 }
 
-/// New quiz form: teacher POST creates (redirects to show); student POST 403.
+/// Canvas' `quizzes/new` is POST-only (`post "quizzes/new"`, canvas
+/// config/routes.rb:446, under `resources :quizzes, except: :new` at :447), so
+/// GET is a method mismatch, teacher POST creates (redirects to the editor,
+/// quizzes_controller.rb:352-355), a title-less POST gets Canvas' "Unnamed Quiz"
+/// (app/models/quizzes/quiz.rb:161), and a student POST is 403.
 #[tokio::test]
 async fn quiz_new_teacher_creates_student_forbidden() {
     let Some((server, pool, prefix)) = setup().await else {
@@ -1242,15 +1381,26 @@ async fn quiz_new_teacher_creates_student_forbidden() {
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
 
-    // Teacher GET renders the form.
+    // No GET on this path, for anyone: Canvas never generated the form page.
     let page = server
         .get(&format!("/courses/{course}/quizzes/new"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .await;
-    assert_eq!(page.status_code(), 200);
-    assert!(page.text().contains("new_quiz_form"));
+    assert_eq!(page.status_code(), 405, "GET /quizzes/new must not exist");
 
-    // Teacher POST creates and 303s to the show page.
+    // The "+ Quiz" control lives on the index as a POST form.
+    let index = server
+        .get(&format!("/courses/{course}/quizzes"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(index.status_code(), 200);
+    let index_body = index.text();
+    assert!(
+        index_body.contains("new_quiz_form"),
+        "index must carry the + Quiz POST form: {index_body}"
+    );
+
+    // Teacher POST creates and 303s to the editor.
     let (csrf_cookie, csrf) = csrf_pair();
     let resp = server
         .post(&format!("/courses/{course}/quizzes/new"))
@@ -1274,7 +1424,14 @@ async fn quiz_new_teacher_creates_student_forbidden() {
         .to_str()
         .unwrap()
         .to_string();
+    // Canvas' `new` redirects to the editor url (quizzes_controller.rb:352-355),
+    // so the location must be `.../quizzes/:id/edit`.
+    assert!(
+        location.ends_with("/edit"),
+        "create must hand off to the editor: {location}"
+    );
     let new_id: i64 = location
+        .trim_end_matches("/edit")
         .rsplit('/')
         .next()
         .unwrap()
@@ -1294,13 +1451,70 @@ async fn quiz_new_teacher_creates_student_forbidden() {
     assert!(published);
     assert_eq!(points, 12.5);
 
-    // Show page renders for the teacher.
-    let show = server
+    // The handoff target — the editor — renders for the teacher.
+    let edit = server
         .get(&location)
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(edit.status_code(), 200, "body: {}", edit.text());
+    let edit_body = edit.text();
+    assert!(
+        edit_body.contains(&format!("action=\"/courses/{course}/quizzes/{new_id}\"")),
+        "the editor form must post to the Canvas member path: {edit_body}"
+    );
+    assert!(
+        edit_body.contains("value=\"Created By Form\""),
+        "the saved title must be prefilled: {edit_body}"
+    );
+
+    // Show page renders for the teacher, with the Edit affordance.
+    let show = server
+        .get(&format!("/courses/{course}/quizzes/{new_id}"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .await;
     assert_eq!(show.status_code(), 200);
     assert!(show.text().contains("Created By Form"));
+    assert!(
+        show.text()
+            .contains(&format!("/courses/{course}/quizzes/{new_id}/edit")),
+        "teacher show page must link to the editor"
+    );
+
+    // A POST with no title is Canvas' index-button request: it creates a
+    // draft, it does not 422.
+    let (csrf_cookie, csrf) = csrf_pair();
+    let resp = server
+        .post(&format!("/courses/{course}/quizzes/new"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie)
+        .form(&serde_json::json!({"_csrf": csrf}))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        303,
+        "blank title must create: {}",
+        resp.text()
+    );
+    let bare_location = resp
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    let bare_id: i64 = bare_location
+        .trim_end_matches("/edit")
+        .rsplit('/')
+        .next()
+        .unwrap()
+        .parse()
+        .expect("quiz id in location");
+    let bare_title: String = sqlx::query_scalar("SELECT title FROM quizzes WHERE id = $1")
+        .bind(bare_id)
+        .fetch_one(&pool)
+        .await
+        .expect("unnamed quiz");
+    assert_eq!(bare_title, "Unnamed Quiz");
 
     // Student POST is 403.
     let (csrf_cookie, csrf) = csrf_pair();
@@ -1311,13 +1525,161 @@ async fn quiz_new_teacher_creates_student_forbidden() {
         .form(&serde_json::json!({"_csrf": csrf, "title": "Nope", "published": ""}))
         .await;
     assert_eq!(resp.status_code(), 403);
+}
 
-    // Student GET is 403 too.
-    let resp = server
-        .get(&format!("/courses/{course}/quizzes/new"))
+/// The quiz editor journey: `GET .../quizzes/:id/edit` (Canvas' `quizzes#edit`,
+/// quizzes_controller.rb:359, which `render :new` at :431) is teacher-only;
+/// saving it reaches Canvas' `PATCH` member route (`resources :quizzes`,
+/// config/routes.rb:447) through the `_method` shim, and `quizzes#update`
+/// flashes "Quiz successfully updated" while redirecting to the show url
+/// (:612-613).
+#[tokio::test]
+async fn quiz_editor_save_uses_member_patch() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "eteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "estudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Editor Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let quiz = seed_quiz(&pool, course, "Midterm", true, 10.0).await;
+
+    // Students have no `:update` right on the quiz -> 403, like Canvas.
+    let denied = server
+        .get(&format!("/courses/{course}/quizzes/{quiz}/edit"))
         .add_cookie(session_cookie(student, "student"))
         .await;
-    assert_eq!(resp.status_code(), 403);
+    assert_eq!(denied.status_code(), 403, "body: {}", denied.text());
+
+    // Teacher GET renders the form and posts to the member path, never /edit.
+    let page = server
+        .get(&format!("/courses/{course}/quizzes/{quiz}/edit"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(page.status_code(), 200, "body: {}", page.text());
+    let body = page.text();
+    assert!(
+        body.contains(&format!("action=\"/courses/{course}/quizzes/{quiz}\"")),
+        "form action must be the Canvas member path: {body}"
+    );
+    assert!(
+        body.contains("name=\"_method\" value=\"patch\""),
+        "hidden _method field: {body}"
+    );
+    assert!(
+        !body.contains(&format!("/courses/{course}/quizzes/{quiz}/edit\"")),
+        "the form must not post to /edit: {body}"
+    );
+    assert!(
+        body.contains("value=\"Midterm\"") && body.contains("value=\"10\""),
+        "stored title and points are prefilled: {body}"
+    );
+    let csrf = page
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+
+    // POST + `_method=patch` on the member path saves and PRGs to show.
+    let resp = server
+        .post(&format!("/courses/{course}/quizzes/{quiz}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_csrf": csrf.clone(),
+            "_method": "patch",
+            "title": "Midterm v2",
+            "description": "<p>Bring a pen</p>",
+            "points_possible": "25",
+            "available_from": "2027-03-01T09:30",
+            "available_until": "2027-03-05T17:00",
+            "published": "true"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 303, "body: {}", resp.text());
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/quizzes/{quiz}?saved=1").as_str(),
+        "update redirects to the show url (quizzes_controller.rb:613)"
+    );
+
+    let row: (String, String, f64, bool, Option<String>, Option<String>) = sqlx::query_as(
+        r#"SELECT title, COALESCE(description, ''), points_possible::float8, published,
+                  to_char(available_from AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI'),
+                  to_char(available_until AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI')
+             FROM quizzes WHERE id = $1"#,
+    )
+    .bind(quiz)
+    .fetch_one(&pool)
+    .await
+    .expect("read quiz");
+    assert_eq!(row.0, "Midterm v2");
+    assert_eq!(row.1, "<p>Bring a pen</p>");
+    assert_eq!(row.2, 25.0);
+    assert!(row.3);
+    // `datetime-local` values have no offset, and the port reads them as UTC.
+    assert_eq!(row.4.as_deref(), Some("2027-03-01T09:30"));
+    assert_eq!(row.5.as_deref(), Some("2027-03-05T17:00"));
+
+    // The redirect target renders Canvas' flash text.
+    let show = server
+        .get(&format!("/courses/{course}/quizzes/{quiz}?saved=1"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(show.status_code(), 200);
+    assert!(
+        show.text().contains("Quiz successfully updated"),
+        "PRG notice must render: {}",
+        show.text()
+    );
+
+    // A bare POST on the member path is not a Canvas route: 405, row untouched.
+    let resp = server
+        .post(&format!("/courses/{course}/quizzes/{quiz}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_csrf": csrf.clone(),
+            "title": "Bare Post",
+            "points_possible": "1"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 405, "member POST must not be routable");
+    let title: String = sqlx::query_scalar("SELECT title FROM quizzes WHERE id = $1")
+        .bind(quiz)
+        .fetch_one(&pool)
+        .await
+        .expect("quiz still there");
+    assert_eq!(title, "Midterm v2", "405 must not write");
+
+    // `?title=` overrides the form value only — Canvas assigns the param to the
+    // unsaved quiz (:369) after pushing the stored title onto the crumb (:367).
+    let page = server
+        .get(&format!(
+            "/courses/{course}/quizzes/{quiz}/edit?title=Draft%20Handoff"
+        ))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(page.status_code(), 200);
+    let body = page.text();
+    assert!(
+        body.contains("value=\"Draft Handoff\""),
+        "?title= must fill the form: {body}"
+    );
+    assert!(
+        body.contains("Midterm v2"),
+        "the crumb keeps the stored title: {body}"
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -1495,9 +1857,7 @@ async fn quiz_submit_grades_and_results() {
         .join("&");
 
     let resp = server
-        .post(&format!(
-            "/courses/{course}/quizzes/{quiz}/submissions/{submission_id}/submit"
-        ))
+        .post(&format!("/courses/{course}/quizzes/{quiz}/submissions"))
         .add_cookie(session_cookie(student, "student"))
         .add_cookie(csrf_cookie)
         .add_header("content-type", "application/x-www-form-urlencoded")
@@ -1562,9 +1922,7 @@ async fn quiz_submit_grades_and_results() {
     // Second submit on a finished attempt redirects to results (no regrade).
     let (csrf_cookie, csrf) = csrf_pair();
     let resp = server
-        .post(&format!(
-            "/courses/{course}/quizzes/{quiz}/submissions/{submission_id}/submit"
-        ))
+        .post(&format!("/courses/{course}/quizzes/{quiz}/submissions"))
         .add_cookie(session_cookie(student, "student"))
         .add_cookie(csrf_cookie)
         .form(&serde_json::json!({"_csrf": csrf}))
@@ -1630,7 +1988,7 @@ async fn assignment_show_and_student_submit() {
         .value()
         .to_string();
     let resp = server
-        .post(&format!("/courses/{course}/assignments/{hw}/submit"))
+        .post(&format!("/courses/{course}/assignments/{hw}/submissions"))
         .add_cookie(session_cookie(student, "student"))
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
@@ -1734,9 +2092,7 @@ async fn quiz_submit_csrf_mismatch_is_403() {
 
     // Mismatched token: cookie says one thing, form another.
     let resp = server
-        .post(&format!(
-            "/courses/{course}/quizzes/{quiz}/submissions/{submission_id}/submit"
-        ))
+        .post(&format!("/courses/{course}/quizzes/{quiz}/submissions"))
         .add_cookie(session_cookie(student, "student"))
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
@@ -1758,8 +2114,10 @@ async fn quiz_submit_csrf_mismatch_is_403() {
     cleanup(&pool, &prefix).await;
 }
 
-/// Issue #71: teacher POST /assignments/new creates the row (it appears in
-/// the list); a student POST is 403.
+/// Issue #71: teacher POST /assignments creates the row (it appears in the
+/// list); a student POST is 403. `/assignments/new` is Canvas' form PAGE, so
+/// a POST there must stay a method mismatch (`resources :assignments`, canvas
+/// config/routes.rb:270 — create is the collection POST).
 #[tokio::test]
 async fn new_assignment_create_and_gates() {
     let Some((server, pool, prefix)) = setup().await else {
@@ -1797,9 +2155,30 @@ async fn new_assignment_create_and_gates() {
         .value()
         .to_string();
 
-    // Student POST -> 403 (before any insert).
+    // POST on the form page is not a Canvas route: 405, no row.
     let resp = server
         .post(&format!("/courses/{course}/assignments/new"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "name": "Should Not Exist",
+            "points_possible": "1",
+            "_csrf": csrf.clone(),
+            "published": "published"
+        }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        405,
+        "POST /assignments/new must not be routable"
+    );
+
+    // Student POST -> 403 (before any insert).
+    let resp = server
+        .post(&format!("/courses/{course}/assignments"))
         .add_cookie(session_cookie(student, "student"))
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
@@ -1816,7 +2195,7 @@ async fn new_assignment_create_and_gates() {
 
     // Teacher POST creates the assignment.
     let resp = server
-        .post(&format!("/courses/{course}/assignments/new"))
+        .post(&format!("/courses/{course}/assignments"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
@@ -1867,7 +2246,7 @@ async fn new_assignment_create_and_gates() {
     // The CSRF cookie and the form token must match (the handler checks the
     // token pair before validating the fields).
     let resp = server
-        .post(&format!("/courses/{course}/assignments/new"))
+        .post(&format!("/courses/{course}/assignments"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_csrf",
@@ -1880,6 +2259,188 @@ async fn new_assignment_create_and_gates() {
         }))
         .await;
     assert_eq!(resp.status_code(), 422, "empty name -> 422");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Canvas' edit form posts `POST /courses/:id/assignments/:id` with a hidden
+/// `_method=patch` field and Rack::MethodOverride turns that into the PATCH
+/// the route table carries (`resources :assignments`, config/routes.rb:270).
+/// `star_ui::method_override` is that shim, so the verbs on this journey are
+/// Canvas' verbs: PATCH/PUT on the member path, GET on `/edit`, and nothing
+/// routable as POST on either.
+#[tokio::test]
+async fn assignment_edit_form_uses_the_method_override() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "eteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "estudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Override Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let group = seed_assignment_group(&pool, course, "Weekly", 1).await;
+    let hw = seed_assignment(
+        &pool,
+        course,
+        Some(group),
+        "Old Title",
+        None,
+        5.0,
+        "published",
+    )
+    .await;
+
+    // The form page: Canvas' /edit page, GET only, and it points at the
+    // member path with the override field — not at /edit, and not at PATCH
+    // (which no HTML form can submit).
+    let resp = server
+        .get(&format!("/courses/{course}/assignments/{hw}/edit"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(
+        body.contains(&format!("action=\"/courses/{course}/assignments/{hw}\"")),
+        "form action must be the Canvas member path, got: {body}"
+    );
+    assert!(
+        body.contains("name=\"_method\" value=\"patch\""),
+        "hidden _method field: {body}"
+    );
+    assert!(
+        !body.contains(&format!("/courses/{course}/assignments/{hw}/edit")),
+        "the form must not post to /edit"
+    );
+    let csrf = resp
+        .cookies()
+        .get("star_csrf")
+        .expect("csrf")
+        .value()
+        .to_string();
+
+    // POST + `_method=patch` on the member path updates the row.
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/{hw}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_method": "patch",
+            "name": "New Title",
+            "points_possible": "8",
+            "assignment_group_id": group.to_string(),
+            "_csrf": csrf.clone(),
+            "published": "published"
+        }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        303,
+        "override PATCH must update: {}",
+        resp.text()
+    );
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/assignments/{hw}").as_str()
+    );
+    let (title, points): (String, f64) =
+        sqlx::query_as("SELECT title, points_possible::float8 FROM assignments WHERE id = $1")
+            .bind(hw)
+            .fetch_one(&pool)
+            .await
+            .expect("read assignment");
+    assert_eq!(title, "New Title");
+    assert_eq!(points, 8.0);
+
+    // Without the override field the same request is a bare POST, and Canvas
+    // has no POST on the member path: 405, row untouched.
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/{hw}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "name": "Bare Post",
+            "points_possible": "1",
+            "_csrf": csrf.clone()
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 405, "member POST must not be routable");
+    let title: String = sqlx::query_scalar("SELECT title FROM assignments WHERE id = $1")
+        .bind(hw)
+        .fetch_one(&pool)
+        .await
+        .expect("read title");
+    assert_eq!(title, "New Title", "bare POST must not write");
+
+    // The invented verb on the form PAGE is gone.
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/{hw}/edit"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "name": "Via /edit",
+            "points_possible": "1",
+            "_csrf": csrf.clone()
+        }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        405,
+        "POST /assignments/:id/edit must not be routable"
+    );
+
+    // A verb outside PATCH/PUT/DELETE is not honoured (see the module docs),
+    // so this stays the POST the router has no route for.
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/{hw}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_method": "get",
+            "name": "Tunneled",
+            "points_possible": "1",
+            "_csrf": csrf.clone()
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 405, "_method=get must not be honoured");
+
+    // The gate runs on the overridden verb too: a student's PATCH-shaped
+    // form is 403 before any update.
+    let resp = server
+        .post(&format!("/courses/{course}/assignments/{hw}"))
+        .add_cookie(session_cookie(student, "student"))
+        .add_cookie(axum_extra::extract::cookie::Cookie::new(
+            "star_csrf",
+            csrf.clone(),
+        ))
+        .form(&serde_json::json!({
+            "_method": "patch",
+            "name": "Hacked",
+            "points_possible": "1",
+            "_csrf": csrf
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student override PATCH -> 403");
+    let title: String = sqlx::query_scalar("SELECT title FROM assignments WHERE id = $1")
+        .bind(hw)
+        .fetch_one(&pool)
+        .await
+        .expect("read title");
+    assert_eq!(title, "New Title", "student write must not land");
 
     cleanup(&pool, &prefix).await;
 }
@@ -1984,7 +2545,7 @@ async fn discussion_show_create_topic_entry_and_reply() {
     // Teacher creates a topic through the form (PRG -> topic page).
     let csrf_page = get_with_session(
         &server,
-        &format!("/courses/{course}/discussions/new"),
+        &format!("/courses/{course}/discussion_topics/new"),
         &teacher_token,
     )
     .await;
@@ -1997,7 +2558,7 @@ async fn discussion_show_create_topic_entry_and_reply() {
         .to_string();
 
     let resp = server
-        .post(&format!("/courses/{course}/discussions"))
+        .post(&format!("/courses/{course}/discussion_topics"))
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_session",
             teacher_token.clone(),
@@ -2052,7 +2613,9 @@ async fn discussion_show_create_topic_entry_and_reply() {
         .value()
         .to_string();
     let resp = server
-        .post(&format!("/courses/{course}/discussions/{topic_id}/entries"))
+        .post(&format!(
+            "/courses/{course}/discussion_topics/{topic_id}/entries"
+        ))
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_session",
             student_token.clone(),
@@ -2087,7 +2650,9 @@ async fn discussion_show_create_topic_entry_and_reply() {
         .value()
         .to_string();
     let resp = server
-        .post(&format!("/courses/{course}/discussions/{topic_id}/entries"))
+        .post(&format!(
+            "/courses/{course}/discussion_topics/{topic_id}/entries"
+        ))
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_session",
             student_token.clone(),
@@ -2127,7 +2692,7 @@ async fn discussion_show_create_topic_entry_and_reply() {
     // A student cannot create topics: POST answers 403.
     let csrf_page = get_with_session(
         &server,
-        &format!("/courses/{course}/discussions/new"),
+        &format!("/courses/{course}/discussion_topics/new"),
         &student_token,
     )
     .await;
@@ -2136,7 +2701,7 @@ async fn discussion_show_create_topic_entry_and_reply() {
     // before CSRF validation matters — any well-formed token exercises it.
     let csrf = "0123456789abcdef0123456789abcdef".to_string();
     let resp = server
-        .post(&format!("/courses/{course}/discussions"))
+        .post(&format!("/courses/{course}/discussion_topics"))
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_session",
             student_token.clone(),
@@ -2156,11 +2721,14 @@ async fn discussion_show_create_topic_entry_and_reply() {
     cleanup(&pool, &prefix).await;
 }
 
-/// The tab alias `/courses/{id}/discussion_topics` serves the same index
-/// page as `/courses/{id}/discussions` (the tabs API emits html_url with
-/// the discussion_topics suffix).
+/// `/courses/{id}/discussion_topics` is the only discussions index: Canvas
+/// draws it with `concern :discussions` → `resources :discussion_topics`
+/// (config/routes.rb:156-165) and has no `/discussions` web row at all, so the
+/// alias this port used to carry is gone. `/courses/{id}/discussions` now falls
+/// through to the generic `/courses/{id}/{tab}` landing, which is a page
+/// without the topic list or the teacher's "+ Discussion" control.
 #[tokio::test]
-async fn discussion_topics_alias_serves_the_index() {
+async fn discussion_topics_index_has_no_discussions_alias() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -2173,34 +2741,37 @@ async fn discussion_topics_alias_serves_the_index() {
 
     let token = star_auth::create_token(teacher, "teacher", JWT_SECRET).expect("mint");
 
-    let a = get_with_session(&server, &format!("/courses/{course}/discussions"), &token).await;
-    let b = get_with_session(
+    let a = get_with_session(
         &server,
         &format!("/courses/{course}/discussion_topics"),
         &token,
     )
     .await;
-    assert_eq!(a.status_code(), 200);
-    assert_eq!(b.status_code(), 200);
+    assert_eq!(a.status_code(), 200, "Canvas' spelling serves the index");
     let a_body = a.text();
-    let b_body = b.text();
-    // The CSRF token differs per request; mask each page's own token before
-    // comparing, the same normalization the auth tests apply.
-    let mask_csrf = |body: &str| {
-        let token = body
-            .split("name=\"_csrf\" value=\"")
-            .nth(1)
-            .and_then(|rest| rest.split('"').next())
-            .unwrap_or_default();
-        body.replace(&format!("value=\"{token}\""), "value=\"CSRF\"")
-    };
-    assert_eq!(
-        mask_csrf(&a_body),
-        mask_csrf(&b_body),
-        "alias serves the identical page"
+    assert!(a_body.contains("Alias Topic"), "topic list rendered");
+    assert!(
+        a_body.contains("id=\"add_discussion\""),
+        "+ Discussion control present: {a_body}"
     );
-    assert!(a_body.contains("Alias Topic"));
-    let _ = topic;
+
+    // The old alias is no longer the discussions page: it falls through to the
+    // generic `/courses/{id}/{tab}` landing, which has neither control.
+    let b = get_with_session(&server, &format!("/courses/{course}/discussions"), &token).await;
+    assert_eq!(b.status_code(), 200, "generic tab landing, not a 404");
+    let b_body = b.text();
+    assert!(
+        !b_body.contains("id=\"add_discussion\""),
+        "the removed alias must not serve the discussions index"
+    );
+
+    let show = get_with_session(
+        &server,
+        &format!("/courses/{course}/discussion_topics/{topic}"),
+        &token,
+    )
+    .await;
+    assert_eq!(show.status_code(), 200, "topic show on Canvas' path");
 
     cleanup(&pool, &prefix).await;
 }
@@ -2345,7 +2916,7 @@ async fn inbox_unread_open_reply_mark_all_and_compose() {
         .value()
         .to_string();
     let resp = server
-        .post("/conversations/mark_all_read")
+        .post("/conversations/mark_all_as_read")
         .add_cookie(axum_extra::extract::cookie::Cookie::new(
             "star_session",
             teacher_token.clone(),
@@ -2452,10 +3023,10 @@ async fn unenrolled_user_gets_no_discussion_data() {
     let outsider_token = star_auth::create_token(outsider, "student", JWT_SECRET).expect("mint");
 
     for path in [
-        format!("/courses/{course}/discussions"),
         format!("/courses/{course}/discussion_topics"),
-        format!("/courses/{course}/discussions/{topic}"),
-        format!("/courses/{course}/discussions/new"),
+        format!("/courses/{course}/discussion_topics"),
+        format!("/courses/{course}/discussion_topics/{topic}"),
+        format!("/courses/{course}/discussion_topics/new"),
     ] {
         let resp = get_with_session(&server, &path, &outsider_token).await;
         assert!(
@@ -2588,6 +3159,518 @@ async fn gradebook_grid_and_csv() {
 }
 
 // ---------------------------------------------------------------------------
+// Course settings + people journey (issue #73)
+// ---------------------------------------------------------------------------
+
+/// Settings: teacher GET renders the form; student GET is 403.
+#[tokio::test]
+async fn settings_teacher_opens_student_403() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "setteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "setstudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Settings Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    let resp = server
+        .get(&format!("/courses/{course}/settings"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(body.contains("course_settings_form"), "settings form");
+    // Canvas saves settings with `put "courses/:course_id"` (config/routes.rb
+    // :228 → CoursesController#update_settings), so the form posts with
+    // Rails' hidden override and lands on the PUT verb this router registers.
+    assert!(
+        body.contains("name=\"_method\" value=\"put\""),
+        "settings form carries _method=put: {body}"
+    );
+    assert!(
+        body.contains("action=\"/courses/") && body.contains("/settings\""),
+        "settings form action is the Canvas member path"
+    );
+    assert!(body.contains("Course is Published"), "publish state shown");
+
+    let resp = server
+        .get(&format!("/courses/{course}/settings"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student settings GET -> 403");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Settings save round-trips name + syllabus + workflow_state into the DB
+/// (PRG redirect with the success notice); student POST is 403; a blank
+/// name re-renders 422.
+#[tokio::test]
+async fn settings_save_round_trip_and_gates() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "saveteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "savestudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Save Course", "unpublished").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    let (csrf_cookie, csrf) = csrf_pair();
+
+    // Student POST -> 403 before any write.
+    let resp = server
+        .put(&format!("/courses/{course}/settings"))
+        .add_cookie(session_cookie(student, "student"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({
+            "name": "Hacked Course", "_csrf": csrf.clone(), "published": "published"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student settings POST -> 403");
+
+    // Teacher saves: name, course_code, syllabus_body, published.
+    let resp = server
+        .put(&format!("/courses/{course}/settings"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({
+            "name": "Renamed Course",
+            "course_code": "RC-101",
+            "description": "A description",
+            "syllabus_body": "Read the textbook",
+            "_csrf": csrf.clone(),
+            "published": "published"
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 303, "save PRG: {}", resp.text());
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/settings?saved=1").as_str()
+    );
+
+    let row: (String, String, Option<String>, String) = sqlx::query_as(
+        "SELECT name, course_code, syllabus_body, workflow_state FROM courses WHERE id = $1",
+    )
+    .bind(course)
+    .fetch_one(&pool)
+    .await
+    .expect("course row");
+    assert_eq!(row.0, "Renamed Course");
+    assert_eq!(row.1, "RC-101");
+    assert_eq!(row.2.as_deref(), Some("Read the textbook"));
+    assert_eq!(row.3, "available", "publish checkbox persisted");
+
+    // Unpublish round trip (checkbox absent).
+    let resp = server
+        .put(&format!("/courses/{course}/settings"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie.clone())
+        .form(
+            &serde_json::json!({"name": "Renamed Course", "course_code": "RC-101", "_csrf": csrf}),
+        )
+        .await;
+    assert_eq!(resp.status_code(), 303);
+    let state: String = sqlx::query_scalar("SELECT workflow_state FROM courses WHERE id = $1")
+        .bind(course)
+        .fetch_one(&pool)
+        .await
+        .expect("state");
+    assert_eq!(state, "unpublished", "unpublish persisted");
+
+    // Blank name -> 422 re-render with the error.
+    let (csrf_cookie, csrf) = csrf_pair();
+    let resp = server
+        .put(&format!("/courses/{course}/settings"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie)
+        .form(&serde_json::json!({"name": "   ", "_csrf": csrf}))
+        .await;
+    assert_eq!(resp.status_code(), 422, "blank name -> 422");
+    assert!(resp.text().contains("Name is required."));
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// People page lists the seeded enrollments with role + state; teacher sees
+/// Add People, student does not.
+#[tokio::test]
+async fn people_page_lists_roster() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "pteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "pstudent", "student", "not-a-real-hash").await;
+    let concluded = seed_user(&pool, &prefix, "pconcluded", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "People Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+    let concluded_enrollment = seed_enrollment(&pool, concluded, course, "student").await;
+    sqlx::query("UPDATE enrollments SET workflow_state = 'inactive' WHERE id = $1")
+        .bind(concluded_enrollment)
+        .execute(&pool)
+        .await
+        .expect("conclude the seeded enrollment");
+
+    let resp = server
+        .get(&format!("/courses/{course}/users"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body = resp.text();
+    assert!(body.contains("roster_table"), "roster table present");
+    assert!(body.contains("pstudent"), "student name listed");
+    assert!(body.contains("Teacher"), "role shown");
+    assert!(body.contains("Active"), "state shown");
+    assert!(body.contains("enrollment-active"), "state styling class");
+    assert!(
+        !body.contains("add_people_link"),
+        "student must not see Add People"
+    );
+
+    let resp = server
+        .get(&format!("/courses/{course}/users"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200);
+    assert!(
+        resp.text().contains("add_people_link"),
+        "teacher sees Add People"
+    );
+
+    // Canvas' row actions are `delete "conclude_user/:id"` and
+    // `post "unconclude_user/:id"` (config/routes.rb:215-216) with the
+    // ENROLLMENT id in the `:id` slot (courses_controller.rb:2808,:2824), and
+    // the conclude form is Rails' `method: :delete` override on a POST.
+    let body = resp.text();
+    assert!(
+        body.contains(&format!("/courses/{course}/conclude_user/")),
+        "conclude form posts to Canvas' conclude_user path: {body}"
+    );
+    assert!(
+        body.contains("name=\"_method\" value=\"delete\""),
+        "conclude form carries _method=delete"
+    );
+    assert!(
+        !body.contains("/conclude\"") && !body.contains("/reactivate\""),
+        "the old /users/{{user_id}}/conclude and /reactivate forms are gone"
+    );
+    assert!(
+        body.contains(&format!(
+            "/courses/{course}/unconclude_user/{concluded_enrollment}"
+        )) && body.contains("reactivate-link"),
+        "the inactive row posts Canvas' unconclude_user reactivate form"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Add People: teacher creates an enrollment (assert DB) + PRG; student
+/// blocked on GET and POST; unknown login re-renders 422.
+#[tokio::test]
+async fn add_people_creates_enrollment_and_gates() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "atteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "atstudent", "student", "not-a-real-hash").await;
+    let outsider = seed_user(&pool, &prefix, "atoutsider", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Add Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, student, course, "student").await;
+
+    // Student GET -> 403.
+    let resp = server
+        .get(&format!("/courses/{course}/users/add"))
+        .add_cookie(session_cookie(student, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student GET add -> 403");
+
+    // Teacher loads the form.
+    let resp = server
+        .get(&format!("/courses/{course}/users/add"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    // The form submits to Canvas' web row for the write —
+    // `post :enroll_users` on the course collection (config/routes.rb:231) —
+    // not to this page's own path, which is only the form's GET.
+    assert!(
+        resp.text()
+            .contains(&format!("action=\"/courses/{course}/enroll_users\"")),
+        "add-people form posts to enroll_users: {}",
+        resp.text()
+    );
+
+    let (csrf_cookie, csrf) = csrf_pair();
+
+    // Student POST -> 403 (no row created).
+    let resp = server
+        .post(&format!("/courses/{course}/enroll_users"))
+        .add_cookie(session_cookie(student, "student"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({
+            "login": format!("{prefix}-atoutsider@test.local"),
+            "role": "student",
+            "_csrf": csrf.clone()
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student POST add -> 403");
+
+    // Teacher adds the outsider as a student.
+    let resp = server
+        .post(&format!("/courses/{course}/enroll_users"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({
+            "login": format!("{prefix}-atoutsider@test.local"),
+            "role": "student",
+            "_csrf": csrf.clone()
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 303, "add PRG: {}", resp.text());
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/users?added=1").as_str()
+    );
+
+    let count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM enrollments WHERE course_id = $1 AND user_id = $2 AND role = 'student'",
+    )
+    .bind(course)
+    .bind(outsider)
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(count, 1, "enrollment created in DB");
+
+    // The roster now lists the outsider.
+    let resp = server
+        .get(&format!("/courses/{course}/users"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    assert!(resp.text().contains("atoutsider"), "roster row added");
+
+    // Duplicate -> 422 with the conflict message.
+    let resp = server
+        .post(&format!("/courses/{course}/enroll_users"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({
+            "login": format!("{prefix}-atoutsider@test.local"),
+            "role": "student",
+            "_csrf": csrf.clone()
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 422, "duplicate -> 422");
+    assert!(resp.text().contains("already enrolled"));
+
+    // Unknown login -> 422.
+    let resp = server
+        .post(&format!("/courses/{course}/enroll_users"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie)
+        .form(&serde_json::json!({
+            "login": format!("{prefix}-nobody@test.local"),
+            "role": "student",
+            "_csrf": csrf
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 422, "unknown login -> 422");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// Conclude flips the enrollment to inactive; reactivate flips it back; a
+/// student on either is 403. Canvas' rows are
+/// `delete "conclude_user/:id" => "courses#conclude_user"` and
+/// `post "unconclude_user/:id" => "courses#unconclude_user"`
+/// (config/routes.rb:215-216) and their `:id` is the ENROLLMENT row
+/// (`@context.enrollments.find(params[:id])`, courses_controller.rb:2808,:2824)
+/// — so the paths below carry `seed_enrollment`'s id, and conclude arrives as a
+/// real DELETE.
+#[tokio::test]
+async fn conclude_and_reactivate_toggle_state() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let teacher = seed_user(&pool, &prefix, "cnteacher", "teacher", "not-a-real-hash").await;
+    let student = seed_user(&pool, &prefix, "cnstudent", "student", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Conclude Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    let enrollment = seed_enrollment(&pool, student, course, "student").await;
+
+    let (csrf_cookie, csrf) = csrf_pair();
+
+    // Student cannot conclude.
+    let resp = server
+        .delete(&format!("/courses/{course}/conclude_user/{enrollment}"))
+        .add_cookie(session_cookie(student, "student"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({"_csrf": csrf.clone()}))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student conclude -> 403");
+
+    // Teacher concludes the student.
+    let resp = server
+        .delete(&format!("/courses/{course}/conclude_user/{enrollment}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({"_csrf": csrf.clone()}))
+        .await;
+    assert_eq!(resp.status_code(), 303, "conclude PRG: {}", resp.text());
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/users?concluded=1").as_str()
+    );
+
+    let state: String = sqlx::query_scalar(
+        "SELECT workflow_state FROM enrollments WHERE course_id = $1 AND user_id = $2",
+    )
+    .bind(course)
+    .bind(student)
+    .fetch_one(&pool)
+    .await
+    .expect("state");
+    assert_eq!(state, "inactive", "concluded -> inactive");
+
+    // The roster row now shows Inactive + the reactivate action.
+    let resp = server
+        .get(&format!("/courses/{course}/users"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .await;
+    let body = resp.text();
+    assert!(body.contains("Inactive"), "Inactive label rendered");
+    assert!(body.contains("reactivate"), "reactivate action offered");
+
+    // Teacher reactivates.
+    let resp = server
+        .post(&format!("/courses/{course}/unconclude_user/{enrollment}"))
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({"_csrf": csrf}))
+        .await;
+    assert_eq!(resp.status_code(), 303, "reactivate PRG");
+    assert_eq!(
+        resp.headers().get("location").unwrap(),
+        format!("/courses/{course}/users?reactivated=1").as_str()
+    );
+
+    let state: String = sqlx::query_scalar(
+        "SELECT workflow_state FROM enrollments WHERE course_id = $1 AND user_id = $2",
+    )
+    .bind(course)
+    .bind(student)
+    .fetch_one(&pool)
+    .await
+    .expect("state");
+    assert_eq!(state, "active", "reactivated -> active");
+
+    // Student cannot reactivate either.
+    let (csrf_cookie, csrf) = csrf_pair();
+    let resp = server
+        .post(&format!("/courses/{course}/unconclude_user/{enrollment}"))
+        .add_cookie(session_cookie(student, "student"))
+        .add_cookie(csrf_cookie)
+        .form(&serde_json::json!({"_csrf": csrf}))
+        .await;
+    assert_eq!(resp.status_code(), 403, "student reactivate -> 403");
+
+    cleanup(&pool, &prefix).await;
+}
+
+/// An unenrolled non-admin gets no settings/people data at all (course gate:
+/// 404 before 403 — the shell cannot bypass API authorization).
+#[tokio::test]
+async fn unenrolled_user_gets_no_settings_or_people_data() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+
+    let outsider = seed_user(&pool, &prefix, "soutsider", "student", "not-a-real-hash").await;
+    let teacher = seed_user(&pool, &prefix, "steacher", "teacher", "not-a-real-hash").await;
+    let course = seed_course(&pool, &prefix, "Gate Course", "available").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+
+    for path in [
+        format!("/courses/{course}/settings"),
+        format!("/courses/{course}/users"),
+        format!("/courses/{course}/users/add"),
+    ] {
+        let resp = server
+            .get(&path)
+            .add_cookie(session_cookie(outsider, "student"))
+            .await;
+        // The course gate hides the course entirely (404); when the course
+        // is visible to the viewer, the teacher gate 403s — both prove no
+        // settings/people data leaks (same convention as the discussions test).
+        assert!(
+            resp.status_code() == 403 || resp.status_code() == 404,
+            "unenrolled GET {path} -> 403/404, got {}",
+            resp.status_code()
+        );
+        assert!(!resp.text().contains("Gate Course"), "no course data leaks");
+    }
+
+    // Mutations for a nonexistent course also 404 (before the teacher gate).
+    let (csrf_cookie, csrf) = csrf_pair();
+    let resp = server
+        .put("/courses/999999/settings")
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie)
+        .form(&serde_json::json!({"name": "X", "_csrf": csrf}))
+        .await;
+    assert_eq!(resp.status_code(), 404, "missing course -> 404");
+
+    // Canvas' own roster write rows gate identically, in the same order the
+    // handlers run (course 404 -> teacher 403 -> CSRF 403):
+    // `post :enroll_users` (config/routes.rb:231) and
+    // `delete "conclude_user/:id"` (:215).
+    let (csrf_cookie, csrf) = csrf_pair();
+    let resp = server
+        .post("/courses/999999/enroll_users")
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie.clone())
+        .form(&serde_json::json!({
+            "login": "whoever@example.com",
+            "role": "student",
+            "_csrf": csrf
+        }))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "enroll_users on a missing course -> 404"
+    );
+
+    let (csrf_cookie, csrf) = csrf_pair();
+    let resp = server
+        .delete("/courses/999999/conclude_user/1")
+        .add_cookie(session_cookie(teacher, "teacher"))
+        .add_cookie(csrf_cookie)
+        .form(&serde_json::json!({"_csrf": csrf}))
+        .await;
+    assert_eq!(
+        resp.status_code(),
+        404,
+        "conclude_user on a missing course -> 404"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
+// ---------------------------------------------------------------------------
 // SpeedGrader grading workflow (issue #108)
 // ---------------------------------------------------------------------------
 
@@ -2689,7 +3772,7 @@ async fn speedgrader_queue_and_rubric_panel() {
     // Teacher queue (default assignment = first, default student = first by
     // name: gstudent sorts before gstudent2).
     let resp = server
-        .get(&format!("/courses/{course}/gradebook/speedgrader"))
+        .get(&format!("/courses/{course}/gradebook/speed_grader"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -2754,7 +3837,7 @@ async fn speedgrader_permission_gates() {
 
     // Student -> 403 on the queue.
     let resp = server
-        .get(&format!("/courses/{course}/gradebook/speedgrader"))
+        .get(&format!("/courses/{course}/gradebook/speed_grader"))
         .add_cookie(session_cookie(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "student queue -> 403");
@@ -2762,7 +3845,7 @@ async fn speedgrader_permission_gates() {
     // Student -> 403 on the POST (course gate passes, teacher check fails).
     let (csrf_cookie, csrf) = csrf_pair();
     let resp = server
-        .post(&format!("/courses/{course}/gradebook/speedgrader/grade"))
+        .post(&format!("/courses/{course}/gradebook/update_submission"))
         .add_cookie(session_cookie(student, "student"))
         .add_cookie(csrf_cookie)
         .add_header("content-type", "application/x-www-form-urlencoded")
@@ -2772,7 +3855,7 @@ async fn speedgrader_permission_gates() {
 
     // Unenrolled non-admin -> 404/403 on the queue (course gate).
     let resp = server
-        .get(&format!("/courses/{course}/gradebook/speedgrader"))
+        .get(&format!("/courses/{course}/gradebook/speed_grader"))
         .add_cookie(session_cookie(outsider, "student"))
         .await;
     assert!(
@@ -2821,7 +3904,7 @@ async fn speedgrader_grade_round_trip() {
     // POST the ONE grading form: score + comment + the first criterion pick.
     let (csrf_cookie, csrf) = csrf_pair();
     let resp = server
-        .post(&format!("/courses/{course}/gradebook/speedgrader/grade"))
+        .post(&format!("/courses/{course}/gradebook/update_submission"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .add_cookie(csrf_cookie)
         .add_header("content-type", "application/x-www-form-urlencoded")
@@ -2840,7 +3923,7 @@ async fn speedgrader_grade_round_trip() {
     assert_eq!(
         location,
         format!(
-            "/courses/{course}/gradebook/speedgrader?assignment_id={essay}&student_id={student}&graded=1"
+            "/courses/{course}/gradebook/speed_grader?assignment_id={essay}&student_id={student}&graded=1"
         )
     );
 
@@ -2912,7 +3995,7 @@ async fn speedgrader_grade_round_trip() {
             .expect("count");
     let (csrf_cookie2, _) = csrf_pair();
     let resp = server
-        .post(&format!("/courses/{course}/gradebook/speedgrader/grade"))
+        .post(&format!("/courses/{course}/gradebook/update_submission"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .add_cookie(csrf_cookie2)
         .add_header("content-type", "application/x-www-form-urlencoded")
@@ -2931,7 +4014,7 @@ async fn speedgrader_grade_round_trip() {
     // mirroring the REST "score is required" validation.
     let (csrf_cookie3, csrf3) = csrf_pair();
     let resp = server
-        .post(&format!("/courses/{course}/gradebook/speedgrader/grade"))
+        .post(&format!("/courses/{course}/gradebook/update_submission"))
         .add_cookie(session_cookie(teacher, "teacher"))
         .add_cookie(csrf_cookie3)
         .add_header("content-type", "application/x-www-form-urlencoded")
@@ -2967,7 +4050,7 @@ async fn speedgrader_next_prev_navigation() {
     // Open student2 directly; "Previous" goes to student (name order).
     let resp = server
         .get(&format!(
-            "/courses/{course}/gradebook/speedgrader?assignment_id={essay}&student_id={student2}"
+            "/courses/{course}/gradebook/speed_grader?assignment_id={essay}&student_id={student2}"
         ))
         .add_cookie(session_cookie(teacher, "teacher"))
         .await;
@@ -2984,7 +4067,7 @@ async fn speedgrader_next_prev_navigation() {
     assert_eq!(
         href,
         format!(
-            "/courses/{course}/gradebook/speedgrader?assignment_id={essay}&#38;student_id={student}"
+            "/courses/{course}/gradebook/speed_grader?assignment_id={essay}&#38;student_id={student}"
         ),
         "prev link preserves assignment + points at the name-previous student"
     );

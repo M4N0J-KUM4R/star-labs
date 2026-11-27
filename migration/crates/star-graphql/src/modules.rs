@@ -124,9 +124,6 @@ impl Module {
         self.position
     }
 
-    /// Canvas `Module.published` is `published?` (module_type.rb:142);
-    /// star-lms stores publish state in `workflow_state` ('active' is
-    /// published), like the REST module handlers.
     async fn published(&self) -> bool {
         self.workflow_state == "active"
     }
@@ -204,14 +201,11 @@ impl ModuleItem {
         ID(self.id.to_string())
     }
 
-    /// Canvas `ModuleItem.module` (module_item_type.rb:56).
     async fn module(&self, ctx: &Context<'_>) -> Result<Option<Module>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         fetch_module(&gctx.pool, self.module_id).await
     }
 
-    /// Canvas `ModuleItem.title` with the ContentTag title fallback
-    /// (explicit title, else the linked content title).
     async fn title(&self) -> Option<&str> {
         self.title.as_deref()
     }
@@ -224,8 +218,6 @@ impl ModuleItem {
         self.position
     }
 
-    /// Canvas `ModuleItem.published` (module_item_type.rb:76); star-lms
-    /// stores publish state in `workflow_state` (0065).
     async fn published(&self) -> bool {
         self.workflow_state == "active"
     }
@@ -333,8 +325,6 @@ pub(crate) async fn fetch_module_page(
     })
 }
 
-/// Fetch one page of a module's items (all of them when `first` is None —
-/// the plain `moduleItems` field is unpaginated in Canvas).
 async fn fetch_module_items(
     pool: &PgPool,
     module_id: i64,
@@ -394,7 +384,6 @@ async fn fetch_module_items(
     Ok(edges)
 }
 
-/// Paginated variant driving `Module.moduleItemsConnection` (first+1 read).
 async fn fetch_module_item_page(
     pool: &PgPool,
     module_id: i64,
@@ -528,9 +517,6 @@ async fn user_enrolled_in_course(
 // Single-record fetch (Canvas `Query.node` / `Query.legacyNode`)
 // ---------------------------------------------------------------------------
 
-/// Canvas `Query.node(type: ModuleItem)` — a module item by legacy id.
-///
-/// Unlike [`fetch_module_item`] this does not apply the course visibility
 /// gate; the `Node` resolver applies the permission check itself.
 pub(crate) async fn fetch_module_item_unchecked(
     pool: &PgPool,

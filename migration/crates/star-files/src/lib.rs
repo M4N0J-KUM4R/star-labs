@@ -63,7 +63,7 @@
 
 use axum::{
     extract::{Path, Query, State},
-    http::{header::HeaderName, HeaderValue, StatusCode},
+    http::{header::HeaderName, HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
     routing::{delete, get, options, post, put},
     Json, Router,
@@ -78,7 +78,9 @@ use star_common::{ApiError, ApiJson, AppState};
 use star_auth::AuthUser;
 
 mod content;
+mod file_gaps;
 mod folders_api;
+pub mod ui;
 mod upload;
 
 // ─── folder constants ──────────────────────────────────────────────────────
@@ -90,9 +92,9 @@ const UNFILED_FOLDER_NAME: &str = "unfiled";
 /// Canvas fallback when the folder name is blank (infer_full_name).
 const DEFAULT_FOLDER_NAME: &str = "New Folder";
 /// Canvas Attachment::CONTEXT_DEFAULT_QUOTA (50 decimal megabytes).
-const DEFAULT_STORAGE_QUOTA: i64 = 50_000_000;
+pub(crate) const DEFAULT_STORAGE_QUOTA: i64 = 50_000_000;
 /// Canvas Attachment::MINIMUM_SIZE_FOR_QUOTA.
-const MINIMUM_SIZE_FOR_QUOTA: i64 = 512;
+pub(crate) const MINIMUM_SIZE_FOR_QUOTA: i64 = 512;
 /// Canvas folders_and_files pagination default (Api.per_page default: 25).
 const MIXED_LIST_PER_PAGE: i64 = 25;
 
@@ -108,7 +110,7 @@ const MIXED_LIST_PER_PAGE: i64 = 25;
 /// *completed* enrollment (the state Canvas' `DELETE /enrollments/:id`
 /// leaves behind, `app/models/enrollment.rb:957`) still counts as course
 /// membership. Only a deleted enrollment loses the membership.
-async fn user_enrolled_or_admin(
+pub(crate) async fn user_enrolled_or_admin(
     db: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -169,7 +171,7 @@ async fn user_has_granular_file_perm(
 /// permissions need an enrollment in `active_or_pending_by_date`
 /// (`app/models/enrollment.rb:1438`), so a concluded enrollment does not
 /// count.
-async fn user_teacher_of_course(
+pub(crate) async fn user_teacher_of_course(
     db: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -954,6 +956,7 @@ pub fn canvas_licenses() -> Vec<LicenseEntry> {
 pub fn router() -> axum::Router<AppState> {
     Router::new()
         .merge(folders_api::router())
+        .merge(file_gaps::file_gaps_routes())
         .route("/courses/{courseId}/files", get(list_course_files))
         .route("/courses/{courseId}/files", post(create_file))
         .route(
@@ -1022,10 +1025,6 @@ pub fn router() -> axum::Router<AppState> {
         )
         .route("/courses/{courseId}/folders", get(list_course_folders))
         .route("/courses/{courseId}/folders", post(create_course_folder))
-        .route(
-            "/courses/{courseId}/folders/root",
-            get(get_course_root_folder),
-        )
         // Canvas deep folders/files endpoints.
         .route(
             "/courses/{courseId}/folders/{id}/duplicates",
@@ -1094,7 +1093,6 @@ pub fn router() -> axum::Router<AppState> {
             "/courses/{courseId}/folders/media",
             get(media_folder_course),
         )
-        .route("/users/{userId}/folders/media", get(media_folder_user))
         // context-scoped show — simple :id lookup in context
         .route("/courses/{courseId}/folders/{id}", get(show_course_folder))
         .route("/users/{userId}/folders/{id}", get(show_user_folder))
@@ -1792,12 +1790,15 @@ async fn post_file(
 
 /// GET /files/{id}/create_success — Canvas files#api_create_success (GET).
 /// Returns the file record after upload finalisation with preview URLs.
+/// The response carries the Canvas `open_cors` headers (the browser that
+/// just finished the S3 upload reads this cross-origin).
 async fn create_success_get(
     State(state): State<AppState>,
     Path(file_id): Path<i64>,
     Query(_params): Query<CreateSuccessQuery>,
+    headers: HeaderMap,
     auth: AuthUser,
-) -> Result<Json<CreateSuccessResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let sql = format!("{ATTACHMENT_SELECT} WHERE f.id = $1 AND f.workflow_state <> 'deleted'");
     let row = sqlx::query_as::<_, AttachmentRow>(&sql)
         .bind(file_id)
@@ -1809,11 +1810,15 @@ async fn create_success_get(
         || is_admin(&auth);
     let attachment = AttachmentResponse::from_row(row, can_manage);
 
-    Ok(Json(CreateSuccessResponse {
-        attachment,
-        preview_url: None,
-        enhanced_preview_url: None,
-    }))
+    Ok(open_cors(
+        Json(CreateSuccessResponse {
+            attachment,
+            preview_url: None,
+            enhanced_preview_url: None,
+        })
+        .into_response(),
+        &headers,
+    ))
 }
 
 /// POST /files/{id}/create_success — Canvas files#api_create_success (POST).
@@ -1821,8 +1826,9 @@ async fn create_success_get(
 async fn create_success_post(
     State(state): State<AppState>,
     Path(file_id): Path<i64>,
+    headers: HeaderMap,
     auth: AuthUser,
-) -> Result<Json<AttachmentResponse>, ApiError> {
+) -> Result<Response, ApiError> {
     let sql = format!("{ATTACHMENT_SELECT} WHERE f.id = $1 AND f.workflow_state <> 'deleted'");
     let row = sqlx::query_as::<_, AttachmentRow>(&sql)
         .bind(file_id)
@@ -1832,17 +1838,60 @@ async fn create_success_post(
 
     let can_manage = user_teacher_of_course(&state.db, auth.id, row.course_id, &auth.role).await?
         || is_admin(&auth);
-    Ok(Json(AttachmentResponse::from_row(row, can_manage)))
+    Ok(open_cors(
+        Json(AttachmentResponse::from_row(row, can_manage)).into_response(),
+        &headers,
+    ))
 }
 
-/// OPTIONS /files/{id}/create_success — CORS preflight for the upload finalisation route.
-async fn create_success_options() -> impl IntoResponse {
+/// The CORS headers Canvas puts on the upload finalisation routes
+/// (`open_cors`, app/controllers/files_controller.rb:1812-1818, applied via
+/// `before_action :open_cors` to api_create/api_create_success at :178-181).
+/// The Origin is reflected (Canvas echoes the request origin rather than
+/// keeping a whitelist) together with credentials, so the browser — which
+/// just POSTed the S3 upload completion — can read the JSON reply.
+fn open_cors(mut response: Response, headers: &HeaderMap) -> Response {
+    let origin = headers
+        .get(axum::http::header::ORIGIN)
+        .and_then(|value| value.to_str().ok());
+    if let Some(origin) = origin {
+        if let Ok(value) = HeaderValue::from_str(origin) {
+            response
+                .headers_mut()
+                .insert("access-control-allow-origin", value);
+        }
+    }
+    response.headers_mut().insert(
+        "access-control-allow-credentials",
+        HeaderValue::from_static("true"),
+    );
+    response.headers_mut().insert(
+        "access-control-allow-methods",
+        HeaderValue::from_static("POST, PUT, DELETE, GET, OPTIONS"),
+    );
+    response.headers_mut().insert(
+        "access-control-request-method",
+        HeaderValue::from_static("*"),
+    );
+    response.headers_mut().insert(
+        "access-control-allow-headers",
+        HeaderValue::from_static(
+            "Origin, X-Requested-With, Content-Type, Accept, Authorization, Accept-Encoding",
+        ),
+    );
+    response
+}
+
+/// OPTIONS /files/{id}/create_success — CORS preflight for the upload
+/// finalisation route (Canvas routes.rb:2238 routes OPTIONS to
+/// `api_create_success_cors`, which answers `head :ok` after `open_cors`).
+async fn create_success_options(headers: HeaderMap) -> impl IntoResponse {
     let mut resp = Response::new(axum::body::Body::empty());
     resp.headers_mut().insert(
         axum::http::header::ALLOW,
-        axum::http::HeaderValue::from_static("GET,POST,OPTIONS"),
+        HeaderValue::from_static("GET,POST,OPTIONS"),
     );
-    resp
+    open_cors(resp, &headers)
 }
 
 /// POST /files/{id}/reset_verifier — Canvas files#reset_verifier.
@@ -2320,22 +2369,6 @@ async fn get_folder(
         return Err(ApiError::Forbidden);
     }
 
-    Ok(Json(FolderResponse::from_row(folder, can_manage)))
-}
-
-/// GET /courses/{courseId}/folders/root — Canvas folders#show with id=root.
-async fn get_course_root_folder(
-    State(state): State<AppState>,
-    Path(course_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<FolderResponse>, ApiError> {
-    let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
-    let allowed =
-        can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
-    if !allowed {
-        return Err(ApiError::Forbidden);
-    }
-    let folder = ensure_root_folder(&state.db, course_id).await?;
     Ok(Json(FolderResponse::from_row(folder, can_manage)))
 }
 
@@ -3116,12 +3149,25 @@ async fn resolve_path_group_named(
 
 // ── context-scoped show ──────────────────────────────────────────────────────
 
-/// GET /courses/{courseId}/folders/{id}
+/// GET /courses/{courseId}/folders/{id} — Canvas folders#show in the course
+/// context. Canvas also resolves the literal id `root` to the course's root
+/// folder (`folders_controller.rb#show`), so that spelling lives here rather
+/// than in a separate route.
 async fn show_course_folder(
     State(state): State<AppState>,
     Path((course_id, id)): Path<(i64, String)>,
     auth: AuthUser,
 ) -> Result<Json<FolderResponse>, ApiError> {
+    let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
+    let allowed =
+        can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+    if id == "root" {
+        let folder = ensure_root_folder_for(&state.db, "Course", course_id).await?;
+        return Ok(Json(FolderResponse::from_row(folder, can_manage)));
+    }
     let folder_id: i64 = id.parse().map_err(|_| ApiError::NotFound)?;
     let folder = fetch_folder(&state.db, folder_id)
         .await?
@@ -3129,16 +3175,11 @@ async fn show_course_folder(
     if folder.context_type != "Course" || folder.context_id != course_id {
         return Err(ApiError::NotFound);
     }
-    let can_manage = user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await?;
-    let allowed =
-        can_manage || user_enrolled_or_admin(&state.db, auth.id, course_id, &auth.role).await?;
-    if !allowed {
-        return Err(ApiError::Forbidden);
-    }
     Ok(Json(FolderResponse::from_row(folder, can_manage)))
 }
 
-/// GET /users/{userId}/folders/{id}
+/// GET /users/{userId}/folders/{id} — Canvas folders#show in the user context,
+/// including the literal id `root`.
 async fn show_user_folder(
     State(state): State<AppState>,
     Path((user_id, id)): Path<(i64, String)>,
@@ -3146,6 +3187,10 @@ async fn show_user_folder(
 ) -> Result<Json<FolderResponse>, ApiError> {
     if auth.id != user_id && !is_admin(&auth) {
         return Err(ApiError::Forbidden);
+    }
+    if id == "root" {
+        let folder = ensure_root_folder_for(&state.db, "User", user_id).await?;
+        return Ok(Json(FolderResponse::from_row(folder, true)));
     }
     let folder_id: i64 = id.parse().map_err(|_| ApiError::NotFound)?;
     let folder = fetch_folder(&state.db, folder_id)
@@ -3157,7 +3202,8 @@ async fn show_user_folder(
     Ok(Json(FolderResponse::from_row(folder, true)))
 }
 
-/// GET /groups/{groupId}/folders/{id}
+/// GET /groups/{groupId}/folders/{id} — Canvas folders#show in the group
+/// context, including the literal id `root`.
 async fn show_group_folder(
     State(state): State<AppState>,
     Path((group_id, id)): Path<(i64, String)>,
@@ -3166,6 +3212,10 @@ async fn show_group_folder(
     let can_view = user_can_read_group(&state.db, auth.id, group_id, &auth.role).await?;
     if !can_view {
         return Err(ApiError::Forbidden);
+    }
+    if id == "root" {
+        let folder = ensure_root_folder_for(&state.db, "Group", group_id).await?;
+        return Ok(Json(FolderResponse::from_row(folder, false)));
     }
     let folder_id: i64 = id.parse().map_err(|_| ApiError::NotFound)?;
     let folder = fetch_folder(&state.db, folder_id)
@@ -3365,56 +3415,6 @@ async fn media_folder_course(
     )
     .await?;
     Ok(Json(FolderResponse::from_row(folder, can_manage)))
-}
-
-/// GET /users/{userId}/folders/media
-async fn media_folder_user(
-    State(state): State<AppState>,
-    Path(user_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<FolderResponse>, ApiError> {
-    if auth.id != user_id && !is_admin(&auth) {
-        return Err(ApiError::Forbidden);
-    }
-    // Find or create user root.
-    let roots: Vec<FolderRow> = sqlx::query_as::<_, FolderRow>(
-        format!(
-            "{FOLDER_SELECT} WHERE f.context_type = 'User' AND f.context_id = $1 \
-             AND f.parent_folder_id IS NULL AND f.workflow_state <> 'deleted' LIMIT 1"
-        )
-        .as_str(),
-    )
-    .bind(user_id)
-    .fetch_all(&state.db)
-    .await?;
-    let root_id = if let Some(root) = roots.first() {
-        root.id
-    } else {
-        let new_root = NewFolder {
-            name: "my files".to_string(),
-            full_name: "my files".to_string(),
-            context_type: "User".to_string(),
-            context_id: user_id,
-            parent_id: 0,
-            workflow_state: "visible".to_string(),
-            position: 0,
-            locked: false,
-            lock_at: None,
-            unlock_at: None,
-            for_submissions: false,
-        };
-        insert_folder(&state.db, new_root).await?.id
-    };
-    let folder = find_or_create_unique_folder(
-        &state.db,
-        "User",
-        user_id,
-        root_id,
-        MEDIA_TYPE,
-        "Uploaded Media",
-    )
-    .await?;
-    Ok(Json(FolderResponse::from_row(folder, true)))
 }
 
 // ── user-scoped duplicates ──────────────────────────────────────────────────

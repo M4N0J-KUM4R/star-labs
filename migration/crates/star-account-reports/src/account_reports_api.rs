@@ -100,7 +100,7 @@ pub fn router() -> Router<AppState> {
 /// perform that action"}]}`. `star_common::ApiError` renders a plain text body,
 /// so the JSON shapes are restored here.
 #[derive(Debug)]
-enum ReportError {
+pub(crate) enum ReportError {
     Api(ApiError),
 }
 
@@ -642,8 +642,8 @@ struct ReportRow {
     attachment_id: Option<i64>,
     workflow_state: String,
     report_type: Option<String>,
-    progress: Option<i64>,
-    current_line: Option<i64>,
+    progress: Option<i32>,
+    current_line: Option<i32>,
     parameters: Option<String>,
     start_at: Option<NaiveDateTime>,
     end_at: Option<NaiveDateTime>,

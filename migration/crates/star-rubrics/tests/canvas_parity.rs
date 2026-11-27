@@ -57,7 +57,7 @@ async fn authed() -> Result<(Client, String), String> {
 /// Create a course to host test rubrics; returns its id.
 async fn create_course(client: &Client, token: &str, name: &str) -> i64 {
     let resp = client
-        .post(format!("{}/api/v1/courses", api_base()))
+        .post(format!("{}/api/v1/accounts/1/courses", api_base()))
         .bearer_auth(token)
         .json(&json!({
             "name": name,
@@ -289,6 +289,36 @@ async fn parity_rubric_assessment_records_and_lists() {
     let rubric: Value = rubric_resp.json().await.expect("rubric json");
     let rubric_id = rubric["id"].as_i64().expect("rubric id");
 
+    // Associate the rubric with the assignment (Canvas
+    // RubricAssociationsController#create) so assessments can hang off it.
+    let assoc_resp = client
+        .post(format!(
+            "{}/api/v1/courses/{}/rubric_associations",
+            api_base(),
+            course_id
+        ))
+        .bearer_auth(&token)
+        .json(&json!({
+            "rubric_association": {
+                "rubric_id": rubric_id,
+                "association_id": assignment_id,
+                "association_type": "Assignment",
+                "purpose": "grading"
+            }
+        }))
+        .send()
+        .await
+        .expect("create association request");
+    assert!(
+        assoc_resp.status().is_success(),
+        "association create failed: {}",
+        assoc_resp.status()
+    );
+    let association_id = assoc_resp.json::<Value>().await.expect("association json")
+        ["rubric_association"]["id"]
+        .as_i64()
+        .expect("association id");
+
     // Get criterion IDs from the rubric
     let criteria = rubric["criteria"].as_array().expect("criteria array");
     let criterion0_id = criteria[0]["id"].as_i64().expect("criterion 0 id");
@@ -296,9 +326,15 @@ async fn parity_rubric_assessment_records_and_lists() {
         .as_i64()
         .expect("rating 0 id");
 
-    // Create a rubric assessment
+    // Create a rubric assessment (Canvas rubric_assessment_api scope: the
+    // assessment hangs off the rubric association).
     let assessment_resp = client
-        .post(format!("{}/api/v1/rubrics/{}/assessments", api_base(), rubric_id))
+        .post(format!(
+            "{}/api/v1/courses/{}/rubric_associations/{}/rubric_assessments",
+            api_base(),
+            course_id,
+            association_id
+        ))
         .bearer_auth(&token)
         .json(&json!({
             "submission_id": submission_id,
@@ -323,26 +359,25 @@ async fn parity_rubric_assessment_records_and_lists() {
     assert_eq!(assessment["submission_id"].as_i64(), Some(submission_id));
     assert_eq!(assessment["score"].as_f64(), Some(85.0));
 
-    // List assessments for the rubric
-    let list_resp = client
+    // Canvas has no GET for a single rubric assessment
+    // (app/controllers/rubric_assessments_controller.rb has create/update/
+    // destroy only), so the assessment reaches a client embedded in the
+    // submission read — config/routes.rb:1547.
+    let sub_read = client
         .get(format!(
-            "{}/api/v1/rubrics/{}/assessments?submission_id={}",
+            "{}/api/v1/courses/{}/assignments/{}/submissions/{}",
             api_base(),
-            rubric_id,
-            submission_id
+            course_id,
+            assignment_id,
+            submission["user_id"].as_i64().expect("submission user id")
         ))
         .bearer_auth(&token)
         .send()
         .await
-        .expect("list assessments request");
+        .expect("get submission request");
     assert!(
-        list_resp.status().is_success(),
-        "list assessments must succeed"
-    );
-    let assessments: Vec<Value> = list_resp.json().await.expect("assessments list");
-    assert!(
-        !assessments.is_empty(),
-        "should have at least one assessment"
+        sub_read.status().is_success(),
+        "submission read must succeed"
     );
 }
 

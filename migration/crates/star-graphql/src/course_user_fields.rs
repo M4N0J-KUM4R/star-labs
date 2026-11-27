@@ -69,7 +69,6 @@ impl Account {
         &self.name
     }
 
-    /// Canvas renames the DB `workflow_state` to `state` (like `Course`).
     async fn state(&self) -> &str {
         &self.workflow_state
     }
@@ -176,7 +175,6 @@ struct UserJoinRow {
     id: i64,
     name: String,
     email: String,
-    /// COALESCE(sortable_name, name) — never null, like the REST handlers.
     sortable_name: String,
     avatar_url: Option<String>,
     created_at: DateTime<Utc>,
@@ -298,10 +296,6 @@ pub(crate) async fn is_account_admin_in_chain(
     Ok(row.is_some())
 }
 
-/// Fetch one account by its SIS source id.
-///
-/// Canvas `Query.account(sisId:)` resolves through the SIS integration.
-/// star-db's `accounts` table carries `sis_source_id` (migration 0240), so
 /// the lookup is the same shape as Canvas'.
 pub(crate) async fn fetch_account_by_sis_id(
     pool: &PgPool,

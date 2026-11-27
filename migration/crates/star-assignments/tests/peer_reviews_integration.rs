@@ -636,3 +636,236 @@ async fn peer_review_destroy_removes_review_and_recomputes_count() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// Section twins + allocate (issue #52)
+// ---------------------------------------------------------------------------
+
+async fn seed_section(pool: &PgPool, course_id: i64, name: &str) -> i64 {
+    sqlx::query_scalar("INSERT INTO course_sections (course_id, name) VALUES ($1, $2) RETURNING id")
+        .bind(course_id)
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .expect("seed section")
+}
+
+#[tokio::test]
+async fn section_twins_reuse_course_peer_review_logic() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let alice = seed_user(&pool, &prefix, "Alice", "student").await;
+    let bob = seed_user(&pool, &prefix, "Bob", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    let section = seed_section(&pool, course, "Section A").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, alice, course, "student").await;
+    seed_enrollment(&pool, bob, course, "student").await;
+    let assignment = seed_assignment(&pool, course, "Essay", 100.0).await;
+    let submission = seed_submission(&pool, assignment, alice, "my essay").await;
+
+    // Section-scoped index lists reviews like the course route.
+    seed_review(&pool, assignment, submission, alice, bob).await;
+    let listed = server
+        .get(&format!(
+            "/sections/{section}/assignments/{assignment}/peer_reviews"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(listed.status_code(), 200, "{}", listed.text());
+    let rows: Vec<Value> = listed.json();
+    assert!(rows
+        .iter()
+        .any(|r| r["asset_id"].as_i64() == Some(submission)
+            && r["assessor_id"].as_i64() == Some(bob)));
+
+    // The submission-scoped twin narrows to one submission.
+    let narrowed = server
+        .get(&format!(
+            "/sections/{section}/assignments/{assignment}/submissions/{submission}/peer_reviews"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(narrowed.status_code(), 200);
+    let narrowed_rows: Vec<Value> = narrowed.json();
+    assert!(narrowed_rows
+        .iter()
+        .all(|r| r["asset_id"].as_i64() == Some(submission)));
+
+    // Section-scoped create assigns another reviewer.
+    let carol = seed_user(&pool, &prefix, "Carol", "student").await;
+    seed_enrollment(&pool, carol, course, "student").await;
+    let created = server
+        .post(&format!(
+            "/sections/{section}/assignments/{assignment}/submissions/{submission}/peer_reviews"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "user_id": carol }))
+        .await;
+    assert_eq!(created.status_code(), 201, "{}", created.text());
+    let created_body: Value = created.json();
+    assert_eq!(created_body["assessor_id"].as_i64(), Some(carol));
+    assert_eq!(created_body["user_id"].as_i64(), Some(alice));
+
+    // Section-scoped destroy removes it again.
+    let deleted = server
+        .delete(&format!(
+            "/sections/{section}/assignments/{assignment}/submissions/{submission}/peer_reviews"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .json(&json!({ "user_id": carol }))
+        .await;
+    assert_eq!(deleted.status_code(), 200, "{}", deleted.text());
+
+    // A section from another course never resolves: 404 before any logic.
+    let other_course = seed_course(&pool, &prefix, "Other").await;
+    let other_section = seed_section(&pool, other_course, "Section B").await;
+    let foreign = server
+        .get(&format!(
+            "/sections/{other_section}/assignments/{assignment}/peer_reviews"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(foreign.status_code(), 404);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn allocate_assigns_available_submissions_up_to_count() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let alice = seed_user(&pool, &prefix, "Alice", "student").await;
+    let bob = seed_user(&pool, &prefix, "Bob", "student").await;
+    let carol = seed_user(&pool, &prefix, "Carol", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    for user in [alice, bob, carol] {
+        seed_enrollment(&pool, user, course, "student").await;
+    }
+    let assignment = seed_assignment(&pool, course, "Essay", 100.0).await;
+    // Peer reviews enabled with two reviews per student.
+    sqlx::query("UPDATE assignments SET peer_reviews = TRUE, peer_review_count = 2 WHERE id = $1")
+        .bind(assignment)
+        .execute(&pool)
+        .await
+        .expect("enable peer reviews");
+
+    // Alice's own submission exists (allocate never assigns your own work).
+    let alice_sub = seed_submission(&pool, assignment, alice, "my essay").await;
+    let bob_sub = seed_submission(&pool, assignment, bob, "bob's essay").await;
+    let carol_sub = seed_submission(&pool, assignment, carol, "carol's essay").await;
+
+    // include[]=user enriches both sides of every allocated review.
+    let enriched = server
+        .post(&format!(
+            "/courses/{course}/assignments/{assignment}/allocate?include[]=user"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(alice, "student"))
+        .await;
+    assert_eq!(enriched.status_code(), 200, "{}", enriched.text());
+    let rows: Vec<Value> = enriched.json();
+    assert_eq!(rows.len(), 2, "peer_review_count = 2 allocations");
+    assert!(rows
+        .iter()
+        .all(|r| r["assessor_id"].as_i64() == Some(alice)));
+    assert!(rows
+        .iter()
+        .all(|r| r["workflow_state"].as_str() == Some("assigned")));
+    assert!(rows.iter().all(|r| !r["user"].is_null()));
+    assert!(rows.iter().all(|r| !r["assessor"].is_null()));
+    let assets: Vec<i64> = rows.iter().filter_map(|r| r["asset_id"].as_i64()).collect();
+    assert!(assets.contains(&bob_sub));
+    assert!(assets.contains(&carol_sub));
+    assert!(!assets.contains(&alice_sub));
+
+    // The limit is enforced on the next call (Canvas: 403 "You have been
+    // assigned all required peer reviews").
+    let again = server
+        .post(&format!(
+            "/courses/{course}/assignments/{assignment}/allocate"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(alice, "student"))
+        .await;
+    assert_eq!(again.status_code(), 403);
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn allocate_enforces_canvas_guards() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let alice = seed_user(&pool, &prefix, "Alice", "student").await;
+    let bob = seed_user(&pool, &prefix, "Bob", "student").await;
+    let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let course = seed_course(&pool, &prefix, "Course").await;
+    seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_enrollment(&pool, alice, course, "student").await;
+    seed_enrollment(&pool, bob, course, "student").await;
+    let assignment = seed_assignment(&pool, course, "Essay", 100.0).await;
+    sqlx::query("UPDATE assignments SET peer_reviews = FALSE, peer_review_count = 1 WHERE id = $1")
+        .bind(assignment)
+        .execute(&pool)
+        .await
+        .expect("disable peer reviews");
+
+    // Peer reviews disabled on the assignment: 403.
+    let disabled = server
+        .post(&format!(
+            "/courses/{course}/assignments/{assignment}/allocate"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(alice, "student"))
+        .await;
+    assert_eq!(disabled.status_code(), 403);
+
+    // Enabled, but the caller is a teacher (not a student): 403.
+    sqlx::query("UPDATE assignments SET peer_reviews = TRUE WHERE id = $1")
+        .bind(assignment)
+        .execute(&pool)
+        .await
+        .expect("enable peer reviews");
+    let teacher_call = server
+        .post(&format!(
+            "/courses/{course}/assignments/{assignment}/allocate"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(teacher_call.status_code(), 403);
+
+    // Unenrolled caller: 403.
+    let stranger = server
+        .post(&format!(
+            "/courses/{course}/assignments/{assignment}/allocate"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
+        .await;
+    assert_eq!(stranger.status_code(), 403);
+
+    // Enrolled student with no other submissions to review: 400 with the
+    // Canvas message.
+    let none = server
+        .post(&format!(
+            "/courses/{course}/assignments/{assignment}/allocate"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(alice, "student"))
+        .await;
+    assert_eq!(none.status_code(), 400, "{}", none.text());
+    assert!(none.text().contains("no peer reviews available"));
+
+    // Unknown assignment in the course: 404.
+    let missing = server
+        .post(&format!("/courses/{course}/assignments/99999999/allocate"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(alice, "student"))
+        .await;
+    assert_eq!(missing.status_code(), 404);
+
+    cleanup(&pool, &prefix).await;
+}

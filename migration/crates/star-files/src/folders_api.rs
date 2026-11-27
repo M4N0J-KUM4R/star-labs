@@ -358,8 +358,9 @@ async fn list_group_folder_duplicates(
 ) -> Result<Json<DuplicatesResponse>, ApiError> {
     let group = load_group(&state.db, group_id).await?;
 
-    // Canvas: the endpoint needs both a11y feature flags on the site admin.
-    if !duplicates_feature_enabled(&state.db).await? {
+    // Canvas: the endpoint needs both a11y feature flags on the context's
+    // root account (a group's root comes through its course's chain).
+    if !duplicates_feature_enabled(&state.db, group_id).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -403,13 +404,29 @@ async fn list_group_folder_duplicates(
     }))
 }
 
-/// Canvas `Account.site_admin.feature_enabled?` for the two flags that gate
-/// the duplicates endpoint.
-async fn duplicates_feature_enabled(db: &PgPool) -> Result<bool, ApiError> {
+/// Canvas `@context.root_account.feature_enabled?` for the two flags that
+/// gate the duplicates endpoint — the root of the group's course account
+/// chain (test isolation, issue #75: tests toggle these on their own
+/// dedicated accounts, so the lookup must follow the context, not a
+/// globally-first root).
+async fn duplicates_feature_enabled(db: &PgPool, group_id: i64) -> Result<bool, ApiError> {
     let root: Option<(i64,)> = sqlx::query_as(
-        "SELECT id FROM accounts WHERE parent_account_id IS NULL AND workflow_state <> 'deleted' \
-         ORDER BY id ASC LIMIT 1",
+        r#"
+        WITH RECURSIVE chain AS (
+            SELECT a.id, a.parent_account_id
+            FROM accounts a
+            JOIN courses c ON c.account_id = a.id
+            JOIN groups g ON g.course_id = c.id
+            WHERE g.id = $1
+            UNION ALL
+            SELECT a.id, a.parent_account_id
+            FROM accounts a
+            JOIN chain ON a.id = chain.parent_account_id
+        )
+        SELECT id FROM chain WHERE parent_account_id IS NULL LIMIT 1
+        "#,
     )
+    .bind(group_id)
     .fetch_optional(db)
     .await?;
     let Some((root_id,)) = root else {

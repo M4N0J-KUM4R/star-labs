@@ -108,12 +108,19 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
 
     star_db::MIGRATOR.run(&pool).await.expect("run migrations");
 
+    // Serialize the (idempotent) DDL across the parallel tests of this
+    // binary: concurrent CREATE INDEX IF NOT EXISTS still races in
+    // pg_class with 23505 duplicate key.
+    static DDL_MUTEX: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+        std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+    let _ddl_guard = DDL_MUTEX.lock().await;
     for statement in PAGE_VIEWS_DDL {
         sqlx::query(statement)
             .execute(&pool)
             .await
             .expect("create the page view tables");
     }
+    drop(_ddl_guard);
 
     let state = AppState {
         db: pool.clone(),

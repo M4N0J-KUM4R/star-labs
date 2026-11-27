@@ -1,9 +1,8 @@
 //! Mount-smoke test for star-account-reports (scaffold, issue #138).
 //!
-//! Verifies the crate's router mounts and answers unknown paths with 404
-//! (not 500, not open) exactly the way star-http assembles it. No domain
-//! routes exist yet — the smoke request targets a path owned by this crate's
-//! future route set.
+//! Verifies the crate's router mounts and answers exactly the way star-http
+//! assembles it: the implemented domain routes require auth (401 without a
+//! token) and genuinely unknown paths fall through to axum's 404.
 //!
 //! Conventions (mirrors star-enrollments):
 //! - Skipped cleanly when DATABASE_URL is not set (prints SKIP and returns).
@@ -43,13 +42,23 @@ async fn unknown_path_is_404() {
         return;
     };
 
-    // A path this crate will own once routes land. With the scaffold's empty
-    // router it must 404 (axum default fallback), never 500 or open.
-    let resp = server.get("/accounts/1/reports_extra").await;
+    // The account-reports routes have landed (issue lane): the real route
+    // now answers 401 without auth instead of the scaffold 404.
+    let resp = server.get("/accounts/999999999/reports").await;
+    assert_eq!(
+        resp.status_code(),
+        401,
+        "implemented route must require auth; body: {}",
+        resp.text()
+    );
+    // A genuinely unknown path still falls through to axum's 404.
+    let resp = server
+        .get("/accounts/999999999/reports_extra_unknown")
+        .await;
     assert_eq!(
         resp.status_code(),
         404,
-        "scaffold must 404 on unimplemented paths; body: {}",
+        "unknown paths must 404; body: {}",
         resp.text()
     );
 }

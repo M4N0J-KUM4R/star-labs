@@ -44,7 +44,7 @@ test.describe('journey 4: teacher discussions + inbox', () => {
     await login(page, DISCUSSIONS_TEACHER_EMAIL);
 
     // Discussions index via the course: topic table renders the seeded topic.
-    await page.goto(`/courses/${COURSE_ID}/discussions`);
+    await page.goto(`/courses/${COURSE_ID}/discussion_topics`);
     await expect(page.locator('#discussion_topics_table')).toBeVisible();
     const row = page.locator(`#discussion_topic_${TOPIC_ID}`);
     await expect(row).toBeVisible();
@@ -57,7 +57,7 @@ test.describe('journey 4: teacher discussions + inbox', () => {
     // Open the topic: body + both entries render.
     await row.locator('.discussion-topic-title').click();
     await expect(page).toHaveURL(
-      new RegExp(`/courses/${COURSE_ID}/discussions/${TOPIC_ID}/?$`),
+      new RegExp(`/courses/${COURSE_ID}/discussion_topics/${TOPIC_ID}/?$`),
     );
     await expect(
       page.locator('.discussion-topic .message.user_content'),
@@ -74,7 +74,7 @@ test.describe('journey 4: teacher discussions + inbox', () => {
 
     // PRG lands back on the topic; the reply is visible.
     await expect(page).toHaveURL(
-      new RegExp(`/courses/${COURSE_ID}/discussions/${TOPIC_ID}/?$`),
+      new RegExp(`/courses/${COURSE_ID}/discussion_topics/${TOPIC_ID}/?$`),
     );
     await expect(
       page.getByText('Teacher reply via the browser smoke journey'),
@@ -84,10 +84,10 @@ test.describe('journey 4: teacher discussions + inbox', () => {
   test('teacher creates a new topic through the form', async ({ page }) => {
     await login(page, DISCUSSIONS_TEACHER_EMAIL);
 
-    await page.goto(`/courses/${COURSE_ID}/discussions`);
+    await page.goto(`/courses/${COURSE_ID}/discussion_topics`);
     await page.locator('#add_discussion').click();
     await expect(page).toHaveURL(
-      new RegExp(`/courses/${COURSE_ID}/discussions/new$`),
+      new RegExp(`/courses/${COURSE_ID}/discussion_topics/new$`),
     );
 
     await page.getByLabel('Title', { exact: true }).fill('Smoke Journey New Topic');
@@ -98,7 +98,7 @@ test.describe('journey 4: teacher discussions + inbox', () => {
 
     // PRG lands on the new topic page.
     await expect(page).toHaveURL(
-      new RegExp(`/courses/${COURSE_ID}/discussions/\\d+/?$`),
+      new RegExp(`/courses/${COURSE_ID}/discussion_topics/\\d+/?$`),
     );
     await expect(page.locator('.discussion-topic__title')).toHaveText(
       'Smoke Journey New Topic',
@@ -108,7 +108,7 @@ test.describe('journey 4: teacher discussions + inbox', () => {
     ).toContainText('Created by the browser-smoke teacher journey.');
 
     // And the index lists it (.first(): re-runs keep topics from earlier runs).
-    await page.goto(`/courses/${COURSE_ID}/discussions`);
+    await page.goto(`/courses/${COURSE_ID}/discussion_topics`);
     await expect(
       page
         .locator('.discussion-topic-title', {
@@ -185,7 +185,7 @@ test.describe('journey 4: student discussions + inbox', () => {
     await login(page, DISCUSSIONS_STUDENT_EMAIL);
 
     // Discussions index: no create button for a student.
-    await page.goto(`/courses/${COURSE_ID}/discussions`);
+    await page.goto(`/courses/${COURSE_ID}/discussion_topics`);
     await expect(page.locator('#add_discussion')).toHaveCount(0);
 
     // A topic without a read row renders the unread marker.
@@ -198,9 +198,9 @@ test.describe('journey 4: student discussions + inbox', () => {
     // Opening the topic clears the marker on the next index fetch.
     await unreadRow.locator('.discussion-topic-title').click();
     await expect(page).toHaveURL(
-      new RegExp(`/courses/${COURSE_ID}/discussions/\\d+/?$`),
+      new RegExp(`/courses/${COURSE_ID}/discussion_topics/\\d+/?$`),
     );
-    await page.goto(`/courses/${COURSE_ID}/discussions`);
+    await page.goto(`/courses/${COURSE_ID}/discussion_topics`);
     unreadRow = page.locator('.discussion-topic-row.unread', {
       hasText: 'Smoke Journey New Topic',
     });

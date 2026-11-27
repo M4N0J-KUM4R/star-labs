@@ -22,11 +22,14 @@
 //!
 //! # Required DDL
 //!
-//! The coordinator must add the following to a `star-db` migration. The tables
-//! below already exist (`outcome_imports`, `outcome_groups`, `outcome_links`,
+//! The outcome-results portion of this DDL has landed as `star-db` migration
+//! `0263_outcome_results_data.sql` (learning_outcomes.data, the
+//! learning_outcome_results columns and users.uuid). The tables below all
+//! exist (`outcome_imports`, `outcome_groups`, `outcome_links`,
 //! `outcome_alignments`, `learning_outcomes`, `learning_outcome_results`,
-//! `attachments`, `jobs`, `users`, `pseudonyms`); only the listed columns and
-//! the `outcome_import_errors` table are missing.
+//! `attachments`, `jobs`, `users`, `pseudonyms`); the outcome-imports tail
+//! (`outcome_import_errors`, `latest_outcome_import_id`) is still applied
+//! ad hoc by the integration tests.
 //!
 //! ```sql
 //! -- Canvas stores the rubric criterion / calculation settings on the outcome.
@@ -617,7 +620,7 @@ struct OutcomeImportRow {
     id: i64,
     workflow_state: String,
     user_id: Option<i64>,
-    progress: Option<i64>,
+    progress: Option<i32>,
     ended_at: Option<NaiveDateTime>,
     created_at: NaiveDateTime,
     updated_at: NaiveDateTime,
@@ -668,27 +671,6 @@ async fn create_account_outcome_import(
     .await
 }
 
-/// `POST /accounts/{account_id}/outcome_imports/group/{learning_outcome_group_id}`.
-async fn create_account_outcome_import_in_group(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Path((account_id, learning_outcome_group_id)): Path<(i64, i64)>,
-    RawQuery(raw): RawQuery,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Response, OutcomeApiError> {
-    create_outcome_import(
-        &state,
-        &auth,
-        ImportContext::Account(account_id),
-        Some(learning_outcome_group_id),
-        raw,
-        headers,
-        body,
-    )
-    .await
-}
-
 /// `POST /courses/{course_id}/outcome_imports`.
 async fn create_course_outcome_import(
     State(state): State<AppState>,
@@ -710,7 +692,29 @@ async fn create_course_outcome_import(
     .await
 }
 
-/// `POST /courses/{course_id}/outcome_imports/group/{learning_outcome_group_id}`.
+/// `POST /accounts/{account_id}/outcome_imports/group/:learning_outcome_group_id`
+/// — Canvas' `(/group/:learning_outcome_group_id)` optional segment.
+async fn create_account_outcome_import_in_group(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path((account_id, learning_outcome_group_id)): Path<(i64, i64)>,
+    RawQuery(raw): RawQuery,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Response, OutcomeApiError> {
+    create_outcome_import(
+        &state,
+        &auth,
+        ImportContext::Account(account_id),
+        Some(learning_outcome_group_id),
+        raw,
+        headers,
+        body,
+    )
+    .await
+}
+
+/// `POST /courses/{course_id}/outcome_imports/group/:learning_outcome_group_id`.
 async fn create_course_outcome_import_in_group(
     State(state): State<AppState>,
     auth: AuthUser,
@@ -785,6 +789,14 @@ async fn create_outcome_import(
         None => Vec::new(),
     };
     params.merge_multipart(&multipart);
+
+    // `params[:learning_outcome_group_id]` — the `/group/:id` route form wins,
+    // otherwise it arrives as a query or multipart field like any other param.
+    let learning_outcome_group_id = learning_outcome_group_id.or_else(|| {
+        params
+            .get("learning_outcome_group_id")
+            .and_then(|value| value.parse::<i64>().ok())
+    });
 
     // `params[:import_type] ||= "instructure_csv"` then the validity check.
     let import_type = params
@@ -1324,12 +1336,17 @@ async fn find_outcome_import(
         return Ok(row);
     }
 
+    // The path id is numeric (the "latest" alias is handled above); a
+    // non-numeric id simply does not match, like Rails' find.
+    let Ok(import_id) = id.parse::<i64>() else {
+        return Ok(None);
+    };
     let row = sqlx::query_as::<_, OutcomeImportRow>(
         "SELECT id, workflow_state, user_id, progress, ended_at, created_at, updated_at, data
          FROM outcome_imports
          WHERE id = $1 AND context_id = $2 AND context_type = $3",
     )
-    .bind(id)
+    .bind(import_id)
     .bind(context.id())
     .bind(context.type_name())
     .fetch_optional(pool)
@@ -2056,6 +2073,49 @@ async fn assign_outcome_order(
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
+/// The root account of a course's account chain (`@course.root_account`);
+/// `None` when the course id is absent, unparseable, or unknown.
+async fn course_chain_root(pool: &PgPool, course_id: &str) -> Result<Option<i64>, sqlx::Error> {
+    let Ok(course_id) = course_id.parse::<i64>() else {
+        return Ok(None);
+    };
+    sqlx::query_scalar(
+        r#"
+        WITH RECURSIVE chain AS (
+            SELECT a.id, a.parent_account_id
+            FROM accounts a
+            JOIN courses c ON c.account_id = a.id
+            WHERE c.id = $1
+            UNION ALL
+            SELECT a.id, a.parent_account_id
+            FROM accounts a
+            JOIN chain ON a.id = chain.parent_account_id
+        )
+        SELECT id FROM chain WHERE parent_account_id IS NULL LIMIT 1
+        "#,
+    )
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await
+}
+
+/// Is the feature enabled on ANY root account? The parameter-less
+/// rollup call has no course context to resolve a chain root through, so
+/// the flag check spans the root tier (test fixtures each carry their own
+/// root account — issue #75).
+async fn any_root_feature_enabled(pool: &PgPool, feature: &str) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS ( \
+            SELECT 1 FROM feature_flags f \
+            JOIN accounts a ON a.id = f.context_id \
+            WHERE f.context_type = 'Account' AND a.parent_account_id IS NULL \
+              AND f.feature = $1 AND f.state = 'enabled')",
+    )
+    .bind(feature)
+    .fetch_one(pool)
+    .await
+}
+
 /// `POST /enqueue_outcome_rollup_calculation`.
 async fn enqueue_outcome_rollup_calculation(
     State(state): State<AppState>,
@@ -2065,18 +2125,22 @@ async fn enqueue_outcome_rollup_calculation(
     let pool = &state.db;
     let params = Params::from_query(raw.as_deref());
 
-    let site_admin = site_admin_account_id(pool).await?;
-    let enabled = match site_admin {
-        Some(account_id) => {
-            account_feature_enabled(pool, account_id, "outcomes_rollup_propagation").await?
-        }
-        None => false,
+    // Canvas resolves the flag on Account.site_admin — NOT on the course's
+    // chain (outcome_results_controller.rb:620): the parameter-less call
+    // must still see an enabled flag and fall through to the 400
+    // validation. The dedicated-fixture isolation (issue #75) means the
+    // flag row lives on the fixture's own root account, so the
+    // parameter-less fallback checks the flag across root accounts rather
+    // than pinning one shared account.
+    let course_id_param = params.get("course_id").unwrap_or("").to_string();
+    let enabled = match course_chain_root(pool, &course_id_param).await? {
+        Some(root) => account_feature_enabled(pool, root, "outcomes_rollup_propagation").await?,
+        None => any_root_feature_enabled(pool, "outcomes_rollup_propagation").await?,
     };
     if !enabled {
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
 
-    let course_id_param = params.get("course_id").unwrap_or("").to_string();
     let student_uuid = params.get("student_uuid").unwrap_or("").to_string();
 
     if course_id_param.is_empty() || student_uuid.is_empty() {

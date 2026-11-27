@@ -117,8 +117,11 @@ struct PageViewRow {
     controller: Option<String>,
     action: Option<String>,
     interaction_seconds: Option<f64>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    // The `page_views` table comes from the canvas-schema dump
+    // (migration 0225) where `created_at`/`updated_at` are `timestamp` (no
+    // time zone); sqlx cannot decode those into `DateTime<Utc>`.
+    created_at: NaiveDateTime,
+    updated_at: NaiveDateTime,
     developer_key_id: Option<i64>,
     developer_key_name: Option<String>,
     user_request: Option<bool>,
@@ -360,8 +363,8 @@ fn page_view_json(row: &PageViewRow) -> Value {
         "controller": row.controller,
         "action": row.action,
         "interaction_seconds": row.interaction_seconds,
-        "created_at": row.created_at,
-        "updated_at": row.updated_at,
+        "created_at": Utc.from_utc_datetime(&row.created_at),
+        "updated_at": Utc.from_utc_datetime(&row.updated_at),
         "developer_key_id": row.developer_key_id,
         "user_request": row.user_request,
         "render_time": row.render_time,

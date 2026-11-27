@@ -405,9 +405,12 @@ async fn the_student_reads_the_questions_of_their_own_submission() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
+    // The world fixture seeds five questions (multiple choice, numerical,
+    // precision numerical, essay and fill-in-the-blanks), so the
+    // include[]=quiz_question side collection carries all five.
     assert_eq!(
         body["quiz_questions"].as_array().expect("questions").len(),
-        4
+        5
     );
     assert_eq!(
         body["meta"]["primaryCollection"],

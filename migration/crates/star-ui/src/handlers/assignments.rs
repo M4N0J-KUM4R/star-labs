@@ -692,7 +692,10 @@ async fn render_form(
             row.assignment_group_id.unwrap_or(0),
             row.workflow_state == "published",
             "Edit Assignment".to_string(),
-            format!("/courses/{course_id}/assignments/{aid}/edit"),
+            // Canvas' update is PATCH/PUT on the member path (`resources
+            // :assignments`, config/routes.rb:270); the form posts there with
+            // the hidden `_method=patch` field that method_override rewrites.
+            format!("/courses/{course_id}/assignments/{aid}"),
         )
     } else {
         (
@@ -704,7 +707,9 @@ async fn render_form(
             0,
             true,
             "Add Assignment".to_string(),
-            format!("/courses/{course_id}/assignments/new"),
+            // Canvas' create is the collection POST from `resources
+            // :assignments` (config/routes.rb:270), not a POST on /new.
+            format!("/courses/{course_id}/assignments"),
         )
     };
 
@@ -786,7 +791,7 @@ pub async fn assignment_new(
     render_form(&app, &user, course_id, None, None, String::new(), jar).await
 }
 
-/// POST /courses/{id}/assignments/new — create from the form.
+/// POST /courses/{id}/assignments — create from the form.
 ///
 /// Teacher-or-admin only (403 otherwise, including CSRF failures); on
 /// validation error the form re-renders with the message (422), on success a
@@ -928,7 +933,14 @@ pub async fn assignment_edit(
     .await
 }
 
-/// POST /courses/{id}/assignments/{aid}/edit — update from the form.
+/// PATCH/PUT /courses/{id}/assignments/{aid} — update from the form.
+///
+/// Canvas routes update as PATCH/PUT on `/courses/:id/assignments/:id`
+/// (`resources :assignments`, canvas config/routes.rb:270) and its form
+/// reaches those verbs through Rack::MethodOverride, which rewrites the
+/// posted `_method` field before routing. `crate::method_override` is that
+/// shim, so the form posts to the member path with the verb Rails draws —
+/// there is no POST twin on `/edit`, in the route table or in the template.
 pub async fn assignment_update(
     State(app): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -1032,7 +1044,7 @@ pub struct SubmitForm {
     pub body: String,
 }
 
-/// POST /courses/{id}/assignments/{aid}/submit — student text-entry submit.
+/// POST /courses/{id}/assignments/{aid}/submissions — student text-entry submit.
 ///
 /// Same upsert SQL shape as the REST `create_submission`
 /// (ON CONFLICT (assignment_id, user_id) DO UPDATE), gated to enrolled

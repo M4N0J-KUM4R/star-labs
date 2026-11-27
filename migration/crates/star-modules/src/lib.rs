@@ -26,6 +26,7 @@ use star_auth::AuthUser;
 
 mod conditional_release;
 mod course_pacing;
+mod module_gaps;
 mod pace_apis;
 mod pace_contexts;
 
@@ -553,7 +554,9 @@ async fn create_or_update_item(
     Ok(Json(item))
 }
 
-/// DELETE /modules/{id}/items/{itemId}
+/// Body of `DELETE /courses/{courseId}/modules/{moduleId}/items/{itemId}`
+/// (canvas-src/config/routes.rb:2351 — Canvas declares item destroy only
+/// inside the course+module nest, so there is no flat `/modules/{id}/items`).
 async fn delete_module_item(
     State(state): State<AppState>,
     Path((module_id, item_id)): Path<(i64, i64)>,
@@ -1235,8 +1238,8 @@ async fn create_course_module_item(
     create_or_update_item(State(state), Path(module_id), auth, Json(body)).await
 }
 
-/// DELETE /courses/{courseId}/modules/{moduleId}/items/{itemId} — Canvas v1 alias
-/// for DELETE /modules/{id}/items/{itemId}.
+/// DELETE /courses/{courseId}/modules/{moduleId}/items/{itemId} — Canvas' only
+/// item-destroy route (canvas-src/config/routes.rb:2351).
 async fn delete_course_module_item(
     State(state): State<AppState>,
     Path((course_id, module_id, item_id)): Path<(i64, i64, i64)>,
@@ -1272,10 +1275,12 @@ pub fn router() -> Router<AppState> {
         .merge(pace_contexts::router())
         // The pace of a section and the pace of a student enrollment.
         .merge(pace_apis::router())
-        .route(
-            "/courses/{courseId}/modules",
-            get(list_modules).post(create_module),
-        )
+        // The PORT-B parity-gap routes (module item redirect/sequence,
+        // mark_read, select_mastery_path, batch_update, duplicate, relock,
+        // concrete mastery-paths stats).
+        .merge(module_gaps::module_gaps_routes())
+        .route("/courses/{courseId}/modules", get(list_modules))
+        .route("/courses/{courseId}/modules", post(create_module))
         .route(
             "/courses/{courseId}/modules/{moduleId}/items",
             get(list_module_items).post(create_course_module_item),

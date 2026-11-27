@@ -3,7 +3,7 @@ method = "POST"
 path = "/api/v1/accounts/6/self_registration"
 
 [request.headers]
-Authorization = "Bearer __REPLAY_TOKEN__"
+Authorization = "Bearer c55d0731ffb0240ad824ab398d92be2a4b930c9af0a5f76a74df263902080ed6"
 
 [response]
 status = 403
@@ -13,7 +13,7 @@ cache-control = "no-cache"
 content-type = "application/json; charset=utf-8"
 referrer-policy = "no-referrer-when-downgrade"
 set-cookie = "[..]"
-x-canvas-meta = "o=users;n=create_self_registered_user;b=2067028;m=2067028;u=0.[..];y=0.00;d=0.00;rlr=600.0;"
+x-canvas-meta = "o=users;n=create_self_registered_user;b=2074132;m=2074132;u=0.02;y=0.00;d=0.00;rlr=600.0;"
 x-content-type-options = "nosniff"
 x-download-options = "noopen"
 x-permitted-cross-domain-policies = "none"

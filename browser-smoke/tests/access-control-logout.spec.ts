@@ -31,9 +31,16 @@ test.describe('journey 3: access control + logout', () => {
     await login(page, TEACHER_EMAIL, SMOKE_PASSWORD);
 
     // The logout button lives inside form[action="/logout"] with the hidden
-    // _csrf field, so a plain click submits a valid double-submit form.
+    // `_method=delete` + `_csrf` fields — Canvas' own shape, `form_tag
+    // logout_path, method: :delete` (app/views/login/logout_confirm.html.erb:39)
+    // over `delete "logout" => "login#destroy"` (config/routes.rb:930). A plain
+    // click submits the POST, the shell's method_override rewrites the verb, and
+    // the double-submit pair still validates.
     const logoutForm = page.locator('form[action="/logout"]');
     await expect(logoutForm).toBeVisible();
+    await expect(
+      logoutForm.locator('input[name="_method"][value="delete"]'),
+    ).toHaveCount(1);
     await page.locator('#global_nav_logout_link').click();
 
     await expect(page).toHaveURL(/\/login\/?$/);

@@ -228,7 +228,7 @@ async fn list_filters_by_bucket_and_emits_canvas_info() {
 
     // queued bucket: only due queued jobs, oldest first, numeric info.
     let resp = server
-        .get("/jobs2?bucket=queued")
+        .get("/jobs2/queued")
         .add_header(AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(
@@ -260,7 +260,7 @@ async fn list_filters_by_bucket_and_emits_canvas_info() {
 
     // future bucket: info is the scheduled timestamp.
     let resp = server
-        .get("/jobs2?bucket=future")
+        .get("/jobs2/future")
         .add_header(AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200);
@@ -279,7 +279,7 @@ async fn list_filters_by_bucket_and_emits_canvas_info() {
 
     // failed bucket: failed-only columns are present.
     let resp = server
-        .get("/jobs2?bucket=failed")
+        .get("/jobs2/failed")
         .add_header(AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 200);
@@ -294,24 +294,27 @@ async fn list_filters_by_bucket_and_emits_canvas_info() {
     assert!(item["failed_at"].is_string());
     assert!(item["info"].is_string(), "failed info is a timestamp");
 
-    // No bucket: rows carry an inferred bucket instead of info.
+    // Canvas' bucket listing takes the tag filter and omits `bucket`.
     let resp = server
-        .get(&format!("/jobs2?tag={prefix}-queued-newer"))
+        .get(&format!("/jobs2/queued?tag={prefix}-queued-newer"))
         .add_header(AUTHORIZATION, bearer.clone())
         .await;
-    assert_eq!(resp.status_code(), 200);
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let rows: Value = resp.json();
     assert_eq!(rows.as_array().map(Vec::len), Some(1));
-    assert_eq!(rows[0]["bucket"], "queued");
     assert_eq!(rows[0]["workflow_state"], Value::Null);
-    assert!(rows[0].get("info").is_none());
+    assert!(
+        rows[0].get("bucket").is_none(),
+        "bucket listings omit bucket"
+    );
+    assert!(rows[0].get("info").is_some(), "bucket listings carry info");
 
-    // Unknown bucket is rejected (Canvas requires a valid bucket).
+    // Canvas routes only the four bucket names, so any other segment is a 404.
     let resp = server
-        .get("/jobs2?bucket=completed")
+        .get("/jobs2/completed")
         .add_header(AUTHORIZATION, bearer)
         .await;
-    assert_eq!(resp.status_code(), 400, "invalid bucket must be a 400");
+    assert_eq!(resp.status_code(), 404, "unknown bucket must be a 404");
 
     cleanup(&pool, &prefix).await;
 }
@@ -599,7 +602,7 @@ async fn clusters_report_counts_and_jobs2_is_admin_only() {
     // Non-admins are forbidden on every Jobs V2 route; anonymous is 401.
     let teacher_bearer = auth(teacher, "teacher");
     let resp = server
-        .get("/jobs2")
+        .get("/jobs2/queued")
         .add_header(AUTHORIZATION, teacher_bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 403);
@@ -619,7 +622,7 @@ async fn clusters_report_counts_and_jobs2_is_admin_only() {
         .await;
     assert_eq!(resp.status_code(), 403);
 
-    assert_eq!(server.get("/jobs2").await.status_code(), 401);
+    assert_eq!(server.get("/jobs2/queued").await.status_code(), 401);
     assert_eq!(server.get("/jobs2/clusters").await.status_code(), 401);
     assert_eq!(server.post("/jobs2/1/requeue").await.status_code(), 401);
 
@@ -644,10 +647,12 @@ async fn grouped_info_groups_queued_jobs_by_tag() {
     // is not disturbed by jobs other tests seed in the same database.
     let base = now - Duration::days(100);
 
-    // Two jobs share a tag, one job has its own tag.
+    // Two jobs share a tag, one job has its own tag. Canvas groups by the RAW
+    // tag column (`JobsV2Controller#grouped_info` → `.group(@group)`), so the
+    // two pp jobs must carry the same tag to land in one group.
     seed_strand_job(
         &pool,
-        &format!("{prefix}-pp-1"),
+        &format!("{prefix}-pp"),
         None,
         None,
         base,
@@ -658,7 +663,7 @@ async fn grouped_info_groups_queued_jobs_by_tag() {
     .await;
     seed_strand_job(
         &pool,
-        &format!("{prefix}-pp-2"),
+        &format!("{prefix}-pp"),
         None,
         None,
         base + Duration::hours(1),
@@ -713,7 +718,7 @@ async fn grouped_info_groups_queued_jobs_by_tag() {
     assert_eq!(rows.len(), 2, "two tag groups: {rows:?}");
 
     // Default order is the bucket's info column (oldest run_at first).
-    assert_eq!(rows[0]["tag"], format!("{prefix}-pp-1"));
+    assert_eq!(rows[0]["tag"], format!("{prefix}-pp"));
     assert_eq!(rows[0]["count"], 2);
     assert!(
         rows[0]["info"]
@@ -738,7 +743,7 @@ async fn grouped_info_groups_queued_jobs_by_tag() {
     let rows: Value = resp.json();
     let rows = rows.as_array().expect("grouped info is a JSON array");
     assert_eq!(rows[0]["count"], 2);
-    assert_eq!(rows[0]["tag"], format!("{prefix}-pp-1"));
+    assert_eq!(rows[0]["tag"], format!("{prefix}-pp"));
 
     // Canvas paginates with per_page / page.
     let resp = server
@@ -749,7 +754,7 @@ async fn grouped_info_groups_queued_jobs_by_tag() {
     let rows: Value = resp.json();
     let rows = rows.as_array().expect("grouped info is a JSON array");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["tag"], format!("{prefix}-pp-1"));
+    assert_eq!(rows[0]["tag"], format!("{prefix}-pp"));
 
     let resp = server
         .get(&format!("/jobs2/queued/by_tag?per_page=1&page=2&{window}"))

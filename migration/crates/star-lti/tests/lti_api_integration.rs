@@ -60,6 +60,14 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
     Some((server, pool, run_prefix()))
 }
 
+#[allow(dead_code)]
+fn auth(user_id: i64, role: &str) -> String {
+    format!(
+        "Bearer {}",
+        star_auth::create_token(user_id, role, JWT_SECRET).expect("mint token")
+    )
+}
+
 async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO users (name, email, password_hash, role) \
@@ -74,7 +82,7 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
     .expect("seed user")
 }
 
-async fn seed_tool(pool: &PgPool, prefix: &str) -> i64 {
+async fn seed_tool(pool: &PgPool, prefix: &str, consumer_key: &str) -> i64 {
     sqlx::query_scalar(
         "INSERT INTO external_tools (name, url, domain, consumer_key, consumer_id, \
              shared_secret, workflow_state, tool_configuration) \
@@ -82,16 +90,16 @@ async fn seed_tool(pool: &PgPool, prefix: &str) -> i64 {
          RETURNING id",
     )
     .bind(format!("{prefix}-tool"))
-    .bind(CONSUMER_KEY)
+    .bind(consumer_key)
     .bind(SHARED_SECRET)
     .fetch_one(pool)
     .await
     .expect("seed tool")
 }
 
-async fn cleanup(pool: &PgPool, prefix: &str) {
+async fn cleanup(pool: &PgPool, prefix: &str, consumer_key: &str) {
     sqlx::query("DELETE FROM lti_nonces WHERE consumer_key = $1")
-        .bind(CONSUMER_KEY)
+        .bind(consumer_key)
         .execute(pool)
         .await
         .ok();
@@ -108,10 +116,11 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
 }
 
 /// The OAuth 1.0a header of a signed request.
-fn oauth_header(path: &str, nonce: &str) -> String {
+fn oauth_header(path: &str, consumer_key: &str, nonce: &str) -> String {
     let timestamp = chrono::Utc::now().timestamp();
     let mut normalized = [
         percent_encode(CONSUMER_KEY),
+        percent_encode(consumer_key),
         percent_encode(nonce),
         percent_encode("HMAC-SHA1"),
         percent_encode(&timestamp.to_string()),
@@ -120,7 +129,7 @@ fn oauth_header(path: &str, nonce: &str) -> String {
     let base = format!(
         "{}&{}&{}",
         percent_encode("POST"),
-        percent_encode(&format!("http://localhost{path}")),
+        percent_encode(&format!("http://canvas.test{path}")),
         percent_encode(&normalized.join("&"))
     );
     let mut mac =
@@ -129,7 +138,7 @@ fn oauth_header(path: &str, nonce: &str) -> String {
     let signature = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
 
     format!(
-        "OAuth oauth_consumer_key=\"{CONSUMER_KEY}\", oauth_signature_method=\"HMAC-SHA1\", \
+        "OAuth oauth_consumer_key=\"{consumer_key}\", oauth_signature_method=\"HMAC-SHA1\", \
          oauth_timestamp=\"{timestamp}\", oauth_nonce=\"{nonce}\", oauth_signature=\"{signature}\""
     )
 }
@@ -155,21 +164,23 @@ async fn a_signed_grade_passback_is_accepted() {
         return;
     };
     let _user = seed_user(&pool, &prefix, "User", "student").await;
-    seed_tool(&pool, &prefix).await;
+    let consumer_key = format!("{prefix}-key");
+    seed_tool(&pool, &prefix, &consumer_key).await;
 
-    let path = "/api/lti/v1/tools/consumer-key/grade_passback";
+    let path = format!("/api/lti/v1/tools/{consumer_key}/grade_passback");
     let resp = server
-        .post(path)
+        .post(&path)
+        .add_header(axum::http::header::HOST, "canvas.test")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            oauth_header(path, "nonce-grade-1"),
+            oauth_header(&path, &consumer_key, "nonce-grade-1"),
         )
         .add_header(axum::http::header::CONTENT_TYPE, "application/xml")
         .bytes("<?xml version=\"1.0\"?><imsx_POXEnvelopeRequest/>".into())
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
 
-    cleanup(&pool, &prefix).await;
+    cleanup(&pool, &prefix, &consumer_key).await;
 }
 
 #[tokio::test]
@@ -179,16 +190,18 @@ async fn an_unsigned_request_is_unauthorized() {
         return;
     };
     let _user = seed_user(&pool, &prefix, "User", "student").await;
-    seed_tool(&pool, &prefix).await;
+    let consumer_key = format!("{prefix}-key");
+    seed_tool(&pool, &prefix, &consumer_key).await;
 
+    let path = format!("/api/lti/v1/tools/{consumer_key}/grade_passback");
     let resp = server
-        .post("/api/lti/v1/tools/consumer-key/grade_passback")
+        .post(&path)
         .add_header(axum::http::header::CONTENT_TYPE, "application/xml")
         .bytes("<?xml version=\"1.0\"?><imsx_POXEnvelopeRequest/>".into())
         .await;
     assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
 
-    cleanup(&pool, &prefix).await;
+    cleanup(&pool, &prefix, &consumer_key).await;
 }
 
 #[tokio::test]
@@ -198,14 +211,16 @@ async fn a_reused_nonce_is_unauthorized() {
         return;
     };
     let _user = seed_user(&pool, &prefix, "User", "student").await;
-    seed_tool(&pool, &prefix).await;
+    let consumer_key = format!("{prefix}-key");
+    seed_tool(&pool, &prefix, &consumer_key).await;
 
-    let path = "/api/lti/v1/tools/consumer-key/ext_grade_passback";
+    let path = format!("/api/lti/v1/tools/{consumer_key}/ext_grade_passback");
     let resp = server
-        .post(path)
+        .post(&path)
+        .add_header(axum::http::header::HOST, "canvas.test")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            oauth_header(path, "nonce-reused"),
+            oauth_header(&path, &consumer_key, "nonce-reused"),
         )
         .bytes("{}".into())
         .await;
@@ -213,16 +228,17 @@ async fn a_reused_nonce_is_unauthorized() {
 
     // The same nonce a second time is rejected.
     let resp = server
-        .post(path)
+        .post(&path)
+        .add_header(axum::http::header::HOST, "canvas.test")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            oauth_header(path, "nonce-reused"),
+            oauth_header(&path, &consumer_key, "nonce-reused"),
         )
         .bytes("{}".into())
         .await;
     assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
 
-    cleanup(&pool, &prefix).await;
+    cleanup(&pool, &prefix, &consumer_key).await;
 }
 
 #[tokio::test]
@@ -232,18 +248,20 @@ async fn a_missing_tool_is_a_not_found() {
         return;
     };
     let _user = seed_user(&pool, &prefix, "User", "student").await;
+    let consumer_key = format!("{prefix}-key");
 
     let path = "/api/lti/v1/tools/unknown-tool/grade_passback";
     let resp = server
         .post(path)
+        .add_header(axum::http::header::HOST, "canvas.test")
         .add_header(
             axum::http::header::AUTHORIZATION,
-            oauth_header(path, "nonce-missing"),
+            oauth_header(path, &consumer_key, "nonce-missing"),
         )
         .add_header(axum::http::header::CONTENT_TYPE, "application/xml")
         .bytes("{}".into())
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
 
-    cleanup(&pool, &prefix).await;
+    cleanup(&pool, &prefix, &consumer_key).await;
 }

@@ -106,16 +106,21 @@ async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str
     .expect("seed enrollment");
 }
 
-/// A tool of the course — the resource links point at a launch URL.
-async fn seed_tool(pool: &PgPool, prefix: &str, course_id: i64, url: &str) -> i64 {
+/// An LTI 1.3 tool of the course — the Canvas-parity `context_external_tools`
+/// table that `lti_resource_links` is foreign-keyed to. The resource links
+/// point at its launch URL.
+async fn seed_tool(pool: &PgPool, prefix: &str, course_id: i64, account_id: i64, url: &str) -> i64 {
     sqlx::query_scalar(
-        "INSERT INTO external_tools (name, url, domain, course_id, context_type, context_id, \
-             workflow_state, tool_configuration) \
-         VALUES ($1, $2, 'tool.test', $3, 'Course', $3, 'active', '{}') RETURNING id",
+        "INSERT INTO context_external_tools \
+         (name, url, domain, context_type, context_id, workflow_state, lti_version, \
+          root_account_id, shared_secret, consumer_key, created_at, updated_at) \
+         VALUES ($1, $2, 'tool.test', 'Course', $3, 'active', '1.3', $4, 'secret', 'key', \
+          now(), now()) RETURNING id",
     )
     .bind(format!("{prefix}-tool"))
     .bind(url)
     .bind(course_id)
+    .bind(account_id)
     .fetch_one(pool)
     .await
     .expect("seed tool")
@@ -130,7 +135,7 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     .execute(pool)
     .await
     .ok();
-    sqlx::query("DELETE FROM external_tools WHERE name LIKE $1")
+    sqlx::query("DELETE FROM context_external_tools WHERE name LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
         .await
@@ -170,7 +175,7 @@ async fn a_resource_link_is_created_read_updated_and_deleted() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     let url = "https://tool.test/launch";
-    seed_tool(&pool, &prefix, course, url).await;
+    seed_tool(&pool, &prefix, course, account, url).await;
 
     let resp = server
         .post(&format!("/courses/{course}/lti_resource_links"))
@@ -201,28 +206,35 @@ async fn a_resource_link_is_created_read_updated_and_deleted() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
 
-    // Update it.
+    // Update it — Canvas only permits `url`, `custom` and
+    // `context_external_tool_id` on update (resource_links_controller.rb
+    // `update`), so the lifecycle pin exercises `custom`.
     let resp = server
         .put(&format!("/courses/{course}/lti_resource_links/{id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "title": "Renamed" }))
+        .json(&json!({ "custom": { "hint": "renamed" } }))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
-    assert_eq!(body["title"], "Renamed");
+    assert_eq!(body["custom"]["hint"], "renamed");
+    assert_eq!(body["title"], "A link");
 
-    // Delete it.
+    // Delete it — Canvas soft-deletes and returns the link JSON.
     let resp = server
         .delete(&format!("/courses/{course}/lti_resource_links/{id}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
-    assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let body: Value = resp.json();
+    assert_eq!(body["workflow_state"], "deleted");
 
     cleanup(&pool, &prefix).await;
 }
 
+/// An unknown URL is rejected — Canvas 422 with the `invalid_url` code
+/// (`Lti::ResourceLinksController` `validate_url` / tool lookup).
 #[tokio::test]
-async fn an_unknown_url_is_a_bad_request() {
+async fn an_unknown_url_is_unprocessable() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -237,7 +249,7 @@ async fn an_unknown_url_is_a_bad_request() {
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "url": "https://unknown.test/launch" }))
         .await;
-    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
+    assert_eq!(resp.status_code(), 422, "body: {}", resp.text());
 
     cleanup(&pool, &prefix).await;
 }

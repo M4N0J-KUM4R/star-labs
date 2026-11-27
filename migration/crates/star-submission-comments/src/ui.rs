@@ -30,8 +30,8 @@ pub struct CommentFeedRow {
     pub created_at: DateTime<Utc>,
 }
 
-/// Load the active comment feed of a submission, oldest first (the same
-/// ordering the REST `list_comments` uses).
+/// Load the active comment feed of a submission, oldest first — the ordering
+/// Canvas' `include[]=submission_comments` feed uses.
 pub async fn load_submission_comment_feed(
     db: &PgPool,
     submission_id: i64,
@@ -56,7 +56,7 @@ pub async fn load_submission_comment_feed(
 /// SpeedGrader comment box.
 ///
 /// Same validation ("comment cannot be empty") and same INSERT shape as the
-/// REST `create_comment_for` handler (issue #55 crate); file attachments
+/// shared comment write in star-assignments (issue #55 crate); file attachments
 /// are not part of the form UI, so `file_ids` is not modeled here.
 pub async fn create_comment_record(
     db: &PgPool,

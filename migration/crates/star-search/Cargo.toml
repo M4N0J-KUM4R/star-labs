@@ -5,11 +5,11 @@ edition.workspace = true
 
 [dependencies]
 star-common = { path = "../star-common" }
-axum = { workspace = true }
 star-auth = { path = "../star-auth" }
-sqlx = { workspace = true }
+axum = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sqlx = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 
@@ -18,4 +18,3 @@ star-db = { path = "../star-db" }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 axum-test = { workspace = true }
-serde_json = { workspace = true }

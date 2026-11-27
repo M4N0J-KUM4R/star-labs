@@ -3,7 +3,7 @@
 //!
 //! Gated by STAR_PARITY_TESTS=1. Targets live API at http://127.0.0.1:8080.
 //!
-//! Covers all 13 routes across grading_periods (7) and grading_standards_api (6):
+//! Covers all 12 routes across grading_periods (7) and grading_standards_api (5):
 //!   1. POST   /accounts/{accountId}/grading_periods       — create grading period(s)
 //!   2. GET    /accounts/{accountId}/grading_periods       — list account grading periods
 //!   3. GET    /grading_periods/{id}                       — get grading period
@@ -14,9 +14,8 @@
 //!   8. GET    /grading_schemes/{id}                       — get grading scheme
 //!   9. PUT    /grading_schemes/{id}                       — update grading scheme
 //!  10. DELETE /grading_schemes/{id}                      — soft-delete grading scheme
-//!  11. GET    /courses/{courseId}/final_grade             — compute letter grade
-//!  12. GET    /courses/{courseId}/grading_standards       — list standards
-//!  13. POST   /courses/{courseId}/grading_standards      — create grading standard
+//!  11. GET    /courses/{courseId}/grading_standards       — list standards
+//!  12. POST   /courses/{courseId}/grading_standards      — create grading standard
 
 use reqwest::blocking::{Client, Response};
 use serde::Deserialize;
@@ -40,12 +39,6 @@ pub struct GradingStandardResponse {
     pub created_at: String,
     pub updated_at: String,
     pub grading_scheme: Option<Vec<GradingSchemeEntryResponse>>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct FinalGradeResponse {
-    pub score: f64,
-    pub letter: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -301,35 +294,6 @@ fn test_delete_grading_standard() {
         get_resp.status().as_u16(),
         404,
         "Deleted standard should 404"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Test 5: GET /courses/{courseId}/final_grade → computes letter grade
-// ---------------------------------------------------------------------------
-#[test]
-#[ignore = "requires STAR_API_BASE/STAR_PARITY_API_URL pointing to a local migration service"]
-fn test_final_grade_letter_computation() {
-    if env::var("STAR_PARITY_TESTS").as_deref() != Ok("1") {
-        eprintln!("STAR_PARITY_TESTS=1 not set — skipping live API test");
-        return;
-    }
-
-    let course_id = env::var("STAR_PARITY_COURSE_ID").unwrap_or("1".to_string());
-    // This test requires: a course with submissions graded and a grading standard.
-    // If the course has no grading standard, letter will be null — this is expected.
-    let user_id = env::var("STAR_PARITY_USER_ID").unwrap_or("1".to_string());
-
-    let resp = do_get(&format!(
-        "/courses/{course_id}/final_grade?user_id={user_id}"
-    ));
-    assert_eq!(resp.status().as_u16(), 200);
-    let fg: FinalGradeResponse = resp.json().unwrap();
-    // We cannot assert on exact letter without known grade data,
-    // but we verify the response shape.
-    println!(
-        "final_grade response: score={}, letter={:?}",
-        fg.score, fg.letter
     );
 }
 

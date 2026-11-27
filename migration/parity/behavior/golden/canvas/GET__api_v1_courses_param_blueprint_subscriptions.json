@@ -1,0 +1,30 @@
+{
+  "route": "GET /api/v1/courses/:course_id/blueprint_subscriptions",
+  "source": "canvas-src/config/routes.rb:2858 (subscriptions_index); canvas-src/app/controllers/master_courses/master_templates_controller.rb:611-616 renders subs.map { child_subscription_json(sub) } as a BARE ARRAY; canvas-src/lib/api/v1/master_courses.rb:127-133 (id = sub.id, template_id = sub.master_template_id, blueprint_course = course_summary_json(sub.master_template.course) with NO opts, so :117-122 teachers/teacher_count are absent here) and :111-116 (api_json only: %w[id name course_code], sis_course_id only with :read_sis/:manage_sis, term_name = course.enrollment_term.name UNCONDITIONALLY, concluded only behind ux_list_concluded_courses_in_bp). Nullability from canvas-src/db/migrate/20101210192618_init_canvas_db.rb: courses.name :177, courses.course_code :194 and enrollment_terms.name :2367 are plain t.string (nullable) while courses.enrollment_term :198 is null: false. Ordering: :612-613 paginates master_course_subscriptions.active with no order, so lib/api.rb:421-426 orders by the primary key ASCENDING.",
+  "shape": {
+    "$list": {
+      "id": "integer",
+      "template_id": "integer",
+      "blueprint_course": {
+        "id": "integer",
+        "name": {
+          "$nullable": "string"
+        },
+        "course_code": {
+          "$nullable": "string"
+        },
+        "term_name": {
+          "$nullable": "string"
+        },
+        "sis_course_id": {
+          "$optional": {
+            "$nullable": "string"
+          }
+        },
+        "concluded": {
+          "$optional": "boolean"
+        }
+      }
+    }
+  }
+}

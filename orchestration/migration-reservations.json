@@ -1,11 +1,10 @@
 {
-  "comment": "Coordinator-owned ledger of migration number reservations (protocol: issue #20). Agents never self-assign a number; the coordinator reserves one at dispatch time. Additive migrations only, no renumbering, no DROP/TRUNCATE. status 'merged' = a NNNN_*.sql file exists in migration/crates/star-db/migrations/ on main; status 'open' = reserved for an open issue (verify the issue is still open before reuse). 'issue' is the GitHub issue number; null marks pre-protocol merges that predate issue-linked PRs. 'free' lists unallocated holes below next_available (0011/0100 never existed; 0111/0115 were released). Validate with: python3 orchestration/check-migration-ledger.py",
+  "comment": "Coordinator-owned ledger of migration number reservations (protocol: issue #20). Agents never self-assign a number; the coordinator reserves one at dispatch time. Additive migrations only, no renumbering, no DROP/TRUNCATE. status 'merged' = a NNNN_*.sql file exists in migration/crates/star-db/migrations/ on main; status 'open' = reserved for an open issue (verify the issue is still open before reuse). 'issue' is the GitHub issue number; null marks pre-protocol merges that predate issue-linked PRs. 'free' lists unallocated holes below next_available (0011 never existed; 0111/0115 were released; 0100 was a hole until PR #212 took it). Validate with: python3 orchestration/check-migration-ledger.py",
   "free": [
-    "0100",
     "0111"
   ],
-  "max_merged": "0248",
-  "next_available": "0249",
+  "max_merged": "0272",
+  "next_available": "0273",
   "reservations": {
     "0001": {
       "issue": null,
@@ -502,6 +501,11 @@
       "note": "PR #10",
       "status": "merged"
     },
+    "0100": {
+      "issue": 89,
+      "note": "PR #212 (polling) took the free hole for 0100_polling.sql; the ledger was not updated at merge time",
+      "status": "merged"
+    },
     "0101": {
       "issue": null,
       "note": "PR #12",
@@ -632,6 +636,16 @@
       "note": "merged by wave (no issue)",
       "status": "merged"
     },
+    "0128": {
+      "issue": 91,
+      "note": "collaborations domain tail (guarded; snapshot 0223 owns the tables) — reserved at #91 dispatch",
+      "status": "merged"
+    },
+    "0131": {
+      "issue": 91,
+      "note": "smart_search_indexes for the smartsearch routes — reserved at #91 dispatch",
+      "status": "merged"
+    },
     "0141": {
       "issue": null,
       "note": "merged by wave (no issue)",
@@ -704,47 +718,47 @@
     },
     "0223": {
       "issue": null,
-      "note": "star-db: the Canvas schema tables (part a)",
+      "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
       "status": "merged"
     },
     "0224": {
       "issue": null,
-      "note": "star-db: the Canvas schema tables (part b)",
+      "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
       "status": "merged"
     },
     "0225": {
       "issue": null,
-      "note": "star-db: the Canvas schema tables (part c)",
+      "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
       "status": "merged"
     },
     "0226": {
       "issue": null,
-      "note": "star-db: the Canvas schema indexes",
+      "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
       "status": "merged"
     },
     "0227": {
       "issue": null,
-      "note": "star-db: the Canvas schema foreign keys",
+      "note": "full Canvas schema tables/indexes/FKs (PR #200; ledger reconciled retroactively)",
       "status": "merged"
     },
     "0228": {
-      "issue": null,
-      "note": "star-lti: the LTI registration history",
+      "issue": 69,
+      "note": "LTI registrations deep: context controls, overlay versions, registration history",
       "status": "merged"
     },
     "0229": {
-      "issue": null,
-      "note": "star-courses: the AI experiences and their conversations",
+      "issue": 91,
+      "note": "web_conferences tails (recordings JSONB, calendar_events FK); 0129 reserved number unusable (snapshot ordering) so the post-snapshot hole 0229 was used per PR #212 precedent",
       "status": "merged"
     },
     "0230": {
       "issue": null,
-      "note": "star-polling: the poll sessions",
+      "note": "GraphQL parity completion backing tables (peer_reviews, sub_assignments, audit_events, internal_settings, speed_grader_settings, checkpoints, gradebook_user_filters, widget_dashboards, user_inbox_labels, learner_dashboard_tab_selections, account_user_dismissals, submission_histories, discussion_entry_reports) — PR #228",
       "status": "merged"
     },
     "0231": {
       "issue": null,
-      "note": "star-media: the media object columns, the tracks and the media files",
+      "note": "Canvas column parity for the authored cohort (0001-0222 tables PR #200 skipped): 447 ADD COLUMN IF NOT EXISTS across 33 tables — reference tools/parity/canvas_authored_tables_reference.json, backlog tools/parity/authored_column_backlog.py — PR #228",
       "status": "merged"
     },
     "0232": {
@@ -769,7 +783,7 @@
     },
     "0236": {
       "issue": null,
-      "note": "star-polling: the poll description and the choice flags",
+      "note": "star-courses: the AI experiences and their conversations (moved off 0229; main's conferences lane owns 0229)",
       "status": "merged"
     },
     "0237": {
@@ -789,47 +803,147 @@
     },
     "0240": {
       "issue": null,
-      "note": "coordinator wave: accounts Canvas field parity",
+      "note": "star-lti: update-request columns (batch-3, commit fd0fbe3)",
       "status": "merged"
     },
     "0241": {
       "issue": null,
-      "note": "coordinator wave: enrollment Canvas parity",
+      "note": "star-account-reports: course_reports table (CourseReportsController, batch-3 parity tail)",
       "status": "merged"
     },
     "0242": {
       "issue": null,
-      "note": "coordinator wave: access_token crypted_token",
+      "note": "star-sis: sis_import_errors table (SisImportsErrorsApiController, batch-3 parity tail)",
       "status": "merged"
     },
     "0243": {
       "issue": null,
-      "note": "coordinator wave: builtin account roles",
+      "note": "accounts.allow_sis_import backfill (sis_imports_api, batch-3 CI)",
       "status": "merged"
     },
     "0244": {
-      "issue": null,
-      "note": "coordinator wave: file storage bytes",
+      "issue": 228,
+      "note": "star-grading-standards: grading_period_sets API (parity gap)",
       "status": "merged"
     },
     "0245": {
-      "issue": null,
-      "note": "coordinator wave: users + folders Canvas parity",
+      "issue": 228,
+      "note": "star-outcomes: outcomes_api columns (parity gap)",
       "status": "merged"
     },
     "0246": {
-      "issue": null,
-      "note": "coordinator wave: GraphQL root parity",
+      "issue": 228,
+      "note": "star-audit: authentication_events (parity gap)",
       "status": "merged"
     },
     "0247": {
-      "issue": null,
-      "note": "coordinator wave: delayed_jobs worker",
+      "issue": 228,
+      "note": "star-assignments: module assignment overrides (parity gap)",
       "status": "merged"
     },
     "0248": {
+      "issue": 228,
+      "note": "star-gradebook: user_preferences + what-if scores (parity gap)",
+      "status": "merged"
+    },
+    "0249": {
+      "issue": 228,
+      "note": "star-gradebook: score_overrides (parity gap)",
+      "status": "merged"
+    },
+    "0250": {
+      "issue": 228,
+      "note": "star-auth: course_events audit table (parity gap)",
+      "status": "merged"
+    },
+    "0251": {
+      "issue": 228,
+      "note": "star-quizzes: quiz family tables (parity gap)",
+      "status": "merged"
+    },
+    "0252": {
+      "issue": 228,
+      "note": "star-courses: misc gap tables (parity gap)",
+      "status": "merged"
+    },
+    "0253": {
       "issue": null,
-      "note": "coordinator wave: courses + groups Canvas fields",
+      "note": "star-media: the media object columns, the tracks and the media files (renumbered from the pre-merge 0231 after main took the number in PR #228)",
+      "status": "merged"
+    },
+    "0254": {
+      "issue": null,
+      "note": "star-pages/calendar/accounts/outcomes/lti: page revisions, reservations, dev keys, release notes, AB import (parity gaps)",
+      "status": "merged"
+    },
+    "0255": {
+      "issue": null,
+      "note": "star-users/modules/files: favorites, notification prefs, pairing codes, avatars, module items, usage rights (parity gaps)",
+      "status": "merged"
+    },
+    "0256": {
+      "issue": null,
+      "note": "star-courses: ms sync, crosslist, account batch, misc gaps revival (parity gaps)",
+      "status": "merged"
+    },
+    "0257": {
+      "issue": 231,
+      "note": "star-courses: the Api::V1::CourseJson columns (uuid, license, integration_id, grade_passback_setting, locale, template) plus the Canvas root-account chain and Default Term backfill (PR #241)",
+      "status": "merged"
+    },
+    "0260": {
+      "issue": 92,
+      "note": "SIS assignment ids + pseudonyms parity (PR #262, wave 4)",
+      "status": "merged"
+    },
+    "0263": {
+      "issue": 86,
+      "note": "star-outcomes: outcome results/rollups runtime columns — learning_outcomes.data (rubric criterion), the learning_outcome_results Canvas columns (context_code, alignment link, hidden, possible/percent, mastery, workflow_state, timestamps) and users.uuid for /enqueue_outcome_rollup_calculation (additive only)",
+      "status": "merged"
+    },
+    "0264": {
+      "issue": null,
+      "note": "the wave: accounts Canvas field parity",
+      "status": "merged"
+    },
+    "0265": {
+      "issue": null,
+      "note": "the wave: enrollment Canvas parity",
+      "status": "merged"
+    },
+    "0266": {
+      "issue": null,
+      "note": "the wave: access_token crypted_token",
+      "status": "merged"
+    },
+    "0267": {
+      "issue": null,
+      "note": "the wave: builtin account roles",
+      "status": "merged"
+    },
+    "0268": {
+      "issue": null,
+      "note": "the wave: file storage bytes",
+      "status": "merged"
+    },
+    "0269": {
+      "issue": null,
+      "note": "the wave: users + folders Canvas parity",
+      "status": "merged"
+    },
+    "0270": {
+      "issue": null,
+      "note": "the wave: GraphQL root parity",
+      "status": "merged"
+    },
+    "0271": {
+      "issue": null,
+      "note": "the wave: delayed_jobs worker",
+      "status": "merged"
+    },
+    "0272": {
+      "issue": null,
+      "note": "the wave: courses + groups Canvas fields",
       "status": "merged"
     }
   }

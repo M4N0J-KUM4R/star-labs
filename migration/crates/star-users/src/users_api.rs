@@ -398,9 +398,13 @@ fn param_key(params: &Value, key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Canvas `params[:user][:id]` — the user a login write is about.
+/// Canvas `params[:user_id] || params[:user][:id]` — the user a login
+/// call is about (pseudonyms_controller.rb:375-379).
 fn user_id_param(query: &Value, body: &Value) -> Option<String> {
     for source in [query, body] {
+        if let Some(id) = source.get("user_id").and_then(value_to_string) {
+            return Some(id);
+        }
         if let Some(Value::Object(user)) = source.get("user") {
             if let Some(id) = user.get("id").and_then(value_to_string) {
                 return Some(id);
@@ -780,8 +784,9 @@ async fn pseudonym_passwordable(
     }
 }
 
-/// The `pseudonyms` row the profile lookup reads.
-type PseudonymRecord = (
+/// Row shape of `load_pseudonym` (factored out for clippy::type_complexity;
+/// distinct from `PseudonymRow`, which is the read-path projection).
+type PseudonymStateRow = (
     i64,
     i64,
     i64,
@@ -800,7 +805,7 @@ type PseudonymRecord = (
 /// Canvas `Pseudonym.active` — every login that is not deleted.
 async fn load_pseudonym(pool: &PgPool, raw_id: &str) -> Result<PseudonymState, ApiError> {
     let id = raw_id.parse::<i64>().map_err(|_| ApiError::NotFound)?;
-    let row: Option<PseudonymRecord> = sqlx::query_as(
+    let row: Option<PseudonymStateRow> = sqlx::query_as(
         r#"
         SELECT id, user_id, account_id, unique_id, sis_user_id, integration_id,
                authentication_provider_id, declared_user_type, workflow_state, created_at,

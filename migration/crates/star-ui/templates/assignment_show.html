@@ -48,7 +48,7 @@
         <span class="submission-score">Score: {{ submission_score_label }}</span>
         {% endif %}
       </p>
-      <form id="submit_assignment" class="submit-assignment-form" method="post" action="/courses/{{ course_id }}/assignments/{{ assignment_id }}/submit">
+      <form id="submit_assignment" class="submit-assignment-form" method="post" action="/courses/{{ course_id }}/assignments/{{ assignment_id }}/submissions">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <div class="ic-Form-control">
           <label class="ic-Label" for="submission_body">Text Entry</label>

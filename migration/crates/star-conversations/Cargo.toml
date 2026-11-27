@@ -18,4 +18,5 @@ reqwest = { version = "0.12", default-features = false, features = ["blocking", 
 tokio = { workspace = true }
 serde_json = { workspace = true }
 star-db = { path = "../star-db" }
+star-search = { path = "../star-search" }
 axum-test = { workspace = true }

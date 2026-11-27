@@ -1,12 +1,21 @@
 //! Login / logout handlers (spec §5).
 //!
-//! `GET /login` renders the form and issues the CSRF cookie; `POST /login`
-//! form-decodes, checks the double-submit CSRF pair, verifies the password
-//! with star-auth's argon2 `verify_password`, mints the SAME JWT via
-//! `star_auth::create_token` (HS256, 7-day expiry) and sets it as the
-//! `star_session` cookie. `POST /logout` stamps `users.last_logged_out` —
-//! which the session extractor (and the API's AuthUser) already honor — and
-//! clears the cookie.
+//! The web-side login surface, on Canvas' own rows (config/routes.rb:928-935):
+//! `GET /login` is the page (`get "login" => "login#new"`, :928) and renders the
+//! form plus issues the CSRF cookie; the CREDENTIAL POST is Canvas' auth-method
+//! row `post "login/canvas" => "login/canvas#create"` (:935), which form-decodes,
+//! checks the double-submit CSRF pair, verifies the password with star-auth's
+//! argon2 `verify_password`, mints the SAME JWT via `star_auth::create_token`
+//! (HS256, 7-day expiry) and sets it as the `star_session` cookie. Canvas serves
+//! no POST at `/login` itself, so neither do we.
+//! Session end is `DELETE /logout` (`delete "logout" => "login#destroy"`, :930):
+//! it stamps `users.last_logged_out` — which the session extractor (and the API's
+//! AuthUser) already honor — and clears the cookie. HTML forms get there with
+//! Rails' `form_tag logout_path, method: :delete`
+//! (app/views/login/logout_confirm.html.erb:39), i.e. a POST + hidden
+//! `_method=delete` that [`crate::method_override`] rewrites; Canvas' other
+//! logout row, `get "logout" => "login#logout_landing"` (:931), is a landing page
+//! this port does not have.
 
 use askama::Template;
 use axum::extract::{Query, State};
@@ -15,7 +24,7 @@ use axum::response::{IntoResponse, Redirect, Response};
 use axum_extra::extract::{CookieJar, Form};
 use serde::Deserialize;
 
-use star_auth::{create_token, verify_password};
+use star_auth::{create_token, login_rate_limiter, verify_password};
 use star_common::{ApiError, AppState};
 
 use crate::env::JsEnv;
@@ -100,10 +109,22 @@ pub async fn login_form(
         error: String::new(),
         session_expired: query.expired.as_deref().is_some_and(|v| v == "1"),
     };
-    (jar, page).into_response()
+    // no-store: a cached login page would embed a CSRF token that no longer
+    // matches the browser's `star_csrf` cookie, failing the double-submit
+    // check with 403 on an otherwise valid login.
+    (
+        jar,
+        [
+            (header::CACHE_CONTROL, "no-store"),
+            (header::PRAGMA, "no-cache"),
+        ],
+        page,
+    )
+        .into_response()
 }
 
-/// POST /login — form-decode, CSRF check, password verify, cookie set, 303.
+/// POST /login/canvas — form-decode, CSRF check, password verify, cookie set, 303.
+/// (Canvas's `post "login/canvas" => "login/canvas#create"`, config/routes.rb:935.)
 pub async fn login_submit(
     State(app): State<AppState>,
     jar: CookieJar,
@@ -119,9 +140,31 @@ pub async fn login_submit(
             .into_response();
     }
 
+    // Locked accounts are refused before the password check (issue #106;
+    // Canvas LoginRegistry returns :too_many_attempts up front). The UI
+    // shares the API's limiter so both surfaces count the same budget.
+    let limiter = login_rate_limiter();
+    let email = form.email.trim().to_lowercase();
+    if limiter.is_locked(&email) {
+        let (jar, csrf_token) = ensure_csrf_cookie(jar);
+        let page = LoginPage {
+            title: "Log In".to_string(),
+            body_class: "full-width ic-Login-Body no-headers".to_string(),
+            css_url: crate::assets::app_css_url(),
+            env_json: JsEnv::anonymous(&crate::request_origin(), Vec::new()).to_json_string(),
+            notices: Vec::new(),
+            csrf_token,
+            next: sanitize_next(form.next.as_deref()),
+            email: form.email.clone(),
+            error: "Too many failed login attempts. Please try again later.".to_string(),
+            session_expired: false,
+        };
+        return (StatusCode::FORBIDDEN, jar, page).into_response();
+    }
+
     let row: Option<(i64, String, String)> =
         match sqlx::query_as("SELECT id, password_hash, role FROM users WHERE email = $1")
-            .bind(form.email.trim().to_lowercase())
+            .bind(&email)
             .fetch_optional(&app.db)
             .await
         {
@@ -139,6 +182,9 @@ pub async fn login_submit(
         .unwrap_or(false);
 
     if !verified {
+        // Count the failure against the shared budget (unknown email
+        // included, so the shell cannot be used to probe for accounts).
+        limiter.record_failure(&email);
         let (jar, csrf_token) = ensure_csrf_cookie(jar);
         let page = LoginPage {
             title: "Log In".to_string(),
@@ -156,6 +202,9 @@ pub async fn login_submit(
     }
 
     let (user_id, _, role) = row.expect("verified implies the row exists");
+
+    // Success clears the failed-login counter (Canvas successful_login!).
+    limiter.record_success(&email);
 
     // Mint the session JWT — same claims, secret and 7-day lifetime the API
     // login mints; only the transport differs (cookie vs Bearer).
@@ -177,7 +226,9 @@ pub async fn login_submit(
         .into_response()
 }
 
-/// POST /logout — CSRF check, stamp `last_logged_out`, clear cookie, redirect.
+/// DELETE /logout — CSRF check, stamp `last_logged_out`, clear cookie, redirect.
+/// (Canvas's `delete "logout" => "login#destroy"`, config/routes.rb:930; the nav form
+/// arrives as POST + `_method=delete` via [`crate::method_override`].)
 ///
 /// The UPDATE reuses the token-invalidation mechanism the API's terminate
 /// sessions route uses (star-users): every token minted before now is dead

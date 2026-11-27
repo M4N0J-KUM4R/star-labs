@@ -740,6 +740,14 @@ impl Query {
             _ => Ok(None),
         }
     }
+    async fn media_object(
+        &self,
+        ctx: &Context<'_>,
+        media_id: String,
+    ) -> Result<Option<crate::outcomes_media::MediaObject>, async_graphql::Error> {
+        let gctx = ctx.data::<GraphQLContext>()?;
+        crate::outcomes_media::fetch_media_object_for_caller(&gctx.pool, gctx, &media_id).await
+    }
 }
 
 /// Whether the caller may read this submission.

@@ -76,6 +76,9 @@ async fn setup() -> Option<(TestServer, PgPool, String)> {
     let server = TestServer::new(
         axum::Router::new()
             .merge(star_courses::router())
+            // The custom_gradebook_columns resource lives in star-gradebook
+            // (the assessments lane) — the same router star-http mounts.
+            .merge(star_gradebook::router())
             .with_state(state),
     )
     .expect("build TestServer");
@@ -152,22 +155,6 @@ async fn seed_column(
     .expect("seed column")
 }
 
-/// Seed a gradebook filter of one user.
-async fn seed_filter(pool: &PgPool, prefix: &str, course_id: i64, user_id: i64, name: &str) -> i64 {
-    sqlx::query_scalar(
-        "INSERT INTO gradebook_filters \
-         (course_id, user_id, name, payload, created_at, updated_at) \
-         VALUES ($1, $2, $3, $4, now(), now()) RETURNING id",
-    )
-    .bind(course_id)
-    .bind(user_id)
-    .bind(format!("{prefix}-{name}"))
-    .bind(json!({ "foo": "bar" }))
-    .fetch_one(pool)
-    .await
-    .expect("seed filter")
-}
-
 fn auth(user_id: i64, role: &str) -> String {
     format!(
         "Bearer {}",
@@ -177,10 +164,6 @@ fn auth(user_id: i64, role: &str) -> String {
 
 async fn cleanup(pool: &PgPool, prefix: &str) {
     let _ = sqlx::query("DELETE FROM custom_gradebook_columns WHERE title LIKE $1")
-        .bind(format!("{prefix}%"))
-        .execute(pool)
-        .await;
-    let _ = sqlx::query("DELETE FROM gradebook_filters WHERE name LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
         .await;
@@ -442,134 +425,6 @@ async fn the_columns_are_reordered() {
     assert_eq!(columns[0]["id"], third);
     assert_eq!(columns[1]["id"], first);
     assert_eq!(columns[2]["id"], second);
-
-    cleanup(&pool, &prefix).await;
-}
-
-#[tokio::test]
-async fn a_teacher_manages_the_gradebook_filters() {
-    let Some((server, pool, prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
-    let other = seed_user(&pool, &prefix, "Other", "teacher").await;
-    let account = seed_account(&pool, &prefix, "Account").await;
-    let course = seed_course(&pool, &prefix, "Course", account).await;
-    seed_enrollment(&pool, teacher, course, "teacher").await;
-
-    // The teacher creates a filter.
-    let resp = server
-        .post(&format!("/courses/{course}/gradebook_filters"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({
-            "gradebook_filter": { "name": "new name", "payload": { "foo": "bar" } },
-        }))
-        .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let created: Value = resp.json();
-    let filter = &created["gradebook_filter"];
-    assert_eq!(filter["name"], "new name");
-    assert_eq!(filter["payload"]["foo"], "bar");
-    assert_eq!(filter["user_id"], teacher);
-    assert_eq!(filter["course_id"], course);
-    let filter_id = filter["id"].as_i64().expect("filter id");
-
-    // The teacher lists the filters of the course — only its own.
-    let resp = server
-        .get(&format!("/courses/{course}/gradebook_filters"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let list: Value = resp.json();
-    let filters = list.as_array().expect("filters");
-    assert_eq!(filters.len(), 1);
-    assert_eq!(filters[0]["gradebook_filter"]["id"], filter_id);
-
-    // The teacher reads the filter — Canvas answers 201 here.
-    let resp = server
-        .get(&format!("/courses/{course}/gradebook_filters/{filter_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .await;
-    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
-    let shown: Value = resp.json();
-    assert_eq!(shown["gradebook_filter"]["id"], filter_id);
-    assert_eq!(shown["gradebook_filter"]["payload"]["foo"], "bar");
-
-    // The teacher updates the filter.
-    let resp = server
-        .put(&format!("/courses/{course}/gradebook_filters/{filter_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "gradebook_filter": { "name": "another name" } }))
-        .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let updated: Value = resp.json();
-    assert_eq!(updated["gradebook_filter"]["name"], "another name");
-    // The payload was not sent, so the stored one is kept.
-    assert_eq!(updated["gradebook_filter"]["payload"]["foo"], "bar");
-
-    // The teacher deletes the filter.
-    let resp = server
-        .delete(&format!("/courses/{course}/gradebook_filters/{filter_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let deleted: Value = resp.json();
-    assert_eq!(deleted["gradebook_filter"]["id"], filter_id);
-
-    let resp = server
-        .get(&format!("/courses/{course}/gradebook_filters/{filter_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .await;
-    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-    let missing: Value = resp.json();
-    assert_eq!(
-        missing["errors"][0]["message"],
-        "The specified resource does not exist."
-    );
-
-    // A filter of another user is not found either.
-    let other_filter = seed_filter(&pool, &prefix, course, other, "Other filter").await;
-    let resp = server
-        .get(&format!(
-            "/courses/{course}/gradebook_filters/{other_filter}"
-        ))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .await;
-    assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-
-    cleanup(&pool, &prefix).await;
-}
-
-#[tokio::test]
-async fn a_gradebook_filter_without_a_name_answers_400() {
-    let Some((server, pool, prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
-    let account = seed_account(&pool, &prefix, "Account").await;
-    let course = seed_course(&pool, &prefix, "Course", account).await;
-    seed_enrollment(&pool, teacher, course, "teacher").await;
-
-    let resp = server
-        .post(&format!("/courses/{course}/gradebook_filters"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "gradebook_filter": { "payload": { "foo": "bar" } } }))
-        .await;
-    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
-    let errors: Value = resp.json();
-    assert_eq!(errors["name"][0], "can't be blank");
-
-    // An empty payload is blank as well.
-    let resp = server
-        .post(&format!("/courses/{course}/gradebook_filters"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "gradebook_filter": { "name": "new name", "payload": {} } }))
-        .await;
-    assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
-    let errors: Value = resp.json();
-    assert_eq!(errors["payload"][0], "can't be blank");
 
     cleanup(&pool, &prefix).await;
 }

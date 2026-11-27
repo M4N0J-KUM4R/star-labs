@@ -12,26 +12,43 @@
 --   - `assignments_weighting` holds the JSON weighting Canvas stores;
 --   - the unique indexes keep one active pace per course / section / user.
 --
--- Nothing is dropped: the blackout dates (0091), the module items and the
--- progress rows (0127) already exist and are referenced from here.
+-- The Canvas-schema baseline (0223) already created `course_paces` and
+-- `course_pace_module_items`, and 0227 pointed the module-item foreign
+-- key at Canvas' polymorphic `content_tags`. The workspace keeps the
+-- course's module items in `module_items` (0002) — this migration
+-- repoints the constraint there and aligns the three columns the pacing
+-- routes write (`end_date` a timestamptz like the API, the weighting and
+-- the calendar-day count NOT NULL with their Canvas defaults).
+-- Nothing is dropped: the blackout dates (0091) already exist.
 
-CREATE TABLE IF NOT EXISTS course_paces (
-    id                              BIGSERIAL PRIMARY KEY,
-    course_id                       BIGINT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
-    course_section_id               BIGINT REFERENCES course_sections(id) ON DELETE CASCADE,
-    user_id                         BIGINT REFERENCES users(id) ON DELETE CASCADE,
-    root_account_id                 BIGINT REFERENCES accounts(id) ON DELETE SET NULL,
-    workflow_state                  TEXT NOT NULL DEFAULT 'unpublished',
-    exclude_weekends                BOOLEAN NOT NULL DEFAULT TRUE,
-    selected_days_to_skip           TEXT[] NOT NULL DEFAULT '{sat,sun}',
-    hard_end_dates                  BOOLEAN NOT NULL DEFAULT FALSE,
-    end_date                        TIMESTAMPTZ,
-    published_at                    TIMESTAMPTZ,
-    assignments_weighting           TEXT NOT NULL DEFAULT '[]',
-    time_to_complete_calendar_days  INTEGER NOT NULL DEFAULT 0,
-    created_at                      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at                      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+ALTER TABLE course_paces
+    ALTER COLUMN end_date TYPE TIMESTAMPTZ USING end_date::timestamptz;
+
+-- The pacing API serializes every timestamp as ISO8601 UTC (DateTime<Utc>);
+-- the baseline created the audit columns as `timestamp without time zone`.
+ALTER TABLE course_paces
+    ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at::timestamptz,
+    ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at::timestamptz,
+    ALTER COLUMN published_at TYPE TIMESTAMPTZ USING published_at::timestamptz;
+
+ALTER TABLE course_pace_module_items
+    ALTER COLUMN created_at TYPE TIMESTAMPTZ USING created_at::timestamptz,
+    ALTER COLUMN updated_at TYPE TIMESTAMPTZ USING updated_at::timestamptz;
+
+ALTER TABLE course_paces
+    ALTER COLUMN assignments_weighting SET DEFAULT '[]',
+    ALTER COLUMN assignments_weighting SET NOT NULL;
+
+ALTER TABLE course_paces
+    ALTER COLUMN time_to_complete_calendar_days SET DEFAULT 0,
+    ALTER COLUMN time_to_complete_calendar_days SET NOT NULL;
+
+ALTER TABLE course_pace_module_items
+    DROP CONSTRAINT IF EXISTS fk_course_pace_module_items_module_item_id;
+
+ALTER TABLE course_pace_module_items
+    ADD CONSTRAINT fk_course_pace_module_items_module_item_id
+    FOREIGN KEY (module_item_id) REFERENCES module_items (id) ON DELETE CASCADE;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_course_paces_primary_plan
     ON course_paces (course_id)
@@ -46,16 +63,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_course_paces_user_plan
     WHERE user_id IS NOT NULL AND workflow_state = 'active';
 
 CREATE INDEX IF NOT EXISTS idx_course_paces_course ON course_paces (course_id);
-
-CREATE TABLE IF NOT EXISTS course_pace_module_items (
-    id              BIGSERIAL PRIMARY KEY,
-    course_pace_id  BIGINT NOT NULL REFERENCES course_paces(id) ON DELETE CASCADE,
-    module_item_id  BIGINT NOT NULL REFERENCES module_items(id) ON DELETE CASCADE,
-    root_account_id BIGINT REFERENCES accounts(id) ON DELETE SET NULL,
-    duration        INTEGER NOT NULL DEFAULT 0,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
 
 CREATE INDEX IF NOT EXISTS idx_course_pace_module_items_pace
     ON course_pace_module_items (course_pace_id);

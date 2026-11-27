@@ -832,6 +832,7 @@ async fn a_scoring_range_the_request_does_not_mention_is_destroyed() {
     let rule_id = rule["id"].as_i64().expect("the rule id");
     let ranges = rule["scoring_ranges"].as_array().expect("the ranges");
     assert_eq!(ranges.len(), 2, "body: {rule}");
+    assert_eq!(ranges.len(), 2, "rule: {rule}");
     let second_range_id = ranges[1]["id"].as_i64().expect("the range id");
 
     // Only the second range is sent, so the first one is destroyed.

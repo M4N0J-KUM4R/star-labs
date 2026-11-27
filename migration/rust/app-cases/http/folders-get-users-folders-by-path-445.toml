@@ -1,0 +1,25 @@
+[request]
+method = "GET"
+path = "/api/v1/users/1/folders/by_path/*full_path"
+
+[request.headers]
+Authorization = "Bearer c55d0731ffb0240ad824ab398d92be2a4b930c9af0a5f76a74df263902080ed6"
+
+[response]
+status = 404
+
+[response.headers]
+cache-control = "no-cache"
+content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
+content-type = "application/json; charset=utf-8"
+referrer-policy = "no-referrer-when-downgrade"
+set-cookie = "[..]"
+x-canvas-meta = "[..]"
+x-content-type-options = "nosniff"
+x-download-options = "noopen"
+x-permitted-cross-domain-policies = "none"
+x-rate-limit-remaining = "600.0"
+x-request-context-id = "[..]-[..]-[..]-[..]-[..]"
+x-request-cost = "0.[..]"
+x-runtime = "0.[..]"
+x-xss-protection = "1; mode=block"

@@ -127,36 +127,6 @@ body.no-headers .ic-app { display: block; }
 .Button--login:hover { background: #025e8c; }
 .ic-Login__actions { margin-top: 24px; }
 
-/* ---- Dashboard cards (Canvas ic-DashboardCard) ---- */
-.ic-DashboardCard_Container { margin-top: 8px; }
-.ic-DashboardCard__box {
-  display: grid; gap: 16px;
-  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-}
-.ic-DashboardCard {
-  background: #fff; border-radius: 4px; border: 1px solid #c7cdd1;
-  overflow: hidden; display: flex; flex-direction: column;
-}
-.ic-DashboardCard__link { color: inherit; display: block; }
-.ic-DashboardCard__link:hover { text-decoration: none; }
-.ic-DashboardCard__header {
-  background: #0374b5; color: #fff; padding: 24px 16px 12px;
-}
-.ic-DashboardCard__header-title { font-size: 18px; font-weight: 600; display: block; }
-.ic-DashboardCard__subheader { padding: 8px 16px; background: #f2f5f7; }
-.ic-DashboardCard__course-code { font-weight: 600; display: block; }
-.ic-DashboardCard__term { font-size: 13px; color: #73858c; display: block; }
-.ic-DashboardCard__footer {
-  padding: 10px 16px; font-size: 13px; color: #73858c;
-  display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap;
-}
-/* Unpublished courses: muted card style, matching the API's published flag */
-.ic-DashboardCard__unpublished .ic-DashboardCard__header { background: #9babb1; }
-.ic-DashboardCard__unpublished-badge {
-  display: inline-block; margin-top: 6px; font-size: 12px;
-  background: rgba(0,0,0,.25); padding: 2px 8px; border-radius: 10px;
-}
-
 /* ---- Course home: wiki front page + modules ---- */
 #wiki_page_show h1 { margin-top: 0; }
 .user_content img { max-width: 100%; height: auto; }
@@ -496,6 +466,19 @@ textarea.ic-Input { width: 100%; font-family: inherit; }
 .comment-body { margin: 4px 0 0; }
 .speedgrader-empty { color: #73858c; }
 
+
+/* ---- Precision Workspace: calendar month grid ---- */
+.calendar-grid { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.calendar-grid-wrapper { overflow-x: auto; }
+.calendar-layout { display: grid; gap: 16px; grid-template-columns: minmax(0, 260px) minmax(0, 1fr); align-items: start; }
+.calendar-contexts, .calendar-main { min-width: 0; }
+.calendar-contexts fieldset { min-width: 0; }
+@media (max-width: 768px) {
+  .calendar-layout { grid-template-columns: minmax(0, 1fr); }
+}
+.calendar-day { vertical-align: top; text-align: center; }
+.calendar-day__events { list-style: none; margin: 0; padding: 0; text-align: left; }
+.calendar-event-chip__link { overflow-wrap: anywhere; }
 /* ---- Error page ---- */
 .ic-Error { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
 .ic-Error__content { text-align: center; }
@@ -505,10 +488,15 @@ textarea.ic-Input { width: 100%; font-family: inherit; }
 /* ---- Responsive ---- */
 @media (max-width: 768px) {
   .ic-app-header { position: static; width: 100%; height: auto; flex-direction: row; }
-  .ic-app-header__main-navigation { overflow-x: auto; }
-  ul.ic-app-header__menu-list { display: flex; }
+  .ic-app-header__main-navigation { overflow-x: auto; min-width: 0; flex: 1 1 0; }
+  ul.ic-app-header__menu-list { display: flex; flex-wrap: wrap; }
   .ic-Layout-wrapper { margin-left: 0; }
   .ic-Layout-columns { flex-direction: column; }
+  .ic-Layout-contentMain { padding: 16px; }
+  .ic-Action-header { flex-wrap: wrap; }
+  .ic-Action-header__Primary, .ic-Action-header__Secondary { min-width: 0; flex-shrink: 1; }
+  .ic-Action-header h1 { overflow-wrap: anywhere; }
+  .calendar-layout { grid-template-columns: minmax(0, 1fr); }
   #left-side.ic-app-course-menu {
     width: 100%; flex: none; border-right: none; border-bottom: 1px solid #c7cdd1;
   }

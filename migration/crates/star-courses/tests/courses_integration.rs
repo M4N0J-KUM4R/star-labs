@@ -234,12 +234,16 @@ async fn list_course_enrollments(
     resp.json()
 }
 
-/// Extract this run's course rows from a /courses page by course_code
-/// prefix (the DB is shared and may contain unrelated courses).
+/// Extract this run's course rows from the `GET /courses` array by
+/// course_code prefix (the DB is shared and may contain unrelated courses).
+///
+/// Canvas' index actions render the serializer's array directly --
+/// `courses_json` is `courses.map { |course| course_json(...) }`
+/// (canvas-src/lib/api/v1/course.rb:73-75) -- so there is no `data` envelope
+/// to index into.
 fn our_courses<'a>(page: &'a Value, prefix: &str) -> Vec<&'a Value> {
-    page["data"]
-        .as_array()
-        .expect("data array")
+    page.as_array()
+        .expect("GET /courses returns a JSON array")
         .iter()
         .filter(|c| {
             c["course_code"]
@@ -250,21 +254,24 @@ fn our_courses<'a>(page: &'a Value, prefix: &str) -> Vec<&'a Value> {
 }
 
 // ---------------------------------------------------------------------------
-// POST /courses
+// POST /accounts/{id}/courses — Canvas' only API course-creation route
+// (canvas-src/config/routes.rb:1231; there is no bare `post "courses"` in the
+// ApiRouteSet::V1 block, so every create here is account-scoped)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn create_course_as_teacher_returns_201_echoes_fields_and_persists() {
+async fn create_course_as_teacher_returns_201_with_canvas_json_and_persists() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
     };
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let account = seed_account(&pool, &prefix, "NewCourseAccount").await;
     let code = format!("{prefix}-NewCourse");
 
     let resp = server
-        .post("/courses")
+        .post(&format!("/accounts/{account}/courses"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({
             "name": "Rust 101",
@@ -280,18 +287,37 @@ async fn create_course_as_teacher_returns_201_echoes_fields_and_persists() {
     let body: Value = resp.json();
     let id = body["id"].as_i64().expect("course id");
 
-    // Response echoes the submitted fields (db ids are generated).
+    // Response is the Canvas course JSON, not a table echo: `name`,
+    // `course_code`, `workflow_state` and the dates are in
+    // `Api::V1::CourseJson::BASE_ATTRIBUTES`
+    // (canvas-src/lib/api/v1/course_json.rb:22-35), while `description`,
+    // `syllabus_body` and `updated_at` are not course_json keys at all
+    // (`syllabus_body` arrives only with `include[]=syllabus_body`).
     assert_eq!(body["name"], "Rust 101");
     assert_eq!(body["course_code"], code);
-    assert_eq!(body["description"], "Intro to Rust");
     assert_eq!(body["workflow_state"], "available", "default state");
     assert_eq!(body["start_at"], "2026-01-10T09:00:00Z");
     assert_eq!(body["end_at"], "2026-05-01T17:00:00Z");
-    assert_eq!(body["syllabus_body"], "<p>read the book</p>");
     assert!(
-        body["created_at"].is_string() && body["updated_at"].is_string(),
-        "timestamps must be present: {body}"
+        body["created_at"].is_string(),
+        "created_at must be present: {body}"
     );
+    assert!(
+        body["uuid"].is_string(),
+        "Course#assign_uuid runs before_save, so uuid is never null: {body}"
+    );
+    assert!(
+        body["calendar"]["ics"]
+            .as_str()
+            .is_some_and(|url| url.ends_with(".ics")),
+        "calendar.ics is an unconditional course_json key: {body}"
+    );
+    for absent in ["description", "syllabus_body", "updated_at"] {
+        assert!(
+            body.get(absent).is_none(),
+            "{absent} is not a Canvas course_json key: {body}"
+        );
+    }
 
     // Row actually persisted in the DB.
     let row: Option<(String, String, Option<String>, String)> = sqlx::query_as(
@@ -330,9 +356,10 @@ async fn create_course_as_admin_succeeds() {
     };
 
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
+    let account = seed_account(&pool, &prefix, "AdminAccount").await;
 
     let resp = server
-        .post("/courses")
+        .post(&format!("/accounts/{account}/courses"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "name": "Admin Course", "course_code": format!("{prefix}-AdminCourse") }))
         .await;
@@ -352,9 +379,10 @@ async fn create_course_as_student_is_403() {
     };
 
     let student = seed_user(&pool, &prefix, "Student", "student").await;
+    let account = seed_account(&pool, &prefix, "StudentTargetAccount").await;
 
     let resp = server
-        .post("/courses")
+        .post(&format!("/accounts/{account}/courses"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .json(&json!({ "name": "Hack 101", "course_code": format!("{prefix}-Hack101") }))
         .await;
@@ -380,9 +408,10 @@ async fn create_course_blank_name_is_422() {
     };
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let account = seed_account(&pool, &prefix, "NoNameAccount").await;
 
     let resp = server
-        .post("/courses")
+        .post(&format!("/accounts/{account}/courses"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "name": "   ", "course_code": format!("{prefix}-NoName") }))
         .await;
@@ -400,9 +429,10 @@ async fn create_course_blank_course_code_is_422() {
     };
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let account = seed_account(&pool, &prefix, "BlankCodeAccount").await;
 
     let resp = server
-        .post("/courses")
+        .post(&format!("/accounts/{account}/courses"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "name": "Some Course", "course_code": "" }))
         .await;
@@ -423,8 +453,9 @@ async fn create_course_invalid_workflow_state_is_422() {
 
     // Canvas courses are born 'unpublished'/'created'; this crate rejects
     // those states (documented deviation — see test header).
+    let account = seed_account(&pool, &prefix, "StateAccount").await;
     let resp = server
-        .post("/courses")
+        .post(&format!("/accounts/{account}/courses"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({
             "name": "State Course",
@@ -443,44 +474,8 @@ async fn create_course_invalid_workflow_state_is_422() {
     cleanup(&pool, &prefix).await;
 }
 
-#[tokio::test]
-async fn create_course_without_alias_still_works_and_uses_default_account() {
-    let Some((server, pool, prefix)) = setup().await else {
-        println!("SKIP: DATABASE_URL not set");
-        return;
-    };
-
-    let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
-    let code = format!("{prefix}-DefaultAccountCourse");
-
-    let resp = server
-        .post("/courses")
-        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "name": "Default Account Course", "course_code": code }))
-        .await;
-
-    assert_eq!(resp.status_code(), 201, "body: {}", resp.text());
-    let body: Value = resp.json();
-    let id = body["id"].as_i64().expect("course id");
-    assert_eq!(body["course_code"], code);
-
-    // The original route keeps the column default (root account, id 1).
-    let row: (Option<i64>,) = sqlx::query_as("SELECT account_id FROM courses WHERE id = $1")
-        .bind(id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-    assert_eq!(
-        row.0,
-        Some(1),
-        "POST /courses must keep the default account"
-    );
-
-    cleanup(&pool, &prefix).await;
-}
-
 // ---------------------------------------------------------------------------
-// POST /accounts/{id}/courses (Canvas-compatible creation alias)
+// POST /accounts/{id}/courses — the account must exist (Canvas answers 404)
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -519,7 +514,8 @@ async fn create_course_via_account_alias_returns_201_and_sets_account_id() {
         .unwrap();
     assert_eq!(row.0, Some(account));
 
-    // Same side effect as POST /courses: creator gets a teacher enrollment.
+    // Side effect of every Canvas course create: creator gets a teacher
+    // enrollment.
     let teacher_rows: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM enrollments WHERE course_id = $1 AND user_id = $2 AND role = 'teacher'",
     )
@@ -606,13 +602,14 @@ async fn list_as_admin_sees_all_non_deleted_courses() {
     let admin = seed_user(&pool, &prefix, "Admin", "admin").await;
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
 
-    // Six live courses for this run (created via the API as the teacher,
+    // Six live courses for this run (created through the API as the teacher,
     // which also auto-enrolls the creator), plus one soft-deleted course.
     // Six guarantees page 2 (per_page=2) is full regardless of what other
     // suites leave in the shared database.
+    let list_account = seed_account(&pool, &prefix, "ListAccount").await;
     for name in ["ListA", "ListB", "ListC", "ListD", "ListE", "ListF"] {
         let resp = server
-            .post("/courses")
+            .post(&format!("/accounts/{list_account}/courses"))
             .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
             .json(&json!({ "name": name, "course_code": format!("{prefix}-{name}") }))
             .await;
@@ -625,12 +622,13 @@ async fn list_as_admin_sees_all_non_deleted_courses() {
         .await
         .unwrap();
 
-    let page = list_courses(&server, &auth(admin, "admin"), "").await;
-    assert_eq!(page["page"], 1);
-    assert_eq!(page["per_page"], 50, "default per_page");
+    let body = list_courses(&server, &auth(admin, "admin"), "").await;
+    let all = body.as_array().expect(
+        "Canvas renders the courses index as a bare array, not a {data, page, total} envelope",
+    );
 
     // Only this run's courses are counted (shared DB may hold others).
-    let ours = our_courses(&page, &prefix);
+    let ours = our_courses(&body, &prefix);
     assert_eq!(
         ours.len(),
         6,
@@ -640,18 +638,14 @@ async fn list_as_admin_sees_all_non_deleted_courses() {
         ours.iter().all(|c| c["workflow_state"] != "deleted"),
         "soft-deleted course must not be listed"
     );
-    // total counts ALL visible courses in the shared DB, so it must be at
-    // least the number visible from this run.
     assert!(
-        page["total"].as_i64().expect("total") >= ours.len() as i64,
-        "total must include this run's visible courses"
+        all.len() >= ours.len(),
+        "the array must include this run's visible courses"
     );
 
-    // Pagination metadata reflects the requested page params.
+    // `page`/`per_page` still limit the rows; Canvas pages the array itself.
     let page2 = list_courses(&server, &auth(admin, "admin"), "page=2&per_page=2").await;
-    assert_eq!(page2["page"], 2);
-    assert_eq!(page2["per_page"], 2);
-    assert_eq!(page2["data"].as_array().expect("data array").len(), 2);
+    assert_eq!(page2.as_array().expect("array").len(), 2);
 
     cleanup(&pool, &prefix).await;
 }
@@ -676,17 +670,21 @@ async fn list_as_non_admin_sees_only_enrolled_courses() {
         .await
         .unwrap();
 
-    let page = list_courses(&server, &auth(student, "student"), "").await;
-    let ours = our_courses(&page, &prefix);
+    let body = list_courses(&server, &auth(student, "student"), "").await;
+    let ours = our_courses(&body, &prefix);
     assert_eq!(ours.len(), 1, "only the enrolled course: {ours:?}");
     assert_eq!(ours[0]["course_code"], format!("{prefix}-EnrolledIn"));
-    assert_eq!(page["total"], 1);
+    assert_eq!(
+        body.as_array().expect("array").len(),
+        1,
+        "a student with one enrollment gets one element"
+    );
 
     // A teacher who is not enrolled anywhere sees nothing (scoping is by
     // enrollment, not by global role).
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
-    let page = list_courses(&server, &auth(teacher, "teacher"), "").await;
-    let ours = our_courses(&page, &prefix);
+    let body = list_courses(&server, &auth(teacher, "teacher"), "").await;
+    let ours = our_courses(&body, &prefix);
     assert_eq!(
         ours.len(),
         0,
@@ -860,17 +858,23 @@ async fn update_course_by_course_teacher_changes_fields() {
     assert_eq!(body["id"], course);
     assert_eq!(body["name"], "Rust 201");
     assert_eq!(body["course_code"], format!("{prefix}-UpdMe-2"));
-    assert_eq!(body["description"], "now with more generics");
     assert_eq!(body["workflow_state"], "completed");
+    assert!(
+        body.get("description").is_none(),
+        "PUT returns the Canvas course_json body, which has no description key: {body}"
+    );
 
     // Row actually updated in the DB.
-    let (name, ws): (String, String) =
-        sqlx::query_as("SELECT name, workflow_state FROM courses WHERE id = $1")
+    let (name, desc, ws): (String, Option<String>, String) =
+        sqlx::query_as("SELECT name, description, workflow_state FROM courses WHERE id = $1")
             .bind(course)
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!((name.as_str(), ws.as_str()), ("Rust 201", "completed"));
+    assert_eq!(
+        (name.as_str(), desc.as_deref(), ws.as_str()),
+        ("Rust 201", Some("now with more generics"), "completed")
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -902,9 +906,19 @@ async fn update_course_partial_patch_keeps_other_fields() {
     let body: Value = resp.json();
     assert_eq!(body["name"], "Only Name Changed");
     assert_eq!(body["course_code"], format!("{prefix}-PatchMe"));
-    assert_eq!(body["description"], "original desc");
-    assert_eq!(body["syllabus_body"], "orig syllabus");
     assert_eq!(body["workflow_state"], "available");
+
+    // The untouched columns keep their values. They are checked in the DB
+    // rather than the response because neither is a Canvas course_json key
+    // (`syllabus_body` only appears with `include[]=syllabus_body`).
+    let (desc, syllabus): (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT description, syllabus_body FROM courses WHERE id = $1")
+            .bind(course)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(desc.as_deref(), Some("original desc"));
+    assert_eq!(syllabus.as_deref(), Some("orig syllabus"));
 
     // updated_at is bumped by the UPDATE.
     let (bumped,): (bool,) =
@@ -1778,10 +1792,11 @@ async fn full_lifecycle_create_update_enroll_unenroll_delete() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
 
-    // 1. Teacher creates a course (auto teacher enrollment).
+    // 1. Teacher creates a course in an account (auto teacher enrollment).
     let code = format!("{prefix}-Lifecycle");
+    let lifecycle_account = seed_account(&pool, &prefix, "LifecycleAccount").await;
     let resp = server
-        .post("/courses")
+        .post(&format!("/accounts/{lifecycle_account}/courses"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .json(&json!({ "name": "Lifecycle 101", "course_code": code, "workflow_state": "unpublished" }))
         .await;

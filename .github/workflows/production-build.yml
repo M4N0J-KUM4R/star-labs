@@ -16,7 +16,7 @@ on:
     branches: [main]
     paths:
       - 'migration/**'
-      - '.github/workflows/production-build.yml'
+      - '.github/workflows/**'
   pull_request:
     paths:
       - 'specs/**'
@@ -24,7 +24,7 @@ on:
       - 'orchestration/**'
       - 'tools/ci/**'
       - 'browser-smoke/**'
-      - '.github/workflows/production-build.yml'
+      - '.github/workflows/**'
   merge_group:
   workflow_dispatch:
     inputs:

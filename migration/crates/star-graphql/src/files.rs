@@ -118,8 +118,6 @@ impl File {
         &self.display_name
     }
 
-    /// Canvas `File.title` (schema.graphql): the item title, like every
-    /// ModuleItemInterface member; files use the filename.
     async fn title(&self) -> &str {
         &self.filename
     }
@@ -128,9 +126,6 @@ impl File {
         &self.content_type
     }
 
-    /// Canvas `File.mimeClass` (file_type.rb:46): the coarse class of the
-    /// content type (image, video, document, ...), derived from the first
-    /// segment like Canvas's MimeClass conversion.
     async fn mime_class(&self) -> &str {
         match self.content_type.split('/').next().unwrap_or("file") {
             "image" => "image",
@@ -143,8 +138,6 @@ impl File {
         }
     }
 
-    /// Canvas `File.size` is a String (file_type.rb:60); star-lms emits the
-    /// raw byte count, like the REST files API.
     async fn size(&self) -> String {
         self.size.to_string()
     }
@@ -169,7 +162,6 @@ impl File {
         self.unlock_at
     }
 
-    /// Canvas `File.folder` (file_type.rb:82).
     async fn folder(&self, ctx: &Context<'_>) -> Result<Option<Folder>, async_graphql::Error> {
         let Some(folder_id) = self.folder_id else {
             return Ok(None);
@@ -242,7 +234,6 @@ impl Folder {
         self.parent_folder_id.map(|id| ID(id.to_string()))
     }
 
-    /// Canvas `Folder.parentFolder` (schema.graphql).
     async fn parent_folder(
         &self,
         ctx: &Context<'_>,
@@ -258,8 +249,6 @@ impl Folder {
         self.position
     }
 
-    /// Canvas `Folder.hidden` — star-lms folders use the Canvas folder
-    /// states (visible/hidden), not a boolean column.
     async fn hidden(&self) -> bool {
         self.workflow_state == "hidden"
     }
@@ -276,13 +265,10 @@ impl Folder {
         self.unlock_at
     }
 
-    /// Canvas `Folder.currentlyLocked`: locked now or scheduled to lock
-    /// (schema.graphql, non-null).
     async fn currently_locked(&self) -> bool {
         self.locked || self.lock_at.map(|t| t <= Utc::now()).unwrap_or(false)
     }
 
-    /// Canvas `Folder.rootFolder`: no parent folder (schema.graphql).
     async fn root_folder(&self) -> bool {
         self.parent_folder_id.is_none()
     }
@@ -313,8 +299,6 @@ impl Folder {
         Ok(count)
     }
 
-    /// Canvas `Folder.files` (folder_type.rb:52) — a plain list, ordered
-    /// by id for determinism.
     async fn files(&self, ctx: &Context<'_>) -> Result<Vec<File>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         let rows: Vec<FileRow> = sqlx::query_as(
@@ -333,7 +317,6 @@ impl Folder {
         Ok(rows.into_iter().map(file_from_row).collect())
     }
 
-    /// Canvas `Folder.subFolders` (folder_type.rb:59).
     async fn sub_folders(&self, ctx: &Context<'_>) -> Result<Vec<Folder>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         let rows: Vec<FolderRow> = sqlx::query_as(

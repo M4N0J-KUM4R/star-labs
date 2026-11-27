@@ -18,7 +18,7 @@ on:
     branches: [main]
     paths:
       - 'migration/**'
-      - '.github/workflows/rust-migration.yml'
+      - '.github/workflows/**'
   pull_request:
     paths:
       - 'specs/**'
@@ -26,7 +26,7 @@ on:
       - 'orchestration/**'
       - 'tools/ci/**'
       - 'browser-smoke/**'
-      - '.github/workflows/rust-migration.yml'
+      - '.github/workflows/**'
   merge_group:
   workflow_dispatch:
 
@@ -124,6 +124,7 @@ jobs:
             crates: >-
               -p star-notifications -p star-accounts -p star-enrollments
               -p star-permissions -p star-groups -p star-assignment-groups
+              -p star-gradebook
               -p star-jobs
               -p star-eportfolios -p star-polling -p star-search -p star-sis
           - shard: 3
@@ -196,6 +197,13 @@ jobs:
     needs: [changes, test-shard, shard-coverage]
     if: always()
     steps:
+      - name: Checkout for the ledger check
+        uses: actions/checkout@v4
+      - name: Migration reservation ledger consistency
+        run: |
+          set -euo pipefail
+          echo "validating orchestration/migration-reservations.json ..."
+          python3 orchestration/check-migration-ledger.py .
       - name: Require every shard to have passed
         run: |
           set -euo pipefail

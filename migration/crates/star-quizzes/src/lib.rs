@@ -13,11 +13,13 @@
 //! - `published` is Canvas' boolean workflow equivalent; Canvas soft-deletes via
 //!   workflow_state='deleted' while keeping submissions — we hard-delete
 //!   instead (submissions cascade away with the quiz). Documented difference.
-//! - POST /quizzes/{id}/start is Canvas' "take" alias for beginning a
-//!   quiz_submission; we keep the /start endpoint name.
+//! - Canvas' quiz-attempt surface is course-scoped: `POST
+//!   /courses/{courseId}/quizzes/{id}/submissions` starts an attempt (the
+//!   former `/quizzes/{id}/start` name is gone) and `GET
+//!   /courses/{courseId}/quizzes/{id}/submission` (singular) returns the
+//!   caller's own submission.
 //! - Canvas nested aliases live under /courses/{courseId}/quizzes/{id}:
-//!   GET/PUT/DELETE (quiz CRUD), POST .../submissions (start), and
-//!   GET .../submission (singular; the caller's own submission).
+//!   GET/PUT/DELETE (quiz CRUD).
 //! - Question routes are teacher/admin-only (Canvas authorizes `:update` even
 //!   for the question index); groups are readable by any enrolled user.
 //!   Question create returns 200, group create 201, deletes 204.
@@ -47,6 +49,8 @@ use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
+mod assessment_question_banks;
+mod quiz_family;
 pub mod quiz_submission_questions_api;
 use std::collections::{HashMap, HashSet};
 
@@ -667,16 +671,17 @@ async fn delete_quiz(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /quizzes/{id}/start — upsert quiz_submission started_at=now()  → 201
-/// Returns 409 Conflict if already started.
+/// Shared implementation behind
+/// `POST /courses/{courseId}/quizzes/{id}/submissions` — upsert quiz_submission
+/// started_at=now() → 201. Returns 409 Conflict if already started.
 ///
-/// Canvas parity note: Canvas' API calls this "take" (create a quiz
-/// submission). We keep the /start endpoint name as the alias.
+/// Canvas' API calls this "take": creating the quiz submission starts the
+/// attempt, so there is no separate `/start` endpoint.
 async fn start_quiz(
     State(state): State<AppState>,
     Path(quiz_id): Path<i64>,
     auth: AuthUser,
-) -> Result<(StatusCode, Json<QuizSubmission>), ApiError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     // Verify quiz exists and the caller is a student in its course
     let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM quizzes WHERE id = $1"#)
         .bind(quiz_id)
@@ -713,6 +718,7 @@ async fn start_quiz(
         return Err(ApiError::Conflict("quiz already started".into()));
     }
 
+    let validation_token = generate_validation_token();
     let submission: QuizSubmission = sqlx::query_as(
         r#"
         INSERT INTO quiz_submissions (quiz_id, user_id, started_at, validation_token)
@@ -722,11 +728,17 @@ async fn start_quiz(
     )
     .bind(quiz_id)
     .bind(auth.id)
-    .bind(generate_validation_token())
+    .bind(&validation_token)
     .fetch_one(&state.db)
     .await?;
 
-    Ok((StatusCode::CREATED, Json(submission)))
+    // `QuizSubmission` carries no token field, but Canvas' take response does
+    // (`API::V1::QuizSubmission::QUIZ_SUBMISSION_JSON_FIELDS`), so the value
+    // just inserted is attached to the object returned to the student.
+    let mut value =
+        serde_json::to_value(&submission).map_err(|e| ApiError::BadRequest(e.to_string()))?;
+    value["validation_token"] = serde_json::Value::String(validation_token);
+    Ok((StatusCode::CREATED, Json(value)))
 }
 
 /// Start (or resume) the caller's single submission for a quiz.
@@ -796,7 +808,9 @@ pub async fn start_or_resume_submission(
     Ok(submission)
 }
 
-/// GET /quizzes/{id}/submissions/me
+/// Shared implementation behind
+/// `GET /courses/{courseId}/quizzes/{id}/submission` (Canvas
+/// `course_quiz_user_submission`, the caller's own submission).
 async fn get_my_submission(
     State(state): State<AppState>,
     Path(quiz_id): Path<i64>,
@@ -902,19 +916,19 @@ async fn delete_course_quiz(
     delete_quiz(State(state), Path::<i64>(quiz_id), auth).await
 }
 
-/// POST /courses/{courseId}/quizzes/{id}/submissions — Canvas start alias
-/// (delegates to POST /quizzes/{id}/start).
+/// POST /courses/{courseId}/quizzes/{id}/submissions — Canvas
+/// `quiz_submissions_api#create`: starting an attempt.
 async fn start_course_quiz_submission(
     State(state): State<AppState>,
     Path((course_id, quiz_id)): Path<(i64, i64)>,
     auth: AuthUser,
-) -> Result<(StatusCode, Json<QuizSubmission>), ApiError> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     require_quiz_in_course(&state.db, quiz_id, course_id).await?;
     start_quiz(State(state), Path::<i64>(quiz_id), auth).await
 }
 
-/// GET /courses/{courseId}/quizzes/{id}/submission (singular) — Canvas alias
-/// for GET /quizzes/{id}/submissions/me, returning the caller's submission.
+/// GET /courses/{courseId}/quizzes/{id}/submission (singular) — Canvas
+/// `course_quiz_user_submission`, returning the caller's submission.
 async fn get_course_my_submission(
     State(state): State<AppState>,
     Path((course_id, quiz_id)): Path<(i64, i64)>,
@@ -2520,6 +2534,8 @@ async fn validate_access_code(
 /// Build the quizzes router.
 pub fn router() -> Router<AppState> {
     Router::new()
+        .merge(assessment_question_banks::question_banks_routes())
+        .merge(quiz_family::quiz_family_routes())
         // The questions of a quiz submission.
         .merge(quiz_submission_questions_api::router())
         // Course-level

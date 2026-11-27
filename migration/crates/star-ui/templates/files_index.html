@@ -1,0 +1,76 @@
+{% extends "layouts/course.html" %}
+{# Files index — Canvas files#index (left folder tree, breadcrumb of folder
+   names, file table: name link, size, type, updated). Teachers see the
+   storage quota. Read-only: the :files concern (config/routes.rb:114-129)
+   does route POST .../files, but it targets files#create and FilesController
+   has no such action — real uploads go through the API
+   (POST /api/v1/courses/:course_id/files => courses#create_file) with a
+   multipart attachment, and this workspace stores file metadata with no byte
+   backing store. Deviation: no hidden/locked icons. #}
+{% block content %}
+  <div id="files_index" class="files-index">
+    <div class="ic-Action-header">
+      <div class="ic-Action-header__Primary">
+        <h1 class="files-index__title">Files</h1>
+      </div>
+    </div>
+
+    <div class="files-layout">
+      <aside class="files-tree" aria-label="Folders">
+        <ul class="files-tree__list">
+          {% for folder in folders %}
+          <li class="files-tree__item">
+            <a href="/courses/{{ course_id }}/files?folder_id={{ folder.id }}" class="files-tree__link">{{ folder.name }}</a>
+          </li>
+          {% endfor %}
+          {% if folders.is_empty() %}
+          <li class="files-tree__empty">No subfolders</li>
+          {% endif %}
+        </ul>
+      </aside>
+
+      <section class="files-main">
+        <nav class="files-breadcrumb" aria-label="Folder path">
+          {% for crumb in trail %}
+          {% if !loop.first %} / {% endif %}
+          <a href="/courses/{{ course_id }}/files?folder_id={{ crumb.id }}">{{ crumb.name }}</a>
+          {% endfor %}
+        </nav>
+
+        {% if can_manage %}
+        <div class="files-quota">
+          <span class="files-quota__label">Storage used: {{ quota_used_mb }} MB of {{ quota_mb }} MB</span>
+          <progress class="files-quota__bar" value="{{ quota_used_mb }}" max="{{ quota_mb }}" aria-label="Storage used"></progress>
+        </div>
+        {% endif %}
+
+        <table class="files-table" id="files_table">
+          <caption class="screenreader-only">Files in {{ course_name }}</caption>
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Size</th>
+              <th scope="col">Type</th>
+              <th scope="col">Modified</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% if files.is_empty() %}
+            <tr class="files-table__empty">
+              <td colspan="4">No files have been added to this folder yet.</td>
+            </tr>
+            {% endif %}
+            {% for file in files %}
+            <tr class="file-row" id="file_{{ file.id }}">
+              <td class="file-name"><a href="/courses/{{ course_id }}/files/{{ file.id }}">{{ file.name }}</a></td>
+              <td class="file-size">{{ file.size }}</td>
+              <td class="file-type">{{ file.content_type }}</td>
+              <td class="file-updated">{{ file.updated_at }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </section>
+    </div>
+  </div>
+{% endblock content %}

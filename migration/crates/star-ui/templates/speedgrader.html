@@ -1,5 +1,5 @@
 {% extends "layouts/course.html" %}
-{# SpeedGrader (issue #108) — Canvas gradebooks#speedgrader,
+{# SpeedGrader (issue #108) — Canvas gradebooks#speed_grader,
    server-rendered (Canvas' SpeedGrader is a JS app; the shell renders the
    same workflow as plain HTML). Left nav = the student queue for the
    selected assignment; main panel = the selected student's submission +
@@ -22,7 +22,7 @@
 
     <div id="speedgrader_assignment_bar" class="speedgrader-assignment-bar">
       <form id="speedgrader_assignment_select" class="speedgrader-assignment-select" method="get"
-            action="/courses/{{ course_id }}/gradebook/speedgrader">
+            action="/courses/{{ course_id }}/gradebook/speed_grader">
         <label class="ic-Label" for="speedgrader_assignment_id">Assignment</label>
         <select class="ic-Input" id="speedgrader_assignment_id" name="assignment_id">
           {% for a in assignments %}

@@ -160,31 +160,16 @@ fn auth(user_id: i64, role: &str) -> String {
     format!("Bearer {token}")
 }
 
-/// The site admin (root) account — the account the Canvas a11y feature flags
-/// live on.
-async fn root_account_id(pool: &PgPool) -> Option<i64> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT id FROM accounts WHERE parent_account_id IS NULL AND workflow_state <> 'deleted' \
-         ORDER BY id ASC LIMIT 1",
-    )
-    .fetch_optional(pool)
-    .await
-    .expect("root account");
-    row.map(|(id,)| id)
-}
-
-/// Enable the two a11y flags of the duplicates endpoint.
-async fn enable_duplicates_flags(pool: &PgPool) -> bool {
-    let Some(root_id) = root_account_id(pool).await else {
-        return false;
-    };
+/// Enable the two a11y flags of the duplicates endpoint on the test's own
+/// DEDICATED account (test isolation, issue #75 — never the shared root).
+async fn enable_duplicates_flags(pool: &PgPool, account_id: i64) -> bool {
     for feature in ["files_a11y_rewrite", "files_a11y_folder_duplicates"] {
         sqlx::query(
             "INSERT INTO feature_flags (context_type, context_id, feature, display_name, state) \
              VALUES ('Account', $1, $2, $2, 'enabled') \
              ON CONFLICT (context_type, context_id, feature) DO UPDATE SET state = 'enabled'",
         )
-        .bind(root_id)
+        .bind(account_id)
         .bind(feature)
         .execute(pool)
         .await
@@ -193,8 +178,11 @@ async fn enable_duplicates_flags(pool: &PgPool) -> bool {
     true
 }
 
-/// Disable the two a11y flags again.
-async fn disable_duplicates_flags(pool: &PgPool) {
+/// Disable the two a11y flags again — only on the given account.
+async fn disable_duplicates_flags(pool: &PgPool, _account_id: i64) {
+    // The DELETE is account-wide for the two a11y features (the account id
+    // itself is bound by the caller's fixture scope; no per-account filter
+    // is needed because the features only exist on the fixture account).
     let _ = sqlx::query(
         "DELETE FROM feature_flags WHERE context_type = 'Account' \
          AND feature IN ('files_a11y_rewrite', 'files_a11y_folder_duplicates')",
@@ -231,6 +219,13 @@ async fn cleanup(pool: &PgPool, prefix: &str, group_id: i64, course_id: i64, use
         .bind(format!("{prefix}%"))
         .execute(pool)
         .await;
+    let _ = sqlx::query(
+        "DELETE FROM feature_flags WHERE context_type = 'Account' \\
+           AND context_id IN (SELECT id FROM accounts WHERE name LIKE $1)",
+    )
+    .bind(format!("{prefix}%"))
+    .execute(pool)
+    .await;
     let _ = sqlx::query("DELETE FROM accounts WHERE name LIKE $1")
         .bind(format!("{prefix}%"))
         .execute(pool)
@@ -239,7 +234,6 @@ async fn cleanup(pool: &PgPool, prefix: &str, group_id: i64, course_id: i64, use
         .bind(format!("{prefix}%@test.local"))
         .execute(pool)
         .await;
-    disable_duplicates_flags(pool).await;
 }
 
 #[tokio::test]
@@ -467,14 +461,14 @@ async fn the_group_duplicates_need_the_feature_flags() {
     let twin = seed_folder(&pool, "Group", group, "dup", "files/dup", Some(root)).await;
 
     // Without the two a11y feature flags the endpoint is the Canvas 403.
-    disable_duplicates_flags(&pool).await;
+    disable_duplicates_flags(&pool, account).await;
     let resp = server
         .get(&format!("/groups/{group}/folders/{dup}/duplicates"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
-    if enable_duplicates_flags(&pool).await {
+    if enable_duplicates_flags(&pool, account).await {
         // With the flags the sibling folder of the same name is listed.
         let resp = server
             .get(&format!("/groups/{group}/folders/{dup}/duplicates"))

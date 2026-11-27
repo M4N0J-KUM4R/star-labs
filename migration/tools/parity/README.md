@@ -28,6 +28,38 @@ python3 tools/parity/parity.py report \
 CI (`.github/workflows/parity.yml`) runs only `report`; it never checks out
 Canvas.
 
+## Publishing from CI
+
+`report` is deterministic, so CI commits its own output (issue #74). The
+`publish` job downloads the `parity-report` artifact from the `parity` job and
+commits those exact bytes — nothing is recomputed, so the branch and the
+artifact cannot disagree.
+
+- Target: the `parity-data` branch, not `main`. The `Phase 4 main gate` ruleset
+  puts `main` behind a `pull_request` rule with no bypass actors, so a workflow
+  token cannot write there and every main write stays under the coordinator's
+  exact-SHA merge gate (issue #20).
+- Trigger: every `push` to `main` (i.e. after each merge). `workflow_dispatch`
+  with `publish=yes` rehearses the same code path from a lane branch.
+- Committed: `report.md`, `coverage.json`, `baseline.json`.
+  `canvas_manifest.json` is an input and is never republished.
+- Runs are no-ops when the numbers have not moved; a coverage regression fails
+  the `parity` job (baseline guard above), which skips `publish` and leaves the
+  last good numbers in place.
+- `migration/parity/` on `main` stays as the ratchet input and as the seed for
+  the first data-only commit; read `parity-data` for live numbers. As of
+  2026-11-18 main's copy said 244/1403 while CI measured 481/1403.
+
+Refresh the branch by hand (normally unnecessary):
+
+```sh
+gh workflow run "Parity scoreboard" --ref main -f publish=yes
+```
+
+Route totals only move when a human refreshes the manifest from a Canvas
+checkout — CI has no Canvas source, so "live" means live against the committed
+manifest.
+
 ## Baseline policy
 
 `parity/baseline.json` stores the implemented REST route count. `report` exits
@@ -62,6 +94,18 @@ still writes `coverage.json` and `report.md` but leaves the baseline untouched.
   nesting. Context loops expand every value with `#{context}`,
   `#{context.pluralize}`, `:#{context}_id`, and `#{path_prefix}`
   substitutions (including the tuple form).
+- Rails also registers the form verbs (`GET <collection>/new`,
+  `GET <member>/edit`) for every `resources`/`resource`, but Canvas only
+  *serves* the ones whose controller action and view both exist, so the
+  extractor keeps those through `SERVED_FORM_PAGES` and drops the rest as
+  dead surface (the constant's comment carries the file:line proof for each
+  kept and each dropped page). This is why the API denominator is unchanged
+  by the rule: `/api/v1/groups/new` has an action but no template.
+- A bare symbol route inside an explicit `collection do` block (`get
+  :syllabus`, `post :reorder`) lands on the collection path, not the member
+  path — Canvas has both shapes, and mixing them up misplaces ~30 web rows
+  such as `courses/:course_id/assignments/syllabus`
+  (canvas-src/config/routes.rb:344-346).
 - Conditional context prefixes of the form
   `prefix = ((context == "global") ? context : "#{context}s/:#{context}_id")`
   are evaluated per loop binding, and `if`/`unless context == "literal"` guards

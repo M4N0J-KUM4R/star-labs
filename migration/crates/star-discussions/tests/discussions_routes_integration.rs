@@ -223,13 +223,15 @@ async fn entries_crud_happy_path_and_student_cannot_moderate() {
     assert_eq!(list.as_array().map(Vec::len), Some(1));
     assert_eq!(list[0]["replies"].as_array().map(Vec::len), Some(1));
 
-    // Single-entry GET works for any enrolled user.
+    // Canvas has no single-entry GET route — the entry body is read through
+    // the topic's entries list (routes.rb:1659), which is what we serve.
     let resp = server
-        .get(&format!("{base}/entries/{entry_id}"))
+        .get(&format!("{base}/entries"))
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    assert_eq!(resp.json::<Value>()["message"], "first post");
+    let list: Value = resp.json();
+    assert_eq!(list[0]["message"], "first post");
 
     // The author may update their own entry.
     let resp = server
@@ -266,10 +268,11 @@ async fn entries_crud_happy_path_and_student_cannot_moderate() {
         .await;
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
 
-    // The soft-deleted entry is gone from the list and the single GET.
+    // The soft-deleted entry is gone from the list, and a second DELETE of it
+    // is a 404 (Canvas discussion_entries#destroy on a deleted entry).
     let resp = server
-        .get(&format!("{base}/entries/{entry_id}"))
-        .add_header(axum::http::header::AUTHORIZATION, auth(author, "student"))
+        .delete(&format!("{base}/entries/{entry_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
     let resp = server

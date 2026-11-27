@@ -253,8 +253,11 @@ async fn account_logins_lists_the_logins_of_the_account() {
     let account = seed_account(&pool, &prefix, "root", None).await;
     let login = seed_pseudonym(&pool, student, account, "student@example.com", 1).await;
 
+    // Canvas `get_user` (pseudonyms_controller.rb:375-379): without
+    // `user_id` the scope is the CALLER's own logins, so the admin has
+    // to name the student to list their login.
     let response = server
-        .get(&format!("/accounts/{account}/logins"))
+        .get(&format!("/accounts/{account}/logins?user_id={student}"))
         .add_header(AUTHORIZATION, auth(admin, "admin"))
         .await;
     assert_eq!(response.status_code(), 200, "body: {}", response.text());

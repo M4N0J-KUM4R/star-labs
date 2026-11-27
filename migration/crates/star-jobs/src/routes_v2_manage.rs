@@ -18,6 +18,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use sqlx::PgPool;
 
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
@@ -25,19 +26,43 @@ use star_common::{ApiError, AppState};
 use crate::require_admin;
 
 /// Request body for `PUT /jobs2/manage`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct ManageRequest {
     pub strand: Option<String>,
     pub max_concurrent: Option<i32>,
     pub priority: Option<i32>,
 }
 
+impl ManageRequest {
+    /// Rails `params`: the query string and the request body merge, the body
+    /// wins.
+    fn merge(self, other: Self) -> Self {
+        Self {
+            strand: self.strand.or(other.strand),
+            max_concurrent: self.max_concurrent.or(other.max_concurrent),
+            priority: self.priority.or(other.priority),
+        }
+    }
+}
+
 /// Request body for `PUT /jobs2/unstuck`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct UnstuckRequest {
     pub strand: Option<String>,
     pub singleton: Option<String>,
     pub job_shards: Option<Vec<i64>>,
+}
+
+impl UnstuckRequest {
+    /// Rails `params`: the query string and the request body merge, the body
+    /// wins.
+    fn merge(self, other: Self) -> Self {
+        Self {
+            strand: self.strand.or(other.strand),
+            singleton: self.singleton.or(other.singleton),
+            job_shards: self.job_shards.or(other.job_shards),
+        }
+    }
 }
 
 /// Query params for `GET /jobs2/throttle/check`.
@@ -56,14 +81,19 @@ pub struct ManageResponse {
 
 /// `PUT /api/v1/jobs2/manage` — update strand concurrency/priority.
 ///
-/// Canvas: `JobsV2Controller#manage` — updates every job in the strand;
-/// `max_concurrent` and `priority` are only written when present.
+/// Canvas: `JobsV2Controller#manage` — updates every job in the strand
+/// (`max_concurrent` and `priority` are only written when present) and then
+/// unblocks the strand up to the new parallelism
+/// (`SwitchmanInstJobs::JobsMigrator.unblock_strand!`).
 pub async fn manage_strand(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(payload): Json<ManageRequest>,
+    Query(query): Query<ManageRequest>,
+    body: Option<Json<ManageRequest>>,
 ) -> Result<Json<ManageResponse>, ApiError> {
     require_admin(&auth)?;
+
+    let payload = query.merge(body.map(|Json(body)| body).unwrap_or_default());
 
     // Canvas: `render json: { message: "missing strand" }, status: :bad_request`.
     // The field is optional so a missing key is answered here (400) rather
@@ -79,8 +109,10 @@ pub async fn manage_strand(
 
     // Canvas only includes the fields that were sent in update_all.
     let mut sets = Vec::new();
+    let mut new_parallelism: Option<i64> = None;
     if let Some(max_concurrent) = payload.max_concurrent {
         sets.push(format!("max_concurrent = {}", max_concurrent.max(1)));
+        new_parallelism = Some(i64::from(max_concurrent.max(1)));
     }
     if let Some(priority) = payload.priority {
         sets.push(format!("priority = {priority}"));
@@ -97,6 +129,12 @@ pub async fn manage_strand(
 
     let updated = sqlx::query(&sql).bind(strand).execute(&state.db).await?;
 
+    // Canvas unblocks the strand up to the new parallelism (only when
+    // `max_concurrent` was among the update args).
+    if let Some(parallelism) = new_parallelism {
+        unblock_strand(&state.db, strand, parallelism).await?;
+    }
+
     Ok(Json(ManageResponse {
         status: "OK".to_string(),
         count: updated.rows_affected() as i64,
@@ -105,66 +143,63 @@ pub async fn manage_strand(
 
 /// `PUT /api/v1/jobs2/unstuck` — unstick a strand, singleton, or all shards.
 ///
-/// Canvas: `JobsV2Controller#unstuck`.
+/// Canvas: `JobsV2Controller#unstuck` →
+/// `SwitchmanInstJobs::JobsMigrator.unblock_strand!` / `unblock_singleton!`.
 /// Three modes:
-/// 1. `strand` provided → unblock the strand (set next_in_strand = true).
-/// 2. `singleton` provided → unblock the singleton.
+/// 1. `strand` provided → unblock the strand up to its parallelism
+///    (`MAX(max_concurrent)`); the number of jobs that became runnable is
+///    the count. An unknown strand is a 404 (Canvas' `count.nil?`).
+/// 2. `singleton` provided → unblock the singleton's oldest job unless one
+///    is already runnable.
 /// 3. Neither → create a progress record and return 202 (no background worker).
 pub async fn unstuck_strand(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(payload): Json<UnstuckRequest>,
+    Query(query): Query<UnstuckRequest>,
+    body: Option<Json<UnstuckRequest>>,
 ) -> Result<Response, ApiError> {
     require_admin(&auth)?;
 
-    if let Some(ref strand) = payload.strand {
-        // Mode 1: unstick by strand.
-        let updated = sqlx::query(
-            r#"
-            UPDATE jobs
-            SET next_in_strand = TRUE,
-                locked_by = NULL,
-                locked_at = NULL,
-                updated_at = NOW()
-            WHERE strand = $1
-              AND workflow_state = 'queued'
-            "#,
-        )
-        .bind(strand)
-        .execute(&state.db)
-        .await?;
+    let payload = query.merge(body.map(|Json(body)| body).unwrap_or_default());
 
-        let count = updated.rows_affected();
-        return Ok(Json(json!({
-            "status": if count > 0 { "OK" } else { "blocked" },
-            "count": count
-        }))
-        .into_response());
+    if let Some(ref strand) = payload.strand {
+        // Mode 1: unstick by strand (Canvas `unblock_strand!`).
+        // `MAX(max_concurrent)` over an empty strand is NULL — Canvas then
+        // answers `ActiveRecord::RecordNotFound`.
+        let (parallelism,): (Option<i32>,) =
+            sqlx::query_as("SELECT MAX(max_concurrent) FROM jobs WHERE strand = $1")
+                .bind(strand)
+                .fetch_one(&state.db)
+                .await?;
+        let Some(parallelism) = parallelism else {
+            return Err(ApiError::NotFound);
+        };
+        let count = unblock_strand(&state.db, strand, i64::from(parallelism)).await?;
+        return Ok(Json(json!({ "status": "OK", "count": count })).into_response());
     }
 
     if let Some(ref singleton) = payload.singleton {
-        // Mode 2: unstick by singleton.
-        let updated = sqlx::query(
-            r#"
-            UPDATE jobs
-            SET next_in_strand = TRUE,
-                locked_by = NULL,
-                locked_at = NULL,
-                updated_at = NOW()
-            WHERE singleton = $1
-              AND workflow_state = 'queued'
-            "#,
+        // Mode 2: unstick by singleton (Canvas `unblock_singleton!`): nothing
+        // to do when a job is already next in strand, otherwise the oldest
+        // job of the singleton becomes runnable; an unknown singleton is a
+        // 404 (Canvas' `count.nil?`).
+        let (oldest_id, any_next): (Option<i64>, Option<bool>) = sqlx::query_as(
+            "SELECT MIN(id), BOOL_OR(next_in_strand) FROM jobs \
+             WHERE strand IS NULL AND singleton = $1",
         )
         .bind(singleton)
-        .execute(&state.db)
+        .fetch_one(&state.db)
         .await?;
-
-        let count = updated.rows_affected();
-        return Ok(Json(json!({
-            "status": if count > 0 { "OK" } else { "blocked" },
-            "count": count
-        }))
-        .into_response());
+        let count = match (any_next, oldest_id) {
+            (Some(true), _) => 0,
+            (_, Some(id)) => sqlx::query("UPDATE jobs SET next_in_strand = TRUE WHERE id = $1")
+                .bind(id)
+                .execute(&state.db)
+                .await?
+                .rows_affected() as i64,
+            (Some(false) | None, None) => return Err(ApiError::NotFound),
+        };
+        return Ok(Json(json!({ "status": "OK", "count": count })).into_response());
     }
 
     // Mode 3: neither strand nor singleton — create a progress record (no worker).
@@ -203,6 +238,44 @@ pub async fn unstuck_strand(
         })),
     )
     .into_response())
+}
+
+// ---------------------------------------------------------------------------
+// Canvas `SwitchmanInstJobs::JobsMigrator`
+// ---------------------------------------------------------------------------
+
+/// Canvas `unblock_strand!(strand, new_parallelism:)`: set `next_in_strand`
+/// on the oldest blocked, unlocked jobs of the strand until the parallelism
+/// is reached; returns how many jobs became runnable.
+async fn unblock_strand(db: &PgPool, strand: &str, parallelism: i64) -> Result<i64, ApiError> {
+    let (running,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM jobs WHERE strand = $1 AND next_in_strand = TRUE")
+            .bind(strand)
+            .fetch_one(db)
+            .await?;
+    let needed = parallelism - running;
+    if needed <= 0 {
+        return Ok(0);
+    }
+    let updated = sqlx::query(
+        r#"
+        UPDATE jobs SET next_in_strand = TRUE
+        WHERE id IN (
+            SELECT id FROM jobs
+            WHERE strand = $1
+              AND next_in_strand = FALSE
+              AND locked_by IS NULL
+              AND singleton IS NULL
+            ORDER BY id ASC
+            LIMIT $2
+        )
+        "#,
+    )
+    .bind(strand)
+    .bind(needed)
+    .execute(db)
+    .await?;
+    Ok(updated.rows_affected() as i64)
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -302,6 +375,18 @@ pub struct ThrottleRequest {
     pub shard_id: Option<i64>,
 }
 
+impl ThrottleRequest {
+    /// Rails `params`: the query string and the request body merge, the body
+    /// wins.
+    fn merge(self, other: Self) -> Self {
+        Self {
+            term: self.term.or(other.term),
+            max_concurrent: self.max_concurrent.or(other.max_concurrent),
+            shard_id: self.shard_id.or(other.shard_id),
+        }
+    }
+}
+
 /// Query params for `GET /jobs2/stuck/{strands,singletons}`.
 #[derive(Debug, Default, Deserialize)]
 pub struct StuckQuery {
@@ -327,13 +412,17 @@ struct StuckRow {
 /// `PUT /api/v1/jobs2/throttle` — Canvas `JobsV2Controller#throttle`.
 ///
 /// The matching jobs move to a fresh temporary strand, so they run one at a
-/// time.
+/// time (Canvas `Delayed::Job.apply_temp_strand!`). Like Rails' `params`, the
+/// arguments come from the query string or the request body.
 pub async fn throttle(
     State(state): State<AppState>,
     auth: AuthUser,
-    Query(params): Query<ThrottleRequest>,
+    Query(query): Query<ThrottleRequest>,
+    body: Option<Json<ThrottleRequest>>,
 ) -> Result<Json<Value>, ApiError> {
     require_admin(&auth)?;
+
+    let params = query.merge(body.map(|Json(body)| body).unwrap_or_default());
 
     let term = params
         .term
@@ -366,11 +455,16 @@ pub async fn throttle(
 
     let job_count = updated.rows_affected() as i64;
 
-    sqlx::query("UPDATE jobs SET next_in_strand = TRUE WHERE strand = $1 ORDER BY id LIMIT $2")
-        .bind(&new_strand)
-        .bind(i64::from(max_concurrent))
-        .execute(&mut *tx)
-        .await?;
+    // Canvas `apply_temp_strand!`: the `max_concurrent` oldest jobs of the
+    // new strand may run.
+    sqlx::query(
+        "UPDATE jobs SET next_in_strand = TRUE \
+         WHERE id IN (SELECT id FROM jobs WHERE strand = $1 ORDER BY id ASC LIMIT $2)",
+    )
+    .bind(&new_strand)
+    .bind(i64::from(max_concurrent))
+    .execute(&mut *tx)
+    .await?;
 
     tx.commit().await?;
 

@@ -26,6 +26,7 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 mod media_objects;
+mod services_api;
 
 mod media_tracks;
 
@@ -258,18 +259,23 @@ async fn list_media_attachments(
 }
 
 /// POST /media_attachments — create or refresh a metadata-only media object.
-async fn create_media_attachment(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Json(payload): Json<CreateMediaObject>,
+/// The context-less media-object create shared by POST /media_attachments
+/// and POST /media_objects (Canvas: without a context_code the create is
+/// attachment-scoped — a user-owned metadata object, 201).
+pub(crate) async fn create_media_object_like_attachment(
+    state: &AppState,
+    auth: &AuthUser,
+    media_id: Option<String>,
+    media_type: Option<String>,
+    title: Option<String>,
+    user_entered_title: Option<String>,
 ) -> Result<(StatusCode, Json<MediaObjectJson>), ApiError> {
-    if payload.media_id.trim().is_empty() {
+    let Some(media_id) = media_id.filter(|id| !id.trim().is_empty()) else {
         return Err(ApiError::Validation("media_id cannot be empty".into()));
-    }
-    let media_type = payload.media_type.as_deref().unwrap_or("video");
-    let title = payload.title.as_deref().map(truncate_title);
-    let user_entered_title = payload
-        .user_entered_title
+    };
+    let media_type = media_type.as_deref().unwrap_or("video");
+    let title = title.as_deref().map(truncate_title);
+    let user_entered_title = user_entered_title
         .as_deref()
         .filter(|value| !value.trim().is_empty())
         .map(truncate_title);
@@ -288,7 +294,7 @@ async fn create_media_attachment(
                   workflow_state, created_at, updated_at
         "#,
     )
-    .bind(&payload.media_id)
+    .bind(&media_id)
     .bind(media_type)
     .bind(&title)
     .bind(&user_entered_title)
@@ -297,7 +303,25 @@ async fn create_media_attachment(
     .await?;
 
     let tracks = load_tracks(&state.db, row.id).await?;
-    Ok((StatusCode::CREATED, Json(to_json(&auth, row, tracks)?)))
+    Ok((StatusCode::CREATED, Json(to_json(auth, row, tracks)?)))
+}
+
+/// POST /media_attachments — create via the shared context-less helper.
+#[allow(clippy::result_large_err)]
+async fn create_media_attachment(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<CreateMediaObject>,
+) -> Result<(StatusCode, Json<MediaObjectJson>), ApiError> {
+    create_media_object_like_attachment(
+        &state,
+        &auth,
+        Some(payload.media_id),
+        payload.media_type,
+        payload.title,
+        payload.user_entered_title,
+    )
+    .await
 }
 
 /// PUT /media_attachments/{id} — update `user_entered_title` (owner/admin).
@@ -359,6 +383,8 @@ async fn update_media_attachment(
 ///
 /// Canvas media-object track listing is scoped to `user_id = current_user`;
 /// `include[]=content|webvtt_content|updated_at|created_at` adds those fields.
+///
+/// Registered by `media_tracks::router()` (one registration per path).
 pub(crate) async fn list_media_tracks(
     State(state): State<AppState>,
     Path(id): Path<i64>,
@@ -430,7 +456,13 @@ pub(crate) async fn list_media_tracks(
 // ---------------------------------------------------------------------------
 
 pub fn router() -> Router<AppState> {
+    // One registration per path: axum 0.8 panics on overlapping routes,
+    // both within a single router and across `merge`. The media_objects /
+    // media_tracks submodules own the Canvas media_objects key space; the
+    // crate root keeps only the media_attachments CRUD that the submodules
+    // do not register (plus the services routes).
     Router::new()
+        .merge(services_api::services_routes())
         .merge(media_objects::router())
         .merge(media_tracks::router())
         .route(

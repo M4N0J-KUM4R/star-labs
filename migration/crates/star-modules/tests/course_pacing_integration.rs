@@ -197,7 +197,7 @@ async fn seed_feature(pool: &PgPool, account_id: i64, feature: &str) {
 async fn seed_blackout_date(pool: &PgPool, course_id: i64, start: &str, end: &str) {
     sqlx::query(
         "INSERT INTO blackout_dates (context_id, context_type, title, start_date, end_date) \
-         VALUES ($1, 'Course', 'Break', $2, $3)",
+         VALUES ($1, 'Course', 'Break', $2::timestamptz, $3::timestamptz)",
     )
     .bind(course_id)
     .bind(start)
@@ -212,6 +212,13 @@ fn auth(user_id: i64, role: &str) -> String {
         "Bearer {}",
         star_auth::create_token(user_id, role, JWT_SECRET).expect("mint token")
     )
+}
+
+/// Parse a fixed UTC instant for the due-date assertions.
+fn utc(text: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(text)
+        .expect("fixed test date")
+        .with_timezone(&chrono::Utc)
 }
 
 async fn cleanup(pool: &PgPool, prefix: &str) {
@@ -847,6 +854,168 @@ async fn a_student_may_not_manage_the_course_paces() {
         )
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    cleanup(&pool, &prefix).await;
+}
+
+// ---------------------------------------------------------------------------
+// Acceptance: pacing date propagation + per-student override isolation
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn publish_propagates_the_paced_due_dates_to_assignment_overrides() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let fixture = seed_fixture(&pool, &prefix).await;
+
+    // The plan starts at the course start (Canvas
+    // `restrict_enrollments_to_course_dates` defaults to true and the seeded
+    // course starts 2021-09-30), all days enabled, no blackout dates.
+    let resp = server
+        .post(&format!("/courses/{}/course_pacing", fixture.course_id))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(fixture.teacher_id, "teacher"),
+        )
+        .json(&json!({
+            "course_pace": {
+                "workflow_state": "active",
+                "course_pace_module_items_attributes": [
+                    { "module_item_id": fixture.module_item_id, "duration": 2 }
+                ]
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // Publishing marks the pace published.
+    let published: (Option<chrono::DateTime<chrono::Utc>>,) =
+        sqlx::query_as("SELECT published_at FROM course_paces WHERE course_id = $1")
+            .bind(fixture.course_id)
+            .fetch_one(&pool)
+            .await
+            .expect("load the pace");
+    assert!(published.0.is_some(), "the pace is published");
+
+    // The paced due date lands on the student as the ad-hoc override Canvas
+    // `CoursePace#publish` writes: the course starts 2021-09-30 and the item
+    // runs 2 days, all days enabled.
+    let overrides: Vec<(String, Vec<i64>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT title, student_ids, due_at FROM assignment_overrides \
+         WHERE assignment_id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(fixture.assignment_id)
+    .fetch_all(&pool)
+    .await
+    .expect("load the paced overrides");
+    assert_eq!(overrides.len(), 1, "one 'Course Pacing' override");
+    assert_eq!(overrides[0].0, "Course Pacing");
+    assert_eq!(overrides[0].1, vec![fixture.student_id]);
+    assert_eq!(overrides[0].2, utc("2021-10-02T00:00:00Z"));
+
+    cleanup(&pool, &prefix).await;
+}
+
+#[tokio::test]
+async fn a_user_pace_does_not_move_the_other_students_paced_due_date() {
+    let Some((server, pool, prefix)) = setup().await else {
+        return;
+    };
+    let fixture = seed_fixture(&pool, &prefix).await;
+    let other_id = seed_user(&pool, &prefix, "Student2", "student").await;
+    let other_enrollment_id = seed_enrollment(&pool, other_id, fixture.course_id, "student").await;
+    // A user pace plans from the enrollment start (Canvas
+    // `CoursePace#start_date` prefers the enrollment), so pin it to the course
+    // start to make the dates deterministic.
+    sqlx::query("UPDATE enrollments SET start_at = '2021-09-30T00:00:00Z' WHERE id = $1")
+        .bind(other_enrollment_id)
+        .execute(&pool)
+        .await
+        .expect("pin the enrollment start");
+
+    // The course pace gives both students the same date, so they share one
+    // override (Canvas: the second student joins the `correct_date_override`).
+    let resp = server
+        .post(&format!("/courses/{}/course_pacing", fixture.course_id))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(fixture.teacher_id, "teacher"),
+        )
+        .json(&json!({
+            "course_pace": {
+                "workflow_state": "active",
+                "course_pace_module_items_attributes": [
+                    { "module_item_id": fixture.module_item_id, "duration": 2 }
+                ]
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    let shared: Vec<(Vec<i64>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT student_ids, due_at FROM assignment_overrides \
+         WHERE assignment_id = $1 AND workflow_state <> 'deleted'",
+    )
+    .bind(fixture.assignment_id)
+    .fetch_all(&pool)
+    .await
+    .expect("load the shared override");
+    assert_eq!(shared.len(), 1, "one shared override");
+    assert!(shared[0].0.contains(&fixture.student_id));
+    assert!(shared[0].0.contains(&other_id));
+    assert_eq!(shared[0].1, utc("2021-10-02T00:00:00Z"));
+
+    // A per-student pace for the second student: 5 days from the start.
+    let resp = server
+        .post(&format!("/courses/{}/course_pacing", fixture.course_id))
+        .add_header(
+            axum::http::header::AUTHORIZATION,
+            auth(fixture.teacher_id, "teacher"),
+        )
+        .json(&json!({
+            "course_pace": {
+                "user_id": other_id,
+                "workflow_state": "active",
+                "course_pace_module_items_attributes": [
+                    { "module_item_id": fixture.module_item_id, "duration": 5 }
+                ]
+            }
+        }))
+        .await;
+    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+
+    // The paced student got their own override with their own date, and the
+    // other student keeps the date the course pace gave them — the membership
+    // moved, the shared row was not edited in place.
+    let overrides: Vec<(Vec<i64>, chrono::DateTime<chrono::Utc>)> = sqlx::query_as(
+        "SELECT student_ids, due_at FROM assignment_overrides \
+         WHERE assignment_id = $1 AND workflow_state <> 'deleted' ORDER BY id",
+    )
+    .bind(fixture.assignment_id)
+    .fetch_all(&pool)
+    .await
+    .expect("load the overrides after the user pace");
+    assert_eq!(overrides.len(), 2, "one override per date");
+
+    let for_other = overrides
+        .iter()
+        .find(|row| row.1 == utc("2021-10-05T00:00:00Z"))
+        .expect("the user pace date");
+    assert_eq!(for_other.0, vec![other_id]);
+
+    let for_first = overrides
+        .iter()
+        .find(|row| row.1 == utc("2021-10-02T00:00:00Z"))
+        .expect("the course pace date");
+    assert!(
+        for_first.0.contains(&fixture.student_id),
+        "the first student keeps the course pace date"
+    );
+    assert!(
+        !for_first.0.contains(&other_id),
+        "the user pace must not move the other student's due date"
+    );
 
     cleanup(&pool, &prefix).await;
 }

@@ -2,9 +2,9 @@
 //!
 //! Exposes `pub fn router() -> Router<AppState>` with endpoints:
 //! - GET/POST /courses/{courseId}/pages
-//! - GET/PUT/DELETE /pages/{id}   (id may be numeric id or url slug)
 //! - GET/PUT/DELETE /courses/{courseId}/pages/{id}
-//!   (Canvas v1 aliases for the flat routes; the page must belong to
+//!   (id may be a numeric id or a url slug; Canvas declares pages only under a
+//!   wiki context, so there is no flat /pages/{id} — the page must belong to
 //!   {courseId}, otherwise 404)
 //! - GET /courses/{courseId}/pages/{url}/revisions             (page history)
 //! - GET /courses/{courseId}/pages/{url}/revisions/latest      (current version)
@@ -16,6 +16,10 @@
 //! - GET/POST /groups/{groupId}/pages                          (group wiki; declined)
 //! - GET/PUT/DELETE /groups/{groupId}/pages/{urlOrId}          (group wiki; declined)
 //! - GET/PUT /groups/{groupId}/front_page                      (group wiki; declined)
+//! - GET  /groups/{groupId}/pages/{urlOrId}/revisions          (group wiki; declined)
+//! - GET  /groups/{groupId}/pages/{urlOrId}/revisions/latest   (group wiki; declined)
+//! - GET/POST /groups/{groupId}/pages/{urlOrId}/revisions/{revisionId}
+//!   (group wiki; declined)
 //!
 //! Canvas parity notes (wiki_page.rb, wiki_pages_api_controller.rb):
 //! - pages carry `url` (slug derived from title), `workflow_state`
@@ -49,6 +53,8 @@ use sqlx::PgPool;
 use star_common::{ApiError, ApiJson, AppState};
 
 use star_auth::AuthUser;
+
+mod page_revisions_gaps;
 
 // ---------------------------------------------------------------------------
 // Domain types
@@ -1653,17 +1659,6 @@ async fn create_group_page(
     Err(ApiError::Forbidden)
 }
 
-/// POST /groups/{groupId}/pages/{urlOrId} — same decline as the collection
-/// create; registered so the method is authorized (403) rather than a bare
-/// 405 from the router.
-async fn create_group_page_at(
-    state: State<AppState>,
-    Path((group_id, _page_ref)): Path<(i64, String)>,
-    auth: AuthUser,
-) -> Result<(StatusCode, Json<PageDetail>), ApiError> {
-    create_group_page(state, Path(group_id), auth).await
-}
-
 /// GET /groups/{groupId}/pages/{urlOrId} — Canvas group wiki pages#show
 /// (declined: no page can live in a group context in this schema).
 async fn show_group_page(
@@ -1911,10 +1906,6 @@ pub fn router() -> Router<AppState> {
             get(list_pages).post(create_page),
         )
         .route(
-            "/pages/{id}",
-            get(get_page).put(update_page).delete(delete_page),
-        )
-        .route(
             "/courses/{courseId}/pages/{id}",
             get(get_course_page)
                 .put(update_course_page)
@@ -1951,7 +1942,6 @@ pub fn router() -> Router<AppState> {
         .route(
             "/groups/{groupId}/pages/{urlOrId}",
             get(show_group_page)
-                .post(create_group_page_at)
                 .put(update_group_page)
                 .delete(delete_group_page),
         )
@@ -1979,6 +1969,8 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/pages/{urlOrId}/accessibility/queue_scan",
             post(accessibility_queue_scan),
         )
+        // Group-context revision routes (P5 gap; declined group wiki).
+        .merge(page_revisions_gaps::page_revisions_gaps_routes())
 }
 
 // ---------------------------------------------------------------------------

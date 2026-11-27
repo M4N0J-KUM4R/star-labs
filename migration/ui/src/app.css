@@ -1,0 +1,29 @@
+/* The only sheet this project authors, and it is three declarations long.
+ *
+ * Everything else — typography, colours, `.ic-*` components, the layout shell —
+ * comes from Canvas' own compiled bundles (static/canvas/<variant>/, built by
+ * scripts/build-canvas-css.sh from canvas-src/app/stylesheets). A rule for an
+ * `.ic-` or `.Button-` selector written by hand here is a drift bug: the same
+ * class already has Canvas' rule somewhere else and one of the two will win by
+ * accident of load order.
+ *
+ * What is left below exists only for the window before those `<link>`s land.
+ * loadCanvasStyles() appends them at run time (the variant is a per-request
+ * choice, see src/lib/canvasStyles.ts), so for a few frames the document has no
+ * sheet at all. Without these three declarations the first paint is
+ * Times-on-white and the page visibly reflows when Lato arrives — which changes
+ * the metric of every line on the screen.
+ *
+ * Values are Canvas' compiled ones, quoted from static/canvas/normal_contrast/
+ * common.css: `html{font-size:100%;-webkit-text-size-adjust:100%;font-family:
+ * "Lato Extended","Lato","Helvetica Neue",Helvetica,Arial,sans-serif}` and
+ * `body{min-height:100vh;background:#fff;font-weight:300}`. */
+
+html {
+	font-family: 'Lato Extended', 'Lato', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+	font-size: 100%;
+}
+
+body {
+	background: #fff;
+}

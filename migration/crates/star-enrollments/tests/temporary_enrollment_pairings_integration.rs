@@ -220,13 +220,20 @@ async fn pairings_are_listed_created_and_deleted() {
         .await;
     assert_eq!(resp.status_code(), 204, "destroy; body: {}", resp.text());
 
+    // Canvas soft deletes the pairing: `destroy` only sets `workflow_state =
+    // "deleted"` (Canvas::SoftDeletable has no default scope hiding deleted
+    // rows), and the controller's `load_temporary_enrollment_pairing` uses a
+    // plain `find`, so the pairing is still shown — with the deleted state.
     let resp = server
         .get(&format!(
             "/accounts/{sub_account_id}/temporary_enrollment_pairings/{id}"
         ))
         .add_header(axum::http::header::AUTHORIZATION, bearer)
         .await;
-    assert_eq!(resp.status_code(), 404, "the pairing is gone");
+    assert_eq!(resp.status_code(), 200, "the pairing is soft deleted");
+    let body: Value = resp.json();
+    assert_eq!(body["id"], id);
+    assert_eq!(body["workflow_state"], "deleted");
 
     cleanup(&pool, &prefix).await;
 }

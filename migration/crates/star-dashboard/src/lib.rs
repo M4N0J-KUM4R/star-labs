@@ -732,11 +732,11 @@ async fn dashboard_cards_handler(
     ))
 }
 
-/// Load the current user's dashboard cards (same query and shape the
-/// `/dashboard/dashboard_cards` API returns). Extracted as a pub loader so the
-/// server-rendered UI shell (star-ui) renders exactly what the API serves
-/// instead of duplicating the SQL. Same semantics: DISTINCT ON (c.id) primary
-/// enrollment by role-rank, position NULLS LAST, name ASC, LIMIT 50.
+/// Load the current user's dashboard cards — the payload of
+/// `GET /api/v1/dashboard/dashboard_cards`, which is also what the dashboard shell
+/// fetches (Canvas' `config/routes.rb` draws that row and its React page calls it).
+/// Same semantics: DISTINCT ON (c.id) primary enrollment by role-rank, position NULLS
+/// LAST, name ASC, LIMIT 50.
 pub async fn load_dashboard_cards(
     db: &sqlx::PgPool,
     user_id: i64,

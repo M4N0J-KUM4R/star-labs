@@ -36,23 +36,97 @@ ACTION_RE = re.compile(r"action:\s*(?::([A-Za-z0-9_]+)|[\"']([A-Za-z0-9_]+)[\"']
 TO_RE = re.compile(r"to:\s*[\"']([A-Za-z0-9_/]+)#([A-Za-z0-9_]+)[\"']")
 STR_RE = re.compile(r"[\"']([^\"']*)[\"']")
 STAR_METHOD_RE = re.compile(r"\b(get|post|put|delete|patch|head|options)\s*\(")
+# A method combinator in an axum chain, i.e. at the head of the `.route()`
+# second argument or directly after a `.`: `axum::routing::get(h)` / `.post(h)`.
+STAR_METHOD_HEAD_RE = re.compile(
+    r"\s*(?:[A-Za-z_][A-Za-z0-9_]*::)*\s*(get|post|put|delete|patch|head|options)\s*\(")
 EACH_RE = re.compile(r"^\s*(.+?)\.each\s+do\s*\|([^|]*)\|\s*$")
 WORD_ARRAY_RE = re.compile(r"%w\[([^\]]*)\]")
 RESOURCES_RE = re.compile(r"^\s*resources\s+:([a-z_][a-z0-9_]*)\b(.*)$")
-PATH_OPT_RE = re.compile(r"\bpath:\s*[\"']([^\"']*)[\"']")
+# Rails' singular `resource :name` — same DSL but there is no index and the
+# member path is the collection path (no `:id` segment).
+SINGULAR_RESOURCE_RE = re.compile(r"^\s*resource\s+:([a-z_][a-z0-9_]*)\b(.*)$")
+CONCERN_DEF_RE = re.compile(
+    r"^\s*concern\s+:([a-z_][a-z0-9_]*)\b[^\n]*\bdo\b\s*(?:#.*)?$")
+CONCERN_USE_RE = re.compile(
+    r"^\s*concerns?\s+:([a-z_][a-z0-9_]*(?:\s*,\s*:[a-z_][a-z0-9_]*)*)"
+    r"(?!\s+do\b)(.*)$")
+MEMBER_BLOCK_RE = re.compile(r"^\s*(member|collection)\s+do\b")
+PATH_OPT_RE = re.compile(
+    r"\bpath:\s*(?:[\"']([^\"']*)[\"']|:([a-z_][a-z0-9_]*))")
 ONLY_OPT_RE = re.compile(r"\bonly:\s*(%i\[([^\]]*)\]|\[([^\]]*)\]|:([A-Za-z0-9_]+))")
 EXCEPT_OPT_RE = re.compile(r"\bexcept:\s*(%i\[([^\]]*)\]|\[([^\]]*)\]|:([A-Za-z0-9_]+))")
 INTERP_RE = re.compile(r"#\{([^{}]*)\}")
 
-# Rails' API resource defaults: no new/edit forms.
+# Rails' seven RESTful actions, each with the path it is drawn on: the
+# collection, the member, or the form suffix Rails appends for `new`
+# (<collection>/new) and `edit` (<member>/edit).
 RESOURCE_ACTIONS = (
-    ("index", "GET", False),
-    ("create", "POST", False),
-    ("show", "GET", True),
-    ("update", "PATCH", True),
-    ("update", "PUT", True),
-    ("destroy", "DELETE", True),
+    ("index", "GET", "collection"),
+    ("create", "POST", "collection"),
+    ("new", "GET", "new"),
+    ("show", "GET", "member"),
+    ("edit", "GET", "edit"),
+    ("update", "PATCH", "member"),
+    ("update", "PUT", "member"),
+    ("destroy", "DELETE", "member"),
 )
+# Singular `resource` has no index; everything else hangs off one path, and
+# its form suffixes are <path>/new and <path>/edit (no :id segment).
+SINGULAR_RESOURCE_ACTIONS = (
+    ("show", "GET", "member"),
+    ("create", "POST", "collection"),
+    ("new", "GET", "new"),
+    ("edit", "GET", "edit"),
+    ("update", "PATCH", "member"),
+    ("update", "PUT", "member"),
+    ("destroy", "DELETE", "member"),
+)
+# `resources` registers the form verbs unconditionally, so reading the route
+# table alone over-reports: of the 164 web + 10 API candidates Canvas'
+# `resources`/`resource` declarations draw, most are dead surface -- the
+# controller has no such action (AbstractController::ActionNotFound), or it
+# has one with nothing to render (ActionView::MissingTemplate). A candidate
+# is a parity target when the action exists AND its render path completes,
+# by any of the four shapes Canvas uses:
+#   a) an implicit template app/views/<controller_path>/<action>.*
+#   b) an explicit `render :sym` whose template exists
+#   c) a React/InstUI mount: `render html: "", layout: ...`
+#   d) delegation to another action that renders (calls `edit`)
+# Verified pair by pair against canvas-src (line numbers of the `def`):
+#   assignments#new 900 (d -> edit), assignments#edit 915 (a: edit.html.erb)
+#   quizzes/quizzes#edit 359 (b: `render :new` at :432)
+#   users#new 1577 (a + `render layout: "bare"`)
+#   discussion_topics#new 578 (d -> edit),#edit 585 (c: render html: "", layout:)
+#   wiki_pages#edit 167 (a: edit.html.erb; drawn as /pages/... by path: :pages)
+#   calendar_events#new 51 (a), #edit 77 (b: `render :new`)
+#   ai_experiences#new 166 (a), #edit 182 (a)
+#   appointment_groups#edit 442 (c: render html: "".html_safe, layout: true)
+#   gradebook_uploads#new 34 (a: new.html.erb)
+# Excluded although the action exists, because nothing is there to render and
+# no render/redirect runs: groups#new (groups_controller.rb:596 --
+# app/views/groups has no new.html.erb) and pseudonyms#new 247 / #edit 370
+# (app/views/pseudonyms holds only confirm_change_password). Excluded because
+# the action does not exist at all: announcements (only index 64 / show 105),
+# files, folders, submissions, external_tools, rubrics, rubric_associations,
+# question_banks, assessment_questions, alerts, conferences, collaborations,
+# communication_channels, eportfolios, modules, outcome* and account/child
+# rows -- Canvas drives those forms from React on the show/index page instead.
+SERVED_FORM_PAGES = frozenset({
+    ("ai_experiences", "edit"),
+    ("ai_experiences", "new"),
+    ("appointment_groups", "edit"),
+    ("assignments", "edit"),
+    ("assignments", "new"),
+    ("calendar_events", "edit"),
+    ("calendar_events", "new"),
+    ("discussion_topics", "edit"),
+    ("discussion_topics", "new"),
+    ("gradebook_uploads", "new"),
+    ("quizzes/quizzes", "edit"),
+    ("users", "new"),
+    ("wiki_pages", "edit"),
+})
 JS_ENV_RE = re.compile(r"\bjs_env\b")
 UI_API_RE = re.compile(r"[\"'`](/api/v1/[^\"'`\s]*)")
 
@@ -157,14 +231,28 @@ def _join_statement(lines, index):
 
 
 def _frame(indent, controller=None, variables=None, bindings=None,
-           resource=None):
+           resource=None, base=None):
     return {
         "indent": indent,
         "controller": controller,
         "variables": variables if variables is not None else {},
         "bindings": bindings if bindings is not None else [{}],
         "resource": resource,
+        "base": base,
     }
+
+
+def _route_base(stack, prefix):
+    """The path prefix Rails appends a relative route to.
+
+    A `resources ... do` frame rebinds it to the collection path, and a
+    `member`/`collection` frame inside that rebinds it again; every other
+    block (scope, constraints, if) inherits whatever the enclosing frame set.
+    """
+    for frame in reversed(stack):
+        if frame["base"]:
+            return frame["base"]
+    return prefix
 
 
 def _pluralize(word):
@@ -264,7 +352,7 @@ def _action_set(match):
             if action.strip()}
 
 
-def _build_resource_routes(name, options, stack, prefix):
+def _build_resource_routes(name, options, stack, prefix, singular=False):
     path_match = PATH_OPT_RE.search(options)
     controller_match = SCOPE_CTRL_RE.search(options)
     controller = (controller_match.group(1) or controller_match.group(2)) \
@@ -273,35 +361,65 @@ def _build_resource_routes(name, options, stack, prefix):
         controller = _scope_controller(stack) or name
     only = _action_set(ONLY_OPT_RE.search(options))
     except_ = _action_set(EXCEPT_OPT_RE.search(options))
-    segment = path_match.group(1) if path_match else name
+    segment = (path_match.group(1) or path_match.group(2)) \
+        if path_match else name
 
     parent = None
     for frame in reversed(stack):
         if frame["resource"]:
             parent = frame["resource"]
             break
+    base = _route_base(stack, prefix).rstrip("/")
     if parent:
-        collection = parent["nested"] + "/" + segment.lstrip("/")
+        inherited = {parent["collection"].rstrip("/"): parent["nested"],
+                     parent["nested"].rstrip("/"): parent["nested"],
+                     parent["member"].rstrip("/"): parent["member"]}.get(base)
     else:
-        collection = segment
-    collection = re.sub(r"/{2,}", "/", collection).strip("/")
-    member = collection + "/:id"
+        inherited = None
+    # `resources :y` inside `resources :x` nests under :x_id (Rails' parent
+    # segment); inside `member do` it hangs off /:id; anywhere else it is
+    # relative to whatever base the enclosing block established.
+    collection = re.sub(
+        r"/{2,}", "/",
+        (inherited if inherited is not None else base)
+        + "/" + segment.lstrip("/"))
+    if singular:
+        # Rails' `resource :x` serves one record: the member path is the
+        # collection path and nested resources hang straight off it.
+        member = collection
+        nested = collection
+    else:
+        member = collection + "/:id"
+        nested = collection + "/:" + _singularize(name) + "_id"
     resource = {
         "name": name,
-        "nested": collection + "/:" + _singularize(name) + "_id",
+        "collection": collection,
+        "member": member,
+        "nested": nested,
         "controller": controller,
     }
 
     routes = []
     seen = set()
     bindings = stack[-1]["bindings"]
-    for action, verb, is_member in RESOURCE_ACTIONS:
+    actions = SINGULAR_RESOURCE_ACTIONS if singular else RESOURCE_ACTIONS
+    for action, verb, path_kind in actions:
         if only is not None and action not in only:
             continue
         if except_ is not None and action in except_:
             continue
+        if path_kind in ("new", "edit"):
+            # Rails still registers the verb; Canvas only serves the handful
+            # of form pages whose controller action and view both exist.
+            if (controller, action) not in SERVED_FORM_PAGES:
+                continue
+            target = collection + "/new" if path_kind == "new" else member + "/edit"
+        elif path_kind == "member":
+            target = member
+        else:
+            target = collection
         for binding in bindings:
-            path = _expand(member if is_member else collection, binding, {})
+            path = _expand(target, binding, {})
             original = path if path.startswith("/") else \
                 prefix.rstrip("/") + "/" + path.lstrip("/")
             original = re.sub(r"/{2,}", "/", original)
@@ -319,9 +437,179 @@ def _build_resource_routes(name, options, stack, prefix):
     return routes, resource
 
 
+def _block_body(lines, start, start_indent):
+    """Lines strictly between a Ruby block opener and its matching `end`."""
+    body = []
+    i = start
+    while i < len(lines):
+        line = lines[i]
+        indent = len(line) - len(line.lstrip())
+        if END_RE.match(line) and indent <= start_indent:
+            return body, i + 1
+        body.append(line)
+        i += 1
+    return body, i
+
+
+def _extract_concerns(lines):
+    """`concern :name do ... end` bodies, keyed by name.
+
+    Rails shares route groups between API scopes this way; the same body is
+    re-read in the enclosing scope of every `concerns :name` use, so a
+    definition contributes nothing on its own.
+    """
+    concerns = {}
+    i = 0
+    while i < len(lines):
+        m = CONCERN_DEF_RE.match(lines[i])
+        if m:
+            indent = len(lines[i]) - len(lines[i].lstrip())
+            body, i = _block_body(lines, i + 1, indent)
+            concerns[m.group(1)] = body
+            continue
+        i += 1
+    return concerns
+
+
+def _scan_lines(lines, i, end_index, stop_indent, prefix, stack, routes,
+                concerns, skip_draw=False):
+    """Route statements in `lines[i:end_index]` under `prefix`/`stack`.
+
+    `stop_indent` ends a real Ruby block; concern bodies are slices with the
+    closing `end` removed, so they pass None and run to `end_index`.
+    `skip_draw` is the web-route pass: nested `ApiRouteSet.draw` blocks belong
+    to the API manifest and must not be counted twice.
+    """
+    while i < end_index:
+        line = lines[i]
+        stripped = line.strip()
+        indent = len(line) - len(line.lstrip())
+
+        if skip_draw and DRAW_RE.match(line):
+            _, i = _block_body(lines, i + 1, indent)
+            continue
+
+        if END_RE.match(line):
+            if stop_indent is not None and indent <= stop_indent:
+                break
+            while len(stack) > 1 and stack[-1]["indent"] >= indent:
+                stack.pop()
+            i += 1
+            continue
+
+        if not stripped or stripped.startswith("#"):
+            i += 1
+            continue
+
+        concern_use = CONCERN_USE_RE.match(line)
+        if concern_use:
+            names = [name.strip().lstrip(":") for name in
+                     concern_use.group(1).split(",")]
+            i += 1
+            for name in names:
+                body = concerns.get(name)
+                if body is None:
+                    continue
+                _scan_lines(body, 0, len(body), None, prefix,
+                            [dict(frame, bindings=list(frame["bindings"]),
+                                  variables=dict(frame["variables"]))
+                             for frame in stack],
+                            routes, concerns, skip_draw)
+            continue
+
+        if VERB_RE.match(line):
+            statement, i = _join_statement(lines, i)
+            i += 1
+            routes.extend(
+                _parse_route_statement(statement, prefix, stack))
+            continue
+
+        loop_values = _parse_each_values(stripped)
+        if loop_values is not None:
+            stack.append(_frame(
+                indent, None, dict(stack[-1]["variables"]),
+                _combine_bindings(stack[-1]["bindings"], loop_values)))
+            i += 1
+            continue
+
+        member_block = MEMBER_BLOCK_RE.match(line)
+        if member_block and stack[-1]["resource"] is not None:
+            resource = stack[-1]["resource"]
+            kind = member_block.group(1)
+            stack.append(_frame(
+                indent, resource["controller"], dict(stack[-1]["variables"]),
+                stack[-1]["bindings"], resource,
+                base=resource["member"] if kind == "member"
+                else resource["collection"]))
+            i += 1
+            continue
+
+        if RESOURCES_RE.match(line) or SINGULAR_RESOURCE_RE.match(line):
+            statement, i = _join_statement(lines, i)
+            i += 1
+            plural = RESOURCES_RE.match(statement)
+            match = plural or SINGULAR_RESOURCE_RE.match(statement)
+            resource_routes, resource = _build_resource_routes(
+                match.group(1), match.group(2), stack, prefix,
+                singular=plural is None)
+            routes.extend(resource_routes)
+            if BLOCK_RE.search(statement):
+                # Rails nests a `resources :x do ... end` block's own route
+                # strings under the parent segment (`/courses/:course_id/
+                # grading_schemes` in Canvas' web roster tabs), so the frame
+                # base is the nested path, not the collection.
+                stack.append(_frame(
+                    indent, resource["controller"],
+                    dict(stack[-1]["variables"]), stack[-1]["bindings"],
+                    resource, base=resource["nested"]))
+            continue
+
+        conditional = COND_ASSIGN_RE.match(line)
+        if conditional:
+            target, var, equals, then_var, else_template = \
+                conditional.groups()
+            stack[-1]["variables"][target] = {
+                "var": var,
+                "equals": equals,
+                "then": then_var,
+                "else": else_template,
+            }
+            i += 1
+            continue
+
+        assign = ASSIGN_RE.match(line)
+        if assign:
+            stack[-1]["variables"][assign.group(1)] = assign.group(2)
+            i += 1
+            continue
+
+        condition = COND_EQ_RE.match(line)
+        if condition:
+            kind, var, equals = condition.groups()
+            kept = [
+                binding for binding in stack[-1]["bindings"]
+                if (binding.get(var) == equals) == (kind == "if")
+            ]
+            stack.append(_frame(indent, None, dict(stack[-1]["variables"]),
+                                kept))
+            i += 1
+            continue
+
+        if BLOCK_RE.search(line) or COND_RE.match(line):
+            ctrl = None
+            m = SCOPE_CTRL_RE.search(line)
+            if m:
+                ctrl = m.group(1) or m.group(2)
+            stack.append(_frame(indent, ctrl, dict(stack[-1]["variables"]),
+                                stack[-1]["bindings"]))
+        i += 1
+    return i
+
+
 def parse_canvas_routes(routes_file):
     lines = routes_file.read_text(encoding="utf-8", errors="replace").splitlines()
     routes = []
+    concerns = _extract_concerns(lines)
     i = 0
     while i < len(lines):
         prefix = _draw_prefix(lines[i])
@@ -332,94 +620,42 @@ def parse_canvas_routes(routes_file):
         start_indent = len(lines[i]) - len(lines[i].lstrip())
         stack = [_frame(start_indent)]
         i += 1
-        while i < len(lines):
-            line = lines[i]
-            stripped = line.strip()
-            indent = len(line) - len(line.lstrip())
-
-            if END_RE.match(line):
-                if indent <= start_indent:
-                    break
-                while len(stack) > 1 and stack[-1]["indent"] >= indent:
-                    stack.pop()
-                i += 1
-                continue
-
-            if not stripped or stripped.startswith("#"):
-                i += 1
-                continue
-
-            if VERB_RE.match(line):
-                statement, i = _join_statement(lines, i)
-                i += 1
-                routes.extend(
-                    _parse_route_statement(statement, prefix, stack))
-                continue
-
-            loop_values = _parse_each_values(stripped)
-            if loop_values is not None:
-                stack.append(_frame(
-                    indent, None, dict(stack[-1]["variables"]),
-                    _combine_bindings(stack[-1]["bindings"], loop_values)))
-                i += 1
-                continue
-
-            if RESOURCES_RE.match(line):
-                statement, i = _join_statement(lines, i)
-                i += 1
-                match = RESOURCES_RE.match(statement)
-                resource_routes, resource = _build_resource_routes(
-                    match.group(1), match.group(2), stack, prefix)
-                routes.extend(resource_routes)
-                if BLOCK_RE.search(statement):
-                    stack.append(_frame(
-                        indent, resource["controller"],
-                        dict(stack[-1]["variables"]), stack[-1]["bindings"],
-                        resource))
-                continue
-
-            conditional = COND_ASSIGN_RE.match(line)
-            if conditional:
-                target, var, equals, then_var, else_template = \
-                    conditional.groups()
-                stack[-1]["variables"][target] = {
-                    "var": var,
-                    "equals": equals,
-                    "then": then_var,
-                    "else": else_template,
-                }
-                i += 1
-                continue
-
-            assign = ASSIGN_RE.match(line)
-            if assign:
-                stack[-1]["variables"][assign.group(1)] = assign.group(2)
-                i += 1
-                continue
-
-            condition = COND_EQ_RE.match(line)
-            if condition:
-                kind, var, equals = condition.groups()
-                kept = [
-                    binding for binding in stack[-1]["bindings"]
-                    if (binding.get(var) == equals) == (kind == "if")
-                ]
-                stack.append(_frame(indent, None, dict(stack[-1]["variables"]),
-                                    kept))
-                i += 1
-                continue
-
-            if BLOCK_RE.search(line) or COND_RE.match(line):
-                ctrl = None
-                m = SCOPE_CTRL_RE.search(line)
-                if m:
-                    ctrl = m.group(1) or m.group(2)
-                stack.append(_frame(indent, ctrl, dict(stack[-1]["variables"]),
-                                    stack[-1]["bindings"]))
-            i += 1
+        i = _scan_lines(lines, i, len(lines), start_indent, prefix, stack,
+                        routes, concerns)
         i += 1
 
     return routes
+
+
+# The application route set: everything in here that is not inside an
+# ApiRouteSet block is a Canvas *web* route (HTML/JS-facing), which the UI
+# shell and some star crates answer with JSON.
+WEB_DRAW_RE = re.compile(
+    r"^\s*[A-Za-z0-9_:]+\.routes\.draw\b[^\n]*\bdo\b\s*$")
+
+
+def parse_canvas_web_routes(routes_file):
+    """Canvas routes outside ApiRouteSet: the same file, the opposite filter."""
+    lines = routes_file.read_text(encoding="utf-8", errors="replace").splitlines()
+    concerns = _extract_concerns(lines)
+    routes = []
+    for index, line in enumerate(lines):
+        if not WEB_DRAW_RE.match(line):
+            continue
+        indent = len(line) - len(line.lstrip())
+        stack = [_frame(indent)]
+        _scan_lines(lines, index + 1, len(lines), indent, "", stack, routes,
+                    concerns, skip_draw=True)
+        break
+    seen = set()
+    unique = []
+    for route in routes:
+        key = (route["verb"], route["path"])
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(route)
+    return unique
 
 
 def _parse_route_statement(statement, prefix, stack):
@@ -435,12 +671,34 @@ def _parse_route_statement(statement, prefix, stack):
         verbs = [token.upper()]
 
     rest = statement[m.end():].lstrip()
+    base = _route_base(stack, prefix)
+    symbol_action = None
     if rest[:1] in ("\"", "'"):
         sm = STR_RE.match(rest)
         raw_path = sm.group(1) if sm else None
     else:
         var = re.match(r"([A-Za-z_][A-Za-z0-9_]*)(?:\.to_s)?\s*[,)]", rest)
         raw_path = stack[-1]["variables"].get(var.group(1)) if var else None
+        if raw_path is None:
+            # Rails' shorthand: `get :questions` inside a `resources` block is
+            # a MEMBER route at <collection>/:id/questions answered by the
+            # block's controller. Inside an explicit `collection do` block the
+            # same shorthand is a COLLECTION route: Canvas'
+            # `resources :assignments { collection { get :syllabus } }`
+            # (config/routes.rb:344-346) is /courses/:course_id/assignments/
+            # syllabus, not .../assignments/:id/syllabus. A quoted path never
+            # takes this branch.
+            sym = re.match(r":([A-Za-z_][A-Za-z0-9_]*)\s*(?:[,)]|$)", rest)
+            if sym and stack[-1]["resource"] is not None:
+                symbol_action = sym.group(1)
+                resource = stack[-1]["resource"]
+                frame_base = _route_base(stack, prefix).rstrip("/")
+                if frame_base and frame_base == resource["collection"].rstrip("/"):
+                    raw_path = frame_base + "/" + symbol_action
+                else:
+                    raw_path = resource["member"] + "/" + symbol_action
+            else:
+                return []
     if not raw_path:
         return []
 
@@ -457,6 +715,8 @@ def _parse_route_statement(statement, prefix, stack):
 
     am = ACTION_RE.search(statement)
     action = (am.group(1) or am.group(2)) if am else None
+    if action is None and symbol_action:
+        action = symbol_action
     if action is None or controller is None:
         tm = TO_RE.search(statement)
         if tm:
@@ -472,20 +732,43 @@ def _parse_route_statement(statement, prefix, stack):
             if path.startswith("/"):
                 original = path
             else:
-                original = prefix.rstrip("/") + "/" + path.lstrip("/")
+                original = base.rstrip("/") + "/" + path.lstrip("/")
             original = re.sub(r"/{2,}", "/", original)
-            key = (verb, original, controller, action)
-            if key in seen:
-                continue
-            seen.add(key)
-            routes.append({
-                "verb": verb,
-                "path": original,
-                "normalized_path": normalize_path(original),
-                "controller": controller,
-                "action": action,
-            })
+            for variant in _optional_variants(original):
+                key = (verb, variant, controller, action)
+                if key in seen:
+                    continue
+                seen.add(key)
+                routes.append({
+                    "verb": verb,
+                    "path": variant,
+                    "normalized_path": normalize_path(variant),
+                    "controller": controller,
+                    "action": action,
+                })
     return routes
+
+
+def _optional_variants(path, depth=0):
+    """Rails registers `(/:id)` twice: with the segment present and absent.
+
+    Without this, an optional tail (`…/tool_consumer_profile(/:id)`) is only
+    ever measured as its short form, so the long form that star serves reads
+    as a fabricated extra.
+    """
+    if depth > 4:
+        return [path]
+    m = re.search(r"\((/[^)]*)\)", path)
+    if not m:
+        return [path]
+    without = path[:m.start()] + path[m.end():]
+    with_seg = path[:m.start()] + m.group(1) + path[m.end():]
+    out = []
+    for variant in (_optional_variants(without, depth + 1)
+                    + _optional_variants(with_seg, depth + 1)):
+        if variant not in out:
+            out.append(variant)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -530,8 +813,11 @@ def count_canvas_sources(canvas_src):
 
     return {
         "graphql_files": len(graphql),
-        "graphql_types": len(types),
-        "graphql_mutations": len(mutations),
+        # FILE counts, not the parity denominators. One *_type.rb can declare
+        # several types, so the denominators are the name inventories
+        # (graphql_type_names / graphql_mutation_names), never these.
+        "graphql_type_files": len(types),
+        "graphql_mutation_files": len(mutations),
         "models": len(_walk_files(canvas_src / "app" / "models", {".rb"})),
         "ui_feature_dirs": len(feature_dirs),
         "js_tsx_files": len(ui_files),
@@ -539,6 +825,89 @@ def count_canvas_sources(canvas_src):
         "js_env_files": js_env_files,
         "js_env_call_sites": js_env_sites,
     }
+
+
+CANVAS_CREATE_TABLE_RE = re.compile(
+    r"(?<![A-Za-z_])create_table\s*\(?\s*(?::([A-Za-z_][A-Za-z0-9_]*)"
+    r"|['\"]([A-Za-z_][A-Za-z0-9_]*)['\"])\s*(?=[,)\s]|$)")
+CANVAS_PARTITION_DEF_RE = re.compile(r"\s*def\s+(\w+)\s*\((\w+)\)")
+CANVAS_PARTITION_LOOP_RE = re.compile(
+    r"\s*\((\d+)\.\.(\d+)\)\.each\s*(?:\{|\bdo\b)\s*\|(\w+)\|\s*(\w+)[\s(]")
+
+
+def _loop_created_tables(lines):
+    """Table names a `(first..last).each { |i| helper(i) }` loop creates.
+
+    Canvas' migrations create most tables with literal `create_table :name`
+    calls, but the init migration also defines
+
+        def create_aua_log_partition(index)
+          table_name = :"aua_logs_#{index}"
+          create_table table_name do |t| ...
+
+    and calls it from `(0..6).each { |i| create_aua_log_partition(i) }`, so a
+    static `create_table :name` scan misses its 7 partition tables. Replay the
+    idiom: a same-file helper whose body assigns
+    `table_name = :"prefix_#{arg}"` and calls `create_table table_name`,
+    invoked by an integer-range loop, emits `prefix_N` for each N in the range.
+    """
+    helpers = {}
+    for i, line in enumerate(lines):
+        dm = CANVAS_PARTITION_DEF_RE.match(line)
+        if not dm:
+            continue
+        body = "\n".join(lines[i:i + 15])
+        table = re.search(
+            r"table_name\s*=\s*:\"([A-Za-z_]+)_#\{\s*%s\s*\}\""
+            % re.escape(dm.group(2)), body)
+        if table and re.search(r"(?<![A-Za-z_])create_table\s+table_name\b",
+                               body):
+            helpers[dm.group(1)] = table.group(1)
+    names = []
+    for line in lines:
+        lm = CANVAS_PARTITION_LOOP_RE.match(line)
+        if lm and lm.group(4) in helpers:
+            names.extend("%s_%d" % (helpers[lm.group(4)], n)
+                         for n in range(int(lm.group(1)), int(lm.group(2)) + 1))
+    return names
+
+
+def canvas_schema_tables(canvas_src):
+    """Canvas table names replayed from db/migrate/*.rb, filename order.
+
+    Returns (loop_tables, named_tables). `named_tables` are the distinct
+    `create_table :name` / `create_table "name"` / `create_table(:name)` names
+    (comment text stripped first, so prose cannot pollute the list);
+    `loop_tables` are the names range-loops create (in Canvas: the 7
+    aua_logs_0..6 partitions of init_canvas_db.rb). Together they are the
+    schema-row denominator (298 named + 7 loop-created = 305).
+    """
+    migrations = canvas_src / "db" / "migrate"
+    named = set()
+    loop_tables = []
+    if migrations.is_dir():
+        for path in sorted(migrations.glob("*.rb")):
+            lines = path.read_text(encoding="utf-8",
+                                   errors="replace").splitlines()
+            for line in lines:
+                # Drop comment text, but only after the match point matters:
+                # `:"aua_logs_#{index}"` interpolation contains no create_table
+                # call, and a commented-out `# create_table :x` must not count.
+                code = line.split("#", 1)[0]
+                for m in CANVAS_CREATE_TABLE_RE.finditer(code):
+                    named.add(m.group(1) or m.group(2))
+            loop_tables.extend(_loop_created_tables(lines))
+    return sorted(set(loop_tables)), sorted(named)
+
+
+def canvas_query_root_fields(canvas_src):
+    """Root `field :` declarations on Canvas' GraphQL QueryType."""
+    query = canvas_src / "app" / "graphql" / "types" / "query_type.rb"
+    if not query.is_file():
+        return 0
+    return len(re.findall(r"^\s*field :", query.read_text(encoding="utf-8",
+                                                          errors="replace"),
+                          re.MULTILINE))
 
 
 def canvas_graphql_type_names(canvas_src):
@@ -661,7 +1030,11 @@ def route_referenced(normalized_path, ui_refs):
 # ---------------------------------------------------------------------------
 
 def _extract_route_calls(text):
-    """Yield the argument text of every `.route(...)` call, paren-balanced."""
+    """Yield (argument text, start offset) of every `.route(...)` call.
+
+    The offset is the index of the `.route(` token in `text`, so callers can
+    map a call back to the enclosing function (see `star_route_mounts`).
+    """
     pos = 0
     while True:
         start = text.find(".route(", pos)
@@ -687,25 +1060,563 @@ def _extract_route_calls(text):
             elif ch == ")":
                 depth -= 1
             i += 1
-        yield text[start + len(".route("):i - 1]
+        yield text[start + len(".route("):i - 1], start
         pos = i
+
+
+def _skip_balanced(text, open_index, opener="(", closer=")"):
+    """Index just past the `closer` that balances the `opener` at open_index."""
+    depth = 0
+    i = open_index
+    in_string = False
+    escaped = False
+    while i < len(text):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+        elif ch == '"':
+            in_string = True
+        elif ch == opener:
+            depth += 1
+        elif ch == closer:
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return len(text)
+
+
+def _star_verbs(tail):
+    """HTTP verbs of one `.route(path, <tail>)` argument list.
+
+    axum chains method combinators, so only the chain head and the
+    dot-prefixed continuations are verbs: `.delete(delete(h))` registers DELETE
+    once, and the inner `delete(h)` is the handler's own name. The old
+    findall-based version counted that pair twice.
+    """
+    verbs = []
+    tail = tail.lstrip()
+    if tail.startswith(","):
+        tail = tail[1:]
+    i = 0
+    while i < len(tail):
+        match = STAR_METHOD_HEAD_RE.match(tail, i)
+        if not match:
+            break
+        verbs.append(match.group(1))
+        i = _skip_balanced(tail, match.end() - 1)
+        while i < len(tail) and tail[i] in " \t\r\n":
+            i += 1
+        if i < len(tail) and tail[i] == ".":
+            i += 1
+            continue
+        break
+    return verbs
+
+
+CFG_TEST_RE = re.compile(r"#\[\s*cfg\s*\(\s*test\s*\)\s*\]")
+TEST_ATTR_RE = re.compile(r"#\[\s*(?:tokio::)?(?:test|sqlx::test)\b")
+MOD_DECL_RE = re.compile(
+    r"^\s*(?:#\[\s*path\s*=\s*\"([^\"]+)\"\s*\]\s*)?"
+    r"(?:pub(?:\([^)]*\))?\s+)?(?:self\s+)?mod\s+([a-z_][a-z0-9_]*)\s*;")
+
+
+def _strip_tests(text):
+    """Drop `#[cfg(test)]` items and `#[test]` function bodies.
+
+    Test scaffolding registers nothing at runtime, and a test that builds a
+    sub-router inflates the registration count (and shows up as a phantom
+    duplicate of the product route it exercises).
+    """
+    for _ in range(500):
+        match = CFG_TEST_RE.search(text)
+        if not match:
+            break
+        brace = text.find("{", match.end())
+        semicolon = text.find(";", match.end())
+        if semicolon >= 0 and (brace < 0 or semicolon < brace):
+            # `#[cfg(test)] mod tests;` — a whole file we must not read.
+            text = text[:match.start()] + text[semicolon + 1:]
+            continue
+        if brace < 0:
+            break
+        text = text[:match.start()] + text[_skip_balanced(text, brace, "{", "}"):]
+    for _ in range(500):
+        match = TEST_ATTR_RE.search(text)
+        if not match:
+            break
+        brace = text.find("{", match.end())
+        if brace < 0:
+            break
+        text = text[:match.start()] + text[_skip_balanced(text, brace, "{", "}"):]
+    return text
+
+
+# ---------------------------------------------------------------------------
+# Rust comment stripping
+# ---------------------------------------------------------------------------
+
+RUST_CHAR_RE = re.compile(r"'(?:\\u\{[0-9a-fA-F]+\}|\\.|[^\\'])'")
+
+
+def _strip_rust_comments(text):
+    """Blank `//` and nested `/* */` comments out, preserving every offset.
+
+    A comment is not code: star-ui's asset block carries the sentence
+    "parity.py counts `.route()` calls" in a `//`, which the scoreboard read
+    as one unparsed registration. Offsets are preserved so a call found in
+    the stripped text still maps to the ranges computed from the same text.
+    Strings (including byte and raw strings) and char literals are stepped
+    over, never blanked; lifetimes (`'a`) are not char literals.
+    """
+    out = list(text)
+    n = len(text)
+
+    def blank(start, stop):
+        for k in range(start, stop):
+            if out[k] != "\n":
+                out[k] = " "
+
+    i = 0
+    while i < n:
+        ch = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if ch == "/" and nxt == "/":
+            j = i
+            while j < n and text[j] != "\n":
+                j += 1
+            blank(i, j)
+            i = j
+            continue
+        if ch == "/" and nxt == "*":
+            depth = 0
+            j = i
+            while j < n:
+                if text.startswith("/*", j):
+                    depth += 1
+                    j += 2
+                elif text.startswith("*/", j):
+                    depth -= 1
+                    j += 2
+                    if depth == 0:
+                        break
+                else:
+                    j += 1
+            blank(i, j)
+            i = j
+            continue
+        # string-literal prefixes: b"...", r"...", r#"..."#, br"...", rb"..."
+        # (guarded so an identifier ending in b/r is not mistaken for one)
+        k = i
+        if (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")) \
+                and k + 1 < n and text[k] == "b" and text[k + 1] in "r\"":
+            k += 1
+        if text[k] == "r":
+            k += 1
+            hashes = 0
+            while k < n and text[k] == "#":
+                hashes += 1
+                k += 1
+            if k < n and text[k] == '"':
+                term = '"' + "#" * hashes
+                j = text.find(term, k + 1)
+                i = n if j < 0 else j + len(term)
+                continue
+            i += 1
+            continue
+        if k != i and text[k] == '"':
+            i = k
+        if text[i] == '"':
+            j = i + 1
+            while j < n:
+                if text[j] == "\\":
+                    j += 2
+                    continue
+                if text[j] == '"':
+                    break
+                j += 1
+            i = j + 1
+            continue
+        if ch == "'":
+            match = RUST_CHAR_RE.match(text, i)
+            if match:
+                i = match.end()
+                continue
+        i += 1
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Router mount detection
+# ---------------------------------------------------------------------------
+#
+# `web_*` vs `api_*` must answer WHERE a registration is mounted, not what
+# shape its path string has: `PUT /assignments/{id}` inside a router that
+# reaches `nest("/api/v1", ...)` is an API-surface question even though the
+# same text appears as a Canvas *page* path, and a star-ui page is a web
+# question even when its path matches an API table row's tail. The mount is
+# recovered from the router composition: the axum chains in `star-http`'s
+# `main()` (the `/api/v1` nest, the `fallback_service` web shell, and the
+# root-merged/`/api/graphql`-nested routers whose route strings are full
+# URLs and whose Canvas counterparts are drawn in the web route set), then
+# transitively through every `.merge(...)` / `.nest(...)` /
+# `.fallback_service(...)` argument that resolves to a `fn` in the tree.
+
+RUST_BODY_FN_RE = re.compile(
+    r"\bfn\s+([A-Za-z_][A-Za-z0-9_]*)\s*(?:<[^<>()]*>)?\s*\(")
+COMPOSITION_HEAD_RE = re.compile(r"\.(merge|nest|fallback_service)\s*\(")
+CALL_PATH_RE = re.compile(
+    r"([A-Za-z_][A-Za-z0-9_]*(?:\s*(?:::|\.)\s*[A-Za-z_][A-Za-z0-9_]*)*)\s*\(")
+LET_NULLARY_RE = re.compile(
+    r"\blet\s+(?:mut\s+)?([a-z_][A-Za-z0-9_]*)[^=;]*?=\s*"
+    r"([A-Za-z_][A-Za-z0-9_]*(?:::[A-Za-z_][A-Za-z0-9_]*)*)\s*\(\s*\)\s*;")
+NEST_PREFIX_RE = re.compile(r"^\s*\"([^\"]*)\"")
+
+
+def _rust_fn_ranges(text):
+    """(name, body_start, body_end) for every `fn` with a body in `text`."""
+    ranges = []
+    for match in RUST_BODY_FN_RE.finditer(text):
+        args_close = _skip_balanced(text, match.end() - 1)
+        j = args_close
+        depth = 0
+        while j < len(text):
+            ch = text[j]
+            if ch in "([":
+                depth += 1
+            elif ch in ")]":
+                depth -= 1
+            elif depth == 0 and ch == "{":
+                break
+            elif depth == 0 and ch == ";":
+                break
+            j += 1
+        if j >= len(text) or text[j] == ";":
+            continue  # trait / extern declaration: no body to compose
+        ranges.append((match.group(1), j, _skip_balanced(text, j, "{", "}")))
+    return ranges
+
+
+def _enclosing_fn(ranges, offset):
+    """Innermost function body containing `offset`, or None."""
+    best = None
+    for name, start, end in ranges:
+        if start <= offset < end:
+            if best is None or (end - start) < (best[2] - best[1]):
+                best = (name, start, end)
+    return best[0] if best else None
+
+
+def _split_top_level_args(text):
+    """Split a call-argument list on depth-0 commas (string-aware)."""
+    parts = []
+    depth = 0
+    quote = None
+    escaped = False
+    current = []
+    for ch in text:
+        if quote:
+            current.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == quote:
+                quote = None
+            continue
+        if ch in "\"'":
+            quote = ch
+            current.append(ch)
+            continue
+        if ch in "([{":
+            depth += 1
+        elif ch in ")]}":
+            depth -= 1
+        if ch == "," and depth == 0:
+            parts.append("".join(current))
+            current = []
+            continue
+        current.append(ch)
+    parts.append("".join(current))
+    return parts
+
+
+def _composition_edges(body):
+    """(nest_prefix, call_path_text) for each merge/nest/fallback_service
+    argument inside one function body."""
+    edges = []
+    bindings = dict(LET_NULLARY_RE.findall(body))
+    for match in COMPOSITION_HEAD_RE.finditer(body):
+        open_index = body.index("(", match.start())
+        args_end = _skip_balanced(body, open_index)
+        args = body[open_index + 1:args_end - 1]
+        if match.group(1) == "nest":
+            parts = _split_top_level_args(args)
+            prefix = None
+            if parts:
+                pm = NEST_PREFIX_RE.match(parts[0])
+                prefix = pm.group(1) if pm else None
+            expr = ",".join(parts[1:]) if len(parts) > 1 else ""
+        else:
+            prefix = None
+            expr = args
+        for call in CALL_PATH_RE.finditer(expr):
+            chain = re.sub(r"\s+", "", call.group(1))
+            if any(not seg[:1].islower() for seg in chain.replace(".", "::").split("::")):
+                continue  # type paths (`Router::new`) build no sub-router
+            head = re.split(r"[.:]+", chain)[0]
+            if head in bindings:
+                edges.append((prefix, bindings[head]))
+            elif "." not in chain:
+                edges.append((prefix, chain))
+    return edges
+
+
+def star_route_mounts(star_src):
+    """Map (file, fn name) -> 'api' | 'web' from the router composition.
+
+    'api' means the function's registrations are reachable only through
+    `nest("/api/v1", ...)`; 'web' means they answer at the top level (the
+    `fallback_service` shell, root-merged routers, `/api/graphql`), which is
+    where Canvas draws their counterparts. Raises SystemExit when the
+    composition root is missing or a router is reachable with two different
+    mounts -- an ambiguous mount is exactly the silence this tool is here to
+    remove.
+    """
+    main_file = star_src / "crates" / "star-http" / "src" / "main.rs"
+    if not main_file.is_file():
+        raise SystemExit(
+            "mount detection: star-http main.rs not found under %s — the "
+            "router composition root is missing, so no registration can be "
+            "classified by mount" % star_src)
+
+    definitions = {}   # (crate, fn) -> list of (file, start, end)
+    ranges_by_file = {}
+    crate_by_file = {}
+    for path in sorted((star_src / "crates").glob("*/src/**/*.rs")):
+        crate = path.relative_to(star_src / "crates").parts[0]
+        text = _strip_tests(_strip_rust_comments(
+            path.read_text(encoding="utf-8", errors="replace")))
+        ranges = _rust_fn_ranges(text)
+        if ranges:
+            key = str(path)
+            ranges_by_file[key] = (text, ranges)
+            crate_by_file[key] = crate
+            for name, start, end in ranges:
+                definitions.setdefault((crate, name), []).append(
+                    (key, start, end))
+
+    def resolve(chain, caller_file):
+        """Call path text -> (file, fn) definition site, or None."""
+        segments = chain.split("::")
+        fn_name = segments[-1]
+        caller_crate = crate_by_file[caller_file]
+        if len(segments) == 1:
+            crate, modules = caller_crate, []
+        elif segments[0] in ("crate", "self"):
+            crate = caller_crate
+            modules = segments[2:-1]
+        elif segments[0].startswith("star_"):
+            crate = segments[0].replace("_", "-")
+            modules = segments[1:-1]
+        else:
+            # a same-crate module path: `content_exports::router()`
+            crate = caller_crate
+            modules = segments[:-1]
+        candidates = definitions.get((crate, fn_name), [])
+        if not candidates:
+            return None
+        if len(candidates) == 1:
+            return (candidates[0][0], fn_name)
+        hit = []
+        if modules:
+            want = "/".join(["src"] + modules)
+            hit = [f for f, _, _ in candidates
+                   if f.endswith(want + ".rs") or f.endswith(want + "/mod.rs")]
+        if not hit and caller_file in [f for f, _, _ in candidates]:
+            hit = [caller_file]
+        if not hit and not modules:
+            # crate-qualified call with no module chain: the crate root file
+            # (a `pub fn router()` in lib.rs, the star-http convention).
+            hit = [f for f, _, _ in candidates
+                   if Path(f).name in ("lib.rs", "main.rs")]
+        if len(hit) == 1:
+            return (hit[0], fn_name)
+        raise SystemExit(
+            "mount detection: call %s::%s() is ambiguous — %s defines it in "
+            "%s; qualify the call with its module path" %
+            ("::".join(segments[:-1]), fn_name, crate,
+             ", ".join(sorted(str(Path(c).relative_to(star_src))
+                              for c in (hit or [f for f, _, _ in candidates])))))
+
+    labels = {}
+    conflicts = []
+    key_main = str(main_file)
+    if key_main not in ranges_by_file:
+        raise SystemExit("mount detection: no functions found in %s" % key_main)
+    queue = [(key_main, "main", "web")]
+    while queue:
+        file, fn, label = queue.pop(0)
+        node = (file, fn)
+        previous = labels.get(node)
+        if previous is not None:
+            if previous != label:
+                conflicts.append(node)
+            continue
+        labels[node] = label
+        entry = ranges_by_file.get(file)
+        if entry is None:
+            continue
+        text, ranges = entry
+        body = next(((s, e) for n, s, e in ranges if n == fn), None)
+        if body is None:
+            continue
+        scope = text[body[0]:body[1]]
+        seen_edges = set()
+        composition_edges = _composition_edges(scope)
+        # chains already placed by a merge/nest argument: the mount decided
+        # there wins, the plain body scan must not re-label them (main's
+        # `let api_router = build_api_router();` is not a second, web mount).
+        composed_chains = {chain for _, chain in composition_edges}
+        for prefix, chain in composition_edges:
+            if (prefix, chain) in seen_edges:
+                continue
+            seen_edges.add((prefix, chain))
+            child = resolve(chain, file)
+            if child is None:
+                continue
+            child_label = "api" if prefix == "/api/v1" else label
+            queue.append((child[0], child[1], child_label))
+        # A builder may also return / splice another builder directly
+        # (`fn router() -> Router { conferences_api::router() }`), so any
+        # call in the body whose target itself composes or registers routes
+        # is followed too. Non-router helpers resolve to bodies with neither
+        # marker and contribute nothing.
+        for call in CALL_PATH_RE.finditer(scope):
+            if call.start() and scope[call.start() - 1] == ".":
+                continue  # a method call (`query.merge(`), not a free router
+            chain = re.sub(r"\s+", "", call.group(1))
+            if "." in chain or any(not seg[:1].islower()
+                                   for seg in chain.split("::")):
+                continue
+            if chain in composed_chains:
+                continue
+            if (None, chain) in seen_edges:
+                continue
+            seen_edges.add((None, chain))
+            child = resolve(chain, file)
+            if child is None:
+                continue
+            entry2 = ranges_by_file.get(child[0])
+            if entry2 is None:
+                continue
+            text2, ranges2 = entry2
+            child_body = next(((s, e) for n, s, e in ranges2
+                               if n == child[1]), None)
+            if child_body is None:
+                continue
+            inner = text2[child_body[0]:child_body[1]]
+            if ".route(" in inner or COMPOSITION_HEAD_RE.search(inner):
+                queue.append((child[0], child[1], label))
+    if conflicts:
+        raise SystemExit(
+            "mount detection: router functions reachable with two different "
+            "mounts: %s" % ", ".join(
+                "%s::%s" % (Path(f).name, n) for f, n in sorted(conflicts)))
+    return labels, ranges_by_file
+
+
+
+def star_reachable_files(star_src):
+    """.rs files under `crates/*/src/` that a crate's `mod` tree pulls in.
+
+    A file no `mod` declaration names is not compiled, so its routes are not
+    registrations. The real case (issue #233) is a scaffold copy left beside
+    the implemented module; skipping it keeps the extras list to what boots.
+    """
+    reachable = set()
+    stack = []
+    for crate_dir in sorted((star_src / "crates").iterdir()):
+        src = crate_dir / "src"
+        if not src.is_dir():
+            continue
+        for entry in ("lib.rs", "main.rs"):
+            path = src / entry
+            if path.is_file():
+                stack.append((path, src, entry))
+    seen = set()
+    while stack:
+        path, crate_src, name = stack.pop()
+        key = path.resolve()
+        if key in seen or not path.is_file():
+            continue
+        seen.add(key)
+        reachable.add(key)
+        text = _strip_tests(path.read_text(encoding="utf-8", errors="replace"))
+        for line in text.splitlines():
+            match = MOD_DECL_RE.match(line)
+            if not match:
+                continue
+            explicit, ident = match.group(1), match.group(2)
+            if explicit:
+                stack.append((path.parent / explicit, crate_src, name))
+                continue
+            # `mod x;` in lib.rs/main.rs resolves to src/x.rs or src/x/mod.rs;
+            # in a nested file it resolves under that file's own directory.
+            if name in ("lib.rs", "main.rs"):
+                bases = [crate_src]
+            else:
+                stem_dir = path.parent / path.stem
+                bases = [stem_dir, path.parent] if stem_dir.is_dir() \
+                    else [path.parent]
+            for base in bases:
+                for cand in (base / f"{ident}.rs", base / ident / "mod.rs"):
+                    if cand.is_file():
+                        stack.append((cand, crate_src, name))
+    return reachable
 
 
 def parse_star_routes(star_src):
     routes = []
     calls = 0
     unparsed = 0
+    test_calls = 0
+    unreachable_calls = 0
+    reachable = star_reachable_files(star_src)
+    mounts, ranges_by_file = star_route_mounts(star_src)
+    unmounted = []
     for path in sorted((star_src / "crates").glob("*/src/*.rs")):
         crate = path.parent.parent.name
-        text = path.read_text(encoding="utf-8", errors="replace")
-        for args in _extract_route_calls(text):
+        raw = path.read_text(encoding="utf-8", errors="replace")
+        code = _strip_rust_comments(raw)
+        raw_calls = list(_extract_route_calls(code))
+        text_calls = list(_extract_route_calls(_strip_tests(code)))
+        test_calls += max(len(raw_calls) - len(text_calls), 0)
+        if path.resolve() not in reachable:
+            # Uncompiled file: count its calls as excluded rather than
+            # silently crediting its routes to the product.
+            unreachable_calls += len(raw_calls)
+            continue
+        key = str(path)
+        fn_ranges = ranges_by_file.get(key, ("", []))[1]
+        for args, offset in text_calls:
             calls += 1
+            fn = _enclosing_fn(fn_ranges, offset)
+            mount = mounts.get((key, fn)) if fn else None
+            if mount is None:
+                unmounted.append((key, fn,
+                                  code[:offset].count("\n") + 1))
             sm = STR_RE.search(args)
             if not sm:
                 unparsed += 1
                 continue
             route_path = sm.group(1)
-            methods = STAR_METHOD_RE.findall(args[sm.end():])
+            methods = _star_verbs(args[sm.end():])
             if not methods:
                 unparsed += 1
                 continue
@@ -716,9 +1627,22 @@ def parse_star_routes(star_src):
                     "normalized_path": normalize_path(route_path),
                     "crate": crate,
                     "source": str(path.relative_to(star_src)),
+                    "mount": mount,
+                    "router_fn": fn,
                 })
-    return sorted(routes, key=lambda r: (r["normalized_path"], r["verb"],
-                                         r["crate"])), calls, unparsed
+    if unmounted:
+        raise SystemExit(
+            "parity mount failure: %d `.route(...)` call(s) sit in functions "
+            "the app never mounts (the router composition in star-http does "
+            "not reach them, so their `web`/`api` side is unknown): %s — "
+            "wire the router into main.rs or drop the registration" %
+            (len(unmounted), ", ".join(
+                "%s::%s(%s)" % (Path(file).relative_to(star_src),
+                                fn or "<top level>", line)
+                for file, fn, line in unmounted)))
+    return (sorted(routes, key=lambda r: (r["normalized_path"], r["verb"],
+                                          r["crate"])), calls, unparsed,
+            test_calls, unreachable_calls)
 
 
 def count_star_sources(star_src):
@@ -754,11 +1678,41 @@ def count_star_sources(star_src):
     migrations = star_src / "crates" / "star-db" / "migrations"
     for path in sorted(migrations.glob("*.sql")) if migrations.is_dir() else []:
         text = path.read_text(encoding="utf-8", errors="replace")
+        # Only real statements count: `--` comment prose ("CREATE TABLE would
+        # run before ...", a backticked `CREATE TABLE collaborations`) must not
+        # pollute the count. Stripping comments and requiring the table name to
+        # be followed by `(` keeps prose and comment mentions out.
+        text = re.sub(r"--[^\n]*", "", text)
         tables.update(m.group(1).lower() for m in re.finditer(
-            r"CREATE TABLE(?:\s+IF NOT EXISTS)?\s+([A-Za-z_][A-Za-z0-9_]*)",
+            r"CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?\s+([A-Za-z_][A-Za-z0-9_]*)"
+            r"\s*\(",
             text, re.IGNORECASE))
     impl["tables"] = len(tables)
+    impl["table_names"] = sorted(tables)
     return impl
+
+
+def count_star_query_root_fields(star_src):
+    """async fn count inside star-graphql's `impl Query` block.
+
+    The block starts at the `impl Query {` line and ends at the
+    `#[derive(MergedObject` that merges Query with the mutation object; both
+    markers are located by regex, never line numbers, so unrelated edits above
+    the block cannot shift the slice. A missing marker is a hard error: a
+    silently-0 root-field count would read as a regression in the report.
+    """
+    lib = star_src / "crates" / "star-graphql" / "src" / "lib.rs"
+    if not lib.is_file():
+        return 0
+    text = lib.read_text(encoding="utf-8", errors="replace")
+    start = re.search(r"^impl Query \{", text, re.MULTILINE)
+    end = re.search(r"#\[derive\(MergedObject", text)
+    if not start or not end or end.start() < start.start():
+        raise SystemExit(
+            "parity: star-graphql `impl Query {` / `#[derive(MergedObject` "
+            "markers not found in %s -- the Query-root-field count is "
+            "meaningless without them" % lib)
+    return len(re.findall(r"\basync\s+fn\b", text[start.start():end.start()]))
 
 
 # --- Star (Rust) GraphQL name extraction -------------------------------------
@@ -781,6 +1735,7 @@ STAR_GRAPHQL_DERIVES = {
 RUST_DERIVE_RE = re.compile(r"^\s*#\[\s*derive\(([^)]*)\)\s*\]")
 RUST_OBJECT_ATTR_RE = re.compile(r"^\s*#\[\s*Object(?:\s*\([^)]*\))?\s*\]")
 RUST_STRUCT_RE = re.compile(r"^\s*(?:pub(?:\([a-z]+\))?\s+)?struct\s+([A-Za-z0-9_]+)")
+RUST_ENUM_RE = re.compile(r"^\s*(?:pub(?:\([a-z]+\))?\s+)?enum\s+([A-Za-z0-9_]+)")
 RUST_IMPL_RE = re.compile(r"^\s*impl\s+(?:<[^>]*>\s*)?([A-Za-z0-9_:]+)")
 RUST_FN_RE = re.compile(
     r"^\s*(?:pub(?:\([a-z]+\))?\s+)?(?:async\s+)?fn\s+([a-z_][a-z0-9_]*)")
@@ -801,7 +1756,13 @@ def _next_declaration(lines, start, pattern, limit=4):
     or None.
     """
     for j in range(start + 1, min(start + 1 + limit, len(lines))):
-        if lines[j].lstrip().startswith("#["):
+        stripped = lines[j].lstrip()
+        if stripped.startswith("#["):
+            # Lint-control attributes (allow/deny/expect) legitimately sit
+            # between a derive and its item; skip them, but any other
+            # attribute means the derive belongs to something else.
+            if stripped.startswith(("#[allow", "#[deny", "#[expect")):
+                continue
             return None
         match = pattern.match(lines[j])
         if match:
@@ -841,11 +1802,20 @@ def parse_star_graphql(star_src):
         for i, line in enumerate(lines):
             derive = RUST_DERIVE_RE.match(line)
             if derive:
-                names = {d.strip() for d in derive.group(1).split(",")}
+                # Normalize 'async_graphql::Enum' / 'async_graphql::Enum(copy)'
+                # style tokens to their bare derive names.
+                names = {d.strip().split("::")[-1].split("(")[0]
+                         for d in derive.group(1).split(",")}
                 if names & STAR_GRAPHQL_DERIVES:
+                    # async-graphql derives apply to structs AND enums
+                    # (Enum/InputObject both); try struct first, then enum.
                     j = _next_declaration(lines, i, RUST_STRUCT_RE)
                     if j is not None:
                         types.add(RUST_STRUCT_RE.match(lines[j]).group(1))
+                    else:
+                        j = _next_declaration(lines, i, RUST_ENUM_RE)
+                        if j is not None:
+                            types.add(RUST_ENUM_RE.match(lines[j]).group(1))
                 continue
             if RUST_OBJECT_ATTR_RE.match(line):
                 j = _next_declaration(lines, i, RUST_IMPL_RE)
@@ -894,24 +1864,40 @@ def build_manifest(canvas_src):
         raise SystemExit("not a Canvas checkout: %s" % routes_file)
 
     routes = parse_canvas_routes(routes_file)
+    web = parse_canvas_web_routes(routes_file)
     ui_refs, ui_literals = scan_ui_api_references(canvas_src)
     for route in routes:
         route["ui_referenced"] = route_referenced(route["normalized_path"], ui_refs)
 
     counts = count_canvas_sources(canvas_src)
     counts["api_routes"] = len(routes)
+    counts["web_routes"] = len(web)
     counts["controllers"] = len({r["controller"] for r in routes if r["controller"]})
     counts["ui_api_ref_strings"] = ui_literals
     counts["ui_api_ref_paths"] = len(ui_refs)
 
+    loop_tables, named_tables = canvas_schema_tables(canvas_src)
+    schema_tables = sorted(set(named_tables) | set(loop_tables))
+
     return {
         "source": "canvas-lms config/routes.rb (ApiRouteSet blocks; resources "
-                  "and %w context loops expanded)",
+                  "and %w context loops expanded; concerns and member/collection "
+                  "blocks expanded)",
         "normalization": "strip /api/v1; :param, {param}, #{...} -> {}",
         "routes": routes,
+        # Canvas' non-API route set. Star endpoints that match here are web/UI
+        # ports, not REST parity items; see classify_extras.
+        "web_routes": web,
         "counts": counts,
         "graphql_type_names": canvas_graphql_type_names(canvas_src),
         "graphql_mutation_names": canvas_graphql_mutation_names(canvas_src),
+        # Canvas' schema inventory, replayed from db/migrate/*.rb: every named
+        # create_table plus the tables its Ruby range-loops create
+        # (aua_logs_0..6). schema_tables is the full denominator;
+        # schema_loop_tables marks the names no literal create_table spells.
+        "schema_tables": schema_tables,
+        "schema_loop_tables": loop_tables,
+        "graphql_query_root_fields": canvas_query_root_fields(canvas_src),
     }
 
 
@@ -927,6 +1913,10 @@ def cmd_manifest(args):
     print("graphql names: %d types, %d mutation operations" %
           (len(manifest["graphql_type_names"]),
            len(manifest["graphql_mutation_names"])))
+    print("schema tables: %d named, %d loop-created" %
+          (len(manifest["schema_tables"]) - len(manifest["schema_loop_tables"]),
+           len(manifest["schema_loop_tables"])))
+    print("graphql query root fields: %d" % manifest["graphql_query_root_fields"])
     print("wrote %s" % args.out)
 
 
@@ -934,9 +1924,137 @@ def cmd_manifest(args):
 # report
 # ---------------------------------------------------------------------------
 
-def build_coverage(manifest, star_src):
+EXTRA_CLASSES = (
+    "api_verb_mismatch",   # Canvas' API has this path and star misses that verb
+    "api_extra_verb",      # Canvas' verbs here are all implemented; this is additive
+    "api_alias",           # `self`/`me` literal for Canvas' `:user_id`-style param
+    "web_exact",           # Canvas has this path+verb, but as a WEB route
+    "web_verb_mismatch",   # Canvas has the path as a web route, other verb
+    "web_nested",          # Canvas has it nested under a parent (web)
+    "api_nested",          # manifest nests it under a parent star does not serve
+    "api_extra_nested",    # manifest nests it, and that nested route IS implemented
+    "absent",              # no Canvas path or path-tail match: alias, rename, or new
+)
+
+
+def _self_alias_paths(path):
+    """Canvas' literal-`self` spelling of a star path, or () when there is none.
+
+    `canvas-src/lib/api.rb:51` maps the id token `self` to
+    `@current_user.id` for collections over the users table (the comment at
+    `lib/api.rb:31` states the same), so `/api/v1/users/self/profile` and
+    `/api/v1/users/:user_id/profile` are one Canvas route. star writes the
+    alias out as its own registration, which a path matcher reports as absent —
+    exactly the rows a "delete what Canvas does not have" pass would wrongly
+    delete. Only `self` is proven in Canvas source; `me` is not, so it is not
+    substituted here.
+    """
+    segments = path.split("/")
+    return ["/".join("{}" if s == "self" else s for s in segments)] \
+        if "self" in segments else []
+
+
+def classify_extras(extras, canvas_routes, web_routes, star_keys):
+    """Say WHY each unmatched star registration is unmatched, BY MOUNT.
+
+    Before this existed every one of them was reported as a bare "extra", and
+    the web/api split came from the shape of the path: an API-mounted
+    `PUT /assignments/{id}` scored against Canvas' WEB route set
+    (`match "assignments/:id"` is a page) and a star-ui page could be called
+    an API verb. Now the registration's real mount decides which Canvas
+    route set is the question: routers reachable through `nest("/api/v1",
+    ...)` answer against the API manifest (api_* classes, alias included),
+    and routers mounted at the top level -- the `star_ui::app` fallback, the
+    root-merged login/LTI/sis families, `/api/graphql` -- answer against
+    the Canvas web set (web_* classes), because Canvas draws those URLs in
+    its web route table. A registration with no proven mount is a hard
+    error, not a bucket; when star already serves every Canvas verb at the
+    path, the extra is additive (`api_extra_verb`) and the job is to label
+    it, not to change it -- conflating the two put 18 no-op "verb fixes" on
+    issue #233's list.
+    """
+    api_verbs = {}
+    for route in canvas_routes:
+        api_verbs.setdefault(route["normalized_path"], set()).add(route["verb"])
+    web_verbs = {}
+    for route in web_routes:
+        web_verbs.setdefault(route["normalized_path"], set()).add(route["verb"])
+    # endswith("/" + path) is the nesting test: Canvas nests most member
+    # routes under a context, star registers them at the top level.
+    api_paths = sorted(api_verbs, key=len, reverse=True)
+    web_paths = sorted(web_verbs, key=len, reverse=True)
+    api_routes_by_path = {}
+    for route in canvas_routes:
+        api_routes_by_path.setdefault(route["normalized_path"], []).append(route)
+
+    web_keys = {(r["verb"], r["normalized_path"]) for r in web_routes}
+    counts = {name: 0 for name in EXTRA_CLASSES}
+    for extra in extras:
+        path, verb = extra["normalized_path"], extra["verb"]
+        mount = extra.get("mount")
+        if mount == "api":
+            if path in api_verbs:
+                missing = sorted(v for v in api_verbs[path]
+                                 if (v, path) not in star_keys)
+                closest = sorted(api_verbs[path])
+                kind = "api_verb_mismatch" if missing else "api_extra_verb"
+                if missing:
+                    closest = missing
+            elif any(ap in api_verbs for ap in _self_alias_paths(path)):
+                ap = next(a for a in _self_alias_paths(path)
+                          if a in api_verbs)
+                verbs = sorted(api_verbs[ap])
+                # The alias only proves parity for the verb Canvas really
+                # answers there: star's PUT /users/self/profile sits on a
+                # path Canvas exposes as GET only, so it is an additive verb
+                # on an aliased path, not a parity-exact route.
+                kind = "api_alias" if verb in verbs else "api_extra_verb"
+                counts[kind] += 1
+                extra["classification"] = kind
+                extra["canvas_closest"] = ["%s %s" % (v, ap) for v in verbs]
+                continue
+            elif any(ap == path or ap.endswith("/" + path) for ap in api_paths):
+                parents = [ap for ap in api_paths if ap.endswith("/" + path)]
+                served = [r for ap in parents for r in api_routes_by_path[ap]
+                          if (r["verb"], r["normalized_path"]) in star_keys]
+                missing = [r for ap in parents for r in api_routes_by_path[ap]
+                           if (r["verb"], r["normalized_path"]) not in star_keys]
+                kind = "api_extra_nested" if served and not missing \
+                    else "api_nested"
+                closest = [(r["verb"] + " " + r["normalized_path"])
+                           for r in (missing or served)][:3]
+            else:
+                kind = "absent"
+                closest = []
+        elif mount == "web":
+            if (verb, path) in web_keys:
+                kind = "web_exact"
+                closest = ["WEB " + verb]
+            elif path in web_verbs:
+                kind = "web_verb_mismatch"
+                closest = sorted(web_verbs[path])
+            elif any(wp == path or wp.endswith("/" + path) for wp in web_paths):
+                kind = "web_nested"
+                closest = [wp for wp in web_paths
+                           if wp.endswith("/" + path)][:1]
+            else:
+                kind = "absent"
+                closest = []
+        else:
+            raise SystemExit(
+                "parity classify failure: %s %s (%s) has mount %r -- every "
+                "registration must be proven web or api by star_route_mounts"
+                % (verb, extra["path"], extra["source"], mount))
+        extra["classification"] = kind
+        extra["canvas_closest"] = closest
+        counts[kind] += 1
+    return counts
+
+
+def build_coverage(manifest, star_src, golden_dir=None):
     canvas_routes = manifest["routes"]
-    star_routes, calls, unparsed = parse_star_routes(star_src)
+    star_routes, calls, unparsed, test_calls, unreachable_calls = \
+        parse_star_routes(star_src)
     star_keys = {(r["verb"], r["normalized_path"]) for r in star_routes}
 
     implemented = [r for r in canvas_routes if (r["verb"], r["normalized_path"]) in star_keys]
@@ -945,6 +2063,9 @@ def build_coverage(manifest, star_src):
 
     canvas_keys = {(r["verb"], r["normalized_path"]) for r in canvas_routes}
     extras = [r for r in star_routes if (r["verb"], r["normalized_path"]) not in canvas_keys]
+    extras_classes = classify_extras(extras, canvas_routes,
+                                     manifest.get("web_routes") or [],
+                                     star_keys)
 
     controllers = {}
     for route in canvas_routes:
@@ -965,6 +2086,18 @@ def build_coverage(manifest, star_src):
     star_impl = count_star_sources(star_src)
     counts = manifest["counts"]
 
+    # Schema like-for-like: Canvas table names (the manifest's db/migrate
+    # replay) against unique real star-db CREATE TABLE names. The star-only
+    # figure is taken against Canvas' NAMED tables -- the loop partitions are
+    # on the star-only side of that line -- matching the parity audit.
+    canvas_tables = set(manifest.get("schema_tables") or [])
+    loop_tables = set(manifest.get("schema_loop_tables") or [])
+    star_table_names = set(star_impl.get("table_names") or [])
+    star_only_tables = sorted(star_table_names - (canvas_tables - loop_tables))
+    golden_count = 0
+    if golden_dir is not None and Path(golden_dir).is_dir():
+        golden_count = len(list(Path(golden_dir).glob("*.json")))
+
     # GraphQL parity by operation name: implemented names from star-graphql
     # (with the documented renames mapped to Canvas graphql_names) intersected
     # with the Canvas inventories from the manifest.
@@ -979,6 +2112,7 @@ def build_coverage(manifest, star_src):
     return {
         "summary": {
             "canvas_api_routes": len(canvas_routes),
+            "canvas_web_routes": len(manifest.get("web_routes") or []),
             "canvas_controllers": counts["controllers"],
             "implemented_rest_routes": len(implemented),
             "implemented_rest_pct": pct(len(implemented), len(canvas_routes)),
@@ -988,12 +2122,19 @@ def build_coverage(manifest, star_src):
             "star_route_registrations": len(star_routes),
             "star_route_calls": calls,
             "star_unparsed_calls": unparsed,
+            "star_test_calls_excluded": test_calls,
+            "star_unreachable_calls_excluded": unreachable_calls,
             "star_extras": len(extras),
+            "star_extras_by_class": extras_classes,
             "graphql_files": counts["graphql_files"],
             "graphql_files_implemented": star_impl["graphql_files"],
-            "graphql_types": counts["graphql_types"],
+            # Denominators are the NAME inventories the matcher actually
+            # compares against, not count_canvas_sources' file-level scan
+            # (170/110 there vs 246/100 names): mixing the two printed an
+            # impossible 246/170.
+            "graphql_types": len(canvas_types),
             "graphql_types_implemented": len(impl_type_names),
-            "graphql_mutations": counts["graphql_mutations"],
+            "graphql_mutations": len(canvas_mutations),
             "graphql_mutations_implemented": len(impl_mutation_names),
             "ui_feature_dirs": counts["ui_feature_dirs"],
             "ui_feature_dirs_implemented": star_impl["ui_feature_dirs"],
@@ -1006,6 +2147,15 @@ def build_coverage(manifest, star_src):
             "js_env_call_sites": counts["js_env_call_sites"],
             "canvas_models": counts["models"],
             "star_tables": star_impl["tables"],
+            "canvas_schema_tables": len(canvas_tables),
+            "schema_tables_implemented": len(canvas_tables & star_table_names),
+            "schema_missing_tables": sorted(canvas_tables - star_table_names),
+            "schema_star_only": len(star_only_tables),
+            "route_shape_contracts": golden_count,
+            "graphql_query_root_fields_canvas": manifest.get(
+                "graphql_query_root_fields") or 0,
+            "graphql_query_root_fields_star": count_star_query_root_fields(
+                star_src),
         },
         "controllers": controllers,
         "implemented_routes": implemented,
@@ -1046,16 +2196,30 @@ def render_report(coverage):
         ("GraphQL object types", s["graphql_types_implemented"], s["graphql_types"]),
         ("GraphQL mutations", s["graphql_mutations_implemented"],
          s["graphql_mutations"]),
+        ("GraphQL Query root fields", s["graphql_query_root_fields_star"],
+         s["graphql_query_root_fields_canvas"]),
         ("UI feature directories", s["ui_feature_dirs_implemented"],
          s["ui_feature_dirs"]),
         ("JS/JSX/TS/TSX files", s["js_tsx_files_implemented"], s["js_tsx_files"]),
         ("ERB views", s["erb_views_implemented"], s["erb_views"]),
         ("js_env files", s["js_env_files_implemented"], s["js_env_files"]),
+        ("Route shape contracts", s["route_shape_contracts"],
+         s["canvas_api_routes"]),
+        ("Canvas schema tables", s["schema_tables_implemented"],
+         s["canvas_schema_tables"]),
     ]
     for label, part, total in rows:
         add("| %s | %d | %d | %s |" % (label, part, total, fmt_pct(part, total)))
-    add("| Schema tables (vs %d Canvas models) | %d | %d | n/a |" %
-        (s["canvas_models"], s["star_tables"], s["canvas_models"]))
+    missing = s["schema_missing_tables"]
+    add("")
+    add("Missing Canvas schema tables (%d): %s." %
+        (len(missing), ", ".join("`%s`" % n for n in missing) or "(none)"))
+    add("Star-only tables: %d (star-db `CREATE TABLE` names with no Canvas "
+        "`create_table` counterpart; includes the 7 `aua_logs_0..6` partitions "
+        "Canvas creates in a Ruby loop)." % s["schema_star_only"])
+    add("Route shape contracts are the golden request/response pairs under "
+        "`parity/behavior/golden/canvas/`, compared by "
+        "`tools/parity/golden_differ.py`.")
     add("")
     add("Implemented REST route count: **%d / %d** (%s)." %
         (s["implemented_rest_routes"], s["canvas_api_routes"],
@@ -1065,6 +2229,11 @@ def render_report(coverage):
         "(%d unparsed); %d have no Canvas match and are listed as extras below." %
         (s["star_route_registrations"], s["star_route_calls"],
          s["star_unparsed_calls"], s["star_extras"]))
+    add("")
+    add("Excluded before counting: %d `.route(...)` calls inside `#[cfg(test)]` "
+        "or `#[test]` bodies, %d calls in `.rs` files no `mod` declaration "
+        "reaches (not compiled, so not registered)." %
+        (s["star_test_calls_excluded"], s["star_unreachable_calls_excluded"]))
     add("")
     add("Canvas source sizes: %d GraphQL files (%d object types, %d mutations), "
         "%d models, %d UI feature dirs, %d JS/TSX files, %d ERB views, "
@@ -1137,13 +2306,59 @@ def render_report(coverage):
         add("")
 
     extras = coverage["unmatched_star_routes"]
-    add("## Star routes with no Canvas match (%d)" % len(extras))
+    add("## Star routes with no Canvas API match (%d)" % len(extras))
     add("")
-    add("| Verb | Path | Crate |")
-    add("|---|---|---|")
-    for route in extras:
-        add("| %s | `%s` | `%s` |" %
-            (route["verb"], route["path"], route["crate"]))
+    add("Classified, because the fix differs by class: only `api_verb_mismatch` "
+        "and `api_nested` are Canvas gaps (star misses a verb or the nested form "
+        "entirely); `api_extra_*` means Canvas' own verbs at that path are all "
+        "implemented and this registration is *additive surface* -- Canvas does "
+        "not answer that (verb, path) through its API, so each row still needs a "
+        "routes.rb check before it is kept. It is not a clean bill of health: "
+        "`POST /courses` sat here until it was deleted, because Canvas' only API "
+        "course create is `post \"accounts/:account_id/courses\"` "
+        "(canvas-src/config/routes.rb:1231); `web_*` means the "
+        "registration is mounted on the top-level (non-`/api/v1`) side -- "
+        "the page shell or the root URL families -- and Canvas answers "
+        "that path as a **web** (HTML/JS) route, so it is a port, not a "
+        "REST parity item; `api_alias` is Canvas' own "
+        "`self` id spelling (canvas-src/lib/api.rb:51 maps the literal `self` "
+        "to the current user), which is parity-exact and must not be deleted; "
+        "and `absent` means no Canvas path or path-tail matches, which covers "
+        "deliberate aliases (`"
+        "/assignment_overrides/{id}` for Canvas' "
+        "`/courses/{course_id}/assignments/{assignment_id}/overrides/{id}`, "
+        "whose nested form IS implemented) as well as genuinely new endpoints.")
+    add("")
+    classes = s.get("star_extras_by_class") or {}
+    add("| Class | Count | Action |")
+    add("|---|---:|---|")
+    for name in EXTRA_CLASSES:
+        action = {
+            "api_verb_mismatch": "Canvas verb at this path is unimplemented: add it",
+            "api_extra_verb": "Canvas serves other verbs here, not this one: "
+                              "extra API surface, verify in routes.rb",
+            "api_alias": "Canvas' `self` id alias (lib/api.rb): keep, parity-exact",
+            "web_exact": "port of a Canvas web route: keep, label as web/UI",
+            "web_verb_mismatch": "web port with the wrong verb",
+            "web_nested": "web route flattened to top level: re-nest or label",
+            "api_nested": "Canvas serves the nested form and star does not: re-nest",
+            "api_extra_nested": "nested form already served: this flat twin is "
+                                "extra surface, verify in routes.rb",
+            "absent": "no Canvas path or tail: a renamed alias, a custom "
+                      "endpoint, or unused -- check before deleting",
+        }[name]
+        add("| `%s` | %d | %s |" % (name, classes.get(name, 0), action))
+    add("")
+    add("| Verb | Path | Crate | Mount | Class | Canvas closest |")
+    add("|---|---|---|---|---|---|")
+    for route in sorted(extras, key=lambda r: (r.get("classification", "absent"),
+                                               r["normalized_path"], r["verb"])):
+        add("| %s | `%s` | `%s` | %s | %s | %s |" %
+            (route["verb"], route["path"], route["crate"],
+             route.get("mount", "?"),
+             route.get("classification", "unclassified"),
+             ", ".join("`%s`" % c for c in route.get("canvas_closest") or [])
+             or "-"))
     add("")
     add("## Parser scope and limitations")
     add("")
@@ -1172,15 +2387,35 @@ def render_report(coverage):
         "Canvas graphql_names before matching. Connection and edge helpers "
         "(e.g. `PageInfo`, `*Edge`, `*Connection`) only count when Canvas "
         "defines a type of the same name.")
-    add("- Rust paths are matched by `(verb, normalized path)`; axum's "
-        "`nest(\"/api/v1\", ...)` mount is assumed for all crate routers.")
+    add("- Rust paths are matched by `(verb, normalized path)`. `web_*` vs "
+        "`api_*` is decided by the Rust mount, not the path shape: "
+        "`star_route_mounts` walks the router composition from `star-http` "
+        "main() -- `nest(\"/api/v1\", build_api_router)` and everything its "
+        "`.merge(...)` chain reaches is `api`; the `fallback_service("
+        "star_ui::app)` shell, the root-merged login/LTI/sis routers, and "
+        "`nest(\"/api/graphql\", ...)` and everything they reach are `web`. "
+        "API-mounted extras are classified only against the Canvas API "
+        "table, web-mounted extras only against the Canvas web table; a "
+        "registration whose enclosing router function is not reachable from "
+        "main() is a hard error.")
     add("- Extras include deliberate flat-path deviations (for example "
         "`/assignments/{id}` where Canvas uses "
         "`/courses/{course_id}/assignments/{id}`) and auth/dashboard/health "
         "routes Canvas does not expose.")
-    add("- The schema row counts `CREATE TABLE` statements in `star-db` migrations "
-        "(36 authored tables); sqlx adds `_sqlx_migrations`, so a live database "
-        "has 37 tables.")
+    add("- The schema row compares table NAMES on both sides. Canvas' names "
+        "are replayed from `db/migrate/*.rb` in filename order -- every "
+        "`create_table :name` / `create_table \"name\"` / "
+        "`create_table(:name)` call (comment text stripped), plus the 7 "
+        "`aua_logs_0..6` partitions the init migration creates through its "
+        "`create_aua_log_partition` loop; the manifest stores the full name "
+        "list (`schema_tables`) with the loop-created names marked in "
+        "`schema_loop_tables`. star-db's names are the unique real "
+        "`CREATE TABLE` statements in `crates/star-db/migrations/*.sql`: "
+        "`--` comments are stripped before matching and the table name must "
+        "be followed by `(`, so comment prose (\"CREATE TABLE would run "
+        "before ...\") cannot inflate the count. The star-only figure is "
+        "taken against Canvas' named tables only, so the 7 loop partitions "
+        "sit on the star-only side of that line.")
     add("")
     return "\n".join(lines)
 
@@ -1190,7 +2425,9 @@ def cmd_report(args):
     star_src = Path(args.star_src).resolve()
     out_dir = Path(args.out)
 
-    coverage = build_coverage(manifest, star_src)
+    coverage = build_coverage(manifest, star_src,
+                              golden_dir=out_dir / "behavior" / "golden"
+                              / "canvas")
     current = coverage["summary"]["implemented_rest_routes"]
 
     baseline_path = out_dir / "baseline.json"
@@ -1201,7 +2438,13 @@ def cmd_report(args):
     (out_dir / "report.md").write_text(render_report(coverage), encoding="utf-8")
 
     regressed = previous is not None and current < previous
-    if not regressed:
+    s = coverage["summary"]
+    # A parser that recognizes nothing reports 0 implemented routes, which is
+    # not a coverage regression the baseline can catch when the baseline itself
+    # is missing (first run, or a scratch --out). Fail loudly instead.
+    parser_broken = (s["star_route_calls"] > 0
+                     and s["star_unparsed_calls"] == s["star_route_calls"])
+    if not regressed and not parser_broken:
         write_json(baseline_path, {
             "implemented_rest_routes": current,
             "policy": "report fails when implemented REST routes fall below this number",
@@ -1218,8 +2461,15 @@ def cmd_report(args):
            fmt_pct(s["ui_referenced_implemented"], s["ui_referenced_routes"])))
     print("star registrations: %d (%d extras)" %
           (s["star_route_registrations"], s["star_extras"]))
+    print("excluded: %d test-code calls, %d calls in uncompiled files" %
+          (s["star_test_calls_excluded"], s["star_unreachable_calls_excluded"]))
     print("wrote %s" % out_dir)
 
+    if parser_broken:
+        print("parity parse failure: all %d `.route(...)` calls unparsed — "
+              "the star parser matched nothing, so every number above is "
+              "meaningless" % s["star_route_calls"], file=sys.stderr)
+        return 1
     if regressed:
         print("parity regression: implemented %d < baseline %d" %
               (current, previous), file=sys.stderr)

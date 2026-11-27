@@ -44,7 +44,16 @@
 //! * star-lms has no SIS import worker. `create` therefore stores the batch
 //!   (and its attachment) but does not run the CSV parser; the batch stays in
 //!   the `created` state, exactly like a Canvas batch whose job has not been
-//!   picked up yet.
+//!   picked up yet. The state machine itself (`initializing`/`created` →
+//!   `importing`/`cleanup_batch` → `imported`/`imported_with_messages`/
+//!   `failed`/`failed_with_messages`, `aborted` off the running states) is
+//!   enforced by the handlers (`abort`, `abort_all_pending`) and advanced by
+//!   the external worker; the integration tests move rows through it with
+//!   direct SQL the same way. Canvas computes `data.counts`
+//!   (`error_count`/`warning_count`), `processing_errors`/`processing_warnings`
+//!   and the `errors_attachment` error file when the batch finishes
+//!   (`SisBatch#populate_old_warnings_and_errors`, `#write_errors_to_file`);
+//!   the JSON renders all of them verbatim once the row carries them.
 //! * The `pre_attachment` upload flow needs Canvas's file upload subsystem
 //!   (an S3 presigned post), which star-lms does not have. The branch is
 //!   reproduced (the batch is created in the `initializing` state and the
@@ -94,10 +103,10 @@ use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
 
 /// Canvas `Api::PER_PAGE`.
-const PER_PAGE: i64 = 10;
+pub(crate) const PER_PAGE: i64 = 10;
 
 /// Canvas `Api::MAX_PER_PAGE`.
-const MAX_PER_PAGE: i64 = 100;
+pub(crate) const MAX_PER_PAGE: i64 = 100;
 
 /// The `workflow_state` values `index` accepts as a filter (the list of the
 /// Canvas controller).
@@ -161,14 +170,14 @@ pub fn router() -> Router<AppState> {
 // ---------------------------------------------------------------------------
 
 /// A Canvas shaped error response.
-struct SisError {
+pub(crate) struct SisError {
     status: StatusCode,
     body: Value,
 }
 
 impl SisError {
     /// Canvas `api_error_json` for `ActiveRecord::RecordNotFound`.
-    fn not_found() -> Self {
+    pub(crate) fn not_found() -> Self {
         SisError {
             status: StatusCode::NOT_FOUND,
             body: json!({ "errors": [{ "message": "The specified resource does not exist." }] }),
@@ -274,7 +283,7 @@ struct SisBatchRow {
     updated_at: NaiveDateTime,
     started_at: Option<NaiveDateTime>,
     ended_at: Option<NaiveDateTime>,
-    progress: Option<i64>,
+    progress: Option<i32>,
     batch_mode: Option<bool>,
     batch_mode_term_id: Option<i64>,
     options: Option<String>,
@@ -282,7 +291,7 @@ struct SisBatchRow {
     diffing_data_set_identifier: Option<String>,
     diffing_remaster: Option<bool>,
     errors_attachment_id: Option<i64>,
-    change_threshold: Option<i64>,
+    change_threshold: Option<i32>,
     diffing_threshold_exceeded: bool,
     processing_errors: Option<String>,
     processing_warnings: Option<String>,
@@ -329,7 +338,7 @@ struct ProgressRow {
     context_type: Option<String>,
     user_id: Option<i64>,
     tag: String,
-    completion: i64,
+    completion: i32,
     workflow_state: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
@@ -338,7 +347,7 @@ struct ProgressRow {
 
 /// The account the request runs against.
 #[derive(Debug, sqlx::FromRow)]
-struct AccountRow {
+pub(crate) struct AccountRow {
     id: i64,
     parent_account_id: Option<i64>,
     allow_sis_import: bool,
@@ -920,14 +929,26 @@ async fn create(
     .await?;
 
     if attachment_id.is_some() {
-        // Canvas enqueues the import job here. star-lms has no SIS import
-        // worker, so the job row is the only trace of it.
+        // Canvas `SisBatch#process` enqueues `queue_job_for_account`:
+        // `Delayed::LOW_PRIORITY` work with `singleton: strand_for_account`
+        // (at most one import processes per account) and `max_attempts: 1`.
+        //
+        // The shared job-model convention (specs/p5-rest-misc-index.md §3)
+        // maps that onto the durable `jobs` row: tag `SisBatch#
+        // process_instructure_csv`, `strand`/`singleton` = `sis_batch:
+        // {account_id}` (`singleton` is a text column here; Canvas sets it to
+        // the strand string as well), priority 20 = `Delayed::LOW_PRIORITY`.
+        // star-lms has no SIS import worker, so the row is the only trace of
+        // the job.
+        let strand = format!("sis_batch:{account_id}");
         let _ = sqlx::query(
-            "INSERT INTO jobs (tag, workflow_state, progress, user_id, context_type, context_id) \
-             VALUES ('SisBatch#process_instructure_csv_zip', 'queued', 0, $1, 'SisBatch', $2)",
+            "INSERT INTO jobs (tag, workflow_state, progress, user_id, context_type, context_id, \
+             strand, singleton, priority, max_attempts) \
+             VALUES ('SisBatch#process_instructure_csv', 'queued', 0, $1, 'SisBatch', $2, $3, $3, 20, 1)",
         )
         .bind(auth.id)
         .bind(batch_id)
+        .bind(&strand)
         .execute(&state.db)
         .await;
     }
@@ -945,7 +966,7 @@ async fn create(
 ///
 /// Canvas casts the parameter to an integer, so an id that does not exist (or
 /// is not a number at all) is a 404.
-async fn load_account(pool: &PgPool, account_id: i64) -> Result<AccountRow, SisError> {
+pub(crate) async fn load_account(pool: &PgPool, account_id: i64) -> Result<AccountRow, SisError> {
     sqlx::query_as::<_, AccountRow>(
         "SELECT id, parent_account_id, allow_sis_import FROM accounts \
          WHERE id = $1 AND workflow_state <> 'deleted'",
@@ -957,7 +978,7 @@ async fn load_account(pool: &PgPool, account_id: i64) -> Result<AccountRow, SisE
 }
 
 /// Canvas `SisImportsApiController#check_account`.
-fn check_account(account: &AccountRow) -> Result<(), SisError> {
+pub(crate) fn check_account(account: &AccountRow) -> Result<(), SisError> {
     if account.parent_account_id.is_some() {
         return Err(SisError::bad_request(
             json!({ "errors": ["SIS imports can only be executed on root accounts"] }),
@@ -975,7 +996,11 @@ fn check_account(account: &AccountRow) -> Result<(), SisError> {
 ///
 /// `:import_sis` and `:manage_sis` are account rights that only account admins
 /// (and site admins) hold, so one check covers every route of this controller.
-async fn authorize_sis(pool: &PgPool, auth: &AuthUser, account_id: i64) -> Result<(), SisError> {
+pub(crate) async fn authorize_sis(
+    pool: &PgPool,
+    auth: &AuthUser,
+    account_id: i64,
+) -> Result<(), SisError> {
     if auth.role == "admin" {
         return Ok(());
     }
@@ -1300,12 +1325,18 @@ async fn sis_import_json(
 
     if let Some(errors) = parse_json_array(batch.processing_errors.as_deref()) {
         if !errors.is_empty() {
-            json.insert("processing_errors".to_string(), Value::Array(errors));
+            json.insert(
+                "processing_errors".to_string(),
+                Value::Array(processing_pairs(errors)),
+            );
         }
     }
     if let Some(warnings) = parse_json_array(batch.processing_warnings.as_deref()) {
         if !warnings.is_empty() {
-            json.insert("processing_warnings".to_string(), Value::Array(warnings));
+            json.insert(
+                "processing_warnings".to_string(),
+                Value::Array(processing_pairs(warnings)),
+            );
         }
     }
     if batch.diffing_data_set_identifier.is_some() {
@@ -1473,7 +1504,7 @@ fn progress_json(progress: &ProgressRow) -> Value {
 // ---------------------------------------------------------------------------
 
 /// A JSON response with an optional `Link` header.
-fn json_response(body: Value, link: Option<String>) -> Response {
+pub(crate) fn json_response(body: Value, link: Option<String>) -> Response {
     let mut response = (StatusCode::OK, Json(body)).into_response();
     if let Some(link) = link {
         if let Ok(value) = HeaderValue::from_str(&link) {
@@ -1484,7 +1515,7 @@ fn json_response(body: Value, link: Option<String>) -> Response {
 }
 
 /// The `Link` header Canvas builds in `Api.build_links_from_hash`.
-fn pagination_link(
+pub(crate) fn pagination_link(
     base_url: &str,
     params: &Params,
     page: i64,
@@ -1534,13 +1565,13 @@ fn pagination_link(
 /// Canvas reads them from the query string and, for a multipart post, from the
 /// form fields as well.
 #[derive(Debug, Default)]
-struct Params {
+pub(crate) struct Params {
     pairs: Vec<(String, String)>,
 }
 
 impl Params {
     /// Parses a query string.
-    fn parse(raw: Option<&str>) -> Self {
+    pub(crate) fn parse(raw: Option<&str>) -> Self {
         let mut params = Params::default();
         let Some(raw) = raw else { return params };
         for pair in raw.split('&') {
@@ -1562,7 +1593,7 @@ impl Params {
     }
 
     /// The last value of a parameter.
-    fn get(&self, key: &str) -> Option<&str> {
+    pub(crate) fn get(&self, key: &str) -> Option<&str> {
         self.pairs
             .iter()
             .rev()
@@ -1724,7 +1755,7 @@ fn find_bytes(haystack: &[u8], needle: &[u8], from: usize) -> Option<usize> {
 
 /// Canvas casts an id parameter to an integer; a value that is not a positive
 /// number does not exist and is a 404.
-fn parse_id(raw: &str) -> Result<i64, SisError> {
+pub(crate) fn parse_id(raw: &str) -> Result<i64, SisError> {
     raw.parse::<i64>()
         .ok()
         .filter(|id| *id > 0)
@@ -1733,7 +1764,7 @@ fn parse_id(raw: &str) -> Result<i64, SisError> {
 
 /// Ruby's `String#to_i`: the leading integer of the string, 0 when there is
 /// none.
-fn ruby_to_i(value: &str) -> i64 {
+pub(crate) fn ruby_to_i(value: &str) -> i64 {
     let trimmed = value.trim_start();
     let mut end = 0;
     for (index, character) in trimmed.char_indices() {
@@ -1747,7 +1778,7 @@ fn ruby_to_i(value: &str) -> i64 {
 }
 
 /// Canvas `Canvas::Plugin.value_to_boolean`.
-fn value_to_boolean(value: Option<&str>) -> bool {
+pub(crate) fn value_to_boolean(value: Option<&str>) -> bool {
     let Some(value) = value else {
         return false;
     };
@@ -1851,6 +1882,22 @@ fn parse_json_object(raw: Option<&str>) -> Map<String, Value> {
 fn parse_json_array(raw: Option<&str>) -> Option<Vec<Value>> {
     raw.and_then(|value| serde_json::from_str::<Value>(value).ok())
         .and_then(|value| value.as_array().cloned())
+}
+
+/// Regroups a serialized `processing_errors`/`processing_warnings` column
+/// into the shape Canvas renders (`SIS_BATCH_KEYS` round-trips them through
+/// `SisBatch#processing_errors`, an array of `[filename, message]` pairs).
+/// The worker serializes a flat JSON array — `[file, message, file, message,
+/// …]` — so a flat list is chunked into `[file, message]` pairs; a column
+/// that already holds pairs passes through untouched.
+fn processing_pairs(values: Vec<Value>) -> Vec<Value> {
+    if values.iter().any(Value::is_array) {
+        return values;
+    }
+    values
+        .chunks(2)
+        .map(|pair| Value::Array(pair.to_vec()))
+        .collect()
 }
 
 /// The ids of a JSON array of ids.

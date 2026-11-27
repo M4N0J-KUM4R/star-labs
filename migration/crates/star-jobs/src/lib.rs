@@ -4,7 +4,6 @@
 //! - `GET  /api/v1/jobs`              — list jobs, JSON mode (`only`/`flavor`/`q`)
 //! - `GET  /api/v1/jobs/{id}`         — show one job (`?flavor=failed`)
 //! - `POST /api/v1/jobs/batch_update` — bulk update/delete/unblock jobs
-//! - `POST /api/v1/jobs/{id}/cancel`  — cancel a queued/running job
 //!
 //! The V1 JSON-mode endpoints emit the Canvas `Delayed::Job` columns
 //! (`id, tag, strand, singleton, shard_id, max_concurrent, priority,
@@ -13,7 +12,6 @@
 //! listings drop `handler`/`last_error` like Canvas' `as_json` except list.
 //!
 //! Canvas parity (`app/controllers/jobs_v2_controller.rb`, Jobs V2 API):
-//! - `GET  /api/v1/jobs2`              — list jobs, optional `bucket` query
 //! - `GET  /api/v1/jobs2/{id}`         — lookup by id or `original_job_id`
 //! - `GET  /api/v1/jobs2/{bucket}`     — bucket listing (queued/running/future/failed)
 //! - `GET  /api/v1/jobs2/{bucket}/by_{group}` — grouped counts (tag/strand/singleton)
@@ -82,9 +80,6 @@ pub struct Job {
 /// Canvas caps job listings at 100 rows per page.
 const DEFAULT_LIMIT: i64 = 100;
 const MAX_LIMIT: i64 = 100;
-
-/// Terminal state written by `POST /jobs/{id}/cancel`.
-const STATE_CANCELLED: &str = "cancelled";
 
 /// Failed state used by the Jobs V2 `failed` bucket.
 const STATE_FAILED: &str = "failed";
@@ -190,10 +185,9 @@ impl Bucket {
     }
 }
 
-/// Query params for `GET /jobs2` (Canvas list arguments).
+/// Query params for `GET /jobs2/{bucket}` (Canvas list arguments).
 #[derive(Debug, Deserialize)]
 pub struct ListJobs2Query {
-    pub bucket: Option<String>,
     pub tag: Option<String>,
     pub strand: Option<String>,
     pub singleton: Option<String>,
@@ -327,21 +321,6 @@ async fn fetch_job_v2(db: &PgPool, id: i64) -> Result<JobV2, ApiError> {
         .ok_or(ApiError::NotFound)
 }
 
-/// Next state when cancelling a job currently in `current`.
-///
-/// Cancelling an already-cancelled job is idempotent (retries must not fail);
-/// jobs that already reached another terminal state (`completed`, `failed`)
-/// conflict instead of being rewritten.
-fn cancelled_state(current: &str) -> Result<&'static str, ApiError> {
-    match current {
-        "queued" | "running" => Ok(STATE_CANCELLED),
-        "cancelled" => Ok(STATE_CANCELLED),
-        other => Err(ApiError::Conflict(format!(
-            "job in state '{other}' cannot be cancelled"
-        ))),
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Permission helpers
 // ---------------------------------------------------------------------------
@@ -371,11 +350,9 @@ pub(crate) fn require_admin(auth: &AuthUser) -> Result<(), ApiError> {
 /// [`routes_v2_grouped`] and [`routes_v2_manage`].
 pub fn router() -> Router<AppState> {
     Router::new()
-        // Canvas Jobs V1 (JSON mode) plus the cancel extension.
+        // Canvas Jobs V1 (JSON mode).
         .merge(routes_v1::router())
-        .route("/jobs/{id}/cancel", post(cancel_job))
         // Canvas Jobs V2 (`/api/v1/jobs2/...`).
-        .route("/jobs2", get(list_jobs_v2))
         .route("/jobs2/clusters", get(list_job_clusters))
         .route("/jobs2/{id}", get(lookup_or_list_v2))
         .route("/jobs2/{id}/requeue", post(requeue_job_v2))
@@ -387,70 +364,9 @@ pub fn router() -> Router<AppState> {
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// `POST /jobs/{id}/cancel` — move a queued/running job to `cancelled`.
-async fn cancel_job(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<Job>, ApiError> {
-    require_admin(&auth)?;
-
-    let existing = fetch_job(&state.db, id).await?;
-    let next = cancelled_state(&existing.workflow_state)?;
-
-    // Already cancelled: return the row unchanged so retries do not bump
-    // updated_at.
-    if next == existing.workflow_state.as_str() {
-        return Ok(Json(existing));
-    }
-
-    let job: Job = sqlx::query_as(
-        r#"
-        UPDATE jobs
-        SET workflow_state = $1, updated_at = now()
-        WHERE id = $2
-        RETURNING id, tag, workflow_state, progress, created_at, updated_at,
-                  user_id, context_type, context_id
-        "#,
-    )
-    .bind(next)
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
-
-    Ok(Json(job))
-}
-
 // ---------------------------------------------------------------------------
 // Jobs V2 handlers (Canvas JobsV2Controller)
 // ---------------------------------------------------------------------------
-
-/// `GET /jobs2` — list jobs, optionally narrowed to a Canvas bucket.
-///
-/// Canvas serves the listing as `/jobs2/{bucket}` (see [`lookup_or_list_v2`]);
-/// this endpoint keeps the bucket as a query parameter so `/api/v1/jobs2`
-/// stays a single entry point. Rows carry `info` (seconds queued/running,
-/// timestamp for future/failed) when a bucket is given and an inferred
-/// `bucket` otherwise.
-async fn list_jobs_v2(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Query(params): Query<ListJobs2Query>,
-) -> Result<Json<Vec<Value>>, ApiError> {
-    require_admin(&auth)?;
-
-    let bucket = match params.bucket.as_deref() {
-        Some(raw) => Some(Bucket::parse(raw).ok_or_else(|| {
-            ApiError::BadRequest(format!(
-                "invalid bucket '{raw}'; expected queued, running, future, or failed"
-            ))
-        })?),
-        None => None,
-    };
-
-    let rows = list_jobs_v2_rows(&state.db, bucket, &params).await?;
-    Ok(Json(rows))
-}
 
 /// Shared listing core for `GET /jobs2?bucket=…` and `GET /jobs2/{bucket}`.
 async fn list_jobs_v2_rows(
@@ -705,22 +621,6 @@ pub async fn enqueue_job(
     Ok(job)
 }
 
-/// Load one job by id, mapping a missing row to 404.
-async fn fetch_job(db: &PgPool, id: i64) -> Result<Job, ApiError> {
-    sqlx::query_as(
-        r#"
-        SELECT id, tag, workflow_state, progress, created_at, updated_at,
-               user_id, context_type, context_id
-        FROM jobs
-        WHERE id = $1
-        "#,
-    )
-    .bind(id)
-    .fetch_optional(db)
-    .await?
-    .ok_or(ApiError::NotFound)
-}
-
 // ---------------------------------------------------------------------------
 // Unit tests (no database required)
 // ---------------------------------------------------------------------------
@@ -729,21 +629,6 @@ async fn fetch_job(db: &PgPool, id: i64) -> Result<Job, ApiError> {
 mod tests {
     use super::*;
     use axum::http::StatusCode;
-
-    #[test]
-    fn test_cancelled_state_transitions() {
-        // Queued and running jobs can be cancelled.
-        assert_eq!(cancelled_state("queued").unwrap(), STATE_CANCELLED);
-        assert_eq!(cancelled_state("running").unwrap(), STATE_CANCELLED);
-        // Cancelling twice stays cancelled (idempotent retry).
-        assert_eq!(cancelled_state("cancelled").unwrap(), STATE_CANCELLED);
-
-        // Other terminal states conflict rather than being rewritten.
-        for terminal in ["completed", "failed", "unknown"] {
-            let err = cancelled_state(terminal).unwrap_err();
-            assert_eq!(err.status(), StatusCode::CONFLICT);
-        }
-    }
 
     #[test]
     fn test_require_admin() {

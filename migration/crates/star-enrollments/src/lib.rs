@@ -25,19 +25,27 @@ use crate::enrollment_json::{
     EnrollmentJsonOptions, GradeRights, ENROLLMENT_JOINS,
 };
 use std::collections::HashSet;
+/// Pub loaders for the server-rendered people/admin pages (star-ui, #73).
+pub mod ui;
 
 // --------------------------------------------------------------------------
 // Domain types
 // --------------------------------------------------------------------------
 
-/// Request to create an enrollment.
-#[derive(Debug, Deserialize)]
-pub struct CreateEnrollmentRequest {
+/// Flat enrollment row from the DB (includes user info from join).
+/// All columns from enrollments + joined user columns.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+pub struct EnrollmentWithUser {
+    pub id: i64,
     pub user_id: i64,
     pub course_id: i64,
-    pub role: Option<String>,
-    /// Optional section within `course_id` (Canvas `enrollment[course_section_id]`).
+    /// Canvas `course_section_id`; NULL means the course default/all sections.
     pub course_section_id: Option<i64>,
+    pub role: String,
+    pub workflow_state: String,
+    pub created_at: DateTime<Utc>,
+    pub name: String,
+    pub email: String,
 }
 
 /// Request to create an enrollment through a section-scoped route.
@@ -57,6 +65,7 @@ pub struct EnrollmentFilter {
 }
 
 /// What the caller may see of the enrollments it reads.
+/// Canvas "Enrollment" JSON for the lifecycle + user-scoped endpoints.
 ///
 /// Canvas decides which optional parts of the enrollment payload a caller
 /// gets from its rights on the enrollment's course
@@ -440,24 +449,6 @@ async fn load_section(pool: &PgPool, section_id: i64) -> Result<CourseSectionRef
         .ok_or(ApiError::NotFound)
 }
 
-/// Canvas scopes `enrollment[course_section_id]` to the course the enrollment
-/// targets; a section belonging to another course is a 404 rather than a
-/// cross-course enrollment.
-async fn ensure_section_in_course(
-    pool: &PgPool,
-    section_id: i64,
-    course_id: i64,
-) -> Result<(), ApiError> {
-    let row: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM course_sections WHERE id = $1 AND course_id = $2")
-            .bind(section_id)
-            .bind(course_id)
-            .fetch_optional(pool)
-            .await
-            .map_err(ApiError::from)?;
-    row.map(|_| ()).ok_or(ApiError::NotFound)
-}
-
 fn validate_enrollment_role(role: &str) -> Result<(), ApiError> {
     if role != "student" && role != "teacher" && role != "ta" {
         return Err(ApiError::Validation(
@@ -524,6 +515,27 @@ async fn insert_enrollment(
 // Router
 // --------------------------------------------------------------------------
 
+/// cross-course enrollment.
+async fn ensure_section_in_course(
+    pool: &PgPool,
+    section_id: i64,
+    course_id: i64,
+) -> Result<(), ApiError> {
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM course_sections WHERE id = $1 AND course_id = $2")
+            .bind(section_id)
+            .bind(course_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(ApiError::from)?;
+    row.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+/// Whether a role is a teacher role (`role == "teacher"` or `"admin"`).
+fn is_teacher(role: &str) -> bool {
+    role == "teacher" || role == "admin"
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         // The alert thresholds of an observer.
@@ -535,6 +547,11 @@ pub fn router() -> Router<AppState> {
             post(create_enrollment).get(list_enrollments),
         )
         .route("/enrollments/{id}", delete(delete_enrollment))
+        // Canvas EnrollmentsApiController: enrollments are always context-
+        // scoped (`courses/:course_id/enrollments`,
+        // `sections/:course_id/enrollments`, `users/:user_id/enrollments`,
+        // routes.rb:1394-1411).  The bare `/enrollments` pair and
+        // `/enrollments/{id}` DELETE were Canvas-absent flat twins.
         // Canvas: GET/POST /api/v1/sections/:section_id/enrollments
         .route(
             "/sections/{section_id}/enrollments",
@@ -1619,6 +1636,16 @@ async fn show_account_enrollment(
     ))))
 }
 
+/// Request to create an enrollment.
+#[derive(Debug, Default, Deserialize)]
+pub struct CreateEnrollmentRequest {
+    pub user_id: i64,
+    pub course_id: i64,
+    pub role: Option<String>,
+    /// Optional section within `course_id` (Canvas `enrollment[course_section_id]`).
+    pub course_section_id: Option<i64>,
+}
+
 /// Body for POST /accounts/{accountId}/bulk_enrollment. Canvas takes
 /// `user_ids[]`, `course_ids[]`, `enrollment_type`, `start_at` and `end_at`
 /// (`enrollment_role_id` custom-role support is omitted with the rest of the
@@ -1749,7 +1776,8 @@ async fn create_bulk_enrollment(
 }
 
 /// Map a Canvas enrollment type to the star `enrollments.role` value used by
-/// the rest of the crate (`create_enrollment`'s default is "student").
+/// the rest of the crate (`create_section_enrollment` falls back to "student"
+/// for an unknown type, as Canvas does).
 fn enrollment_role_column(enrollment_type: &str) -> &'static str {
     match enrollment_type {
         "TeacherEnrollment" => "teacher",
