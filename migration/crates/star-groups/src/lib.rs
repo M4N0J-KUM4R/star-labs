@@ -928,9 +928,9 @@ pub fn router() -> Router<AppState> {
             "/groups/{id}",
             get(get_group)
                 .put(update_group)
-                // Canvas routes no PATCH here: the request never reaches a
-                // controller, so it answers the router's 404.
-                .patch(canvas_route_not_found)
+                // Canvas' `resources :groups` (config/routes.rb:694) routes
+                // PATCH to groups#update as well, the same controller as PUT.
+                .patch(update_group)
                 .delete(delete_group),
         )
         // Membership routes — Canvas group_memberships#index/#create
@@ -990,9 +990,10 @@ pub fn router() -> Router<AppState> {
             "/group_categories/{id}",
             get(get_group_category)
                 .put(update_group_category)
-                // Canvas routes no PATCH here: the request never reaches a
-                // controller, so it answers the router's 404.
-                .patch(canvas_route_not_found)
+                // Canvas' `resources :group_categories`
+                // (config/routes.rb:108) routes PATCH to
+                // group_categories#update, the same controller as PUT.
+                .patch(update_group_category)
                 .delete(delete_group_category),
         )
         // GET (group_categories#groups, canvas config/routes.rb:2595) and
@@ -2540,24 +2541,6 @@ async fn generate_group_name(db: &PgPool) -> Result<String, ApiError> {
         .fetch_optional(db)
         .await?;
     Ok(generated.unwrap_or_else(|| "New Group".to_string()))
-}
-
-/// Canvas' routing 404: no route matched, so no controller ran.
-///
-/// The router answers with an empty body served as `text/html`
-/// (the recorded corpus: `group-categories-patch-group-categories`).
-async fn canvas_route_not_found() -> Response {
-    let mut response = (
-        StatusCode::NOT_FOUND,
-        [(axum::http::header::CONTENT_TYPE, "text/html")],
-        "",
-    )
-        .into_response();
-    response.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("text/html"),
-    );
-    response
 }
 
 async fn create_group_standalone(
