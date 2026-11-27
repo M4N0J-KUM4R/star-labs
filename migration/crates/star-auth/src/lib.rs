@@ -1339,11 +1339,8 @@ async fn create_user_token(
         r#"
         INSERT INTO access_tokens
             (user_id, developer_key_id, token, crypted_token, token_hint, purpose,
-             scopes, permanent_expires_at, remember_access, workflow_state)
-        VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, FALSE, 'active')
-            (user_id, developer_key_id, token, token_hint, purpose, scopes,
-             permanent_expires_at, remember_access, workflow_state)
-        VALUES ($1, NULL, $2, $3, $4, $5, $6, FALSE, $7)
+             scopes, permanent_expires_at, workflow_state)
+        VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8)
         RETURNING id
         "#,
     )
