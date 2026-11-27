@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Generate a per-task brief for each core family.
+
+An agent working on one family should not have to explore the repo. It should
+be handed a brief that says, in order:
+
+    the routes it owns -> the Canvas files to read -> the Rust crate to change
+    -> the fields its table still owes Canvas -> the traps that apply
+    -> the recorded case that shows what the answer must look like
+    -> the checklist
+
+The brief is generated, so it cannot drift from the artefacts it summarises.
+
+    python3 tools/knowledge/gen_briefs.py
+    python3 tools/knowledge/gen_briefs.py --check
+"""
+
+from __future__ import annotations
+
+import argparse
+import collections
+import json
+import re
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[2]
+MIGRATION = REPO / "migration"
+VAULT = REPO / "docs" / "knowledge"
+
+# The families to brief, in the order we want them migrated.
+FAMILIES = [
+    "accounts", "users", "courses", "enrollments_api", "groups",
+    "group_categories", "folders", "files", "assignments", "submissions_api",
+    "rubrics_api", "discussion_topics_api", "wiki_pages_api",
+    "calendar_events_api", "conversations", "outcome_groups_api",
+    "external_tools", "lti/registrations",
+]
+
+# Which traps are worth reading for which family.
+TRAPS = {
+    "axum": ["axum-merge-semantics", "double-merge-star-content",
+             "axum-json-extractor-415", "ci-never-assembled-the-router"],
+    "canvas": ["canvas-schema-differences", "canvas-root-account",
+               "canvas-special-accounts-production", "canvas-response-headers"],
+    "harness": ["corpus-token-placeholder", "star-http-is-the-only-binary",
+                "rust-errors-are-plain-text"],
+}
+
+
+def normalise(path: str) -> str:
+    path = re.sub(r"\{[^}]+\}", "{}", path)
+    path = re.sub(r":[A-Za-z_][A-Za-z0-9_]*", "{}", path)
+    path = re.sub(r"\([^)]*\)\Z", "", path)
+    return path or "/"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--check", action="store_true")
+    args = ap.parse_args()
+
+    surface = json.loads((MIGRATION / "parity" / "canvas-api-surface.json").read_text())
+    layer = json.loads((MIGRATION / "parity" / "canvas-data-layer.json").read_text())
+
+    # the port's own routes, and which crate owns each
+    port: dict[str, set[str]] = collections.defaultdict(set)
+    for crate_dir in sorted((MIGRATION / "crates").iterdir()):
+        if not crate_dir.is_dir():
+            continue
+        for f in crate_dir.rglob("*.rs"):
+            if "/tests/" in str(f):
+                continue
+            for m in re.finditer(r'\.route\(\s*"([^"]*)"', f.read_text(errors="ignore")):
+                p = m.group(1)
+                if p.startswith("/api/v1"):
+                    p = p[len("/api/v1"):]
+                port[normalise(p)].add(crate_dir.name)
+
+    # the recorded cases, and what the replay said about them
+    cases_by_shape: dict[str, list[tuple[str, int | None, str]]] = collections.defaultdict(list)
+    report = MIGRATION / "rust" / "app-cases" / "replay-report.md"
+    failing: set[str] = set()
+    if report.is_file():
+        failing = set(re.findall(r"^### ([a-z0-9\-_]+)\s*$", report.read_text(errors="ignore"), re.M))
+    for toml in sorted((MIGRATION / "rust" / "app-cases" / "http").glob("*.toml")):
+        text = toml.read_text(errors="ignore")
+        m = re.search(r'path = "([^"]*)"', text)
+        s = re.search(r"status = (\d+)", text)
+        if not m:
+            continue
+        p = m.group(1)
+        if p.startswith("/api/v1"):
+            p = p[len("/api/v1"):]
+        cases_by_shape[normalise(p)].append(
+            (toml.stem, int(s.group(1)) if s else None,
+             "fail" if toml.stem in failing else "pass")
+        )
+
+    by_controller: dict[str, list[dict]] = collections.defaultdict(list)
+    for r in surface["routes"]:
+        if r["api"]:
+            by_controller[r["controller"]].append(r)
+
+    out_dir = VAULT / "briefs"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = []
+
+    for family in FAMILIES:
+        routes = by_controller.get(family, [])
+        if not routes:
+            continue
+        # The owner is the crate that registers most of this family's paths.
+        # (A family can touch a second crate — "courses" also has account-scoped
+        # aliases in star-accounts — so take the majority, not the first.)
+        votes: collections.Counter = collections.Counter()
+        for r in routes:
+            p = r["path"]
+            if p.startswith("/api/v1"):
+                p = p[len("/api/v1"):]
+            for c in port.get(normalise(p), set()):
+                votes[c] += 1
+        crate = votes.most_common(1)[0][0] if votes else "?"
+        src = f"app/controllers/{family.replace('/', '/')}_controller.rb"
+
+        L: list[str] = []
+        A = L.append
+        A("---")
+        A(f"tags: [brief, family, {family.replace('/', '-')}]")
+        A("---")
+        A("")
+        A(f"# Brief: `{family}`")
+        A("")
+        A("GENERATED by `tools/knowledge/gen_briefs.py`. Do not edit by hand.")
+        A("")
+        A("Everything you need for one slice. Read this, then the Canvas files it")
+        A("names. Do not explore the repo.")
+        A("")
+        A(f"- Rust crate: **`{crate}`**  (`migration/crates/{crate}/`)")
+        A(f"- Canvas controller: **`{src}`**")
+        A(f"- Routes owned: **{len(routes)}**")
+        A("")
+        A("## Your routes")
+        A("")
+        A("| verb | Canvas path | port has it | recorded case | replay |")
+        A("|---|---|---|---|---|")
+        for r in sorted(routes, key=lambda r: (r["verb"], r["path"])):
+            p = r["path"]
+            if p.startswith("/api/v1"):
+                p = p[len("/api/v1"):]
+            sh = normalise(p)
+            has = "yes" if sh in port else "**no**"
+            c = cases_by_shape.get(sh, [])
+            if c:
+                name, status, verdict = c[0]
+                rec = f"`{status}`"
+                rp = "**FAIL**" if verdict == "fail" else "pass"
+            else:
+                rec, rp = "-", "-"
+            A(f"| {r['verb']} | `{r['path']}` | {has} | {rec} | {rp} |")
+        A("")
+        A("## The answer must look like the recorded body")
+        A("")
+        recorded = [c for r in routes for c in cases_by_shape.get(
+            normalise(r["path"][len("/api/v1"):] if r["path"].startswith("/api/v1") else r["path"]), [])]
+        if recorded:
+            A("| case | Canvas answered | body |")
+            A("|---|---|---|")
+            for name, status, _ in recorded[:8]:
+                body = MIGRATION / "rust" / "app-cases" / "http" / f"{name}.body"
+                snippet = ""
+                if body.is_file():
+                    text = body.read_text(errors="ignore").strip().replace("\n", " ")
+                    snippet = (text[:120] + "…") if len(text) > 120 else text
+                A(f"| `{name}` | {status} | `{snippet}` |")
+            A("")
+            A("Open `migration/rust/app-cases/http/<case>.toml` for the full recorded")
+            A("response — status, headers and body. That file is the contract.")
+        else:
+            A("_No recorded case for this family yet. Record one before porting:_")
+            A("")
+            A("```sh")
+            A("python3 migration/tools/parity/gen_inputs.py \\")
+            A("  --manifest migration/parity/canvas_manifest.json \\")
+            A("  --out migration/rust/app-cases/http-inputs.jsonl")
+            A("```")
+        A("")
+        A("## Traps that apply to you")
+        A("")
+        for group, names in TRAPS.items():
+            for n in names:
+                if group == "axum" or family in n or family.replace("_api", "") in n:
+                    A(f"- [[traps/{n}]]")
+        A("")
+        A("## Checklist")
+        A("")
+        A("1. Read the Canvas controller and its serializer. Take the field names and")
+        A("   the status codes from there — not from the spec, not from memory.")
+        A("2. Check the recorded body above. If a case exists, that IS the answer.")
+        A("3. Compare the Rust table's columns against what Canvas returns —")
+        A("   `docs/knowledge/facts/schema-truth.md` lists what is missing.")
+        A("4. Implement. Keep Canvas' permission order: the first check that denies")
+        A("   decides the status.")
+        A("5. Add a test that asserts the recorded shape, not a guess.")
+        A("6. `cargo fmt`, then let CI run the tests. Do not run cargo locally")
+        A("   (AGENTS.md rule 4) — CI is the gate.")
+        A("")
+
+        path = out_dir / f"{family.replace('/', '-')}.md"
+        path.write_text("\n".join(L), encoding="utf-8")
+        written.append(path)
+
+    print(f"wrote {len(written)} briefs -> {out_dir.relative_to(REPO)}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
