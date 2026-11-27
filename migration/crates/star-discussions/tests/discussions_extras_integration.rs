@@ -233,7 +233,10 @@ async fn entry_get_and_moderator_update_delete_round_trip() {
         .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     // A course teacher (forum moderator) may edit another user's entry.
     let resp = server
@@ -333,7 +336,10 @@ async fn entry_update_delete_require_author_or_moderator_and_nonblank_message() 
         .json(&json!({ "message": "hijack" }))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
     let resp = server
         .delete(&url)
         .add_header(axum::http::header::AUTHORIZATION, other_bearer.clone())
@@ -362,7 +368,10 @@ async fn entry_update_delete_require_author_or_moderator_and_nonblank_message() 
             "body {body}; response: {}",
             resp.text()
         );
-        assert_eq!(resp.text(), "validation: message cannot be empty");
+        assert_eq!(
+            resp.text(),
+            r#"{"errors":[{"message":"message cannot be empty"}]}"#
+        );
     }
 
     // Missing entries are a 404 for both update and delete.
@@ -467,7 +476,10 @@ async fn add_reply_nests_replies_and_404s_for_foreign_parents() {
         .json(&json!({ "message": "  " }))
         .await;
     assert_eq!(resp.status_code(), 422, "body: {}", resp.text());
-    assert_eq!(resp.text(), "validation: message cannot be empty");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"message cannot be empty"}]}"#
+    );
 
     // Missing parents and parents from another topic are a 404.
     let resp = server
@@ -504,7 +516,10 @@ async fn add_reply_nests_replies_and_404s_for_foreign_parents() {
         .json(&json!({ "message": "wrong topic" }))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     // Unenrolled callers are a 403.
     let resp = server

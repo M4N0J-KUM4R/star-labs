@@ -334,7 +334,10 @@ async fn create_topic_rejects_blank_title_and_unknown_type_with_422() {
             "title {bad_title:?}; body: {}",
             resp.text()
         );
-        assert_eq!(resp.text(), "validation: title cannot be empty");
+        assert_eq!(
+            resp.text(),
+            r#"{"errors":[{"message":"title cannot be empty"}]}"#
+        );
     }
 
     // Unknown discussion_type -> 422 with the exact plain-text body.
@@ -346,7 +349,7 @@ async fn create_topic_rejects_blank_title_and_unknown_type_with_422() {
     assert_eq!(resp.status_code(), 422, "body: {}", resp.text());
     assert_eq!(
         resp.text(),
-        "validation: discussion_type must be 'side_comment', 'threaded', 'flat', or 'not_threaded'"
+        r#"{"errors":[{"message":"discussion_type must be 'side_comment', 'threaded', 'flat', or 'not_threaded'"}]}"#
     );
 
     cleanup(&pool, &prefix).await;
@@ -375,7 +378,10 @@ async fn create_topic_requires_teacher_or_admin() {
         .json(&json!({ "title": format!("{prefix}-nope") }))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     // A user with no relationship to the course is rejected with 403 too.
     let resp = server
@@ -384,7 +390,10 @@ async fn create_topic_requires_teacher_or_admin() {
         .json(&json!({ "title": format!("{prefix}-nope") }))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -408,9 +417,13 @@ async fn create_topic_admin_on_missing_course_hits_fk_and_returns_500() {
         .json(&json!({ "title": format!("{prefix}-GhostCourse") }))
         .await;
     assert_eq!(resp.status_code(), 500, "body: {}", resp.text());
-    // QUIRK: ApiError::Db renders as the bare string "database error" — the
-    // underlying sqlx message is only logged server-side, never in the body.
-    assert_eq!(resp.text(), "database error");
+    // Canvas' 500 body: the underlying sqlx message is only logged
+    // server-side, never in the body
+    // (app/controllers/application_controller.rb:2296).
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"An error occurred.","error_code":"internal_server_error"}]}"#
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -623,7 +636,10 @@ async fn get_topic_of_another_course_is_404() {
         )
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -668,7 +684,10 @@ async fn get_topic_of_soft_deleted_topic_is_404() {
         "get-one must hide a soft-deleted topic; body: {}",
         resp.text()
     );
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -743,7 +762,10 @@ async fn update_topic_rejects_blank_title_with_422() {
         .json(&json!({ "title": "   " }))
         .await;
     assert_eq!(resp.status_code(), 422, "body: {}", resp.text());
-    assert_eq!(resp.text(), "validation: title cannot be empty");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"title cannot be empty"}]}"#
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -781,7 +803,10 @@ async fn update_and_delete_authz_and_404_ordering() {
         .json(&json!({ "title": "hijack" }))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     // QUIRK: update verifies existence BEFORE authorization, so even the
     // unauthorized student gets 404 (not 403) for a missing topic.
@@ -791,7 +816,10 @@ async fn update_and_delete_authz_and_404_ordering() {
         .json(&json!({ "title": "hijack" }))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     // The authorized teacher gets 404 for a missing topic as well.
     let resp = server
@@ -807,7 +835,10 @@ async fn update_and_delete_authz_and_404_ordering() {
         .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     // Teacher deleting a missing topic -> 404.
     let resp = server
@@ -815,7 +846,10 @@ async fn update_and_delete_authz_and_404_ordering() {
         .add_header(axum::http::header::AUTHORIZATION, teacher_bearer)
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -958,7 +992,10 @@ async fn create_entry_unenrolled_403_cross_course_and_deleted_topic_404() {
         .json(&json!({ "message": "sneaking in" }))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     // Addressing a course-A topic through the course-B path is a 404 (the
     // topic's course is compared against the path course).
@@ -973,7 +1010,10 @@ async fn create_entry_unenrolled_403_cross_course_and_deleted_topic_404() {
         .json(&json!({ "message": "wrong door" }))
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     // Reading entries through the wrong course path is a 404 too.
     let resp = server
@@ -1010,7 +1050,10 @@ async fn create_entry_unenrolled_403_cross_course_and_deleted_topic_404() {
         "posting to a deleted topic must 404; body: {}",
         resp.text()
     );
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -1050,7 +1093,10 @@ async fn create_entry_rejects_blank_message_and_foreign_or_missing_parent() {
             "message {bad:?}; body: {}",
             resp.text()
         );
-        assert_eq!(resp.text(), "validation: message cannot be empty");
+        assert_eq!(
+            resp.text(),
+            r#"{"errors":[{"message":"message cannot be empty"}]}"#
+        );
     }
 
     // A parent entry from a DIFFERENT topic of the same course is rejected.
@@ -1073,7 +1119,7 @@ async fn create_entry_rejects_blank_message_and_foreign_or_missing_parent() {
     assert_eq!(resp.status_code(), 422, "body: {}", resp.text());
     assert_eq!(
         resp.text(),
-        "validation: parent_id must belong to the same topic"
+        r#"{"errors":[{"message":"parent_id must belong to the same topic"}]}"#
     );
 
     // A nonexistent parent id is rejected with the same 422.
@@ -1085,7 +1131,7 @@ async fn create_entry_rejects_blank_message_and_foreign_or_missing_parent() {
     assert_eq!(resp.status_code(), 422, "body: {}", resp.text());
     assert_eq!(
         resp.text(),
-        "validation: parent_id must belong to the same topic"
+        r#"{"errors":[{"message":"parent_id must belong to the same topic"}]}"#
     );
 
     cleanup(&pool, &prefix).await;
@@ -1276,7 +1322,10 @@ async fn full_lifecycle_topic_entry_reply_then_soft_delete() {
         .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     // 7. The entries endpoints treat the deleted topic as gone.
     let resp = server
@@ -1336,7 +1385,10 @@ async fn every_route_rejects_anonymous_callers_with_401() {
     // GET list.
     let resp = server.get(&base).await;
     assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
 
     // POST create topic.
     let resp = server
@@ -1344,12 +1396,18 @@ async fn every_route_rejects_anonymous_callers_with_401() {
         .json(&json!({ "title": "anonymous" }))
         .await;
     assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
 
     // GET one.
     let resp = server.get(&one).await;
     assert_eq!(resp.status_code(), 401);
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
 
     // PUT update.
     let resp = server
@@ -1357,12 +1415,18 @@ async fn every_route_rejects_anonymous_callers_with_401() {
         .json(&json!({ "title": "anonymous" }))
         .await;
     assert_eq!(resp.status_code(), 401);
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
 
     // DELETE.
     let resp = server.delete(&one).await;
     assert_eq!(resp.status_code(), 401);
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
 
     // POST entry.
     let resp = server
@@ -1370,18 +1434,27 @@ async fn every_route_rejects_anonymous_callers_with_401() {
         .json(&json!({ "message": "anonymous" }))
         .await;
     assert_eq!(resp.status_code(), 401);
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
 
     // GET entries.
     let resp = server.get(&entries).await;
     assert_eq!(resp.status_code(), 401);
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
 
     // PUT/DELETE topic read.
     let topic_read = format!("{base}/1/read");
     let resp = server.put(&topic_read).await;
     assert_eq!(resp.status_code(), 401);
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
     let resp = server.delete(&topic_read).await;
     assert_eq!(resp.status_code(), 401);
 
@@ -1389,12 +1462,18 @@ async fn every_route_rejects_anonymous_callers_with_401() {
     let entry_read = format!("{base}/1/entries/2/read");
     let resp = server.put(&entry_read).await;
     assert_eq!(resp.status_code(), 401);
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
 
     // POST entry rating.
     let resp = server.post(&format!("{base}/1/entries/2/rating")).await;
     assert_eq!(resp.status_code(), 401);
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -1518,7 +1597,10 @@ async fn topic_read_state_lifecycle_matches_canvas_noop_semantics() {
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     // Deleted topics are gone for the read endpoints too.
     let resp = server
@@ -1533,7 +1615,10 @@ async fn topic_read_state_lifecycle_matches_canvas_noop_semantics() {
         .add_header(axum::http::header::AUTHORIZATION, student_bearer)
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     cleanup(&pool, &prefix).await;
 }
@@ -1585,7 +1670,10 @@ async fn entry_read_state_validates_course_topic_and_enrollment() {
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     // Addressing the entry through the wrong course path is a 404.
     let resp = server
@@ -1595,7 +1683,10 @@ async fn entry_read_state_validates_course_topic_and_enrollment() {
         .add_header(axum::http::header::AUTHORIZATION, student_bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     // An entry addressed under the wrong topic is a 404 too.
     let other_topic = create_topic_ok(
@@ -1747,7 +1838,10 @@ async fn rate_entry_accepts_zero_or_one_and_rejects_other_values() {
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     cleanup(&pool, &prefix).await;
 }

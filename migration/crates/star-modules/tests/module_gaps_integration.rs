@@ -577,7 +577,10 @@ async fn select_mastery_path_reports_the_disabled_feature() {
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
-    assert_eq!(resp.text(), "bad request: mastery paths not enabled");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"mastery paths not enabled"}]}"#
+    );
 
     // Unknown item -> 404 (Canvas resolves the asset first).
     let resp = server
@@ -670,7 +673,10 @@ async fn batch_update_modules_reorders_positions_in_given_order() {
         .json(&json!({}))
         .await;
     assert_eq!(resp.status_code(), 400, "missing module_ids");
-    assert_eq!(resp.text(), "bad request: missing module_ids parameter");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"missing module_ids parameter"}]}"#
+    );
 
     // A module from another course aborts the batch -> 404, nothing moves.
     let resp = server

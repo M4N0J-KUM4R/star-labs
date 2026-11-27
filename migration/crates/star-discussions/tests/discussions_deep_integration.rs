@@ -319,7 +319,10 @@ async fn course_summaries_require_read_access_topic_and_summarize_right() {
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     // An enrolled student may read the course but not summarize it.
     let resp = server
@@ -343,7 +346,10 @@ async fn course_summaries_require_read_access_topic_and_summarize_right() {
         .add_header(axum::http::header::AUTHORIZATION, teacher_bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     // A missing topic is a 404 for the teacher as well.
     let resp = server
@@ -481,7 +487,10 @@ async fn update_discussion_types_covers_every_side_comment_and_migrate_disallow_
         .json(&json!({ "threaded": [first], "not_threaded": [second] }))
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     // Without the topic arrays Canvas answers 400 "Missing data".
     let resp = server
