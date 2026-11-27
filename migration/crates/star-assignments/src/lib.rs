@@ -1421,39 +1421,6 @@ async fn list_submissions(
     Ok(Json(rows))
 }
 
-async fn get_my_submission(
-    State(state): State<AppState>,
-    Path(assignment_id): Path<i64>,
-    auth: AuthUser,
-) -> Result<Json<Submission>, ApiError> {
-    // Fetch assignment to get course_id
-    let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM assignments WHERE id = $1"#)
-        .bind(assignment_id)
-        .fetch_optional(&state.db)
-        .await?;
-
-    let course_id = row.ok_or(ApiError::NotFound)?.0;
-
-    // Check enrolled
-    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let row: Option<Submission> = sqlx::query_as(
-        r#"
-        SELECT id, assignment_id, user_id, body, score::float8, submitted_at, created_at, updated_at
-        FROM submissions
-        WHERE assignment_id = $1 AND user_id = $2
-        "#,
-    )
-    .bind(assignment_id)
-    .bind(auth.id)
-    .fetch_optional(&state.db)
-    .await?;
-
-    row.map(Json).ok_or(ApiError::NotFound)
-}
-
 // ---------------------------------------------------------------------------
 // Canvas submissions API (SubmissionsApiController)
 // ---------------------------------------------------------------------------
@@ -8393,15 +8360,6 @@ async fn section_submission_summary(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
     submission_summary(State(state), Path((course_id, assignment_id)), auth).await
-}
-
-async fn course_get_my_submission(
-    State(state): State<AppState>,
-    Path((course_id, assignment_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-) -> Result<Json<Submission>, ApiError> {
-    ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-    get_my_submission(State(state), Path(assignment_id), auth).await
 }
 
 pub fn router() -> Router<AppState> {
