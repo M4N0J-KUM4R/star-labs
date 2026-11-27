@@ -77,6 +77,9 @@ cause, fix.
 | [[traps/ci-never-assembled-the-router]] | `cargo test -p` never assembles the app router — that is why the boot bug was invisible |
 | [[traps/star-http-is-the-only-binary]] | the binary is `star-http`; `PORT` is the fallback for `STAR_PORT` |
 | [[traps/front-door-delegation]] | the front door delegates on axum's fallback **and** its method-not-allowed fallback; Canvas answers 404, never 405 |
+| [[traps/front-door-original-path]] | `nest("/api/v1")` strips the prefix before the fallback runs — forward `OriginalUri`, not `parts.uri` |
+| [[traps/replay-gate-reads-git]] | the replay overwrites the committed report; the gate must read the baseline out of git |
+| [[traps/role-model-vs-canvas-role-overrides]] | the port's role model is stricter than Canvas' role-override defaults (students, `read_roster`) |
 
 ## Decisions — why things are the way they are
 
