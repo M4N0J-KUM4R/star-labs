@@ -22,7 +22,6 @@ use sqlx::PgPool;
 use star_common::AppState;
 
 const JWT_SECRET: &str = "test-jwt-secret";
-const CONSUMER_KEY: &str = "consumer-key";
 const SHARED_SECRET: &str = "shared-secret";
 
 type HmacSha1 = Hmac<Sha1>;
@@ -119,7 +118,6 @@ async fn cleanup(pool: &PgPool, prefix: &str, consumer_key: &str) {
 fn oauth_header(path: &str, consumer_key: &str, nonce: &str) -> String {
     let timestamp = chrono::Utc::now().timestamp();
     let mut normalized = [
-        percent_encode(CONSUMER_KEY),
         percent_encode(consumer_key),
         percent_encode(nonce),
         percent_encode("HMAC-SHA1"),

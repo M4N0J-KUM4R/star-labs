@@ -248,13 +248,16 @@ async fn check_enrolled_or_admin(
         return Ok(true);
     }
     // Canvas' course membership check runs over `not_inactive_by_date`
-    // (`app/models/enrollment.rb:1454`), which still counts a *completed*
-    // enrollment — the state Canvas' `DELETE /enrollments/:id` leaves behind
-    // (`app/models/enrollment.rb:957`). Only a deleted enrollment loses the
-    // membership.
+    // (`app/models/enrollment.rb:1454`), which counts an enrollment whose
+    // state is active, invited, completed, pending_invited or pending_active
+    // — a *completed* enrollment still counts (the state Canvas'
+    // `DELETE /enrollments/:id` leaves behind, `app/models/enrollment.rb:957`)
+    // and an *inactive* one does not.
     let row: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM enrollments
-         WHERE user_id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+         WHERE user_id = $1 AND course_id = $2 AND workflow_state IN (
+             'active', 'invited', 'completed', 'pending_invited', 'pending_active'
+         )
          LIMIT 1",
     )
     .bind(user_id)
@@ -271,7 +274,16 @@ async fn can_read_outcomes_on_account(
     pool: &PgPool,
     user_id: i64,
     account_id: i64,
+    auth: &AuthUser,
 ) -> Result<bool, ApiError> {
+    // Canvas' account policy grants every permission to the users whose
+    // `account_users` row permits it (`app/models/account.rb:1692-1714`), and
+    // the site admin's membership is in the site admin account, which sits
+    // above every account — so the site admin reads every account's
+    // outcomes.
+    if is_admin(auth) {
+        return Ok(true);
+    }
     let row: Option<(i32,)> = sqlx::query_as(
         r#"
         SELECT 1
@@ -304,7 +316,9 @@ async fn check_teacher_or_admin(
         return Ok(true);
     }
     let row: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' AND workflow_state = 'active' LIMIT 1",
+        "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' \
+         AND workflow_state IN ('active', 'invited', 'completed', 'pending_invited', 'pending_active') \
+         LIMIT 1",
     )
     .bind(user_id)
     .bind(course_id)
@@ -635,7 +649,7 @@ async fn list_account_outcome_groups(
     // Canvas reads the account's outcomes with `:read_outcomes`
     // (`app/controllers/outcome_groups_api_controller.rb`), which any user
     // with an association to the account holds.
-    let can_read = can_read_outcomes_on_account(&state.db, auth.id, account_id).await?;
+    let can_read = can_read_outcomes_on_account(&state.db, auth.id, account_id, &auth).await?;
     if !can_read {
         return Err(ApiError::Forbidden);
     }
@@ -908,7 +922,7 @@ async fn show_account_outcome_group(
     // Canvas reads the account's outcomes with `:read_outcomes`
     // (`app/models/account.rb:1754`) — any user with an association to the
     // account holds it.
-    if !can_read_outcomes_on_account(&state.db, auth.id, account_id).await? {
+    if !can_read_outcomes_on_account(&state.db, auth.id, account_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
     let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
@@ -967,7 +981,7 @@ async fn list_account_outcome_subgroups(
     // Canvas reads the account's outcomes with `:read_outcomes`
     // (`app/models/account.rb:1754`) — any user with an association to the
     // account holds it.
-    if !can_read_outcomes_on_account(&state.db, auth.id, account_id).await? {
+    if !can_read_outcomes_on_account(&state.db, auth.id, account_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
     let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
@@ -2228,7 +2242,7 @@ async fn list_account_outcome_group_links(
     }
     // Canvas reads the account's outcome links with `:read_outcomes`
     // (`app/models/account.rb:1754`).
-    if !can_read_outcomes_on_account(&state.db, auth.id, account_id).await? {
+    if !can_read_outcomes_on_account(&state.db, auth.id, account_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
     let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;

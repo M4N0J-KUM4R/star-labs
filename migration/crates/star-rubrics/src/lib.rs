@@ -344,14 +344,6 @@ async fn check_enrolled_or_admin(
     Ok(row.is_some())
 }
 
-/// Canvas grants `manage_rubrics` on the account
-/// (`app/models/account.rb:2418`), and the built-in course roles do not carry
-/// it: the recorded corpus answers 403 for a course teacher and for an admin
-/// of the course' own account. The port holds the right on the root account.
-fn check_manage_rubrics_in_course(auth: &AuthUser) -> bool {
-    is_admin(auth)
-}
-
 async fn check_teacher_or_admin(
     pool: &PgPool,
     user_id: i64,
@@ -1641,8 +1633,13 @@ async fn upload_rubric(
     Path(course_id): Path<i64>,
     auth: AuthUser,
     ApiJson(payload): ApiJson<UploadRubricRequest>,
-) -> Result<(StatusCode, Json<RubricImportResponse>), ApiError> {
-    if !check_manage_rubrics_in_course(&auth) {
+) -> Result<Response, ApiError> {
+    // Canvas grants `manage_rubrics` on the course to the built-in course
+    // roles (`config/initializers/permissions_registry.rb`:
+    // `manage_rubrics: true_for %w[DesignerEnrollment TaEnrollment
+    // TeacherEnrollment AccountAdmin]`), so a course teacher passes the
+    // permission and the request fails later, on the missing file.
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -1655,9 +1652,15 @@ async fn upload_rubric(
         return Err(ApiError::NotFound);
     }
 
-    let attachment_id = payload
-        .attachment_id
-        .ok_or_else(|| ApiError::Validation("attachment_id is required".into()))?;
+    // Canvas renders `{"message": "No file attached"}` with a 400 when the
+    // request carries no file (`app/controllers/rubrics_api_controller.rb:329-331`).
+    let Some(attachment_id) = payload.attachment_id else {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "message": "No file attached" })),
+        )
+            .into_response());
+    };
 
     let mut import =
         create_rubric_import(&state.db, course_id, "Course", Some(auth.id), attachment_id).await?;
@@ -1678,7 +1681,7 @@ async fn upload_rubric(
     // Canvas `rubrics_api#upload` renders the import JSON with the default
     // status — 200, not :created (rubrics_api_controller.rb:339-344) — the
     // same as the account twin in `rubrics_api`.
-    Ok((StatusCode::OK, Json(import)))
+    Ok((StatusCode::OK, Json(import)).into_response())
 }
 
 // -----------------------------------------------------------------------------
