@@ -2,11 +2,13 @@
 //! `specs/p5-rest-collaborations.md`).
 //!
 //! Pinned behavior:
-//! - api_index: 401 anonymous; 404 unknown course/group; 403 non-member
-//!   (student not in the course); tab-disabled 404 body for a course without
-//!   a seeded collaborations tab (star-courses DEFAULT_COURSE_TABS has none);
-//!   bare `collaborations` array envelope with meta.pagination; non-managers
-//!   only see rows they authored / are user-collaborator on / are in a
+//! - api_index: 401 anonymous; 404 unknown course/group; 403 when the
+//!   context owns no collaboration provider (`require_collaborations_configured`);
+//!   403 non-member (student not in the course); tab-disabled 404 body for a
+//!   course whose collaborations tab row is hidden; a bare JSON array
+//!   (Canvas renders the collection itself) with the pagination counts in the
+//!   `x-total-count` / `x-per-page` / `x-page` headers; non-managers only
+//!   see rows they authored / are user-collaborator on / are in a
 //!   collaborating group; group twin always tab-enabled.
 //! - members: 404 unknown collaboration; 403 non-collaborator; paginated
 //!   flat `collaborators` array; user collaborators (type "user",
@@ -17,8 +19,10 @@
 //!   `[User]` shape.
 //! - destroy: 200 + row JSON (Canvas renders the record, not 204); soft
 //!   delete (workflow_state 'deleted', deleted_at stamped); destroyed rows
-//!   invisible in api_index; cross-context id → 404; non-author
-//!   non-manager → 403; `delete_doc` accepted (stubbed boundary).
+//!   invisible in api_index; cross-context id → 404; the author may delete
+//!   only when the context grants `create_collaborations` (a plain student
+//!   does not hold it in star-lms' enrollment-based role model), a
+//!   non-author non-manager → 403; `delete_doc` accepted (stubbed boundary).
 //!
 //! Skipped cleanly when DATABASE_URL is not set; unique per-run prefix plus
 //! full teardown keeps shared-DB runs safe.
@@ -82,6 +86,14 @@ async fn seed_user(pool: &PgPool, prefix: &str, name: &str, role: &str) -> i64 {
     .expect("seed user")
 }
 
+async fn seed_account(pool: &PgPool, prefix: &str) -> i64 {
+    sqlx::query_scalar("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+        .bind(format!("{prefix}-Account"))
+        .fetch_one(pool)
+        .await
+        .expect("seed account")
+}
+
 async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
     sqlx::query_scalar("INSERT INTO courses (name, course_code) VALUES ($1, $2) RETURNING id")
         .bind(format!("{prefix}-{name}"))
@@ -89,6 +101,35 @@ async fn seed_course(pool: &PgPool, prefix: &str, name: &str) -> i64 {
         .fetch_one(pool)
         .await
         .expect("seed course")
+}
+
+/// An LTI tool with the `collaboration` placement in the course — this is
+/// what makes `Collaboration.any_collaborations_configured?` true
+/// (app/models/collaboration.rb:189-199).
+async fn seed_collaboration_tool(pool: &PgPool, prefix: &str, course_id: i64, account_id: i64) {
+    let tool_id: i64 = sqlx::query_scalar(
+        "INSERT INTO context_external_tools \
+           (context_id, context_type, shared_secret, consumer_key, name, workflow_state, \
+            root_account_id, created_at, updated_at) \
+         VALUES ($1, 'Course', 'secret', 'key', $2, 'active', $3, \
+                 (now() AT TIME ZONE 'UTC'), (now() AT TIME ZONE 'UTC')) \
+         RETURNING id",
+    )
+    .bind(course_id)
+    .bind(format!("{prefix}-collab-tool"))
+    .bind(account_id)
+    .fetch_one(pool)
+    .await
+    .expect("seed context external tool");
+
+    sqlx::query(
+        "INSERT INTO context_external_tool_placements (placement_type, context_external_tool_id) \
+         VALUES ('collaboration', $1)",
+    )
+    .bind(tool_id)
+    .execute(pool)
+    .await
+    .expect("seed tool placement");
 }
 
 async fn seed_enrollment(pool: &PgPool, user_id: i64, course_id: i64, role: &str) -> i64 {
@@ -189,6 +230,21 @@ async fn seed_course_collaborations_tab(pool: &PgPool, course_id: i64) {
     .expect("seed collaborations tab");
 }
 
+/// Hide the collaborations tab on a course: only an explicitly hidden row
+/// disables the route (Canvas `tab_enabled?` — a course with no row at all
+/// still has the tab, app/controllers/application_controller.rb:1270-1295).
+async fn seed_hidden_course_collaborations_tab(pool: &PgPool, course_id: i64) {
+    sqlx::query(
+        "INSERT INTO course_tabs (course_id, tab_id, position, hidden) \
+         VALUES ($1, 'collaborations', 12, true) \
+         ON CONFLICT (course_id, tab_id) DO UPDATE SET hidden = true",
+    )
+    .bind(course_id)
+    .execute(pool)
+    .await
+    .expect("seed hidden collaborations tab");
+}
+
 fn auth(user_id: i64, role: &str) -> String {
     let token = star_auth::create_token(user_id, role, JWT_SECRET).expect("mint token");
     format!("Bearer {token}")
@@ -220,6 +276,17 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
         .execute(pool)
         .await;
     let _ = sqlx::query(
+        "DELETE FROM context_external_tool_placements WHERE context_external_tool_id IN \
+           (SELECT id FROM context_external_tools WHERE name LIKE $1 || '-%')",
+    )
+    .bind(prefix)
+    .execute(pool)
+    .await;
+    let _ = sqlx::query("DELETE FROM context_external_tools WHERE name LIKE $1 || '-%'")
+        .bind(prefix)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query(
         "DELETE FROM course_tabs WHERE course_id IN ( \
            SELECT id FROM courses WHERE course_code LIKE $1 || '-%')",
     )
@@ -227,6 +294,10 @@ async fn cleanup(pool: &PgPool, prefix: &str) {
     .execute(pool)
     .await;
     let _ = sqlx::query("DELETE FROM courses WHERE course_code LIKE $1 || '-%'")
+        .bind(prefix)
+        .execute(pool)
+        .await;
+    let _ = sqlx::query("DELETE FROM accounts WHERE name LIKE $1 || '-%'")
         .bind(prefix)
         .execute(pool)
         .await;
@@ -250,10 +321,12 @@ async fn api_index_course_lifecycle_and_permissions() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let student = seed_user(&pool, &prefix, "Student", "student").await;
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let account = seed_account(&pool, &prefix).await;
     let course = seed_course(&pool, &prefix, "Course").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, student, course, "student").await;
     seed_course_collaborations_tab(&pool, course).await;
+    seed_collaboration_tool(&pool, &prefix, course, account).await;
 
     let own = seed_collaboration(&pool, "Course", course, teacher, &format!("{prefix}-own")).await;
     seed_collaboration(&pool, "Course", course, teacher, &format!("{prefix}-other")).await;
@@ -288,16 +361,23 @@ async fn api_index_course_lifecycle_and_permissions() {
         .await;
     assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
-    // teacher (manager) sees both active rows (items + meta.pagination).
+    // teacher (manager) sees both active rows — a bare JSON array (Canvas
+    // renders the collection itself) with the counts in the headers.
     let resp = server
         .get(&format!("/courses/{course}/collaborations"))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let total = resp
+        .headers()
+        .get("x-total-count")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i64>().ok())
+        .expect("x-total-count header");
+    assert!(total >= 2, "x-total-count: {total}");
     let body: Value = resp.json();
-    let items = body["items"].as_array().expect("items array");
+    let items = body.as_array().expect("array");
     assert_eq!(items.len(), 2, "deleted row must be invisible: {body}");
-    assert!(body["meta"]["pagination"]["total"].as_i64().unwrap() >= 2);
     let first = &items[0];
     assert_eq!(first["id"].as_i64().unwrap(), own);
     assert_eq!(
@@ -321,7 +401,7 @@ async fn api_index_course_lifecycle_and_permissions() {
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
     assert!(
-        body["items"].as_array().unwrap().is_empty(),
+        body.as_array().unwrap().is_empty(),
         "student sees none yet: {body}"
     );
 
@@ -333,7 +413,7 @@ async fn api_index_course_lifecycle_and_permissions() {
         .await;
     assert_eq!(resp.status_code(), 200);
     let body: Value = resp.json();
-    assert_eq!(body["items"].as_array().unwrap().len(), 1);
+    assert_eq!(body.as_array().unwrap().len(), 1);
 
     cleanup(&pool, &prefix).await;
 }
@@ -346,10 +426,14 @@ async fn api_index_course_tab_disabled_is_404_body() {
     };
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
-    // NO collaborations tab seeded — star-courses DEFAULT_COURSE_TABS has
-    // none, so the tab is disabled and Canvas renders the tab-disabled 404.
+    let account = seed_account(&pool, &prefix).await;
+    // The collaborations tab is explicitly HIDDEN — only a hidden row
+    // disables the route (Canvas `tab_enabled?`: a course with no row at all
+    // still has the tab, app/controllers/application_controller.rb:1270-1295).
     let course = seed_course(&pool, &prefix, "NoTab").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
+    seed_hidden_course_collaborations_tab(&pool, course).await;
+    seed_collaboration_tool(&pool, &prefix, course, account).await;
     seed_collaboration(
         &pool,
         "Course",
@@ -381,9 +465,13 @@ async fn api_index_group_twin_always_enabled() {
     };
 
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
+    let account = seed_account(&pool, &prefix).await;
     let course = seed_course(&pool, &prefix, "Course").await;
     let group = seed_group(&pool, course, &format!("{prefix}-Group")).await;
     seed_group_member(&pool, group, teacher).await;
+    // The group inherits the collaboration provider of its parent course
+    // (Canvas searches the context chain, lib/lti/tool_finder_utils.rb:41-70).
+    seed_collaboration_tool(&pool, &prefix, course, account).await;
     seed_collaboration(&pool, "Group", group, teacher, &format!("{prefix}-grouped")).await;
 
     // group twin: no tab seeding needed (star-groups always renders the
@@ -394,7 +482,7 @@ async fn api_index_group_twin_always_enabled() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
-    let items = body["items"].as_array().unwrap();
+    let items = body.as_array().expect("array");
     assert_eq!(items.len(), 1);
     assert_eq!(items[0]["context_type"].as_str().unwrap(), "Group");
     assert_eq!(items[0]["context_id"].as_i64().unwrap(), group);
@@ -417,8 +505,10 @@ async fn members_pagination_and_mixed_collaborators() {
     };
 
     let owner = seed_user(&pool, &prefix, "Owner", "teacher").await;
+    let account = seed_account(&pool, &prefix).await;
     let course = seed_course(&pool, &prefix, "Course").await;
     let group = seed_group(&pool, course, &format!("{prefix}-Group")).await;
+    seed_collaboration_tool(&pool, &prefix, course, account).await;
     let collab =
         seed_collaboration(&pool, "Course", course, owner, &format!("{prefix}-members")).await;
 
@@ -437,10 +527,16 @@ async fn members_pagination_and_mixed_collaborators() {
         .add_header(axum::http::header::AUTHORIZATION, auth(owner, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    let total = resp
+        .headers()
+        .get("x-total-count")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<i64>().ok())
+        .expect("x-total-count header");
     let body: Value = resp.json();
-    let page1 = body["items"].as_array().expect("items array");
+    let page1 = body.as_array().expect("array");
     assert_eq!(page1.len(), 10, "Canvas PER_PAGE default 10: {body}");
-    assert_eq!(body["meta"]["pagination"]["total"].as_i64().unwrap(), 13);
+    assert_eq!(total, 13);
     let first = &page1[0];
     assert_eq!(first["type"].as_str().unwrap(), "user");
     assert!(first["name"].as_str().unwrap().contains("Member"));
@@ -453,7 +549,7 @@ async fn members_pagination_and_mixed_collaborators() {
         .await;
     assert_eq!(resp.status_code(), 200);
     let body: Value = resp.json();
-    let page2 = body["items"].as_array().unwrap();
+    let page2 = body.as_array().expect("array");
     assert_eq!(page2.len(), 3);
     assert!(
         page2.iter().any(|i| i["type"] == "group"),
@@ -519,11 +615,13 @@ async fn potential_collaborators_course_and_group() {
     let s1 = seed_user(&pool, &prefix, "StudentA", "student").await;
     let s2 = seed_user(&pool, &prefix, "StudentB", "student").await;
     let outsider = seed_user(&pool, &prefix, "Outsider", "student").await;
+    let account = seed_account(&pool, &prefix).await;
     let course = seed_course(&pool, &prefix, "Course").await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, ta, course, "ta").await;
     seed_enrollment(&pool, s1, course, "student").await;
     seed_enrollment(&pool, s2, course, "student").await;
+    seed_collaboration_tool(&pool, &prefix, course, account).await;
 
     // course: distinct enrolled users, ordered by sortable_name.
     let resp = server
@@ -532,10 +630,11 @@ async fn potential_collaborators_course_and_group() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
-    let users = body["items"].as_array().expect("items array");
+    let users = body.as_array().expect("array");
     assert_eq!(users.len(), 4, "teacher+ta+2 students: {body}");
     for u in users {
         assert!(u["sortable_name"].is_string());
+        assert!(u["short_name"].is_string());
         assert!(u["email"].as_str().unwrap().contains("@test.local"));
     }
 
@@ -566,7 +665,7 @@ async fn potential_collaborators_course_and_group() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
-    let users = body["items"].as_array().expect("items array");
+    let users = body.as_array().expect("array");
     let mut ids: Vec<i64> = users.iter().map(|u| u["id"].as_i64().unwrap()).collect();
     ids.sort();
     let mut expected = vec![teacher, ta, s1];
@@ -593,11 +692,13 @@ async fn destroy_soft_delete_and_permissions() {
     let teacher = seed_user(&pool, &prefix, "Teacher", "teacher").await;
     let author = seed_user(&pool, &prefix, "Author", "student").await;
     let stranger = seed_user(&pool, &prefix, "Stranger", "student").await;
+    let account = seed_account(&pool, &prefix).await;
     let course = seed_course(&pool, &prefix, "Course").await;
     seed_course_collaborations_tab(&pool, course).await;
     seed_enrollment(&pool, teacher, course, "teacher").await;
     seed_enrollment(&pool, author, course, "student").await;
     seed_enrollment(&pool, stranger, course, "student").await;
+    seed_collaboration_tool(&pool, &prefix, course, account).await;
 
     let own =
         seed_collaboration(&pool, "Course", course, author, &format!("{prefix}-doomed")).await;
@@ -631,17 +732,33 @@ async fn destroy_soft_delete_and_permissions() {
         .await;
     assert_eq!(resp.status_code(), 404);
 
-    // author destroys own row with delete_doc → 200 + row JSON (not 204)
+    // The author may delete its own row only when the context grants
+    // `create_collaborations` (Canvas Collaboration policy,
+    // app/models/collaboration.rb:70-97). star-lms' enrollment-based role
+    // model gives a plain student no `create_collaborations` on a course →
+    // 403.
     let resp = server
         .delete(&format!(
             "/courses/{course}/collaborations/{own}?delete_doc=true"
         ))
         .add_header(axum::http::header::AUTHORIZATION, auth(author, "student"))
         .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+
+    // the course content manager destroys it with delete_doc → 200 + row
+    // JSON (not 204).
+    let resp = server
+        .delete(&format!(
+            "/courses/{course}/collaborations/{own}?delete_doc=true"
+        ))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
     let body: Value = resp.json();
     assert_eq!(body["id"].as_i64().unwrap(), own);
     assert_eq!(body["title"].as_str().unwrap(), format!("{prefix}-doomed"));
+    assert_eq!(body["workflow_state"].as_str().unwrap(), "deleted");
+    assert!(body["deleted_at"].is_string());
 
     // soft-deleted: row remains but workflow_state flipped.
     let (state, deleted_at): (String, Option<chrono::NaiveDateTime>) =
@@ -660,7 +777,7 @@ async fn destroy_soft_delete_and_permissions() {
         .await;
     let body: Value = resp.json();
     assert!(
-        !body["items"]
+        !body
             .as_array()
             .unwrap()
             .iter()
@@ -685,7 +802,9 @@ async fn destroy_soft_delete_and_permissions() {
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
 
-    // group twin destroy.
+    // group twin destroy: the author is not a group member and holds no
+    // `create_collaborations` on the group → 403; the admin of the parent
+    // course manages the group's content → 200.
     let group = seed_group(&pool, course, &format!("{prefix}-Group")).await;
     let group_collab = seed_collaboration(
         &pool,
@@ -698,6 +817,11 @@ async fn destroy_soft_delete_and_permissions() {
     let resp = server
         .delete(&format!("/groups/{group}/collaborations/{group_collab}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(author, "student"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+    let resp = server
+        .delete(&format!("/groups/{group}/collaborations/{group_collab}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
 
