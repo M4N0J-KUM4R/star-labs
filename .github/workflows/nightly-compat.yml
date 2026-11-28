@@ -122,6 +122,11 @@ jobs:
               -p star-accounts -p star-api -p star-common -p star-dashboard
               -p star-learning-dates -p star-modules -p star-notifications
               -p star-pages
+              # The crate wave's new crates. Three of them carry no test
+              # file of their own, so they cost this leg almost nothing; the
+              # leg was the lightest of the four by test volume.
+              -p star-canvas-response -p star-proxy -p star-storage
+              -p star-worker
           - shard: 3
             crates: >-
               -p star-audit -p star-content -p star-courses -p star-db
