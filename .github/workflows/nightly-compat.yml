@@ -58,6 +58,14 @@ jobs:
       available: ${{ steps.gate.outputs.available }}
     env:
       DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+      # The port's migrations assume `public`: the trigram index names
+      # `public.gin_trgm_ops`, and the extension the index needs is created
+      # in the first schema of the search_path. Postgres' default search_path
+      # is `"$user", public`, and on Supabase the role's own schema comes
+      # first — so the extension would land outside `public` and the index
+      # would not resolve. The lane pins the path for the migration and for
+      # the legs, so both agree on where the tables are.
+      PGOPTIONS: "-c search_path=public"
     steps:
       - name: Check secret
         id: gate
@@ -145,6 +153,9 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
       STAR_JWT_SECRET: nightly-supabase-test-secret
+      # The same search path the preflight migrated with — see the note in
+      # the preflight's environment.
+      PGOPTIONS: "-c search_path=public"
     defaults:
       run:
         working-directory: migration

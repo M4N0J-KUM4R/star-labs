@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -141,31 +142,40 @@ def tables_schema(url: str) -> str:
 
 
 def apply_migrations(url: str, directory: Path) -> int:
-    """Apply the tree's migrations and record them the way sqlx does.
+    """Apply the tree's migrations over the schema that is there, and record them.
 
-    The lane's four legs share one database, and the Supabase session
-    pooler refuses connections beyond its client ceiling (15). If every leg
+    The lane's four legs share one database, and the Supabase session pooler
+    refuses connections beyond its client ceiling (15). If every leg
     migrated, four legs would hold a connection each while they wait for
     sqlx's advisory lock — and the pooler drops them ("expected to read 5
     bytes, got 0 bytes at EOF"). So the migration happens once, here, and
     the legs find a ready schema.
 
+    The schema is not emptied: the port's migrations are mostly idempotent
+    but not entirely — some `CREATE INDEX` statements have no `IF NOT
+    EXISTS`, and the extension the trigram index needs lives in a schema
+    of its own. So the migrations are applied over what is there, the
+    statements that fail because their relation is already there are
+    skipped, and any other error fails the run.
+
     The `_sqlx_migrations` rows are written with the checksum sqlx computes
-    (SHA-384 of the file), so the legs' `MIGRATOR.run()` validates them
-    and has nothing to do.
+    (SHA-384 of the file, `sqlx-core/src/migrate/migration.rs:25`), so the
+    legs' `MIGRATOR.run()` validates them and has nothing to do.
     """
-    psql(url, "DROP TABLE IF EXISTS _sqlx_migrations")
-    for path in sorted(directory.glob("*.sql")):
-        number = path.name.split("_", 1)[0]
-        if not number.isdigit():
-            continue
+    tree = tree_migrations(directory)
+    for version, (name, _) in sorted(tree.items()):
+        path = directory / name
         result = subprocess.run(
-            ["psql", url, "-v", "ON_ERROR_STOP=1", "-q", "-f", str(path)],
+            ["psql", url, "-v", "ON_ERROR_STOP=0", "-q", "-f", str(path)],
             capture_output=True,
             text=True,
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"{path.name}: {result.stderr.strip()[:2000]}")
+        errors = [
+            line for line in result.stderr.splitlines()
+            if "ERROR:" in line and "already exists" not in line
+        ]
+        if errors:
+            raise RuntimeError(f"{name}: " + " | ".join(errors[:5])[:2000])
     psql(
         url,
         "CREATE TABLE IF NOT EXISTS _sqlx_migrations ("
@@ -176,14 +186,14 @@ def apply_migrations(url: str, directory: Path) -> int:
         "checksum BYTEA NOT NULL,"
         "execution_time BIGINT NOT NULL)",
     )
-    tree = tree_migrations(directory)
     for version, (name, digest) in tree.items():
         description = name.split("_", 1)[1].replace(".sql", "")
         psql(
             url,
             "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) "
-            f"VALUES ({version}, '{description}', true, "
-            f"decode('{digest}', 'hex'), 0) ON CONFLICT (version) DO NOTHING",
+            f"VALUES ({version}, '{description}', true, decode('{digest}', 'hex'), 0) "
+            "ON CONFLICT (version) DO UPDATE SET checksum = EXCLUDED.checksum, "
+            "success = true, description = EXCLUDED.description",
         )
     return len(tree)
 
@@ -251,6 +261,17 @@ def main() -> int:
     if missing:
         print(f"  pending: {len(missing)} migration(s) the database has not applied yet "
               f"(first: {missing[0]})")
+
+    if args.apply:
+        print("migration_state: applying the tree's migrations over the schema that is there")
+        try:
+            count = apply_migrations(url, args.migrations)
+        except Exception as error:  # noqa: BLE001
+            print(f"migration_state: the migrations could not be applied: {error}",
+                  file=sys.stderr)
+            return 2
+        print(f"migration_state: {count} migration(s) applied and recorded")
+        return 0
 
     if mismatched or unknown:
         if not args.reset:
