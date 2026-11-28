@@ -1332,9 +1332,19 @@ async fn delete_course_tool(
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
     require_course(&state.db, course_id).await?;
-    if !can_manage_course_tools(&state.db, &auth, course_id).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `delete_tool` asks for `:delete` on the tool
+    // (`app/controllers/external_tools_controller.rb:2144`), which the
+    // ContextExternalTool policy grants when the context grants
+    // `manage_lti_delete` (`app/models/context_external_tool.rb:187-189`).
+    // The permission layer reads the role overrides, so a course whose
+    // account has turned the right off answers the same way Canvas does.
+    star_permissions::check::require(
+        &state.db,
+        auth.id,
+        &star_permissions::PermissionContext::Course { course_id },
+        "manage_lti_delete",
+    )
+    .await?;
     let tool = find_course_tool(&state.db, course_id, id).await?;
     // Canvas delete_tool renders the destroyed tool's JSON (controller.rb:
     // 2143-2149), with workflow_state 'deleted' on the returned record.
@@ -1385,9 +1395,16 @@ async fn delete_account_tool(
 ) -> Result<Json<Value>, ApiError> {
     require_account(&state.db, account_id).await?;
     let tool = find_account_tool(&state.db, account_id, id).await?;
-    if !can_manage_account(&state.db, &auth, account_id).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // The same `:delete` on the tool, which the policy grants through the
+    // context's `manage_lti_delete`
+    // (`app/models/context_external_tool.rb:187-189`).
+    star_permissions::check::require(
+        &state.db,
+        auth.id,
+        &star_permissions::PermissionContext::Account { account_id },
+        "manage_lti_delete",
+    )
+    .await?;
     // Canvas delete_tool renders the destroyed tool's JSON (controller.rb:
     // 2143-2149).
     sqlx::query(

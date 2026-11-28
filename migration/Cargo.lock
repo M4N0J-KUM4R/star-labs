@@ -3309,6 +3309,7 @@ dependencies = [
  "star-auth",
  "star-common",
  "star-db",
+ "star-permissions",
  "tokio",
  "url",
  "uuid",
