@@ -151,9 +151,27 @@ def oracle_rows() -> list[tuple[str, str, tuple]]:
         "course_sections",
         "group_categories",
         "groups",
+        "group_memberships",
         "folders",
         "assignments",
         "enrollments",
+        "account_users",
+        "role_overrides",
+        "discussion_topics",
+        "discussion_entries",
+        "discussion_topic_summaries",
+        "submissions",
+        "calendar_events",
+        "external_tools",
+        "files",
+        "learning_outcomes",
+        "outcome_groups",
+        "outcome_links",
+        "rubrics",
+        "rubric_associations",
+        "lti_registrations",
+        "pages",
+        "page_revisions",
     ]
     for table in order + [t for t in seed if t not in order]:
         spec = seed.get(table)
@@ -253,11 +271,14 @@ def seed() -> int:
                                 (params[1], params[2], params[3]),
                             )
                         elif table == "folders":
-                            # The folder's root is unique per context.
+                            # Only the row this one replaces. The root
+                            # folder of a context is unique, but that is a
+                            # property of the seed (the child folders carry
+                            # their parent), and deleting the whole context
+                            # would take the root folder with them.
                             cur.execute(
-                                "DELETE FROM folders WHERE id = %s "
-                                "OR (context_type = %s AND context_id = %s)",
-                                (params[0], params[3], params[4]),
+                                "DELETE FROM folders WHERE id = %s",
+                                (params[0],),
                             )
                         else:
                             cur.execute(f"DELETE FROM {table} WHERE id = %s", (params[0],))

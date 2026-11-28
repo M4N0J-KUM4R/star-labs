@@ -1,4 +1,22 @@
 {
+ "account_users": {
+  "columns": [
+   "id",
+   "account_id",
+   "user_id",
+   "role",
+   "workflow_state"
+  ],
+  "rows": [
+   {
+    "account_id": 6,
+    "id": 1,
+    "role": "admin",
+    "user_id": 1,
+    "workflow_state": "active"
+   }
+  ]
+ },
  "accounts": {
   "columns": [
    "id",
@@ -32,7 +50,7 @@
    {
     "id": 6,
     "name": "Parity Account",
-    "parent_account_id": null,
+    "parent_account_id": 5,
     "settings": "{}",
     "workflow_state": "active"
    },
@@ -50,14 +68,46 @@
    "id",
    "course_id",
    "title",
-   "points_possible"
+   "points_possible",
+   "workflow_state"
   ],
   "rows": [
    {
     "course_id": 1,
     "id": 1,
     "points_possible": 100,
-    "title": "Parity Assignment"
+    "title": "Parity Assignment",
+    "workflow_state": "published"
+   }
+  ]
+ },
+ "calendar_events": {
+  "columns": [
+   "id",
+   "course_id",
+   "user_id",
+   "title",
+   "description",
+   "start_at",
+   "end_at",
+   "workflow_state",
+   "location_name",
+   "created_at",
+   "updated_at"
+  ],
+  "rows": [
+   {
+    "course_id": 1,
+    "created_at": "2026-11-27T08:49:56Z",
+    "description": null,
+    "end_at": "2026-11-28T09:49:56Z",
+    "id": 1,
+    "location_name": null,
+    "start_at": "2026-11-28T08:49:56Z",
+    "title": "Parity Event",
+    "updated_at": "2026-11-27T08:49:56Z",
+    "user_id": 1,
+    "workflow_state": "active"
    }
   ]
  },
@@ -65,23 +115,27 @@
   "columns": [
    "id",
    "course_id",
-   "name"
+   "name",
+   "workflow_state"
   ],
   "rows": [
    {
     "course_id": 3,
     "id": 1,
-    "name": "Parity Course"
+    "name": "Parity Course",
+    "workflow_state": "active"
    },
    {
     "course_id": 5,
     "id": 2,
-    "name": "Parity Course"
+    "name": "Parity Course",
+    "workflow_state": "active"
    },
    {
     "course_id": 1,
     "id": 3,
-    "name": "Parity Course"
+    "name": "Parity Course",
+    "workflow_state": "active"
    }
   ]
  },
@@ -125,91 +179,217 @@
    }
   ]
  },
+ "discussion_entries": {
+  "columns": [
+   "id",
+   "topic_id",
+   "parent_id",
+   "user_id",
+   "message",
+   "workflow_state",
+   "created_at",
+   "updated_at"
+  ],
+  "rows": [
+   {
+    "created_at": "2026-11-27T06:20:54Z",
+    "id": 1,
+    "message": "Parity reply.",
+    "parent_id": null,
+    "topic_id": 1,
+    "updated_at": "2026-11-27T06:20:54Z",
+    "user_id": 3,
+    "workflow_state": "active"
+   }
+  ]
+ },
+ "discussion_topic_summaries": {
+  "columns": [
+   "id",
+   "discussion_topic_id",
+   "user_id",
+   "llm_config_version",
+   "dynamic_content_hash",
+   "summary",
+   "parent_id",
+   "locale",
+   "created_at",
+   "updated_at"
+  ],
+  "rows": [
+   {
+    "created_at": "2026-11-27T06:20:54Z",
+    "discussion_topic_id": 1,
+    "dynamic_content_hash": "parity-summary-hash",
+    "id": 1,
+    "llm_config_version": "discussion_topic_summary_refined",
+    "locale": "en",
+    "parent_id": null,
+    "summary": "Parity summary.",
+    "updated_at": "2026-11-27T06:20:54Z",
+    "user_id": 1
+   }
+  ]
+ },
+ "discussion_topics": {
+  "columns": [
+   "id",
+   "course_id",
+   "title",
+   "message",
+   "workflow_state",
+   "discussion_type",
+   "user_id",
+   "pinned",
+   "locked",
+   "created_at",
+   "updated_at"
+  ],
+  "rows": [
+   {
+    "course_id": 1,
+    "created_at": "2026-11-27T06:20:54Z",
+    "discussion_type": "threaded",
+    "id": 1,
+    "locked": false,
+    "message": null,
+    "pinned": false,
+    "title": "Parity Topic",
+    "updated_at": "2026-11-27T06:20:54Z",
+    "user_id": 1,
+    "workflow_state": "active"
+   }
+  ]
+ },
  "enrollments": {
   "columns": [
    "id",
    "user_id",
    "course_id",
    "role",
-   "workflow_state"
+   "workflow_state",
+   "type",
+   "course_section_id",
+   "root_account_id"
   ],
   "rows": [
    {
-    "course_id": 3,
-    "id": 1,
-    "role": "teacher",
-    "user_id": 1,
-    "workflow_state": "deleted"
-   },
-   {
-    "course_id": 3,
-    "id": 2,
-    "role": "student",
-    "user_id": 2,
-    "workflow_state": "deleted"
-   },
-   {
-    "course_id": 3,
-    "id": 3,
-    "role": "student",
-    "user_id": 3,
-    "workflow_state": "active"
-   },
-   {
-    "course_id": 3,
-    "id": 4,
-    "role": "teacher",
-    "user_id": 5,
-    "workflow_state": "deleted"
-   },
-   {
-    "course_id": 3,
-    "id": 5,
-    "role": "student",
-    "user_id": 6,
-    "workflow_state": "active"
-   },
-   {
-    "course_id": 5,
-    "id": 6,
-    "role": "teacher",
-    "user_id": 1,
-    "workflow_state": "deleted"
-   },
-   {
-    "course_id": 5,
-    "id": 7,
-    "role": "student",
-    "user_id": 3,
-    "workflow_state": "active"
-   },
-   {
-    "course_id": 5,
-    "id": 8,
-    "role": "student",
-    "user_id": 7,
-    "workflow_state": "active"
-   },
-   {
     "course_id": 1,
+    "course_section_id": 3,
     "id": 9,
     "role": "teacher",
+    "root_account_id": 6,
+    "type": "TeacherEnrollment",
     "user_id": 1,
     "workflow_state": "active"
    },
    {
     "course_id": 1,
+    "course_section_id": 3,
     "id": 10,
     "role": "student",
+    "root_account_id": 6,
+    "type": "StudentEnrollment",
     "user_id": 3,
     "workflow_state": "active"
    },
    {
     "course_id": 1,
+    "course_section_id": 3,
     "id": 11,
-    "role": "student",
+    "role": "observer",
+    "root_account_id": 6,
+    "type": "StudentViewEnrollment",
     "user_id": 8,
     "workflow_state": "active"
+   },
+   {
+    "course_id": 1,
+    "course_section_id": 3,
+    "id": 12,
+    "role": "student",
+    "root_account_id": 6,
+    "type": "StudentEnrollment",
+    "user_id": 9,
+    "workflow_state": "completed"
+   }
+  ]
+ },
+ "external_tools": {
+  "columns": [
+   "id",
+   "name",
+   "description",
+   "url",
+   "domain",
+   "consumer_key",
+   "privacy_level",
+   "workflow_state",
+   "course_id",
+   "account_id",
+   "context_type",
+   "context_id",
+   "tool_type",
+   "lti_version",
+   "enabled",
+   "visible",
+   "created_at",
+   "updated_at"
+  ],
+  "rows": [
+   {
+    "account_id": 6,
+    "consumer_key": "parity-consumer-key",
+    "context_id": 1,
+    "context_type": "Course",
+    "course_id": 1,
+    "created_at": "2026-11-27T12:16:13Z",
+    "description": "Parity tool.",
+    "domain": null,
+    "enabled": true,
+    "id": 1,
+    "lti_version": "1.3",
+    "name": "Parity Tool",
+    "privacy_level": "public",
+    "tool_type": "lti",
+    "updated_at": "2026-11-27T14:51:05Z",
+    "url": "https://example.invalid/parity",
+    "visible": true,
+    "workflow_state": "active"
+   }
+  ]
+ },
+ "files": {
+  "columns": [
+   "id",
+   "course_id",
+   "uploader_id",
+   "filename",
+   "display_name",
+   "content_type",
+   "size",
+   "folder",
+   "folder_id",
+   "uuid",
+   "workflow_state",
+   "created_at",
+   "updated_at"
+  ],
+  "rows": [
+   {
+    "content_type": "text/plain",
+    "course_id": 1,
+    "created_at": "2026-11-27T12:26:02Z",
+    "display_name": "parity-file.txt",
+    "filename": "parity-file.txt",
+    "folder": "course files",
+    "folder_id": null,
+    "id": 7,
+    "size": 21,
+    "updated_at": "2026-11-27T13:00:59Z",
+    "uploader_id": 1,
+    "uuid": "0GJ6OIpz3lyY0Ik8NvR80eY1jKpdBbQMMhiOymoa",
+    "workflow_state": "processed"
    }
   ]
  },
@@ -219,22 +399,56 @@
    "name",
    "full_name",
    "context_type",
-   "context_id"
+   "context_id",
+   "parent_folder_id",
+   "workflow_state",
+   "position",
+   "created_at"
   ],
   "rows": [
    {
     "context_id": 1,
     "context_type": "Course",
+    "created_at": "2026-11-26T20:29:16Z",
     "full_name": "course files",
     "id": 1,
-    "name": "course files"
+    "name": "course files",
+    "parent_folder_id": null,
+    "position": 1,
+    "workflow_state": "visible"
    },
    {
     "context_id": 1,
     "context_type": "Course",
+    "created_at": "2026-11-26T20:29:16Z",
     "full_name": "course files/Parity Folder",
     "id": 2,
-    "name": "Parity Folder"
+    "name": "Parity Folder",
+    "parent_folder_id": 1,
+    "position": 1,
+    "workflow_state": "visible"
+   },
+   {
+    "context_id": 1,
+    "context_type": "Group",
+    "created_at": "2026-11-26T20:48:28Z",
+    "full_name": "files",
+    "id": 4,
+    "name": "files",
+    "parent_folder_id": null,
+    "position": 1,
+    "workflow_state": "visible"
+   },
+   {
+    "context_id": 1,
+    "context_type": "Account",
+    "created_at": "2026-11-26T20:48:28Z",
+    "full_name": "files",
+    "id": 7,
+    "name": "files",
+    "parent_folder_id": null,
+    "position": 1,
+    "workflow_state": "visible"
    }
   ]
  },
@@ -243,14 +457,52 @@
    "id",
    "course_id",
    "account_id",
-   "name"
+   "name",
+   "role",
+   "context_type",
+   "context_id",
+   "workflow_state",
+   "created_at"
   ],
   "rows": [
    {
     "account_id": 6,
+    "context_id": 1,
+    "context_type": "Course",
     "course_id": 1,
+    "created_at": "2026-11-26T20:24:30Z",
     "id": 1,
-    "name": "Parity Category"
+    "name": "Parity Category",
+    "role": "StudentEnrollment",
+    "workflow_state": "available"
+   }
+  ]
+ },
+ "group_memberships": {
+  "columns": [
+   "id",
+   "group_id",
+   "user_id",
+   "workflow_state",
+   "moderator",
+   "created_at"
+  ],
+  "rows": [
+   {
+    "created_at": "2026-11-26T20:29:16Z",
+    "group_id": 1,
+    "id": 1,
+    "moderator": false,
+    "user_id": 1,
+    "workflow_state": "accepted"
+   },
+   {
+    "created_at": "2026-11-27T05:29:37Z",
+    "group_id": 1,
+    "id": 2,
+    "moderator": false,
+    "user_id": 3,
+    "workflow_state": "accepted"
    }
   ]
  },
@@ -259,14 +511,465 @@
    "id",
    "course_id",
    "name",
-   "group_category_id"
+   "group_category_id",
+   "description",
+   "workflow_state",
+   "join_level",
+   "is_public",
+   "max_membership",
+   "members_count",
+   "storage_quota_mb",
+   "context_type",
+   "context_name",
+   "role",
+   "created_at"
+  ],
+  "rows": [
+   {
+    "context_name": "Parity Course",
+    "context_type": "Course",
+    "course_id": 1,
+    "created_at": "2026-11-26T20:29:16Z",
+    "description": null,
+    "group_category_id": 1,
+    "id": 1,
+    "is_public": false,
+    "join_level": "parent_context_only",
+    "max_membership": null,
+    "members_count": 2,
+    "name": "Parity Group",
+    "role": "StudentEnrollment",
+    "storage_quota_mb": 50,
+    "workflow_state": "available"
+   }
+  ]
+ },
+ "learning_outcomes": {
+  "columns": [
+   "id",
+   "title",
+   "short_description",
+   "description",
+   "display_name",
+   "workflow_state",
+   "context_id",
+   "context_type",
+   "created_at",
+   "updated_at"
+  ],
+  "rows": [
+   {
+    "context_id": 1,
+    "context_type": "Course",
+    "created_at": "2026-11-27T06:20:54Z",
+    "description": "Parity outcome.",
+    "display_name": null,
+    "id": 1,
+    "short_description": "Parity outcome",
+    "title": "Parity outcome",
+    "updated_at": "2026-11-27T06:20:54Z",
+    "workflow_state": "active"
+   },
+   {
+    "context_id": 1,
+    "context_type": "Course",
+    "created_at": "2026-11-27T06:20:54Z",
+    "description": "Parity outcome.",
+    "display_name": null,
+    "id": 2,
+    "short_description": "Parity outcome",
+    "title": "Parity outcome",
+    "updated_at": "2026-11-27T06:20:54Z",
+    "workflow_state": "active"
+   },
+   {
+    "context_id": 1,
+    "context_type": "Course",
+    "created_at": "2026-11-27T06:20:54Z",
+    "description": "Parity outcome.",
+    "display_name": null,
+    "id": 3,
+    "short_description": "Parity outcome",
+    "title": "Parity outcome",
+    "updated_at": "2026-11-27T06:20:54Z",
+    "workflow_state": "active"
+   },
+   {
+    "context_id": 1,
+    "context_type": "Course",
+    "created_at": "2026-11-27T06:20:54Z",
+    "description": "Parity outcome.",
+    "display_name": null,
+    "id": 4,
+    "short_description": "Parity outcome",
+    "title": "Parity outcome",
+    "updated_at": "2026-11-27T06:20:54Z",
+    "workflow_state": "active"
+   }
+  ]
+ },
+ "lti_registrations": {
+  "columns": [
+   "id",
+   "account_id",
+   "root_account_id",
+   "name",
+   "description",
+   "lti_version",
+   "workflow_state",
+   "configuration",
+   "created_at",
+   "updated_at"
+  ],
+  "rows": [
+   {
+    "account_id": 5,
+    "configuration": "{}",
+    "created_at": "2026-11-27T14:31:33Z",
+    "description": "Parity LTI registration.",
+    "id": 5,
+    "lti_version": "1.3",
+    "name": "Parity LTI Registration",
+    "root_account_id": 5,
+    "updated_at": "2026-11-27T14:31:33Z",
+    "workflow_state": "active"
+   }
+  ]
+ },
+ "outcome_groups": {
+  "columns": [
+   "id",
+   "course_id",
+   "context_type",
+   "context_id",
+   "parent_outcome_group_id",
+   "title",
+   "description",
+   "workflow_state",
+   "created_at",
+   "updated_at"
+  ],
+  "rows": [
+   {
+    "context_id": 1,
+    "context_type": "Course",
+    "course_id": 1,
+    "created_at": "2026-11-27T06:20:54Z",
+    "description": null,
+    "id": 2,
+    "parent_outcome_group_id": null,
+    "title": "Parity Course",
+    "updated_at": "2026-11-27T06:20:54Z",
+    "workflow_state": "active"
+   },
+   {
+    "context_id": 1,
+    "context_type": "Course",
+    "course_id": 1,
+    "created_at": "2026-11-27T06:20:54Z",
+    "description": "Parity outcome subgroup.",
+    "id": 4,
+    "parent_outcome_group_id": 2,
+    "title": "Parity Outcome Subgroup",
+    "updated_at": "2026-11-27T06:20:54Z",
+    "workflow_state": "active"
+   }
+  ]
+ },
+ "outcome_links": {
+  "columns": [
+   "id",
+   "outcome_id",
+   "outcome_group_id",
+   "context_type",
+   "context_id",
+   "workflow_state"
+  ],
+  "rows": [
+   {
+    "context_id": 1,
+    "context_type": "Course",
+    "id": 1,
+    "outcome_group_id": 2,
+    "outcome_id": 1,
+    "workflow_state": "active"
+   },
+   {
+    "context_id": 1,
+    "context_type": "Course",
+    "id": 2,
+    "outcome_group_id": 2,
+    "outcome_id": 2,
+    "workflow_state": "active"
+   },
+   {
+    "context_id": 1,
+    "context_type": "Course",
+    "id": 3,
+    "outcome_group_id": 2,
+    "outcome_id": 3,
+    "workflow_state": "active"
+   },
+   {
+    "context_id": 1,
+    "context_type": "Course",
+    "id": 4,
+    "outcome_group_id": 2,
+    "outcome_id": 4,
+    "workflow_state": "active"
+   },
+   {
+    "context_id": 1,
+    "context_type": "Course",
+    "id": 5,
+    "outcome_group_id": 4,
+    "outcome_id": 4,
+    "workflow_state": "active"
+   }
+  ]
+ },
+ "page_revisions": {
+  "columns": [
+   "id",
+   "page_id",
+   "revision_id",
+   "title",
+   "body",
+   "url",
+   "user_id",
+   "created_at",
+   "updated_at"
+  ],
+  "rows": [
+   {
+    "body": "Parity front page.",
+    "created_at": "2026-11-27T12:16:09Z",
+    "id": 1,
+    "page_id": 5,
+    "revision_id": 1,
+    "title": "Front Page",
+    "updated_at": "2026-11-27T12:16:09Z",
+    "url": "front-page",
+    "user_id": 1
+   }
+  ]
+ },
+ "pages": {
+  "columns": [
+   "id",
+   "course_id",
+   "title",
+   "body",
+   "url",
+   "workflow_state",
+   "editing_roles",
+   "front_page",
+   "created_at",
+   "updated_at"
+  ],
+  "rows": [
+   {
+    "body": "Parity front page.",
+    "course_id": 1,
+    "created_at": "2026-11-27T12:16:09Z",
+    "editing_roles": "teachers",
+    "front_page": true,
+    "id": 5,
+    "title": "Front Page",
+    "updated_at": "2026-11-27T12:16:09Z",
+    "url": "front-page",
+    "workflow_state": "published"
+   }
+  ]
+ },
+ "role_overrides": {
+  "columns": [
+   "id",
+   "permission",
+   "enabled",
+   "locked",
+   "context_type",
+   "context_id",
+   "role_id"
+  ],
+  "rows": [
+   {
+    "context_id": 6,
+    "context_type": "Account",
+    "enabled": false,
+    "id": 1,
+    "locked": true,
+    "permission": "manage_courses_reset",
+    "role_id": 6
+   },
+   {
+    "context_id": 6,
+    "context_type": "Account",
+    "enabled": false,
+    "id": 2,
+    "locked": true,
+    "permission": "manage_courses_delete",
+    "role_id": 6
+   },
+   {
+    "context_id": 6,
+    "context_type": "Account",
+    "enabled": false,
+    "id": 3,
+    "locked": true,
+    "permission": "manage_assignments_delete",
+    "role_id": 6
+   },
+   {
+    "context_id": 6,
+    "context_type": "Account",
+    "enabled": false,
+    "id": 4,
+    "locked": true,
+    "permission": "manage_groups_delete",
+    "role_id": 6
+   },
+   {
+    "context_id": 6,
+    "context_type": "Account",
+    "enabled": false,
+    "id": 5,
+    "locked": true,
+    "permission": "manage_lti_delete",
+    "role_id": 6
+   },
+   {
+    "context_id": 6,
+    "context_type": "Account",
+    "enabled": false,
+    "id": 6,
+    "locked": true,
+    "permission": "manage_courses_reset",
+    "role_id": 2
+   },
+   {
+    "context_id": 6,
+    "context_type": "Account",
+    "enabled": false,
+    "id": 7,
+    "locked": true,
+    "permission": "manage_courses_delete",
+    "role_id": 2
+   },
+   {
+    "context_id": 6,
+    "context_type": "Account",
+    "enabled": false,
+    "id": 8,
+    "locked": true,
+    "permission": "manage_assignments_delete",
+    "role_id": 2
+   },
+   {
+    "context_id": 6,
+    "context_type": "Account",
+    "enabled": false,
+    "id": 9,
+    "locked": true,
+    "permission": "manage_groups_delete",
+    "role_id": 2
+   },
+   {
+    "context_id": 6,
+    "context_type": "Account",
+    "enabled": false,
+    "id": 10,
+    "locked": true,
+    "permission": "manage_lti_delete",
+    "role_id": 2
+   }
+  ]
+ },
+ "rubric_associations": {
+  "columns": [
+   "id",
+   "rubric_id",
+   "association_id",
+   "association_type",
+   "context_id",
+   "context_type",
+   "title",
+   "purpose",
+   "bookmarked",
+   "use_for_grading",
+   "workflow_state"
+  ],
+  "rows": [
+   {
+    "association_id": 1,
+    "association_type": "Assignment",
+    "bookmarked": true,
+    "context_id": 1,
+    "context_type": "Course",
+    "id": 1,
+    "purpose": "grading",
+    "rubric_id": 1,
+    "title": "Parity Assignment",
+    "use_for_grading": false,
+    "workflow_state": "active"
+   }
+  ]
+ },
+ "rubrics": {
+  "columns": [
+   "id",
+   "course_id",
+   "title",
+   "points_possible",
+   "workflow_state",
+   "created_at",
+   "updated_at"
   ],
   "rows": [
    {
     "course_id": 1,
-    "group_category_id": 1,
+    "created_at": "2026-11-27T06:20:54Z",
     "id": 1,
-    "name": "Parity Group"
+    "points_possible": 10,
+    "title": "Parity Rubric",
+    "updated_at": "2026-11-27T06:20:54Z",
+    "workflow_state": "active"
+   }
+  ]
+ },
+ "submissions": {
+  "columns": [
+   "id",
+   "assignment_id",
+   "user_id",
+   "body",
+   "score",
+   "submitted_at",
+   "submission_type",
+   "attempt",
+   "workflow_state",
+   "excused",
+   "late",
+   "anonymous_id",
+   "created_at",
+   "updated_at"
+  ],
+  "rows": [
+   {
+    "anonymous_id": "uRjPo",
+    "assignment_id": 1,
+    "attempt": 1,
+    "body": "Parity submission body.",
+    "created_at": "2026-11-27T14:51:04Z",
+    "excused": false,
+    "id": 14,
+    "late": false,
+    "score": null,
+    "submission_type": "online_text_entry",
+    "submitted_at": "2026-11-27T14:51:04Z",
+    "updated_at": "2026-11-27T14:51:04Z",
+    "user_id": 3,
+    "workflow_state": "submitted"
    }
   ]
  },
@@ -343,6 +1046,14 @@
     "password_hash": "not-a-real-hash",
     "role": "teacher",
     "sortable_name": "Student, Test"
+   },
+   {
+    "email": "throwaway@example.com",
+    "id": 9,
+    "name": "Parity Throwaway Student",
+    "password_hash": "not-a-real-hash",
+    "role": "teacher",
+    "sortable_name": "Student, Parity Throwaway"
    }
   ]
  }
