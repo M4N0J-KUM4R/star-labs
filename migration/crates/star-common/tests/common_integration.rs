@@ -113,35 +113,46 @@ fn api_error_status_matches_variant() {
 async fn api_error_into_response_maps_status_and_body() {
     use axum::response::IntoResponse;
 
-    // The IntoResponse impl produces (status, Display string): a plain-text
-    // body, not a JSON error envelope.
+    // Canvas answers an API error with a JSON body, never with plain text:
+    // 401 `{"status":"unauthenticated",...}`, 403
+    // `{"status":"unauthorized",...}`, 404 and 500 `{"errors":[...]}`
+    // (lib/authentication_methods.rb:414-425,
+    // app/controllers/application_controller.rb:2296).
     let cases = [
-        (ApiError::NotFound, StatusCode::NOT_FOUND, "not found"),
+        (
+            ApiError::NotFound,
+            StatusCode::NOT_FOUND,
+            r#"{"errors":[{"message":"The specified resource does not exist."}]}"#,
+        ),
         (
             ApiError::Unauthorized,
             StatusCode::UNAUTHORIZED,
-            "unauthorized",
+            r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#,
         ),
-        (ApiError::Forbidden, StatusCode::FORBIDDEN, "forbidden"),
+        (
+            ApiError::Forbidden,
+            StatusCode::FORBIDDEN,
+            r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#,
+        ),
         (
             ApiError::Conflict("email already in use".into()),
             StatusCode::CONFLICT,
-            "conflict: email already in use",
+            r#"{"errors":[{"message":"email already in use"}]}"#,
         ),
         (
             ApiError::Validation("email must contain '@'".into()),
             StatusCode::UNPROCESSABLE_ENTITY,
-            "validation: email must contain '@'",
+            r#"{"errors":[{"message":"email must contain '@'"}]}"#,
         ),
         (
             ApiError::BadRequest("malformed body".into()),
             StatusCode::BAD_REQUEST,
-            "bad request: malformed body",
+            r#"{"errors":[{"message":"malformed body"}]}"#,
         ),
         (
             ApiError::Db("boom".into()),
             StatusCode::INTERNAL_SERVER_ERROR,
-            "database error",
+            r#"{"errors":[{"message":"An error occurred.","error_code":"internal_server_error"}]}"#,
         ),
     ];
 
@@ -155,7 +166,7 @@ async fn api_error_into_response_maps_status_and_body() {
         assert_eq!(
             bytes.as_ref(),
             body.as_bytes(),
-            "body for {label}: body is the Display string, not JSON"
+            "body for {label}: Canvas renders the error as JSON"
         );
     }
 }

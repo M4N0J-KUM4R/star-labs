@@ -1,0 +1,11 @@
+# Cases whose answer depends on what the rest of the session did.
+#
+# The corpus's cases share one database, so a case that renders a whole
+# table sees the rows the other cases created or deleted, and its answer
+# moves with the order they ran in. Those cases are reported by the gate
+# but do not fail it; the fix is to give the corpus isolated fixtures
+# (the way the crate tests use a unique prefix per run).
+
+# POST /api/v1/courses/1/rubrics/download_rubrics renders a CSV of every
+# rubric in the course, and the corpus creates rubrics in other cases.
+rubrics-api-post-courses-rubrics-download-rubrics

@@ -304,7 +304,11 @@ async fn create_module_authz_runs_before_course_existence_check() {
         "teacher on missing course gets 404; body: {}",
         resp.text()
     );
-    assert_eq!(resp.text(), "not found", "error body is plain text");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#,
+        "Canvas renders the error as JSON"
+    );
 
     // Student: the Forbidden is returned BEFORE the course existence check,
     // so a missing course surfaces as 403 for unauthorized callers.
@@ -318,7 +322,11 @@ async fn create_module_authz_runs_before_course_existence_check() {
         403,
         "student on missing course must hit the authz gate (403), not 404"
     );
-    assert_eq!(resp.text(), "forbidden", "error body is plain text");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#,
+        "Canvas renders the error as JSON"
+    );
 
     // Plain student on a real course is forbidden too.
     let course = seed_course(&pool, &prefix, "AuthzOrderCourse").await;
@@ -530,7 +538,10 @@ async fn list_modules_read_authz_matrix() {
     // Anonymous -> 401 from the AuthUser extractor, before any handler work.
     let resp = server.get(&format!("/courses/{course}/modules")).await;
     assert_eq!(resp.status_code(), 401, "anonymous list must be 401");
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
 
     // Active enrollment -> 200.
     let resp = server
@@ -553,7 +564,10 @@ async fn list_modules_read_authz_matrix() {
         403,
         "only workflow_state='active' enrollments grant read access"
     );
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     // No enrollment -> 403, even with a 'teacher' session-role claim
     // (read access comes from enrollment rows / admin role only).
@@ -614,7 +628,10 @@ async fn get_module_returns_flattened_module_with_items() {
     // Anonymous -> 401 from the AuthUser extractor, before any handler work.
     let resp = server.get(&format!("/modules/{module}")).await;
     assert_eq!(resp.status_code(), 401, "anonymous module detail is 401");
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
 
     // Authenticated but not enrolled -> 403 (module found, then authz).
     let resp = server
@@ -622,7 +639,10 @@ async fn get_module_returns_flattened_module_with_items() {
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "non-enrolled module detail is 403");
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     // Unauthorized callers still get 404 for a missing module: the lookup
     // precedes the authz check.
@@ -687,7 +707,10 @@ async fn get_module_missing_and_deleted_404() {
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 404, "missing module 404s");
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     // Soft-deleted modules 404 on detail too.
     let resp = server
@@ -793,7 +816,10 @@ async fn update_module_authz_matrix() {
         .json(&json!({ "name": "Nope" }))
         .await;
     assert_eq!(resp.status_code(), 403, "student update must be 403");
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     // Student on a MISSING module -> 404: the handler resolves the module
     // before the authz check, so existence leaks before authorization.
@@ -922,7 +948,10 @@ async fn delete_module_authz_matrix() {
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "student delete must be 403");
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     // Missing module -> 404 for anyone (lookup precedes authz).
     let resp = server
@@ -978,7 +1007,7 @@ async fn create_item_invalid_type_422_validation_precedes_authz() {
     assert_eq!(resp.status_code(), 422, "item_type 'quiz' is rejected");
     assert_eq!(
         resp.text(),
-        "validation: item_type must be 'page' or 'assignment'"
+        r#"{"errors":[{"message":"item_type must be 'page' or 'assignment'"}]}"#
     );
 
     // Validation runs BEFORE module lookup and authz: a student with a bad
@@ -1188,7 +1217,10 @@ async fn list_module_items_returns_seeded_items_with_authz() {
         .get(&format!("/courses/{course}/modules/{module}/items"))
         .await;
     assert_eq!(resp.status_code(), 401, "anonymous items list is 401");
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
 
     // Authenticated but not enrolled -> 403.
     let resp = server
@@ -1196,7 +1228,10 @@ async fn list_module_items_returns_seeded_items_with_authz() {
         .add_header(axum::http::header::AUTHORIZATION, auth(outsider, "student"))
         .await;
     assert_eq!(resp.status_code(), 403, "non-enrolled items list is 403");
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     // Unauthorized callers still get 404 for a missing module: the module
     // lookup precedes the authz check.
@@ -1363,7 +1398,10 @@ async fn nested_module_alias_404_for_wrong_course_missing_and_deleted() {
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 404, "cross-course alias GET");
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     let resp = server
         .put(&format!("/courses/{course}/modules/{foreign_module}"))
@@ -1371,7 +1409,10 @@ async fn nested_module_alias_404_for_wrong_course_missing_and_deleted() {
         .json(&json!({ "name": "Hijacked" }))
         .await;
     assert_eq!(resp.status_code(), 404, "cross-course alias PUT");
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     let resp = server
         .delete(&format!("/courses/{course}/modules/{foreign_module}"))
@@ -1526,7 +1567,10 @@ async fn nested_item_alias_matches_flat_upsert_and_delete() {
         404,
         "alias item create requires the module to belong to the course"
     );
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM module_items WHERE module_id = $1")
         .bind(other_module)
         .fetch_one(&pool)
@@ -1619,7 +1663,10 @@ async fn nested_alias_authz_matrix_matches_flat_routes() {
         .get(&format!("/courses/{course}/modules/{module}"))
         .await;
     assert_eq!(resp.status_code(), 401, "anonymous alias GET");
-    assert_eq!(resp.text(), "unauthorized");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthenticated","errors":[{"message":"user authorization required"}]}"#
+    );
 
     let resp = server
         .put(&format!("/courses/{course}/modules/{module}"))
@@ -1650,7 +1697,10 @@ async fn nested_alias_authz_matrix_matches_flat_routes() {
         .add_header(axum::http::header::AUTHORIZATION, outsider_auth.clone())
         .await;
     assert_eq!(resp.status_code(), 403, "outsider alias GET");
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     let resp = server
         .put(&format!("/courses/{course}/modules/{module}"))

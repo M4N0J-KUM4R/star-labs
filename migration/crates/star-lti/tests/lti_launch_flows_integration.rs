@@ -365,7 +365,10 @@ async fn authorize_redirect_redirects_to_the_hint_domain() {
         .get("/api/lti/authorize_redirect?lti_message_hint=not-a-jwt")
         .await;
     assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.text(), "bad request: Invalid lti_message_hint");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"Invalid lti_message_hint"}]}"#
+    );
 
     cleanup(&pool, &prefix, f.course).await;
 }
@@ -439,7 +442,10 @@ async fn authorize_validates_oidc_params_in_canvas_order() {
         .add_header(AUTHORIZATION, teacher_auth.clone())
         .await;
     assert_eq!(resp.status_code(), 400, "body: {}", resp.text());
-    assert_eq!(resp.text(), "bad request: Invalid lti_message_hint");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"Invalid lti_message_hint"}]}"#
+    );
 
     // Wrong scope (a matching login_hint — a mismatch would overwrite the
     // error with login_required, like Canvas' set_oidc_error!).
@@ -481,7 +487,10 @@ async fn authorize_validates_oidc_params_in_canvas_order() {
         .add_header(HOST, "canvas.test")
         .await;
     assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.text(), "bad request: Invalid lti_message_hint");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"Invalid lti_message_hint"}]}"#
+    );
 
     // An unknown client_id is Canvas' 404 — even before the hint decode.
     let resp = server
@@ -519,7 +528,10 @@ async fn authorize_validates_oidc_params_in_canvas_order() {
         .add_header(AUTHORIZATION, teacher_auth.clone())
         .await;
     assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.text(), "bad request: Invalid lti_message_hint");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"Invalid lti_message_hint"}]}"#
+    );
 
     // A hint pointing at an unknown context.
     let hint = hint_jwt(json!({"context_id": 987654321}), JWT_SECRET);
@@ -590,7 +602,10 @@ async fn authorize_rejects_unregistered_redirect_uri() {
         .add_header(AUTHORIZATION, auth(f.teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 400);
-    assert_eq!(resp.text(), "bad request: Invalid redirect_uri");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"Invalid redirect_uri"}]}"#
+    );
 
     cleanup(&pool, &prefix, f.course).await;
 }

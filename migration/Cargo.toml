@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/star-http",
+    "crates/star-canvas-response",
     "crates/star-auth",
     "crates/star-users",
     "crates/star-courses",
@@ -11,6 +12,7 @@ members = [
     "crates/star-common",
     "crates/star-quizzes",
     "crates/star-files",
+    "crates/star-storage",
     "crates/star-enrollments",
     "crates/star-pages",
     "crates/star-modules",
@@ -31,6 +33,7 @@ members = [
     "crates/star-submission-comments",
     "crates/star-permissions",
     "crates/star-jobs",
+    "crates/star-worker",
     "crates/star-lti",
     "crates/star-features",
     "crates/star-learning-dates",
@@ -42,6 +45,7 @@ members = [
     "crates/star-conferences",
     "crates/star-eportfolios",
     "crates/star-polling",
+    "crates/star-proxy",
     "crates/star-search",
     "crates/star-sis",
     "crates/star-ui",

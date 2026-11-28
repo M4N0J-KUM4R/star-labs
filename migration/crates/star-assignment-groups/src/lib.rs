@@ -9,7 +9,7 @@
 use axum::{
     extract::{Path, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -524,23 +524,14 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route(
             "/courses/{courseId}/assignment_groups",
-            post(create_assignment_group),
-        )
-        .route(
-            "/courses/{courseId}/assignment_groups",
-            get(list_assignment_groups),
+            post(create_assignment_group).get(list_assignment_groups),
         )
         .route(
             "/courses/{courseId}/assignment_groups/{id}",
-            get(get_assignment_group),
-        )
-        .route(
-            "/courses/{courseId}/assignment_groups/{id}",
-            put(update_assignment_group).patch(update_assignment_group),
-        )
-        .route(
-            "/courses/{courseId}/assignment_groups/{id}",
-            delete(delete_assignment_group),
+            get(get_assignment_group)
+                .put(update_assignment_group)
+                .patch(update_assignment_group)
+                .delete(delete_assignment_group),
         )
         .route(
             "/courses/{courseId}/assignment_groups/{groupId}/assignments",

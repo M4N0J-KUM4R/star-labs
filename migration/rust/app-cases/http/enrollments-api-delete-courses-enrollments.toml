@@ -1,6 +1,6 @@
 [request]
 method = "DELETE"
-path = "/api/v1/courses/1/enrollments/1"
+path = "/api/v1/courses/1/enrollments/12"
 
 [request.headers]
 Authorization = "Bearer __REPLAY_TOKEN__"
@@ -9,12 +9,12 @@ Authorization = "Bearer __REPLAY_TOKEN__"
 status = 200
 
 [response.headers]
-cache-control = "[..]"
+cache-control = "max-age=0, private, must-revalidate"
 content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
 content-type = "application/json; charset=utf-8"
 referrer-policy = "no-referrer-when-downgrade"
 set-cookie = "[..]"
-x-canvas-meta = "at=10000000000007;dk=10000000000001;o=enrollments_api;n=destroy;t=Course;i=1;b=[..];m=[..];u=0.[..];y=0.00;d=0.[..];rlr=600.0;"
+x-canvas-meta = "at=10000000000007;dk=10000000000001;o=enrollments_api;n=destroy;t=Course;i=1;b=2074132;m=2074132;u=0.[..];y=0.00;d=0.[..];rlr=600.0;"
 x-canvas-user-id = "10000000000001"
 x-content-type-options = "nosniff"
 x-download-options = "noopen"

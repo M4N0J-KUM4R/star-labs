@@ -43,7 +43,7 @@ use axum::{
 use serde_json::{json, Map, Value};
 use sqlx::PgPool;
 use star_auth::AuthUser;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 
 use crate::{
     check_teacher_or_admin, create_rubric_import, fetch_rubric_with_nested, is_admin, Rubric,
@@ -99,14 +99,12 @@ fn rubric_not_found() -> Response {
 }
 
 /// Canvas `render_json_unauthorized` (authenticated but not authorized).
+///
+/// The body is rendered by the shared renderer in `star-common`, so the key
+/// order (`status` before `errors`) is Canvas' and not `serde_json`'s
+/// alphabetical one.
 fn forbidden() -> Response {
-    json_response(
-        StatusCode::FORBIDDEN,
-        json!({
-            "status": "unauthorized",
-            "errors": [{"message": "user not authorized to perform that action"}],
-        }),
-    )
+    ApiError::Forbidden.into_response()
 }
 
 /// Canvas `RubricsApiController#upload_status` renders the ActiveRecord
@@ -790,7 +788,7 @@ pub async fn upload_account_rubric(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<UploadRubricRequest>,
+    ApiJson(payload): ApiJson<UploadRubricRequest>,
 ) -> Result<Response, ApiError> {
     if let Some(reject) = account_gate(&state, account_id, &auth).await? {
         return Ok(reject);

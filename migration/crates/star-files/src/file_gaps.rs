@@ -31,7 +31,6 @@ use axum::routing::{get, put};
 use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use sqlx::PgPool;
 use star_auth::AuthUser;
 use star_common::{ApiError, AppState};
@@ -181,85 +180,6 @@ async fn api_capture(
     .await?;
 
     Ok(Json(captured))
-}
-
-/// Request body of POST /files/update_word_count (Canvas accepts both the
-/// documented `file_id` and a bare `id`).
-#[derive(Debug, Deserialize)]
-pub struct UpdateWordCountRequest {
-    pub id: Option<i64>,
-    pub file_id: Option<i64>,
-    pub word_count: Option<i32>,
-}
-
-/// Canvas: files#update_word_count — POST /api/v1/files/update_word_count.
-///
-/// Updates the file's word count (migration 0255) and answers
-/// `head :no_content` (204); unknown files are 404. The caller must own the
-/// file or manage its course (the crate's reset_verifier gate).
-async fn update_word_count(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Json(payload): Json<UpdateWordCountRequest>,
-) -> Result<StatusCode, ApiError> {
-    let file_id = payload
-        .file_id
-        .or(payload.id)
-        .ok_or_else(|| ApiError::BadRequest("file_id is required".into()))?;
-    let word_count = payload
-        .word_count
-        .ok_or_else(|| ApiError::BadRequest("word_count is required".into()))?;
-
-    let row: Option<(i64, i64)> = sqlx::query_as(
-        "SELECT course_id, uploader_id FROM files \
-         WHERE id = $1 AND workflow_state <> 'deleted'",
-    )
-    .bind(file_id)
-    .fetch_optional(&state.db)
-    .await?;
-    let (course_id, uploader_id) = row.ok_or(ApiError::NotFound)?;
-
-    let can_manage =
-        user_teacher_of_course(&state.db, auth.id, course_id, &auth.role).await? || is_admin(&auth);
-    if !can_manage && uploader_id != auth.id {
-        return Err(ApiError::Forbidden);
-    }
-
-    let result = sqlx::query(
-        "UPDATE files SET word_count = $1, updated_at = now() \
-         WHERE id = $2 AND workflow_state <> 'deleted'",
-    )
-    .bind(word_count)
-    .bind(file_id)
-    .execute(&state.db)
-    .await?;
-    if result.rows_affected() == 0 {
-        return Err(ApiError::NotFound);
-    }
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
-/// Request body of POST /rce_linked_file_instfs_ids.
-#[derive(Debug, Deserialize)]
-pub struct RceLinkedFileIdsRequest {
-    /// The ids Canvas checks for InstFS RCE linkage; accepted for the
-    /// request contract (a missing key is a 422) but never read — no
-    /// InstFS integration exists, so no id is ever RCE-linked.
-    #[allow(dead_code)]
-    pub file_ids: Vec<i64>,
-}
-
-/// Canvas: files#rce_linked_file_instfs_ids —
-/// POST /api/v1/rce_linked_file_instfs_ids.
-///
-/// Canvas answers the subset of ids that are RCE-linked in InstFS; no InstFS
-/// integration exists here, so the documented feature-off shape `{"ids": []}`
-/// is returned for every request.
-async fn rce_linked_file_instfs_ids(
-    Json(_payload): Json<RceLinkedFileIdsRequest>,
-) -> Json<serde_json::Value> {
-    Json(json!({ "ids": [] }))
 }
 
 // ---------------------------------------------------------------------------
@@ -568,14 +488,6 @@ async fn get_user_content_licenses(
 pub fn file_gaps_routes() -> Router<AppState> {
     Router::new()
         .route("/files/capture", axum::routing::post(api_capture))
-        .route(
-            "/files/update_word_count",
-            axum::routing::post(update_word_count),
-        )
-        .route(
-            "/rce_linked_file_instfs_ids",
-            axum::routing::post(rce_linked_file_instfs_ids),
-        )
         .route(
             "/groups/{groupId}/usage_rights",
             put(set_group_usage_rights),

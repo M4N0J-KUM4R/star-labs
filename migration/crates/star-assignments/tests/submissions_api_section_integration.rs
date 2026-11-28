@@ -533,9 +533,27 @@ async fn the_section_student_views_are_scoped_to_the_section() {
     let assignment = seed_assignment(&pool, course, "Homework").await;
     seed_submission(&pool, assignment, student).await;
 
-    // The submissions of the section.
+    // Without `student_ids`, Canvas falls back to the caller's own id
+    // (`app/controllers/submissions_api_controller.rb:389`) and a caller who
+    // may view all grades is refused when that id is not one of the visible
+    // students (line 400). The recorded corpus answers exactly this:
+    // `GET /api/v1/sections/3/students/submissions` → 403
+    // `{"status":"unauthorized","errors":[{"message":"user not authorized to
+    // perform that action"}]}`.
     let resp = server
         .get(&format!("/sections/{section}/students/submissions"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+    let denied: Value = resp.json();
+    assert_eq!(denied["status"], "unauthorized", "{denied}");
+
+    // With the student named, the teacher sees the submissions of that
+    // student, scoped to the section.
+    let resp = server
+        .get(&format!(
+            "/sections/{section}/students/submissions?student_ids[]={student}"
+        ))
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
         .await;
     assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
@@ -545,6 +563,7 @@ async fn the_section_student_views_are_scoped_to_the_section() {
         list.iter().all(|item| item["user_id"] == student),
         "{list:?}"
     );
+    assert!(!list.is_empty(), "the seeded submission is listed");
 
     // The summary of the assignment.
     let resp = server

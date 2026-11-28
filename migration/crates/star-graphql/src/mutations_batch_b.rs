@@ -183,31 +183,6 @@ pub struct CreateGroupInSetInput {
 }
 
 #[derive(Debug, Clone, SimpleObject)]
-pub struct DiscussionTopicPayload {
-    pub discussion_topic: Option<BatchBDiscussionTopic>,
-    pub errors: Vec<BatchBError>,
-}
-
-#[derive(Debug, Clone, SimpleObject)]
-pub struct BatchBDiscussionTopic {
-    pub id: ID,
-    pub course_id: ID,
-    pub title: String,
-    pub message: Option<String>,
-    pub published: bool,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, InputObject)]
-pub struct CreateDiscussionTopicInput {
-    pub course_id: ID,
-    pub title: String,
-    pub message: Option<String>,
-    pub published: Option<bool>,
-}
-
-#[derive(Debug, Clone, SimpleObject)]
 pub struct DiscussionEntryPayload {
     pub discussion_entry: Option<BatchBDiscussionEntry>,
     pub errors: Vec<BatchBError>,
@@ -305,28 +280,6 @@ pub struct CreateSubmissionInput {
 }
 
 #[derive(Debug, Clone, InputObject)]
-pub struct CreateSubmissionCommentInput {
-    pub submission_id: ID,
-    pub comment: String,
-}
-
-#[derive(Debug, Clone, SimpleObject)]
-pub struct SubmissionCommentPayload {
-    pub submission_comment: Option<BatchBSubmissionComment>,
-    pub errors: Vec<BatchBError>,
-}
-
-#[derive(Debug, Clone, SimpleObject)]
-pub struct BatchBSubmissionComment {
-    pub id: ID,
-    pub submission_id: ID,
-    pub author_id: ID,
-    pub comment: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, InputObject)]
 pub struct UpdateSubmissionGradeInput {
     pub submission_id: ID,
     /// Canvas `grade` is a string ("85", "pass") — parity kept.
@@ -377,17 +330,6 @@ impl BatchBMutations {
     ) -> Result<GroupPayload, async_graphql::Error> {
         let gctx = ctx.data::<crate::GraphQLContext>()?;
         create_group_in_set(gctx, input).await
-    }
-
-    /// Canvas `createDiscussionTopic`
-    /// (`app/graphql/mutations/create_discussion_topic.rb`).
-    async fn create_discussion_topic(
-        &self,
-        ctx: &Context<'_>,
-        input: CreateDiscussionTopicInput,
-    ) -> Result<DiscussionTopicPayload, async_graphql::Error> {
-        let gctx = ctx.data::<crate::GraphQLContext>()?;
-        create_discussion_topic(gctx, input).await
     }
 
     /// Canvas `createDiscussionEntry`
@@ -443,17 +385,6 @@ impl BatchBMutations {
     ) -> Result<SubmissionPayload, async_graphql::Error> {
         let gctx = ctx.data::<crate::GraphQLContext>()?;
         create_submission(gctx, input).await
-    }
-
-    /// Canvas `createSubmissionComment`
-    /// (`app/graphql/mutations/create_submission_comment.rb`).
-    async fn create_submission_comment(
-        &self,
-        ctx: &Context<'_>,
-        input: CreateSubmissionCommentInput,
-    ) -> Result<SubmissionCommentPayload, async_graphql::Error> {
-        let gctx = ctx.data::<crate::GraphQLContext>()?;
-        create_submission_comment(gctx, input).await
     }
 
     /// Canvas `updateSubmissionGrade`
@@ -513,17 +444,6 @@ struct GroupInsertRow {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct TopicInsertRow {
-    id: i64,
-    course_id: i64,
-    title: String,
-    message: Option<String>,
-    workflow_state: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
 struct EntryInsertRow {
     id: i64,
     topic_id: i64,
@@ -550,16 +470,6 @@ struct SubmissionInsertRow {
     body: Option<String>,
     score: Option<f64>,
     submitted_at: DateTime<Utc>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-struct CommentInsertRow {
-    id: i64,
-    submission_id: i64,
-    author_id: i64,
-    comment: String,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -732,69 +642,6 @@ async fn create_group_in_set(
             id: ID(row.id.to_string()),
             group_set_id: row.group_category_id.map(|g| ID(g.to_string())),
             name: row.name,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        }),
-        errors: Vec::new(),
-    })
-}
-
-async fn create_discussion_topic(
-    gctx: &crate::GraphQLContext,
-    input: CreateDiscussionTopicInput,
-) -> Result<DiscussionTopicPayload, async_graphql::Error> {
-    let course_id = parse_id(&input.course_id, "course")?;
-    let exists: Option<(i32,)> =
-        sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
-            .bind(course_id)
-            .fetch_optional(&gctx.pool)
-            .await
-            .map_err(db_err)?;
-    if exists.is_none() {
-        return Err(async_graphql::Error::new(format!(
-            "invalid course: {}",
-            input.course_id.0
-        )));
-    }
-    // Canvas: any participant may create a topic; publishing requires
-    // a teacher. Non-teachers get an unpublished topic (Canvas
-    // `published` param is silently ignored without the right — REST
-    // parity in star-discussions).
-    let teacher = is_teacher_or_admin(&gctx.pool, gctx, course_id).await?;
-    if !teacher && !is_enrolled_or_admin(&gctx.pool, gctx, course_id).await? {
-        return Err(async_graphql::Error::new("insufficient permission"));
-    }
-    if input.title.trim().is_empty() {
-        return Ok(DiscussionTopicPayload {
-            discussion_topic: None,
-            errors: validation_errors(Some("title"), "title cannot be blank"),
-        });
-    }
-    let published = teacher && input.published.unwrap_or(false);
-    let row: Option<TopicInsertRow> = sqlx::query_as(
-        r#"
-        INSERT INTO discussion_topics (course_id, title, message, workflow_state)
-        VALUES ($1, $2, $3, $4)
-        RETURNING id, course_id, title, message, workflow_state, created_at, updated_at
-        "#,
-    )
-    .bind(course_id)
-    .bind(input.title.trim())
-    .bind(&input.message)
-    .bind(if published { "active" } else { "unpublished" })
-    .fetch_optional(&gctx.pool)
-    .await
-    .map_err(db_err)?;
-    let Some(row) = row else {
-        return Err(async_graphql::Error::new("discussion topic create failed"));
-    };
-    Ok(DiscussionTopicPayload {
-        discussion_topic: Some(BatchBDiscussionTopic {
-            id: ID(row.id.to_string()),
-            course_id: ID(row.course_id.to_string()),
-            title: row.title,
-            message: row.message,
-            published: row.workflow_state == "active",
             created_at: row.created_at,
             updated_at: row.updated_at,
         }),
@@ -1160,63 +1007,6 @@ async fn create_submission(
             score: row.score,
             grade: row.score.map(|s| format!("{}", s as i64)),
             submitted_at: row.submitted_at,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        }),
-        errors: Vec::new(),
-    })
-}
-
-async fn create_submission_comment(
-    gctx: &crate::GraphQLContext,
-    input: CreateSubmissionCommentInput,
-) -> Result<SubmissionCommentPayload, async_graphql::Error> {
-    let submission_id = parse_id(&input.submission_id, "submission")?;
-    let Some((sid, student_id, course_id)) =
-        load_submission_course(&gctx.pool, submission_id).await?
-    else {
-        return Err(async_graphql::Error::new(format!(
-            "submission not found: {}",
-            input.submission_id.0
-        )));
-    };
-    // The submission's student or a teacher/admin of the course (REST
-    // star-submission-comments visibility gate).
-    let allowed =
-        student_id == gctx.auth_user.id || is_teacher_or_admin(&gctx.pool, gctx, course_id).await?;
-    if !allowed {
-        return Err(async_graphql::Error::new("insufficient permission"));
-    }
-    if input.comment.trim().is_empty() {
-        return Ok(SubmissionCommentPayload {
-            submission_comment: None,
-            errors: validation_errors(Some("comment"), "comment cannot be blank"),
-        });
-    }
-    let row: Option<CommentInsertRow> = sqlx::query_as(
-        r#"
-        INSERT INTO submission_comments (submission_id, author_id, comment)
-        VALUES ($1, $2, $3)
-        RETURNING id, submission_id, author_id, comment, created_at, updated_at
-        "#,
-    )
-    .bind(sid)
-    .bind(gctx.auth_user.id)
-    .bind(input.comment.trim())
-    .fetch_optional(&gctx.pool)
-    .await
-    .map_err(db_err)?;
-    let Some(row) = row else {
-        return Err(async_graphql::Error::new(
-            "submission comment create failed",
-        ));
-    };
-    Ok(SubmissionCommentPayload {
-        submission_comment: Some(BatchBSubmissionComment {
-            id: ID(row.id.to_string()),
-            submission_id: ID(row.submission_id.to_string()),
-            author_id: ID(row.author_id.to_string()),
-            comment: row.comment,
             created_at: row.created_at,
             updated_at: row.updated_at,
         }),

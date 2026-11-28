@@ -101,10 +101,15 @@ pub async fn list_jobs_json(
 }
 
 /// Fetch running jobs (flavor-scope aware).
+///
+/// The read model is the `job_queue` view (migration 0345): it covers the
+/// port's own `jobs` table and Canvas' `delayed_jobs` queue, so the running
+/// rows are the rows the worker holds.
 async fn list_running(db: &PgPool, flavor: &str) -> Result<impl IntoResponse, ApiError> {
     let where_clause = running_where_clause(flavor);
 
-    let sql = format!("SELECT {JOB_V2_COLUMNS} FROM jobs WHERE {where_clause} ORDER BY id DESC");
+    let sql =
+        format!("SELECT {JOB_V2_COLUMNS} FROM job_queue WHERE {where_clause} ORDER BY id DESC");
     let rows: Vec<JobV2> = sqlx::query_as(&sql).fetch_all(db).await?;
 
     let jobs: Vec<Value> = rows.iter().map(|j| job_v2_to_json(j, false)).collect();
@@ -132,7 +137,7 @@ async fn list_tags(db: &PgPool, flavor: &str, limit: i64) -> Result<impl IntoRes
     let sql = format!(
         r#"
         SELECT tag, COUNT(*) AS count
-        FROM jobs
+        FROM job_queue
         WHERE {where_clause}
         GROUP BY tag
         ORDER BY count DESC
@@ -174,7 +179,7 @@ async fn list_jobs(
     let mut sql = format!(
         r#"
         SELECT {JOB_V2_COLUMNS}
-        FROM jobs
+        FROM job_queue
         WHERE {where_clause}
         "#
     );
@@ -189,7 +194,7 @@ async fn list_jobs(
     let rows: Vec<JobV2> = sqlx::query_as(&sql).fetch_all(db).await?;
 
     // Count total for pagination.
-    let mut count_sql = format!("SELECT COUNT(*) FROM jobs WHERE {where_clause}");
+    let mut count_sql = format!("SELECT COUNT(*) FROM job_queue WHERE {where_clause}");
     if let Some(ref f) = q_filter {
         count_sql.push_str(f);
     }
@@ -215,6 +220,10 @@ fn flavor_where_clause(flavor: &str) -> String {
 }
 
 /// Convert a JobV2 to a JSON Value, optionally including handler/last_error.
+///
+/// Canvas' Jobs API reports the job state and how far the work got, so the
+/// V1 payload carries `workflow_state` and `completion_percentage` on top of
+/// the `Delayed::Job` columns.
 fn job_v2_to_json(job: &JobV2, include_extras: bool) -> Value {
     let mut value = serde_json::to_value(job).unwrap_or_else(|_| json!({}));
 
@@ -223,7 +232,8 @@ fn job_v2_to_json(job: &JobV2, include_extras: bool) -> Value {
             obj.remove("handler");
             obj.remove("last_error");
         }
-        obj.remove("workflow_state");
+        obj.insert("workflow_state".to_string(), json!(job.workflow_state));
+        obj.insert("completion_percentage".to_string(), json!(job.progress));
     }
 
     value
@@ -257,7 +267,27 @@ pub async fn show_job_v1(
         .fetch_optional(&state.db)
         .await?;
 
-    match row {
+    if let Some(job) = row {
+        return Ok(Json(job_v2_to_json(&job, true)));
+    }
+
+    // The row may live in Canvas' `delayed_jobs` queue instead — the table
+    // the background worker drains (migration 0345).
+    let flavor = if params.flavor.as_deref() == Some("failed") {
+        "(workflow_state = 'failed' OR failed_at IS NOT NULL)"
+    } else {
+        "(workflow_state != 'failed' AND failed_at IS NULL)"
+    };
+    let queue_sql = format!(
+        "SELECT {JOB_V2_COLUMNS} FROM job_queue WHERE id = $1 AND {flavor} ORDER BY id LIMIT 1"
+    );
+
+    let queued: Option<JobV2> = sqlx::query_as(&queue_sql)
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?;
+
+    match queued {
         Some(job) => Ok(Json(job_v2_to_json(&job, true))),
         None => Err(ApiError::NotFound),
     }
@@ -289,7 +319,12 @@ pub async fn batch_update(
                     .bind(&ids)
                     .execute(&state.db)
                     .await?;
-                deleted.rows_affected() as i64
+                // Canvas' queue table holds the rows the worker runs.
+                let deleted_queue = sqlx::query("DELETE FROM delayed_jobs WHERE id = ANY($1)")
+                    .bind(&ids)
+                    .execute(&state.db)
+                    .await?;
+                deleted.rows_affected() as i64 + deleted_queue.rows_affected() as i64
             } else {
                 return Err(ApiError::BadRequest(
                     "job_ids required for force_delete".into(),
@@ -315,7 +350,22 @@ pub async fn batch_update(
                     .execute(&state.db)
                     .await?
                 };
-                deleted.rows_affected() as i64
+                // The Canvas queue table holds the rows the worker runs.
+                let deleted_queue = if payload.flavor.as_deref() == Some("failed") {
+                    sqlx::query("DELETE FROM delayed_jobs WHERE id = ANY($1)")
+                        .bind(&ids)
+                        .execute(&state.db)
+                        .await?
+                } else {
+                    sqlx::query(
+                        "DELETE FROM delayed_jobs WHERE id = ANY($1) \
+                         AND (locked_by IS NULL OR locked_by = 'on hold')",
+                    )
+                    .bind(&ids)
+                    .execute(&state.db)
+                    .await?
+                };
+                deleted.rows_affected() as i64 + deleted_queue.rows_affected() as i64
             } else {
                 return Err(ApiError::BadRequest("job_ids required for destroy".into()));
             }

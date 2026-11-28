@@ -3,8 +3,8 @@
   "free": [
     "0111"
   ],
-  "max_merged": "0263",
-  "next_available": "0264",
+  "max_merged": "0273",
+  "next_available": "0274",
   "reservations": {
     "0001": {
       "issue": null,
@@ -899,6 +899,56 @@
     "0263": {
       "issue": 86,
       "note": "star-outcomes: outcome results/rollups runtime columns \u2014 learning_outcomes.data (rubric criterion), the learning_outcome_results Canvas columns (context_code, alignment link, hidden, possible/percent, mastery, workflow_state, timestamps) and users.uuid for /enqueue_outcome_rollup_calculation (additive only)",
+      "status": "merged"
+    },
+    "0264": {
+      "issue": null,
+      "note": "the wave: accounts Canvas field parity",
+      "status": "merged"
+    },
+    "0265": {
+      "issue": null,
+      "note": "the wave: enrollment Canvas parity",
+      "status": "merged"
+    },
+    "0266": {
+      "issue": null,
+      "note": "the wave: access_token crypted_token",
+      "status": "merged"
+    },
+    "0267": {
+      "issue": null,
+      "note": "the wave: builtin account roles",
+      "status": "merged"
+    },
+    "0268": {
+      "issue": null,
+      "note": "the wave: file storage bytes",
+      "status": "merged"
+    },
+    "0269": {
+      "issue": null,
+      "note": "the wave: users + folders Canvas parity",
+      "status": "merged"
+    },
+    "0270": {
+      "issue": null,
+      "note": "the wave: GraphQL root parity",
+      "status": "merged"
+    },
+    "0271": {
+      "issue": null,
+      "note": "the wave: delayed_jobs worker",
+      "status": "merged"
+    },
+    "0272": {
+      "issue": null,
+      "note": "the wave: courses + groups Canvas fields",
+      "status": "merged"
+    },
+    "0273": {
+      "issue": null,
+      "note": "the wave: the LTI children an account takes with it (Canvas dependent: :destroy)",
       "status": "merged"
     }
   }

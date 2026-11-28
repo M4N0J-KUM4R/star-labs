@@ -23,7 +23,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, patch, post, put},
+    routing::{delete, get, patch, post},
     Json, Router,
 };
 
@@ -2665,36 +2665,130 @@ async fn batch_update_periods(
 // Router
 // ---------------------------------------------------------------------------
 
+/// from graded submissions (via star-assignments grade computation).
+async fn get_final_grade(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    Query(query): Query<FinalGradeQuery>,
+    auth: AuthUser,
+) -> Result<Json<FinalGradeResponse>, ApiError> {
+    // Must be teacher or admin to view another student's grade
+    // (or you can view your own grade)
+    let is_viewing_self = auth.id == query.user_id;
+    if !is_viewing_self && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Check: user must be enrolled in the course (or admin)
+    if !check_enrolled_or_admin(&state.db, query.user_id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    // 1. Fetch the active grading standard for the course
+    let std_row: Option<GradingStandard> = sqlx::query_as(
+        r#"SELECT id, course_id, title, workflow_state, created_at, updated_at
+           FROM grading_standards
+           WHERE course_id = $1 AND workflow_state = 'active'
+           LIMIT 1"#,
+    )
+    .bind(course_id)
+    .fetch_optional(&state.db)
+    .await?;
+
+    let entries: Option<Vec<GradingSchemeEntry>> = if let Some(std) = std_row {
+        let e: Vec<GradingSchemeEntry> = sqlx::query_as(
+            r#"SELECT id, name, min_score::float8, position
+               FROM grading_scheme_entries
+               WHERE grading_standard_id = $1
+               ORDER BY position ASC"#,
+        )
+        .bind(std.id)
+        .fetch_all(&state.db)
+        .await?;
+        Some(e)
+    } else {
+        None
+    };
+
+    // 2. Compute the grade percentage from graded submissions
+    //    (reuse the grade_arrays_from_submissions + compute_grade_percent from star-assignments)
+    let assignments: Vec<star_assignments::Assignment> = sqlx::query_as(
+        r#"SELECT id, course_id, title, description, points_possible::float8, due_at, created_at, updated_at
+           FROM assignments WHERE course_id = $1"#,
+    )
+    .bind(course_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let submissions: Vec<star_assignments::Submission> = sqlx::query_as(
+        r#"SELECT s.id, s.assignment_id, s.user_id, s.body, s.score::float8, s.submitted_at, s.created_at, s.updated_at
+           FROM submissions s
+           JOIN assignments a ON a.id = s.assignment_id
+           WHERE a.course_id = $1 AND s.user_id = $2"#,
+    )
+    .bind(course_id)
+    .bind(query.user_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    let (scores, points_possible) =
+        star_assignments::grade_arrays_from_submissions(&assignments, &submissions);
+    let score = star_assignments::compute_grade_percent(&scores, &points_possible);
+
+    let score = match score {
+        Some(s) => s,
+        None => {
+            return Ok(Json(FinalGradeResponse {
+                score: 0.0,
+                letter: None,
+            }));
+        }
+    };
+
+    let letter = entries
+        .as_ref()
+        .and_then(|e| compute_letter_grade(score, e));
+
+    Ok(Json(FinalGradeResponse { score, letter }))
+}
+
+/// GET /courses/{courseId}/final_grade?user_id=N
+#[derive(Debug, Deserialize)]
+pub struct FinalGradeQuery {
+    pub user_id: i64,
+}
+
+/// Response for final grade computation.
+#[derive(Debug, Serialize)]
+pub struct FinalGradeResponse {
+    pub score: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub letter: Option<String>,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        // Canvas `GradingStandardsApiController#create` / `#context_index`
+        // (config/routes.rb:2697 and :2702).
         .merge(grading_period_sets::grading_period_sets_routes())
         // Canvas GradingStandardsApiController (account scope + course PUT).
         .merge(grading_standards_api::router())
         .route(
             "/courses/{courseId}/grading_standards",
-            post(create_grading_standard),
+            post(create_grading_standard).get(list_grading_standards),
         )
-        .route(
-            "/courses/{courseId}/grading_standards",
-            get(list_grading_standards),
-        )
+        .route("/courses/{courseId}/final_grade", get(get_final_grade))
         .route("/grading_standards/{id}", get(get_grading_standard))
         .route("/grading_standards/{id}", delete(delete_grading_standard))
+        // Canvas `GradingStandardsApiController#context_show` / `#destroy`
+        // (config/routes.rb:2699 and :2705).
         .route(
             "/courses/{courseId}/grading_standards/{id}",
-            get(get_course_grading_standard),
-        )
-        .route(
-            "/courses/{courseId}/grading_standards/{id}",
-            delete(delete_course_grading_standard),
+            get(get_course_grading_standard).delete(delete_course_grading_standard),
         )
         .route(
             "/accounts/{accountId}/grading_periods",
-            get(list_account_grading_periods),
-        )
-        .route(
-            "/accounts/{accountId}/grading_periods",
-            post(create_account_grading_period),
+            get(list_account_grading_periods).post(create_account_grading_period),
         )
         // Canvas GradingPeriodsController — the course and set scopes.
         .route(
@@ -2719,43 +2813,39 @@ pub fn router() -> Router<AppState> {
             "/grading_period_sets/{setId}/grading_periods/batch_update",
             patch(set_batch_update_grading_periods),
         )
-        .route("/grading_periods/{id}", get(get_grading_period))
-        .route("/grading_periods/{id}", put(update_grading_period))
-        .route("/grading_periods/{id}", delete(delete_grading_period))
         .route(
-            "/accounts/{accountId}/grading_schemes",
-            get(list_account_grading_schemes),
+            "/grading_periods/{id}",
+            get(get_grading_period)
+                .put(update_grading_period)
+                .delete(delete_grading_period),
         )
         .route(
             "/accounts/{accountId}/grading_schemes",
-            post(create_account_grading_scheme),
-        )
-        .route("/grading_schemes/{id}", get(get_grading_scheme))
-        .route("/grading_schemes/{id}", put(update_grading_scheme))
-        .route("/grading_schemes/{id}", delete(delete_grading_scheme))
-        .route(
-            "/courses/{courseId}/blackout_dates",
-            get(list_course_blackout_dates),
+            get(list_account_grading_schemes).post(create_account_grading_scheme),
         )
         .route(
-            "/courses/{courseId}/blackout_dates",
-            post(create_course_blackout_date),
+            "/grading_schemes/{id}",
+            get(get_grading_scheme)
+                .put(update_grading_scheme)
+                .delete(delete_grading_scheme),
         )
         .route(
             "/courses/{courseId}/blackout_dates",
-            put(bulk_update_course_blackout_dates),
+            get(list_course_blackout_dates)
+                .post(create_course_blackout_date)
+                .put(bulk_update_course_blackout_dates),
         )
+        // Canvas `BlackoutDatesController#show` / `#update` / `#destroy`
+        // (config/routes.rb:2972, :2974 and :2976).
         .route(
             "/courses/{courseId}/blackout_dates/{id}",
-            delete(delete_course_blackout_date),
+            get(show_course_blackout_date)
+                .put(update_course_blackout_date)
+                .delete(delete_course_blackout_date),
         )
         .route(
             "/courses/{courseId}/blackout_dates/new",
             get(new_course_blackout_date),
-        )
-        .route(
-            "/courses/{courseId}/blackout_dates/{id}",
-            get(show_course_blackout_date).put(update_course_blackout_date),
         )
         .route(
             "/accounts/{accountId}/blackout_dates/new",
@@ -2769,11 +2859,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/accounts/{accountId}/blackout_dates",
-            get(list_account_blackout_dates),
-        )
-        .route(
-            "/accounts/{accountId}/blackout_dates",
-            post(create_account_blackout_date),
+            get(list_account_blackout_dates).post(create_account_blackout_date),
         )
 }
 

@@ -6,39 +6,229 @@ use axum::{
     body::Bytes,
     extract::{Path, Query, State},
     http::{header, StatusCode},
-    routing::{delete, get, patch, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use star_auth::AuthUser;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 use std::collections::HashSet;
 
 // ---------------------------------------------------------------------------
 // Domain types
 // ---------------------------------------------------------------------------
 
+/// The group columns the group endpoints read.
+///
+/// Canvas renders a group from `lib/api/v1/group.rb:29-32` (the attributes)
+/// plus the fields `group_json` merges in (context data, context name,
+/// avatar, role, leader, submission flag, concluded flag and the
+/// non-collaborative flag). The columns below are the port's mirror of that
+/// set; migration 0248 adds the ones the port was missing.
+const GROUP_COLUMNS: &str = "id, course_id, name, description, workflow_state, join_level, \
+     group_category_id, created_at, updated_at, is_public, max_membership, members_count, \
+     storage_quota_mb, context_type, context_name, avatar_url, role, leader, has_submission, \
+     concluded, non_collaborative";
+
+/// The group columns with a table alias, for the queries that join the
+/// groups table with another one.
+fn group_columns(alias: &str) -> String {
+    GROUP_COLUMNS
+        .split(", ")
+        .map(|column| format!("{alias}.{column}"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// Group record matching Canvas API v1 shape.
-#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Group {
     pub id: i64,
     pub course_id: Option<i64>,
     pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     pub workflow_state: String,
     pub join_level: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub group_category_id: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+    /// Canvas `groups.is_public`.
+    pub is_public: bool,
+    /// Canvas `groups.max_membership`.
+    pub max_membership: Option<i64>,
+    /// Canvas `Group#members_count` — the participating memberships.
+    pub members_count: i64,
+    /// Canvas `Group#storage_quota_mb`.
+    pub storage_quota_mb: Option<i64>,
+    /// Canvas `groups.context_type` — "Course" or "Account".
+    pub context_type: Option<String>,
+    /// Canvas `group.context.name`.
+    pub context_name: Option<String>,
+    /// Canvas `group.avatar_attachment`, rendered as a thumbnail URL.
+    pub avatar_url: Option<String>,
+    /// Canvas `group.group_category.role`.
+    pub role: Option<String>,
+    /// Canvas `group.leader` (`groups.leader_id`).
+    pub leader: Option<i64>,
+    /// Canvas `Group#submission?`.
+    pub has_submission: bool,
+    /// Canvas `group.context.concluded?`.
+    pub concluded: bool,
+    /// Canvas `groups.non_collaborative`.
+    pub non_collaborative: bool,
+}
+
+/// Canvas `group_json` — the key set Canvas returns for a group
+/// (`lib/api/v1/group.rb:41-112`). Canvas renders neither the group's
+/// `workflow_state` nor its `updated_at`, so neither is in this struct.
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupResponse {
+    pub id: i64,
+    pub name: String,
+    pub description: Option<String>,
+    pub is_public: bool,
+    pub join_level: String,
+    pub group_category_id: Option<i64>,
+    pub max_membership: Option<i64>,
+    pub created_at: DateTime<Utc>,
+    pub members_count: i64,
+    pub storage_quota_mb: Option<i64>,
+    pub context_type: Option<String>,
+    pub course_id: Option<i64>,
+    pub context_name: Option<String>,
+    pub avatar_url: Option<String>,
+    pub role: Option<String>,
+    /// Canvas renders the leader with `user_display_json`, or null.
+    pub leader: Option<serde_json::Value>,
+    pub has_submission: bool,
+    pub concluded: bool,
+    pub non_collaborative: bool,
+}
+
+/// Canvas' `anonymous_id` is the user id in base 36
+/// (`lib/api/v1/user.rb:235`: `user.id.to_s(36)`).
+fn base36_id(id: i64) -> String {
+    const DIGITS: &[u8; 36] = b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut value = id.unsigned_abs();
+    let mut out = Vec::new();
+    while value > 0 {
+        out.push(DIGITS[(value % 36) as usize]);
+        value /= 36;
+    }
+    out.reverse();
+    String::from_utf8(out).unwrap_or_default()
+}
+
+/// Load the `user_display_json` of every group's leader
+/// (`lib/api/v1/group.rb:53` → `lib/api/v1/user.rb:222`).
+async fn load_leader_displays(
+    pool: &PgPool,
+    groups: &[Group],
+) -> Result<std::collections::HashMap<i64, serde_json::Value>, ApiError> {
+    let leader_ids: Vec<i64> = groups.iter().filter_map(|g| g.leader).collect();
+    if leader_ids.is_empty() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let rows: Vec<(i64, String, Option<String>)> = sqlx::query_as(
+        r#"
+        SELECT u.id, COALESCE(u.short_name, u.name) AS display_name, p.avatar_url
+        FROM users u
+        LEFT JOIN user_profiles p ON p.user_id = u.id
+        WHERE u.id = ANY($1)
+        "#,
+    )
+    .bind(&leader_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, display_name, avatar_url)| {
+            (
+                id,
+                serde_json::json!({
+                    "id": id,
+                    "anonymous_id": base36_id(id),
+                    "display_name": display_name,
+                    "avatar_image_url": avatar_url,
+                    "html_url": format!("/users/{id}"),
+                    "pronouns": serde_json::Value::Null,
+                }),
+            )
+        })
+        .collect())
+}
+
+/// Build the Canvas group response for one group.
+fn group_response(
+    group: Group,
+    leaders: &std::collections::HashMap<i64, serde_json::Value>,
+) -> GroupResponse {
+    GroupResponse {
+        id: group.id,
+        name: group.name,
+        description: group.description,
+        is_public: group.is_public,
+        join_level: group.join_level,
+        group_category_id: group.group_category_id,
+        max_membership: group.max_membership,
+        created_at: group.created_at,
+        members_count: group.members_count,
+        storage_quota_mb: group.storage_quota_mb,
+        context_type: group.context_type,
+        course_id: group.course_id,
+        context_name: group.context_name,
+        avatar_url: group.avatar_url,
+        role: group.role,
+        leader: group.leader.and_then(|id| leaders.get(&id).cloned()),
+        has_submission: group.has_submission,
+        concluded: group.concluded,
+        non_collaborative: group.non_collaborative,
+    }
+}
+
+/// Build the Canvas group responses for a list of groups.
+async fn group_responses(
+    pool: &PgPool,
+    groups: Vec<Group>,
+) -> Result<Vec<GroupResponse>, ApiError> {
+    let leaders = load_leader_displays(pool, &groups).await?;
+    Ok(groups
+        .into_iter()
+        .map(|group| group_response(group, &leaders))
+        .collect())
+}
+
+/// Build the Canvas group response for one group.
+async fn group_response_for(pool: &PgPool, group: Group) -> Result<GroupResponse, ApiError> {
+    let leaders = load_leader_displays(pool, std::slice::from_ref(&group)).await?;
+    Ok(group_response(group, &leaders))
+}
+
+/// Refresh the group's `members_count` — Canvas counts the participating
+/// memberships (`Group#members_count`, app/models/group.rb:935).
+async fn sync_members_count(pool: &PgPool, group_id: i64) -> Result<(), ApiError> {
+    sqlx::query(
+        r#"
+        UPDATE groups
+        SET members_count = (
+            SELECT COUNT(*) FROM group_memberships gm
+            WHERE gm.group_id = $1 AND gm.workflow_state = 'accepted'
+        )
+        WHERE id = $1
+        "#,
+    )
+    .bind(group_id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Request to create a group.
 #[derive(Debug, Deserialize)]
 pub struct CreateGroup {
+    #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub description: Option<String>,
@@ -46,6 +236,18 @@ pub struct CreateGroup {
     pub join_level: String,
     #[serde(default)]
     pub group_category_id: Option<i64>,
+}
+
+/// Canvas' `join_level` default (app/models/group.rb:601).
+impl Default for CreateGroup {
+    fn default() -> Self {
+        CreateGroup {
+            name: String::new(),
+            description: None,
+            join_level: default_join_level(),
+            group_category_id: None,
+        }
+    }
 }
 
 fn default_join_level() -> String {
@@ -62,7 +264,7 @@ fn membership_initial_workflow_state(join_level: &str) -> &'static str {
 }
 
 /// Request to update a group.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct UpdateGroup {
     pub name: Option<String>,
     #[serde(default)]
@@ -129,7 +331,7 @@ pub struct GroupMembershipJson {
 }
 
 /// Request body for POST /groups/{groupId}/invite (Canvas `invitees[]`).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct InviteGroupUsers {
     #[serde(default)]
     pub invitees: Vec<String>,
@@ -249,7 +451,7 @@ pub struct GroupCategory {
 }
 
 /// Request to create a group category.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct CreateGroupCategory {
     pub name: String,
     #[serde(default)]
@@ -268,7 +470,7 @@ pub struct CreateGroupCategory {
 }
 
 /// Request to update a group category. Absent fields are left unchanged.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct UpdateGroupCategory {
     #[serde(default)]
     pub name: Option<String>,
@@ -416,7 +618,10 @@ async fn check_teacher_or_admin_for_course(
     }
 
     let row: Option<(i32,)> = sqlx::query_as(
-        r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' LIMIT 1"#,
+        r#"SELECT 1 FROM enrollments
+           WHERE user_id = $1 AND course_id = $2 AND role = 'teacher'
+             AND workflow_state IN ('active', 'invited')
+           LIMIT 1"#,
     )
     .bind(user_id)
     .bind(course_id)
@@ -472,6 +677,17 @@ async fn fetch_active_group_join_level(
 }
 
 /// Canvas group :read: admins, course teachers, or any active member.
+///
+/// Canvas' `Group` policy (`app/models/group.rb:662`) grants the group's
+/// permissions when the group's *context* grants the user `:read`:
+///
+/// ```ruby
+/// given { |user, session| !non_collaborative? && (context.is_a?(Account) || context&.grants_right?(user, session, :read) || false) }
+/// ```
+///
+/// so a member of the group's course may read the group even without being a
+/// group member — and Canvas' course `:read` still holds for a concluded
+/// enrollment (`not_inactive_by_date`, `app/models/enrollment.rb:1454`).
 async fn can_read_group(
     pool: &PgPool,
     user_id: i64,
@@ -480,6 +696,18 @@ async fn can_read_group(
 ) -> Result<bool, ApiError> {
     if is_teacher_in_group(pool, user_id, group_id, auth).await? {
         return Ok(true);
+    }
+
+    // The group's course grants the caller `:read`.
+    let course_id: Option<(Option<i64>,)> =
+        sqlx::query_as("SELECT course_id FROM groups WHERE id = $1")
+            .bind(group_id)
+            .fetch_optional(pool)
+            .await?;
+    if let Some((Some(course_id),)) = course_id {
+        if check_course_read_access(pool, user_id, course_id, auth).await? {
+            return Ok(true);
+        }
     }
 
     let member: Option<(i32,)> = sqlx::query_as(
@@ -513,12 +741,15 @@ async fn check_course_read_access(
         return Ok(true);
     }
 
-    let row: Option<(i32,)> =
-        sqlx::query_as("SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1")
-            .bind(user_id)
-            .bind(course_id)
-            .fetch_optional(pool)
-            .await?;
+    let row: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM enrollments
+             WHERE user_id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+             LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await?;
 
     Ok(row.is_some())
 }
@@ -656,12 +887,23 @@ async fn create_category_groups(
     count: i32,
 ) -> Result<(), ApiError> {
     for index in 1..=count {
-        sqlx::query("INSERT INTO groups (course_id, name, group_category_id) VALUES ($1, $2, $3)")
-            .bind(course_id)
-            .bind(format!("{category_name} {index}"))
-            .bind(category_id)
-            .execute(pool)
-            .await?;
+        sqlx::query(
+            r#"
+            INSERT INTO groups (course_id, name, group_category_id, context_type, context_name,
+                                role, max_membership, is_public, non_collaborative)
+            VALUES ($1, $2, $3, 'Course',
+                    (SELECT c.name FROM courses c WHERE c.id = $1),
+                    (SELECT gc.role FROM group_categories gc WHERE gc.id = $3),
+                    (SELECT gc.group_limit FROM group_categories gc WHERE gc.id = $3),
+                    COALESCE((SELECT gc.role FROM group_categories gc WHERE gc.id = $3), '') = 'communities',
+                    COALESCE((SELECT gc.non_collaborative FROM group_categories gc WHERE gc.id = $3), false))
+            "#,
+        )
+        .bind(course_id)
+        .bind(format!("{category_name} {index}"))
+        .bind(category_id)
+        .execute(pool)
+        .await?;
     }
     Ok(())
 }
@@ -673,63 +915,87 @@ async fn create_category_groups(
 pub fn router() -> Router<AppState> {
     Router::new()
         // Course-scoped group routes
-        .route("/courses/{courseId}/groups", post(create_group))
-        .route("/courses/{courseId}/groups", get(list_groups))
-        // Direct group routes
-        .route("/groups/{id}", get(get_group))
-        .route("/groups/{id}", put(update_group))
-        .route("/groups/{id}", patch(update_group))
-        .route("/groups/{id}", delete(delete_group))
-        // Membership routes
-        .route("/groups/{groupId}/memberships", post(create_membership))
-        .route("/groups/{groupId}/memberships", get(list_memberships))
+        // Canvas groups#context_index (GET) and groups#create (POST) share one
+        // Canvas path (canvas config/routes.rb:2120,2123) — one axum
+        // registration, disjoint methods.
         .route(
-            "/groups/{groupId}/memberships/{membershipId}",
-            get(get_membership),
+            "/courses/{courseId}/groups",
+            post(create_group).get(list_groups),
         )
+        // Direct group routes — Canvas groups#show/#update/#destroy
+        // (canvas config/routes.rb:2120).
         .route(
-            "/groups/{groupId}/memberships/{membershipId}",
-            put(update_membership).patch(update_membership),
+            "/groups/{id}",
+            get(get_group)
+                .put(update_group)
+                // Canvas' `resources :groups` (config/routes.rb:694) routes
+                // PATCH to groups#update as well, the same controller as PUT.
+                .patch(update_group)
+                .delete(delete_group),
         )
+        // Membership routes — Canvas group_memberships#index/#create
+        // (canvas config/routes.rb:2137).
+        .route(
+            "/groups/{groupId}/memberships",
+            post(create_membership).get(list_memberships),
+        )
+        // Canvas group_memberships#show/#update/#destroy
+        // (canvas config/routes.rb:2137).
         .route(
             "/groups/{groupId}/memberships/{membershipId}",
-            delete(delete_membership),
+            get(get_membership)
+                .put(update_membership)
+                .patch(update_membership)
+                .delete(delete_membership),
         )
         // Canvas groups#users / group_memberships#create/destroy_bulk
-        .route("/groups/{groupId}/users", get(list_group_users))
-        .route("/groups/{groupId}/users", post(add_group_user))
-        .route("/groups/{groupId}/users", delete(bulk_remove_group_users))
+        // (canvas config/routes.rb:2124,2138,2140).
         .route(
-            "/groups/{groupId}/users/{userId}",
-            get(get_membership_by_user),
+            "/groups/{groupId}/users",
+            get(list_group_users)
+                .post(add_group_user)
+                .delete(bulk_remove_group_users),
         )
+        // Canvas group_memberships#show/#update/#destroy addressed by user id
+        // (canvas config/routes.rb:2138).
         .route(
             "/groups/{groupId}/users/{userId}",
-            delete(remove_group_user),
-        )
-        // Canvas group_memberships#update addressed by user id.
-        .route(
-            "/groups/{groupId}/users/{userId}",
-            put(update_membership_by_user).patch(update_membership_by_user),
+            get(get_membership_by_user)
+                .delete(remove_group_user)
+                .put(update_membership_by_user)
+                .patch(update_membership_by_user),
         )
         // Canvas groups#invite and group file metadata
         .route("/groups/{groupId}/invite", post(invite_group_users))
-        .route("/groups/{groupId}/files", get(list_group_files))
+        // Canvas groups#api_index (GET, canvas config/routes.rb:2143) and
+        // groups#create_file (POST, canvas config/routes.rb:2127) share one
+        // Canvas path — one axum registration, disjoint methods.
+        .route(
+            "/groups/{groupId}/files",
+            get(list_group_files).post(create_group_file),
+        )
         // Canvas groups#index (current user's active groups)
         .route("/users/self/groups", get(list_self_groups))
         // Group category routes
+        // Canvas group_categories#create (POST) and #context_index (GET) share
+        // one Canvas path (canvas config/routes.rb:2591,2593) — one axum
+        // registration, disjoint methods.
         .route(
             "/courses/{courseId}/group_categories",
-            post(create_group_category),
+            post(create_group_category).get(list_group_categories),
         )
+        // Canvas group_categories#show/#update/#destroy
+        // (canvas config/routes.rb:2589).
         .route(
-            "/courses/{courseId}/group_categories",
-            get(list_group_categories),
+            "/group_categories/{id}",
+            get(get_group_category)
+                .put(update_group_category)
+                // Canvas' `resources :group_categories`
+                // (config/routes.rb:108) routes PATCH to
+                // group_categories#update, the same controller as PUT.
+                .patch(update_group_category)
+                .delete(delete_group_category),
         )
-        .route("/group_categories/{id}", get(get_group_category))
-        .route("/group_categories/{id}", put(update_group_category))
-        .route("/group_categories/{id}", patch(update_group_category))
-        .route("/group_categories/{id}", delete(delete_group_category))
         // GET (group_categories#groups, canvas config/routes.rb:2595) and
         // POST (groups#create, canvas config/routes.rb:2129) share one Canvas
         // path. They must share one axum registration too: identical path
@@ -740,13 +1006,13 @@ pub fn router() -> Router<AppState> {
             get(list_category_groups).post(create_group_in_category),
         )
         // Canvas group categories in an account context (accounts/group_categories)
+        // Canvas group_categories#context_index (GET, canvas
+        // config/routes.rb:2590) and #create (POST, canvas
+        // config/routes.rb:2592) share one Canvas path — one axum
+        // registration, disjoint methods.
         .route(
             "/accounts/{accountId}/group_categories",
-            get(list_account_group_categories),
-        )
-        .route(
-            "/accounts/{accountId}/group_categories",
-            post(create_account_group_category),
+            get(list_account_group_categories).post(create_account_group_category),
         )
         // Canvas group_categories#assign_unassigned_members
         .route(
@@ -760,8 +1026,8 @@ pub fn router() -> Router<AppState> {
         .route("/accounts/{accountId}/groups", get(list_account_groups))
         // G2: permissions for a group
         .route("/groups/{groupId}/permissions", get(get_group_permissions))
-        // G3: file upload stub (create_file)
-        .route("/groups/{groupId}/files", post(create_group_file))
+        // G3: file upload stub (create_file) — registered with the
+        // GET /groups/{groupId}/files route above.
         // G4: preview html
         .route("/groups/{groupId}/preview_html", post(preview_html))
         // G6/G7: activity stream
@@ -817,8 +1083,8 @@ async fn create_group(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateGroup>,
-) -> Result<(StatusCode, Json<Group>), ApiError> {
+    ApiJson(payload): ApiJson<CreateGroup>,
+) -> Result<(StatusCode, Json<GroupResponse>), ApiError> {
     if !is_teacher(&auth) {
         return Err(ApiError::Forbidden);
     }
@@ -854,23 +1120,40 @@ async fn create_group(
         "invitation_only".to_string()
     };
 
-    let group: Group = sqlx::query_as(
+    // Canvas derives the group's context, role and membership limits from
+    // its context and its group category (`app/models/group.rb:600-605`,
+    // `app/models/group_category.rb:641-645`): the context type and name
+    // from the course, the role and the member limit from the category, a
+    // group is public only in a "communities" category, and it inherits the
+    // category's `non_collaborative` flag.
+    let sql = format!(
         r#"
-        INSERT INTO groups (course_id, name, description, join_level, group_category_id)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, course_id, name, description, workflow_state, join_level,
-                  group_category_id, created_at, updated_at
-        "#,
-    )
-    .bind(course_id)
-    .bind(&payload.name)
-    .bind(&payload.description)
-    .bind(&join_level)
-    .bind(payload.group_category_id)
-    .fetch_one(&state.db)
-    .await?;
+        INSERT INTO groups (course_id, name, description, join_level, group_category_id,
+                            context_type, context_name, role, max_membership, is_public,
+                            non_collaborative)
+        VALUES ($1, $2, $3, $4, $5,
+                'Course',
+                (SELECT c.name FROM courses c WHERE c.id = $1),
+                (SELECT gc.role FROM group_categories gc WHERE gc.id = $5),
+                (SELECT gc.group_limit FROM group_categories gc WHERE gc.id = $5),
+                COALESCE((SELECT gc.role FROM group_categories gc WHERE gc.id = $5), '') = 'communities',
+                COALESCE((SELECT gc.non_collaborative FROM group_categories gc WHERE gc.id = $5), false))
+        RETURNING {GROUP_COLUMNS}
+        "#
+    );
+    let group: Group = sqlx::query_as(&sql)
+        .bind(course_id)
+        .bind(&payload.name)
+        .bind(&payload.description)
+        .bind(&join_level)
+        .bind(payload.group_category_id)
+        .fetch_one(&state.db)
+        .await?;
 
-    Ok((StatusCode::CREATED, Json(group)))
+    Ok((
+        StatusCode::CREATED,
+        Json(group_response_for(&state.db, group).await?),
+    ))
 }
 
 /// GET /courses/{courseId}/groups — list groups for a course (enrolled users)
@@ -879,7 +1162,7 @@ async fn list_groups(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-) -> Result<Json<Vec<Group>>, ApiError> {
+) -> Result<Json<Vec<GroupResponse>>, ApiError> {
     // Verify course exists
     let course_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
         .bind(course_id)
@@ -893,7 +1176,9 @@ async fn list_groups(
     // Non-admin must be enrolled in the course
     if !is_admin(&auth) {
         let enrolled: Option<(i32,)> = sqlx::query_as(
-            "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1",
+            "SELECT 1 FROM enrollments
+             WHERE user_id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+             LIMIT 1",
         )
         .bind(auth.id)
         .bind(course_id)
@@ -905,20 +1190,20 @@ async fn list_groups(
         }
     }
 
-    let groups: Vec<Group> = sqlx::query_as(
+    let sql = format!(
         r#"
-        SELECT id, course_id, name, description, workflow_state, join_level,
-               group_category_id, created_at, updated_at
+        SELECT {GROUP_COLUMNS}
         FROM groups
         WHERE course_id = $1 AND workflow_state != 'deleted'
         ORDER BY created_at DESC
-        "#,
-    )
-    .bind(course_id)
-    .fetch_all(&state.db)
-    .await?;
+        "#
+    );
+    let groups: Vec<Group> = sqlx::query_as(&sql)
+        .bind(course_id)
+        .fetch_all(&state.db)
+        .await?;
 
-    Ok(Json(groups))
+    Ok(Json(group_responses(&state.db, groups).await?))
 }
 
 /// GET /groups/{id} — get a single group by ID.
@@ -926,17 +1211,17 @@ async fn get_group(
     State(state): State<AppState>,
     Path(group_id): Path<i64>,
     auth: AuthUser,
-) -> Result<Json<Group>, ApiError> {
-    let group: Option<Group> = sqlx::query_as(
+) -> Result<Json<GroupResponse>, ApiError> {
+    let sql = format!(
         r#"
-        SELECT id, course_id, name, description, workflow_state, join_level,
-               group_category_id, created_at, updated_at
+        SELECT {GROUP_COLUMNS}
         FROM groups WHERE id = $1
-        "#,
-    )
-    .bind(group_id)
-    .fetch_optional(&state.db)
-    .await?;
+        "#
+    );
+    let group: Option<Group> = sqlx::query_as(&sql)
+        .bind(group_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let group = group.ok_or(ApiError::NotFound)?;
 
@@ -944,7 +1229,9 @@ async fn get_group(
     if let Some(course_id) = group.course_id {
         if !is_admin(&auth) {
             let enrolled: Option<(i32,)> = sqlx::query_as(
-                "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1",
+                "SELECT 1 FROM enrollments
+                 WHERE user_id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+                 LIMIT 1",
             )
             .bind(auth.id)
             .bind(course_id)
@@ -962,7 +1249,7 @@ async fn get_group(
         }
     }
 
-    Ok(Json(group))
+    Ok(Json(group_response_for(&state.db, group).await?))
 }
 
 /// PUT/PATCH /groups/{id} — update a group (teacher/admin only)
@@ -970,19 +1257,19 @@ async fn update_group(
     State(state): State<AppState>,
     Path(group_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<UpdateGroup>,
-) -> Result<Json<Group>, ApiError> {
+    ApiJson(payload): ApiJson<UpdateGroup>,
+) -> Result<Json<GroupResponse>, ApiError> {
     // Fetch existing group
-    let existing: Option<Group> = sqlx::query_as(
+    let sql = format!(
         r#"
-        SELECT id, course_id, name, description, workflow_state, join_level,
-               group_category_id, created_at, updated_at
+        SELECT {GROUP_COLUMNS}
         FROM groups WHERE id = $1
-        "#,
-    )
-    .bind(group_id)
-    .fetch_optional(&state.db)
-    .await?;
+        "#
+    );
+    let existing: Option<Group> = sqlx::query_as(&sql)
+        .bind(group_id)
+        .fetch_optional(&state.db)
+        .await?;
 
     let existing = existing.ok_or(ApiError::NotFound)?;
 
@@ -1007,23 +1294,23 @@ async fn update_group(
         ));
     }
 
-    let updated: Group = sqlx::query_as(
+    let sql = format!(
         r#"
         UPDATE groups
         SET name = $2, description = $3, join_level = $4, updated_at = now()
         WHERE id = $1
-        RETURNING id, course_id, name, description, workflow_state, join_level,
-                  group_category_id, created_at, updated_at
-        "#,
-    )
-    .bind(group_id)
-    .bind(&name)
-    .bind(&description)
-    .bind(&join_level)
-    .fetch_one(&state.db)
-    .await?;
+        RETURNING {GROUP_COLUMNS}
+        "#
+    );
+    let updated: Group = sqlx::query_as(&sql)
+        .bind(group_id)
+        .bind(&name)
+        .bind(&description)
+        .bind(&join_level)
+        .fetch_one(&state.db)
+        .await?;
 
-    Ok(Json(updated))
+    Ok(Json(group_response_for(&state.db, updated).await?))
 }
 
 /// DELETE /groups/{id} — soft-delete a group (teacher/admin only)
@@ -1116,6 +1403,8 @@ async fn create_membership(
         }
         Err(e) => return Err(ApiError::Db(e.to_string())),
     }
+
+    sync_members_count(&state.db, group_id).await?;
 
     // Fetch the created membership with user info
     let membership: MembershipWithUser = sqlx::query_as(
@@ -1217,6 +1506,8 @@ async fn delete_membership(
     if result.rows_affected() == 0 {
         return Err(ApiError::NotFound);
     }
+
+    sync_members_count(&state.db, group_id).await?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -1368,6 +1659,8 @@ async fn apply_membership_update(
     .bind(payload.moderator)
     .fetch_one(&state.db)
     .await?;
+
+    sync_members_count(&state.db, group_id).await?;
 
     Ok(Json(updated))
 }
@@ -1531,6 +1824,8 @@ async fn add_group_user(
     .fetch_one(&state.db)
     .await?;
 
+    sync_members_count(&state.db, group_id).await?;
+
     Ok(Json(membership))
 }
 
@@ -1580,6 +1875,8 @@ async fn remove_group_user(
     .bind(membership_id)
     .execute(&state.db)
     .await?;
+
+    sync_members_count(&state.db, group_id).await?;
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }
@@ -1637,6 +1934,8 @@ async fn bulk_remove_group_users(
     .fetch_all(&state.db)
     .await?;
 
+    sync_members_count(&state.db, group_id).await?;
+
     // Canvas reports memberships the caller could not remove; here that is
     // any requested user id that had no active membership in the group.
     let unauthorized_user_ids: Vec<i64> = user_ids
@@ -1658,7 +1957,7 @@ async fn invite_group_users(
     State(state): State<AppState>,
     Path(group_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<InviteGroupUsers>,
+    ApiJson(payload): ApiJson<InviteGroupUsers>,
 ) -> Result<Json<Vec<GroupMembershipJson>>, ApiError> {
     if fetch_active_group_join_level(&state.db, group_id)
         .await?
@@ -1739,6 +2038,8 @@ async fn invite_group_users(
         memberships.push(membership);
     }
 
+    sync_members_count(&state.db, group_id).await?;
+
     Ok(Json(memberships))
 }
 
@@ -1781,7 +2082,7 @@ async fn list_self_groups(
     State(state): State<AppState>,
     Query(query): Query<SelfGroupsQuery>,
     auth: AuthUser,
-) -> Result<Json<Vec<Group>>, ApiError> {
+) -> Result<Json<Vec<GroupResponse>>, ApiError> {
     let context_type = match query.context_type.as_deref() {
         None | Some("") => None,
         Some("Course") => Some("Course"),
@@ -1793,10 +2094,9 @@ async fn list_self_groups(
         }
     };
 
-    let groups: Vec<Group> = sqlx::query_as(
+    let sql = format!(
         r#"
-        SELECT g.id, g.course_id, g.name, g.description, g.workflow_state,
-               g.join_level, g.group_category_id, g.created_at, g.updated_at
+        SELECT {}
         FROM groups g
         JOIN group_memberships gm ON gm.group_id = g.id
         WHERE gm.user_id = $1
@@ -1809,13 +2109,15 @@ async fn list_self_groups(
           )
         ORDER BY g.name
         "#,
-    )
-    .bind(auth.id)
-    .bind(context_type)
-    .fetch_all(&state.db)
-    .await?;
+        group_columns("g"),
+    );
+    let groups: Vec<Group> = sqlx::query_as(&sql)
+        .bind(auth.id)
+        .bind(context_type)
+        .fetch_all(&state.db)
+        .await?;
 
-    Ok(Json(groups))
+    Ok(Json(group_responses(&state.db, groups).await?))
 }
 
 // ---------------------------------------------------------------------------
@@ -1827,7 +2129,7 @@ async fn create_group_category(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateGroupCategory>,
+    ApiJson(payload): ApiJson<CreateGroupCategory>,
 ) -> Result<Json<GroupCategory>, ApiError> {
     let course_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
         .bind(course_id)
@@ -1972,7 +2274,7 @@ async fn update_group_category(
     State(state): State<AppState>,
     Path(category_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<UpdateGroupCategory>,
+    ApiJson(payload): ApiJson<UpdateGroupCategory>,
 ) -> Result<Json<GroupCategory>, ApiError> {
     let existing = fetch_group_category(&state.db, category_id).await?;
 
@@ -2047,8 +2349,28 @@ async fn delete_group_category(
 ) -> Result<Json<GroupCategory>, ApiError> {
     let existing = fetch_group_category(&state.db, category_id).await?;
 
-    if !can_manage_group_category(&state.db, auth.id, &existing, &auth).await? {
-        return Err(ApiError::Forbidden);
+    // Canvas `group_categories#destroy` checks the group's delete right
+    // before it looks the category up
+    // (`app/controllers/group_categories_controller.rb:649-658`), and that
+    // right is `manage_groups_delete` on the course the category belongs to.
+    // The permission layer reads the role overrides, so a course whose
+    // account has turned the right off answers the same way Canvas does.
+    match existing.course_id {
+        Some(course_id) => {
+            star_permissions::check::require(
+                &state.db,
+                auth.id,
+                &star_permissions::PermissionContext::Course { course_id },
+                "manage_groups_delete",
+            )
+            .await?;
+        }
+        // Account-level categories: only an admin can manage them.
+        None => {
+            if !is_admin(&auth) {
+                return Err(ApiError::Forbidden);
+            }
+        }
     }
 
     // Canvas refuses to delete protected categories with 401 "unauthorized".
@@ -2081,27 +2403,27 @@ async fn list_category_groups(
     State(state): State<AppState>,
     Path(category_id): Path<i64>,
     auth: AuthUser,
-) -> Result<Json<Vec<Group>>, ApiError> {
+) -> Result<Json<Vec<GroupResponse>>, ApiError> {
     let category = fetch_group_category(&state.db, category_id).await?;
 
     if !can_read_group_category(&state.db, auth.id, &category, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
-    let groups: Vec<Group> = sqlx::query_as(
+    let sql = format!(
         r#"
-        SELECT id, course_id, name, description, workflow_state, join_level,
-               group_category_id, created_at, updated_at
+        SELECT {GROUP_COLUMNS}
         FROM groups
         WHERE group_category_id = $1 AND workflow_state != 'deleted'
         ORDER BY name
-        "#,
-    )
-    .bind(category_id)
-    .fetch_all(&state.db)
-    .await?;
+        "#
+    );
+    let groups: Vec<Group> = sqlx::query_as(&sql)
+        .bind(category_id)
+        .fetch_all(&state.db)
+        .await?;
 
-    Ok(Json(groups))
+    Ok(Json(group_responses(&state.db, groups).await?))
 }
 
 // ---------------------------------------------------------------------------
@@ -2168,7 +2490,7 @@ async fn create_account_group_category(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateGroupCategory>,
+    ApiJson(payload): ApiJson<CreateGroupCategory>,
 ) -> Result<Json<GroupCategory>, ApiError> {
     if !is_admin(&auth) {
         return Err(ApiError::Forbidden);
@@ -2202,31 +2524,73 @@ async fn create_account_group_category(
 /// POST /groups — create a group from its category's context (Canvas
 /// groups#create). Course categories need a teacher/admin; account categories
 /// and categories-less creates need an admin.
+/// Canvas names a group after a random uuid when the request names none
+/// (app/models/group.rb:598).
+/// The domain root account — Canvas' `@domain_root_account`.
+async fn domain_root_account_id(db: &PgPool) -> Result<Option<i64>, ApiError> {
+    let id: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM accounts WHERE parent_account_id IS NULL AND workflow_state <> 'deleted' ORDER BY id LIMIT 1",
+    )
+    .fetch_optional(db)
+    .await?;
+    Ok(id)
+}
+
+/// Canvas' `GroupCategory.communities_for(account)` — the account's
+/// "Communities" category, used when a group is created without one.
+async fn communities_group_category(
+    db: &PgPool,
+    account_id: Option<i64>,
+) -> Result<Option<i64>, ApiError> {
+    let Some(account_id) = account_id else {
+        return Ok(None);
+    };
+    let id: Option<i64> = sqlx::query_scalar(
+        "SELECT id FROM group_categories
+         WHERE account_id = $1 AND name = 'Communities' AND workflow_state <> 'deleted'
+         ORDER BY id LIMIT 1",
+    )
+    .bind(account_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(id)
+}
+
+async fn generate_group_name(db: &PgPool) -> Result<String, ApiError> {
+    let generated: Option<String> = sqlx::query_scalar("SELECT gen_random_uuid()::text")
+        .fetch_optional(db)
+        .await?;
+    Ok(generated.unwrap_or_else(|| "New Group".to_string()))
+}
+
 async fn create_group_standalone(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(payload): Json<CreateGroup>,
-) -> Result<Json<Group>, ApiError> {
-    let name = payload.name.trim().to_string();
-    if name.is_empty() {
-        return Err(ApiError::Validation("name is required".into()));
-    }
+    ApiJson(payload): ApiJson<CreateGroup>,
+) -> Result<Json<GroupResponse>, ApiError> {
+    // Canvas names a group after a random uuid when the request names none
+    // (app/models/group.rb:598 — `self.name ||= CanvasSlug.generate_securish_uuid`).
+    let name = if payload.name.trim().is_empty() {
+        generate_group_name(&state.db).await?
+    } else {
+        payload.name.trim().to_string()
+    };
 
-    let (course_id, account_id) = match payload.group_category_id {
+    let (course_id, account_id, group_category_id) = match payload.group_category_id {
         Some(category_id) => {
             let category = fetch_group_category(&state.db, category_id).await?;
             if !can_manage_group_category(&state.db, auth.id, &category, &auth).await? {
                 return Err(ApiError::Forbidden);
             }
-            (category.course_id, category.account_id)
+            (category.course_id, category.account_id, Some(category_id))
         }
-        // Canvas falls back to the domain root account's communities category;
-        // this service has no domain root, so a bare POST /groups is admin-only.
+        // Without a group category Canvas falls back to the domain root
+        // account's communities category and runs **no** permission check in
+        // that branch (`app/controllers/groups_controller.rb:656`).
         None => {
-            if !is_admin(&auth) {
-                return Err(ApiError::Forbidden);
-            }
-            (None, None)
+            let root_account = domain_root_account_id(&state.db).await?;
+            let communities = communities_group_category(&state.db, root_account).await?;
+            (None, root_account, communities)
         }
     };
 
@@ -2242,25 +2606,35 @@ async fn create_group_standalone(
         "invitation_only".to_string()
     };
 
-    let group: Group = sqlx::query_as(
+    // Canvas derives the group's context, role and membership limits from
+    // its context and its group category (`app/models/group.rb:600-605`).
+    let sql = format!(
         r#"
         INSERT INTO groups
-            (course_id, account_id, name, description, join_level, group_category_id)
-        VALUES ($1, $2, $3, $4, $5, $6)
-        RETURNING id, course_id, name, description, workflow_state, join_level,
-                  group_category_id, created_at, updated_at
-        "#,
-    )
-    .bind(course_id)
-    .bind(account_id)
-    .bind(&name)
-    .bind(&payload.description)
-    .bind(&join_level)
-    .bind(payload.group_category_id)
-    .fetch_one(&state.db)
-    .await?;
+            (course_id, account_id, name, description, join_level, group_category_id,
+             context_type, context_name, role, max_membership, is_public, non_collaborative)
+        VALUES ($1, $2, $3, $4, $5, $6,
+                CASE WHEN $1::BIGINT IS NOT NULL THEN 'Course' ELSE 'Account' END,
+                COALESCE((SELECT c.name FROM courses c WHERE c.id = $1),
+                         (SELECT a.name FROM accounts a WHERE a.id = $2)),
+                (SELECT gc.role FROM group_categories gc WHERE gc.id = $6),
+                (SELECT gc.group_limit FROM group_categories gc WHERE gc.id = $6),
+                COALESCE((SELECT gc.role FROM group_categories gc WHERE gc.id = $6), '') = 'communities',
+                COALESCE((SELECT gc.non_collaborative FROM group_categories gc WHERE gc.id = $6), false))
+        RETURNING {GROUP_COLUMNS}
+        "#
+    );
+    let group: Group = sqlx::query_as(&sql)
+        .bind(course_id)
+        .bind(account_id)
+        .bind(&name)
+        .bind(&payload.description)
+        .bind(&join_level)
+        .bind(group_category_id)
+        .fetch_one(&state.db)
+        .await?;
 
-    Ok(Json(group))
+    Ok(Json(group_response_for(&state.db, group).await?))
 }
 
 /// POST /group_categories/{id}/assign_unassigned_members — distribute course
@@ -2362,6 +2736,10 @@ async fn assign_unassigned_members(
         });
     }
 
+    for group_id in group_ids {
+        sync_members_count(&state.db, group_id).await?;
+    }
+
     Ok(Json(
         assignment
             .into_iter()
@@ -2380,7 +2758,7 @@ async fn list_account_groups(
     Path(account_id): Path<i64>,
     Query(params): Query<AccountGroupsQuery>,
     auth: AuthUser,
-) -> Result<Json<Vec<Group>>, ApiError> {
+) -> Result<Json<Vec<GroupResponse>>, ApiError> {
     if !is_admin(&auth) {
         return Err(ApiError::Forbidden);
     }
@@ -2392,10 +2770,9 @@ async fn list_account_groups(
         .map(|s| s.trim())
         .filter(|s| !s.is_empty());
 
-    let groups: Vec<Group> = sqlx::query_as(
+    let sql = format!(
         r#"
-        SELECT id, course_id, name, description, workflow_state, join_level,
-               group_category_id, created_at, updated_at
+        SELECT {GROUP_COLUMNS}
         FROM groups
         WHERE workflow_state != 'deleted'
           AND (course_id IS NULL OR EXISTS (
@@ -2403,14 +2780,15 @@ async fn list_account_groups(
           ))
           AND ($2::TEXT IS NULL OR name ILIKE '%' || $2 || '%')
         ORDER BY name ASC
-        "#,
-    )
-    .bind(account_id)
-    .bind(search_term)
-    .fetch_all(&state.db)
-    .await?;
+        "#
+    );
+    let groups: Vec<Group> = sqlx::query_as(&sql)
+        .bind(account_id)
+        .bind(search_term)
+        .fetch_all(&state.db)
+        .await?;
 
-    Ok(Json(groups))
+    Ok(Json(group_responses(&state.db, groups).await?))
 }
 
 /// GET /groups/{groupId}/permissions — return permission flags for current user
@@ -2514,7 +2892,7 @@ async fn preview_html(
     State(state): State<AppState>,
     Path(group_id): Path<i64>,
     auth: AuthUser,
-    Json(body): Json<serde_json::Value>,
+    ApiJson(body): ApiJson<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let exists: Option<i64> =
         sqlx::query_scalar("SELECT id FROM groups WHERE id = $1 AND workflow_state != 'deleted'")
@@ -2539,8 +2917,8 @@ async fn create_group_in_category(
     State(state): State<AppState>,
     Path(category_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateGroup>,
-) -> Result<(StatusCode, Json<Group>), ApiError> {
+    ApiJson(payload): ApiJson<CreateGroup>,
+) -> Result<(StatusCode, Json<GroupResponse>), ApiError> {
     let category = fetch_group_category(&state.db, category_id).await?;
     if !can_manage_group_category(&state.db, auth.id, &category, &auth).await? {
         return Err(ApiError::Forbidden);
@@ -2555,23 +2933,34 @@ async fn create_group_in_category(
         .course_id
         .ok_or_else(|| ApiError::BadRequest("category must belong to a course".into()))?;
 
-    let group: Group = sqlx::query_as(
+    let sql = format!(
         r#"
-        INSERT INTO groups (course_id, name, description, join_level, group_category_id)
-        VALUES ($1, $2, $3, $4, $5)
-        RETURNING id, course_id, name, description, workflow_state, join_level,
-                  group_category_id, created_at, updated_at
-        "#,
-    )
-    .bind(course_id)
-    .bind(name)
-    .bind(&payload.description)
-    .bind(&payload.join_level)
-    .bind(category_id)
-    .fetch_one(&state.db)
-    .await?;
+        INSERT INTO groups (course_id, name, description, join_level, group_category_id,
+                            context_type, context_name, role, max_membership, is_public,
+                            non_collaborative)
+        VALUES ($1, $2, $3, $4, $5,
+                'Course',
+                (SELECT c.name FROM courses c WHERE c.id = $1),
+                (SELECT gc.role FROM group_categories gc WHERE gc.id = $5),
+                (SELECT gc.group_limit FROM group_categories gc WHERE gc.id = $5),
+                COALESCE((SELECT gc.role FROM group_categories gc WHERE gc.id = $5), '') = 'communities',
+                COALESCE((SELECT gc.non_collaborative FROM group_categories gc WHERE gc.id = $5), false))
+        RETURNING {GROUP_COLUMNS}
+        "#
+    );
+    let group: Group = sqlx::query_as(&sql)
+        .bind(course_id)
+        .bind(name)
+        .bind(&payload.description)
+        .bind(&payload.join_level)
+        .bind(category_id)
+        .fetch_one(&state.db)
+        .await?;
 
-    Ok((StatusCode::CREATED, Json(group)))
+    Ok((
+        StatusCode::CREATED,
+        Json(group_response_for(&state.db, group).await?),
+    ))
 }
 
 /// GET /groups/{groupId}/activity_stream — paginated stream of group events
@@ -2632,6 +3021,7 @@ async fn import_category_users(
     let csv_str = String::from_utf8_lossy(&body);
     let lines = csv_str.lines().skip(1); // skip header
     let mut added = 0;
+    let mut touched_groups: std::collections::HashSet<i64> = std::collections::HashSet::new();
 
     for line in lines {
         let parts: Vec<&str> = line.split(',').collect();
@@ -2647,8 +3037,13 @@ async fn import_category_users(
                 .execute(&state.db)
                 .await?;
                 added += 1;
+                touched_groups.insert(group_id);
             }
         }
+    }
+
+    for group_id in touched_groups {
+        sync_members_count(&state.db, group_id).await?;
     }
 
     Ok(Json(serde_json::json!({ "added": added })))
@@ -2745,14 +3140,17 @@ async fn bulk_manage_differentiation_tag(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<serde_json::Value>,
+    ApiJson(payload): ApiJson<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     const MAX_BULK_ACTIONS: usize = 50;
 
+    // Canvas `params.require(:operations)` raises ParameterMissing, which the
+    // generic handler renders as `{"errors":[{"message":"operations is
+    // missing"}]}` (app/controllers/application_controller.rb:2321).
     let ops = payload
         .get("operations")
         .and_then(|v| v.as_object())
-        .ok_or_else(|| ApiError::BadRequest("operations object required".into()))?;
+        .ok_or_else(|| ApiError::BadRequest("operations is missing".into()))?;
 
     let create_ops: Vec<&serde_json::Value> = ops
         .get("create")
@@ -2779,7 +3177,7 @@ async fn bulk_manage_differentiation_tag(
     let gc_params = payload
         .get("group_category")
         .and_then(|v| v.as_object())
-        .ok_or_else(|| ApiError::BadRequest("group_category object required".into()))?;
+        .ok_or_else(|| ApiError::BadRequest("group_category is missing".into()))?;
 
     let course_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
         .bind(course_id)
@@ -2863,7 +3261,18 @@ async fn bulk_manage_differentiation_tag(
         if let Some(name) = op.get("name").and_then(|v| v.as_str()) {
             if !name.trim().is_empty() {
                 let row: (i64,) = sqlx::query_as(
-                    "INSERT INTO groups (course_id, group_category_id, name) VALUES ($1, $2, $3) RETURNING id"
+                    r#"
+                    INSERT INTO groups (course_id, group_category_id, name, context_type,
+                                        context_name, role, max_membership, is_public,
+                                        non_collaborative)
+                    VALUES ($1, $2, $3, 'Course',
+                            (SELECT c.name FROM courses c WHERE c.id = $1),
+                            (SELECT gc.role FROM group_categories gc WHERE gc.id = $2),
+                            (SELECT gc.group_limit FROM group_categories gc WHERE gc.id = $2),
+                            COALESCE((SELECT gc.role FROM group_categories gc WHERE gc.id = $2), '') = 'communities',
+                            COALESCE((SELECT gc.non_collaborative FROM group_categories gc WHERE gc.id = $2), false))
+                    RETURNING id
+                    "#,
                 )
                 .bind(course_id)
                 .bind(group_category_id)

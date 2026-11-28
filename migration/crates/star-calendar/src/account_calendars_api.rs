@@ -29,7 +29,7 @@
 //! ## Schema
 //!
 //! The two calendar columns of the account already exist (migration
-//! `0236_account_calendars.sql`); no new DDL is needed:
+//! `0237_account_calendars.sql`); no new DDL is needed:
 //!
 //! ```sql
 //! ALTER TABLE accounts
@@ -1152,6 +1152,21 @@ impl IntoResponse for CalendarError {
                 })),
             )
                 .into_response(),
+            CalendarError::Api(ApiError::ParameterValidation(errors)) => {
+                let entries: Vec<Value> = errors
+                    .iter()
+                    .map(|error| json!({ "attribute": error.attribute, "message": error.message }))
+                    .collect();
+                (StatusCode::BAD_REQUEST, Json(entries)).into_response()
+            }
+            CalendarError::Api(ApiError::Canvas { status, body }) => {
+                let mut response = (status, body.clone()).into_response();
+                response.headers_mut().insert(
+                    axum::http::header::CONTENT_TYPE,
+                    axum::http::HeaderValue::from_static("application/json; charset=utf-8"),
+                );
+                response
+            }
             CalendarError::Canvas(status, body) => (status, Json(body)).into_response(),
         }
     }

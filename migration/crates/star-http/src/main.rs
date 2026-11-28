@@ -2,7 +2,7 @@
 //!
 //! Owns main(), router assembly, auth middleware, and graceful shutdown.
 
-use axum::{middleware, routing::get, Json, Router};
+use axum::{middleware, routing::get, Extension, Json, Router};
 use sqlx::postgres::PgPoolOptions;
 use star_common::AppState;
 use std::{env, net::SocketAddr};
@@ -66,10 +66,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         return Err("STAR_JWT_SECRET is set but empty".into());
     }
 
+    // The port: STAR_PORT is the deployment's own setting, PORT is the
+    // conventional 12-factor name and is what the parity replay harness sets
+    // when it starts the binary on the port it picked for the run.
     let port: u16 = env::var("STAR_PORT")
+        .or_else(|_| env::var("PORT"))
         .unwrap_or_else(|_| "8080".to_string())
         .parse()
-        .expect("STAR_PORT must be a valid u16");
+        .expect("STAR_PORT/PORT must be a valid u16");
 
     // -------------------------------------------------------------------------
     // Database pool + migrations
@@ -91,13 +95,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     };
 
     // -------------------------------------------------------------------------
+    // The cutover front door
+    // -------------------------------------------------------------------------
+    // The port answers the routes it owns; the routes it does not own yet go
+    // to the Canvas instance the deployment still runs. Without
+    // STAR_CANVAS_ORIGIN there is nothing to delegate to and the front door
+    // is the empty 404 axum would answer anyway, so the parity replay sees
+    // only the port's own answers.
+    let origin = match star_proxy::CanvasOrigin::from_env() {
+        Ok(origin) => origin.map(std::sync::Arc::new),
+        Err(error) => return Err(Box::new(error) as Box<dyn std::error::Error + Send + Sync>),
+    };
+    if let Some(origin) = &origin {
+        info!(origin = %origin.base(), "the front door delegates to Canvas");
+    }
+
+    // -------------------------------------------------------------------------
     // Build API router under /api/v1
     // -------------------------------------------------------------------------
-    let api_router = build_api_router();
+    // The API router's own fallback is the front door: a path under
+    // /api/v1 that the port does not answer is Canvas' to answer, and the
+    // nested router would otherwise answer 404 on its own.
+    let api_router = build_api_router(origin.clone()).fallback(star_proxy::fallback);
 
     // -------------------------------------------------------------------------
     // Full app router — /health at top level, everything else under /api/v1
     // -------------------------------------------------------------------------
+    // The Canvas response middleware wraps the whole application: Canvas
+    // sets its security, context and pagination headers on every answer, so
+    // they have to be set on every answer here too. It sits outermost so it
+    // sees the final status, headers and body.
     let app = Router::new()
         .route("/health", get(health))
         // Server-rendered UI shell (star-ui, spec p5): top level, NOT under
@@ -106,7 +133,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         // Rails' `_method` override, which has to run ahead of routing, and
         // none of the root-mounted routers below own a path the shell
         // registers, so the two shapes answer the same requests.
-        .fallback_service(star_ui::app(state.clone()))
+        // The front door sits behind the shell: the shell is the app's
+        // fallback (it carries Rails' `_method` override, which has to run
+        // ahead of routing), so the delegation has to be the shell's own
+        // fallback. A request the shell does not answer goes to Canvas.
+        .fallback_service(star_ui::app_with_fallback(
+            state.clone(),
+            axum::routing::any(star_proxy::fallback),
+        ))
         // Canvas serves the LTI Advantage family at /api/lti (outside
         // /api/v1), so the router carries the prefix and is merged here.
         .merge(star_lti::lti_advantage_router())
@@ -139,6 +173,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         )
         // Canvas serves its GraphQL API at /api/graphql (outside /api/v1).
         .nest("/api/graphql", star_graphql::router())
+        // The front door: a request the port has no route for is Canvas' to
+        // answer. The shell is the app's fallback service (it carries the
+        // `_method` override), so the delegation is the shell's own fallback
+        // — a fallback set here would replace the shell.
+        .method_not_allowed_fallback(star_proxy::fallback)
+        .layer(Extension(origin.clone()))
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            star_canvas_response::canvas_response,
+        ))
         .with_state(state)
         .layer(TraceLayer::new_for_http());
 
@@ -163,7 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 // Assemble all domain routers under /api/v1
 // ---------------------------------------------------------------------------
 
-fn build_api_router() -> Router<AppState> {
+fn build_api_router(origin: Option<std::sync::Arc<star_proxy::CanvasOrigin>>) -> Router<AppState> {
     Router::new()
         .merge(star_auth::router())
         .merge(star_users::router())
@@ -203,6 +247,16 @@ fn build_api_router() -> Router<AppState> {
         .merge(star_polling::router())
         .merge(star_search::router())
         .merge(star_sis::router())
+        // A path the port knows but the method it does not serve is Canvas' to
+        // answer: Canvas answers an undefined method with 404, never 405.
+        .method_not_allowed_fallback(star_proxy::fallback)
+        .layer(Extension(origin))
+    // star_pages, star_modules and star_announcements are NOT merged
+    // here: star_content::router() already merges all three. Adding them
+    // again registered every route in those crates twice, and axum 0.8
+    // panics on a duplicate method ("Overlapping method route") — the
+    // application could not start at all.
+    // crates/star-http/tests/router_conflicts.rs is the gate for this.
     // NOTE: star_pages / star_modules / star_announcements are NOT merged
     // here — star-content/src/lib.rs already merges their routers (lines
     // 56-58). Merging them here as well panics axum at startup with

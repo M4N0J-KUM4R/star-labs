@@ -14,7 +14,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use star_auth::AuthUser;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 
 mod module_assignment_overrides;
 use std::collections::{HashMap, HashSet};
@@ -415,7 +415,53 @@ fn is_admin(auth: &AuthUser) -> bool {
     auth.role == "admin"
 }
 
-/// Check if user is enrolled in a course (as any role) or is admin.
+async fn check_can_read_grades(
+    db: &PgPool,
+    user_id: i64,
+    course_id: i64,
+) -> Result<bool, ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM enrollments \
+         WHERE user_id = $1 AND course_id = $2 \
+           AND workflow_state IN ('active', 'invited') \
+         LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(course_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.is_some())
+}
+
+async fn require_course_permission(
+    pool: &PgPool,
+    user_id: i64,
+    course_id: i64,
+    permission: &str,
+) -> Result<(), ApiError> {
+    star_permissions::check::require(
+        pool,
+        user_id,
+        &star_permissions::PermissionContext::Course { course_id },
+        permission,
+    )
+    .await
+}
+
+async fn require_grading_right(
+    pool: &PgPool,
+    user_id: i64,
+    course_id: i64,
+) -> Result<(), ApiError> {
+    star_permissions::check::require_any(
+        pool,
+        user_id,
+        &star_permissions::PermissionContext::Course { course_id },
+        &["manage_grades", "view_all_grades"],
+    )
+    .await
+}
+
 async fn check_enrolled_or_admin(
     pool: &PgPool,
     user_id: i64,
@@ -437,7 +483,6 @@ async fn check_enrolled_or_admin(
     Ok(row.is_some())
 }
 
-/// Check if user is a teacher in a course or admin.
 async fn check_teacher_or_admin(
     pool: &PgPool,
     user_id: i64,
@@ -448,8 +493,14 @@ async fn check_teacher_or_admin(
         return Ok(true);
     }
 
+    // Canvas grants the course-admin rights through
+    // `active_or_pending_by_date` (`app/models/enrollment.rb:1438`), which
+    // does not list a concluded enrollment.
     let row: Option<(i32,)> = sqlx::query_as(
-        r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' LIMIT 1"#,
+        r#"SELECT 1 FROM enrollments
+           WHERE user_id = $1 AND course_id = $2 AND role = 'teacher'
+             AND workflow_state IN ('active', 'invited')
+           LIMIT 1"#,
     )
     .bind(user_id)
     .bind(course_id)
@@ -459,8 +510,6 @@ async fn check_teacher_or_admin(
     Ok(row.is_some())
 }
 
-/// Verify that an assignment exists and belongs to the given course.
-/// Canvas nested routes treat a mismatched or missing assignment as 404.
 async fn ensure_assignment_in_course(
     pool: &PgPool,
     course_id: i64,
@@ -477,8 +526,6 @@ async fn ensure_assignment_in_course(
     Ok(())
 }
 
-/// Validate that every ad-hoc student id belongs to an active student
-/// enrollment in the course. Canvas returns 400 for unknown student ids.
 async fn validate_student_ids(
     pool: &PgPool,
     course_id: i64,
@@ -503,7 +550,6 @@ async fn validate_student_ids(
     Ok(())
 }
 
-/// Validate that a group override target is an active group in the course.
 async fn validate_group_in_course(
     pool: &PgPool,
     course_id: i64,
@@ -524,7 +570,6 @@ async fn validate_group_in_course(
     Ok(())
 }
 
-/// Resolve and validate an override target against the course.
 async fn resolve_and_validate_target(
     pool: &PgPool,
     course_id: i64,
@@ -550,7 +595,6 @@ async fn resolve_and_validate_target(
     Ok(target)
 }
 
-/// Fetch a non-deleted override or 404.
 async fn fetch_override(pool: &PgPool, override_id: i64) -> Result<AssignmentOverride, ApiError> {
     let row: Option<AssignmentOverride> = sqlx::query_as(
         r#"
@@ -567,7 +611,6 @@ async fn fetch_override(pool: &PgPool, override_id: i64) -> Result<AssignmentOve
     row.ok_or(ApiError::NotFound)
 }
 
-/// Course that owns the assignment behind an override.
 async fn course_id_for_assignment(pool: &PgPool, assignment_id: i64) -> Result<i64, ApiError> {
     let row: Option<(i64,)> = sqlx::query_as(r#"SELECT course_id FROM assignments WHERE id = $1"#)
         .bind(assignment_id)
@@ -577,8 +620,6 @@ async fn course_id_for_assignment(pool: &PgPool, assignment_id: i64) -> Result<i
     Ok(row.ok_or(ApiError::NotFound)?.0)
 }
 
-/// Fetch an override and enforce read (enrolled) or write (teacher/admin)
-/// access on its course. Returns the existing row.
 async fn require_override_access(
     pool: &PgPool,
     override_id: i64,
@@ -601,7 +642,6 @@ async fn require_override_access(
     Ok(existing)
 }
 
-/// Ensure the override belongs to the assignment in the nested Canvas route.
 async fn ensure_override_in_assignment(
     pool: &PgPool,
     assignment_id: i64,
@@ -630,9 +670,6 @@ fn normalize_override_title(title: Option<String>) -> String {
         .unwrap_or_else(|| "No Title".to_string())
 }
 
-/// Verify the target user has a live enrollment in the course. Canvas'
-/// `get_user_considering_section` raises RecordNotFound when it cannot find
-/// the user in the course, so mismatches are 404s rather than 403s.
 async fn ensure_user_in_course(
     pool: &PgPool,
     course_id: i64,
@@ -654,9 +691,28 @@ async fn ensure_user_in_course(
     Ok(())
 }
 
-/// Verify the target user has a live enrollment in the section. Canvas'
-/// `get_user_considering_section` raises RecordNotFound, so section-mismatched
-/// users are 404s rather than 403s. Caller must also verify course access.
+async fn ensure_student_in_course(
+    pool: &PgPool,
+    course_id: i64,
+    user_id: i64,
+) -> Result<(), ApiError> {
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1 FROM enrollments
+        WHERE course_id = $1 AND user_id = $2 AND role = 'student'
+          AND workflow_state <> 'deleted'
+        LIMIT 1
+        "#,
+    )
+    .bind(course_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    row.ok_or(ApiError::NotFound)?;
+    Ok(())
+}
+
 async fn ensure_section_user(pool: &PgPool, section_id: i64, user_id: i64) -> Result<(), ApiError> {
     let row: Option<(i32,)> = sqlx::query_as(
         r#"
@@ -674,7 +730,6 @@ async fn ensure_section_user(pool: &PgPool, section_id: i64, user_id: i64) -> Re
     Ok(())
 }
 
-/// Verify the calling user has a live enrollment in the section.
 async fn ensure_section_enrollment(
     pool: &PgPool,
     section_id: i64,
@@ -803,11 +858,29 @@ fn parse_since(value: Option<&str>, field: &str) -> Result<Option<DateTime<Utc>>
         .map_err(|_| ApiError::BadRequest(format!("Invalid datetime for {field}")))
 }
 
-/// Resolve the `student_ids[]` argument against the course.
-///
-/// Canvas semantics: teachers/admins may request any visible student or
-/// "all"; students may only request themselves. Unknown student ids are
-/// unauthorized (403) just like `render_unauthorized_action`.
+async fn ensure_visible_students(
+    pool: &PgPool,
+    course_id: i64,
+    ids: &[i64],
+) -> Result<(), ApiError> {
+    let visible: i64 = sqlx::query_scalar(
+        r#"
+        SELECT COUNT(DISTINCT user_id) FROM enrollments
+        WHERE course_id = $1 AND user_id = ANY($2)
+          AND role = 'student' AND workflow_state <> 'deleted'
+        "#,
+    )
+    .bind(course_id)
+    .bind(ids)
+    .fetch_one(pool)
+    .await?;
+
+    if visible as usize != ids.len() {
+        return Err(ApiError::Forbidden);
+    }
+    Ok(())
+}
+
 async fn resolve_requested_student_ids(
     pool: &PgPool,
     course_id: i64,
@@ -816,7 +889,15 @@ async fn resolve_requested_student_ids(
     requested: &[String],
 ) -> Result<Vec<i64>, ApiError> {
     if requested.is_empty() {
-        return Ok(vec![auth.id]);
+        // Canvas falls back to the caller's own id
+        // (`app/controllers/submissions_api_controller.rb:389`) and, for a
+        // caller who may view all grades, refuses the request when that id
+        // is not one of the visible students (line 400).
+        let ids = vec![auth.id];
+        if can_view_all {
+            ensure_visible_students(pool, course_id, &ids).await?;
+        }
+        return Ok(ids);
     }
 
     if requested.iter().any(|id| id.eq_ignore_ascii_case("all")) {
@@ -872,8 +953,6 @@ async fn resolve_requested_student_ids(
     Ok(ids)
 }
 
-/// Resolve the requested `assignment_ids[]` to the course's assignments.
-/// Canvas returns 403 when any requested id is outside the course scope.
 async fn resolve_requested_assignment_ids(
     pool: &PgPool,
     course_id: i64,
@@ -903,7 +982,6 @@ async fn resolve_requested_assignment_ids(
     Ok(requested.to_vec())
 }
 
-/// Load submission attachments grouped by submission id.
 async fn load_submission_attachments(
     pool: &PgPool,
     submission_ids: &[i64],
@@ -1093,7 +1171,6 @@ pub fn grade_arrays_from_submissions(
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// GET /courses/{courseId}/assignments
 async fn list_course_assignments(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
@@ -1119,17 +1196,15 @@ async fn list_course_assignments(
     Ok(Json(rows))
 }
 
-/// POST /courses/{courseId}/assignments
 async fn create_assignment(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
     Json(payload): Json<CreateAssignment>,
 ) -> Result<(StatusCode, Json<Assignment>), ApiError> {
-    // Check teacher or admin
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `AssignmentsApiController#create` -> `manage_assignments_add`
+    // (`app/controllers/assignments_api_controller.rb:872`).
+    require_course_permission(&state.db, auth.id, course_id, "manage_assignments_add").await?;
 
     if payload.title.trim().is_empty() {
         return Err(ApiError::Validation("title is required".into()));
@@ -1160,7 +1235,6 @@ async fn create_assignment(
     Ok((StatusCode::CREATED, Json(row)))
 }
 
-/// GET /assignments/{id}
 async fn get_assignment(
     State(state): State<AppState>,
     Path(assignment_id): Path<i64>,
@@ -1187,7 +1261,6 @@ async fn get_assignment(
     Ok(Json(assignment))
 }
 
-/// PUT /assignments/{id}
 async fn update_assignment(
     State(state): State<AppState>,
     Path(assignment_id): Path<i64>,
@@ -1207,10 +1280,15 @@ async fn update_assignment(
 
     let existing = row.ok_or(ApiError::NotFound)?;
 
-    // Check teacher or admin
-    if !check_teacher_or_admin(&state.db, auth.id, existing.course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `AssignmentsApiController#update` -> `manage_assignments_edit`
+    // (`app/controllers/assignments_api_controller.rb:1758`).
+    require_course_permission(
+        &state.db,
+        auth.id,
+        existing.course_id,
+        "manage_assignments_edit",
+    )
+    .await?;
 
     let title = payload.title.unwrap_or(existing.title);
     let description = payload.description.or(existing.description);
@@ -1236,7 +1314,6 @@ async fn update_assignment(
     Ok(Json(updated))
 }
 
-/// DELETE /assignments/{id}
 async fn delete_assignment(
     State(state): State<AppState>,
     Path(assignment_id): Path<i64>,
@@ -1250,10 +1327,8 @@ async fn delete_assignment(
 
     let course_id = row.ok_or(ApiError::NotFound)?.0;
 
-    // Check teacher or admin
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `AssignmentsApiController#destroy` -> `manage_assignments_delete`.
+    require_course_permission(&state.db, auth.id, course_id, "manage_assignments_delete").await?;
 
     let result = sqlx::query(r#"DELETE FROM assignments WHERE id = $1"#)
         .bind(assignment_id)
@@ -1267,7 +1342,6 @@ async fn delete_assignment(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// POST /assignments/{id}/submissions — upsert own submission
 async fn create_submission(
     State(state): State<AppState>,
     Path(assignment_id): Path<i64>,
@@ -1312,7 +1386,6 @@ async fn create_submission(
     Ok((StatusCode::CREATED, Json(submission)))
 }
 
-/// GET /assignments/{id}/submissions — all submissions (teacher/admin)
 async fn list_submissions(
     State(state): State<AppState>,
     Path(assignment_id): Path<i64>,
@@ -1326,10 +1399,10 @@ async fn list_submissions(
 
     let course_id = row.ok_or(ApiError::NotFound)?.0;
 
-    // Check teacher or admin
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `SubmissionsApiController#index` ->
+    // `authorized_action(@context, @current_user, [:manage_grades,
+    // :view_all_grades])` (`app/controllers/submissions_api_controller.rb:256`).
+    require_grading_right(&state.db, auth.id, course_id).await?;
 
     let rows: Vec<SubmissionWithUser> = sqlx::query_as(
         r#"
@@ -1352,21 +1425,34 @@ async fn list_submissions(
 // Canvas submissions API (SubmissionsApiController)
 // ---------------------------------------------------------------------------
 
-/// GET /courses/{courseId}/students/submissions — Canvas `for_students`.
-///
-/// Returns a flat list of existing submissions by default; `grouped=true`
-/// returns one entry per enrolled student with a (possibly empty)
-/// `submissions` array.
 async fn list_student_submissions(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     RawQuery(raw_query): RawQuery,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+    // Canvas `for_students`
+    // (`app/controllers/submissions_api_controller.rb:384`) answers with the
+    // caller's own submissions when they hold `read_grades`, and with 403
+    // when they hold neither `manage_grades`/`view_all_grades` nor
+    // `read_grades` (line 413). `read_grades` is not one of the permissions
+    // that apply to concluded enrollments
+    // (`config/initializers/permissions_registry.rb`), so a concluded
+    // enrollment loses it.
+    // `manage_grades` or `view_all_grades` on the course
+    // (`app/controllers/submissions_api_controller.rb:392`).
+    let can_view_all = star_permissions::check::require_any(
+        &state.db,
+        auth.id,
+        &star_permissions::PermissionContext::Course { course_id },
+        &["manage_grades", "view_all_grades"],
+    )
+    .await
+    .is_ok();
+    let can_read_grades = check_can_read_grades(&state.db, auth.id, course_id).await?;
+    if !can_view_all && !can_read_grades {
         return Err(ApiError::Forbidden);
     }
-    let can_view_all = check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await?;
 
     let query = parse_student_submissions_query(raw_query.as_deref())?;
     let student_ids = resolve_requested_student_ids(
@@ -1543,10 +1629,14 @@ async fn get_student_submission(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user_id = resolve_user_id_param(&user_id_raw, auth.id)?;
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-    ensure_user_in_course(&state.db, course_id, user_id).await?;
+    ensure_student_in_course(&state.db, course_id, user_id).await?;
 
-    if auth.id != user_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
+    // Canvas `SubmissionsApiController#show` -> `authorized_action(@submission,
+    // @current_user, :read)`: the submission's own user may read it, anyone
+    // else needs the grading rights on the course
+    // (`app/models/submission.rb:584-618`).
+    if auth.id != user_id {
+        require_grading_right(&state.db, auth.id, course_id).await?;
     }
 
     let query = parse_submission_includes(raw_query.as_deref());
@@ -1754,8 +1844,6 @@ fn parse_include_query(raw_query: Option<&str>) -> SubmissionListQuery {
     query
 }
 
-/// Render a [`SubmissionRow`] into the Canvas submission JSON shape with the
-/// optional `include[]` extras, sharing the course-level show logic.
 async fn build_submission_entry(
     pool: &PgPool,
     row: SubmissionRow,
@@ -1812,9 +1900,6 @@ fn parse_submission_includes(raw_query: Option<&str>) -> SubmissionIncludes {
     includes
 }
 
-/// Canvas `submission_history`: one attempt-shaped entry per submission
-/// version. star-lms does not version submissions, so the current row is the
-/// single history entry, like a one-attempt Canvas submission.
 async fn submission_history_json(
     pool: &PgPool,
     submission_id: i64,
@@ -1853,8 +1938,6 @@ type SubmissionCommentRow = (
     DateTime<Utc>,
 );
 
-/// Canvas `submission_comments` include: the active comments on the
-/// submission (lib/api/v1/submission_comment.rb fields).
 async fn submission_comments_json(
     pool: &PgPool,
     submission_id: i64,
@@ -1889,9 +1972,6 @@ async fn submission_comments_json(
     Ok(serde_json::json!(comments))
 }
 
-/// Canvas `rubric_assessment` include: the grading assessment for the
-/// submission as `{criterion_id: {rating_id, comments, points}}`
-/// (indexed_rubric_assessment_json). `null` when there is none.
 async fn rubric_assessment_json(
     pool: &PgPool,
     submission_id: i64,
@@ -1944,12 +2024,6 @@ async fn rubric_assessment_json(
     Ok(serde_json::Value::Object(indexed))
 }
 
-/// GET /courses/{courseId}/assignments/{assignmentId}/submission_summary —
-/// Canvas `submission_summary` (teacher-only): {graded, ungraded,
-/// not_submitted} counts over the course's active students. Canvas's
-/// needs_grading = submission_type NOT NULL AND not excused AND
-/// (workflow_state='pending_review' OR (state IN submitted,graded AND score
-/// IS NULL)); graded = score NOT NULL AND state='graded' OR excused.
 async fn submission_summary(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -1957,9 +2031,10 @@ async fn submission_summary(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
 
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `SubmissionsApiController#submission_summary` ->
+    // `authorized_action(@context, @current_user, [:manage_grades,
+    // :view_all_grades])` (`app/controllers/submissions_api_controller.rb:1321`).
+    require_grading_right(&state.db, auth.id, course_id).await?;
 
     let (students, graded, ungraded): (i64, i64, i64) = sqlx::query_as(
         r#"
@@ -1994,9 +2069,6 @@ async fn submission_summary(
     })))
 }
 
-/// PUT/DELETE /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/read
-/// — Canvas mark_submission_read / mark_submission_unread. The owner of the
-/// submission or a teacher/admin may flip the state; 204 on success.
 async fn mark_submission_read_state(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
@@ -2045,7 +2117,6 @@ async fn mark_submission_read_state(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// PUT .../submissions/{userId}/read — mark read.
 async fn mark_submission_read(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id_raw)): Path<(i64, i64, String)>,
@@ -2061,7 +2132,6 @@ async fn mark_submission_read(
     .await
 }
 
-/// DELETE .../submissions/{userId}/read — mark unread.
 async fn mark_submission_unread(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id_raw)): Path<(i64, i64, String)>,
@@ -2077,37 +2147,21 @@ async fn mark_submission_unread(
     .await
 }
 
-/// POST /courses/{courseId}/assignments/{assignmentId}/submissions/update_grades
-/// — Canvas `bulk_update` (grade_data[<user_id>][posted_grade]).
-///
-/// Deviation: Canvas enqueues the work and returns a pending Progress
-/// (tag "submissions_update"); star-lms has no progresses table, so the
-/// grades are applied synchronously and a completed Progress-shaped body is
-/// returned ({id: 0, context_id, context_type, tag, completion: 100,
-/// workflow_state: "completed"}).
 async fn bulk_update_grades(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
     auth: AuthUser,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Canvas reads `params[:grade_data]` first: a request without it is a
+    // 400 even for a caller who may not grade
+    // (`app/controllers/submissions_api_controller.rb:1388-1391`).
+    let grade_data = parse_grade_data(&body)?;
+
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
 
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
-
-    let payload: serde_json::Value = serde_json::from_slice(&body)
-        .map_err(|_| ApiError::BadRequest("'grade_data' parameter required".into()))?;
-    let grade_data = payload
-        .get("grade_data")
-        .and_then(|value| value.as_object())
-        .ok_or_else(|| ApiError::BadRequest("'grade_data' parameter required".into()))?;
-    if grade_data.is_empty() {
-        return Err(ApiError::BadRequest(
-            "'grade_data' parameter required".into(),
-        ));
-    }
+    // Canvas `SubmissionsApiController#update_grades` -> `manage_grades`.
+    require_course_permission(&state.db, auth.id, course_id, "manage_grades").await?;
 
     for (raw_user_id, entry) in grade_data {
         let user_id: i64 = raw_user_id
@@ -2172,9 +2226,6 @@ async fn bulk_update_grades(
     })))
 }
 
-/// PUT /courses/{courseId}/submissions/bulk_mark_read — marks the caller's
-/// own submissions in the course as read. Always 204 (Canvas ignores ids that
-/// belong to other users or other courses).
 async fn bulk_mark_read(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
@@ -2276,9 +2327,6 @@ impl AnonymousSubmission {
     }
 }
 
-/// PUT /courses/{courseId}/submissions/{id}/clear_unread — marks the
-/// submission read for the caller. Always 204, like Canvas' `clear_unread`
-/// (ids outside the course are silently ignored).
 async fn clear_unread(
     State(state): State<AppState>,
     Path((course_id, submission_id)): Path<(i64, i64)>,
@@ -2308,18 +2356,6 @@ async fn clear_unread(
 // Gradeable students + gradebook grid (Phase 5)
 // ---------------------------------------------------------------------------
 
-/// GET /courses/{courseId}/assignments/{assignmentId}/gradeable_students —
-/// Canvas `gradeable_students`: one `UserDisplay` per student with a
-/// submission row, or an `AnonymousUserDisplay` when the caller cannot view
-/// student names and `allow_new_anonymous_id` is passed. Requires
-/// manage_grades/view_all_grades (teachers/admins in star-lms).
-///
-/// `can_view_student_names?` parity (spec §6.1): names are hidden when the
-/// assignment `anonymize_students?` — anonymous grading on and (for the
-/// snapshot's non-moderated assignments) at least one active student has an
-/// unposted submission. Canvas models "unposted" as `posted_at IS NULL`; the
-/// Star snapshot has no `posted_at`, so an ungraded submission
-/// (`graded_at IS NULL`) is the equivalent gate.
 async fn gradeable_students(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -2328,9 +2364,10 @@ async fn gradeable_students(
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let assignment = load_moderated_assignment(&state.db, course_id, assignment_id).await?;
 
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `SubmissionsApiController#gradeable_students` ->
+    // `authorized_action(@context, @current_user, [:manage_grades,
+    // :view_all_grades])` (`app/controllers/submissions_api_controller.rb:1245`).
+    require_grading_right(&state.db, auth.id, course_id).await?;
 
     let (sort_by_name, descending, allow_new_anonymous_id, include_provisional_grades) =
         parse_gradeable_students_query(raw_query.as_deref());
@@ -2472,15 +2509,6 @@ async fn gradeable_students(
 // (Canvas routes.rb:1494, submissions_api_controller#multiple_gradeable_students)
 // ---------------------------------------------------------------------------
 
-/// GET /courses/{courseId}/assignments/gradeable_students — Canvas
-/// `multiple_gradeable_students`: one UserDisplay per gradeable student in
-/// the course, each carrying the `assignment_ids` visible to that student.
-///
-/// Requires manage_grades/view_all_grades (teachers/admins in star-lms).
-/// Canvas filters students through `AssignmentVisibility` for the requested
-/// `assignment_ids[]`; the snapshot has no per-student assignment-visibility
-/// overrides, so every course assignment is treated as visible and the
-/// filter narrows to the requested ids when provided.
 async fn multiple_gradeable_students(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
@@ -2495,9 +2523,12 @@ async fn multiple_gradeable_students(
         return Err(ApiError::NotFound);
     }
 
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `gradeable_students` needs `manage_grades` *or*
+    // `view_all_grades` (`app/controllers/submissions_api_controller.rb:1245`).
+    // `view_all_grades` carries `applies_to_concluded: true`
+    // (`config/initializers/permissions_registry.rb:1963`), so a concluded
+    // teacher keeps it — the shared permission layer applies that carve-out.
+    require_grading_right(&state.db, auth.id, course_id).await?;
 
     // assignment_ids[] filter (Canvas: Array(params[:assignment_ids]))
     let assignment_ids: Vec<i64> = raw_query
@@ -2593,7 +2624,6 @@ fn parse_gradeable_students_query(raw_query: Option<&str>) -> (bool, bool, bool,
     )
 }
 
-/// GET /courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}
 async fn show_anonymous_submission(
     State(state): State<AppState>,
     Path((course_id, assignment_id, anonymous_id)): Path<(i64, i64, String)>,
@@ -2620,8 +2650,6 @@ async fn show_anonymous_submission(
     Ok(Json(AnonymousSubmission::from_row(row, course_id)))
 }
 
-/// PUT /courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId} —
-/// grades the submission found by its anonymous id (Canvas `update_anonymous`).
 async fn update_anonymous_submission(
     State(state): State<AppState>,
     Path((course_id, assignment_id, anonymous_id)): Path<(i64, i64, String)>,
@@ -2676,9 +2704,6 @@ struct SectionRef {
     course_id: i64,
 }
 
-/// Load a section and return its course. Canvas' `get_course_from_section`
-/// (`api_find(CourseSection, params[:section_id])`) makes an unknown section a
-/// 404 before any course-scoped lookup happens.
 async fn load_section_course(pool: &PgPool, section_id: i64) -> Result<i64, ApiError> {
     let section: Option<SectionRef> =
         sqlx::query_as("SELECT course_id FROM course_sections WHERE id = $1")
@@ -2700,12 +2725,6 @@ fn parse_section_submissions_query(raw: Option<&str>) -> SubmissionListQuery {
     parse_list_query(raw)
 }
 
-/// GET /sections/{sectionId}/assignments/{assignmentId}/submissions —
-/// Canvas `submissions`, section-scoped.
-///
-/// Enrollments in the section are the source of truth for which students
-/// belong to this view. Teachers/admins see all section students; students
-/// only see their own submissions (like Canvas).
 async fn section_list_submissions(
     State(state): State<AppState>,
     Path((section_id, assignment_id)): Path<(i64, i64)>,
@@ -2801,12 +2820,6 @@ async fn section_list_submissions(
     Ok(Json(entries))
 }
 
-/// GET /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId} —
-/// Canvas `submission`, section-scoped.
-///
-/// Teachers/admins may view any student's submission; students may only view
-/// their own. Uses `get_user_considering_section` to scope the student to the
-/// section (404 when not in section).
 async fn section_get_submission(
     State(state): State<AppState>,
     Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
@@ -2882,17 +2895,12 @@ async fn section_get_submission(
     }
 }
 
-/// PUT /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId} —
-/// Canvas `update`, section-scoped.
-///
-/// The student's submission can only be updated by themselves or a teacher.
-/// Mirrors the course-level `grade_submission` pattern (save + grade).
 async fn section_update_submission(
     State(state): State<AppState>,
     Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
     RawQuery(_raw_query): RawQuery,
     auth: AuthUser,
-    Json(payload): Json<serde_json::Value>,
+    ApiJson(payload): ApiJson<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
@@ -2965,13 +2973,6 @@ async fn section_update_submission(
     Ok(Json(entry))
 }
 
-/// GET /sections/{sectionId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}
-/// — Canvas `show_anonymous`, section variant.
-///
-/// Canvas resolves the section to its course (`get_course_from_section`), then
-/// scopes the student lookup to the section via `get_user_considering_section`
-/// (`students.where(enrollments: { course_section_id: @section })`), so the
-/// submission must belong to a student enrolled in that section.
 async fn section_show_anonymous_submission(
     State(state): State<AppState>,
     Path((section_id, assignment_id, anonymous_id)): Path<(i64, i64, String)>,
@@ -3004,11 +3005,6 @@ async fn section_show_anonymous_submission(
     Ok(Json(AnonymousSubmission::from_row(row, course_id)))
 }
 
-/// PUT /sections/{sectionId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}
-/// — Canvas `update_anonymous`, section variant (grade update path).
-///
-/// Same resolution as the GET twin; Canvas `update_anonymous` funnels into the
-/// ordinary `update` action, whose `:grade` right means teachers/admins only.
 async fn section_update_anonymous_submission(
     State(state): State<AppState>,
     Path((section_id, assignment_id, anonymous_id)): Path<(i64, i64, String)>,
@@ -3061,21 +3057,15 @@ async fn section_update_anonymous_submission(
     Ok(Json(AnonymousSubmission::from_row(row, course_id)))
 }
 
-/// POST /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/files
-///
-/// Metadata-only attachment record (Canvas upload preflight + finalize in one
-/// call). Students upload for themselves; teachers/admins may upload on the
-/// student's behalf. Creates the submission row lazily like Canvas'
-/// `find_or_create_submission`.
 async fn create_submission_file(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id_raw)): Path<(i64, i64, String)>,
     auth: AuthUser,
-    Json(payload): Json<SubmissionFileRequest>,
+    ApiJson(payload): ApiJson<SubmissionFileRequest>,
 ) -> Result<(StatusCode, Json<SubmissionAttachment>), ApiError> {
     let user_id = resolve_user_id_param(&user_id_raw, auth.id)?;
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-    ensure_user_in_course(&state.db, course_id, user_id).await?;
+    ensure_student_in_course(&state.db, course_id, user_id).await?;
 
     if auth.id != user_id && !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
@@ -3153,7 +3143,6 @@ async fn create_submission_file(
 // Canvas nested route aliases
 // ---------------------------------------------------------------------------
 
-/// GET /courses/{courseId}/assignments/{id} — flat GET alias.
 async fn course_get_assignment(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -3163,7 +3152,6 @@ async fn course_get_assignment(
     get_assignment(State(state), Path(assignment_id), auth).await
 }
 
-/// PUT /courses/{courseId}/assignments/{id} — flat PUT alias.
 async fn course_update_assignment(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -3174,7 +3162,6 @@ async fn course_update_assignment(
     update_assignment(State(state), Path(assignment_id), auth, Json(payload)).await
 }
 
-/// DELETE /courses/{courseId}/assignments/{id} — flat DELETE alias.
 async fn course_delete_assignment(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -3184,7 +3171,6 @@ async fn course_delete_assignment(
     delete_assignment(State(state), Path(assignment_id), auth).await
 }
 
-/// GET /courses/{courseId}/assignments/{id}/submissions — flat list alias.
 async fn course_list_submissions(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -3194,7 +3180,6 @@ async fn course_list_submissions(
     list_submissions(State(state), Path(assignment_id), auth).await
 }
 
-/// POST /courses/{courseId}/assignments/{id}/submissions — flat submit alias.
 async fn course_create_submission(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -3205,22 +3190,11 @@ async fn course_create_submission(
     create_submission(State(state), Path(assignment_id), auth, Json(payload)).await
 }
 
-/// PUT /courses/{courseId}/assignments/{assignmentId}/submissions/{userId} —
-/// Canvas's per-user grading route. Accepts both the existing star-lms
-/// `{score}` payload and Canvas' `{submission: {posted_grade}}` shape, and
-/// creates the submission row when the student has not submitted yet
-/// (Canvas `find_or_create_submission`).
-///
-/// Canvas `submissions_api#update` moderation params (spec p5 slice F, #31):
-/// `submission[provisional]=true` routes the grade into a provisional grade
-/// row instead of the submission; `submission[final]` is honored only for
-/// moderators; a non-provisional `posted_grade` on a moderated, unpublished
-/// assignment is a 401 before any grading happens.
 async fn course_grade_submission(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id_raw)): Path<(i64, i64, String)>,
     auth: AuthUser,
-    Json(payload): Json<serde_json::Value>,
+    ApiJson(payload): ApiJson<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let user_id = resolve_user_id_param(&user_id_raw, auth.id)?;
     let assignment = load_moderated_assignment(&state.db, course_id, assignment_id).await?;
@@ -3247,12 +3221,11 @@ async fn course_grade_submission(
         }
     }
 
-    ensure_user_in_course(&state.db, course_id, user_id).await?;
+    ensure_student_in_course(&state.db, course_id, user_id).await?;
 
-    // Canvas requires :grade, i.e. manage_grades: teachers and admins only.
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas requires :grade, i.e. `manage_grades` on the course
+    // (`app/models/submission.rb:615-618`).
+    require_course_permission(&state.db, auth.id, course_id, "manage_grades").await?;
 
     if provisional {
         return grade_submission_provisional(
@@ -3309,10 +3282,6 @@ async fn course_grade_submission(
     Ok(Json(value))
 }
 
-/// The provisional branch of `PUT .../submissions/{userId}` (Canvas
-/// `Assignment#grade_student` with `provisional: true`): the submission row
-/// is created but never scored; the grade lands in a `provisional_grades`
-/// row owned by the scorer (or the single final grade for moderators).
 async fn grade_submission_provisional(
     state: AppState,
     assignment: ModeratedAssignment,
@@ -3464,9 +3433,6 @@ async fn grade_submission_provisional(
     Ok(Json(value))
 }
 
-/// Canvas `Assignment#ensure_grader_can_adjudicate` (provisional path):
-/// create or occupy the grader's moderation_graders slot; the grader limit
-/// rejects new graders once the slots are full.
 async fn ensure_grader_slot(
     pool: &PgPool,
     assignment: &ModeratedAssignment,
@@ -3515,8 +3481,6 @@ async fn ensure_grader_slot(
     Ok(())
 }
 
-/// Insert a moderation_graders row with a random 5-char alphanumeric
-/// anonymous id (Canvas `Anonymity.generate_id`), retrying on collisions.
 async fn insert_moderation_grader_slot(
     pool: &PgPool,
     assignment_id: i64,
@@ -3576,9 +3540,6 @@ fn format_points_grade(score: f64) -> String {
     }
 }
 
-/// Canvas `Submission#find_or_create_provisional_grade!` for the update
-/// route: upsert the scorer's non-final grade, or (for moderators) the
-/// submission's single final grade, enforcing the Canvas validations.
 async fn upsert_provisional_grade(
     pool: &PgPool,
     assignment: &ModeratedAssignment,
@@ -3747,9 +3708,6 @@ impl ModeratedAssignment {
     }
 }
 
-/// Load the moderation columns of an assignment inside a course. Canvas
-/// resolves the assignment with `api_find(@context.assignments, ...)`, so an
-/// unknown assignment (or one from another course) is a 404.
 async fn load_moderated_assignment(
     pool: &PgPool,
     course_id: i64,
@@ -3810,11 +3768,6 @@ async fn load_moderated_assignment(
     })
 }
 
-/// Canvas `Course#account_membership_allows(user, :select_final_grade)`: the
-/// user holds an account membership (`account_users`) on the course's account
-/// chain. Canvas's default AccountAdmin role carries `select_final_grade`
-/// (`config/initializers/permissions_registry.rb`); the snapshot has no
-/// account-role override layer yet, so membership alone grants the right.
 async fn account_membership_allows(
     pool: &PgPool,
     course_id: i64,
@@ -3848,8 +3801,6 @@ async fn account_membership_allows(
     Ok(row.is_some())
 }
 
-/// Canvas `AbstractAssignment#permits_moderation?(user)`: the final grader or
-/// an account admin with `:select_final_grade`.
 async fn permits_moderation(
     pool: &PgPool,
     assignment: &ModeratedAssignment,
@@ -3861,7 +3812,6 @@ async fn permits_moderation(
     account_membership_allows(pool, assignment.course_id, user_id).await
 }
 
-/// Canvas `AbstractAssignment#can_view_other_grader_identities?(user)`.
 async fn can_view_other_grader_identities(
     pool: &PgPool,
     assignment: &ModeratedAssignment,
@@ -3886,9 +3836,6 @@ async fn can_view_other_grader_identities(
     Ok(!assignment.graders_anonymous_to_graders)
 }
 
-/// Canvas `AbstractAssignment#moderated_grader_limit_reached?`: the count of
-/// slot-holding provisional graders (excluding the final grader) has reached
-/// `grader_count`.
 async fn moderated_grader_limit_reached(
     pool: &PgPool,
     assignment: &ModeratedAssignment,
@@ -3910,10 +3857,6 @@ async fn moderated_grader_limit_reached(
     Ok(taken >= i64::from(assignment.grader_count))
 }
 
-/// Canvas `AbstractAssignment#anonymize_students?` with the moderated branch:
-/// false unless `anonymous_grading`; for moderated assignments only while
-/// grades are unpublished; otherwise while any active student has an
-/// unposted submission.
 async fn assignment_anonymize_students_moderated(
     pool: &PgPool,
     assignment: &ModeratedAssignment,
@@ -3944,8 +3887,6 @@ async fn assignment_anonymize_students_moderated(
     Ok(unposted.is_some())
 }
 
-/// Canvas `AbstractAssignment#can_view_student_names?(user)`: false when
-/// students are anonymized, otherwise course grading rights.
 async fn can_view_student_names(
     pool: &PgPool,
     assignment: &ModeratedAssignment,
@@ -3958,9 +3899,6 @@ async fn can_view_student_names(
     check_teacher_or_admin(pool, user_id, assignment.course_id, auth).await
 }
 
-/// Canvas `AbstractAssignment#can_be_moderated_grader?(user)`: a grader with
-/// course grading rights, unless the grader limit is reached — then only the
-/// final grader or an existing moderation grader.
 async fn can_be_moderated_grader(
     pool: &PgPool,
     assignment: &ModeratedAssignment,
@@ -3986,7 +3924,6 @@ async fn can_be_moderated_grader(
     Ok(slot.is_some())
 }
 
-/// Canvas `assignment.grader_ids_to_anonymous_ids` (moderation_graders map).
 async fn grader_ids_to_anonymous_ids(
     pool: &PgPool,
     assignment_id: i64,
@@ -4093,9 +4030,6 @@ fn provisional_grade_json(
     json
 }
 
-/// Canvas `submission_provisional_grades_json` (lib/api/v1/submission.rb):
-/// moderators see every provisional grade (non-final by `created_at`, final
-/// last); other graders only see their own.
 async fn submission_provisional_grades_json(
     pool: &PgPool,
     course_id: i64,
@@ -4154,9 +4088,6 @@ async fn submission_provisional_grades_json(
     Ok(list)
 }
 
-/// The students visible to a course admin, including inactive ones (Canvas
-/// `students_visible_to(user, include: :inactive)` over
-/// `all_accepted_students`: student enrollments not rejected/deleted).
 async fn visible_student_ids(pool: &PgPool, course_id: i64) -> Result<Vec<i64>, ApiError> {
     let ids: Vec<i64> = sqlx::query_scalar(
         r#"
@@ -4171,10 +4102,6 @@ async fn visible_student_ids(pool: &PgPool, course_id: i64) -> Result<Vec<i64>, 
     Ok(ids)
 }
 
-/// Attach `provisional_grades` to a serialized submission when the
-/// assignment is a moderated one present in the include map (Canvas
-/// `submission_json`: the include is only honored for moderated
-/// assignments).
 async fn append_provisional_grades_include(
     pool: &PgPool,
     moderated_includes: &HashMap<i64, ModeratedAssignment>,
@@ -4294,9 +4221,6 @@ impl ModerationSetUser {
 const MODERATION_SET_USER_SELECT: &str =
     "SELECT u.id, u.name, u.sortable_name, u.email, u.role, u.created_at FROM users u";
 
-/// GET /courses/{courseId}/assignments/{assignmentId}/moderated_students —
-/// Canvas `ModerationSetController#index`: the students selected for
-/// moderation, ordered by id.
 async fn moderation_set_index(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -4321,10 +4245,6 @@ async fn moderation_set_index(
     Ok(Json(users))
 }
 
-/// POST /courses/{courseId}/assignments/{assignmentId}/moderated_students —
-/// Canvas `ModerationSetController#create`: add students to the moderation
-/// set incrementally; the response lists the requested students that are
-/// visible to the caller.
 async fn moderation_set_create(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -4406,8 +4326,6 @@ fn selection_json(
     }
 }
 
-/// Record a moderation event (Canvas `ModeratedGrading::Selection
-/// #create_moderation_event` → `AnonymousOrModerationEvent`).
 async fn create_moderation_event(
     pool: &PgPool,
     assignment_id: i64,
@@ -4434,8 +4352,6 @@ async fn create_moderation_event(
     Ok(())
 }
 
-/// Record a provisional-grade audit event (Canvas
-/// `ModeratedGrading::ProvisionalGrade` create/update audit events).
 async fn create_provisional_grade_event(
     pool: &PgPool,
     assignment_id: i64,
@@ -4475,8 +4391,6 @@ fn provisional_grade_event_payload(pg: &ProvisionalGradeRow) -> serde_json::Valu
     })
 }
 
-/// Select a provisional grade's row, restricted to one assignment (Canvas
-/// `@assignment.provisional_grades.find` → 404 on a foreign id).
 async fn find_provisional_grade(
     pool: &PgPool,
     assignment_id: i64,
@@ -4498,8 +4412,6 @@ async fn find_provisional_grade(
     Ok(pg)
 }
 
-/// PUT /courses/{courseId}/assignments/{assignmentId}/provisional_grades/
-/// {provisionalGradeId}/select — Canvas `ProvisionalGradesController#select`.
 async fn provisional_grades_select(
     State(state): State<AppState>,
     Path((course_id, assignment_id, provisional_grade_id)): Path<(i64, i64, i64)>,
@@ -4579,10 +4491,6 @@ async fn provisional_grades_select(
     Ok(Json(json).into_response())
 }
 
-/// PUT /courses/{courseId}/assignments/{assignmentId}/provisional_grades/
-/// bulk_select — Canvas `ProvisionalGradesController#bulk_select`: select a
-/// provisional grade for several students at once; only changed selections
-/// are returned (and generate moderation events).
 async fn provisional_grades_bulk_select(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -4735,9 +4643,6 @@ fn parse_query_value(raw_query: Option<&str>, key: &str) -> Option<String> {
     None
 }
 
-/// GET .../provisional_grades/status and .../anonymous_provisional_grades/
-/// status — Canvas `ProvisionalGradesBaseController#status` (the two
-/// controllers differ only in how the submission is located).
 async fn provisional_grades_status_common(
     state: AppState,
     course_id: i64,
@@ -4892,8 +4797,6 @@ async fn provisional_grades_status_common(
     Ok(Json(json).into_response())
 }
 
-/// GET .../provisional_grades/status — Canvas
-/// `ProvisionalGradesController#status`.
 async fn provisional_grades_status(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -4918,8 +4821,6 @@ async fn provisional_grades_status(
     .await
 }
 
-/// GET .../anonymous_provisional_grades/status — Canvas
-/// `AnonymousProvisionalGradesController#status`.
 async fn anonymous_provisional_grades_status(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -4957,9 +4858,6 @@ impl PublishGrade {
     }
 }
 
-/// POST /courses/{courseId}/assignments/{assignmentId}/provisional_grades/
-/// publish — Canvas `ProvisionalGradesController#publish`: publish the
-/// selected provisional grade of every submission (irreversible).
 async fn provisional_grades_publish(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -5151,7 +5049,6 @@ fn parse_peer_review_query(raw_query: Option<&str>) -> PeerReviewQuery {
     query
 }
 
-/// Canvas `user_display_json` (id + display_name) for the include[]=user case.
 async fn user_display(pool: &PgPool, user_id: i64) -> Result<serde_json::Value, ApiError> {
     let row: Option<(String,)> = sqlx::query_as(r#"SELECT name FROM users WHERE id = $1"#)
         .bind(user_id)
@@ -5162,8 +5059,6 @@ async fn user_display(pool: &PgPool, user_id: i64) -> Result<serde_json::Value, 
         .unwrap_or(serde_json::Value::Null))
 }
 
-/// Fetch the submission, verify it belongs to the assignment, and return it.
-/// Canvas `peer_review_assets` raises RecordNotFound on a mismatch (404).
 async fn ensure_submission_in_assignment(
     pool: &PgPool,
     assignment_id: i64,
@@ -5181,8 +5076,6 @@ async fn ensure_submission_in_assignment(
     Ok((user_id, submission_id))
 }
 
-/// Select all peer reviews for an assignment, optionally narrowed to one
-/// submission (Canvas `for_asset`).
 async fn select_peer_reviews(
     pool: &PgPool,
     assignment_id: i64,
@@ -5204,10 +5097,6 @@ async fn select_peer_reviews(
     Ok(rows)
 }
 
-/// GET /courses/{courseId}/assignments/{assignmentId}/peer_reviews and
-/// GET .../submissions/{submissionId}/peer_reviews — Canvas `index`.
-/// Teachers/admins see every review; students only see reviews of their own
-/// submissions (`for_assessee`).
 async fn list_peer_reviews(
     State(state): State<AppState>,
     Path(path): Path<Vec<i64>>,
@@ -5283,11 +5172,6 @@ async fn list_peer_reviews(
     Ok(Json(entries))
 }
 
-/// POST /courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
-/// — Canvas `create`. The submission is lazily created for its owner like
-/// Canvas' `find_or_create_submission`; the reviewer (user_id param) must be
-/// an active student in the course. 400 "Create failed" when the reviewer is
-/// the submission owner.
 async fn create_peer_review(
     State(state): State<AppState>,
     Path((course_id, assignment_id, submission_id)): Path<(i64, i64, i64)>,
@@ -5415,9 +5299,6 @@ fn parse_peer_review_user_id(body: &[u8]) -> Result<i64, ApiError> {
     Err(ApiError::BadRequest("user_id is required".into()))
 }
 
-/// DELETE /courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
-/// — Canvas `destroy`. 400 "Delete failed" when no review matches the
-/// (submission, reviewer, assessee) triple.
 async fn destroy_peer_review(
     State(state): State<AppState>,
     Path((course_id, assignment_id, submission_id)): Path<(i64, i64, i64)>,
@@ -5474,7 +5355,6 @@ async fn destroy_peer_review(
     })))
 }
 
-/// Render peer review rows with the shared `index` shape (include[]=user).
 async fn render_peer_reviews(
     pool: &PgPool,
     query: &PeerReviewQuery,
@@ -5499,9 +5379,6 @@ async fn render_peer_reviews(
     Ok(entries)
 }
 
-/// GET /sections/{sectionId}/assignments/{assignmentId}/peer_reviews and
-/// GET .../submissions/{submissionId}/peer_reviews — Canvas `index` twins.
-/// `get_course_from_section` resolves the course before the shared index.
 async fn list_section_peer_reviews(
     State(state): State<AppState>,
     Path(path): Path<Vec<i64>>,
@@ -5517,8 +5394,6 @@ async fn list_section_peer_reviews(
     list_peer_reviews(State(state), Path(resolved), RawQuery(raw_query), auth).await
 }
 
-/// POST /sections/{sectionId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
-/// — Canvas `create` twin for a section context.
 async fn create_section_peer_review(
     State(state): State<AppState>,
     Path((section_id, assignment_id, submission_id)): Path<(i64, i64, i64)>,
@@ -5537,8 +5412,6 @@ async fn create_section_peer_review(
     .await
 }
 
-/// DELETE /sections/{sectionId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews
-/// — Canvas `destroy` twin for a section context.
 async fn destroy_section_peer_review(
     State(state): State<AppState>,
     Path((section_id, assignment_id, submission_id)): Path<(i64, i64, i64)>,
@@ -5555,13 +5428,6 @@ async fn destroy_section_peer_review(
     .await
 }
 
-/// POST /courses/{courseId}/assignments/{assignmentId}/allocate
-///
-/// Canvas `PeerReviewsApiController#allocate` backed by
-/// `PeerReview::AllocationService`: the calling student is allocated other
-/// students' submissions to review until the assignment's
-/// `peer_review_count` is reached. The response contains the caller's
-/// ongoing (incomplete) reviews plus the newly allocated ones.
 async fn allocate_peer_review(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -5709,7 +5575,6 @@ async fn allocate_peer_review(
 // Assignment overrides (Canvas AssignmentOverridesController)
 // ---------------------------------------------------------------------------
 
-/// GET /courses/{courseId}/assignments/{assignmentId}/overrides
 async fn list_assignment_overrides(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -5737,7 +5602,6 @@ async fn list_assignment_overrides(
     Ok(Json(rows))
 }
 
-/// POST /courses/{courseId}/assignments/{assignmentId}/overrides
 async fn create_assignment_override(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -5785,8 +5649,6 @@ async fn create_assignment_override(
     Ok((StatusCode::CREATED, Json(row)))
 }
 
-/// Shared implementation behind
-/// `GET /courses/{courseId}/assignments/{assignmentId}/overrides/{id}`.
 async fn get_assignment_override(
     State(state): State<AppState>,
     Path(override_id): Path<i64>,
@@ -5796,8 +5658,6 @@ async fn get_assignment_override(
     Ok(Json(row))
 }
 
-/// Shared implementation behind
-/// `PUT /courses/{courseId}/assignments/{assignmentId}/overrides/{id}`.
 async fn update_assignment_override(
     State(state): State<AppState>,
     Path(override_id): Path<i64>,
@@ -5851,9 +5711,6 @@ async fn update_assignment_override(
     Ok(Json(updated))
 }
 
-/// Shared implementation behind
-/// `DELETE /courses/{courseId}/assignments/{assignmentId}/overrides/{id}` —
-/// Canvas soft-deletes and returns the former override details with a 200.
 async fn delete_assignment_override(
     State(state): State<AppState>,
     Path(override_id): Path<i64>,
@@ -5879,7 +5736,6 @@ async fn delete_assignment_override(
 
 // --- Canvas nested aliases (course + assignment scoped) --------------------
 
-/// GET /courses/{courseId}/assignments/{assignmentId}/overrides/{id}
 async fn course_get_assignment_override(
     State(state): State<AppState>,
     Path((course_id, assignment_id, override_id)): Path<(i64, i64, i64)>,
@@ -5890,7 +5746,6 @@ async fn course_get_assignment_override(
     get_assignment_override(State(state), Path(override_id), auth).await
 }
 
-/// PUT /courses/{courseId}/assignments/{assignmentId}/overrides/{id}
 async fn course_update_assignment_override(
     State(state): State<AppState>,
     Path((course_id, assignment_id, override_id)): Path<(i64, i64, i64)>,
@@ -5902,7 +5757,6 @@ async fn course_update_assignment_override(
     update_assignment_override(State(state), Path(override_id), auth, Json(payload)).await
 }
 
-/// DELETE /courses/{courseId}/assignments/{assignmentId}/overrides/{id}
 async fn course_delete_assignment_override(
     State(state): State<AppState>,
     Path((course_id, assignment_id, override_id)): Path<(i64, i64, i64)>,
@@ -5919,8 +5773,6 @@ async fn course_delete_assignment_override(
 // group_alias / section_alias; issue #55)
 // ---------------------------------------------------------------------------
 
-/// Canvas `require_context` + `api_find(Course.active, ...)`: a missing or
-/// soft-deleted course is a 404 before any permission check runs.
 async fn ensure_course_not_deleted(pool: &PgPool, course_id: i64) -> Result<(), ApiError> {
     let row: Option<(i32,)> =
         sqlx::query_as("SELECT 1 FROM courses WHERE id = $1 AND workflow_state <> 'deleted'")
@@ -6083,11 +5935,8 @@ fn parse_batch_entry(value: &serde_json::Value) -> BatchOverrideEntry {
 
 /// Outcome of Canvas `deserialize_overrides` for a JSON request.
 enum DeserializedOverrides {
-    /// Nothing usable was supplied.
     Blank,
-    /// A truthy non-array (scalar / malformed map).
     NotAnArray,
-    /// An ordered list of entries.
     Entries(Vec<serde_json::Value>),
 }
 
@@ -6156,8 +6005,6 @@ enum ResolvedBatchTarget {
     Section(i64),
 }
 
-/// Validate an ad-hoc `student_ids` list against active student enrollments
-/// (Canvas `api_find_all(learning_object.context.all_students, ...)`).
 async fn validate_batch_student_ids(
     pool: &PgPool,
     course_id: i64,
@@ -6196,9 +6043,6 @@ async fn validate_batch_student_ids(
     Ok(Ok(enrolled))
 }
 
-/// Resolve the create-time target of a batch entry: `student_ids` >
-/// `group_id` > `course_section_id`, with Canvas' error strings. Dates are
-/// parsed separately and only their parse errors are reported here.
 async fn resolve_batch_target(
     pool: &PgPool,
     course_id: i64,
@@ -6254,10 +6098,6 @@ fn title_from_student_count(count: usize) -> String {
     }
 }
 
-/// Overrides of an assignment visible to the caller (Canvas
-/// `AssignmentOverrideApplicator.overrides_for_assignment_and_user`):
-/// teachers/admins see every active override; students only see overrides
-/// that target them (ad-hoc list, their groups, their sections).
 async fn visible_override_ids(
     pool: &PgPool,
     course_id: i64,
@@ -6304,7 +6144,6 @@ async fn visible_override_ids(
     Ok(ids.into_iter().collect())
 }
 
-/// Fetch active overrides by id.
 async fn fetch_overrides_by_ids(
     pool: &PgPool,
     ids: &[i64],
@@ -6327,12 +6166,6 @@ async fn fetch_overrides_by_ids(
     Ok(rows.into_iter().map(|row| (row.id, row)).collect())
 }
 
-/// GET /courses/{courseId}/assignments/overrides — Canvas
-/// `batch_retrieve`. Query entries arrive in Rails form encoding
-/// (`assignment_overrides[][id]=..&assignment_overrides[][assignment_id]=..`
-/// or the indexed `assignment_overrides[0][..]` spelling) and are answered
-/// in request order with `null` for unknown assignments, unknown overrides
-/// and overrides the caller cannot see.
 async fn batch_retrieve_assignment_overrides(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
@@ -6508,11 +6341,6 @@ async fn batch_retrieve_assignment_overrides(
     Ok((StatusCode::OK, Json(serde_json::Value::Array(values))))
 }
 
-/// Shared validation for `batch_create` / `batch_update` (Canvas
-/// `interpret_batch_assignment_overrides_data`). Returns per-entry error
-/// strings aligned with the request (`None` marks a valid entry), the parsed
-/// entries, the resolved targets (create; or an adhoc update's replacement
-/// set), and — for updates — the current override rows.
 async fn interpret_batch_entries(
     pool: &PgPool,
     course_id: i64,
@@ -6647,8 +6475,6 @@ async fn interpret_batch_entries(
     Ok((errors, parsed, targets, existing))
 }
 
-/// POST /courses/{courseId}/assignments/overrides — Canvas `batch_create`.
-/// Transactional: every override is created or none are.
 async fn batch_create_assignment_overrides(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
@@ -6758,10 +6584,6 @@ async fn batch_create_assignment_overrides(
     Ok((StatusCode::OK, Json(serde_json::Value::Array(values))))
 }
 
-/// PUT /courses/{courseId}/assignments/overrides — Canvas `batch_update`.
-/// Transactional: every override is updated or none are. Omitted date fields
-/// clear the override (Canvas `clear_*_override`); an adhoc override without
-/// `student_ids` keeps its target set.
 async fn batch_update_assignment_overrides(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
@@ -6865,9 +6687,6 @@ async fn batch_update_assignment_overrides(
     Ok((StatusCode::OK, Json(serde_json::Value::Array(values))))
 }
 
-/// Shared alias implementation (Canvas `group_alias` / `section_alias`):
-/// resolve the set's course, require course read + assignment, then 302 to
-/// the canonical override URL — 404 when no visible override targets the set.
 async fn assignment_override_alias(
     pool: &PgPool,
     course_id: i64,
@@ -6919,8 +6738,6 @@ async fn assignment_override_alias(
     ))
 }
 
-/// GET /groups/{groupId}/assignments/{assignmentId}/override — Canvas
-/// `group_alias`: 302 to the override for that group, 404 otherwise.
 async fn group_assignment_override_alias(
     State(state): State<AppState>,
     Path((group_id, assignment_id)): Path<(i64, i64)>,
@@ -6945,8 +6762,6 @@ async fn group_assignment_override_alias(
     .await
 }
 
-/// GET /sections/{sectionId}/assignments/{assignmentId}/override — Canvas
-/// `section_alias`: 302 to the override for that section, 404 otherwise.
 async fn section_assignment_override_alias(
     State(state): State<AppState>,
     Path((section_id, assignment_id)): Path<(i64, i64)>,
@@ -6978,13 +6793,6 @@ async fn section_assignment_override_alias(
 // provisional grading routes live above via main's implementations).
 // ---------------------------------------------------------------------------
 
-/// POST .../courses/:course_id/assignments/:assignment_id/extensions — Canvas
-/// AssignmentExtensionsController#create. The body carries an array of
-/// `{user_id, extra_attempts}`; Canvas stores extra attempts on the
-/// student's submission row (there is no assignment_extensions table) and
-/// answers 200 with `{assignment_extensions: [...]}`. Entries whose user has
-/// no submission yet are skipped from the response (Canvas only updates
-/// `@context.submissions.where(...)`); invalid payloads are 400s.
 async fn create_assignment_extension(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -7071,11 +6879,6 @@ async fn create_assignment_extension(
     })))
 }
 
-/// POST .../sections/:section_id/assignments/:assignment_id/submissions — the
-/// section twin of submissions#create (Canvas routes.rb generates the same
-/// route for sections and courses). Resolves the section to its course,
-/// requires the caller to be enrolled in the section, then runs the same
-/// upsert as the course-level create_submission.
 async fn section_create_submission(
     State(state): State<AppState>,
     Path((section_id, assignment_id)): Path<(i64, i64)>,
@@ -7134,14 +6937,6 @@ async fn section_create_submission(
 // accessibility_scan / accessibility_queue_scan; issue #55)
 // ---------------------------------------------------------------------------
 
-/// GET /users/{userId}/courses/{courseId}/assignments — Canvas `user_index`:
-/// the course's assignments as visible to the target user. Canvas
-/// `require_user_visibility` allows the caller when they are the target
-/// ("self" or matching id), a teacher/admin of the course viewing one of its
-/// students, or a global admin. (Observer pairings have no Star equivalent —
-/// the enrollments schema carries no `associated_user_id`.) The target user
-/// must then be able to read the course (Canvas
-/// `authorized_action(@context, @user, :read)`).
 async fn user_index_assignments(
     State(state): State<AppState>,
     Path((user_id, course_id)): Path<(String, i64)>,
@@ -7228,12 +7023,6 @@ async fn user_index_assignments(
     Ok(Json(rows))
 }
 
-/// GET /courses/{courseId}/assignments/{assignmentId}/users/{userId}/group_members
-/// — Canvas `student_group_members`: `{id, name}` BasicUser entries for the
-/// group the student belongs to. Star assignments carry no
-/// `group_category_id`, so Canvas' `group_students` always falls to the
-/// `[student]` branch (rspec
-/// "returns an array with the student only if not a group assignment").
 async fn student_group_members(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
@@ -7325,13 +7114,6 @@ fn duplicate_copy_title(title: &str, course_conflicts: &[String]) -> String {
     }
 }
 
-/// POST /courses/{courseId}/assignments/{assignmentId}/duplicate — Canvas
-/// `duplicate`: copies the assignment inside its course (or, with
-/// `target_course_id`, into another course the caller may add assignments
-/// to), answering the new assignment plus `new_positions` for its group.
-/// Star assignments have no `position` column, so positions are derived from
-/// id order within the group (Canvas moves the copy below the target
-/// assignment; the response keeps the documented shape).
 async fn duplicate_assignment(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -7512,12 +7294,6 @@ async fn duplicate_assignment(
     Ok((StatusCode::OK, Json(value)))
 }
 
-/// PUT /courses/{courseId}/assignments/bulk_update — Canvas `bulk_update`:
-/// date updates for a list of assignments, applied synchronously (Star has
-/// no job worker) and answered with the Canvas Progress shape — the same
-/// convention as the landed `update_grades` route. `all_dates` entries
-/// update the base assignment (`due_at`; Star assignments carry no
-/// unlock_at/lock_at columns) or the named override (full date triple).
 async fn bulk_update_assignments(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
@@ -7665,12 +7441,6 @@ async fn bulk_update_assignments(
     })))
 }
 
-/// POST /courses/{courseId}/assignments/{assignmentId}/retry_alignment_clone
-/// — Canvas `retry_alignment_clone` only proceeds when the target assignment
-/// sits in the `failed_to_clone_outcome_alignment` duplication state. Star
-/// assignments have no duplication workflow states (and no Outcomes service
-/// to re-clone alignments), so the state guard rejects every representable
-/// request with Canvas' exact error body.
 async fn retry_alignment_clone(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -7719,13 +7489,6 @@ async fn retry_alignment_clone(
     ))
 }
 
-/// Shared accessibility-scan implementation (Canvas
-/// `accessibility_scan` / `accessibility_queue_scan`): course-content
-/// management rights, then the account's a11y checker flags, then the
-/// assignment — the same gate order as Canvas. Star has no a11y rule
-/// engine, so the completed scan reports zero issues (shape parity with
-/// `accessibility_resource_scan_json`; the scan id mirrors Canvas'
-/// one-scan-per-resource record).
 async fn assignment_accessibility_scan(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -7818,8 +7581,6 @@ async fn assignment_accessibility_scan(
     })))
 }
 
-/// POST /courses/{courseId}/assignments/{assignmentId}/accessibility/scan
-/// — Canvas `accessibility_scan` (synchronous scan).
 async fn assignment_accessibility_scan_sync(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -7828,9 +7589,6 @@ async fn assignment_accessibility_scan_sync(
     assignment_accessibility_scan(State(state), Path((course_id, assignment_id)), auth).await
 }
 
-/// POST /courses/{courseId}/assignments/{assignmentId}/accessibility/queue_scan
-/// — Canvas `accessibility_queue_scan` (queued scan; Star applies it
-/// synchronously, like every other Progress-returning route).
 async fn assignment_accessibility_queue_scan(
     State(state): State<AppState>,
     Path((course_id, assignment_id)): Path<(i64, i64)>,
@@ -7864,9 +7622,7 @@ const UNREAD_ANNOTATIONS_KEY: &str = "unread_submission_annotations";
 /// The read state families of the submission routes.
 #[derive(Debug, Clone, Copy)]
 enum ReadStateKind {
-    /// `rubric_comments/read` and `rubric_assessments/read`.
     Rubric,
-    /// `document_annotations/read`.
     Annotations,
 }
 
@@ -7885,7 +7641,6 @@ fn submission_global_id(submission_id: i64) -> String {
     format!("submission-{submission_id}")
 }
 
-/// The submission of an assignment and a student (404 when there is none).
 async fn find_submission(pool: &PgPool, assignment_id: i64, user_id: i64) -> Result<i64, ApiError> {
     let row: Option<(i64,)> =
         sqlx::query_as("SELECT id FROM submissions WHERE assignment_id = $1 AND user_id = $2")
@@ -7896,7 +7651,6 @@ async fn find_submission(pool: &PgPool, assignment_id: i64, user_id: i64) -> Res
     row.map(|(id,)| id).ok_or(ApiError::NotFound)
 }
 
-/// Canvas `User#unread_submission_annotations?` / `unread_rubric_assessments?`.
 async fn submission_unread_preference(
     pool: &PgPool,
     user_id: i64,
@@ -7921,8 +7675,6 @@ async fn submission_unread_preference(
         .unwrap_or(false))
 }
 
-/// Canvas `User#mark_submission_annotations_read!` / `mark_rubric_assessments_read!`:
-/// the flag is removed from the preference hash.
 async fn clear_submission_unread_preference(
     pool: &PgPool,
     user_id: i64,
@@ -7974,25 +7726,22 @@ fn bulk_update_progress(
 
 /// The `grade_data` of a bulk update.
 fn parse_grade_data(body: &Bytes) -> Result<serde_json::Map<String, serde_json::Value>, ApiError> {
-    let payload: serde_json::Value = serde_json::from_slice(body)
-        .map_err(|_| ApiError::BadRequest("'grade_data' parameter required".into()))?;
+    // Canvas answers a missing or empty `grade_data` with a 400 and a single
+    // `error` key of its own
+    // (`app/controllers/submissions_api_controller.rb:1388-1391`).
+    let missing =
+        || ApiError::canvas_error(StatusCode::BAD_REQUEST, "'grade_data' parameter required");
+    let payload: serde_json::Value = serde_json::from_slice(body).map_err(|_| missing())?;
     let grade_data = payload
         .get("grade_data")
         .and_then(|value| value.as_object())
-        .ok_or_else(|| ApiError::BadRequest("'grade_data' parameter required".into()))?;
+        .ok_or_else(missing)?;
     if grade_data.is_empty() {
-        return Err(ApiError::BadRequest(
-            "'grade_data' parameter required".into(),
-        ));
+        return Err(missing());
     }
     Ok(grade_data.clone())
 }
 
-/// Canvas `Submission.process_bulk_update` — apply the grades.
-///
-/// `assignment_id` is the assignment of the path when there is one; then the
-/// map is `{ user_id => { ... } }` for that assignment. Otherwise the map is
-/// `{ assignment_id => { user_id => { ... } } }`.
 async fn apply_bulk_grade_data(
     state: &AppState,
     auth: &AuthUser,
@@ -8133,18 +7882,18 @@ async fn apply_bulk_grade_data(
     Ok(())
 }
 
-/// POST /courses/{courseId}/submissions/update_grades — Canvas `bulk_update`
-/// for a whole course: `grade_data` is `{ assignment_id => { user_id => ... } }`.
 async fn course_bulk_update_grades(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
+    // Canvas reads `params[:grade_data]` before it checks the permission
+    // (`app/controllers/submissions_api_controller.rb:1388-1391`).
+    let grade_data = parse_grade_data(&body)?;
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
-    let grade_data = parse_grade_data(&body)?;
     apply_bulk_grade_data(&state, &auth, course_id, None, None, &grade_data).await?;
     Ok(Json(bulk_update_progress(
         course_id,
@@ -8154,8 +7903,6 @@ async fn course_bulk_update_grades(
     )))
 }
 
-/// POST /sections/{sectionId}/submissions/update_grades — Canvas `bulk_update`
-/// for a section.
 async fn section_bulk_update_grades(
     State(state): State<AppState>,
     Path(section_id): Path<i64>,
@@ -8163,10 +7910,12 @@ async fn section_bulk_update_grades(
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
+    // Canvas reads `params[:grade_data]` before it checks the permission
+    // (`app/controllers/submissions_api_controller.rb:1388-1391`).
+    let grade_data = parse_grade_data(&body)?;
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
-    let grade_data = parse_grade_data(&body)?;
     apply_bulk_grade_data(
         &state,
         &auth,
@@ -8184,8 +7933,6 @@ async fn section_bulk_update_grades(
     )))
 }
 
-/// POST /sections/{sectionId}/assignments/{assignmentId}/submissions/update_grades
-/// — Canvas `bulk_update` for one assignment of a section.
 async fn section_bulk_update_assignment_grades(
     State(state): State<AppState>,
     Path((section_id, assignment_id)): Path<(i64, i64)>,
@@ -8193,11 +7940,13 @@ async fn section_bulk_update_assignment_grades(
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
+    // Canvas reads `params[:grade_data]` before it checks the permission
+    // (`app/controllers/submissions_api_controller.rb:1388-1391`).
+    let grade_data = parse_grade_data(&body)?;
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
     ensure_assignment_in_course(&state.db, course_id, assignment_id).await?;
-    let grade_data = parse_grade_data(&body)?;
     apply_bulk_grade_data(
         &state,
         &auth,
@@ -8215,8 +7964,6 @@ async fn section_bulk_update_assignment_grades(
     )))
 }
 
-/// PUT /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/read
-/// — Canvas `mark_submission_read` for a section.
 async fn section_mark_submission_read(
     State(state): State<AppState>,
     Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
@@ -8233,8 +7980,6 @@ async fn section_mark_submission_read(
     .await
 }
 
-/// DELETE /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/read
-/// — Canvas `mark_submission_unread` for a section.
 async fn section_mark_submission_unread(
     State(state): State<AppState>,
     Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
@@ -8251,9 +7996,6 @@ async fn section_mark_submission_unread(
     .await
 }
 
-/// Canvas `mark_submission_item_read` — mark one item of a submission read.
-///
-/// Items are `grade`, `comment` and `rubric`.
 async fn mark_submission_item_read_for(
     state: &AppState,
     auth: &AuthUser,
@@ -8293,8 +8035,6 @@ async fn mark_submission_item_read_for(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// PUT /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/read/{item}
-/// — Canvas `mark_submission_item_read`.
 async fn course_mark_submission_item_read(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id, item)): Path<(i64, i64, i64, String)>,
@@ -8303,8 +8043,6 @@ async fn course_mark_submission_item_read(
     mark_submission_item_read_for(&state, &auth, course_id, assignment_id, user_id, &item).await
 }
 
-/// PUT /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/read/{item}
-/// — Canvas `mark_submission_item_read` for a section.
 async fn section_mark_submission_item_read(
     State(state): State<AppState>,
     Path((section_id, assignment_id, user_id, item)): Path<(i64, i64, i64, String)>,
@@ -8315,9 +8053,6 @@ async fn section_mark_submission_item_read(
     mark_submission_item_read_for(&state, &auth, course_id, assignment_id, user_id, &item).await
 }
 
-/// PUT /sections/{sectionId}/submissions/bulk_mark_read — Canvas
-/// `mark_bulk_submissions_as_read` for a section. Only the caller's own
-/// submissions are marked.
 async fn section_bulk_mark_read(
     State(state): State<AppState>,
     Path(section_id): Path<i64>,
@@ -8353,8 +8088,6 @@ async fn section_bulk_mark_read(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// PUT /sections/{sectionId}/submissions/{userId}/clear_unread — Canvas
-/// `submissions_clear_unread` for a section. Site-admin only.
 async fn section_submissions_clear_unread(
     State(state): State<AppState>,
     Path((section_id, user_id)): Path<(i64, i64)>,
@@ -8385,8 +8118,6 @@ async fn section_submissions_clear_unread(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Canvas `rubric_assessments_read_state` / `document_annotations_read_state` —
-/// the read state of the submission for the student it belongs to.
 async fn submission_read_state(
     state: &AppState,
     auth: &AuthUser,
@@ -8409,8 +8140,6 @@ async fn submission_read_state(
     Ok(Json(serde_json::json!({ "read": !unread })))
 }
 
-/// Canvas `mark_rubric_assessments_read` / `mark_document_annotations_read` —
-/// only the student who owns the submission may mark it read.
 async fn mark_submission_read_family(
     state: &AppState,
     auth: &AuthUser,
@@ -8432,8 +8161,6 @@ async fn mark_submission_read_family(
     Ok(Json(serde_json::json!({ "read": true })))
 }
 
-/// GET /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/rubric_assessments/read
-/// — Canvas `rubric_assessments_read_state`.
 async fn course_rubric_assessments_read_state(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
@@ -8450,8 +8177,6 @@ async fn course_rubric_assessments_read_state(
     .await
 }
 
-/// PUT /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/rubric_assessments/read
-/// — Canvas `mark_rubric_assessments_read`.
 async fn course_mark_rubric_assessments_read(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
@@ -8468,8 +8193,6 @@ async fn course_mark_rubric_assessments_read(
     .await
 }
 
-/// GET /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/document_annotations/read
-/// — Canvas `document_annotations_read_state`.
 async fn course_document_annotations_read_state(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
@@ -8486,8 +8209,6 @@ async fn course_document_annotations_read_state(
     .await
 }
 
-/// PUT /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/document_annotations/read
-/// — Canvas `mark_document_annotations_read`.
 async fn course_mark_document_annotations_read(
     State(state): State<AppState>,
     Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
@@ -8504,8 +8225,6 @@ async fn course_mark_document_annotations_read(
     .await
 }
 
-/// GET /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/rubric_assessments/read
-/// — Canvas `rubric_assessments_read_state` for a section.
 async fn section_rubric_assessments_read_state(
     State(state): State<AppState>,
     Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
@@ -8524,8 +8243,6 @@ async fn section_rubric_assessments_read_state(
     .await
 }
 
-/// PUT /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/rubric_assessments/read
-/// — Canvas `mark_rubric_assessments_read` for a section.
 async fn section_mark_rubric_assessments_read(
     State(state): State<AppState>,
     Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
@@ -8544,8 +8261,6 @@ async fn section_mark_rubric_assessments_read(
     .await
 }
 
-/// GET /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/document_annotations/read
-/// — Canvas `document_annotations_read_state` for a section.
 async fn section_document_annotations_read_state(
     State(state): State<AppState>,
     Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
@@ -8564,8 +8279,6 @@ async fn section_document_annotations_read_state(
     .await
 }
 
-/// PUT /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/document_annotations/read
-/// — Canvas `mark_document_annotations_read` for a section.
 async fn section_mark_document_annotations_read(
     State(state): State<AppState>,
     Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
@@ -8584,8 +8297,6 @@ async fn section_mark_document_annotations_read(
     .await
 }
 
-/// GET /sections/{sectionId}/students/submissions — Canvas `for_students` for
-/// a section: the submissions of the students of the section.
 async fn section_for_students(
     State(state): State<AppState>,
     Path(section_id): Path<i64>,
@@ -8625,13 +8336,11 @@ async fn section_for_students(
     Ok(Json(serde_json::Value::Array(filtered)))
 }
 
-/// POST /sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}/files
-/// — Canvas `create_file` for a section.
 async fn section_create_submission_file(
     State(state): State<AppState>,
     Path((section_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
     auth: AuthUser,
-    Json(payload): Json<SubmissionFileRequest>,
+    ApiJson(payload): ApiJson<SubmissionFileRequest>,
 ) -> Result<(StatusCode, Json<SubmissionAttachment>), ApiError> {
     let course_id = load_section_course(&state.db, section_id).await?;
     ensure_section_user(&state.db, section_id, user_id).await?;
@@ -8639,13 +8348,11 @@ async fn section_create_submission_file(
         State(state),
         Path((course_id, assignment_id, user_id.to_string())),
         auth,
-        Json(payload),
+        ApiJson(payload),
     )
     .await
 }
 
-/// GET /sections/{sectionId}/assignments/{assignmentId}/submission_summary —
-/// Canvas `submission_summary` for a section.
 async fn section_submission_summary(
     State(state): State<AppState>,
     Path((section_id, assignment_id)): Path<(i64, i64)>,
@@ -8655,16 +8362,14 @@ async fn section_submission_summary(
     submission_summary(State(state), Path((course_id, assignment_id)), auth).await
 }
 
-/// Build the assignments router.
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(module_assignment_overrides::module_assignment_overrides_routes())
         // Course-level assignment routes
         .route(
             "/courses/{courseId}/assignments",
-            get(list_course_assignments),
+            get(list_course_assignments).post(create_assignment),
         )
-        .route("/courses/{courseId}/assignments", post(create_assignment))
         // Assignment-level routes
         .route("/assignments/{id}", get(get_assignment))
         .route("/assignments/{id}", put(update_assignment))
@@ -8682,7 +8387,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}",
-            get(get_student_submission),
+            get(get_student_submission).put(course_grade_submission),
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/files",
@@ -8695,11 +8400,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/read",
-            put(mark_submission_read),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/read",
-            delete(mark_submission_unread),
+            put(mark_submission_read).delete(mark_submission_unread),
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/update_grades",
@@ -8722,31 +8423,19 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
-            get(show_anonymous_submission),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
-            put(update_anonymous_submission),
+            get(show_anonymous_submission).put(update_anonymous_submission),
         )
         // Anonymous submissions: section twins (spec p5 slice E, #30)
         .route(
             "/sections/{sectionId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
-            get(section_show_anonymous_submission),
-        )
-        .route(
-            "/sections/{sectionId}/assignments/{assignmentId}/anonymous_submissions/{anonymousId}",
-            put(section_update_anonymous_submission),
+            get(section_show_anonymous_submission).put(section_update_anonymous_submission),
         )
         // Moderated / provisional grading (Canvas ModerationSetController,
         // ProvisionalGradesController, AnonymousProvisionalGradesController,
         // spec p5 slice F, #31)
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/moderated_students",
-            get(moderation_set_index),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/moderated_students",
-            post(moderation_set_create),
+            get(moderation_set_index).post(moderation_set_create),
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/provisional_grades/status",
@@ -8775,15 +8464,9 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
-            get(list_peer_reviews),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
-            post(create_peer_review),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{submissionId}/peer_reviews",
-            delete(destroy_peer_review),
+            get(list_peer_reviews)
+                .post(create_peer_review)
+                .delete(destroy_peer_review),
         )
         // Canvas peer_reviews_api section twins (`get_course_from_section`).
         .route(
@@ -8809,62 +8492,46 @@ pub fn router() -> Router<AppState> {
         // Canvas v1 nested aliases (same handlers, course-scoped paths)
         .route(
             "/courses/{courseId}/assignments/{id}",
-            get(course_get_assignment),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{id}",
-            put(course_update_assignment),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{id}",
-            delete(course_delete_assignment),
+            get(course_get_assignment)
+                .put(course_update_assignment)
+                .delete(course_delete_assignment),
         )
         .route(
             "/courses/{courseId}/assignments/{id}/submissions",
-            get(course_list_submissions),
+            get(course_list_submissions).post(course_create_submission),
         )
-        .route(
-            "/courses/{courseId}/assignments/{id}/submissions",
-            post(course_create_submission),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}",
-            put(course_grade_submission),
-        )
+        // Canvas serves `submissions/self` through the same route as
+        // `submissions/:user_id` (`lib/api.rb` maps the literal `self` to
+        // the caller), so the `{user_id}` route below answers both. The
+        // separate `self` route answered with the old handler, which
+        // answered 403 where Canvas answers 404 and 404 where Canvas
+        // synthesizes the unsubmitted record.
+
         // Assignment overrides — Canvas nested paths
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/overrides",
-            get(list_assignment_overrides),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/overrides",
-            post(create_assignment_override),
+            get(list_assignment_overrides).post(create_assignment_override),
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/overrides/{id}",
-            get(course_get_assignment_override),
+            get(course_get_assignment_override)
+                .put(course_update_assignment_override)
+                .delete(course_delete_assignment_override),
         )
+        // Assignment overrides — flat routes
         .route(
-            "/courses/{courseId}/assignments/{assignmentId}/overrides/{id}",
-            put(course_update_assignment_override),
-        )
-        .route(
-            "/courses/{courseId}/assignments/{assignmentId}/overrides/{id}",
-            delete(course_delete_assignment_override),
+            "/assignment_overrides/{id}",
+            get(get_assignment_override)
+                .put(update_assignment_override)
+                .delete(delete_assignment_override),
         )
         // Assignment overrides — batch routes (Canvas
         // AssignmentOverridesController#batch_*, issue #55)
         .route(
             "/courses/{courseId}/assignments/overrides",
-            get(batch_retrieve_assignment_overrides),
-        )
-        .route(
-            "/courses/{courseId}/assignments/overrides",
-            post(batch_create_assignment_overrides),
-        )
-        .route(
-            "/courses/{courseId}/assignments/overrides",
-            put(batch_update_assignment_overrides),
+            get(batch_retrieve_assignment_overrides)
+                .post(batch_create_assignment_overrides)
+                .put(batch_update_assignment_overrides),
         )
         // Assignment overrides — group/section aliases (#55)
         .route(
@@ -8990,11 +8657,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}",
-            get(section_get_submission),
-        )
-        .route(
-            "/sections/{sectionId}/assignments/{assignmentId}/submissions/{userId}",
-            put(section_update_submission),
+            get(section_get_submission).put(section_update_submission),
         )
     // Read state routes — /courses/{courseId}/submissions/{id}/read/{item}
     // Course read state routes (for rubric/assignment/quiz)

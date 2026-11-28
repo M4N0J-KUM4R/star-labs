@@ -27,6 +27,10 @@ use std::sync::{Mutex, OnceLock};
 
 use star_common::{ApiError, AppState, Claims};
 
+pub mod access_token;
+
+pub use access_token::{hashed_token, is_api_request, AccessTokenAuth, HINT_LENGTH};
+
 // ---------------------------------------------------------------------------
 // Login attempt throttling (issue #106 security pass)
 // ---------------------------------------------------------------------------
@@ -142,11 +146,12 @@ pub fn login_rate_limiter() -> &'static LoginRateLimiter {
 
 /// Authenticated user extracted from the Authorization: Bearer *** header.
 ///
-/// The JWT is decoded and verified against `AppState.jwt_secret`; the user's
-/// current role is then loaded from PostgreSQL by the token's `sub` claim.
-/// The role claim inside the token is never trusted: it may be stale (roles
-/// can change after login) and a signed token is not an authorization
-/// record. Users that no longer exist are rejected.
+/// The bearer token is resolved the way Canvas resolves it: from the
+/// `access_tokens` row it belongs to (`lib/authentication_methods.rb:144-177`).
+/// The user comes from that row and the role from the `users` table — the
+/// role claim of the port's own session token is never trusted: it may be
+/// stale (roles can change after login) and a signed token is not an
+/// authorization record. Users that no longer exist are rejected.
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub id: i64,
@@ -175,40 +180,117 @@ where
             .strip_prefix("Bearer ")
             .ok_or(ApiError::Unauthorized)?;
 
-        // Verify the signed token against the shared secret from app state.
-        // No environment fallback: the secret is injected once at startup.
-        let claims = decode::<Claims>(
-            token,
-            &DecodingKey::from_secret(app.jwt_secret.as_bytes()),
-            &Validation::default(),
-        )
-        .map_err(|_| ApiError::Unauthorized)?
-        .claims;
-
-        // Load the user's current role from the database. The token's role
-        // claim is advisory only and never used for authorization; users
-        // deleted since the token was minted are rejected.
-        let (role, last_logged_out): (String, Option<chrono::DateTime<chrono::Utc>>) =
-            sqlx::query_as("SELECT role, last_logged_out FROM users WHERE id = $1")
-                .bind(claims.sub)
-                .fetch_optional(&app.db)
-                .await
-                .map_err(ApiError::from)?
-                .ok_or(ApiError::Unauthorized)?;
-
-        // Tokens minted before the last logout are no longer valid. The
-        // token lifetime is fixed by create_token, so issued-at is derived
-        // from exp without adding another claim.
-        let issued_at = claims.exp as i64 - TOKEN_EXPIRY_SECS as i64;
-        if last_logged_out.is_some_and(|last| issued_at < last.timestamp()) {
-            return Err(ApiError::Unauthorized);
-        }
+        let path = request_path(parts);
+        let auth = resolve_bearer(&app.db, &app.jwt_secret, token, &path)
+            .await?
+            .ok_or(ApiError::Unauthorized)?;
 
         Ok(AuthUser {
-            id: claims.sub,
-            role,
+            id: auth.user_id,
+            role: auth.role,
         })
     }
+}
+
+/// The path Canvas would see for the request.
+///
+/// axum's `nest` strips the mount prefix from the URI the nested router
+/// sees — the API router is mounted under `/api/v1`, so the handler sees
+/// `/accounts/6` where the client asked for `/api/v1/accounts/6`. Canvas
+/// decides whether a request is an API request from the path the client
+/// asked for (`app/controllers/application_controller.rb:2357-2359`), so the
+/// original path is the one to use.
+fn request_path(parts: &Parts) -> String {
+    parts
+        .extensions
+        .get::<axum::extract::OriginalUri>()
+        .map(|original| original.0.path().to_string())
+        .unwrap_or_else(|| parts.uri.path().to_string())
+}
+
+/// The caller a bearer token resolves to.
+#[derive(Debug, Clone)]
+pub struct BearerAuth {
+    /// The user the request acts as.
+    pub user_id: i64,
+    /// The user's current role, read from the `users` table.
+    pub role: String,
+    /// The `access_tokens` row the token came from, when it is one. This is
+    /// the `at` of the `x-canvas-meta` header
+    /// (`lib/authentication_methods.rb:173`).
+    pub access_token_id: Option<i64>,
+    /// The developer key the access token was issued for — the `dk` of the
+    /// header (`lib/authentication_methods.rb:174`).
+    pub developer_key_id: Option<i64>,
+}
+
+/// Resolve the caller a bearer token names.
+///
+/// Canvas resolves the caller from the `access_tokens` row the token belongs
+/// to (`lib/authentication_methods.rb:144-177`), and only for API requests
+/// (`app/controllers/application_controller.rb:2357-2359`). The port does the
+/// same: a token that names a usable row is the caller, and the row's ids
+/// are what the `x-canvas-meta` header carries.
+///
+/// The port's own signed session token is still accepted as a fallback. It is
+/// not Canvas's model — Canvas has no JWT session for the API — but it is
+/// what `/auth/login` hands out and what the committed integration tests
+/// authenticate with, so it stays until those move to access tokens.
+pub async fn resolve_bearer(
+    db: &PgPool,
+    secret: &str,
+    token: &str,
+    path: &str,
+) -> Result<Option<BearerAuth>, ApiError> {
+    if access_token::skips_authentication(path) {
+        // Canvas answers this action without a caller
+        // (`app/controllers/users_controller.rb:106`).
+        return Ok(None);
+    }
+
+    if access_token::is_api_request(path) {
+        if let Some(auth) = access_token::authenticate(db, secret, token).await? {
+            return Ok(Some(BearerAuth {
+                user_id: auth.user_id,
+                role: auth.role,
+                access_token_id: Some(auth.id),
+                developer_key_id: auth.developer_key_id,
+            }));
+        }
+    }
+
+    // The port's own session token: a signed JWT with the user id in `sub`.
+    // Verified against the shared secret from app state. No environment
+    // fallback: the secret is injected once at startup.
+    let Some(claims) = verify_token(token, secret) else {
+        return Ok(None);
+    };
+
+    // Load the user's current role from the database. The token's role
+    // claim is advisory only and never used for authorization; users
+    // deleted since the token was minted are rejected.
+    let (role, last_logged_out): (String, Option<DateTime<Utc>>) =
+        sqlx::query_as("SELECT role, last_logged_out FROM users WHERE id = $1")
+            .bind(claims.sub)
+            .fetch_optional(db)
+            .await
+            .map_err(ApiError::from)?
+            .ok_or(ApiError::Unauthorized)?;
+
+    // Tokens minted before the last logout are no longer valid. The
+    // token lifetime is fixed by create_token, so issued-at is derived
+    // from exp without adding another claim.
+    let issued_at = claims.exp as i64 - TOKEN_EXPIRY_SECS as i64;
+    if last_logged_out.is_some_and(|last| issued_at < last.timestamp()) {
+        return Ok(None);
+    }
+
+    Ok(Some(BearerAuth {
+        user_id: claims.sub,
+        role,
+        access_token_id: None,
+        developer_key_id: None,
+    }))
 }
 
 // ---------------------------------------------------------------------------
@@ -1017,7 +1099,7 @@ const PERSONAL_TOKEN_SELECT: &str = r#"
 
 /// First `TOKEN_HINT_LENGTH` characters of a token (Canvas `token_hint`).
 fn token_hint(token: &str) -> String {
-    token.chars().take(TOKEN_HINT_LENGTH).collect()
+    access_token::token_hint(token)
 }
 
 /// Parse Canvas `token[expires_at]`: an ISO8601/RFC3339 timestamp, with a
@@ -1241,6 +1323,10 @@ async fn create_user_token(
     let scopes = params.scopes.map(StringList::into_vec).unwrap_or_default();
     let token = generate_opaque_token(32);
     let hint = token_hint(&token);
+    // Canvas stores the token hashed, never in the clear
+    // (app/models/access_token.rb:312-315); the hash is what the caller is
+    // resolved from.
+    let crypted = hashed_token(&token, &app.jwt_secret);
     // Canvas: creating a token for someone else marks it pending until the
     // user activates it (tokens#create, `unless @context == logged_in_user`).
     let workflow_state = if target != auth.id {
@@ -1252,14 +1338,15 @@ async fn create_user_token(
     let id: i64 = sqlx::query_scalar(
         r#"
         INSERT INTO access_tokens
-            (user_id, developer_key_id, token, token_hint, purpose, scopes,
-             permanent_expires_at, remember_access, workflow_state)
-        VALUES ($1, NULL, $2, $3, $4, $5, $6, FALSE, $7)
+            (user_id, developer_key_id, token, crypted_token, token_hint, purpose,
+             scopes, permanent_expires_at, workflow_state)
+        VALUES ($1, NULL, $2, $3, $4, $5, $6, $7, $8)
         RETURNING id
         "#,
     )
     .bind(target)
     .bind(&token)
+    .bind(&crypted)
     .bind(&hint)
     .bind(purpose)
     .bind(scopes)
@@ -2226,6 +2313,10 @@ async fn grant_client_credentials(
         return oauth_error_dynamic(StatusCode::BAD_REQUEST, "invalid_scope", missing.join(" "));
     }
 
+    // Canvas signs the client-credentials token with the developer key
+    // (`access_token: key.issue_token(claims)`,
+    // lib/canvas/oauth/client_credentials_provider.rb:21). It is a JWT, not a
+    // stored opaque token, and no access_tokens row is created.
     let host = headers
         .get(HOST)
         .and_then(|value| value.to_str().ok())
@@ -2266,6 +2357,10 @@ async fn grant_client_credentials(
         .into_response()
 }
 
+/// DELETE /login/oauth2/token — Canvas `oauth2_provider#destroy`
+/// (oauth2_provider_controller.rb:216-232). Revokes the OAuth access token
+/// the request is authenticated with; anything else (session JWTs, unknown
+/// strings) gets Canvas's 400 message.
 /// DELETE /login/oauth2/token — Canvas `oauth2_provider#destroy`
 /// (oauth2_provider_controller.rb:216-232). Revokes the OAuth access token
 /// the request is authenticated with; anything else (session JWTs, unknown

@@ -1,1 +1,1 @@
-{"errors":[{"message":"The specified resource does not exist."}]}
+{"id":[..],"created_at":"2026-11-27T15:[..]:[..]","updated_at":"2026-11-27T15:[..]:[..]","parent_id":1,"rating_count":null,"rating_sum":null,"user_id":1,"user_name":"Parity User","message":null,"user":{"id":1,"anonymous_id":"1","display_name":"Parity User","avatar_image_url":"http://127.0.0.1:[..]/images/messages/avatar-50.png","html_url":"http://127.0.0.1:[..]/courses/1/users/1","pronouns":null},"read_state":"read","forced_read_state":false}

@@ -170,15 +170,18 @@ async fn unauthenticated_request_is_rejected_with_401() {
     };
 
     // POST without an Authorization header: rejected before execution, so the
-    // body must NOT be a GraphQL response (no "data"/"errors" JSON shape).
+    // body must NOT be a GraphQL response. Canvas' REST 401 body is
+    // `{"status":"unauthenticated","errors":[{"message":"user authorization
+    // required"}]}` (star-common's `ApiError`), which has no `data` key —
+    // that is what distinguishes it from a GraphQL error response.
     let resp = server
         .post("/api/graphql")
         .json(&json!({ "query": "{ __typename }" }))
         .await;
     assert_eq!(resp.status_code(), 401, "body: {}", resp.text());
     assert!(
-        !resp.text().contains("\"errors\""),
-        "unauthenticated must not be a GraphQL error: {}",
+        !resp.text().contains("\"data\""),
+        "unauthenticated must not be a GraphQL response: {}",
         resp.text()
     );
 

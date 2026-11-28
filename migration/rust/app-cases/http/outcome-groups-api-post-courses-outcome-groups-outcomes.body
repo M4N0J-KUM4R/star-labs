@@ -1,1 +1,1 @@
-{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
+{"errors":{"short_description":[{"attribute":"short_description","message":"can't be blank","type":"blank"}]}}

@@ -6,14 +6,15 @@ path = "/api/v1/accounts/6/lti_registrations/by_utid/:utid"
 Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
-status = 403
+status = 404
 
 [response.headers]
 cache-control = "no-cache"
+content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
 content-type = "application/json; charset=utf-8"
 referrer-policy = "no-referrer-when-downgrade"
 set-cookie = "[..]"
-x-canvas-meta = "at=10000000000007;dk=10000000000001;o=lti/registrations;n=show_by_utid;b=2067028;m=2067028;u=0.[..];y=0.00;d=0.00;rlr=600.0;"
+x-canvas-meta = "at=10000000000007;dk=10000000000001;o=lti/registrations;n=show_by_utid;t=Account;i=6;b=2074132;m=2074132;u=0.02;y=0.00;d=0.00;rlr=600.0;"
 x-canvas-user-id = "10000000000001"
 x-content-type-options = "nosniff"
 x-download-options = "noopen"

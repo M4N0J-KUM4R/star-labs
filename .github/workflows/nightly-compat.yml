@@ -55,9 +55,17 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      available: ${{ steps.gate.outputs.available }}
+      available: ${{ steps.migrate.outputs.available || steps.gate.outputs.available }}
     env:
       DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
+      # The port's migrations assume `public`: the trigram index names
+      # `public.gin_trgm_ops`, and the extension the index needs is created
+      # in the first schema of the search_path. Postgres' default search_path
+      # is `"$user", public`, and on Supabase the role's own schema comes
+      # first — so the extension would land outside `public` and the index
+      # would not resolve. The lane pins the path for the migration and for
+      # the legs, so both agree on where the tables are.
+      PGOPTIONS: "-c search_path=public"
     steps:
       - name: Check secret
         id: gate
@@ -78,6 +86,40 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends postgresql-client
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT current_schema()"
+      - name: Make the test schema match the tree
+        id: migrate
+        # sqlx records the SHA-384 of every migration file it applies
+        # (sqlx-core/src/migrate/migration.rs), and refuses to run when a
+        # file changed after it was applied. A migration edited after the
+        # long-lived test schema applied it takes the whole lane down with
+        # `VersionMismatch` — which is how this lane has been failing.
+        #
+        # The test schema is a fixture, not data: every test seeds and tears
+        # down its own rows. So when the schema disagrees with the tree the
+        # lane rebuilds it and measures the tree. The rebuild is logged, and
+        # it only happens when the disagreement is real.
+        if: steps.gate.outputs.available == 'true'
+        run: |
+          set +e
+          python3 tools/ci/migration_state.py \
+            --migrations migration/crates/star-db/migrations \
+            --reset \
+            --apply
+          status=$?
+          set -e
+          if [ "$status" = "0" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          elif [ "$status" = "3" ]; then
+            # This database cannot hold the port's schema (the trigram index
+            # needs the pg_trgm extension in `public`, and this instance keeps
+            # its extensions in `extensions`). The Supabase compatibility lane
+            # does not run; the coverage lane still does, against PostgreSQL 16.
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::the Supabase compatibility lane cannot migrate the port's schema on this instance; it did not run"
+            echo "Supabase compatibility lane: did not run — this instance keeps its extensions outside \`public\`, and the port's trigram index needs them there." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$status" != "0" ]; then
+            exit "$status"
+          fi
 
   # ---------------------------------------------------------------------------
   # Shard map: every workspace crate except star-http is assigned to exactly
@@ -106,6 +148,11 @@ jobs:
               -p star-accounts -p star-api -p star-common -p star-dashboard
               -p star-learning-dates -p star-modules -p star-notifications
               -p star-pages
+              # The crate wave's new crates. Three of them carry no test
+              # file of their own, so they cost this leg almost nothing; the
+              # leg was the lightest of the four by test volume.
+              -p star-canvas-response -p star-proxy -p star-storage
+              -p star-worker
           - shard: 3
             crates: >-
               -p star-audit -p star-content -p star-courses -p star-db
@@ -123,6 +170,9 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
       STAR_JWT_SECRET: nightly-supabase-test-secret
+      # The same search path the preflight migrated with — see the note in
+      # the preflight's environment.
+      PGOPTIONS: "-c search_path=public"
     defaults:
       run:
         working-directory: migration

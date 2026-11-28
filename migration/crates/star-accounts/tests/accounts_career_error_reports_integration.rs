@@ -25,6 +25,13 @@ use serde_json::{json, Value};
 use sqlx::PgPool;
 use star_common::AppState;
 
+/// The root account's settings are shared by every test in this file, and
+/// the career flag and the quiz IP filters are both root account settings.
+/// The tests that touch them take this lock so they do not run into each
+/// other.
+static ROOT_SETTINGS: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
 fn run_prefix() -> String {
     use std::sync::atomic::{AtomicU32, Ordering};
     static N: AtomicU32 = AtomicU32::new(0);
@@ -347,7 +354,7 @@ async fn the_course_and_horizon_account_lists_answer_the_accounts_of_the_caller(
 }
 
 #[tokio::test]
-async fn the_bulk_user_routes_answer_a_progress_object() {
+async fn the_bulk_user_routes_ask_for_the_permission_canvas_asks_for() {
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -358,27 +365,30 @@ async fn the_bulk_user_routes_answer_a_progress_object() {
     seed_account_admin(&pool, account, admin).await;
     seed_account_admin(&pool, account, member).await;
 
-    // The bulk update suspends the membership.
+    // Both bulk routes ask for `manage_users_in_bulk`
+    // (`app/controllers/accounts_controller.rb:1885` and `:1920`), and that
+    // permission is gated on the root account's
+    // `horizon_bulk_api_permission` feature
+    // (`config/initializers/permissions_registry.rb`), which is off by
+    // default — so the request is refused, for an account admin too. The
+    // recorded corpus says the same: both routes answer 403.
     let resp = server
         .put(&format!("/accounts/{account}/users/bulk_update"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .json(&json!({ "user": { "event": "suspend" } }))
         .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let progress: Value = resp.json();
-    assert_eq!(progress["tag"], "update_multiple_users");
-    assert_eq!(progress["context_type"], "Account");
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
+    let denied: Value = resp.json();
+    assert_eq!(denied["status"], "unauthorized", "{denied}");
 
-    // The remove route answers a progress object too.
+    // The remove route refuses the same way.
     let resp = server
         .delete(&format!("/accounts/{account}/users?user_ids[]={member}"))
         .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
         .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
-    let progress: Value = resp.json();
-    assert_eq!(progress["tag"], "remove_users_from_account");
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
 
-    // The membership is gone.
+    // Nothing changed: the memberships are still there.
     let left: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM account_users WHERE account_id = $1 AND user_id = $2",
     )
@@ -387,9 +397,12 @@ async fn the_bulk_user_routes_answer_a_progress_object() {
     .fetch_one(&pool)
     .await
     .expect("count the memberships");
-    assert_eq!(left, 0);
+    assert_eq!(
+        left, 1,
+        "a refused bulk update must not touch the memberships"
+    );
 
-    // A caller without the right is a 403.
+    // A caller without the right is a 403 as well.
     let resp = server
         .put(&format!("/accounts/{account}/users/bulk_update"))
         .add_header(axum::http::header::AUTHORIZATION, auth(member, "student"))
@@ -451,6 +464,7 @@ async fn only_the_root_account_restores_a_user() {
 
 #[tokio::test]
 async fn the_quiz_ip_filters_come_from_the_account_settings() {
+    let _settings = ROOT_SETTINGS.lock().await;
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -600,6 +614,7 @@ async fn the_user_scoped_notification_aliases_are_scoped_to_the_caller() {
 
 #[tokio::test]
 async fn the_career_routes_follow_the_root_account_flag() {
+    let _settings = ROOT_SETTINGS.lock().await;
     let Some((server, pool, prefix)) = setup().await else {
         println!("SKIP: DATABASE_URL not set");
         return;
@@ -612,6 +627,15 @@ async fn the_career_routes_follow_the_root_account_flag() {
     .fetch_one(&pool)
     .await
     .expect("read the root account settings");
+
+    // The career flag lives on the root account, so the test starts from a
+    // root account without it: a run that failed half way through would
+    // otherwise leave the flag on for the next one. The original settings
+    // are restored at the end of the test.
+    sqlx::query("UPDATE accounts SET settings = '{}'::jsonb WHERE parent_account_id IS NULL")
+        .execute(&pool)
+        .await
+        .expect("clear the root account settings");
 
     // Without a career affiliated root account the feature is off.
     let resp = server

@@ -837,6 +837,9 @@ async fn can_create_conferences(
             let Some((Some(course_id),)) = course else {
                 return Ok(false);
             };
+            // A group resolves to its course, so the recursion is one level
+            // deep. The compiler cannot prove that, so the recursive call is
+            // boxed: an async fn that calls itself needs indirection.
             // Box the recursive Group → Course delegation (E0733: async
             // recursion requires boxing).
             Box::pin(can_create_conferences(db, auth, Context::Course(course_id))).await
@@ -1940,14 +1943,14 @@ async fn for_user(
 async fn recording_ready_course(
     State(state): State<AppState>,
     Path((course_id, conference_id)): Path<(i64, i64)>,
-    raw_query: RawQuery,
+    RawQuery(raw_query): RawQuery,
     body: Bytes,
 ) -> Result<Response, ApiError> {
     recording_ready(
         &state,
         Context::Course(course_id),
         conference_id,
-        raw_query.0.as_deref(),
+        raw_query.as_deref(),
         &body,
     )
     .await
@@ -1957,14 +1960,14 @@ async fn recording_ready_course(
 async fn recording_ready_group(
     State(state): State<AppState>,
     Path((group_id, conference_id)): Path<(i64, i64)>,
-    raw_query: RawQuery,
+    RawQuery(raw_query): RawQuery,
     body: Bytes,
 ) -> Result<Response, ApiError> {
     recording_ready(
         &state,
         Context::Group(group_id),
         conference_id,
-        raw_query.0.as_deref(),
+        raw_query.as_deref(),
         &body,
     )
     .await

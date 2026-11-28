@@ -1,0 +1,23 @@
+# Migrations edited after they were added — known debt, and a ratchet.
+#
+# sqlx records the SHA-384 of every migration file it applies
+# (sqlx-core/src/migrate/migration.rs) and refuses to run against a database
+# whose recorded checksum differs: `VersionMismatch`. An edited migration
+# therefore breaks every database that has applied it — which is how the
+# nightly's Supabase lane failed, on version 223.
+#
+# Every entry here is a file that was changed after it had already been
+# applied somewhere. The repair is the same in each case: restore the file
+# to the bytes of the commit that introduced it, and put the intended change
+# in a new migration. Each repair removes its entry, and the list only ever
+# gets shorter.
+#
+# Format: NNNN_name.sql  reason
+
+0104_peer_reviews.sql  the asset_id foreign key was repointed from assignments to submissions
+0131_smart_search.sql  the progress column was changed from REAL to DOUBLE PRECISION
+0223_canvas_schema_tables_a.sql  created_at/updated_at gained DEFAULT now()
+0224_canvas_schema_tables_b.sql  created_at/updated_at gained DEFAULT now()
+0225_canvas_schema_tables_c.sql  created_at/updated_at gained DEFAULT now()
+0233_course_paces.sql  published_at became timestamptz and the pace presenter carries the enrollment id
+0241_course_reports.sql  the course_reports table was given its columns, defaults and indexes

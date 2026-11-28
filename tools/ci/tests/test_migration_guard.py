@@ -8,17 +8,22 @@ tests.
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+import migration_guard  # noqa: E402
 
 from migration_guard import (  # noqa: E402
     DEFAULT_ALLOWLIST,
     check,
     find_destructive,
+    known_edit_debt,
     main,
     strip_sql_comments,
 )
@@ -225,6 +230,52 @@ class MigrationGuardTests(unittest.TestCase):
         self.write(self.head, "0100_b.sql", "TRUNCATE TABLE y;\n")
         self.assertEqual(main(["--head", str(self.head)]), 1)
 
+    # -- [edited] ------------------------------------------------------------
+    #
+    # sqlx records the SHA-384 of every migration file it applies and
+    # refuses to run when the file changed (`VersionMismatch`). An edited
+    # migration therefore breaks every database that has applied it — which
+    # is how the nightly's Supabase lane was failing.
+
+    def _git_repo(self) -> Path:
+        """A git repository with one committed migration."""
+        root = Path(self._tmp.name) / "repo"
+        (root / "migrations").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.email", "t@e.local"], check=True)
+        subprocess.run(["git", "-C", str(root), "config", "user.name", "t"], check=True)
+        (root / "migrations" / "0001_core.sql").write_text(GOOD_SQL)
+        subprocess.run(["git", "-C", str(root), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(root), "commit", "-qm", "add"], check=True)
+        return root
+
+    def test_edited_migration_fails(self) -> None:
+        root = self._git_repo()
+        (root / "migrations" / "0001_core.sql").write_text(GOOD_SQL + "\n-- edited later\n")
+        errors, _ = check(root / "migrations", None, root)
+        self.assertTrue(any(e.startswith("[edited]") for e in errors), errors)
+
+    def test_unchanged_migration_passes(self) -> None:
+        root = self._git_repo()
+        errors, _ = check(root / "migrations", None, root)
+        self.assertEqual(errors, [])
+
+    def test_a_new_migration_is_not_an_edit(self) -> None:
+        root = self._git_repo()
+        (root / "migrations" / "0002_new.sql").write_text(GOOD_SQL)
+        errors, _ = check(root / "migrations", None, root)
+        self.assertEqual(errors, [])
+
+    def test_known_debt_is_reported_but_does_not_fail(self) -> None:
+        root = self._git_repo()
+        (root / "migrations" / "0001_core.sql").write_text(GOOD_SQL + "\n-- edited later\n")
+        with mock.patch.object(migration_guard, "DEFAULT_EDIT_ALLOWLIST",
+                               Path(self._tmp.name) / "edit_allowlist.txt") as allowlist:
+            allowlist.write_text("0001_core.sql  known debt\n")
+            errors, _ = check(root / "migrations", None, root)
+            self.assertEqual(errors, [])
+            debt = known_edit_debt(root / "migrations", root)
+            self.assertEqual(len(debt), 1, debt)
 
 if __name__ == "__main__":
     unittest.main()

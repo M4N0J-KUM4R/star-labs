@@ -46,7 +46,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -56,7 +56,7 @@ use sqlx::PgPool;
 use url::Url;
 
 use star_auth::AuthUser;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 
 use crate::{can_manage_account, is_admin};
 
@@ -708,7 +708,9 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{course_id}/external_tools/{id}",
-            get(show_course_tool),
+            get(show_course_tool)
+                .put(update_course_tool)
+                .delete(delete_course_tool),
         )
         .route(
             "/accounts/{account_id}/external_tools",
@@ -723,10 +725,6 @@ pub fn router() -> Router<AppState> {
             get(all_visible_nav_tools),
         )
         // New: update / delete (routes 1-4)
-        .route(
-            "/courses/{course_id}/external_tools/{id}",
-            put(update_course_tool).delete(delete_course_tool),
-        )
         // Route 15: GET show (API path) — Canvas routes.rb:1704 nests show
         // under the account scope as well; account reads are admin-gated,
         // matching list_account_tools.
@@ -876,16 +874,22 @@ async fn show_course_tool(
 /// `GET /accounts/{account_id}/external_tools/{id}` — show one account tool
 /// (brief route 15, `external_tools#show` API path). Account-scoped reads are
 /// admin-gated, mirroring `list_account_tools`.
+///
+/// Canvas looks the tool up **before** it authorizes the request
+/// (external_tools_controller.rb:938-941: `Lti::ContextToolFinder...find`
+/// raises `RecordNotFound` -> `404`), so a tool that does not exist answers
+/// `404` and not `403`. The lookup keeps that order here; the account
+/// permission is still required for a tool that does exist.
 async fn show_account_tool(
     State(state): State<AppState>,
     Path((account_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
     require_account(&state.db, account_id).await?;
+    let tool = find_account_tool(&state.db, account_id, id).await?;
     if !can_manage_account(&state.db, &auth, account_id).await? {
         return Err(ApiError::Forbidden);
     }
-    let tool = find_account_tool(&state.db, account_id, id).await?;
     let favorites = rce_favorite_ids(&state.db, "Account", account_id).await?;
     let top_nav = top_nav_favorite_ids(&state.db, "Account", account_id).await?;
     let is_top_nav = has_placement(&tool.tool_configuration, "top_navigation")
@@ -950,7 +954,7 @@ async fn create_course_tool(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateToolRequest>,
+    ApiJson(payload): ApiJson<CreateToolRequest>,
 ) -> Result<Response, ApiError> {
     require_course(&state.db, course_id).await?;
     if !can_manage_course_tools(&state.db, &auth, course_id).await? {
@@ -981,7 +985,7 @@ async fn create_account_tool(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateToolRequest>,
+    ApiJson(payload): ApiJson<CreateToolRequest>,
 ) -> Result<Response, ApiError> {
     require_account(&state.db, account_id).await?;
     if !can_manage_account(&state.db, &auth, account_id).await? {
@@ -1328,9 +1332,19 @@ async fn delete_course_tool(
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
     require_course(&state.db, course_id).await?;
-    if !can_manage_course_tools(&state.db, &auth, course_id).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `delete_tool` asks for `:delete` on the tool
+    // (`app/controllers/external_tools_controller.rb:2144`), which the
+    // ContextExternalTool policy grants when the context grants
+    // `manage_lti_delete` (`app/models/context_external_tool.rb:187-189`).
+    // The permission layer reads the role overrides, so a course whose
+    // account has turned the right off answers the same way Canvas does.
+    star_permissions::check::require(
+        &state.db,
+        auth.id,
+        &star_permissions::PermissionContext::Course { course_id },
+        "manage_lti_delete",
+    )
+    .await?;
     let tool = find_course_tool(&state.db, course_id, id).await?;
     // Canvas delete_tool renders the destroyed tool's JSON (controller.rb:
     // 2143-2149), with workflow_state 'deleted' on the returned record.
@@ -1367,16 +1381,30 @@ async fn update_account_tool(
 }
 
 /// `DELETE /accounts/{account_id}/external_tools/{id}` — soft-delete an account tool.
+///
+/// Canvas looks the tool up **before** it authorizes the request
+/// (external_tools_controller.rb:1673-1676: `Lti::ContextToolFinder...find`
+/// raises `RecordNotFound` -> `404`; the `delete` right is checked afterwards
+/// in `delete_tool`), so a tool that does not exist answers `404` and not
+/// `403`. The lookup keeps that order here; the account permission is still
+/// required for a tool that does exist.
 async fn delete_account_tool(
     State(state): State<AppState>,
     Path((account_id, id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<Value>, ApiError> {
     require_account(&state.db, account_id).await?;
-    if !can_manage_account(&state.db, &auth, account_id).await? {
-        return Err(ApiError::Forbidden);
-    }
     let tool = find_account_tool(&state.db, account_id, id).await?;
+    // The same `:delete` on the tool, which the policy grants through the
+    // context's `manage_lti_delete`
+    // (`app/models/context_external_tool.rb:187-189`).
+    star_permissions::check::require(
+        &state.db,
+        auth.id,
+        &star_permissions::PermissionContext::Account { account_id },
+        "manage_lti_delete",
+    )
+    .await?;
     // Canvas delete_tool renders the destroyed tool's JSON (controller.rb:
     // 2143-2149).
     sqlx::query(
@@ -1470,7 +1498,7 @@ async fn create_course_tool_with_verification(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateToolWithVerificationRequest>,
+    ApiJson(payload): ApiJson<CreateToolWithVerificationRequest>,
 ) -> Result<Response, ApiError> {
     require_course(&state.db, course_id).await?;
     if !can_manage_course_tools(&state.db, &auth, course_id).await? {
@@ -1499,7 +1527,7 @@ async fn create_account_tool_with_verification(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateToolWithVerificationRequest>,
+    ApiJson(payload): ApiJson<CreateToolWithVerificationRequest>,
 ) -> Result<Response, ApiError> {
     require_account(&state.db, account_id).await?;
     if !can_manage_account(&state.db, &auth, account_id).await? {
@@ -1780,7 +1808,11 @@ async fn can_read_group_tools(
         return Err(ApiError::NotFound);
     };
 
-    let member: Option<(i64,)> = sqlx::query_as(
+    // `SELECT 1` is an INT4 literal in PostgreSQL; the crate's convention
+    // is to read it as i32 (the queries that want an i64 cast the literal
+    // to `1::bigint`). Decoding the INT4 literal into an i64 is a runtime
+    // error, and the request answered 500 instead of the group's tools.
+    let member: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM group_memberships \
          WHERE group_id = $1 AND user_id = $2 AND workflow_state <> 'deleted' LIMIT 1",
     )

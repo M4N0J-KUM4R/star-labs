@@ -138,6 +138,8 @@ jobs:
               -p star-files -p star-graphql -p star-learning-dates
               -p star-rubrics -p star-dashboard -p star-calendar
               -p star-outcomes -p star-lti
+              -p star-canvas-response -p star-proxy -p star-storage
+              -p star-worker
     services:
       postgres:
         image: postgres:16
@@ -167,7 +169,11 @@ jobs:
           shared-key: shard-${{ matrix.shard }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Run workspace shard ${{ matrix.shard }}
-        run: cargo test --locked --no-fail-fast ${{ matrix.crates }}
+        # The crates of a shard share one Postgres, and their suites seed
+        # rows with fixed ids. Two suites running at once can collide on
+        # those ids, so the shards use the same thread limit as the
+        # nightly workflow.
+        run: cargo test --locked --no-fail-fast ${{ matrix.crates }} -- --test-threads=2
 
   # ---------------------------------------------------------------------------
   # Guards the shard map: a new crate that nobody added to a shard would

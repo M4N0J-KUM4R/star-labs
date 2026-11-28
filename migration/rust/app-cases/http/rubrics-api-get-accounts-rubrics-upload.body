@@ -1,1 +1,1 @@
-{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
+{"id":1,"root_account_id":6,"workflow_state":"initializing","user_id":1,"attachment_id":null,"progress":0,"error_count":0,"error_data":[],"created_at":"2026-11-27T13:01:04Z","updated_at":"2026-11-27T13:01:04Z","account_id":6,"course_id":null,"user":{"id":1,"name":"Parity User","created_at":"2026-11-26T20:10:15Z","sortable_name":"User, Parity","short_name":"Parity User","sis_user_id":null,"integration_id":null,"login_id":"parity@example.com"}}

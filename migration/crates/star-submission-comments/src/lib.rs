@@ -27,7 +27,7 @@ use axum::{
     body::Bytes,
     extract::{Path, RawQuery, State},
     http::StatusCode,
-    routing::{post, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -632,8 +632,319 @@ async fn annotation_notification(
 // Router
 // ---------------------------------------------------------------------------
 
+async fn list_comments(
+    State(state): State<AppState>,
+    Path(submission_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<Vec<SubmissionComment>>, ApiError> {
+    list_comments_for(&state, submission_id, auth).await
+}
+
+async fn create_comment(
+    State(state): State<AppState>,
+    Path(submission_id): Path<i64>,
+    auth: AuthUser,
+    Json(payload): Json<CreateComment>,
+) -> Result<(StatusCode, Json<SubmissionComment>), ApiError> {
+    create_comment_for(&state, submission_id, auth, payload).await
+}
+
+async fn delete_comment(
+    State(state): State<AppState>,
+    Path((submission_id, comment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    delete_comment_for(&state, submission_id, comment_id, auth).await
+}
+
+async fn update_comment(
+    State(state): State<AppState>,
+    Path((submission_id, comment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateComment>,
+) -> Result<Json<CommentDetail>, ApiError> {
+    update_comment_for(&state, submission_id, comment_id, auth, payload).await
+}
+
+async fn list_comments_for(
+    state: &AppState,
+    submission_id: i64,
+    auth: AuthUser,
+) -> Result<Json<Vec<SubmissionComment>>, ApiError> {
+    // Verify the submission exists (404 if not)
+    let _course_id = get_course_id_for_submission(&state.db, submission_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    // Access check
+    if !check_can_view_or_comment(&state.db, auth.id, submission_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let rows: Vec<SubmissionComment> = sqlx::query_as(
+        r#"
+        SELECT id, submission_id, author_id, comment, workflow_state, edited_at, created_at, updated_at
+        FROM submission_comments
+        WHERE submission_id = $1 AND workflow_state = 'active'
+        ORDER BY created_at ASC
+        "#,
+    )
+    .bind(submission_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    Ok(Json(rows))
+}
+
+async fn create_comment_for(
+    state: &AppState,
+    submission_id: i64,
+    auth: AuthUser,
+    payload: CreateComment,
+) -> Result<(StatusCode, Json<SubmissionComment>), ApiError> {
+    // Verify the submission exists (404 if not)
+    let _course_id = get_course_id_for_submission(&state.db, submission_id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+
+    // Access check
+    if !check_can_view_or_comment(&state.db, auth.id, submission_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    if payload.comment.trim().is_empty() {
+        return Err(ApiError::Validation("comment cannot be empty".into()));
+    }
+
+    let row: SubmissionComment = sqlx::query_as(
+        r#"
+        INSERT INTO submission_comments (submission_id, author_id, comment)
+        VALUES ($1, $2, $3)
+        RETURNING id, submission_id, author_id, comment, workflow_state, edited_at, created_at, updated_at
+        "#,
+    )
+    .bind(submission_id)
+    .bind(auth.id)
+    .bind(&payload.comment)
+    .fetch_one(&state.db)
+    .await?;
+
+    // Link any metadata-only uploads the caller references (Canvas attaches
+    // comment files the same way). Unknown/foreign ids are ignored, matching
+    // Canvas, which only keeps attachments the author may attach.
+    link_attachments(&state.db, submission_id, row.id, &payload.file_ids).await?;
+
+    Ok((StatusCode::CREATED, Json(row)))
+}
+
+/// Attach unattached comment-file records of this submission to a comment.
+async fn link_attachments(
+    pool: &PgPool,
+    submission_id: i64,
+    comment_id: i64,
+    file_ids: &[i64],
+) -> Result<(), ApiError> {
+    if file_ids.is_empty() {
+        return Ok(());
+    }
+
+    sqlx::query(
+        r#"
+        UPDATE submission_comment_attachments
+        SET comment_id = $1, updated_at = now()
+        WHERE id = ANY($2) AND submission_id = $3 AND comment_id IS NULL
+        "#,
+    )
+    .bind(comment_id)
+    .bind(file_ids)
+    .bind(submission_id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// GET /submissions/{submissionId}/comments/{commentId}
+async fn get_comment(
+    State(state): State<AppState>,
+    Path((submission_id, comment_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<CommentDetail>, ApiError> {
+    get_comment_for(&state, submission_id, comment_id, auth).await
+}
+
+/// PUT /submissions/{submissionId}/comments/read
+async fn mark_comments_read(
+    State(state): State<AppState>,
+    Path(submission_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    mark_comments_read_for(&state, submission_id, auth).await
+}
+
+/// GET /submissions/{submissionId}/comments/unread_count
+async fn comments_unread_count(
+    State(state): State<AppState>,
+    Path(submission_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<UnreadCount>, ApiError> {
+    unread_count_for(&state, submission_id, &auth).await
+}
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments
+async fn list_comments_nested(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<Vec<SubmissionComment>>, ApiError> {
+    let submission_id = resolve_submission_id(&state.db, course_id, assignment_id, user_id).await?;
+    list_comments_for(&state, submission_id, auth).await
+}
+
+/// POST /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments
+async fn create_comment_nested(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id)): Path<(i64, i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<CreateComment>,
+) -> Result<(StatusCode, Json<SubmissionComment>), ApiError> {
+    let submission_id = resolve_submission_id(&state.db, course_id, assignment_id, user_id).await?;
+    create_comment_for(&state, submission_id, auth, payload).await
+}
+
+/// GET /courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}
+async fn get_comment_nested(
+    State(state): State<AppState>,
+    Path((course_id, assignment_id, user_id, comment_id)): Path<(i64, i64, i64, i64)>,
+    auth: AuthUser,
+) -> Result<Json<CommentDetail>, ApiError> {
+    let submission_id = resolve_submission_id(&state.db, course_id, assignment_id, user_id).await?;
+    get_comment_for(&state, submission_id, comment_id, auth).await
+}
+
+/// Request body for creating a comment.
+#[derive(Debug, Deserialize)]
+pub struct CreateComment {
+    pub comment: String,
+    /// Optional metadata-only attachments (from the comments/files upload) to
+    /// link to the new comment. Canvas attaches comment files the same way.
+    #[serde(default)]
+    pub file_ids: Vec<i64>,
+}
+
+/// Shared single-comment read logic for the flat and Canvas-nested routes.
+/// Course teacher/admin OR the submission's own student → comment detail.
+async fn get_comment_for(
+    state: &AppState,
+    submission_id: i64,
+    comment_id: i64,
+    auth: AuthUser,
+) -> Result<Json<CommentDetail>, ApiError> {
+    authorize_comment_thread(state, submission_id, &auth).await?;
+    Ok(Json(
+        load_comment_detail(&state.db, submission_id, comment_id).await?,
+    ))
+}
+
+/// Mark the whole comment thread read for the caller (Canvas mark-read parity).
+/// Stores the highest active comment id at mark time, so later comments count
+/// as unread again.
+async fn mark_comments_read_for(
+    state: &AppState,
+    submission_id: i64,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    authorize_comment_thread(state, submission_id, &auth).await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO submission_comment_reads
+            (submission_id, user_id, last_read_comment_id, read_at, updated_at)
+        VALUES (
+            $1,
+            $2,
+            (SELECT MAX(id) FROM submission_comments
+              WHERE submission_id = $1 AND workflow_state = 'active'),
+            now(),
+            now()
+        )
+        ON CONFLICT (submission_id, user_id) DO UPDATE
+        SET last_read_comment_id = EXCLUDED.last_read_comment_id,
+            read_at = now(),
+            updated_at = now()
+        "#,
+    )
+    .bind(submission_id)
+    .bind(auth.id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Count unread comments for the caller: active comments authored by someone
+/// else with an id greater than the last read marker (all when never read).
+/// Comments the caller wrote never count as unread (Canvas parity).
+async fn unread_count_for(
+    state: &AppState,
+    submission_id: i64,
+    auth: &AuthUser,
+) -> Result<Json<UnreadCount>, ApiError> {
+    authorize_comment_thread(state, submission_id, auth).await?;
+
+    let (unread_count,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM submission_comments c
+        WHERE c.submission_id = $1
+          AND c.workflow_state = 'active'
+          AND c.author_id <> $2
+          AND c.id > COALESCE(
+              (SELECT r.last_read_comment_id
+                 FROM submission_comment_reads r
+                WHERE r.submission_id = $1 AND r.user_id = $2),
+              0
+          )
+        "#,
+    )
+    .bind(submission_id)
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(UnreadCount { unread_count }))
+}
+
+/// Unread comment count response (Canvas `unread_count` shape).
+#[derive(Debug, Clone, Serialize)]
+pub struct UnreadCount {
+    pub unread_count: i64,
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        .route(
+            "/submissions/{submissionId}/comments",
+            get(list_comments).post(create_comment),
+        )
+        .route(
+            "/submissions/{submissionId}/comments/{commentId}",
+            get(get_comment).put(update_comment).delete(delete_comment),
+        )
+        // Comment read state
+        .route(
+            "/submissions/{submissionId}/comments/read",
+            put(mark_comments_read),
+        )
+        .route(
+            "/submissions/{submissionId}/comments/unread_count",
+            get(comments_unread_count),
+        )
+        // Canvas nested aliases — resolve submission by course/assignment/user
+        .route(
+            "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments",
+            get(list_comments_nested).post(create_comment_nested),
+        )
         // Canvas nested member routes — resolve submission by course/assignment/user.
         // Canvas declares no comments index or create route anywhere in the API
         // route set: the thread is read through `include[]=submission_comments`
@@ -650,7 +961,9 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/submissions/{userId}/comments/{commentId}",
-            put(update_comment_nested).delete(delete_comment_nested),
+            get(get_comment_nested)
+                .put(update_comment_nested)
+                .delete(delete_comment_nested),
         )
         // Annotation notification (Canvas SubmissionCommentsApiController
         // #annotation_notification, issue #55). Canvas declares this route

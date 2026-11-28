@@ -38,7 +38,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use star_auth::AuthUser;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 
 mod outcome_gaps;
 mod outcome_proficiency;
@@ -130,7 +130,7 @@ pub struct LearningOutcomeLink {
 }
 
 /// Request body for linking an outcome to a group.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct LinkOutcomeToGroup {
     pub outcome_id: i64,
 }
@@ -204,6 +204,12 @@ fn is_global_admin(auth: &AuthUser) -> bool {
     auth.role == "admin"
 }
 
+/// Canvas checks the global (site-admin) outcome group permissions on the
+/// site-admin account itself, so the check does not need the group row.
+fn check_global_manage_access(auth: &AuthUser) -> bool {
+    is_global_admin(auth)
+}
+
 /// Check global outcome group manage access: global admin only.
 async fn check_global_group_manage_access(
     _pool: &PgPool,
@@ -241,12 +247,62 @@ async fn check_enrolled_or_admin(
     if is_admin(auth) {
         return Ok(true);
     }
-    let row: Option<(i32,)> =
-        sqlx::query_as("SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND workflow_state = 'active' LIMIT 1")
-            .bind(user_id)
-            .bind(course_id)
-            .fetch_optional(pool)
-            .await?;
+    // Canvas' course membership check runs over `not_inactive_by_date`
+    // (`app/models/enrollment.rb:1454`), which counts an enrollment whose
+    // state is active, invited, completed, pending_invited or pending_active
+    // — a *completed* enrollment still counts (the state Canvas'
+    // `DELETE /enrollments/:id` leaves behind, `app/models/enrollment.rb:957`)
+    // and an *inactive* one does not.
+    let row: Option<(i32,)> = sqlx::query_as(
+        "SELECT 1 FROM enrollments
+         WHERE user_id = $1 AND course_id = $2 AND workflow_state IN (
+             'active', 'invited', 'completed', 'pending_invited', 'pending_active'
+         )
+         LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(course_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.is_some())
+}
+
+/// Canvas `Account`'s `:read_outcomes` — "any user with an association to this
+/// account" (`app/models/account.rb:1754`). The association comes from an
+/// `account_users` row or from an enrollment in one of the account's courses.
+async fn can_read_outcomes_on_account(
+    pool: &PgPool,
+    user_id: i64,
+    account_id: i64,
+    auth: &AuthUser,
+) -> Result<bool, ApiError> {
+    // Canvas' account policy grants every permission to the users whose
+    // `account_users` row permits it (`app/models/account.rb:1692-1714`), and
+    // the site admin's membership is in the site admin account, which sits
+    // above every account — so the site admin reads every account's
+    // outcomes.
+    if is_admin(auth) {
+        return Ok(true);
+    }
+    let row: Option<(i32,)> = sqlx::query_as(
+        r#"
+        SELECT 1
+        WHERE EXISTS (
+            SELECT 1 FROM account_users au
+            WHERE au.user_id = $1 AND au.account_id = $2
+        )
+        OR EXISTS (
+            SELECT 1 FROM enrollments e
+            JOIN courses c ON c.id = e.course_id
+            WHERE e.user_id = $1 AND c.account_id = $2
+        )
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
     Ok(row.is_some())
 }
 
@@ -260,7 +316,9 @@ async fn check_teacher_or_admin(
         return Ok(true);
     }
     let row: Option<(i32,)> = sqlx::query_as(
-        "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' AND workflow_state = 'active' LIMIT 1",
+        "SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' \
+         AND workflow_state IN ('active', 'invited', 'completed', 'pending_invited', 'pending_active') \
+         LIMIT 1",
     )
     .bind(user_id)
     .bind(course_id)
@@ -328,6 +386,17 @@ async fn check_teacher_or_admin_for_group(
 
 /// Depth cap for account-tree walks (same guard as star-accounts).
 const MAX_ACCOUNT_TREE_DEPTH: i64 = 10;
+
+/// Canvas' `manage_outcomes` right.
+///
+/// The right is an account right (`app/models/account.rb:2344`) and the
+/// built-in course roles do not carry it: the recorded corpus answers 403 for
+/// a course teacher and for an admin of the course' own account. The port
+/// therefore holds the right on the root account, which is where Canvas holds
+/// it for the global outcome groups.
+fn can_manage_outcomes(auth: &AuthUser) -> bool {
+    is_global_admin(auth)
+}
 
 /// Is the user an admin of this specific account?
 async fn is_account_admin(pool: &PgPool, user_id: i64, account_id: i64) -> Result<bool, ApiError> {
@@ -501,7 +570,7 @@ async fn create_outcome_group(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateOutcomeGroup>,
+    ApiJson(payload): ApiJson<CreateOutcomeGroup>,
 ) -> Result<(StatusCode, Json<LearningOutcomeGroup>), ApiError> {
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
@@ -577,10 +646,14 @@ async fn list_account_outcome_groups(
         return Err(ApiError::NotFound);
     }
 
-    let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
-    if !can_manage {
+    // Canvas reads the account's outcomes with `:read_outcomes`
+    // (`app/controllers/outcome_groups_api_controller.rb`), which any user
+    // with an association to the account holds.
+    let can_read = can_read_outcomes_on_account(&state.db, auth.id, account_id, &auth).await?;
+    if !can_read {
         return Err(ApiError::Forbidden);
     }
+    let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
 
     let rows: Vec<LearningOutcomeGroup> = sqlx::query_as(
         r#"
@@ -846,10 +919,13 @@ async fn show_account_outcome_group(
     if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
-    let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
-    if !can_manage {
+    // Canvas reads the account's outcomes with `:read_outcomes`
+    // (`app/models/account.rb:1754`) — any user with an association to the
+    // account holds it.
+    if !can_read_outcomes_on_account(&state.db, auth.id, account_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
+    let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
 
     let group = fetch_account_outcome_group(&state.db, account_id, group_id).await?;
     Ok(Json(group_json(&group, can_manage)))
@@ -902,10 +978,13 @@ async fn list_account_outcome_subgroups(
     if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
-    let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
-    if !can_manage {
+    // Canvas reads the account's outcomes with `:read_outcomes`
+    // (`app/models/account.rb:1754`) — any user with an association to the
+    // account holds it.
+    if !can_read_outcomes_on_account(&state.db, auth.id, account_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
+    let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
 
     let group = fetch_account_outcome_group(&state.db, account_id, group_id).await?;
     let rows: Vec<LearningOutcomeGroup> = sqlx::query_as(
@@ -1058,7 +1137,7 @@ async fn link_outcome_by_group_id(
     State(state): State<AppState>,
     Path(group_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<LinkOutcome>,
+    ApiJson(payload): ApiJson<LinkOutcome>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let group = fetch_outcome_group(&state.db, group_id).await?;
     if !check_group_manage_access(&state.db, auth.id, &group, &auth).await? {
@@ -1500,9 +1579,11 @@ async fn link_outcome_to_group(
     State(state): State<AppState>,
     Path((course_id, group_id)): Path<(i64, i64)>,
     auth: AuthUser,
-    Json(payload): Json<LinkOutcomeToGroup>,
+    ApiJson(payload): ApiJson<LinkOutcomeToGroup>,
 ) -> Result<(StatusCode, Json<LearningOutcomeLink>), ApiError> {
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+    // Canvas checks `can_manage_outcomes` before it looks the group up
+    // (app/controllers/outcome_groups_api_controller.rb:512-514).
+    if !can_manage_outcomes(&auth) {
         return Err(ApiError::Forbidden);
     }
 
@@ -1781,7 +1862,11 @@ async fn course_outcome_group_account_chain(
     Path(course_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+    // Canvas `OutcomeGroupsApiController#account_chain` needs
+    // `manage_outcomes` on the context
+    // (`app/controllers/outcome_groups_api_controller.rb:380`), not the
+    // read-only `read_outcomes` the index uses.
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
 
@@ -1828,10 +1913,13 @@ async fn update_global_outcome_group(
     auth: AuthUser,
     payload: Option<Json<UpdateOutcomeGroup>>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let group = fetch_global_outcome_group(&state.db, group_id).await?;
-    if !check_global_group_manage_access(&state.db, auth.id, &group, &auth).await? {
+    // Canvas checks `manage_outcomes` on the site-admin account *before* it
+    // looks the group up (`authorized_action(@context, @current_user, ...)`),
+    // so a caller without the right gets 403 even for a missing group.
+    if !check_global_manage_access(&auth) {
         return Err(ApiError::Forbidden);
     }
+    let group = fetch_global_outcome_group(&state.db, group_id).await?;
     let payload = payload.map(|Json(fields)| fields).unwrap_or_default();
     apply_outcome_group_update(&state.db, group, payload).await
 }
@@ -1842,10 +1930,13 @@ async fn delete_global_outcome_group(
     Path(group_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    let group = fetch_global_outcome_group(&state.db, group_id).await?;
-    if !check_global_group_manage_access(&state.db, auth.id, &group, &auth).await? {
+    // Canvas checks `manage_outcomes` on the site-admin account *before* it
+    // looks the group up (`authorized_action(@context, @current_user, ...)`),
+    // so a caller without the right gets 403 even for a missing group.
+    if !check_global_manage_access(&auth) {
         return Err(ApiError::Forbidden);
     }
+    let _group = fetch_global_outcome_group(&state.db, group_id).await?;
 
     let result = sqlx::query(
         "UPDATE outcome_groups SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
@@ -1900,8 +1991,13 @@ async fn create_global_outcome_subgroup(
     State(state): State<AppState>,
     Path(group_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateOutcomeGroup>,
+    ApiJson(payload): ApiJson<CreateOutcomeGroup>,
 ) -> Result<(StatusCode, Json<LearningOutcomeGroup>), ApiError> {
+    // Canvas checks `can_manage_outcomes` before it looks the group up
+    // (app/controllers/outcome_groups_api_controller.rb:650-651).
+    if !is_global_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
     let parent = fetch_global_outcome_group(&state.db, group_id).await?;
     if !check_global_group_manage_access(&state.db, auth.id, &parent, &auth).await? {
         return Err(ApiError::Forbidden);
@@ -1967,9 +2063,11 @@ async fn create_course_outcome_subgroup(
     State(state): State<AppState>,
     Path((course_id, group_id)): Path<(i64, i64)>,
     auth: AuthUser,
-    Json(payload): Json<CreateOutcomeGroup>,
+    ApiJson(payload): ApiJson<CreateOutcomeGroup>,
 ) -> Result<(StatusCode, Json<LearningOutcomeGroup>), ApiError> {
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+    // Canvas' `manage_outcomes` check runs before the group lookup
+    // (app/controllers/outcome_groups_api_controller.rb:650-651).
+    if !can_manage_outcomes(&auth) {
         return Err(ApiError::Forbidden);
     }
 
@@ -2006,10 +2104,13 @@ async fn import_global_outcome_group(
     Path(group_id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
-    let group = fetch_global_outcome_group(&state.db, group_id).await?;
-    if !check_global_group_manage_access(&state.db, auth.id, &group, &auth).await? {
+    // Canvas checks `manage_outcomes` on the site-admin account *before* it
+    // looks the group up (`authorized_action(@context, @current_user, ...)`),
+    // so a caller without the right gets 403 even for a missing group.
+    if !check_global_manage_access(&auth) {
         return Err(ApiError::Forbidden);
     }
+    let _group = fetch_global_outcome_group(&state.db, group_id).await?;
     Ok(Json(Vec::new()))
 }
 
@@ -2050,10 +2151,13 @@ async fn unlink_global_outcome(
     Path((group_id, outcome_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<StatusCode, ApiError> {
-    let group = fetch_global_outcome_group(&state.db, group_id).await?;
-    if !check_global_group_manage_access(&state.db, auth.id, &group, &auth).await? {
+    // Canvas checks `manage_outcomes` on the site-admin account *before* it
+    // looks the group up (`authorized_action(@context, @current_user, ...)`),
+    // so a caller without the right gets 403 even for a missing group.
+    if !check_global_manage_access(&auth) {
         return Err(ApiError::Forbidden);
     }
+    let _group = fetch_global_outcome_group(&state.db, group_id).await?;
 
     let result = sqlx::query(
         "UPDATE outcome_links SET workflow_state = 'deleted', updated_at = now() WHERE outcome_group_id = $1 AND outcome_id = $2 AND workflow_state = 'active'",
@@ -2136,10 +2240,12 @@ async fn list_account_outcome_group_links(
     if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
-    let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
-    if !can_manage {
+    // Canvas reads the account's outcome links with `:read_outcomes`
+    // (`app/models/account.rb:1754`).
+    if !can_read_outcomes_on_account(&state.db, auth.id, account_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
+    let can_manage = can_access_account(&state.db, auth.id, account_id, &auth).await?;
 
     let links: Vec<LearningOutcomeLink> = sqlx::query_as(
         r#"
@@ -2220,6 +2326,121 @@ async fn list_account_outcome_group_links(
 // Router
 // ---------------------------------------------------------------------------
 
+/// POST /global/outcome_groups/{id}/outcomes → 201.
+///
+/// The global outcome groups belong to the root account, so Canvas checks
+/// `manage_outcomes` on the root account before it looks the group up
+/// (app/controllers/outcome_groups_api_controller.rb:512-514).
+async fn link_global_outcome(
+    State(state): State<AppState>,
+    Path(group_id): Path<i64>,
+    auth: AuthUser,
+    ApiJson(payload): ApiJson<LinkOutcome>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    if !is_global_admin(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+    // Canvas checks `manage_outcomes` on the site-admin account *before* it
+    // looks the group up (`authorized_action(@context, @current_user, ...)`),
+    // so a caller without the right gets 403 even for a missing group.
+    if !check_global_manage_access(&auth) {
+        return Err(ApiError::Forbidden);
+    }
+    let group = fetch_global_outcome_group(&state.db, group_id).await?;
+    link_outcome_by_group(state, group, group_id, auth, payload).await
+}
+
+/// The shared body of the outcome-group link routes.
+async fn link_outcome_by_group(
+    state: AppState,
+    group: LearningOutcomeGroup,
+    group_id: i64,
+    _auth: AuthUser,
+    payload: LinkOutcome,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let outcome_id = match payload.outcome_id {
+        Some(outcome_id) => {
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS (SELECT 1 FROM learning_outcomes WHERE id = $1 AND workflow_state = 'active')",
+            )
+            .bind(outcome_id)
+            .fetch_one(&state.db)
+            .await?;
+            if !exists {
+                return Err(ApiError::NotFound);
+            }
+            outcome_id
+        }
+        None => {
+            let title = payload
+                .title
+                .as_deref()
+                .ok_or_else(|| ApiError::Validation("outcome_id or title is required".into()))?;
+            if title.trim().is_empty() {
+                return Err(ApiError::Validation("title cannot be blank".into()));
+            }
+            let outcome: LearningOutcome = sqlx::query_as(
+                r#"
+                INSERT INTO learning_outcomes (title, description, display_name)
+                VALUES ($1, $2, $3)
+                RETURNING id, title, description, display_name, workflow_state, created_at, updated_at
+                "#,
+            )
+            .bind(title)
+            .bind(&payload.description)
+            .bind(&payload.display_name)
+            .fetch_one(&state.db)
+            .await?;
+            outcome.id
+        }
+    };
+
+    if let Some(from_group_id) = payload.move_from {
+        // Canvas moves the existing link instead of creating a second one.
+        let moved: Option<LearningOutcomeLink> = sqlx::query_as(
+            r#"
+            UPDATE outcome_links
+            SET outcome_group_id = $1,
+                context_type = $2,
+                context_id = $3,
+                workflow_state = 'active',
+                updated_at = now()
+            WHERE outcome_id = $4 AND outcome_group_id = $5
+            RETURNING id, outcome_id, outcome_group_id, context_type, context_id, workflow_state
+            "#,
+        )
+        .bind(group_id)
+        .bind(&group.context_type)
+        .bind(group.context_id)
+        .bind(outcome_id)
+        .bind(from_group_id)
+        .fetch_optional(&state.db)
+        .await?;
+        let link = moved.ok_or_else(|| ApiError::BadRequest("outcome link not found".into()))?;
+        let json = link_response(&state.db, &group, &link, true).await?;
+        return Ok((StatusCode::OK, Json(json)));
+    }
+
+    let link: LearningOutcomeLink = sqlx::query_as(
+        r#"
+        INSERT INTO outcome_links (outcome_id, outcome_group_id, context_type, context_id)
+        VALUES ($1, $2, $3, $4)
+        ON CONFLICT (outcome_id, outcome_group_id)
+        DO UPDATE SET workflow_state = 'active', updated_at = now()
+        RETURNING id, outcome_id, outcome_group_id, context_type, context_id, workflow_state
+        "#,
+    )
+    .bind(outcome_id)
+    .bind(group_id)
+    .bind(&group.context_type)
+    .bind(group.context_id)
+    .fetch_one(&state.db)
+    .await?;
+
+    let json = link_response(&state.db, &group, &link, true).await?;
+    Ok((StatusCode::CREATED, Json(json)))
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(outcome_proficiency::outcome_proficiency_routes())
@@ -2281,7 +2502,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/global/outcome_groups/{id}/outcomes",
-            get(list_group_outcome_links).post(link_outcome_by_group_id),
+            get(list_group_outcome_links).post(link_global_outcome),
         )
         .route(
             "/global/outcome_groups/{id}/outcomes/{outcomeId}",
@@ -2618,7 +2839,7 @@ mod tests {
             State(state.clone()),
             Path(course_id),
             auth.clone(),
-            Json(CreateOutcomeGroup {
+            ApiJson(CreateOutcomeGroup {
                 title: title.to_string(),
                 description: None,
                 vendor_guid: None,
@@ -2698,7 +2919,7 @@ mod tests {
             State(state.clone()),
             Path(group.id),
             auth.clone(),
-            Json(LinkOutcome {
+            ApiJson(LinkOutcome {
                 outcome_id: None,
                 move_from: None,
                 title: Some("Critical Thinking".to_string()),
@@ -2964,7 +3185,7 @@ mod tests {
             State(state.clone()),
             Path(group.id),
             auth.clone(),
-            Json(LinkOutcome {
+            ApiJson(LinkOutcome {
                 outcome_id: None,
                 move_from: None,
                 title: Some("Link Index Outcome".to_string()),
@@ -2980,7 +3201,7 @@ mod tests {
             State(state.clone()),
             Path(other_group.id),
             other_auth,
-            Json(LinkOutcome {
+            ApiJson(LinkOutcome {
                 outcome_id: None,
                 move_from: None,
                 title: Some("Other Course Outcome".to_string()),

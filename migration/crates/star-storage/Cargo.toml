@@ -1,0 +1,12 @@
+[package]
+name = "star-storage"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+hmac = { workspace = true }
+md-5 = { workspace = true }
+reqwest = { workspace = true }
+sha2 = { workspace = true }
+thiserror = { workspace = true }

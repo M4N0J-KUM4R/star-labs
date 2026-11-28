@@ -302,27 +302,35 @@ async fn update_word_count_sets_the_column_and_gates_by_owner() {
         .await;
     assert_eq!(resp.status_code(), 400, "missing word_count");
 
-    // A stranger can neither see nor touch another user's file.
+    // Canvas reads the file from the attachment the JWT names and checks no
+    // ownership (`files_controller.rb:1625-1648`): a request without the
+    // JWT is a 400 before anything else is looked at.
     let resp = server
         .post("/files/update_word_count")
         .add_header(axum::http::header::AUTHORIZATION, auth(stranger, "student"))
         .json(&json!({ "file_id": student_file, "word_count": 5 }))
         .await;
-    assert_eq!(resp.status_code(), 403, "stranger denied");
+    assert_eq!(resp.status_code(), 400, "the attachment_jwt is missing");
 
-    // Unknown file -> 404.
+    // Unknown file -> 404. Canvas decodes the JWT, then does an explicit
+    // find-update, so a missing attachment is a 404
+    // (`files_controller.rb:1646`).
+    let missing_jwt =
+        star_files::create_attachment_jwt(MISSING_ID, JWT_SECRET).expect("mint attachment jwt");
     let resp = server
         .post("/files/update_word_count")
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "file_id": MISSING_ID, "word_count": 5 }))
+        .json(&json!({ "attachment_jwt": missing_jwt, "word_count": 5 }))
         .await;
     assert_eq!(resp.status_code(), 404, "unknown file");
 
     // Teacher (course manager) -> 204 and the column is set.
+    let teacher_jwt =
+        star_files::create_attachment_jwt(teacher_file, JWT_SECRET).expect("mint jwt");
     let resp = server
         .post("/files/update_word_count")
         .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
-        .json(&json!({ "file_id": teacher_file, "word_count": 4242 }))
+        .json(&json!({ "attachment_jwt": teacher_jwt, "word_count": 4242 }))
         .await;
     assert_eq!(resp.status_code(), 204, "body: {}", resp.text());
     let count: i32 = sqlx::query_scalar("SELECT word_count FROM files WHERE id = $1")
@@ -332,11 +340,14 @@ async fn update_word_count_sets_the_column_and_gates_by_owner() {
         .expect("read word_count");
     assert_eq!(count, 4242);
 
-    // The owner may update their own file too (bare `id` alias).
+    // Canvas checks no ownership: the owner may count the words of their own
+    // file too.
+    let student_jwt =
+        star_files::create_attachment_jwt(student_file, JWT_SECRET).expect("mint jwt");
     let resp = server
         .post("/files/update_word_count")
         .add_header(axum::http::header::AUTHORIZATION, auth(student, "student"))
-        .json(&json!({ "id": student_file, "word_count": 17 }))
+        .json(&json!({ "attachment_jwt": student_jwt, "word_count": 17 }))
         .await;
     assert_eq!(resp.status_code(), 204, "owner may count words");
     let count: i32 = sqlx::query_scalar("SELECT word_count FROM files WHERE id = $1")
@@ -363,14 +374,25 @@ async fn rce_linked_file_instfs_ids_answers_the_feature_off_shape() {
 
     let user = seed_user(&pool, &prefix, "RceUser", "student").await;
 
+    // Canvas finds the user by `user_uuid` and refuses the request when the
+    // caller may not read that user's full profile
+    // (`files_controller.rb:1652-1653`). Without a `user_uuid` there is no
+    // user, so the answer is the unauthorized one. The recorded corpus
+    // carries exactly this: `POST /api/v1/rce_linked_file_instfs_ids` → 403
+    // `{"status":"unauthorized","errors":[{"message":"user not authorized to
+    // perform that action"}]}`.
     let resp = server
         .post("/rce_linked_file_instfs_ids")
         .add_header(axum::http::header::AUTHORIZATION, auth(user, "student"))
         .json(&json!({ "file_ids": [1, 2, 3] }))
         .await;
-    assert_eq!(resp.status_code(), 200, "body: {}", resp.text());
+    assert_eq!(resp.status_code(), 403, "body: {}", resp.text());
     let body: Value = resp.json();
-    assert_eq!(body, json!({ "ids": [] }), "no InstFS linkage exists");
+    assert_eq!(body["status"], "unauthorized", "{body}");
+    assert_eq!(
+        body["errors"][0]["message"], "user not authorized to perform that action",
+        "{body}"
+    );
 
     cleanup(&pool, &prefix).await;
 }

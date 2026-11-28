@@ -374,10 +374,9 @@ pub fn advantage_router() -> Router<AppState> {
         )
         // Flat paths (no account scope)
         .route("/api/lti/registrations", post(create_registration))
-        .route("/api/lti/registrations/{registration_id}", put(update_registration))
         .route(
             "/api/lti/registrations/{registration_id}",
-            get(show_registration_configuration),
+            put(update_registration).get(show_registration_configuration),
         )
 }
 

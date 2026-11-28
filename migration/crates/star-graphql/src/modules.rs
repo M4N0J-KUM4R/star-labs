@@ -54,6 +54,7 @@ use crate::{
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct ModuleRow {
     id: i64,
+    course_id: i64,
     name: String,
     position: i32,
     workflow_state: String,
@@ -89,6 +90,35 @@ const MODULE_ITEM_JOIN_SQL: &str = "FROM module_items mi \
 // GraphQL types
 // ---------------------------------------------------------------------------
 
+/// Canvas GraphQL `ModulePrerequisite`
+/// (`app/graphql/types/module_type.rb`) — a module that must be completed
+/// first.
+///
+/// Canvas shape: `id: ID!`, `name: String!`, `type: String!`.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct ModulePrerequisite {
+    pub id: ID,
+    pub name: String,
+    pub r#type: String,
+}
+
+/// Canvas GraphQL `ModuleItemMasterCourseRestriction`
+/// (`app/graphql/types/module_item_type.rb`) — the master-course locking
+/// state of an item.
+///
+/// Canvas shape: `all: Boolean`, `availabilityDates: Boolean`,
+/// `content: Boolean`, `dueDates: Boolean`, `points: Boolean`,
+/// `settings: Boolean`.
+#[derive(Debug, Clone, SimpleObject)]
+pub struct ModuleItemMasterCourseRestriction {
+    pub all: Option<bool>,
+    pub availability_dates: Option<bool>,
+    pub content: Option<bool>,
+    pub due_dates: Option<bool>,
+    pub points: Option<bool>,
+    pub settings: Option<bool>,
+}
+
 /// Canvas GraphQL `Module` (subset of `app/graphql/types/module_type.rb`).
 /// Method names are camelCased by the Object derive: `id`, `_id`, `name`,
 /// `position`, `published`, `moduleItems`, `moduleItemsConnection`,
@@ -96,12 +126,13 @@ const MODULE_ITEM_JOIN_SQL: &str = "FROM module_items mi \
 /// without backing columns: see the module doc above.
 #[derive(Debug, Clone)]
 pub struct Module {
-    id: i64,
-    name: String,
-    position: i32,
-    workflow_state: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) course_id: i64,
+    pub(crate) name: String,
+    pub(crate) position: i32,
+    pub(crate) workflow_state: String,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -111,6 +142,7 @@ impl Module {
     }
 
     /// Canvas `Module._id`: the legacy canvas id (module_type.rb:119).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
@@ -123,9 +155,24 @@ impl Module {
         self.position
     }
 
-    /// Canvas `Module.published` is `published?` (module_type.rb:142);
-    /// star-lms stores publish state in `workflow_state` ('active' is
-    /// published), like the REST module handlers.
+    /// star-lms extension — Canvas does not expose the owning course on
+    /// `Module`, but the port keeps it (the older `Module` type did too).
+    async fn course_id(&self) -> ID {
+        ID(self.course_id.to_string())
+    }
+
+    /// star-lms extension — Canvas exposes the module's state through
+    /// `published` only.
+    async fn workflow_state(&self) -> &str {
+        &self.workflow_state
+    }
+
+    /// Canvas `Module.prerequisites` — star-db's `modules` table carries no
+    /// prerequisite rows (deviation: always empty).
+    async fn prerequisites(&self) -> Vec<ModulePrerequisite> {
+        Vec::new()
+    }
+
     async fn published(&self) -> bool {
         self.workflow_state == "active"
     }
@@ -181,14 +228,14 @@ impl Module {
 /// backing columns: see the module doc above.
 #[derive(Debug, Clone)]
 pub struct ModuleItem {
-    id: i64,
-    module_id: i64,
-    title: Option<String>,
-    indent: i32,
-    position: i32,
-    workflow_state: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) module_id: i64,
+    pub(crate) title: Option<String>,
+    pub(crate) indent: i32,
+    pub(crate) position: i32,
+    pub(crate) workflow_state: String,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -198,18 +245,28 @@ impl ModuleItem {
     }
 
     /// Canvas `ModuleItem._id`: the legacy canvas id (module_item_type.rb:54).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
 
-    /// Canvas `ModuleItem.module` (module_item_type.rb:56).
     async fn module(&self, ctx: &Context<'_>) -> Result<Option<Module>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         fetch_module(&gctx.pool, self.module_id).await
     }
 
-    /// Canvas `ModuleItem.title` with the ContentTag title fallback
-    /// (explicit title, else the linked content title).
+    /// star-lms extension — Canvas links the item to its parent through
+    /// `module` only.
+    async fn module_id(&self) -> ID {
+        ID(self.module_id.to_string())
+    }
+
+    /// Canvas `ModuleItem.masterCourseRestrictions` — star-db tracks the
+    /// master-course state at the course level only (deviation: null).
+    async fn master_course_restrictions(&self) -> Option<ModuleItemMasterCourseRestriction> {
+        None
+    }
+
     async fn title(&self) -> Option<&str> {
         self.title.as_deref()
     }
@@ -222,8 +279,6 @@ impl ModuleItem {
         self.position
     }
 
-    /// Canvas `ModuleItem.published` (module_item_type.rb:76); star-lms
-    /// stores publish state in `workflow_state` (0065).
     async fn published(&self) -> bool {
         self.workflow_state == "active"
     }
@@ -284,7 +339,7 @@ pub(crate) async fn fetch_module_page(
 
     let mut rows: Vec<ModuleRow> = sqlx::query_as(
         r#"
-        SELECT id, name, position, workflow_state, created_at, updated_at
+        SELECT id, course_id, name, position, workflow_state, created_at, updated_at
         FROM modules
         WHERE course_id = $1
           AND workflow_state != 'deleted'
@@ -311,6 +366,7 @@ pub(crate) async fn fetch_module_page(
                 cursor,
                 node: Module {
                     id: row.id,
+                    course_id: row.course_id,
                     name: row.name,
                     position: row.position,
                     workflow_state: row.workflow_state,
@@ -331,8 +387,6 @@ pub(crate) async fn fetch_module_page(
     })
 }
 
-/// Fetch one page of a module's items (all of them when `first` is None —
-/// the plain `moduleItems` field is unpaginated in Canvas).
 async fn fetch_module_items(
     pool: &PgPool,
     module_id: i64,
@@ -392,7 +446,6 @@ async fn fetch_module_items(
     Ok(edges)
 }
 
-/// Paginated variant driving `Module.moduleItemsConnection` (first+1 read).
 async fn fetch_module_item_page(
     pool: &PgPool,
     module_id: i64,
@@ -416,13 +469,13 @@ async fn fetch_module_item_page(
 }
 
 /// Fetch a single module by id (used by `ModuleItem.module`).
-async fn fetch_module(
+pub(crate) async fn fetch_module(
     pool: &PgPool,
     module_id: i64,
 ) -> Result<Option<Module>, async_graphql::Error> {
     let row: Option<ModuleRow> = sqlx::query_as(
         r#"
-        SELECT id, name, position, workflow_state, created_at, updated_at
+        SELECT id, course_id, name, position, workflow_state, created_at, updated_at
         FROM modules
         WHERE id = $1 AND workflow_state != 'deleted'
         "#,
@@ -434,6 +487,7 @@ async fn fetch_module(
 
     Ok(row.map(|row| Module {
         id: row.id,
+        course_id: row.course_id,
         name: row.name,
         position: row.position,
         workflow_state: row.workflow_state,
@@ -516,4 +570,43 @@ async fn user_enrolled_in_course(
     .await
     .map_err(db_err)?;
     Ok(row.is_some())
+}
+
+// ---------------------------------------------------------------------------
+// Single-record fetch (Canvas `Query.node` / `Query.legacyNode`)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Single-record fetch (Canvas `Query.node` / `Query.legacyNode`)
+// ---------------------------------------------------------------------------
+
+/// gate; the `Node` resolver applies the permission check itself.
+pub(crate) async fn fetch_module_item_unchecked(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<ModuleItem>, async_graphql::Error> {
+    let row: Option<ModuleItemRow> = sqlx::query_as(&format!(
+        r#"
+        SELECT mi.id, mi.module_id, mi.position,
+               mi.indent, mi.workflow_state, mi.created_at, mi.updated_at,
+               {MODULE_ITEM_TITLE_SQL}
+        {MODULE_ITEM_JOIN_SQL}
+        WHERE mi.id = $1
+        "#
+    ))
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(|row| ModuleItem {
+        id: row.id,
+        module_id: row.module_id,
+        title: row.title,
+        indent: row.indent,
+        position: row.position,
+        workflow_state: row.workflow_state,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    }))
 }

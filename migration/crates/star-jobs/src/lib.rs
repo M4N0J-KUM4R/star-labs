@@ -27,9 +27,15 @@
 //! max_attempts, locked_by, run_at, locked_at, handler` plus, for failed
 //! jobs, `failed_at, original_job_id, requeued_job_id, last_error`.
 //!
-//! No worker runs in this workspace: [`enqueue_job`] records the durable row
-//! and an external worker (or a later phase) is expected to advance
-//! `workflow_state` / `progress`.
+//! No worker runs inside this crate: [`enqueue_job`] records the durable row
+//! and the `star-worker` process (migration plan slice 1.5) claims it, runs
+//! the handler and advances `workflow_state` / `progress`.
+//!
+//! The Jobs V1 surface reads the `job_queue` view (migration 0345), which
+//! covers the port's own `jobs` table and Canvas' `delayed_jobs` queue, so
+//! the API reports the rows the worker actually runs. Each job reports
+//! `id`, `queue`, `workflow_state`, `created_at`, `tag` and
+//! `completion_percentage`.
 //!
 //! Auth: Canvas gates the Jobs API behind the site-admin `view_jobs` /
 //! `manage_jobs` permissions; the workspace equivalent is the global `admin`
@@ -101,6 +107,16 @@ pub struct JobV2 {
     pub run_at: DateTime<Utc>,
     pub locked_at: Option<DateTime<Utc>>,
     pub handler: Option<String>,
+    /// The queue the row is in (Canvas `Delayed::Settings.queue`).
+    pub queue: Option<String>,
+    /// When the row was enqueued.
+    pub created_at: DateTime<Utc>,
+    /// The completion percentage of the work (0..=100).
+    ///
+    /// Canvas has no such column on `Delayed::Job`; the port keeps it on the
+    /// job row and reports it as `completion_percentage`.
+    #[serde(skip_serializing)]
+    pub progress: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failed_at: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -118,7 +134,8 @@ pub struct JobV2 {
 pub(crate) const JOB_V2_COLUMNS: &str =
     "id, tag, strand, singleton, shard_id, max_concurrent, priority, \
      attempts, max_attempts, locked_by, run_at, locked_at, handler, failed_at, \
-     original_job_id, requeued_job_id, last_error, workflow_state";
+     original_job_id, requeued_job_id, last_error, workflow_state, queue, \
+     progress, created_at";
 
 /// Canvas Jobs V2 buckets (`JobsV2Controller::BUCKETS`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -570,9 +587,10 @@ async fn requeue_job_v2(
 
 /// Enqueue an internal job row for a request.
 ///
-/// No worker is started and nothing is scheduled: the returned row is the
-/// durable record that a background task is pending. Callers that enqueue on
-/// behalf of a user should pass that user's id and the Canvas context
+/// The row is the durable record that a background task is pending. The
+/// background worker (`star-worker`) claims the row, runs the handler the
+/// `tag` names and records the result. Callers that enqueue on behalf of a
+/// user should pass that user's id and the Canvas context
 /// (`context_type` + `context_id`) the job belongs to.
 pub async fn enqueue_job(
     db: &PgPool,
@@ -587,8 +605,8 @@ pub async fn enqueue_job(
 
     let job: Job = sqlx::query_as(
         r#"
-        INSERT INTO jobs (tag, workflow_state, progress, user_id, context_type, context_id)
-        VALUES ($1, 'queued', 0, $2, $3, $4)
+        INSERT INTO jobs (tag, workflow_state, progress, user_id, context_type, context_id, handler)
+        VALUES ($1, 'queued', 0, $2, $3, $4, $1)
         RETURNING id, tag, workflow_state, progress, created_at, updated_at,
                   user_id, context_type, context_id
         "#,
@@ -645,6 +663,9 @@ mod tests {
             run_at,
             locked_at: None,
             handler: Some("--- !ruby/object:Proc {}".to_string()),
+            queue: Some("canvas_queue".to_string()),
+            created_at: Utc::now(),
+            progress: 0,
             failed_at: None,
             original_job_id: None,
             requeued_job_id: None,

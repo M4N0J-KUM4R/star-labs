@@ -251,8 +251,11 @@ async fn nested_aliases_return_404_for_missing_or_cross_course_rubrics() {
     let missing_rubric = 999_999_999_i64;
 
     // Cross-course requests are 404 even though the teacher could otherwise
-    // manage the rubric in its real course.
-    for method in ["get", "put", "delete"] {
+    // manage the rubric in its real course. The GET is the exception:
+    // Canvas checks `manage_rubrics` on the *course* before it looks the
+    // rubric up (`app/controllers/rubrics_api_controller.rb:293`), and the
+    // teacher does not manage the other course — so the GET is a 403.
+    for (method, expected) in [("get", 403), ("put", 404), ("delete", 404)] {
         let mut req = match method {
             "get" => server.get(&format!("/courses/{other_course}/rubrics/{rubric}")),
             "put" => server.put(&format!("/courses/{other_course}/rubrics/{rubric}")),
@@ -265,8 +268,8 @@ async fn nested_aliases_return_404_for_missing_or_cross_course_rubrics() {
         let resp = req.await;
         assert_eq!(
             resp.status_code(),
-            404,
-            "{method} cross-course must be 404, body: {}",
+            expected,
+            "{method} cross-course must be {expected}, body: {}",
             resp.text()
         );
     }

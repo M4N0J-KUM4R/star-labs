@@ -29,7 +29,7 @@ names. Do not explore the repo.
 | GET | `/api/v1/accounts/:account_id/outcome_groups/:id/outcomes` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/outcome_groups/:id/subgroups` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/outcome_groups/account_chain` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/root_outcome_group` | **no** | - | - |
+| GET | `/api/v1/accounts/:account_id/root_outcome_group` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/outcome_group_links` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/outcome_groups` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/outcome_groups/:id` | yes | - | - |

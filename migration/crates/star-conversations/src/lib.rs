@@ -33,7 +33,7 @@ use sqlx::PgPool;
 use std::collections::HashMap;
 
 use star_auth::AuthUser;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState, ParamError};
 
 // Server-rendered inbox loaders (star-ui, issue #72): pub loaders extracted
 // the same way star-courses extracted load_course_for_viewer.
@@ -78,7 +78,7 @@ pub struct ConversationParticipant {
 // ---------------------------------------------------------------------------
 
 /// POST /conversations
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct CreateConversation {
     pub recipients: Vec<i64>, // user IDs to add as participants
     pub subject: String,
@@ -86,13 +86,13 @@ pub struct CreateConversation {
 }
 
 /// POST /conversations/{id}/add_message
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct AddMessage {
     pub body: String,
 }
 
 /// POST /conversations/{id}/add_recipients
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct AddRecipients {
     pub recipients: Vec<i64>, // user IDs to add as participants
 }
@@ -105,13 +105,6 @@ pub struct AddRecipients {
 pub struct RemoveMessages {
     #[serde(default)]
     pub remove: Option<Vec<i64>>,
-}
-
-fn validate_recipients(recipients: &[i64]) -> Result<(), ApiError> {
-    if recipients.is_empty() {
-        return Err(ApiError::Validation("recipients cannot be empty".into()));
-    }
-    Ok(())
 }
 
 /// Validate the recipients list for add_recipients.
@@ -447,15 +440,24 @@ fn conversation_batch_json(row: ConversationBatchRow, now: DateTime<Utc>) -> Con
 async fn create_conversation(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(payload): Json<CreateConversation>,
+    ApiJson(payload): ApiJson<CreateConversation>,
 ) -> Result<(StatusCode, Json<CreatedConversation>), ApiError> {
-    validate_recipients(&payload.recipients)?;
-
-    if payload.subject.trim().is_empty() {
-        return Err(ApiError::Validation("subject cannot be empty".into()));
+    // Canvas conversations#create answers a bare array of
+    // `{attribute, message}` pairs (app/controllers/conversations_controller.rb:406)
+    // in the order: recipients blank, recipients invalid, body blank.
+    if payload.recipients.is_empty() {
+        return Err(ApiError::parameter_validation(vec![ParamError::new(
+            "recipients",
+            "blank",
+        )]));
     }
     if payload.body.trim().is_empty() {
-        return Err(ApiError::Validation("body cannot be empty".into()));
+        return Err(ApiError::parameter_validation(vec![ParamError::new(
+            "body", "blank",
+        )]));
+    }
+    if payload.subject.trim().is_empty() {
+        return Err(ApiError::Validation("subject cannot be empty".into()));
     }
 
     let mut tx = state.db.begin().await?;
@@ -601,15 +603,16 @@ async fn add_message(
     State(state): State<AppState>,
     Path(id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<AddMessage>,
+    ApiJson(payload): ApiJson<AddMessage>,
 ) -> Result<Json<MessageInResponse>, ApiError> {
-    if payload.body.trim().is_empty() {
-        return Err(ApiError::Validation("body cannot be empty".into()));
-    }
-
-    // Verify participant.
+    // Canvas conversations#add_message loads the conversation first and only
+    // then validates the body (app/controllers/conversations_controller.rb:969).
     if !is_participant(&state.db, id, auth.id).await? {
         return Err(ApiError::NotFound);
+    }
+
+    if payload.body.trim().is_empty() {
+        return Err(ApiError::Validation("body cannot be empty".into()));
     }
 
     let mut tx = state.db.begin().await?;
@@ -692,14 +695,15 @@ async fn add_recipients(
     State(state): State<AppState>,
     Path(id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<AddRecipients>,
+    ApiJson(payload): ApiJson<AddRecipients>,
 ) -> Result<Json<ConversationDetail>, ApiError> {
-    validate_new_recipients(&payload.recipients)?;
-
-    // Verify participant.
+    // Canvas loads the conversation before it looks at the recipients
+    // (before_action :get_conversation runs before :normalize_recipients).
     if !is_participant(&state.db, id, auth.id).await? {
         return Err(ApiError::NotFound);
     }
+
+    validate_new_recipients(&payload.recipients)?;
 
     // Unknown user ids are ignored (Canvas drops unknown recipients).
     let known: Vec<(i64,)> =
@@ -893,7 +897,7 @@ async fn unread_count(
 
 /// PUT /conversations/{id} body — Canvas `update` (API_ALLOWED_FIELDS only;
 /// unknown fields are ignored by strong params).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 struct ConversationUpdateBody {
     #[serde(default)]
     conversation: ConversationUpdateFields,
@@ -942,7 +946,7 @@ async fn update_conversation(
     State(state): State<AppState>,
     Path(id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<ConversationUpdateBody>,
+    ApiJson(payload): ApiJson<ConversationUpdateBody>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let row: Option<ParticipantTailRow> = sqlx::query_as(
         r#"
@@ -1073,19 +1077,24 @@ fn coerce_ids(value: &Value) -> Vec<i64> {
 async fn batch_update_conversations(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(body): Json<Value>,
+    ApiJson(body): ApiJson<Value>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let object = body.as_object();
     let raw_ids = object.and_then(|fields| fields.get("conversation_ids"));
     let ids = raw_ids.map(coerce_ids).unwrap_or_default();
+    // Canvas conversations#batch_update renders its own body shape:
+    // `{"message":"conversation_ids not specified"}`
+    // (app/controllers/conversations_controller.rb:1057).
     if ids.is_empty() {
-        return Err(ApiError::BadRequest(
-            "conversation_ids not specified".into(),
+        return Err(ApiError::canvas_json(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "message": "conversation_ids not specified" }),
         ));
     }
     if ids.len() > 500 {
-        return Err(ApiError::BadRequest(
-            "conversation batch size limit (500) exceeded".into(),
+        return Err(ApiError::canvas_json(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "message": "conversation batch size limit (500) exceeded" }),
         ));
     }
 
@@ -1094,7 +1103,10 @@ async fn batch_update_conversations(
         .and_then(Value::as_str)
         .unwrap_or_default();
     if event.is_empty() {
-        return Err(ApiError::BadRequest("event not specified".into()));
+        return Err(ApiError::canvas_json(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "message": "event not specified" }),
+        ));
     }
     let set_clause = match event {
         "mark_as_read" => "read_at = now()",
@@ -1103,7 +1115,12 @@ async fn batch_update_conversations(
         "unstar" => "starred = false",
         "archive" => "workflow_state = 'archived'",
         "destroy" => "workflow_state = 'deleted'",
-        _ => return Err(ApiError::BadRequest("invalid event".into())),
+        _ => {
+            return Err(ApiError::canvas_json(
+                StatusCode::BAD_REQUEST,
+                serde_json::json!({ "message": "invalid event" }),
+            ))
+        }
     };
 
     // Canvas applies the event only to participants of the current user;
@@ -1149,15 +1166,44 @@ async fn mark_all_as_read(
     Ok(Json(json!({})))
 }
 
-/// Site-admin gate for the admin-only tail routes. Canvas answers 401
-/// (`unauthorized_action`), which is what these routes return — unlike the
-/// participant routes' 403/404 convention.
+/// Site-admin gate for the admin-only tail routes.
+///
+/// Canvas answers **403** here: `conversations#deleted_index` and
+/// `#restore_message` call `render_unauthorized_action`
+/// (`app/controllers/conversations_controller.rb`), which renders
+/// `{"status":"unauthorized",...}` with a 403, and `#delete_for_all` runs
+/// `authorized_action(Account.site_admin, @current_user, :manage_students)`,
+/// which also renders 403 when the right is missing.
+///
+/// The check itself is Canvas' `@current_user.roles(Account.site_admin)
+/// .include? "admin"` (`app/controllers/conversations_controller.rb`), i.e.
+/// the caller has to hold the site-admin role; the port models that with the
+/// global `users.role`.
 fn ensure_site_admin(auth: &AuthUser) -> Result<(), ApiError> {
     if auth.role == "admin" {
         Ok(())
     } else {
-        Err(ApiError::Unauthorized)
+        Err(ApiError::Forbidden)
     }
+}
+
+/// Canvas `ConversationsController#delete_for_all` ->
+/// `authorized_action(Account.site_admin, @current_user, :manage_students)`
+/// (`app/controllers/conversations_controller.rb:786`).
+///
+/// The shared permission layer answers it: the caller must hold
+/// `manage_students` on the site admin account.
+async fn require_site_admin_manage_students(pool: &PgPool, user_id: i64) -> Result<(), ApiError> {
+    let Some(account_id) = star_permissions::check::site_admin_account_id(pool).await? else {
+        return Err(ApiError::Forbidden);
+    };
+    star_permissions::check::require(
+        pool,
+        user_id,
+        &star_permissions::PermissionContext::Account { account_id },
+        "manage_students",
+    )
+    .await
 }
 
 /// GET /conversations/deleted — Canvas `deleted_index` (§5.4).
@@ -1378,7 +1424,7 @@ async fn delete_conversation_for_all(
     Path(id): Path<i64>,
     auth: AuthUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    ensure_site_admin(&auth)?;
+    require_site_admin_manage_students(&state.db, auth.id).await?;
 
     let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM conversations WHERE id = $1")
         .bind(id)
@@ -1403,18 +1449,24 @@ async fn delete_conversation_for_all(
 
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/conversations", post(create_conversation))
-        .route("/conversations", get(list_conversations))
+        .route(
+            "/conversations",
+            post(create_conversation)
+                .get(list_conversations)
+                .put(batch_update_conversations),
+        )
         .route("/conversations/batches", get(list_conversation_batches))
         .route("/conversations/unread_count", get(unread_count))
-        .route("/conversations/{id}", get(get_conversation))
-        .route("/conversations/{id}", delete(delete_conversation))
+        .route(
+            "/conversations/{id}",
+            get(get_conversation)
+                .delete(delete_conversation)
+                .put(update_conversation),
+        )
         .route("/conversations/{id}/add_message", post(add_message))
         .route("/conversations/{id}/add_recipients", post(add_recipients))
         .route("/conversations/{id}/remove_messages", post(remove_messages))
         // Conversations tail (#60, platform spec §5.1–5.7)
-        .route("/conversations", put(batch_update_conversations))
-        .route("/conversations/{id}", put(update_conversation))
         .route(
             "/conversations/{id}/delete_for_all",
             delete(delete_conversation_for_all),
@@ -1434,19 +1486,19 @@ pub fn router() -> Router<AppState> {
 mod tests {
     use super::{
         batch_completion, conversation_batch_json, keep_latest_message, message_ids_to_remove,
-        recipients_to_add, validate_new_recipients, validate_recipients, ConversationBatchRow,
-        MessageInResponse, UnreadCount,
+        recipients_to_add, validate_new_recipients, ConversationBatchRow, MessageInResponse,
+        UnreadCount,
     };
     use chrono::{Duration, Utc};
     use star_common::ApiError;
 
     #[test]
-    fn creating_conversation_requires_at_least_one_recipient() {
+    fn adding_recipients_requires_a_recipient() {
         assert!(matches!(
-            validate_recipients(&[]),
-            Err(ApiError::Validation(_))
+            validate_new_recipients(&[]),
+            Err(ApiError::BadRequest(_))
         ));
-        assert!(validate_recipients(&[42]).is_ok());
+        assert!(validate_new_recipients(&[42]).is_ok());
     }
 
     #[test]

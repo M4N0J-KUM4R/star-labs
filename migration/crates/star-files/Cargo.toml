@@ -6,6 +6,7 @@ edition.workspace = true
 [dependencies]
 star-common = { path = "../star-common" }
 star-auth = { path = "../star-auth" }
+star-storage = { path = "../star-storage" }
 uuid = { workspace = true }
 axum = { workspace = true }
 sqlx = { workspace = true }

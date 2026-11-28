@@ -77,7 +77,7 @@ pub async fn enroll_user_in_course(
     course_id: i64,
     user_id: i64,
     role: &str,
-) -> Result<crate::EnrollmentWithUser, ApiError> {
+) -> Result<crate::enrollment_json::EnrollmentApiRow, ApiError> {
     let auth_role = get_user_role(db, actor.id).await?;
     let auth_role = auth_role.unwrap_or_else(|| "student".to_string());
 

@@ -39,8 +39,8 @@ names. Do not explore the repo.
 | POST | `/api/v1/files/:id/create_success` | yes | - | - |
 | POST | `/api/v1/files/:id/create_success` | yes | - | - |
 | POST | `/api/v1/files/:id/reset_verifier` | yes | - | - |
-| POST | `/api/v1/files/capture` | **no** | `404` | **FAIL** |
-| POST | `/api/v1/files/update_word_count` | yes | `400` | **FAIL** |
+| POST | `/api/v1/files/capture` | yes | `404` | **FAIL** |
+| POST | `/api/v1/files/update_word_count` | yes | `400` | pass |
 | POST | `/api/v1/rce_linked_file_instfs_ids` | yes | `403` | pass |
 | PUT | `/api/v1/files/:id` | yes | - | - |
 

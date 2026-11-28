@@ -9,6 +9,7 @@ path = "src/main.rs"
 
 [dependencies]
 star-common = { path = "../star-common" }
+star-canvas-response = { path = "../star-canvas-response" }
 star-db = { path = "../star-db" }
 star-auth = { path = "../star-auth" }
 star-users = { path = "../star-users" }
@@ -47,6 +48,7 @@ star-collaborations = { path = "../star-collaborations" }
 star-conferences = { path = "../star-conferences" }
 star-eportfolios = { path = "../star-eportfolios" }
 star-polling = { path = "../star-polling" }
+star-proxy = { path = "../star-proxy" }
 star-search = { path = "../star-search" }
 star-sis = { path = "../star-sis" }
 star-ui = { path = "../star-ui" }

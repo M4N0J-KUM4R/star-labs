@@ -225,7 +225,7 @@ async fn create_assignment_positive_teacher() {
                 "name": "Essay 1",
                 "description": "write it",
                 "pointsPossible": 25.5,
-                "state": "PUBLISHED"
+                "state": "published"
             }
         }),
     )
@@ -343,7 +343,7 @@ async fn create_assignment_outsider_unauthorized() {
         &server,
         &auth(admin, "admin"),
         CREATE_MUTATION,
-        json!({ "input": { "courseId": course.to_string(), "name": "Admin task", "state": "PUBLISHED" } }),
+        json!({ "input": { "courseId": course.to_string(), "name": "Admin task", "state": "published" } }),
     )
     .await;
     assert_eq!(
@@ -440,7 +440,7 @@ async fn update_assignment_delete_via_state_deleted() {
         &server,
         &auth(teacher, "teacher"),
         UPDATE_MUTATION,
-        json!({ "input": { "id": assignment.to_string(), "state": "DELETED" } }),
+        json!({ "input": { "id": assignment.to_string(), "state": "deleted" } }),
     )
     .await;
     assert_eq!(
@@ -461,7 +461,7 @@ async fn update_assignment_delete_via_state_deleted() {
         &server,
         &auth(teacher, "teacher"),
         UPDATE_MUTATION,
-        json!({ "input": { "id": assignment.to_string(), "state": "DELETED" } }),
+        json!({ "input": { "id": assignment.to_string(), "state": "deleted" } }),
     )
     .await;
     assert!(body["errors"].is_null() || body["errors"].as_array().is_none_or(|e| e.is_empty()));
@@ -482,7 +482,7 @@ async fn update_assignment_delete_via_state_deleted() {
         &server,
         &auth(teacher, "teacher"),
         UPDATE_MUTATION,
-        json!({ "input": { "id": assignment.to_string(), "state": "PUBLISHED" } }),
+        json!({ "input": { "id": assignment.to_string(), "state": "published" } }),
     )
     .await;
     assert_eq!(
@@ -511,7 +511,7 @@ async fn update_assignment_state_deleted_student_insufficient_permission() {
         &server,
         &auth(student, "student"),
         UPDATE_MUTATION,
-        json!({ "input": { "id": assignment.to_string(), "state": "DELETED" } }),
+        json!({ "input": { "id": assignment.to_string(), "state": "deleted" } }),
     )
     .await;
     assert_eq!(

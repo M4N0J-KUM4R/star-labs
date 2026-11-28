@@ -58,18 +58,6 @@ struct SchemeEntryRow {
     min_score: f64,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
-struct AccountNotificationRow {
-    id: i64,
-    account_id: i64,
-    subject: String,
-    message: String,
-    start_at: DateTime<Utc>,
-    end_at: DateTime<Utc>,
-    icon: Option<String>,
-    workflow_state: String,
-}
-
 // ---------------------------------------------------------------------------
 // GraphQL types
 // ---------------------------------------------------------------------------
@@ -133,22 +121,6 @@ impl GradingStandard {
     }
 }
 
-/// Canvas GraphQL `AccountNotification`
-/// (`app/graphql/types/account_notification_type.rb`, subset).
-#[derive(Debug, Clone, SimpleObject)]
-pub struct AccountNotification {
-    pub id: ID,
-    pub account_id: ID,
-    pub subject: String,
-    pub message: String,
-    pub start_at: DateTime<Utc>,
-    pub end_at: DateTime<Utc>,
-    /// Canvas `icon` — nullable (announcement, calendar, …).
-    pub icon: Option<String>,
-    /// `active` | `deleted` (Canvas workflow states).
-    pub workflow_state: String,
-}
-
 // ---------------------------------------------------------------------------
 // Fetchers
 // ---------------------------------------------------------------------------
@@ -206,41 +178,4 @@ pub(crate) async fn fetch_course_grading_standards(
         });
     }
     Ok(out)
-}
-
-/// An account's window-valid, non-deleted announcements (Canvas shows
-/// `start_at <= now < end_at`), ordered by start date.
-pub(crate) async fn fetch_account_notifications(
-    pool: &PgPool,
-    account_id: i64,
-) -> Result<Vec<AccountNotification>, async_graphql::Error> {
-    let rows: Vec<AccountNotificationRow> = sqlx::query_as(
-        r#"
-        SELECT id, account_id, subject, message, start_at, end_at, icon, workflow_state
-        FROM account_notifications
-        WHERE account_id = $1
-          AND workflow_state <> 'deleted'
-          AND start_at <= now()
-          AND end_at > now()
-        ORDER BY start_at, id
-        "#,
-    )
-    .bind(account_id)
-    .fetch_all(pool)
-    .await
-    .map_err(db_err)?;
-
-    Ok(rows
-        .into_iter()
-        .map(|r| AccountNotification {
-            id: ID(r.id.to_string()),
-            account_id: ID(r.account_id.to_string()),
-            subject: r.subject,
-            message: r.message,
-            start_at: r.start_at,
-            end_at: r.end_at,
-            icon: r.icon,
-            workflow_state: r.workflow_state,
-        })
-        .collect())
 }

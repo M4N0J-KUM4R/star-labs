@@ -1,0 +1,81 @@
+//! The Canvas permission registry.
+//!
+//! Every permission Canvas declares, with the rules that decide who holds
+//! it. The data is transcribed from the running Canvas:
+//! `migration/parity/canvas-api-surface.json` (the dump written by
+//! `canvas-boot/canvas_introspection.rb`) for `true_for` / `false_for` /
+//! `account_only` / `deprecated` / `not_for_masquerading`, and
+//! `canvas-src/config/initializers/permissions_registry.rb` for
+//! `available_to` / `applies_to_concluded` / `account_allows` /
+//! `restrict_future_enrollments`.
+//!
+//! GENERATED — do not edit by hand. Regenerate with
+//! `migration/tools/parity/gen_permission_registry.py`.
+//!
+//! The rules themselves live in [`crate::rules`].
+
+use crate::rules::{Concluded, RoleKind};
+
+/// Where a permission may be administered, and whether it may only be
+/// administered at the root account or by a site admin.
+///
+/// Mirrors `account_only` in the Ruby registry. `Account` is the registry's
+/// `account_only: true`, which only restricts the permission *management*
+/// UI and does not change the grant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountOnly {
+    /// No account restriction.
+    None,
+    /// `account_only: true` — manageable in an account context only.
+    Account,
+    /// `account_only: :root` — the root account only.
+    Root,
+    /// `account_only: :site_admin` — site admins only.
+    SiteAdmin,
+}
+
+/// Whether Canvas gates the permission on an account setting or feature.
+///
+/// Canvas's `account_allows` is a lambda over the account, e.g.
+/// `a.root_account.feature_enabled?(:horizon_bulk_api_permission)`. The port
+/// does not carry Canvas's feature flags, so the layer denies these
+/// permissions rather than allowing what Canvas may deny.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountAllows {
+    /// No account-level condition; the role rules decide.
+    Always,
+    /// Canvas gates the permission on an account setting or feature flag.
+    Required,
+}
+
+/// One permission, with the rules that decide who holds it.
+#[derive(Debug, Clone, Copy)]
+pub struct PermissionSpec {
+    /// The permission name, as Canvas names it.
+    pub name: &'static str,
+    /// The human label Canvas shows for it.
+    pub label: &'static str,
+    /// The roles that hold the permission by default.
+    pub true_for: &'static [RoleKind],
+    /// The roles that never hold the permission.
+    pub false_for: &'static [RoleKind],
+    /// The roles whose permission value may be overridden. A role that is
+    /// not listed is *locked* to the default (Canvas
+    /// `RoleOverride#uncached_permission_for`).
+    pub available_to: &'static [RoleKind],
+    /// Where the permission may be administered.
+    pub account_only: AccountOnly,
+    /// Whether the permission survives a concluded enrollment.
+    pub applies_to_concluded: Concluded,
+    /// Whether Canvas gates the permission on an account setting.
+    pub account_allows: AccountAllows,
+    /// Whether a future (invited) enrollment is denied the permission.
+    pub restrict_future_enrollments: bool,
+    /// Whether the permission may be used while masquerading.
+    pub not_for_masquerading: bool,
+    /// Whether Canvas marks the permission as deprecated.
+    pub deprecated: bool,
+}
+
+/// Every permission Canvas declares, in registry order.
+pub static PERMISSIONS: &[PermissionSpec] = &[

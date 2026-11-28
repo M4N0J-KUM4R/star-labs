@@ -43,11 +43,13 @@ from __future__ import annotations
 
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 
 DEFAULT_HEAD = Path("migration/crates/star-db/migrations")
 DEFAULT_ALLOWLIST = Path(__file__).resolve().parent / "migration_destructive_allowlist.txt"
+DEFAULT_EDIT_ALLOWLIST = Path(__file__).resolve().parent / "migration_edit_allowlist.txt"
 FILENAME_RE = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
 ALLOWLIST_RE = re.compile(r"^(\S+):(\d+)\s+(DROP|TRUNCATE)$")
 # DROP followed by anything except the NOT NULL / DEFAULT relaxations, and
@@ -149,7 +151,86 @@ def load_allowlist(path: Path) -> tuple[set[str], list[str]]:
     return entries, errors
 
 
-def check(head_dir: Path, base_dir: Path | None = None) -> tuple[list[str], int]:
+def introduced_content(git_root: Path, path: str) -> str | None:
+    """The bytes of a migration file as the commit that introduced it wrote them.
+
+    `None` when the file is not in git yet (a new migration) or the git
+    history is unavailable — a file that git does not know cannot have been
+    edited after it was applied.
+    """
+    added = subprocess.run(
+        ["git", "-C", str(git_root), "log", "--follow", "--format=%H", "--", path],
+        capture_output=True,
+        text=True,
+    )
+    if added.returncode != 0:
+        return None
+    # `--follow` walks the rename chain, so the oldest commit may carry the
+    # file under an earlier name; the first commit that has the file under
+    # the name it has today is the one that introduced it.
+    for commit in reversed(added.stdout.split()):
+        show = subprocess.run(
+            ["git", "-C", str(git_root), "show", f"{commit}:{path}"],
+            capture_output=True,
+            text=True,
+        )
+        if show.returncode == 0:
+            return show.stdout
+    return None
+
+
+def load_edit_allowlist(path: Path) -> set[str]:
+    """The migrations known to have been edited after they were added.
+
+    Each entry is a filename and a reason. The entries are debt: every one
+    of them breaks a database that applied the file, and the list shrinks as
+    the files are restored.
+    """
+    entries: set[str] = set()
+    if not path.is_file():
+        return entries
+    for raw in path.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        entries.add(line.split()[0])
+    return entries
+
+
+def known_edit_debt(head_dir: Path, git_root: Path | None = None) -> list[str]:
+    """The migrations that were edited after they were added, and are allowed.
+
+    The list is debt: each entry is a file that breaks every database that
+    applied it. `tools/ci/migration_edit_allowlist.txt` holds the entries.
+    """
+    if git_root is None or not (git_root / ".git").exists():
+        return []
+    allowlist = load_edit_allowlist(DEFAULT_EDIT_ALLOWLIST)
+    debt: list[str] = []
+    for _, names in sorted(collect_migrations(head_dir)[0].items()):
+        for name in names:
+            path = migration_path(head_dir, git_root, name)
+            if path is None:
+                continue
+            original = introduced_content(git_root, path)
+            if original is None or original == (head_dir / name).read_text():
+                continue
+            if name in allowlist:
+                debt.append(f"[edited] {name}: known debt — restore the file and "
+                            "put the change in a new migration")
+    return debt
+
+
+def migration_path(head_dir: Path, git_root: Path, name: str) -> str | None:
+    """The repository path of a migration file, or None when it is outside."""
+    try:
+        return str((head_dir / name).relative_to(git_root))
+    except ValueError:
+        return None
+
+
+def check(head_dir: Path, base_dir: Path | None = None,
+          git_root: Path | None = None) -> tuple[list[str], int]:
     """Run all rules; return (violations, migration count at head)."""
     errors: list[str] = []
     if not head_dir.is_dir():
@@ -200,6 +281,32 @@ def check(head_dir: Path, base_dir: Path | None = None) -> tuple[list[str], int]
                     f"but head has {', '.join(head_names)}"
                 )
 
+    # An edited migration is the failure mode that takes a whole database
+    # down: sqlx records the SHA-384 of the file it applied
+    # (sqlx-core/src/migrate/migration.rs) and refuses to run when the file
+    # changed — `VersionMismatch`. The nightly's Supabase lane has been
+    # failing exactly that way.
+    if git_root is not None and (git_root / ".git").exists():
+        edit_allowlist = load_edit_allowlist(DEFAULT_EDIT_ALLOWLIST)
+        for number, names in sorted(numbers.items()):
+            for name in names:
+                path = migration_path(head_dir, git_root, name)
+                if path is None:
+                    continue
+                original = introduced_content(git_root, path)
+                if original is None:
+                    continue
+                if original == (head_dir / name).read_text():
+                    continue
+                message = (
+                    f"[edited] {name}: the file changed after it was added — "
+                    "sqlx records the file's checksum, so an edited migration "
+                    "breaks every database that has applied it. Restore the "
+                    "file and put the change in a new migration."
+                )
+                if name not in edit_allowlist:
+                    errors.append(message)
+
     return errors, count
 
 
@@ -218,16 +325,30 @@ def main(argv: list[str] | None = None) -> int:
         help="baseline migrations directory (merge-base snapshot) for "
         "renumber/rename/deletion detection",
     )
+    parser.add_argument(
+        "--git-root",
+        type=Path,
+        default=Path.cwd(),
+        help="repository root, for the 'an added migration is never edited' "
+             "rule (default: the current directory)",
+    )
     args = parser.parse_args(argv)
 
-    errors, count = check(args.head, args.base)
+    errors, count = check(args.head, args.base, args.git_root)
+    debt = known_edit_debt(args.head, args.git_root)
+    if debt:
+        print(f"migration guard: {len(debt)} known debt item(s) (ratchet — see "
+              f"{DEFAULT_EDIT_ALLOWLIST.name}):")
+        for item in debt:
+            print(f"  {item}")
     if errors:
         print(f"migration guard: {len(errors)} violation(s) in {args.head}")
         for error in errors:
             print(f"  {error}")
         print(
             "\nRules (protocol #20): numbers unique, never renumbered, "
-            "additive-only — no DROP/TRUNCATE in migrations."
+            "additive-only — no DROP/TRUNCATE in migrations, and a migration "
+            "file is never edited after it is added."
         )
         return 1
     print(f"migration guard: OK — {count} migrations pass all rules")

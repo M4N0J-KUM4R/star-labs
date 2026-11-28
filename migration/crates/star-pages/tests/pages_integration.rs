@@ -205,7 +205,10 @@ async fn alias_of_page_in_another_course_is_404() {
         .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
         .await;
     assert_eq!(resp.status_code(), 404, "body: {}", resp.text());
-    assert_eq!(resp.text(), "not found");
+    assert_eq!(
+        resp.text(),
+        r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+    );
 
     let resp = server
         .put(&wrong_door)
@@ -269,7 +272,10 @@ async fn alias_authz_matches_flat_routes() {
         .json(&json!({ "title": "hijack" }))
         .await;
     assert_eq!(resp.status_code(), 403, "{alias}; body: {}", resp.text());
-    assert_eq!(resp.text(), "forbidden");
+    assert_eq!(
+        resp.text(),
+        r#"{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}"#
+    );
 
     let resp = server
         .delete(&alias)
@@ -425,7 +431,10 @@ async fn revision_routes_are_course_scoped() {
             .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
             .await;
         assert_eq!(resp.status_code(), 404, "{url}; body: {}", resp.text());
-        assert_eq!(resp.text(), "not found");
+        assert_eq!(
+            resp.text(),
+            r#"{"errors":[{"message":"The specified resource does not exist."}]}"#
+        );
     }
 
     cleanup(&pool, &prefix).await;

@@ -32,15 +32,15 @@ use crate::{
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-struct AssignmentRow {
-    id: i64,
-    course_id: i64,
-    name: String,
-    description: Option<String>,
-    points_possible: f64,
-    due_at: Option<DateTime<Utc>>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+pub(crate) struct AssignmentRow {
+    pub(crate) id: i64,
+    pub(crate) course_id: i64,
+    pub(crate) name: String,
+    pub(crate) description: Option<String>,
+    pub(crate) points_possible: f64,
+    pub(crate) due_at: Option<DateTime<Utc>>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 // ---------------------------------------------------------------------------

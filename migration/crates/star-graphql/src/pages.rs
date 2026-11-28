@@ -90,14 +90,14 @@ pub enum ProgressState {
 /// `body`, `url`, `published`, `frontPage`, `createdAt`, `updatedAt`.
 #[derive(Debug, Clone)]
 pub struct Page {
-    id: i64,
-    title: String,
-    body: Option<String>,
-    url: Option<String>,
-    workflow_state: String,
-    front_page: bool,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) title: String,
+    pub(crate) body: Option<String>,
+    pub(crate) url: Option<String>,
+    pub(crate) workflow_state: String,
+    pub(crate) front_page: bool,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -107,6 +107,7 @@ impl Page {
     }
 
     /// Canvas `Page._id`: the legacy canvas id (LegacyIDInterface).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
@@ -150,16 +151,16 @@ impl Page {
 /// rows are polymorphic (0127) and the union members have no resolvers.
 #[derive(Debug, Clone)]
 pub struct Progress {
-    id: i64,
-    user_id: Option<i64>,
-    tag: String,
-    workflow_state: String,
-    completion: i32,
-    context_type: Option<String>,
-    context_id: Option<i64>,
-    message: Option<String>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) user_id: Option<i64>,
+    pub(crate) tag: String,
+    pub(crate) workflow_state: String,
+    pub(crate) completion: i32,
+    pub(crate) context_type: Option<String>,
+    pub(crate) context_id: Option<i64>,
+    pub(crate) message: Option<String>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 impl Progress {
@@ -176,6 +177,7 @@ impl Progress {
     }
 
     /// Canvas `Progress._id`: the legacy canvas id (progress_type.rb:46).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
@@ -348,4 +350,37 @@ pub(crate) async fn fetch_page_page(
             end_cursor,
         },
     })
+}
+
+// ---------------------------------------------------------------------------
+// Single-record fetch (Canvas `Query.node` / `Query.legacyNode`)
+// ---------------------------------------------------------------------------
+
+/// Canvas `Query.node(type: Page)` — a wiki page by legacy id.
+pub(crate) async fn fetch_page(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<Page>, async_graphql::Error> {
+    let row: Option<PageRow> = sqlx::query_as(
+        r#"
+        SELECT id, title, body, url, workflow_state, front_page, created_at, updated_at
+        FROM pages
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(|row| Page {
+        id: row.id,
+        title: row.title,
+        body: row.body,
+        url: row.url,
+        workflow_state: row.workflow_state,
+        front_page: row.front_page,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    }))
 }

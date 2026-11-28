@@ -38,7 +38,7 @@ names. Do not explore the repo.
 | GET | `/api/v1/users/activity_stream` | yes | `200` | **FAIL** |
 | GET | `/api/v1/users/self/activity_stream` | yes | `200` | pass |
 | GET | `/api/v1/users/self/activity_stream/summary` | yes | `200` | pass |
-| GET | `/api/v1/users/self/todo` | yes | `200` | pass |
+| GET | `/api/v1/users/self/todo` | yes | `200` | **FAIL** |
 | GET | `/api/v1/users/self/todo_item_count` | yes | `200` | pass |
 | GET | `/api/v1/users/self/upcoming_events` | yes | `200` | pass |
 | POST | `/api/v1/accounts/:account_id/self_registration` | yes | - | - |
@@ -67,8 +67,8 @@ names. Do not explore the repo.
 | `users-get-users-self-activity-stream-summary` | 200 | `[]` |
 | `users-delete-users-self-activity-stream` | 200 | `{"hidden":true}` |
 | `users-get-users-self-activity-stream` | 200 | `[]` |
-| `users-get-users-self-todo` | 200 | `[]` |
-| `users-get-users-self-todo-item-count` | 200 | `{"needs_grading_count":0,"assignments_needing_submitting":0}` |
+| `users-get-users-self-todo` | 200 | `[{"context_type":"Course","course_id":1,"context_name":"Parity Course","context_short_name":"PARITY","type":"grading","i…` |
+| `users-get-users-self-todo-item-count` | 200 | `{"needs_grading_count":1,"assignments_needing_submitting":0}` |
 
 Open `migration/rust/app-cases/http/<case>.toml` for the full recorded
 response — status, headers and body. That file is the contract.

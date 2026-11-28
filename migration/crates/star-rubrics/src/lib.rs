@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use star_auth::AuthUser;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 
 mod rubrics_api;
 
@@ -328,8 +328,14 @@ async fn check_enrolled_or_admin(
     if is_admin(auth) {
         return Ok(true);
     }
+    // Canvas' course membership check runs over `active_or_pending_by_date`
+    // (`app/models/enrollment.rb:1438`); its `active` scope is
+    // `workflow_state <> 'deleted'` (`app/models/enrollment.rb:293`), so a
+    // concluded enrollment still counts as membership.
     let row: Option<(i32,)> = sqlx::query_as(
-        r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 LIMIT 1"#,
+        r#"SELECT 1 FROM enrollments
+           WHERE user_id = $1 AND course_id = $2 AND workflow_state <> 'deleted'
+           LIMIT 1"#,
     )
     .bind(user_id)
     .bind(course_id)
@@ -347,8 +353,14 @@ async fn check_teacher_or_admin(
     if is_admin(auth) {
         return Ok(true);
     }
+    // Canvas grants the course-admin permissions through
+    // `active_or_pending_by_date` (`app/models/enrollment.rb:1438`), which
+    // does not list a completed enrollment.
     let row: Option<(i32,)> = sqlx::query_as(
-        r#"SELECT 1 FROM enrollments WHERE user_id = $1 AND course_id = $2 AND role = 'teacher' LIMIT 1"#,
+        r#"SELECT 1 FROM enrollments
+           WHERE user_id = $1 AND course_id = $2 AND role = 'teacher'
+             AND workflow_state IN ('active', 'invited')
+           LIMIT 1"#,
     )
     .bind(user_id)
     .bind(course_id)
@@ -1246,11 +1258,13 @@ async fn list_used_locations(
     Path((course_id, rubric_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<Vec<UsedLocationCourse>>, ApiError> {
-    verify_rubric_course(&state.db, course_id, rubric_id).await?;
-
+    // Canvas checks `manage_rubrics` on the course *before* it looks the
+    // rubric up (`app/controllers/rubrics_api_controller.rb:293`), so a
+    // caller without the right gets 403 even for a missing rubric.
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
+    verify_rubric_course(&state.db, course_id, rubric_id).await?;
 
     let rows: Vec<UsedLocationRow> = sqlx::query_as(
         r#"
@@ -1575,7 +1589,7 @@ impl RubricImportResponse {
 }
 
 /// Request body for POST .../rubrics/upload.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct UploadRubricRequest {
     pub attachment_id: Option<i64>,
 }
@@ -1618,8 +1632,13 @@ async fn upload_rubric(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<UploadRubricRequest>,
-) -> Result<(StatusCode, Json<RubricImportResponse>), ApiError> {
+    ApiJson(payload): ApiJson<UploadRubricRequest>,
+) -> Result<Response, ApiError> {
+    // Canvas grants `manage_rubrics` on the course to the built-in course
+    // roles (`config/initializers/permissions_registry.rb`:
+    // `manage_rubrics: true_for %w[DesignerEnrollment TaEnrollment
+    // TeacherEnrollment AccountAdmin]`), so a course teacher passes the
+    // permission and the request fails later, on the missing file.
     if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
         return Err(ApiError::Forbidden);
     }
@@ -1633,9 +1652,15 @@ async fn upload_rubric(
         return Err(ApiError::NotFound);
     }
 
-    let attachment_id = payload
-        .attachment_id
-        .ok_or_else(|| ApiError::Validation("attachment_id is required".into()))?;
+    // Canvas renders `{"message": "No file attached"}` with a 400 when the
+    // request carries no file (`app/controllers/rubrics_api_controller.rb:329-331`).
+    let Some(attachment_id) = payload.attachment_id else {
+        return Ok((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "message": "No file attached" })),
+        )
+            .into_response());
+    };
 
     let mut import =
         create_rubric_import(&state.db, course_id, "Course", Some(auth.id), attachment_id).await?;
@@ -1656,7 +1681,7 @@ async fn upload_rubric(
     // Canvas `rubrics_api#upload` renders the import JSON with the default
     // status — 200, not :created (rubrics_api_controller.rb:339-344) — the
     // same as the account twin in `rubrics_api`.
-    Ok((StatusCode::OK, Json(import)))
+    Ok((StatusCode::OK, Json(import)).into_response())
 }
 
 // -----------------------------------------------------------------------------
@@ -1677,32 +1702,16 @@ async fn get_course_rubric(
     Path((course_id, rubric_id)): Path<(i64, i64)>,
     auth: AuthUser,
 ) -> Result<Json<RubricResponse>, ApiError> {
+    // Canvas checks `manage_rubrics` on the course *before* it looks the
+    // rubric up (`app/controllers/rubrics_api_controller.rb:293`), so a
+    // caller without the right gets 403 even for a missing rubric.
+    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
     verify_rubric_course(&state.db, course_id, rubric_id).await?;
     get_rubric(State(state), Path(rubric_id), auth).await
 }
 
-/// PUT /courses/{courseId}/rubrics/{id}  → 200 (Canvas nested alias).
-async fn update_course_rubric(
-    State(state): State<AppState>,
-    Path((course_id, rubric_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-    Json(payload): Json<UpdateRubric>,
-) -> Result<Json<RubricResponse>, ApiError> {
-    verify_rubric_course(&state.db, course_id, rubric_id).await?;
-    update_rubric(State(state), Path(rubric_id), auth, Json(payload)).await
-}
-
-/// DELETE /courses/{courseId}/rubrics/{id}  → 204 (Canvas nested alias).
-async fn delete_course_rubric(
-    State(state): State<AppState>,
-    Path((course_id, rubric_id)): Path<(i64, i64)>,
-    auth: AuthUser,
-) -> Result<StatusCode, ApiError> {
-    verify_rubric_course(&state.db, course_id, rubric_id).await?;
-    delete_rubric(State(state), Path(rubric_id), auth).await
-}
-
-// ---------------------------------------------------------------------------
 // CSV template + export (Canvas `RubricsApiController#upload_template` /
 // `#download_rubrics`)
 // ---------------------------------------------------------------------------
@@ -1715,7 +1724,7 @@ Rubric 1,Criteria 1,Criteria 1 Description,false,Rating 1,Rating 1 Description,2
 Rubric 1,Criteria 2,Criteria 2 Description,false,Criteria 2 Rating 1,Rating Description,1,Criteria 2 Rating 2,Rating 2 Description,1\n";
 
 /// `rubric_ids` from a Canvas export request (array or comma-separated ids).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct DownloadRubrics {
     #[serde(default)]
     pub rubric_ids: Option<Vec<i64>>,
@@ -1897,7 +1906,7 @@ async fn download_course_rubrics(
     State(state): State<AppState>,
     Path(course_id): Path<i64>,
     auth: AuthUser,
-    Json(params): Json<DownloadRubrics>,
+    ApiJson(params): ApiJson<DownloadRubrics>,
 ) -> Result<Response, ApiError> {
     let course_exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM courses WHERE id = $1")
         .bind(course_id)
@@ -1950,7 +1959,7 @@ async fn download_account_rubrics(
     State(state): State<AppState>,
     Path(account_id): Path<i64>,
     auth: AuthUser,
-    Json(params): Json<DownloadRubrics>,
+    ApiJson(params): ApiJson<DownloadRubrics>,
 ) -> Result<Response, ApiError> {
     if !is_admin(&auth) {
         return Err(ApiError::Forbidden);
@@ -2001,9 +2010,31 @@ async fn download_account_rubrics(
 // Router
 // ---------------------------------------------------------------------------
 
+/// PUT /courses/{courseId}/rubrics/{id}  → 200 (Canvas nested alias).
+async fn update_course_rubric(
+    State(state): State<AppState>,
+    Path((course_id, rubric_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+    Json(payload): Json<UpdateRubric>,
+) -> Result<Json<RubricResponse>, ApiError> {
+    verify_rubric_course(&state.db, course_id, rubric_id).await?;
+    update_rubric(State(state), Path(rubric_id), auth, Json(payload)).await
+}
+
+/// DELETE /courses/{courseId}/rubrics/{id}  → 204 (Canvas nested alias).
+async fn delete_course_rubric(
+    State(state): State<AppState>,
+    Path((course_id, rubric_id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    verify_rubric_course(&state.db, course_id, rubric_id).await?;
+    delete_rubric(State(state), Path(rubric_id), auth).await
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .merge(rubrics_api::router())
+        // The peer reviews of an assignment.
         .route("/courses/{courseId}/rubrics", post(create_rubric))
         .route("/courses/{courseId}/rubrics", get(list_course_rubrics))
         .route("/courses/{courseId}/rubrics/{id}", get(get_course_rubric))
@@ -2015,6 +2046,8 @@ pub fn router() -> Router<AppState> {
             "/courses/{courseId}/rubrics/{id}",
             delete(delete_course_rubric),
         )
+
+
         .route("/rubrics/{id}", get(get_rubric))
         .route("/rubrics/{id}", put(update_rubric))
         .route("/rubrics/{id}", delete(delete_rubric))

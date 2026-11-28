@@ -1427,10 +1427,19 @@ async fn remove_account_users(
     if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
-    // Canvas: @account.grants_right?(@current_user, :manage_users_in_bulk)
-    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas: `@account.grants_right?(@current_user, :manage_users_in_bulk)`
+    // (`app/controllers/accounts_controller.rb:1885`). The permission is
+    // gated on the root account's `horizon_bulk_api_permission` feature
+    // (`config/initializers/permissions_registry.rb`), which is off by
+    // default — so the request is refused, and "is the caller an admin of
+    // this account" is not the question Canvas asks.
+    star_permissions::check::require(
+        &state.db,
+        auth.id,
+        &star_permissions::PermissionContext::Account { account_id },
+        "manage_users_in_bulk",
+    )
+    .await?;
 
     let user_ids = parse_user_id_list(&params);
     if user_ids.len() > MAX_USERS_PER_BULK_UPDATE {
@@ -1472,9 +1481,16 @@ async fn bulk_update_account_users(
     if !account_exists(&state.db, account_id).await? {
         return Err(ApiError::NotFound);
     }
-    if !can_access_account(&state.db, auth.id, account_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas: `@account.grants_right?(@current_user, :manage_users_in_bulk)`
+    // (`app/controllers/accounts_controller.rb:1920`) — the same permission
+    // as the sibling delete, and the same feature gate.
+    star_permissions::check::require(
+        &state.db,
+        auth.id,
+        &star_permissions::PermissionContext::Account { account_id },
+        "manage_users_in_bulk",
+    )
+    .await?;
 
     let user_ids = parse_user_id_list(&params);
     if user_ids.len() > MAX_USERS_PER_BULK_UPDATE {

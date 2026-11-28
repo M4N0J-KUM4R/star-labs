@@ -14,7 +14,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -496,6 +496,107 @@ async fn accessibility_queue_scan(
     Ok(StatusCode::ACCEPTED)
 }
 
+#[derive(Debug, Serialize)]
+pub struct UnreadCount {
+    pub unread_count: i64,
+}
+
+// ---------------------------------------------------------------------------
+// Read state (Canvas DiscussionTopicRead parity)
+// ---------------------------------------------------------------------------
+
+/// PUT /courses/{courseId}/announcements/{id}/read — mark read for the caller.
+///
+/// Canvas responds 204 No Content with an empty body and treats repeated
+/// calls as a no-op, so the insert is an upsert.
+async fn mark_announcement_read(
+    State(state): State<AppState>,
+    Path((course_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_announcement_in_course(&state.db, course_id, id).await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO announcement_reads (announcement_id, user_id, state)
+        VALUES ($1, $2, 'read')
+        ON CONFLICT (announcement_id, user_id)
+        DO UPDATE SET state = 'read', updated_at = now()
+        "#,
+    )
+    .bind(id)
+    .bind(auth.id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// DELETE /courses/{courseId}/announcements/{id}/read — mark unread.
+///
+/// Canvas clears the read record (204, empty body) and is idempotent.
+async fn mark_announcement_unread(
+    State(state): State<AppState>,
+    Path((course_id, id)): Path<(i64, i64)>,
+    auth: AuthUser,
+) -> Result<StatusCode, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+    ensure_announcement_in_course(&state.db, course_id, id).await?;
+
+    sqlx::query(
+        r#"
+        UPDATE announcement_reads
+        SET state = 'unread', updated_at = now()
+        WHERE announcement_id = $1 AND user_id = $2
+        "#,
+    )
+    .bind(id)
+    .bind(auth.id)
+    .execute(&state.db)
+    .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /courses/{courseId}/announcements/unread_count — count unread for the caller.
+///
+/// Mirrors Canvas unread counters: every non-deleted announcement in the
+/// course without a `state = 'read'` row for this user counts as unread.
+async fn unread_count(
+    State(state): State<AppState>,
+    Path(course_id): Path<i64>,
+    auth: AuthUser,
+) -> Result<Json<UnreadCount>, ApiError> {
+    if !check_enrolled_or_admin(&state.db, auth.id, course_id, &auth).await? {
+        return Err(ApiError::Forbidden);
+    }
+
+    let (count,): (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)::BIGINT
+        FROM announcements a
+        LEFT JOIN announcement_reads ar
+            ON ar.announcement_id = a.id AND ar.user_id = $2
+        WHERE a.course_id = $1
+          AND a.workflow_state <> 'deleted'
+          AND (ar.id IS NULL OR ar.state <> 'read')
+        "#,
+    )
+    .bind(course_id)
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await?;
+
+    Ok(Json(UnreadCount {
+        unread_count: count,
+    }))
+}
+
 // ---------------------------------------------------------------------------
 // Router
 // ---------------------------------------------------------------------------
@@ -513,14 +614,24 @@ pub fn router() -> Router<AppState> {
         )
         // The RSS feeds of a course or a group.
         .merge(external_feeds::router())
-        .route("/courses/{courseId}/announcements", get(list_announcements))
         .route(
             "/courses/{courseId}/announcements",
-            post(create_announcement),
+            get(list_announcements).post(create_announcement),
         )
-        .route("/announcements/{id}", get(get_announcement))
-        .route("/announcements/{id}", put(update_announcement))
-        .route("/announcements/{id}", delete(delete_announcement))
+        .route(
+            "/courses/{courseId}/announcements/unread_count",
+            get(unread_count),
+        )
+        .route(
+            "/courses/{courseId}/announcements/{id}/read",
+            put(mark_announcement_read).delete(mark_announcement_unread),
+        )
+        .route(
+            "/announcements/{id}",
+            get(get_announcement)
+                .put(update_announcement)
+                .delete(delete_announcement),
+        )
 }
 
 #[cfg(test)]

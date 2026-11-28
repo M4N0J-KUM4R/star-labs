@@ -284,9 +284,43 @@ async fn terminate_sessions_expires_tokens() {
         .await;
     assert_eq!(res.status_code(), 403);
 
+    // Acting on yourself is not enough: Canvas' User policy grants
+    // `terminate_sessions` only through `manage_user_logins`
+    // (app/models/user.rb:1529-1531), and that permission is `account_only:
+    // :root`. The `given { |user| user == self }` block
+    // (app/models/user.rb:1470-1497) does not carry it.
     let res = server
         .delete(&format!("/users/{owner}/sessions"))
         .add_header("Authorization", auth(owner, "student"))
+        .await;
+    assert_eq!(res.status_code(), 403);
+
+    // An admin of a root account the target belongs to may terminate the
+    // sessions: `check_accounts_right?(user, :manage_user_logins)` looks at
+    // the accounts of the target, and `manage_user_logins` is held by an
+    // account admin.
+    let admin = seed_user(&pool, &prefix, "Session Admin", "student").await;
+    let (root_account,): (i64,) =
+        sqlx::query_as("INSERT INTO accounts (name) VALUES ($1) RETURNING id")
+            .bind(format!("{prefix} root account"))
+            .fetch_one(&pool)
+            .await
+            .expect("seed root account");
+    for (account_id, user_id) in [(root_account, admin), (root_account, owner)] {
+        sqlx::query(
+            "INSERT INTO account_users (account_id, user_id, role) \
+             VALUES ($1, $2, 'admin')",
+        )
+        .bind(account_id)
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .expect("seed account membership");
+    }
+
+    let res = server
+        .delete(&format!("/users/{owner}/sessions"))
+        .add_header("Authorization", auth(admin, "student"))
         .await;
     assert_eq!(res.status_code(), 200);
     assert_eq!(res.json::<Value>()["message"], "All sessions terminated");

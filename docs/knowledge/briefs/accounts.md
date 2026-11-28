@@ -20,7 +20,7 @@ names. Do not explore the repo.
 | DELETE | `/api/v1/accounts/:account_id/users` | yes | - | - |
 | DELETE | `/api/v1/accounts/:account_id/users/:user_id` | yes | - | - |
 | GET | `/api/v1/acceptable_use_policy` | yes | `200` | pass |
-| GET | `/api/v1/accounts` | yes | `200` | pass |
+| GET | `/api/v1/accounts` | yes | `200` | **FAIL** |
 | GET | `/api/v1/accounts/:account_id/accessibility_issue_summary` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/courses` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/help_links` | yes | - | - |
@@ -30,8 +30,8 @@ names. Do not explore the repo.
 | GET | `/api/v1/accounts/:account_id/sub_accounts` | yes | - | - |
 | GET | `/api/v1/accounts/:account_id/terms_of_service` | yes | - | - |
 | GET | `/api/v1/accounts/:id` | yes | - | - |
-| GET | `/api/v1/course_accounts` | yes | `200` | pass |
-| GET | `/api/v1/course_creation_accounts` | yes | `200` | pass |
+| GET | `/api/v1/course_accounts` | yes | `200` | **FAIL** |
+| GET | `/api/v1/course_creation_accounts` | yes | `200` | **FAIL** |
 | GET | `/api/v1/horizon_accounts` | yes | `200` | pass |
 | GET | `/api/v1/manageable_accounts` | yes | `200` | **FAIL** |
 | GET | `/api/v1/manually_created_courses_account` | yes | `200` | **FAIL** |
@@ -45,12 +45,12 @@ names. Do not explore the repo.
 | case | Canvas answered | body |
 |---|---|---|
 | `accounts-get-settings-environment` | 200 | `{}` |
-| `accounts-get-accounts` | 200 | `[]` |
-| `accounts-get-course-accounts` | 200 | `[..]` |
-| `accounts-get-manageable-accounts` | 200 | `[]` |
+| `accounts-get-accounts` | 200 | `[{"id":6,"name":"Parity Account","parent_account_id":null,"root_account_id":null,"workflow_state":"active","uuid":"Cv5td…` |
+| `accounts-get-course-accounts` | 200 | `[{"id":6,"name":"Parity Account","parent_account_id":null,"root_account_id":null,"workflow_state":"active","uuid":"Cv5td…` |
+| `accounts-get-manageable-accounts` | 200 | `[{"id":6,"name":"Parity Account","parent_account_id":null,"root_account_id":null,"workflow_state":"active","uuid":"Cv5td…` |
 | `accounts-get-horizon-accounts` | 200 | `[]` |
-| `accounts-get-course-creation-accounts` | 200 | `[]` |
-| `accounts-get-manually-created-courses-account` | 200 | `{"id":9,"name":"Manually-Created Courses","parent_account_id":4,"root_account_id":4,"workflow_state":"active","uuid":"Hp…` |
+| `accounts-get-course-creation-accounts` | 200 | `[{"id":6,"name":"Parity Account","parent_account_id":null,"root_account_id":null,"workflow_state":"active","uuid":"Cv5td…` |
+| `accounts-get-manually-created-courses-account` | 200 | `{"id":9,"name":"Manually-Created Courses","parent_account_id":4,"root_account_id":null,"workflow_state":"active","uuid":…` |
 | `accounts-get-acceptable-use-policy` | 200 | `{"content":null}` |
 
 Open `migration/rust/app-cases/http/<case>.toml` for the full recorded

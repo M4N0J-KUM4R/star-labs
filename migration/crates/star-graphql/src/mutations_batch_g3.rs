@@ -6,8 +6,39 @@
 //! Same CONTRACT.md error channels as Batches A–C/G1/G2.
 
 use async_graphql::{Context, InputObject, Object, SimpleObject, ID};
+use chrono::{DateTime, Utc};
 
 use crate::{db_err, GraphQLContext};
+
+// ---------------------------------------------------------------------------
+// Row shapes for the mutation payloads
+// ---------------------------------------------------------------------------
+
+/// A row of `institutional_tags` (0224) — the payload of the
+/// `createInstitutionalTag` / `updateInstitutionalTag` mutations.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct InstitutionalTagRow {
+    id: i64,
+    name: String,
+    description: String,
+    category_id: i64,
+    workflow_state: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+/// A row of `institutional_tag_categories` (0224) — the payload of the
+/// `createInstitutionalTagCategory` / `updateInstitutionalTagCategory`
+/// mutations.
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct InstitutionalTagCategoryRow {
+    id: i64,
+    name: String,
+    description: Option<String>,
+    workflow_state: String,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
 
 // ---------------------------------------------------------------------------
 // Shared helpers
@@ -72,7 +103,7 @@ pub struct CreateInstitutionalTagInput {
 
 #[derive(Debug, Clone, SimpleObject)]
 pub struct InstitutionalTagPayload {
-    pub institutional_tag: Option<crate::entities_batch_f::InstitutionalTag>,
+    pub institutional_tag: Option<crate::root_types::InstitutionalTag>,
     pub errors: Vec<G3Error>,
 }
 
@@ -118,7 +149,7 @@ pub struct CreateInstitutionalTagCategoryInput {
 
 #[derive(Debug, Clone, SimpleObject)]
 pub struct InstitutionalTagCategoryPayload {
-    pub institutional_tag_category: Option<crate::entities_batch_f::InstitutionalTagCategory>,
+    pub institutional_tag_category: Option<crate::root_types::InstitutionalTagCategory>,
     pub errors: Vec<G3Error>,
 }
 
@@ -136,31 +167,6 @@ pub struct UpdateInstitutionalTagCategoryArchivedStateInput {
 }
 
 #[derive(Debug, Clone, InputObject)]
-pub struct CreateInternalSettingInput {
-    pub name: String,
-    pub value: String,
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, SimpleObject)]
-pub struct InternalSettingPayload {
-    pub internal_setting: Option<crate::entities_batch_f::InternalSetting>,
-    pub errors: Vec<G3Error>,
-}
-
-#[derive(Debug, Clone, InputObject)]
-pub struct UpdateInternalSettingInput {
-    pub internal_setting_id: ID,
-    pub value: Option<String>,
-    pub description: Option<String>,
-}
-
-#[derive(Debug, Clone, InputObject)]
-pub struct DeleteInternalSettingInput {
-    pub internal_setting_id: ID,
-}
-
-#[derive(Debug, Clone, InputObject)]
 pub struct CreateUserInboxLabelInput {
     pub name: String,
     pub color: Option<String>,
@@ -169,23 +175,6 @@ pub struct CreateUserInboxLabelInput {
 #[derive(Debug, Clone, SimpleObject)]
 pub struct UserInboxLabelPayload {
     pub inbox_label: Option<serde_json::Value>,
-    pub errors: Vec<G3Error>,
-}
-
-#[derive(Debug, Clone, InputObject)]
-pub struct UpdateMyInboxSettingsInput {
-    pub use_signature: Option<bool>,
-    pub signature: Option<String>,
-    pub use_out_of_office: Option<bool>,
-    pub out_of_office_first_date: Option<String>,
-    pub out_of_office_last_date: Option<String>,
-    pub out_of_office_subject: Option<String>,
-    pub out_of_office_message: Option<String>,
-}
-
-#[derive(Debug, Clone, SimpleObject)]
-pub struct InboxSettingsPayload {
-    pub inbox_settings: Option<crate::entities_batch_f::InboxSettings>,
     pub errors: Vec<G3Error>,
 }
 
@@ -316,30 +305,43 @@ impl BatchG3Mutations {
                 errors: validation_errors(Some("name"), "name cannot be blank"),
             });
         }
-        let (tid,): (i64,) = sqlx::query_as(
+        // Canvas requires `categoryId` and `description` on
+        // `createInstitutionalTag`; the port's column is NOT NULL, so a
+        // missing category is reported as a validation error instead of a
+        // database error.
+        let category_id = match input.category_id.as_ref() {
+            Some(c) => parse_id(c, "category")?,
+            None => {
+                return Ok(InstitutionalTagPayload {
+                    institutional_tag: None,
+                    errors: validation_errors(Some("categoryId"), "categoryId is required"),
+                });
+            }
+        };
+        let row: Option<InstitutionalTagRow> = sqlx::query_as(
             "INSERT INTO institutional_tags (name, description, category_id) \
-             VALUES ($1, $2, $3) RETURNING id",
+             VALUES ($1, COALESCE($2, ''), $3) \
+             RETURNING id, name, description, category_id, workflow_state, \
+                       created_at, updated_at",
         )
         .bind(input.name.trim())
         .bind(&input.description)
-        .bind(
-            input
-                .category_id
-                .as_ref()
-                .map(|c| parse_id(c, "category"))
-                .transpose()?,
-        )
-        .fetch_one(&gctx.pool)
+        .bind(category_id)
+        .fetch_optional(&gctx.pool)
         .await
         .map_err(db_err)?;
+        let Some(row) = row else {
+            return Err(async_graphql::Error::new("institutional tag save failed"));
+        };
         Ok(InstitutionalTagPayload {
-            institutional_tag: Some(crate::entities_batch_f::InstitutionalTag {
-                id: ID(tid.to_string()),
-                name: Some(input.name.trim().to_string()),
-                description: input.description.clone(),
-                category_id: input.category_id.clone(),
-                sis_source_id: None,
-                workflow_state: Some("active".to_string()),
+            institutional_tag: Some(crate::root_types::InstitutionalTag {
+                id: row.id,
+                name: row.name,
+                description: row.description,
+                category_id: row.category_id,
+                workflow_state: row.workflow_state,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
             }),
             errors: Vec::new(),
         })
@@ -365,11 +367,12 @@ impl BatchG3Mutations {
                 });
             }
         }
-        let row: Option<(String, Option<String>)> = sqlx::query_as(
+        let row: Option<InstitutionalTagRow> = sqlx::query_as(
             "UPDATE institutional_tags SET name = COALESCE($2, name), \
              description = COALESCE($3, description), updated_at = now() \
              WHERE id = $1 AND workflow_state <> 'deleted' \
-             RETURNING name, description",
+             RETURNING id, name, description, category_id, workflow_state, \
+                       created_at, updated_at",
         )
         .bind(tid)
         .bind(input.name.as_deref().map(str::trim))
@@ -377,17 +380,18 @@ impl BatchG3Mutations {
         .fetch_optional(&gctx.pool)
         .await
         .map_err(db_err)?;
-        let Some((name, description)) = row else {
+        let Some(row) = row else {
             return Err(async_graphql::Error::new("institutional tag not found"));
         };
         Ok(InstitutionalTagPayload {
-            institutional_tag: Some(crate::entities_batch_f::InstitutionalTag {
-                id: input.institutional_tag_id.clone(),
-                name: Some(name),
-                description,
-                category_id: None,
-                sis_source_id: None,
-                workflow_state: Some("active".to_string()),
+            institutional_tag: Some(crate::root_types::InstitutionalTag {
+                id: row.id,
+                name: row.name,
+                description: row.description,
+                category_id: row.category_id,
+                workflow_state: row.workflow_state,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
             }),
             errors: Vec::new(),
         })
@@ -461,24 +465,30 @@ impl BatchG3Mutations {
                 errors: validation_errors(Some("name"), "name cannot be blank"),
             });
         }
-        let (cid,): (i64,) = sqlx::query_as(
+        let row: Option<InstitutionalTagCategoryRow> = sqlx::query_as(
             "INSERT INTO institutional_tag_categories (account_id, name, description) \
-             VALUES ($1, $2, $3) RETURNING id",
+             VALUES ($1, $2, $3) \
+             RETURNING id, name, description, workflow_state, created_at, updated_at",
         )
         .bind(parse_id(&input.account_id, "account")?)
         .bind(input.name.trim())
         .bind(&input.description)
-        .fetch_one(&gctx.pool)
+        .fetch_optional(&gctx.pool)
         .await
         .map_err(db_err)?;
+        let Some(row) = row else {
+            return Err(async_graphql::Error::new(
+                "institutional tag category save failed",
+            ));
+        };
         Ok(InstitutionalTagCategoryPayload {
-            institutional_tag_category: Some(crate::entities_batch_f::InstitutionalTagCategory {
-                id: ID(cid.to_string()),
-                name: Some(input.name.trim().to_string()),
-                description: input.description.clone(),
-                account_id: Some(input.account_id.clone()),
-                sis_source_id: None,
-                workflow_state: Some("active".to_string()),
+            institutional_tag_category: Some(crate::root_types::InstitutionalTagCategory {
+                id: row.id,
+                name: row.name,
+                description: row.description,
+                workflow_state: row.workflow_state,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
             }),
             errors: Vec::new(),
         })
@@ -507,10 +517,11 @@ impl BatchG3Mutations {
                 });
             }
         }
-        let row: Option<(String, Option<String>)> = sqlx::query_as(
+        let row: Option<InstitutionalTagCategoryRow> = sqlx::query_as(
             "UPDATE institutional_tag_categories SET name = COALESCE($2, name), \
              description = COALESCE($3, description), updated_at = now() \
-             WHERE id = $1 AND workflow_state <> 'deleted' RETURNING name, description",
+             WHERE id = $1 AND workflow_state <> 'deleted' \
+             RETURNING id, name, description, workflow_state, created_at, updated_at",
         )
         .bind(cid)
         .bind(input.name.as_deref().map(str::trim))
@@ -518,19 +529,19 @@ impl BatchG3Mutations {
         .fetch_optional(&gctx.pool)
         .await
         .map_err(db_err)?;
-        let Some((name, description)) = row else {
+        let Some(row) = row else {
             return Err(async_graphql::Error::new(
                 "institutional tag category not found",
             ));
         };
         Ok(InstitutionalTagCategoryPayload {
-            institutional_tag_category: Some(crate::entities_batch_f::InstitutionalTagCategory {
-                id: input.institutional_tag_category_id.clone(),
-                name: Some(name),
-                description,
-                account_id: None,
-                sis_source_id: None,
-                workflow_state: Some("active".to_string()),
+            institutional_tag_category: Some(crate::root_types::InstitutionalTagCategory {
+                id: row.id,
+                name: row.name,
+                description: row.description,
+                workflow_state: row.workflow_state,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
             }),
             errors: Vec::new(),
         })
@@ -564,109 +575,6 @@ impl BatchG3Mutations {
             return Err(async_graphql::Error::new(
                 "institutional tag category not found",
             ));
-        }
-        Ok(G3SuccessPayload { success: true })
-    }
-
-    /// Canvas `createInternalSetting`
-    /// (mutations/create_internal_setting.rb; 0230).
-    async fn create_internal_setting(
-        &self,
-        ctx: &Context<'_>,
-        input: CreateInternalSettingInput,
-    ) -> Result<InternalSettingPayload, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        if !gctx.is_admin() {
-            return Err(async_graphql::Error::new("insufficient permission"));
-        }
-        if input.name.trim().is_empty() {
-            return Ok(InternalSettingPayload {
-                internal_setting: None,
-                errors: validation_errors(Some("name"), "name cannot be blank"),
-            });
-        }
-        let row: Option<(i64, String, String, Option<String>)> = sqlx::query_as(
-            "INSERT INTO internal_settings (name, value, description) \
-             VALUES ($1, $2, $3) ON CONFLICT (name) DO UPDATE SET \
-             value = EXCLUDED.value, updated_at = now() \
-             RETURNING id, name, value, description",
-        )
-        .bind(input.name.trim())
-        .bind(&input.value)
-        .bind(&input.description)
-        .fetch_optional(&gctx.pool)
-        .await
-        .map_err(db_err)?;
-        let Some((id, name, value, description)) = row else {
-            return Err(async_graphql::Error::new("internal setting save failed"));
-        };
-        Ok(InternalSettingPayload {
-            internal_setting: Some(crate::entities_batch_f::InternalSetting {
-                id: ID(id.to_string()),
-                name: Some(name),
-                value: Some(value),
-                description,
-            }),
-            errors: Vec::new(),
-        })
-    }
-
-    /// Canvas `updateInternalSetting`
-    /// (mutations/update_internal_setting.rb).
-    async fn update_internal_setting(
-        &self,
-        ctx: &Context<'_>,
-        input: UpdateInternalSettingInput,
-    ) -> Result<InternalSettingPayload, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        if !gctx.is_admin() {
-            return Err(async_graphql::Error::new("insufficient permission"));
-        }
-        let sid = parse_id(&input.internal_setting_id, "internal setting")?;
-        let row: Option<(i64, String, Option<String>, Option<String>)> = sqlx::query_as(
-            "UPDATE internal_settings SET value = COALESCE($2, value), \
-             description = COALESCE($3, description), updated_at = now() \
-             WHERE id = $1 RETURNING id, name, value, description",
-        )
-        .bind(sid)
-        .bind(&input.value)
-        .bind(&input.description)
-        .fetch_optional(&gctx.pool)
-        .await
-        .map_err(db_err)?;
-        let Some((id, name, value, description)) = row else {
-            return Err(async_graphql::Error::new("internal setting not found"));
-        };
-        Ok(InternalSettingPayload {
-            internal_setting: Some(crate::entities_batch_f::InternalSetting {
-                id: ID(id.to_string()),
-                name: Some(name),
-                value,
-                description,
-            }),
-            errors: Vec::new(),
-        })
-    }
-
-    /// Canvas `deleteInternalSetting`
-    /// (mutations/delete_internal_setting.rb).
-    async fn delete_internal_setting(
-        &self,
-        ctx: &Context<'_>,
-        input: DeleteInternalSettingInput,
-    ) -> Result<G3SuccessPayload, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        if !gctx.is_admin() {
-            return Err(async_graphql::Error::new("insufficient permission"));
-        }
-        let sid = parse_id(&input.internal_setting_id, "internal setting")?;
-        let res = sqlx::query("DELETE FROM internal_settings WHERE id = $1")
-            .bind(sid)
-            .execute(&gctx.pool)
-            .await
-            .map_err(db_err)?;
-        if res.rows_affected() == 0 {
-            return Err(async_graphql::Error::new("internal setting not found"));
         }
         Ok(G3SuccessPayload { success: true })
     }
@@ -724,76 +632,6 @@ impl BatchG3Mutations {
             return Err(async_graphql::Error::new("inbox label not found"));
         }
         Ok(G3SuccessPayload { success: true })
-    }
-
-    /// Canvas `updateMyInboxSettings`
-    /// (mutations/update_my_inbox_settings.rb; 0224 inbox_settings).
-    async fn update_my_inbox_settings(
-        &self,
-        ctx: &Context<'_>,
-        input: UpdateMyInboxSettingsInput,
-    ) -> Result<InboxSettingsPayload, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let parse_ts = |v: &Option<String>| -> Result<Option<chrono::DateTime<chrono::Utc>>, _> {
-            v.as_deref()
-                .map(|s| s.parse())
-                .transpose()
-                .map_err(|_| async_graphql::Error::new("invalid timestamp"))
-        };
-        let first = parse_ts(&input.out_of_office_first_date)?;
-        let last = parse_ts(&input.out_of_office_last_date)?;
-        let row: Option<(i64,)> = sqlx::query_as(
-            r#"
-            INSERT INTO inbox_settings
-                (user_id, use_signature, signature, use_out_of_office,
-                 out_of_office_first_date, out_of_office_last_date,
-                 out_of_office_subject, out_of_office_message)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-            ON CONFLICT (user_id) DO UPDATE SET
-                use_signature = COALESCE(EXCLUDED.use_signature, inbox_settings.use_signature),
-                signature = COALESCE(EXCLUDED.signature, inbox_settings.signature),
-                use_out_of_office = COALESCE(EXCLUDED.use_out_of_office,
-                    inbox_settings.use_out_of_office),
-                out_of_office_first_date = COALESCE(EXCLUDED.out_of_office_first_date,
-                    inbox_settings.out_of_office_first_date),
-                out_of_office_last_date = COALESCE(EXCLUDED.out_of_office_last_date,
-                    inbox_settings.out_of_office_last_date),
-                out_of_office_subject = COALESCE(EXCLUDED.out_of_office_subject,
-                    inbox_settings.out_of_office_subject),
-                out_of_office_message = COALESCE(EXCLUDED.out_of_office_message,
-                    inbox_settings.out_of_office_message),
-                updated_at = now()
-            RETURNING id
-            "#,
-        )
-        .bind(gctx.auth_user.id)
-        .bind(input.use_signature)
-        .bind(&input.signature)
-        .bind(input.use_out_of_office)
-        .bind(first)
-        .bind(last)
-        .bind(&input.out_of_office_subject)
-        .bind(&input.out_of_office_message)
-        .fetch_optional(&gctx.pool)
-        .await
-        .map_err(db_err)?;
-        let Some((sid,)) = row else {
-            return Err(async_graphql::Error::new("inbox settings save failed"));
-        };
-        Ok(InboxSettingsPayload {
-            inbox_settings: Some(crate::entities_batch_f::InboxSettings {
-                id: ID(sid.to_string()),
-                user_id: ID(gctx.auth_user.id.to_string()),
-                use_signature: input.use_signature,
-                signature: input.signature.clone(),
-                use_out_of_office: input.use_out_of_office,
-                out_of_office_first_date: first,
-                out_of_office_last_date: last,
-                out_of_office_subject: input.out_of_office_subject.clone(),
-                out_of_office_message: input.out_of_office_message.clone(),
-            }),
-            errors: Vec::new(),
-        })
     }
 
     /// Canvas `updateSpeedGraderSettings`

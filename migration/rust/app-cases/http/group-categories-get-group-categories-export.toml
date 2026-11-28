@@ -6,16 +6,17 @@ path = "/api/v1/group_categories/1/export"
 Authorization = "Bearer __REPLAY_TOKEN__"
 
 [response]
-status = 401
+status = 200
 
 [response.headers]
-cache-control = "no-store"
+cache-control = "max-age=0, private, must-revalidate"
+content-disposition = """attachment; filename="Parity Category.csv"; filename*=UTF-8''Parity%20Category.csv"""
 content-security-policy = "frame-ancestors 'self' 54.252.48.186;"
-content-type = "text/plain; charset=utf-8"
-pragma = "no-cache"
+content-transfer-encoding = "binary"
+content-type = "text/csv"
 referrer-policy = "no-referrer-when-downgrade"
 set-cookie = "[..]"
-x-canvas-meta = "at=10000000000007;dk=10000000000001;o=group_categories;n=export;t=Course;i=1;b=2067028;m=2067028;u=0.[..];y=0.00;d=0.00;rlr=600.0;"
+x-canvas-meta = "at=10000000000007;dk=10000000000001;o=group_categories;n=export;t=Course;i=1;b=2074132;m=2074132;u=0.[..];y=0.00;d=0.[..];rlr=600.0;"
 x-canvas-user-id = "10000000000001"
 x-content-type-options = "nosniff"
 x-download-options = "noopen"

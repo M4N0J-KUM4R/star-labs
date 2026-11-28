@@ -355,47 +355,415 @@ fn parse_preference_updates(body: &serde_json::Value) -> Result<Vec<(String, Str
 // Router
 // --------------------------------------------------------------------------
 
+/// GET /users/self/notifications — list the authenticated user's notifications.
+/// Excludes deleted notifications; newest first.
+async fn list_notifications(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<Vec<NotificationItem>>, ApiError> {
+    let rows: Vec<NotificationItem> = sqlx::query_as(
+        r#"
+        SELECT id, user_id, subject, body, category, workflow_state, link, created_at, updated_at
+        FROM notifications
+        WHERE user_id = $1 AND workflow_state != 'deleted'
+        ORDER BY created_at DESC
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(rows))
+}
+
+/// PUT /notifications/{id}/read — mark a notification as read.
+/// Only the notification owner can do this.
+async fn mark_read(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<i64>,
+) -> Result<Json<NotificationItem>, ApiError> {
+    // Verify the notification exists and belongs to the authenticated user.
+    let row: Option<NotificationItem> = sqlx::query_as(
+        r#"
+        SELECT id, user_id, subject, body, category, workflow_state, link, created_at, updated_at
+        FROM notifications
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let notification = row.ok_or(ApiError::NotFound)?;
+
+    if notification.user_id != auth.id {
+        return Err(ApiError::Forbidden);
+    }
+
+    let updated: NotificationItem = sqlx::query_as(
+        r#"
+        UPDATE notifications
+        SET workflow_state = 'read', updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, user_id, subject, body, category, workflow_state, link, created_at, updated_at
+        "#,
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(updated))
+}
+
+/// DELETE /notifications/{id} — soft-delete a notification (set workflow_state = 'deleted').
+/// Only the notification owner can do this.
+async fn delete_notification(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    // Verify the notification exists and belongs to the authenticated user.
+    let row: Option<(i64,)> = sqlx::query_as("SELECT user_id FROM notifications WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+
+    let user_id = row.ok_or(ApiError::NotFound)?.0;
+
+    if user_id != auth.id {
+        return Err(ApiError::Forbidden);
+    }
+
+    let result = sqlx::query(
+        "UPDATE notifications SET workflow_state = 'deleted', updated_at = NOW() WHERE id = $1",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /notifications/unread_count — return the count of unread notifications for the authed user.
+async fn unread_count(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<UnreadCountResponse>, ApiError> {
+    let row: (i64,) = sqlx::query_as(
+        r#"
+        SELECT COUNT(*)::BIGINT FROM notifications
+        WHERE user_id = $1 AND workflow_state = 'unread'
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(UnreadCountResponse { count: row.0 }))
+}
+
+/// GET /users/self/notification_preferences — list all notification preferences for the authed user.
+async fn list_preferences(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> Result<Json<NotificationPreferencesResponse>, ApiError> {
+    let rows: Vec<NotificationPolicyRow> = sqlx::query_as(
+        r#"
+        SELECT id, user_id, channel, frequency, notification_category, created_at, updated_at
+        FROM notification_policies
+        WHERE user_id = $1
+        ORDER BY notification_category ASC
+        "#,
+    )
+    .bind(auth.id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(NotificationPreferencesResponse {
+        notification_preferences: rows,
+    }))
+}
+
+/// PUT /users/self/notification_preferences — upsert a notification preference.
+/// If a policy for (user_id, notification_category) exists, update it; otherwise insert.
+async fn upsert_preference(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<UpdatePreferenceRequest>,
+) -> Result<Json<NotificationPreferencesResponse>, ApiError> {
+    // Validate frequency value.
+    match payload.frequency.as_str() {
+        "immediately" | "daily" | "weekly" | "never" => {}
+        _ => {
+            return Err(ApiError::Validation(
+                "frequency must be one of: immediately, daily, weekly, never".into(),
+            ));
+        }
+    }
+
+    let row: NotificationPolicyRow = sqlx::query_as(
+        r#"
+        INSERT INTO notification_policies (user_id, channel, frequency, notification_category)
+        VALUES ($1, 'email', $2, $3)
+        ON CONFLICT (user_id, notification_category)
+        DO UPDATE SET frequency = EXCLUDED.frequency, updated_at = NOW()
+        RETURNING id, user_id, channel, frequency, notification_category, created_at, updated_at
+        "#,
+    )
+    .bind(auth.id)
+    .bind(&payload.frequency)
+    .bind(&payload.notification_category)
+    .fetch_one(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    Ok(Json(NotificationPreferencesResponse {
+        notification_preferences: vec![row],
+    }))
+}
+
+/// GET /users/{user_id}/notification_preferences — the user's notification
+/// preferences aggregated over every unretired communication channel.
+async fn list_user_preferences(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+) -> Result<Json<UserNotificationPreferencesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_read(&auth, target_user_id)?;
+
+    let rows = list_user_preferences_for(&state.db, target_user_id).await?;
+    Ok(Json(UserNotificationPreferencesResponse {
+        notification_preferences: rows,
+    }))
+}
+
+/// PUT /users/{user_id}/notification_preferences — Canvas' `update_all` body
+/// shapes applied to every unretired communication channel, then the aggregate
+/// preference list is returned.
+async fn update_user_preferences(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(raw_user_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<UserNotificationPreferencesResponse>, ApiError> {
+    let target_user_id = resolve_user_segment(&raw_user_id, auth.id)?;
+    user_exists(&state.db, target_user_id).await?;
+    authorize_preferences_write(&auth, target_user_id)?;
+
+    let updates = parse_preference_updates(&body)?;
+    ensure_unretired_channel(&state.db, target_user_id).await?;
+
+    let channel_ids: Vec<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT id FROM communication_channels
+        WHERE user_id = $1 AND workflow_state <> 'retired'
+        ORDER BY position ASC, id ASC
+        "#,
+    )
+    .bind(target_user_id)
+    .fetch_all(&state.db)
+    .await?;
+
+    for (channel_id,) in &channel_ids {
+        for (notification, frequency) in &updates {
+            upsert_channel_preference(
+                &state.db,
+                target_user_id,
+                *channel_id,
+                notification,
+                frequency,
+            )
+            .await?;
+        }
+    }
+
+    let rows = list_user_preferences_for(&state.db, target_user_id).await?;
+    Ok(Json(UserNotificationPreferencesResponse {
+        notification_preferences: rows,
+    }))
+}
+
+/// One row per notification, taken from the user's primary (lowest position)
+/// unretired channel. Canvas' `NotificationPreference` model has no channel
+/// reference, so the user-level view collapses per-channel policies.
+async fn list_user_preferences_for(
+    pool: &sqlx::PgPool,
+    user_id: i64,
+) -> Result<Vec<NotificationPreference>, ApiError> {
+    let rows: Vec<NotificationPreference> = sqlx::query_as(
+        r#"
+        SELECT DISTINCT ON (np.notification) np.notification, np.category, np.frequency
+        FROM notification_preferences np
+        JOIN communication_channels cc ON cc.id = np.communication_channel_id
+        WHERE np.user_id = $1 AND cc.workflow_state <> 'retired'
+        ORDER BY np.notification ASC, cc.position ASC, cc.id ASC
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows)
+}
+
+/// Canvas provisions an email communication channel for every user; this
+/// schema does not, so a preference update first creates the primary email
+/// channel from `users.email` (active, since the address is already verified).
+async fn ensure_unretired_channel(pool: &sqlx::PgPool, user_id: i64) -> Result<(), ApiError> {
+    let existing: Option<(i64,)> = sqlx::query_as(
+        r#"
+        SELECT id FROM communication_channels
+        WHERE user_id = $1 AND workflow_state <> 'retired'
+        LIMIT 1
+        "#,
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    if existing.is_some() {
+        return Ok(());
+    }
+
+    let email: (String,) = sqlx::query_as("SELECT email FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await?;
+
+    sqlx::query(
+        r#"
+        INSERT INTO communication_channels (user_id, path, path_type, position, workflow_state)
+        VALUES ($1, $2, 'email', 0, 'active')
+        ON CONFLICT DO NOTHING
+        "#,
+    )
+    .bind(user_id)
+    .bind(email.0)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+/// A notification item as returned by the feed API.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct NotificationItem {
+    pub id: i64,
+    pub user_id: i64,
+    pub subject: String,
+    pub body: String,
+    pub category: String,
+    pub workflow_state: String,
+    pub link: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Response for unread count.
+#[derive(Debug, Serialize)]
+pub struct UnreadCountResponse {
+    pub count: i64,
+}
+
+/// Canvas wraps notification policies in a `notification_preferences` key.
+#[derive(Debug, Serialize)]
+pub struct NotificationPreferencesResponse {
+    pub notification_preferences: Vec<NotificationPolicyRow>,
+}
+
+/// A notification preference policy.
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct NotificationPolicyRow {
+    pub id: i64,
+    pub user_id: i64,
+    pub channel: String,
+    pub frequency: String,
+    pub notification_category: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Request payload for updating a notification preference.
+#[derive(Debug, Deserialize)]
+pub struct UpdatePreferenceRequest {
+    pub notification_category: String,
+    pub frequency: String,
+}
+
+/// User-level preference lists use the same Canvas envelope as channel ones.
+pub type UserNotificationPreferencesResponse = CommunicationChannelPreferencesResponse;
+
 pub fn router() -> Router<AppState> {
     Router::new()
+        // Notification feed
+        .route("/users/self/notifications", get(list_notifications))
+        .route("/notifications/{id}/read", put(mark_read))
+        .route("/notifications/{id}", delete(delete_notification))
+        .route("/notifications/unread_count", get(unread_count))
+        // Notification preferences
+        // User-level policies; Canvas exposes preferences only per
+        // communication channel, so this path has no Canvas route.
+        .route(
+            "/users/self/notification_preferences",
+            get(list_preferences).put(upsert_preference),
+        )
+        // Communication channels + per-channel notification preferences
+        // Canvas serves GET (`communication_channels#index`) and POST
+        // (`communication_channels#create`) on `users/:user_id/communication_channels`
+        // (routes.rb:2052-2053); `self` resolves to the authenticated user.
         // Communication channels + per-channel notification preferences.
         // Canvas has no notification-feed or flat preference API: preferences
         // live under communication_channels only (config/routes.rb:2066-2076).
         .route(
             "/users/self/communication_channels",
-            get(list_communication_channels),
-        )
-        .route(
-            "/users/self/communication_channels",
-            post(create_communication_channel),
+            get(list_communication_channels).post(create_communication_channel),
         )
         .route(
             "/users/self/communication_channels/{id}",
             delete(delete_communication_channel),
         )
+        // Canvas serves GET (`notification_preferences#index`, routes.rb:2067)
+        // and PUT (`notification_preferences#update_all`, routes.rb:2074)
+        // on this path.
         .route(
             "/users/self/communication_channels/{communication_channel_id}/notification_preferences",
-            get(list_channel_preferences),
-        )
-        .route(
-            "/users/self/communication_channels/{communication_channel_id}/notification_preferences",
-            put(update_channel_preferences),
+            get(list_channel_preferences).put(update_channel_preferences),
         )
         .route(
             "/users/self/communication_channels/{communication_channel_id}/notification_preferences/{notification}",
             get(show_channel_preference_self).put(update_channel_preference),
         )
+        // User-level notification preferences (Canvas API v1)
+        // User-level aggregation; Canvas has no matching route.
+        .route(
+            "/users/{user_id}/notification_preferences",
+            get(list_user_preferences).put(update_user_preferences),
+        )
         // User-scoped communication channels (Canvas API v1)
+        // Canvas `communication_channels#index` / `#create`
+        // (routes.rb:2052-2053) on `users/:user_id/communication_channels`.
         .route(
             "/users/{user_id}/communication_channels",
-            get(list_user_communication_channels),
+            get(list_user_communication_channels).post(create_user_communication_channel),
         )
-        .route(
-            "/users/{user_id}/communication_channels",
-            post(create_user_communication_channel),
-        )
+        // Canvas `destroy` (routes.rb:2062) and `reset_bounce_count`
+        // (routes.rb:2054) share `users/:user_id/communication_channels/:id`.
         .route(
             "/users/{user_id}/communication_channels/{id}",
-            delete(delete_user_communication_channel),
+            delete(delete_user_communication_channel).post(reset_bounce_count),
         )
         // Account bounced-email report (Canvas `bouncing_channel_report`)
         .route(
@@ -403,11 +771,6 @@ pub fn router() -> Router<AppState> {
             get(bounced_communication_channels),
         )
         // communication_channels tail (#62)
-        // Canvas `reset_bounce_count` (routes.rb:2053).
-        .route(
-            "/users/{user_id}/communication_channels/{id}",
-            post(reset_bounce_count),
-        )
         // Canvas `delete_push_token` (routes.rb:2062) — literal self/push
         // segments win over the {type}/{address} params below.
         .route(
@@ -459,25 +822,20 @@ pub fn router() -> Router<AppState> {
             "/users/{user_id}/communication_channels/{communication_channel_id}/notification_preference_categories",
             get(list_channel_preference_categories_scoped),
         )
-        // Per-channel notification preferences, scoped by (type, address)
+        // Per-channel notification preferences, scoped by (type, address).
+        // Canvas `notification_preferences#index`/`#show` (GET, routes.rb:2069,
+        // 2071) and `#update_all`/`#update` (PUT, routes.rb:2075, 2073) share
+        // these paths; writes are self-only — render_unauthorized_action.
         .route(
             "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences",
-            get(index_channel_preferences_by_address),
+            get(index_channel_preferences_by_address).put(update_channel_preferences_by_address),
         )
         .route(
             "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}",
-            get(show_channel_preference_by_address),
+            get(show_channel_preference_by_address).put(update_channel_preference_by_address),
         )
-        // Preference updates, scoped by (type, address) (Canvas `update_all`
-        // and `update`; writes are self-only — render_unauthorized_action)
-        .route(
-            "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences",
-            put(update_channel_preferences_by_address),
-        )
-        .route(
-            "/users/{user_id}/communication_channels/{type}/{address}/notification_preferences/{notification}",
-            put(update_channel_preference_by_address),
-        )
+    // Preference updates, scoped by (type, address) (Canvas `update_all`
+    // and `update`; writes are self-only — render_unauthorized_action)
 }
 
 // --------------------------------------------------------------------------

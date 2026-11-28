@@ -174,36 +174,36 @@ fn canvas_message(status: StatusCode, message: &str) -> UsersApiError {
 pub fn router() -> Router<AppState> {
     Router::new()
         // PseudonymsController
-        .route("/accounts/{account_id}/logins", get(account_logins))
+        .route(
+            "/accounts/{account_id}/logins",
+            get(account_logins).post(create_login),
+        )
         .route("/users/{user_id}/logins", get(user_logins))
-        .route("/accounts/{account_id}/logins", post(create_login))
         .route("/accounts/{account_id}/logins/{id}", put(update_login))
         .route("/users/{user_id}/logins/{id}", delete(destroy_login))
         .route("/users/reset_password", post(forgot_password))
         // CourseNicknamesController
-        .route("/users/self/course_nicknames", get(course_nicknames))
         .route(
             "/users/self/course_nicknames",
-            delete(clear_course_nicknames),
+            get(course_nicknames).delete(clear_course_nicknames),
         )
         .route(
             "/users/self/course_nicknames/{course_id}",
-            get(course_nickname),
-        )
-        .route(
-            "/users/self/course_nicknames/{course_id}",
-            put(set_course_nickname),
-        )
-        .route(
-            "/users/self/course_nicknames/{course_id}",
-            delete(remove_course_nickname),
+            get(course_nickname)
+                .put(set_course_nickname)
+                .delete(remove_course_nickname),
         )
         // Bookmarks::BookmarksController
-        .route("/users/self/bookmarks", get(list_bookmarks))
-        .route("/users/self/bookmarks", post(create_bookmark))
-        .route("/users/self/bookmarks/{id}", get(show_bookmark))
-        .route("/users/self/bookmarks/{id}", put(update_bookmark))
-        .route("/users/self/bookmarks/{id}", delete(destroy_bookmark))
+        .route(
+            "/users/self/bookmarks",
+            get(list_bookmarks).post(create_bookmark),
+        )
+        .route(
+            "/users/self/bookmarks/{id}",
+            get(show_bookmark)
+                .put(update_bookmark)
+                .delete(destroy_bookmark),
+        )
 }
 
 // ---------------------------------------------------------------------------

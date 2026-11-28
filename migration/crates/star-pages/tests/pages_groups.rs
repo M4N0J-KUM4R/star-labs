@@ -385,19 +385,24 @@ async fn group_page_routes_decline_without_group_wiki() {
     let admin_bearer = auth(admin, "admin");
 
     // Reads: a group member, the parent-course teacher and an admin all pass
-    // Canvas' context+read checks — the routes still decline with 403
-    // (pages are course-scoped in this schema).
-    for url in [
-        format!("/groups/{group_id}/pages"),
-        format!("/groups/{group_id}/pages/{prefix}-irrelevant"),
-        format!("/groups/{group_id}/front_page"),
+    // Canvas' context+read checks. The index answers the empty page list
+    // Canvas returns for a group whose wiki holds no pages — the port's
+    // `pages` table has no group column, so no page can live in a group
+    // context. The page route stays declined with 403, and the front page
+    // answers what Canvas answers for a group without one: 404
+    // `{"message":"No front page has been set"}`
+    // (`app/controllers/wiki_pages_api_controller.rb:781`).
+    for (url, expected) in [
+        (format!("/groups/{group_id}/pages"), 200),
+        (format!("/groups/{group_id}/pages/{prefix}-irrelevant"), 403),
+        (format!("/groups/{group_id}/front_page"), 404),
     ] {
         for bearer in [&member_bearer, &teacher_bearer, &admin_bearer] {
             let resp = server
                 .get(&url)
                 .add_header(axum::http::header::AUTHORIZATION, bearer.clone())
                 .await;
-            assert_eq!(resp.status_code(), 403, "{url}; body: {}", resp.text());
+            assert_eq!(resp.status_code(), expected, "{url}; body: {}", resp.text());
         }
     }
 

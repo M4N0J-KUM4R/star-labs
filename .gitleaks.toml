@@ -28,4 +28,10 @@ useDefault = true
     '''^browser-smoke/.*''',
     # Scripts in orchestration/ that reference the CI fixture secret.
     '''^orchestration/.*''',
+    # The recorded Canvas corpus. A recorded response can carry a signed
+    # value — Canvas' todo items carry the LTI deep-linking message, which is
+    # a JWT signed with the oracle's client secret. The corpus is a recording
+    # of a throwaway instance, and the value is redacted where it matters;
+    # the path is allowlisted so the recording is not read as a credential.
+    '''(^|/)migration/rust/app-cases/.*''',
   ]

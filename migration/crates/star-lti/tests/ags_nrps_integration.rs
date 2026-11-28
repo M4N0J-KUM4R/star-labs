@@ -21,10 +21,17 @@ const SCOPE_NRPS: &str =
     "https://purl.imsglobal.org/spec/lti-nrps/scope/contextmembership.readonly";
 
 fn run_prefix() -> String {
+    // The counter makes the prefix unique inside the process: two tests
+    // that start in the same millisecond would otherwise seed the same
+    // email and collide on the users' unique key.
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static N: AtomicU32 = AtomicU32::new(0);
+    let n = N.fetch_add(1, Ordering::Relaxed);
     format!(
-        "lti-ags-{}-{}",
+        "lti-ags-{}-{}-{}",
         std::process::id(),
-        chrono::Utc::now().timestamp_millis()
+        chrono::Utc::now().timestamp_millis(),
+        n
     )
 }
 

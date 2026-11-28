@@ -88,18 +88,18 @@ struct FolderRow {
 /// module doc above.
 #[derive(Debug, Clone)]
 pub struct File {
-    id: i64,
-    filename: String,
-    display_name: String,
-    content_type: String,
-    size: i64,
-    folder_id: Option<i64>,
-    workflow_state: String,
-    locked: bool,
-    lock_at: Option<DateTime<Utc>>,
-    unlock_at: Option<DateTime<Utc>>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) filename: String,
+    pub(crate) display_name: String,
+    pub(crate) content_type: String,
+    pub(crate) size: i64,
+    pub(crate) folder_id: Option<i64>,
+    pub(crate) workflow_state: String,
+    pub(crate) locked: bool,
+    pub(crate) lock_at: Option<DateTime<Utc>>,
+    pub(crate) unlock_at: Option<DateTime<Utc>>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -109,6 +109,7 @@ impl File {
     }
 
     /// Canvas `File._id`: the legacy canvas id (file_type.rb:40).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
@@ -117,8 +118,6 @@ impl File {
         &self.display_name
     }
 
-    /// Canvas `File.title` (schema.graphql): the item title, like every
-    /// ModuleItemInterface member; files use the filename.
     async fn title(&self) -> &str {
         &self.filename
     }
@@ -127,9 +126,6 @@ impl File {
         &self.content_type
     }
 
-    /// Canvas `File.mimeClass` (file_type.rb:46): the coarse class of the
-    /// content type (image, video, document, ...), derived from the first
-    /// segment like Canvas's MimeClass conversion.
     async fn mime_class(&self) -> &str {
         match self.content_type.split('/').next().unwrap_or("file") {
             "image" => "image",
@@ -142,8 +138,6 @@ impl File {
         }
     }
 
-    /// Canvas `File.size` is a String (file_type.rb:60); star-lms emits the
-    /// raw byte count, like the REST files API.
     async fn size(&self) -> String {
         self.size.to_string()
     }
@@ -168,7 +162,6 @@ impl File {
         self.unlock_at
     }
 
-    /// Canvas `File.folder` (file_type.rb:82).
     async fn folder(&self, ctx: &Context<'_>) -> Result<Option<Folder>, async_graphql::Error> {
         let Some(folder_id) = self.folder_id else {
             return Ok(None);
@@ -194,19 +187,19 @@ impl File {
 /// `subFolders`, `createdAt`, `updatedAt`.
 #[derive(Debug, Clone)]
 pub struct Folder {
-    id: i64,
-    name: String,
-    full_name: String,
-    context_type: String,
-    context_id: i64,
-    parent_folder_id: Option<i64>,
-    workflow_state: String,
-    position: i32,
-    locked: bool,
-    lock_at: Option<DateTime<Utc>>,
-    unlock_at: Option<DateTime<Utc>>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) full_name: String,
+    pub(crate) context_type: String,
+    pub(crate) context_id: i64,
+    pub(crate) parent_folder_id: Option<i64>,
+    pub(crate) workflow_state: String,
+    pub(crate) position: i32,
+    pub(crate) locked: bool,
+    pub(crate) lock_at: Option<DateTime<Utc>>,
+    pub(crate) unlock_at: Option<DateTime<Utc>>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -216,6 +209,7 @@ impl Folder {
     }
 
     /// Canvas `Folder._id`: the legacy canvas id (folder_type.rb:29).
+    #[graphql(name = "_id")]
     async fn _id(&self) -> ID {
         ID(self.id.to_string())
     }
@@ -240,7 +234,6 @@ impl Folder {
         self.parent_folder_id.map(|id| ID(id.to_string()))
     }
 
-    /// Canvas `Folder.parentFolder` (schema.graphql).
     async fn parent_folder(
         &self,
         ctx: &Context<'_>,
@@ -256,8 +249,6 @@ impl Folder {
         self.position
     }
 
-    /// Canvas `Folder.hidden` — star-lms folders use the Canvas folder
-    /// states (visible/hidden), not a boolean column.
     async fn hidden(&self) -> bool {
         self.workflow_state == "hidden"
     }
@@ -274,13 +265,10 @@ impl Folder {
         self.unlock_at
     }
 
-    /// Canvas `Folder.currentlyLocked`: locked now or scheduled to lock
-    /// (schema.graphql, non-null).
     async fn currently_locked(&self) -> bool {
         self.locked || self.lock_at.map(|t| t <= Utc::now()).unwrap_or(false)
     }
 
-    /// Canvas `Folder.rootFolder`: no parent folder (schema.graphql).
     async fn root_folder(&self) -> bool {
         self.parent_folder_id.is_none()
     }
@@ -311,8 +299,6 @@ impl Folder {
         Ok(count)
     }
 
-    /// Canvas `Folder.files` (folder_type.rb:52) — a plain list, ordered
-    /// by id for determinism.
     async fn files(&self, ctx: &Context<'_>) -> Result<Vec<File>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         let rows: Vec<FileRow> = sqlx::query_as(
@@ -331,7 +317,6 @@ impl Folder {
         Ok(rows.into_iter().map(file_from_row).collect())
     }
 
-    /// Canvas `Folder.subFolders` (folder_type.rb:59).
     async fn sub_folders(&self, ctx: &Context<'_>) -> Result<Vec<Folder>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         let rows: Vec<FolderRow> = sqlx::query_as(
@@ -475,7 +460,7 @@ pub(crate) async fn fetch_folder_page(
 }
 
 /// Fetch a single folder by id, deleted folders excluded.
-async fn fetch_folder(
+pub(crate) async fn fetch_folder(
     pool: &PgPool,
     folder_id: i64,
 ) -> Result<Option<Folder>, async_graphql::Error> {
@@ -537,4 +522,33 @@ async fn user_enrolled_in_course(
     .await
     .map_err(db_err)?;
     Ok(row.is_some())
+}
+
+// ---------------------------------------------------------------------------
+// Single-record fetch (Canvas `Query.node` / `Query.legacyNode`)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Single-record fetch (Canvas `Query.node` / `Query.legacyNode`)
+// ---------------------------------------------------------------------------
+
+/// Canvas `Query.node(type: File)` — a file by legacy id.
+pub(crate) async fn fetch_file(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<File>, async_graphql::Error> {
+    let row: Option<FileRow> = sqlx::query_as(
+        r#"
+        SELECT id, filename, display_name, content_type, size, folder_id,
+               workflow_state, locked, lock_at, unlock_at, created_at, updated_at
+        FROM files
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(file_from_row))
 }

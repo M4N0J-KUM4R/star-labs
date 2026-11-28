@@ -274,9 +274,10 @@ async fn create_discussion_topic_and_entry() {
         &server,
         &auth(teacher, "teacher"),
         "mutation ($input: CreateDiscussionTopicInput!) { createDiscussionTopic(input: $input) \
-         { discussionTopic { id courseId title message published } errors { message } } }",
+         { discussionTopic { id contextId title message published } errors { message } } }",
         json!({ "input": {
-            "courseId": course.to_string(),
+            "contextId": course.to_string(),
+            "contextType": "Course",
             "title": "Welcome",
             "message": "Say hi",
             "published": true
@@ -288,21 +289,26 @@ async fn create_discussion_topic_and_entry() {
     assert_eq!(topic["published"], true, "{body}");
     let topic_id = topic["id"].as_str().expect("topic id").to_string();
 
-    // Student creates unpublished (publish flag ignored without the right).
+    // A student may not create a discussion topic: Canvas runs
+    // `verify_authorized_action!(discussion_topic, :create)`, which needs
+    // `manage_course_content_add` — teacher rights.
     let body = gql_post(
         &server,
         &auth(student, "student"),
         "mutation ($input: CreateDiscussionTopicInput!) { createDiscussionTopic(input: $input) \
          { discussionTopic { id published } errors { message } } }",
         json!({ "input": {
-            "courseId": course.to_string(),
+            "contextId": course.to_string(),
+            "contextType": "Course",
             "title": "Student topic",
             "published": true
         } }),
     )
     .await;
-    assert_eq!(
-        body["data"]["createDiscussionTopic"]["discussionTopic"]["published"], false,
+    assert!(
+        body["errors"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("insufficient permission")),
         "{body}"
     );
 
@@ -312,7 +318,11 @@ async fn create_discussion_topic_and_entry() {
         &auth(outsider, "student"),
         "mutation ($input: CreateDiscussionTopicInput!) { createDiscussionTopic(input: $input) \
          { discussionTopic { id } } }",
-        json!({ "input": { "courseId": course.to_string(), "title": "X" } }),
+        json!({ "input": {
+            "contextId": course.to_string(),
+            "contextType": "Course",
+            "title": "X"
+        } }),
     )
     .await;
     assert!(body["data"]["createDiscussionTopic"].is_null(), "{body}");
@@ -550,13 +560,13 @@ async fn submission_mutations_round_trip() {
         &server,
         &auth(teacher, "teacher"),
         "mutation ($input: CreateSubmissionCommentInput!) { createSubmissionComment(input: $input) \
-         { submissionComment { id submissionId authorId comment } errors { message } } }",
+         { submissionComment { id submissionId author { id } comment } errors { message } } }",
         json!({ "input": { "submissionId": sub_id, "comment": "Good work" } }),
     )
     .await;
     let comment = &body["data"]["createSubmissionComment"]["submissionComment"];
     assert_eq!(comment["comment"], "Good work", "{body}");
-    assert_eq!(comment["authorId"], teacher.to_string(), "{body}");
+    assert_eq!(comment["author"]["id"], teacher.to_string(), "{body}");
 
     // Student marks comments read.
     let body = gql_post(

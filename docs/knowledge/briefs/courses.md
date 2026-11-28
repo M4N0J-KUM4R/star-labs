@@ -18,8 +18,8 @@ names. Do not explore the repo.
 | verb | Canvas path | port has it | recorded case | replay |
 |---|---|---|---|---|
 | DELETE | `/api/v1/courses/:id` | yes | - | - |
-| GET | `/api/v1/accounts/:account_id/courses/:id` | **no** | - | - |
-| GET | `/api/v1/courses` | yes | `200` | pass |
+| GET | `/api/v1/accounts/:account_id/courses/:id` | yes | - | - |
+| GET | `/api/v1/courses` | yes | `200` | **FAIL** |
 | GET | `/api/v1/courses/:course_id/activity_stream` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/activity_stream/summary` | yes | - | - |
 | GET | `/api/v1/courses/:course_id/bulk_user_progress` | yes | - | - |
@@ -60,7 +60,7 @@ names. Do not explore the repo.
 
 | case | Canvas answered | body |
 |---|---|---|
-| `courses-get-courses` | 200 | `[..]` |
+| `courses-get-courses` | 200 | `[{"id":1,"name":"Parity Course","course_code":"PARITY","account_id":6,"created_at":"2026-11-26T20:10:16Z","start_at":nul…` |
 
 Open `migration/rust/app-cases/http/<case>.toml` for the full recorded
 response — status, headers and body. That file is the contract.

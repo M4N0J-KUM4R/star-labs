@@ -2759,6 +2759,7 @@ dependencies = [
  "star-auth",
  "star-common",
  "star-db",
+ "star-permissions",
  "tokio",
  "tower",
 ]
@@ -2825,6 +2826,7 @@ dependencies = [
  "star-auth",
  "star-common",
  "star-db",
+ "star-permissions",
  "tokio",
 ]
 
@@ -2854,11 +2856,13 @@ dependencies = [
  "axum-macros",
  "axum-test",
  "chrono",
+ "hmac",
  "http 1.5.0",
  "jsonwebtoken",
  "rsa",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "sqlx",
  "star-common",
@@ -2882,6 +2886,20 @@ dependencies = [
  "star-common",
  "star-db",
  "tokio",
+]
+
+[[package]]
+name = "star-canvas-response"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "rand 0.8.8",
+ "serde_json",
+ "sha2",
+ "star-auth",
+ "star-common",
+ "uuid",
 ]
 
 [[package]]
@@ -2930,6 +2948,7 @@ dependencies = [
  "star-common",
  "star-db",
  "tokio",
+ "uuid",
 ]
 
 [[package]]
@@ -2964,6 +2983,7 @@ dependencies = [
  "star-auth",
  "star-common",
  "star-db",
+ "star-permissions",
  "star-search",
  "tokio",
 ]
@@ -2982,6 +3002,7 @@ dependencies = [
  "star-common",
  "star-db",
  "star-gradebook",
+ "star-permissions",
  "tokio",
 ]
 
@@ -3045,6 +3066,7 @@ dependencies = [
  "star-auth",
  "star-common",
  "star-db",
+ "star-permissions",
  "tokio",
  "tower",
 ]
@@ -3096,6 +3118,7 @@ dependencies = [
  "star-auth",
  "star-common",
  "star-db",
+ "star-storage",
  "tokio",
  "tower",
  "uuid",
@@ -3168,6 +3191,7 @@ dependencies = [
  "star-auth",
  "star-common",
  "star-db",
+ "star-permissions",
  "tokio",
  "tower",
 ]
@@ -3190,6 +3214,7 @@ dependencies = [
  "star-audit",
  "star-auth",
  "star-calendar",
+ "star-canvas-response",
  "star-collaborations",
  "star-common",
  "star-conferences",
@@ -3217,6 +3242,7 @@ dependencies = [
  "star-pages",
  "star-permissions",
  "star-polling",
+ "star-proxy",
  "star-quizzes",
  "star-rubrics",
  "star-search",
@@ -3283,6 +3309,7 @@ dependencies = [
  "star-auth",
  "star-common",
  "star-db",
+ "star-permissions",
  "tokio",
  "url",
  "uuid",
@@ -3406,6 +3433,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-proxy"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "reqwest",
+ "serde_json",
+ "star-common",
+ "thiserror 2.0.21",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "star-quizzes"
 version = "0.1.0"
 dependencies = [
@@ -3475,6 +3515,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "star-storage"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "hmac",
+ "md-5",
+ "reqwest",
+ "sha2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "star-submission-comments"
 version = "0.1.0"
 dependencies = [
@@ -3525,6 +3577,7 @@ dependencies = [
  "star-submission-comments",
  "time",
  "tokio",
+ "tower",
  "url",
 ]
 
@@ -3545,6 +3598,19 @@ dependencies = [
  "star-db",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "star-worker"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde_json",
+ "sqlx",
+ "star-db",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

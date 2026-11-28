@@ -19,7 +19,7 @@ Qwen workers.
 | **a Canvas route** | `briefs/<family>.md` → [[facts/route-map]] → the Canvas file it names → [[facts/schema-truth]] for that table |
 | **a table's fields** | [[facts/schema-truth]] for that table → the recorded body in `migration/rust/app-cases/http/` → the Canvas model |
 | **a failing parity case** | `migration/rust/app-cases/replay-report.md` → the case's `.toml` (what Canvas answered) → the handler |
-| **the current state of the port** | [[facts/parity-state]] |
+| **the current state of the port** | [[facts/parity-state]] → [[facts/capability-ledger]] for the per-capability verdict |
 | **anything that has bitten you** | `traps/` — read the list below before you start |
 | **"why is it done this way?"** | `decisions/` |
 
@@ -37,6 +37,7 @@ cd star-labs && python3 tools/knowledge/gen_knowledge.py --check  # CI: stale?
 | [[facts/route-map]] | `migration/parity/canvas_manifest.json` + `coverage.json` + the port's own registrations | Which crate owns this route, which Canvas file to read, is it implemented, does the replay pass |
 | [[facts/schema-truth]] | the recorded Canvas bodies + `migration/crates/star-db/migrations/` | Which columns this table still owes Canvas |
 | [[facts/parity-state]] | `coverage.json` + `replay-report.md` | How far along the port actually is |
+| [[facts/capability-ledger]] | the parity manifest + the corpus + the replay report | Every Canvas capability: where the port's code is, what evidence exists, what still differs |
 | [[facts/gap-report]] | `parity/canvas-*.json` (Canvas introspection) vs the tree | What the port still owes Canvas: routes, permissions, columns, GraphQL |
 
 ## Per-family briefs — start here, not in the repo
@@ -76,6 +77,12 @@ cause, fix.
 | [[traps/canvas-token-self-expiry]] | a route that ends sessions must not end the replay's own token |
 | [[traps/ci-never-assembled-the-router]] | `cargo test -p` never assembles the app router — that is why the boot bug was invisible |
 | [[traps/star-http-is-the-only-binary]] | the binary is `star-http`; `PORT` is the fallback for `STAR_PORT` |
+| [[traps/front-door-delegation]] | the front door delegates on axum's fallback **and** its method-not-allowed fallback; Canvas answers 404, never 405 |
+| [[traps/front-door-original-path]] | `nest("/api/v1")` strips the prefix before the fallback runs — forward `OriginalUri`, not `parts.uri` |
+| [[traps/replay-gate-reads-git]] | the replay overwrites the committed report; the gate must read the baseline out of git |
+| [[traps/role-model-vs-canvas-role-overrides]] | the port's role model is stricter than Canvas' role-override defaults (students, `read_roster`) |
+| [[traps/api-resources-draw-put-not-patch]] | Canvas' API `resources` draws PUT only — the port registers 9 API PATCH routes Canvas does not serve |
+| [[traps/account-gated-permissions]] | 45 permissions hang on an account feature flag the port never grants — always denied |
 
 ## Decisions — why things are the way they are
 

@@ -1001,11 +1001,7 @@ pub fn router() -> Router<AppState> {
         )
         .route(
             "/courses/{courseId}/files/{attachmentId}/date_details",
-            get(get_file_date_details),
-        )
-        .route(
-            "/courses/{courseId}/files/{attachmentId}/date_details",
-            put(put_file_date_details),
+            get(get_file_date_details).put(put_file_date_details),
         )
         .route(
             "/courses/{courseId}/assignments/{assignmentId}/date_details/convert_tag_overrides",

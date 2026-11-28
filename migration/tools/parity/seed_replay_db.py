@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
 import os
+import pathlib
 import sys
 
 try:
@@ -127,6 +129,69 @@ ROWS = [
 ]
 
 
+def oracle_rows() -> list[tuple[str, str, tuple]]:
+    """The rows the Canvas oracle had, as `tools/parity/replay-seed.json`.
+
+    The dump comes from the oracle itself (`dump_oracle_seed.py`), so the
+    replay seeds the same rows the recording was made against. Without them
+    the port answers 404 where Canvas answered 200 and the replay measures
+    the seed instead of the port.
+    """
+    path = pathlib.Path(__file__).resolve().parent / "replay-seed.json"
+    if not path.is_file():
+        return []
+    seed = json.loads(path.read_text())
+    rows = []
+    # The order the foreign keys need: the accounts and the users before the
+    # rows that point at them.
+    order = [
+        "accounts",
+        "users",
+        "courses",
+        "course_sections",
+        "group_categories",
+        "groups",
+        "group_memberships",
+        "folders",
+        "assignments",
+        "enrollments",
+        "account_users",
+        "role_overrides",
+        "discussion_topics",
+        "discussion_entries",
+        "discussion_topic_summaries",
+        "submissions",
+        "calendar_events",
+        "external_tools",
+        "files",
+        "learning_outcomes",
+        "outcome_groups",
+        "outcome_links",
+        "rubrics",
+        "rubric_associations",
+        "lti_registrations",
+        "pages",
+        "page_revisions",
+    ]
+    for table in order + [t for t in seed if t not in order]:
+        spec = seed.get(table)
+        if not spec:
+            continue
+        columns = spec["columns"]
+        placeholders = ", ".join(["%s"] * len(columns))
+        # The row is replaced, not skipped: a database seeded twice keeps the
+        # old row otherwise, and the old row can carry a setting the new one
+        # does not.
+        updates = ", ".join(f"{c} = EXCLUDED.{c}" for c in columns if c != "id")
+        sql = (
+            f"INSERT INTO {table} ({', '.join(columns)}) "
+            f"VALUES ({placeholders}) ON CONFLICT (id) DO UPDATE SET {updates}"
+        )
+        for row in spec["rows"]:
+            rows.append((table, sql, tuple(row.get(c) for c in columns)))
+    return rows
+
+
 def access_token_rows() -> list[tuple[str, str, tuple]]:
     """The rows the replay's access token needs.
 
@@ -186,14 +251,48 @@ def seed() -> int:
         return 3
 
     ok, failed = 0, []
-    rows = ROWS + access_token_rows()
+    rows = oracle_rows() + access_token_rows()
     with psycopg.connect(url) as conn:
         with conn.cursor() as cur:
-            for table, sql, params in rows:
+            for index, (table, sql, params) in enumerate(rows):
+                # A savepoint per row: one row the port's schema does not
+                # accept must not take the rest of the seed with it.
+                savepoint = f"seed_row_{index}"
                 try:
+                    cur.execute(f"SAVEPOINT {savepoint}")
+                    # The row this one replaces: a replay database seeded
+                    # twice keeps the old row otherwise, and the enrollment's
+                    # unique key is the pair, not the id.
+                    try:
+                        if table == "enrollments":
+                            cur.execute(
+                                "DELETE FROM enrollments "
+                                "WHERE user_id = %s AND course_id = %s AND role = %s",
+                                (params[1], params[2], params[3]),
+                            )
+                        elif table == "folders":
+                            # Only the row this one replaces. The root
+                            # folder of a context is unique, but that is a
+                            # property of the seed (the child folders carry
+                            # their parent), and deleting the whole context
+                            # would take the root folder with them.
+                            cur.execute(
+                                "DELETE FROM folders WHERE id = %s",
+                                (params[0],),
+                            )
+                        else:
+                            cur.execute(f"DELETE FROM {table} WHERE id = %s", (params[0],))
+                    except Exception:  # noqa: BLE001 - the row stays
+                        # Something else points at the row (an enrollment term
+                        # at the account, a course at the account). The insert
+                        # below then keeps what is already there.
+                        cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                        cur.execute(f"SAVEPOINT {savepoint}")
                     cur.execute(sql, params)
+                    cur.execute(f"RELEASE SAVEPOINT {savepoint}")
                     ok += 1
                 except Exception as exc:  # noqa: BLE001 - report and continue
+                    cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
                     failed.append(f"{table}: {exc}")
         conn.commit()
 

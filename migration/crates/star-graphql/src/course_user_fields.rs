@@ -52,11 +52,11 @@ use crate::{
 /// camelCased by the Object derive: `id`, `name`, `state`, `createdAt`,
 /// `updatedAt`.
 pub struct Account {
-    id: i64,
-    name: String,
-    workflow_state: String,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) workflow_state: String,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -69,7 +69,6 @@ impl Account {
         &self.name
     }
 
-    /// Canvas renames the DB `workflow_state` to `state` (like `Course`).
     async fn state(&self) -> &str {
         &self.workflow_state
     }
@@ -176,7 +175,6 @@ struct UserJoinRow {
     id: i64,
     name: String,
     email: String,
-    /// COALESCE(sortable_name, name) — never null, like the REST handlers.
     sortable_name: String,
     avatar_url: Option<String>,
     created_at: DateTime<Utc>,
@@ -296,4 +294,23 @@ pub(crate) async fn is_account_admin_in_chain(
     .await
     .map_err(db_err)?;
     Ok(row.is_some())
+}
+
+/// the lookup is the same shape as Canvas'.
+pub(crate) async fn fetch_account_by_sis_id(
+    pool: &PgPool,
+    sis_id: &str,
+) -> Result<Option<Account>, async_graphql::Error> {
+    let row: Option<AccountRow> = sqlx::query_as(
+        r#"
+        SELECT id, name, workflow_state, created_at, updated_at
+        FROM accounts
+        WHERE sis_source_id = $1
+        "#,
+    )
+    .bind(sis_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+    Ok(row.map(AccountRow::into))
 }

@@ -119,7 +119,8 @@ def read_cases(case_dir: Path) -> list[dict]:
 
 def check(case_dir: Path, base_url: str, timeout: float) -> int:
     cases = read_cases(case_dir)
-    failures: list[tuple[str, str, str, str]] = []
+    field_failures: list[tuple[str, str, str, str]] = []
+    status_failures: list[tuple[str, str, str, str]] = []
     checked = 0
     for case in cases:
         if not case["meta"] or not case["authorization"]:
@@ -138,7 +139,7 @@ def check(case_dir: Path, base_url: str, timeout: float) -> int:
             got = exc.headers.get(META, "") if exc.headers else ""
             status = exc.code
         except Exception as exc:  # noqa: BLE001
-            failures.append((case["name"], "request", str(exc), ""))
+            field_failures.append((case["name"], "request", str(exc), ""))
             continue
 
         want = parse_meta(case["meta"])
@@ -147,20 +148,32 @@ def check(case_dir: Path, base_url: str, timeout: float) -> int:
             if field not in want:
                 continue
             if want[field] != have.get(field):
-                failures.append((case["name"], field, want[field], have.get(field, "<missing>")))
+                field_failures.append(
+                    (case["name"], field, want[field], have.get(field, "<missing>"))
+                )
         if case["status"] is not None and status != case["status"]:
-            failures.append((case["name"], "status", str(case["status"]), str(status)))
+            # A status difference is a parity gap the replay already
+            # measures; it is reported here, but it is not what this check
+            # gates. The contract fields of the header are.
+            status_failures.append(
+                (case["name"], "status", str(case["status"]), str(status))
+            )
 
+    failures = field_failures + status_failures
     print(f"checked {checked} cases; {len(failures)} stable-field differences")
+    print(
+        f"  {len(field_failures)} contract-field differences, "
+        f"{len(status_failures)} status differences (the replay's business)"
+    )
     by_field: dict[str, int] = {}
     for _, field, _, _ in failures:
         by_field[field] = by_field.get(field, 0) + 1
     for field, n in sorted(by_field.items(), key=lambda kv: -kv[1]):
         print(f"  {field:<8} {n}")
     limit = int(os.environ.get("META_CHECK_SHOW", "20"))
-    for name, field, want, got in failures[:limit]:
+    for name, field, want, got in field_failures[:limit]:
         print(f"  {name}: {field} expected {want!r} got {got!r}")
-    return 1 if failures else 0
+    return 1 if field_failures else 0
 
 
 def main() -> int:

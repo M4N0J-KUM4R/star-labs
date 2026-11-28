@@ -37,21 +37,21 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post},
+    routing::get,
     Json, Router,
 };
 use sqlx::PgPool;
 
 use star_auth::AuthUser;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 
 use crate::{
     canvas_error, canvas_not_found, dedupe_folder_name, ensure_root_folder_for,
     ensure_unfiled_folder, fetch_child_by_name, fetch_folder, fetch_sibling_names,
     find_or_create_unique_folder, insert_folder, is_admin, join_full_name, next_position,
-    normalize_folder_name, pagination, user_in_group, user_teacher_of_course, CreateFolderRequest,
-    DuplicatesResponse, FolderListQuery, FolderResponse, FolderRow, NewFolder, FOLDER_SELECT,
-    MEDIA_TYPE,
+    normalize_folder_name, pagination, user_enrolled_or_admin, user_in_group,
+    user_teacher_of_course, CreateFolderRequest, DuplicatesResponse, FolderListQuery,
+    FolderResponse, FolderRow, NewFolder, FOLDER_SELECT, MEDIA_TYPE,
 };
 
 /// The name of the Canvas media folder (`Folder.media_folder`).
@@ -94,6 +94,34 @@ async fn group_can_manage(
     }
 }
 
+/// Whether the caller may read the group context.
+///
+/// Canvas' `Group` policy (`app/models/group.rb:662`) grants the group's
+/// permissions when the group's *context* grants the user `:read`:
+///
+/// ```ruby
+/// given { |user, session| !non_collaborative? && (context.is_a?(Account) || context&.grants_right?(user, session, :read) || false) }
+/// ```
+///
+/// so a member of the group's course may read the group without being a group
+/// member.
+async fn group_can_read(
+    db: &PgPool,
+    auth: &AuthUser,
+    group: &GroupScope,
+) -> Result<bool, ApiError> {
+    if group_can_manage(db, auth, group).await? {
+        return Ok(true);
+    }
+    if user_in_group(db, auth.id, group.id).await? {
+        return Ok(true);
+    }
+    match group.course_id {
+        Some(course_id) => user_enrolled_or_admin(db, auth.id, course_id, &auth.role).await,
+        None => Ok(false),
+    }
+}
+
 // ─── list_all_folders ────────────────────────────────────────────────────────
 
 /// GET /groups/{groupId}/folders — Canvas FoldersController#list_all_folders.
@@ -105,7 +133,8 @@ async fn list_group_folders(
 ) -> Result<Json<Vec<FolderResponse>>, ApiError> {
     let group = load_group(&state.db, group_id).await?;
     let can_manage = group_can_manage(&state.db, &auth, &group).await?;
-    let can_read = can_manage || user_in_group(&state.db, auth.id, group.id).await?;
+    let can_read = group_can_read(&state.db, &auth, &group).await?;
+    let _ = can_manage;
     if !can_read {
         return Err(ApiError::Forbidden);
     }
@@ -154,7 +183,7 @@ async fn create_group_folder(
     State(state): State<AppState>,
     Path(group_id): Path<i64>,
     auth: AuthUser,
-    Json(payload): Json<CreateFolderRequest>,
+    ApiJson(payload): ApiJson<CreateFolderRequest>,
 ) -> Result<Response, ApiError> {
     let group = load_group(&state.db, group_id).await?;
 
@@ -287,7 +316,8 @@ async fn media_folder_group(
 ) -> Result<Json<FolderResponse>, ApiError> {
     let group = load_group(&state.db, group_id).await?;
     let can_manage = group_can_manage(&state.db, &auth, &group).await?;
-    let can_read = can_manage || user_in_group(&state.db, auth.id, group.id).await?;
+    let can_read = group_can_read(&state.db, &auth, &group).await?;
+    let _ = can_manage;
     if !can_read {
         return Err(ApiError::Forbidden);
     }
@@ -343,7 +373,8 @@ async fn list_group_folder_duplicates(
     }
 
     let can_manage = group_can_manage(&state.db, &auth, &group).await?;
-    let can_read = can_manage || user_in_group(&state.db, auth.id, group.id).await?;
+    let can_read = group_can_read(&state.db, &auth, &group).await?;
+    let _ = can_manage;
     if !can_read {
         return Err(ApiError::Forbidden);
     }
@@ -422,8 +453,10 @@ async fn duplicates_feature_enabled(db: &PgPool, group_id: i64) -> Result<bool, 
 /// are registered by the crate router (see the module docs).
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/groups/{groupId}/folders", get(list_group_folders))
-        .route("/groups/{groupId}/folders", post(create_group_folder))
+        .route(
+            "/groups/{groupId}/folders",
+            get(list_group_folders).post(create_group_folder),
+        )
         .route("/groups/{groupId}/folders/media", get(media_folder_group))
         .route(
             "/groups/{groupId}/folders/{id}/duplicates",

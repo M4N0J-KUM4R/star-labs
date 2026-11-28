@@ -226,7 +226,7 @@ async fn account_notifications_window_and_admin_gate() {
     .expect("seed past");
 
     let query = "query ($id: ID!) { accountNotifications(accountId: $id) { id accountId subject \
-                 message icon workflowState startAt endAt } }";
+                 message icon notificationType startAt endAt } }";
 
     // Admin sees only the window-valid one.
     let body = gql_post(
@@ -244,10 +244,12 @@ async fn account_notifications_window_and_admin_gate() {
     assert_eq!(notes[0]["accountId"], account_id.to_string(), "{body}");
     assert_eq!(notes[0]["subject"], "Maintenance", "{body}");
     assert_eq!(notes[0]["icon"], "calendar", "{body}");
-    assert_eq!(notes[0]["workflowState"], "active", "{body}");
+    assert_eq!(notes[0]["notificationType"], "active", "{body}");
     assert!(notes[0]["startAt"].is_string(), "{body}");
 
-    // Non-admin gets null (admin-only gate).
+    // Non-admin sees none of the account-wide announcements. Canvas types
+    // the field `[AccountNotification!]!` (never null), so the port answers
+    // with an empty list rather than null.
     let body = gql_post(
         &server,
         &auth(student, "student"),
@@ -255,7 +257,13 @@ async fn account_notifications_window_and_admin_gate() {
         json!({ "id": account_id.to_string() }),
     )
     .await;
-    assert!(body["data"]["accountNotifications"].is_null(), "{body}");
+    assert_eq!(
+        body["data"]["accountNotifications"]
+            .as_array()
+            .map(Vec::len),
+        Some(0),
+        "{body}"
+    );
 
     // Cleanup the account.
     let _ = sqlx::query("DELETE FROM accounts WHERE id = $1")

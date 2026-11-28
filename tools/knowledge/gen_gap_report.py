@@ -149,6 +149,17 @@ def port_permission_words() -> set[str]:
     return names
 
 
+def camel(name: str) -> str:
+    """The GraphQL field name of a Rust method (`create_thing` → `createThing`).
+
+    async-graphql turns a snake_case method into a camelCase field, and
+    Canvas' SDL names its fields in camelCase, so the comparison has to
+    speak the same language.
+    """
+    head, *rest = name.split("_")
+    return head + "".join(part[:1].upper() + part[1:] for part in rest)
+
+
 def port_graphql() -> dict[str, set[str]]:
     """GraphQL type / query field / mutation names the port declares."""
     out: dict[str, set[str]] = {"types": set(), "queries": set(), "mutations": set()}
@@ -165,15 +176,38 @@ def port_graphql() -> dict[str, set[str]]:
             out["types"].add(m.group(1))
         for m in re.finditer(r"async_graphql::Object", text):
             pass
-        # The query and mutation roots are named structs: `pub struct Query;`
-        # and `pub struct Mutation(..);`, each with an `#[Object] impl`.
-        for root, bucket in (("Query", "queries"), ("Mutation", "mutations")):
-            m = re.search(r"impl\s+" + root + r"[^\{]*\{[\s\S]*?\n\}", text)
-            if not m:
-                continue
-            for f in re.finditer(r"\basync\s+fn\s+(\w+)\s*\(", m.group(0)):
-                out[bucket].add(f.group(1))
+        # The query and mutation roots are named structs with an `#[Object]`
+        # impl: `pub struct Query;` + `impl Query { … }`, and the mutation
+        # roots are `RootMutations`, `AssignmentMutations`,
+        # `BatchBMutations`, `BatchG1Mutations`, … — one impl per slice. The
+        # fields are the `async fn`s of the impl block, so the block has to
+        # be walked to its own closing brace — a regex that stops at the
+        # first `\n}` stops at the first nested block and counts a fraction
+        # of the fields.
+        for m in re.finditer(r"impl\s+(\w+)\b[^\{]*\{", text):
+            name = m.group(1)
+            if name == "Query":
+                out["queries"] |= {camel(f) for f in impl_fields(text, name)}
+            elif name.endswith("Mutations") or name == "Mutation":
+                out["mutations"] |= {camel(f) for f in impl_fields(text, name)}
     return out
+
+
+def impl_fields(text: str, name: str) -> set[str]:
+    """The `async fn` field names of `impl <name> { … }`."""
+    m = re.search(r"impl\s+" + re.escape(name) + r"\b[^\{]*\{", text)
+    if not m:
+        return set()
+    fields: set[str] = set()
+    depth = 1
+    for line in text[m.end():].splitlines():
+        depth += line.count("{") - line.count("}")
+        if depth <= 0:
+            break
+        f = re.match(r"\s+async\s+fn\s+(\w+)\s*\(", line)
+        if f:
+            fields.add(f.group(1))
+    return fields
 
 
 def replay_counts() -> tuple[int, int, int]:

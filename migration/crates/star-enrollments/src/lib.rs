@@ -6,7 +6,7 @@ use axum::{
     extract::{Path, Query, RawQuery, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -14,11 +14,17 @@ use serde::Deserialize;
 use serde_json::json;
 use sqlx::PgPool;
 use star_auth::AuthUser;
-use star_common::{ApiError, AppState};
+use star_common::{ApiError, ApiJson, AppState};
 
+mod enrollment_json;
 mod observer_alert_thresholds;
 mod temporary_enrollment_pairings;
 
+use crate::enrollment_json::{
+    enrollment_columns, enrollment_order, port_enrollment_json, EnrollmentApiRow,
+    EnrollmentJsonOptions, GradeRights, ENROLLMENT_JOINS,
+};
+use std::collections::HashSet;
 /// Pub loaders for the server-rendered people/admin pages (star-ui, #73).
 pub mod ui;
 
@@ -44,33 +50,114 @@ pub struct EnrollmentWithUser {
 
 /// Request to create an enrollment through a section-scoped route.
 /// The course is derived from the section, so no `course_id` is accepted.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct CreateSectionEnrollmentRequest {
-    pub user_id: i64,
+    #[serde(default)]
+    pub user_id: Option<i64>,
     pub role: Option<String>,
 }
 
+/// Query params for listing enrollments.
+#[derive(Debug, Deserialize)]
+pub struct EnrollmentFilter {
+    pub user_id: Option<i64>,
+    pub course_id: Option<i64>,
+}
+
+/// What the caller may see of the enrollments it reads.
 /// Canvas "Enrollment" JSON for the lifecycle + user-scoped endpoints.
 ///
-/// Canvas renames `workflow_state` to `enrollment_state` in API responses
-/// (`enrollment_json` in lib/api/v1/user.rb), so the serialized field carries
-/// that name while the DB column keeps its original one.
-#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
-pub struct EnrollmentJson {
-    pub id: i64,
-    pub user_id: i64,
-    pub course_id: i64,
-    pub course_section_id: Option<i64>,
-    pub role: String,
-    #[serde(rename = "enrollment_state")]
-    pub workflow_state: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub start_at: Option<DateTime<Utc>>,
-    pub end_at: Option<DateTime<Utc>>,
-    pub last_activity_at: Option<DateTime<Utc>>,
-    pub last_attended_at: Option<DateTime<Utc>>,
-    pub total_activity_time: i32,
+/// Canvas decides which optional parts of the enrollment payload a caller
+/// gets from its rights on the enrollment's course
+/// (`Api::V1::User#enrollment_json`, lib/api/v1/user.rb:292):
+///
+/// - the activity fields need the enrollment to be the caller's own or the
+///   caller to be able to read course reports,
+/// - the SIS ids need the caller to be able to read SIS data,
+/// - the grades need grade rights, and their contents depend on whether the
+///   caller may also manage the grades.
+///
+/// The port has no course-report, SIS or grade-scheme permission model, so
+/// the site admin and the teachers of the course stand in for them.
+struct CallerRights {
+    admin: bool,
+    taught_courses: HashSet<i64>,
+}
+
+impl CallerRights {
+    /// The courses the caller teaches (Canvas: a TeacherEnrollment).
+    async fn load(
+        pool: &PgPool,
+        caller_id: i64,
+        admin: bool,
+        course_ids: &[i64],
+    ) -> Result<Self, ApiError> {
+        let rows: Vec<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT DISTINCT course_id FROM enrollments
+            WHERE user_id = $1 AND role = 'teacher' AND course_id = ANY($2)
+            "#,
+        )
+        .bind(caller_id)
+        .bind(course_ids.to_vec())
+        .fetch_all(pool)
+        .await
+        .map_err(ApiError::from)?;
+
+        Ok(CallerRights {
+            admin,
+            taught_courses: rows.into_iter().map(|(course_id,)| course_id).collect(),
+        })
+    }
+
+    /// Canvas renders the activity fields for the enrolled user and for
+    /// callers who may read course reports.
+    fn sees_activity(&self, enrollment_user_id: i64, caller_id: i64) -> bool {
+        enrollment_user_id == caller_id || self.admin
+    }
+
+    /// Canvas renders the SIS ids for callers who may read SIS data.
+    fn reads_sis(&self, course_id: i64) -> bool {
+        self.admin || self.taught_courses.contains(&course_id)
+    }
+
+    /// The grade rights of the caller on the enrollment's course.
+    fn grade_rights(&self, enrollment_user_id: i64, caller_id: i64, course_id: i64) -> GradeRights {
+        if self.admin || self.taught_courses.contains(&course_id) {
+            GradeRights::Manage
+        } else if enrollment_user_id == caller_id {
+            GradeRights::Read
+        } else {
+            GradeRights::None
+        }
+    }
+
+    /// The options of one enrollment row.
+    fn options(
+        &self,
+        row: &EnrollmentApiRow,
+        caller_id: i64,
+        include_user: bool,
+    ) -> EnrollmentJsonOptions {
+        EnrollmentJsonOptions {
+            include_user,
+            include_activity: self.sees_activity(row.user_id, caller_id),
+            include_sis: self.reads_sis(row.course_id),
+            grade_rights: self.grade_rights(row.user_id, caller_id, row.course_id),
+        }
+    }
+}
+
+/// The select of the enrollment rows, with the where clause and the order
+/// Canvas uses (`enrollments.order(:type, users.sortable_name, :id)`).
+fn enrollment_query(where_clause: &str) -> String {
+    format!(
+        "SELECT {} {} WHERE {} {}",
+        enrollment_columns(),
+        ENROLLMENT_JOINS,
+        where_clause,
+        enrollment_order()
+    )
 }
 
 /// Query params for `GET /users/{userId}/enrollments`.
@@ -269,6 +356,47 @@ impl IntoResponse for EnrollmentActionError {
 // --------------------------------------------------------------------------
 
 /// Look up a user's role from the DB.
+/// Ask the shared permission layer whether the acting user holds a
+/// permission in this course.
+///
+/// Canvas answers with the permission registry, not with "is this user a
+/// teacher", so the port asks the same question the same way
+/// ([`star_permissions::check::require`]).
+async fn require_course_permission(
+    pool: &PgPool,
+    user_id: i64,
+    course_id: i64,
+    permission: &str,
+) -> Result<(), ApiError> {
+    star_permissions::check::require(
+        pool,
+        user_id,
+        &star_permissions::PermissionContext::Course { course_id },
+        permission,
+    )
+    .await
+}
+
+/// The Canvas permission that lets a user add an enrollment of `role`.
+///
+/// Canvas `User#can_create_enrollment_for?`
+/// (`app/models/user.rb:3474-3485`).
+fn add_enrollment_permission(role: &str) -> &'static str {
+    match role {
+        "teacher" => "add_teacher_to_course",
+        "ta" => "add_ta_to_course",
+        "designer" => "add_designer_to_course",
+        "observer" => "add_observer_to_course",
+        _ => "add_student_to_course",
+    }
+}
+
+/// The Canvas role of an enrollment row, as the permission registry spells it.
+fn enrollment_role_kind(role: &str) -> star_permissions::RoleKind {
+    star_permissions::RoleKind::from_port_name(role)
+        .unwrap_or(star_permissions::RoleKind::StudentEnrollment)
+}
+
 async fn get_user_role(pool: &PgPool, user_id: i64) -> Result<Option<String>, ApiError> {
     let row: Option<(String,)> = sqlx::query_as("SELECT role FROM users WHERE id = $1")
         .bind(user_id)
@@ -280,10 +408,6 @@ async fn get_user_role(pool: &PgPool, user_id: i64) -> Result<Option<String>, Ap
 
 fn is_admin(role: &str) -> bool {
     role == "admin"
-}
-
-fn is_teacher(role: &str) -> bool {
-    role == "teacher" || role == "admin"
 }
 
 /// Check if a user is enrolled as teacher (or admin) for a given course.
@@ -343,16 +467,16 @@ async fn user_exists(pool: &PgPool, user_id: i64) -> Result<bool, ApiError> {
     Ok(row.is_some())
 }
 
-/// Insert an active enrollment and return it in Canvas-ish shape (with user
-/// name/email). 409 when (user, course, role) is already enrolled; Canvas
-/// allows one enrollment per user/course/role triple in this schema.
+/// Insert an active enrollment and return its row. 409 when (user, course,
+/// role) is already enrolled; Canvas allows one enrollment per user/course/role
+/// triple in this schema.
 async fn insert_enrollment(
     pool: &PgPool,
     user_id: i64,
     course_id: i64,
     course_section_id: Option<i64>,
     role: &str,
-) -> Result<EnrollmentWithUser, ApiError> {
+) -> Result<EnrollmentApiRow, ApiError> {
     let result = sqlx::query(
         r#"
         INSERT INTO enrollments (user_id, course_id, course_section_id, role, workflow_state)
@@ -376,15 +500,9 @@ async fn insert_enrollment(
         Err(e) => return Err(ApiError::Db(e.to_string())),
     }
 
-    sqlx::query_as(
-        r#"
-        SELECT e.id, e.user_id, e.course_id, e.course_section_id, e.role,
-               e.workflow_state, e.created_at, u.name, u.email
-        FROM enrollments e
-        JOIN users u ON u.id = e.user_id
-        WHERE e.user_id = $1 AND e.course_id = $2 AND e.role = $3
-        "#,
-    )
+    sqlx::query_as(&enrollment_query(
+        "e.user_id = $1 AND e.course_id = $2 AND e.role = $3",
+    ))
     .bind(user_id)
     .bind(course_id)
     .bind(role)
@@ -397,12 +515,38 @@ async fn insert_enrollment(
 // Router
 // --------------------------------------------------------------------------
 
+/// cross-course enrollment.
+async fn ensure_section_in_course(
+    pool: &PgPool,
+    section_id: i64,
+    course_id: i64,
+) -> Result<(), ApiError> {
+    let row: Option<(i64,)> =
+        sqlx::query_as("SELECT id FROM course_sections WHERE id = $1 AND course_id = $2")
+            .bind(section_id)
+            .bind(course_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(ApiError::from)?;
+    row.map(|_| ()).ok_or(ApiError::NotFound)
+}
+
+/// Whether a role is a teacher role (`role == "teacher"` or `"admin"`).
+fn is_teacher(role: &str) -> bool {
+    role == "teacher" || role == "admin"
+}
+
 pub fn router() -> Router<AppState> {
     Router::new()
         // The alert thresholds of an observer.
         .merge(observer_alert_thresholds::router())
         // The temporary enrollment pairings of an account.
         .merge(temporary_enrollment_pairings::router())
+        .route(
+            "/enrollments",
+            post(create_enrollment).get(list_enrollments),
+        )
+        .route("/enrollments/{id}", delete(delete_enrollment))
         // Canvas EnrollmentsApiController: enrollments are always context-
         // scoped (`courses/:course_id/enrollments`,
         // `sections/:course_id/enrollments`, `users/:user_id/enrollments`,
@@ -458,6 +602,191 @@ pub fn router() -> Router<AppState> {
 // Handlers
 // --------------------------------------------------------------------------
 
+/// POST /enrollments — create an enrollment.
+/// 409 if (user_id, course_id, role) combo already exists.
+/// 404 if user or course missing.
+async fn create_enrollment(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(payload): Json<CreateEnrollmentRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
+    let auth_role = get_user_role(&state.db, auth.id).await?;
+    let auth_role = auth_role.unwrap_or_else(|| "student".to_string());
+
+    let role = payload.role.as_deref().unwrap_or("student");
+    validate_enrollment_role(role)?;
+
+    // Canvas `User#can_create_enrollment_for?` -> the granular
+    // `add_*_to_course` permission for the enrollment's role on that course
+    // (`app/models/user.rb:3474-3485`).
+    require_course_permission(
+        &state.db,
+        auth.id,
+        payload.course_id,
+        add_enrollment_permission(role),
+    )
+    .await?;
+
+    // Verify course exists.
+    let course_exists: Option<(i32,)> = sqlx::query_as("SELECT 1 FROM courses WHERE id = $1")
+        .bind(payload.course_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+
+    if course_exists.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // Verify user exists.
+    if !user_exists(&state.db, payload.user_id).await? {
+        return Err(ApiError::NotFound);
+    }
+
+    // Canvas: an explicit course_section_id must belong to the course being
+    // enrolled in, otherwise the section lookup is a 404.
+    if let Some(section_id) = payload.course_section_id {
+        ensure_section_in_course(&state.db, section_id, payload.course_id).await?;
+    }
+
+    let enrollment = insert_enrollment(
+        &state.db,
+        payload.user_id,
+        payload.course_id,
+        payload.course_section_id,
+        role,
+    )
+    .await?;
+
+    let rights = CallerRights::load(
+        &state.db,
+        auth.id,
+        is_admin(&auth_role),
+        &[enrollment.course_id],
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(port_enrollment_json(
+            &enrollment,
+            &rights.options(&enrollment, auth.id, false),
+        )),
+    ))
+}
+
+/// GET /enrollments — list enrollments.
+/// Admin sees all; teachers see enrollments for courses they're teaching.
+async fn list_enrollments(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Query(filter): Query<EnrollmentFilter>,
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
+    let auth_role = get_user_role(&state.db, auth.id).await?;
+    let auth_role = auth_role.unwrap_or_else(|| "student".to_string());
+
+    // Non-admin: only enrollments for courses this user teaches.
+    let taught_course_ids: Option<Vec<i64>> = if is_admin(&auth_role) {
+        None
+    } else {
+        let enrolled_course_ids: Vec<(i64,)> = sqlx::query_as(
+            r#"
+            SELECT course_id FROM enrollments
+            WHERE user_id = $1 AND role = 'teacher'
+            "#,
+        )
+        .bind(auth.id)
+        .fetch_all(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+
+        let course_ids: Vec<i64> = enrolled_course_ids.into_iter().map(|(id,)| id).collect();
+
+        if course_ids.is_empty() {
+            return Ok(Json(vec![]));
+        }
+
+        if let Some(course_id) = filter.course_id {
+            if !course_ids.contains(&course_id) {
+                return Err(ApiError::Forbidden);
+            }
+        }
+
+        Some(course_ids)
+    };
+
+    let rows: Vec<EnrollmentApiRow> = sqlx::query_as(&enrollment_query(
+        "e.workflow_state != 'deleted' \
+          AND ($1::bigint IS NULL OR e.user_id = $1) \
+          AND ($2::bigint IS NULL OR e.course_id = $2) \
+          AND ($3::bigint[] IS NULL OR e.course_id = ANY($3))",
+    ))
+    .bind(filter.user_id)
+    .bind(filter.course_id)
+    .bind(taught_course_ids)
+    .fetch_all(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    let course_ids: Vec<i64> = rows.iter().map(|row| row.course_id).collect();
+    let rights = CallerRights::load(&state.db, auth.id, is_admin(&auth_role), &course_ids).await?;
+
+    let payload: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| port_enrollment_json(row, &rights.options(row, auth.id, true)))
+        .collect();
+
+    Ok(Json(payload))
+}
+
+/// DELETE /enrollments/{id} — delete an enrollment.
+/// Course teacher or admin only.
+async fn delete_enrollment(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Path(enrollment_id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    // Fetch the enrollment to know which course it's in.
+    let enrollment: Option<(i64, i64, String)> =
+        sqlx::query_as("SELECT course_id, user_id, role FROM enrollments WHERE id = $1")
+            .bind(enrollment_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+
+    let (course_id, _enrolled_user_id, role) = enrollment.ok_or(ApiError::NotFound)?;
+
+    // Canvas `EnrollmentsApiController#destroy` without a `task` parameter
+    // checks `Enrollment#can_be_concluded_by`
+    // (`app/controllers/enrollments_api_controller.rb:947-968`): a student
+    // enrollment needs `manage_students`, every other enrollment needs
+    // `allow_course_admin_actions` on the course.
+    if !star_permissions::check::can_conclude_enrollment(
+        &state.db,
+        auth.id,
+        course_id,
+        enrollment_role_kind(&role),
+    )
+    .await?
+    {
+        return Err(ApiError::Forbidden);
+    }
+
+    let result = sqlx::query(
+        "UPDATE enrollments SET workflow_state = 'deleted', updated_at = now() WHERE id = $1",
+    )
+    .bind(enrollment_id)
+    .execute(&state.db)
+    .await
+    .map_err(ApiError::from)?;
+
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
 // --------------------------------------------------------------------------
 // Section-scoped enrollment routes (Canvas EnrollmentsApiController)
 // --------------------------------------------------------------------------
@@ -469,46 +798,46 @@ pub fn router() -> Router<AppState> {
 /// section. Any other user may list their own enrollment in that section, as
 /// documented for the Canvas enrollments API ("A user can, however, return
 /// his/her own enrollments").
+///
+/// The answer is the Canvas enrollment payload: the index action of
+/// `EnrollmentsApiController` renders every enrollment with
+/// `enrollment_json`, and it always includes the nested user.
 async fn list_section_enrollments(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(section_id): Path<i64>,
-) -> Result<Json<Vec<EnrollmentWithUser>>, ApiError> {
+) -> Result<Json<Vec<serde_json::Value>>, ApiError> {
     let section = load_section(&state.db, section_id).await?;
 
     let auth_role = get_user_role(&state.db, auth.id).await?;
     let auth_role = auth_role.unwrap_or_else(|| "student".to_string());
 
-    let can_read_roster = is_admin(&auth_role)
-        || is_teacher_in_course(&state.db, auth.id, section.course_id, &auth_role).await?;
+    // Canvas `EnrollmentsApiController#course_index_enrollments` ->
+    // `grants_any_right?(:read_roster, :view_all_grades, :manage_grades)`
+    // (`app/controllers/enrollments_api_controller.rb:1187`).
+    let can_read_roster = star_permissions::check::require_any(
+        &state.db,
+        auth.id,
+        &star_permissions::PermissionContext::Course {
+            course_id: section.course_id,
+        },
+        &["read_roster", "view_all_grades", "manage_grades"],
+    )
+    .await
+    .is_ok();
 
-    let rows: Vec<EnrollmentWithUser> = if can_read_roster {
-        sqlx::query_as(
-            r#"
-            SELECT e.id, e.user_id, e.course_id, e.course_section_id, e.role,
-                   e.workflow_state, e.created_at, u.name, u.email
-            FROM enrollments e
-            JOIN users u ON u.id = e.user_id
-            WHERE e.course_section_id = $1 AND e.workflow_state != 'deleted'
-            ORDER BY e.created_at DESC
-            "#,
-        )
+    let rows: Vec<EnrollmentApiRow> = if can_read_roster {
+        sqlx::query_as(&enrollment_query(
+            "e.course_section_id = $1 AND e.workflow_state != 'deleted'",
+        ))
         .bind(section_id)
         .fetch_all(&state.db)
         .await
         .map_err(ApiError::from)?
     } else {
-        sqlx::query_as(
-            r#"
-            SELECT e.id, e.user_id, e.course_id, e.course_section_id, e.role,
-                   e.workflow_state, e.created_at, u.name, u.email
-            FROM enrollments e
-            JOIN users u ON u.id = e.user_id
-            WHERE e.course_section_id = $1 AND e.user_id = $2
-              AND e.workflow_state != 'deleted'
-            ORDER BY e.created_at DESC
-            "#,
-        )
+        sqlx::query_as(&enrollment_query(
+            "e.course_section_id = $1 AND e.user_id = $2 AND e.workflow_state != 'deleted'",
+        ))
         .bind(section_id)
         .bind(auth.id)
         .fetch_all(&state.db)
@@ -516,7 +845,15 @@ async fn list_section_enrollments(
         .map_err(ApiError::from)?
     };
 
-    Ok(Json(rows))
+    let course_ids: Vec<i64> = rows.iter().map(|row| row.course_id).collect();
+    let rights = CallerRights::load(&state.db, auth.id, is_admin(&auth_role), &course_ids).await?;
+
+    let payload: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| row.to_json(&rights.options(row, auth.id, true)))
+        .collect();
+
+    Ok(Json(payload))
 }
 
 /// POST /sections/{section_id}/enrollments — Canvas "Enroll a user" scoped to a
@@ -527,37 +864,66 @@ async fn create_section_enrollment(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(section_id): Path<i64>,
-    Json(payload): Json<CreateSectionEnrollmentRequest>,
-) -> Result<(StatusCode, Json<EnrollmentWithUser>), ApiError> {
+    ApiJson(payload): ApiJson<CreateSectionEnrollmentRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let section = load_section(&state.db, section_id).await?;
+
+    // Canvas reads `params[:enrollment]` first and answers
+    // `{"message":"No parameters given"}` when the request names no
+    // enrollment attribute at all
+    // (app/controllers/enrollments_api_controller.rb:680-682).
+    let Some(user_id) = payload.user_id else {
+        return Err(ApiError::canvas_json(
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({ "message": "No parameters given" }),
+        ));
+    };
 
     let auth_role = get_user_role(&state.db, auth.id).await?;
     let auth_role = auth_role.unwrap_or_else(|| "student".to_string());
 
-    // Course teachers (or admins) may enroll users in the section's course.
-    if !is_admin(&auth_role)
-        && !is_teacher_in_course(&state.db, auth.id, section.course_id, &auth_role).await?
-    {
-        return Err(ApiError::Forbidden);
-    }
-
-    if !user_exists(&state.db, payload.user_id).await? {
-        return Err(ApiError::NotFound);
-    }
-
     let role = payload.role.as_deref().unwrap_or("student");
     validate_enrollment_role(role)?;
 
+    // Canvas `User#can_create_enrollment_for?` -> the granular
+    // `add_*_to_course` permission for the enrollment's role on the course
+    // the section belongs to.
+    require_course_permission(
+        &state.db,
+        auth.id,
+        section.course_id,
+        add_enrollment_permission(role),
+    )
+    .await?;
+
+    if !user_exists(&state.db, user_id).await? {
+        return Err(ApiError::NotFound);
+    }
+
     let enrollment = insert_enrollment(
         &state.db,
-        payload.user_id,
+        user_id,
         section.course_id,
         Some(section.id),
         role,
     )
     .await?;
 
-    Ok((StatusCode::CREATED, Json(enrollment)))
+    let rights = CallerRights::load(
+        &state.db,
+        auth.id,
+        is_admin(&auth_role),
+        &[enrollment.course_id],
+    )
+    .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(port_enrollment_json(
+            &enrollment,
+            &rights.options(&enrollment, auth.id, false),
+        )),
+    ))
 }
 
 // --------------------------------------------------------------------------
@@ -680,15 +1046,35 @@ async fn reactivate_enrollment(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((course_id, enrollment_id)): Path<(i64, i64)>,
-) -> Result<Json<EnrollmentJson>, EnrollmentActionError> {
+) -> Result<Json<serde_json::Value>, EnrollmentActionError> {
     let enrollment = load_course_enrollment(&state.db, course_id, enrollment_id).await?;
 
     let auth_role = get_user_role(&state.db, auth.id)
         .await?
         .unwrap_or_else(|| "student".to_string());
 
-    if !is_admin(&auth_role)
-        && !is_teacher_in_course(&state.db, auth.id, course_id, &auth_role).await?
+    // Canvas `EnrollmentsApiController#reactivate` checks
+    // `Enrollment#can_be_deleted_by`
+    // (`app/controllers/enrollments_api_controller.rb:1039-1045`): the granular
+    // `remove_*` permission for the enrollment's own role, and an account
+    // admin for anybody's enrollment.
+    let enrollment_role: Option<(String,)> =
+        sqlx::query_as("SELECT role FROM enrollments WHERE id = $1 AND course_id = $2")
+            .bind(enrollment_id)
+            .bind(course_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(ApiError::from)?;
+    let enrollment_role = enrollment_role.map(|(role,)| role).unwrap_or_default();
+
+    if !star_permissions::check::can_delete_enrollment(
+        &state.db,
+        auth.id,
+        course_id,
+        enrollment.user_id,
+        enrollment_role_kind(&enrollment_role),
+    )
+    .await?
     {
         return Err(ApiError::Forbidden.into());
     }
@@ -699,23 +1085,35 @@ async fn reactivate_enrollment(
         ));
     }
 
-    let updated: EnrollmentJson = sqlx::query_as(
-        r#"
-        UPDATE enrollments
-        SET workflow_state = 'active', updated_at = now()
-        WHERE id = $1 AND course_id = $2
-        RETURNING id, user_id, course_id, course_section_id, role, workflow_state,
-                  created_at, updated_at, start_at, end_at,
-                  last_activity_at, last_attended_at, total_activity_time
-        "#,
+    sqlx::query(
+        "UPDATE enrollments SET workflow_state = 'active', updated_at = now() WHERE id = $1 AND course_id = $2",
     )
     .bind(enrollment_id)
     .bind(course_id)
-    .fetch_one(&state.db)
+    .execute(&state.db)
     .await
     .map_err(ApiError::from)?;
 
-    Ok(Json(updated))
+    // Canvas answers with the enrollment payload
+    // (`render json: enrollment_json(@enrollment, ...)`), which carries the
+    // nested user only on the index actions.
+    let updated: EnrollmentApiRow = sqlx::query_as(&enrollment_query("e.id = $1"))
+        .bind(enrollment_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(ApiError::from)?;
+
+    let rights = CallerRights::load(
+        &state.db,
+        auth.id,
+        is_admin(&auth_role),
+        &[updated.course_id],
+    )
+    .await?;
+
+    Ok(Json(
+        updated.to_json(&rights.options(&updated, auth.id, false)),
+    ))
 }
 
 /// Valid `state` values for `GET /users/{userId}/enrollments`, mirroring the
@@ -742,12 +1140,14 @@ fn state_filter(state: &str) -> Option<Vec<String>> {
 /// callers need roster rights on the user's courses. Here that maps to
 /// admins (all courses) and course teachers (their own courses only); everyone
 /// else is forbidden. `self` is accepted as the user id, matching `api_find`.
+///
+/// The answer is the Canvas enrollment payload of the index action.
 async fn list_user_enrollments(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(user_ref): Path<String>,
     Query(filter): Query<UserEnrollmentFilter>,
-) -> Result<Json<Vec<EnrollmentJson>>, EnrollmentActionError> {
+) -> Result<Json<Vec<serde_json::Value>>, EnrollmentActionError> {
     let target_user_id = if user_ref == "self" {
         auth.id
     } else {
@@ -800,20 +1200,13 @@ async fn list_user_enrollments(
         Some(course_ids)
     };
 
-    let rows: Vec<EnrollmentJson> = sqlx::query_as(
-        r#"
-        SELECT e.id, e.user_id, e.course_id, e.course_section_id, e.role,
-               e.workflow_state, e.created_at, e.updated_at, e.start_at, e.end_at,
-               e.last_activity_at, e.last_attended_at, e.total_activity_time
-        FROM enrollments e
-        WHERE e.user_id = $1
-          AND e.workflow_state = ANY($2::text[])
-          AND ($3::text IS NULL OR e.role = $3)
-          AND ($4::bigint IS NULL OR e.course_id = $4)
-          AND ($5::bigint[] IS NULL OR e.course_id = ANY($5::bigint[]))
-        ORDER BY e.created_at DESC
-        "#,
-    )
+    let rows: Vec<EnrollmentApiRow> = sqlx::query_as(&enrollment_query(
+        "e.user_id = $1 \
+          AND e.workflow_state = ANY($2::text[]) \
+          AND ($3::text IS NULL OR e.role = $3) \
+          AND ($4::bigint IS NULL OR e.course_id = $4) \
+          AND ($5::bigint[] IS NULL OR e.course_id = ANY($5::bigint[]))",
+    ))
     .bind(target_user_id)
     .bind(&states)
     .bind(filter.role.as_deref())
@@ -823,7 +1216,17 @@ async fn list_user_enrollments(
     .await
     .map_err(ApiError::from)?;
 
-    Ok(Json(rows))
+    let course_ids: Vec<i64> = rows.iter().map(|row| row.course_id).collect();
+    let rights = CallerRights::load(&state.db, auth.id, is_admin(&auth_role), &course_ids).await?;
+
+    // The index action of `EnrollmentsApiController` renders every
+    // enrollment with the nested user.
+    let payload: Vec<serde_json::Value> = rows
+        .iter()
+        .map(|row| row.to_json(&rights.options(row, auth.id, true)))
+        .collect();
+
+    Ok(Json(payload))
 }
 
 // --------------------------------------------------------------------------
@@ -1055,15 +1458,13 @@ async fn update_last_attended(
     // Canvas runs `authorized_action(@context, ..., [:view_all_grades,
     // :manage_grades])` before anything else (enrollments_api_controller.rb
     // #last_attended), so course teachers/admins pass here first.
-    let auth_role = get_user_role(&state.db, auth.id)
-        .await?
-        .unwrap_or_else(|| "student".to_string());
-
-    if !is_admin(&auth_role)
-        && !is_teacher_in_course(&state.db, auth.id, course_id, &auth_role).await?
-    {
-        return Err(ApiError::Forbidden.into());
-    }
+    star_permissions::check::require_any(
+        &state.db,
+        auth.id,
+        &star_permissions::PermissionContext::Course { course_id },
+        &["view_all_grades", "manage_grades"],
+    )
+    .await?;
 
     // Canvas parses `Time.zone.parse(params[:date])` next and renders
     // 400 { "message": "Invalid date time input" } before touching any
@@ -1152,37 +1553,6 @@ async fn account_chain_ids(pool: &PgPool, account_id: i64) -> Result<Vec<i64>, A
     Ok(rows.into_iter().map(|(id,)| id).collect())
 }
 
-/// Whether the caller can read an account roster (Canvas `:read_roster` on the
-/// context account). Star's approximation: site admins (`users.role`) and
-/// `account_users` admins on the account or any of its ancestors.
-async fn can_read_account_roster(
-    pool: &PgPool,
-    user_id: i64,
-    account_chain: &[i64],
-) -> Result<bool, ApiError> {
-    let role: Option<(String,)> = sqlx::query_as("SELECT role FROM users WHERE id = $1")
-        .bind(user_id)
-        .fetch_optional(pool)
-        .await
-        .map_err(ApiError::from)?;
-    if role.map(|(r,)| r).as_deref() == Some("admin") {
-        return Ok(true);
-    }
-    let admin: Option<(i32,)> = sqlx::query_as(
-        r#"
-        SELECT 1 FROM account_users
-        WHERE user_id = $1 AND account_id = ANY($2) AND role = 'admin'
-        LIMIT 1
-        "#,
-    )
-    .bind(user_id)
-    .bind(account_chain)
-    .fetch_optional(pool)
-    .await
-    .map_err(ApiError::from)?;
-    Ok(admin.is_some())
-}
-
 /// GET /accounts/{accountId}/enrollments/{id} — Canvas
 /// `EnrollmentsApiController#show`.
 ///
@@ -1191,34 +1561,41 @@ async fn can_read_account_roster(
 /// the caller is the enrolled user or can `:read_roster` on the context. A
 /// sub-account context additionally 404s unless the enrollment's course hangs
 /// under it (`course.account_chain_ids.include?(@context.id)`).
+///
+/// The answer is the Canvas enrollment payload. The show action renders it
+/// without the nested user (`render json: enrollment_json(enrollment, ...)`).
 async fn show_account_enrollment(
     State(state): State<AppState>,
     auth: AuthUser,
     Path((account_id, enrollment_id)): Path<(i64, i64)>,
-) -> Result<Json<EnrollmentJson>, ApiError> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     let account = load_account(&state.db, account_id).await?;
 
     // Canvas `all_enrollments.find(params[:id])`: by primary key, no
     // workflow_state filter — deleted enrollments are still visible here.
-    let enrollment: EnrollmentJson = sqlx::query_as(
-        r#"
-        SELECT id, user_id, course_id, course_section_id, role, workflow_state,
-               created_at, updated_at, start_at, end_at,
-               last_activity_at, last_attended_at, total_activity_time
-        FROM enrollments WHERE id = $1
-        "#,
-    )
-    .bind(enrollment_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(ApiError::from)?
-    .ok_or(ApiError::NotFound)?;
+    let enrollment: EnrollmentApiRow = sqlx::query_as(&enrollment_query("e.id = $1"))
+        .bind(enrollment_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(ApiError::from)?
+        .ok_or(ApiError::NotFound)?;
 
     // Canvas: own enrollment renders without any roster right; others need
     // `:read_roster` on the context account (unauthorized -> 401).
     if enrollment.user_id != auth.id {
-        let chain = account_chain_ids(&state.db, account.id).await?;
-        if !can_read_account_roster(&state.db, auth.id, &chain).await? {
+        // Canvas `EnrollmentsApiController#show` ->
+        // `authorized_action(@context, @current_user, :read_roster)`
+        // (`app/controllers/enrollments_api_controller.rb:566`).
+        if !star_permissions::check::can(
+            &state.db,
+            auth.id,
+            &star_permissions::PermissionContext::Account {
+                account_id: account.id,
+            },
+            "read_roster",
+        )
+        .await?
+        {
             return Err(ApiError::Unauthorized);
         }
 
@@ -1241,19 +1618,44 @@ async fn show_account_enrollment(
         }
     }
 
-    Ok(Json(enrollment))
+    let auth_role = get_user_role(&state.db, auth.id)
+        .await?
+        .unwrap_or_else(|| "student".to_string());
+    let rights = CallerRights::load(
+        &state.db,
+        auth.id,
+        is_admin(&auth_role),
+        &[enrollment.course_id],
+    )
+    .await?;
+
+    Ok(Json(enrollment.to_json(&rights.options(
+        &enrollment,
+        auth.id,
+        false,
+    ))))
+}
+
+/// Request to create an enrollment.
+#[derive(Debug, Default, Deserialize)]
+pub struct CreateEnrollmentRequest {
+    pub user_id: i64,
+    pub course_id: i64,
+    pub role: Option<String>,
+    /// Optional section within `course_id` (Canvas `enrollment[course_section_id]`).
+    pub course_section_id: Option<i64>,
 }
 
 /// Body for POST /accounts/{accountId}/bulk_enrollment. Canvas takes
 /// `user_ids[]`, `course_ids[]`, `enrollment_type`, `start_at` and `end_at`
 /// (`enrollment_role_id` custom-role support is omitted with the rest of the
 /// custom-role surface).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Default, Deserialize)]
 pub struct BulkEnrollmentRequest {
     #[serde(default)]
-    pub user_ids: Vec<i64>,
+    pub user_ids: Option<Vec<i64>>,
     #[serde(default)]
-    pub course_ids: Vec<i64>,
+    pub course_ids: Option<Vec<i64>>,
     pub enrollment_type: Option<String>,
     pub start_at: Option<DateTime<Utc>>,
     pub end_at: Option<DateTime<Utc>>,
@@ -1282,7 +1684,7 @@ async fn create_bulk_enrollment(
     State(state): State<AppState>,
     auth: AuthUser,
     Path(account_id): Path<i64>,
-    Json(payload): Json<BulkEnrollmentRequest>,
+    ApiJson(payload): ApiJson<BulkEnrollmentRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let account = load_account(&state.db, account_id).await?;
 
@@ -1296,10 +1698,15 @@ async fn create_bulk_enrollment(
 
     // Canvas: `user_ids.size * course_ids.size > 500` -> 400 (empty lists
     // short-circuit the check, matching `!user_ids.empty? && ...`).
-    if !payload.user_ids.is_empty()
-        && !payload.course_ids.is_empty()
-        && payload.user_ids.len() * payload.course_ids.len() > 500
-    {
+    // Canvas calls `user_ids.empty?` on the raw parameter and raises when the
+    // request names no user ids at all; its exception handler answers the
+    // generic 500 (app/controllers/enrollments_api_controller.rb:907).
+    let Some(user_ids) = payload.user_ids.as_ref() else {
+        return Err(ApiError::canvas_internal_error());
+    };
+    let course_ids = payload.course_ids.clone().unwrap_or_default();
+
+    if !user_ids.is_empty() && !course_ids.is_empty() && user_ids.len() * course_ids.len() > 500 {
         return Err(ApiError::BadRequest(
             "Too many users to enroll at once.".into(),
         ));
@@ -1310,7 +1717,7 @@ async fn create_bulk_enrollment(
     let auth_role = get_user_role(&state.db, auth.id)
         .await?
         .unwrap_or_else(|| "student".to_string());
-    for course_id in &payload.course_ids {
+    for course_id in &course_ids {
         let course: Option<(i64,)> = sqlx::query_as("SELECT id FROM courses WHERE id = $1")
             .bind(course_id)
             .fetch_optional(&state.db)
@@ -1329,8 +1736,8 @@ async fn create_bulk_enrollment(
     // `Enrollment::BulkUpdate` creates one enrollment per (user, course) pair,
     // keeping existing ones (`allow_multiple_enrollments` + upsert semantics:
     // the same pair is not created twice, matching the UNIQUE constraint).
-    for course_id in &payload.course_ids {
-        for user_id in &payload.user_ids {
+    for course_id in &course_ids {
+        for user_id in user_ids {
             sqlx::query(
                 r#"
                 INSERT INTO enrollments

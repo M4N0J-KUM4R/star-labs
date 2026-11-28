@@ -1,1 +1,1 @@
-{"status":"unauthorized","errors":[{"message":"user not authorized to perform that action"}]}
+{"errors":[{"code":"invalid_workflow_state","message":"workflow_state must be one of 'on', 'off'"}]}

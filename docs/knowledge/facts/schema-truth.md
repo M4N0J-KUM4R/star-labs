@@ -12,13 +12,41 @@ field the port still owes Canvas — the recorded body is the spec.
 
 ## `accounts`
 
-Rust columns: 30  ·  missing vs Canvas: **0**
+Rust columns: 49  ·  missing vs Canvas: **17**
 
-All recorded fields exist as columns.
+```
+admin_nickname
+created_by
+description
+developer_key_id
+dynamic_registration_url
+icon_url
+ims_registration_id
+inherited
+internal_service
+lock_deploying
+lti_version
+manual_configuration_id
+pending_update
+reinstall_disabled
+template_registration_id
+updated_by
+vendor
+```
 
 ## `assignments`
 
-_No non-error recorded response for this table yet._
+Rust columns: 79  ·  missing vs Canvas: **7**
+
+```
+avatar_image_url
+display_name
+graded
+html_url
+not_submitted
+pronouns
+ungraded
+```
 
 ## `attachments`
 
@@ -26,11 +54,33 @@ _No non-error recorded response for this table yet._
 
 ## `calendar_events`
 
-_No non-error recorded response for this table yet._
+Rust columns: 16  ·  missing vs Canvas: **19**
+
+```
+all_context_codes
+child_events_count
+context_color
+context_name
+created_at
+description
+end_at
+hidden
+html_url
+id
+location_name
+rrule
+series_uuid
+start_at
+title
+type
+updated_at
+url
+workflow_state
+```
 
 ## `conversations`
 
-Rust columns: 5  ·  missing vs Canvas: **3**
+Rust columns: 12  ·  missing vs Canvas: **3**
 
 ```
 attribute
@@ -40,155 +90,128 @@ unread_count
 
 ## `courses`
 
-Rust columns: 17  ·  missing vs Canvas: **41**
+Rust columns: 56  ·  missing vs Canvas: **24**
 
 ```
-allow_student_anonymous_discussion_topics
-allow_student_discussion_editing
-allow_student_discussion_reporting
-allow_student_discussion_topics
-allow_student_forum_attachments
-allow_student_organized_groups
-banner_image
-banner_image_id
-banner_image_url
-conditional_release
+assessed
+can_unlink
+completion
+context_id
+context_name
+context_short_name
+context_type
 course_color
-default_due_time
-default_student_gradebook_view
-filter_speed_grader_by_student_group
+course_id
 friendly_name
-grade_passback_setting
-grading_standard_enabled
-grading_standard_id
-hide_distribution_graphs
-hide_final_grades
-hide_sections_on_course_users_page
-home_page_announcement_limit
-homeroom_course
-html
-image
-image_id
-image_url
-integration_id
-lock_all_announcements
-login_id
-restrict_quantitative_data
-restrict_student_future_view
-restrict_student_past_view
-short_name
-show_announcements_on_home_page
-sis_user_id
-sortable_name
+html_url
+ignore
+ignore_permanently
+message
+needs_grading_count
+quiz_lti
+sis_course_id
+sis_import_id
+storage_quota_mb
 success
-syllabus_course_summary
-usage_rights_required
-use_default_discussion_settings
+tag
+type
+url
+user_id
 ```
 
 ## `enrollments`
 
-Rust columns: 29  ·  missing vs Canvas: **0**
+Rust columns: 49  ·  missing vs Canvas: **1**
 
-All recorded fields exist as columns.
+```
+sis_import_id
+```
 
 ## `folders`
 
-Rust columns: 23  ·  missing vs Canvas: **0**
+Rust columns: 32  ·  missing vs Canvas: **0**
 
 All recorded fields exist as columns.
 
 ## `group_categories`
 
-_No non-error recorded response for this table yet._
+Rust columns: 21  ·  missing vs Canvas: **10**
+
+```
+allows_multiple_memberships
+completion
+is_member
+message
+protected
+sis_group_category_id
+sis_import_id
+tag
+url
+user_id
+```
 
 ## `groups`
 
-Rust columns: 10  ·  missing vs Canvas: **50**
+Rust columns: 35  ·  missing vs Canvas: **2**
 
 ```
-allow_course_admin_actions
-avatar_url
-concluded
-context_name
-context_type
-create
-create_collaborations
-create_conferences
-create_forum
-delete
-has_submission
-html
-is_public
-join
-leader
-leave
-manage
-manage_calendar
-manage_course_content_add
-manage_course_content_delete
-manage_course_content_edit
-manage_files_add
-manage_files_delete
-manage_files_edit
-manage_students
-manage_wiki_create
-manage_wiki_delete
-manage_wiki_update
-max_membership
-members_count
-moderate_forum
-non_collaborative
-participate
-participate_as_student
-post_to_forum
-read
-read_announcements
-read_as_admin
-read_email_addresses
-read_files
-read_forum
-read_roster
-read_sis
-role
-send_messages
-send_messages_all
-storage_quota_mb
-update
-view_unpublished_items
-view_user_logins
+sis_group_id
+sis_import_id
 ```
 
 ## `rubrics`
 
-_No non-error recorded response for this table yet._
+Rust columns: 19  ·  missing vs Canvas: **9**
+
+```
+account_id
+attachment_id
+button_display
+data
+error_count
+progress
+rating_order
+root_account_id
+user_id
+```
 
 ## `submissions`
 
-_No non-error recorded response for this table yet._
+Rust columns: 37  ·  missing vs Canvas: **9**
+
+```
+custom_grade_status_id
+entered_grade
+entered_score
+grading_period_id
+missing
+preview_url
+read
+seconds_late
+sticker
+```
 
 ## `users`
 
-Rust columns: 22  ·  missing vs Canvas: **14**
+Rust columns: 54  ·  missing vs Canvas: **13**
 
 ```
 assignments_needing_submitting
-collapse_course_nav
-collapse_global_nav
-comment_library_suggestions_enabled
-default_to_block_editor
-elementary_dashboard_disabled
+context_name
+context_short_name
+context_type
+course_id
 hidden
-hide_dashcard_color_overlays
+html_url
+ignore
+ignore_permanently
 ignored
-manual_mark_as_read
+last_login
 needs_grading_count
-release_notes_badge_disabled
-widget_dashboard_dark_mode
-widget_dashboard_user_preference
+type
 ```
 
-**Total missing columns across these tables: 108.**
+**Total missing columns across these tables: 114.**
 
 To close one: add an idempotent migration in
 `migration/crates/star-db/migrations/` (never edit an existing one),

@@ -1,1 +1,1 @@
-{"errors":[{"message":"The specified resource does not exist."}]}
+[{"id":4,"title":"Parity Outcome Subgroup","vendor_guid":null,"url":"/api/v1/courses/1/outcome_groups/4","subgroups_url":"/api/v1/courses/1/outcome_groups/4/subgroups","outcomes_url":"/api/v1/courses/1/outcome_groups/4/outcomes","can_edit":true}]

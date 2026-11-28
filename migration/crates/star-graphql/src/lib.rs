@@ -69,27 +69,52 @@ mod mutations_batch_c;
 mod mutations_batch_g1;
 mod mutations_batch_g2;
 mod mutations_batch_g3;
+mod node;
 mod outcomes_media;
 mod pages;
+mod query_root;
+pub use query_root::Query;
 mod quiz;
+mod root_data;
+mod root_mutations;
+mod root_types;
 mod rubrics;
 mod submission;
 mod terms_sections;
 mod user_channels;
 
+// The `Node` interface (`node.rs`) is public, so every type it can return
+// has to be publicly reachable. These re-exports are that reachability;
+// the modules themselves stay private.
+pub use assignment::Assignment;
 use assignment::AssignmentConnection;
 use assignment_group::AssignmentGroupConnection;
+pub use conversations::Conversation;
 use conversations::ConversationParticipantConnection;
+pub use course_user_fields::Account;
 use course_user_fields::{CoursePermissions, UserConnection};
-use discussion_topic::DiscussionTopicConnection;
+pub use discussion_topic::Discussion;
+use discussion_topic::DiscussionConnection;
 use external_tools::ExternalToolConnection;
 use files::FolderConnection;
+pub use files::{File, Folder};
 use grading_periods::GradingPeriodGroup;
+pub use groups::{Group, GroupSet};
 use groups::{GroupConnection, GroupSetConnection};
 use modules::ModuleConnection;
+pub use modules::{Module, ModuleItem};
+pub use node::{Node, NodeType};
 use pages::PageConnection;
+pub use pages::{Page, Progress};
 use quiz::QuizConnection;
+pub use root_types::{
+    AccountNotification, AssignmentGroup, AuditLogs, InboxSettings, InstitutionalTag,
+    InstitutionalTagCategory, InternalSetting, LearningOutcome, LearningOutcomeGroup,
+    OutcomeCalculationMethod, OutcomeProficiency, PeerReviewSubAssignment, Rubric,
+    SubmissionComment,
+};
 use rubrics::RubricConnection;
+pub use submission::Submission;
 use terms_sections::{CourseSection, EnrollmentTerm};
 
 // ---------------------------------------------------------------------------
@@ -181,16 +206,16 @@ struct EnrollmentRow {
 /// `updatedAt`, `enrollmentsConnection`, `assignmentsConnection`,
 /// `usersConnection`, `account`, `permissions`.
 pub struct Course {
-    id: i64,
-    name: String,
-    course_code: String,
-    syllabus_body: Option<String>,
-    workflow_state: String,
-    start_at: Option<DateTime<Utc>>,
-    end_at: Option<DateTime<Utc>>,
-    account_id: Option<i64>,
-    created_at: DateTime<Utc>,
-    updated_at: DateTime<Utc>,
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) course_code: String,
+    pub(crate) syllabus_body: Option<String>,
+    pub(crate) workflow_state: String,
+    pub(crate) start_at: Option<DateTime<Utc>>,
+    pub(crate) end_at: Option<DateTime<Utc>>,
+    pub(crate) account_id: Option<i64>,
+    pub(crate) created_at: DateTime<Utc>,
+    pub(crate) updated_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -203,17 +228,14 @@ impl Course {
         &self.name
     }
 
-    /// Canvas `course_code` (same column name).
     async fn course_code(&self) -> &str {
         &self.course_code
     }
 
-    /// Canvas `syllabus_body` — rich HTML, nullable like Canvas.
     async fn syllabus_body(&self) -> Option<&str> {
         self.syllabus_body.as_deref()
     }
 
-    /// Canvas renames the DB `workflow_state` to `state`.
     async fn state(&self) -> &str {
         &self.workflow_state
     }
@@ -236,10 +258,6 @@ impl Course {
 
     // -- issue #28 additions: account / permissions / usersConnection --------
 
-    /// Canvas `Course.account` — the owning account. No extra permission
-    /// guard in `course_type.rb`; visibility is inherited from the
-    /// `course(id)` gate. Courses created before the accounts migration
-    /// default to account 1; unknown/deleted accounts resolve to null.
     async fn account(
         &self,
         ctx: &Context<'_>,
@@ -251,11 +269,6 @@ impl Course {
         course_user_fields::fetch_account(&gctx.pool, account_id).await
     }
 
-    /// Canvas `Course.permissions` — the request's rights in this course.
-    /// Values are computed from the role model the REST handlers use
-    /// (RoleOverride has no star-lms equivalent yet): admins and course
-    /// teachers hold the management rights, any course participant may send
-    /// messages, and `becomeUser` follows the account-admin chain.
     async fn permissions(
         &self,
         ctx: &Context<'_>,
@@ -285,11 +298,6 @@ impl Course {
         })
     }
 
-    /// Canvas `Course.usersConnection` — the roster as a relay connection.
-    /// Gated like `course_type.rb#users_connection` on roster rights
-    /// (`read_roster`/`view_all_grades`/`manage_grades` → global admin or
-    /// course teacher); everyone else resolves null, not an error.
-    /// Deviation: ordered by user id (cursor contract), not sortable name.
     async fn users_connection(
         &self,
         ctx: &Context<'_>,
@@ -308,9 +316,6 @@ impl Course {
         ))
     }
 
-    /// Relay-style connection with cursor pagination: LIMIT first+1,
-    /// ORDER BY id. Roster parity: admins and course teachers see every
-    /// enrollment; other enrolled users (students) see only their own.
     async fn enrollments_connection(
         &self,
         ctx: &Context<'_>,
@@ -333,12 +338,6 @@ impl Course {
         ))
     }
 
-    /// Paginated assignments in this course (LIMIT first+1, ORDER BY id).
-    /// Everyone who can resolve the course sees its assignments — parity
-    /// with the star-assignments REST list handler; the schema has no
-    /// `workflow_state` on assignments yet, so there is no
-    /// published/unpublished split to enforce (documented in
-    /// `specs/gql/assignments.md`).
     async fn assignments_connection(
         &self,
         ctx: &Context<'_>,
@@ -351,12 +350,6 @@ impl Course {
         ))
     }
 
-    /// Paginated assignment groups in this course (LIMIT first+1, ORDER BY
-    /// position then id — Canvas `AssignmentGroup.natural_order`). Includes
-    /// the 0049 grading rules via LEFT JOIN; groups without a rules row
-    /// resolve `rules` to null. Everyone who can resolve the course sees
-    /// its groups — parity with the star-assignment-groups REST index;
-    /// deleted groups are filtered (Canvas `AssignmentGroup.active`).
     async fn assignment_groups_connection(
         &self,
         ctx: &Context<'_>,
@@ -375,10 +368,6 @@ impl Course {
         ))
     }
 
-    /// The course's grading period set with its periods, or null when the
-    /// course has none (Canvas resolves through
-    /// `GradingPeriodGroup.for_course`). Periods are sorted by start
-    /// date; deleted rows are filtered (Canvas `active` scopes).
     async fn grading_periods(
         &self,
         ctx: &Context<'_>,
@@ -387,11 +376,6 @@ impl Course {
         grading_periods::fetch_course_grading_period_group(&gctx.pool, self.id).await
     }
 
-    /// The course's own grading standards with their scheme rows
-    /// (position-ordered; deleted filtered). Canvas course_type.rb
-    /// gradingStandards — account-level fallbacks are not included.
-    /// Visibility inherited from course(id), parity with the
-    /// star-grading-standards REST list.
     async fn grading_standards(
         &self,
         ctx: &Context<'_>,
@@ -402,11 +386,6 @@ impl Course {
             .await
     }
 
-    /// Paginated rubrics in this course (LIMIT first+1, ORDER BY id), each
-    /// hydrated with its criteria and nested ratings (position-ordered —
-    /// Canvas `Rubric#rubric_criteria`). Deleted rubrics are filtered
-    /// (Canvas `Rubric.active`). Visibility inherited from `course(id)` —
-    /// parity with the star-search rubrics REST handler.
     async fn rubrics_connection(
         &self,
         ctx: &Context<'_>,
@@ -419,11 +398,6 @@ impl Course {
         ))
     }
 
-    /// Paginated quizzes in this course (LIMIT first+1, ORDER BY id).
-    /// Everyone who can resolve the course sees its quizzes — parity with
-    /// the star-quizzes REST list handler; unpublished quizzes are included
-    /// because course visibility already gates access (documented in the
-    /// quiz module doc comment).
     async fn quizzes_connection(
         &self,
         ctx: &Context<'_>,
@@ -436,19 +410,12 @@ impl Course {
         ))
     }
 
-    /// Paginated, non-deleted discussion topics in this course (LIMIT first+1,
-    /// ORDER BY id — Canvas orders regular discussions by `id: asc`).
-    /// Everyone who can resolve the course sees the same set: parity with the
-    /// star-discussions REST list handler and Canvas's `DiscussionTopic.active`
-    /// scope (`workflow_state <> 'deleted'`). Canvas's per-viewer
-    /// section/availability scoping is a documented deviation
-    /// (`specs/gql/submissions-discussions.md`).
     async fn discussions_connection(
         &self,
         ctx: &Context<'_>,
         first: Option<i32>,
         after: Option<String>,
-    ) -> Result<Option<DiscussionTopicConnection>, async_graphql::Error> {
+    ) -> Result<Option<DiscussionConnection>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         Ok(Some(
             discussion_topic::fetch_discussion_topic_page(
@@ -461,12 +428,6 @@ impl Course {
         ))
     }
 
-    /// Paginated learning outcomes linked to this course's groups
-    /// (LIMIT first+1, ORDER BY id). Canvas scopes outcomesConnection
-    /// through the account tree; star-lms has no account tree, so the
-    /// course's linked outcomes are the set (documented deviation).
-    /// Visibility inherited from course(id) — parity with the
-    /// star-outcomes REST handlers.
     async fn outcomes_connection(
         &self,
         ctx: &Context<'_>,
@@ -480,22 +441,14 @@ impl Course {
         ))
     }
 
-    /// The course's outcome groups (0022 learning_outcome_groups, id
-    /// order), each carrying its linked outcomes. Visibility inherited
-    /// from course(id).
     async fn outcome_groups(
         &self,
         ctx: &Context<'_>,
-    ) -> Result<Vec<outcomes_media::LearningOutcomeGroup>, async_graphql::Error> {
+    ) -> Result<Vec<crate::root_types::LearningOutcomeGroup>, async_graphql::Error> {
         let gctx = ctx.data::<GraphQLContext>()?;
         outcomes_media::fetch_course_outcome_groups(&gctx.pool, self.id).await
     }
 
-    /// Paginated enabled external tools in this course (LIMIT first+1,
-    /// ORDER BY id) with their configured placements (from the 0085
-    /// `tool_configuration` JSONB). Deleted/disabled filtered. Visibility
-    /// inherited from course(id) — parity with the star-lti REST tool
-    /// listing.
     async fn external_tools_connection(
         &self,
         ctx: &Context<'_>,
@@ -509,10 +462,6 @@ impl Course {
         ))
     }
 
-    /// Paginated non-deleted modules (LIMIT first+1, ORDER BY id), like
-    /// Canvas `Course.modulesConnection` (course_type.rb:263). Everyone who
-    /// can resolve the course sees its modules — parity with the
-    /// star-modules REST index.
     async fn modules_connection(
         &self,
         ctx: &Context<'_>,
@@ -525,9 +474,6 @@ impl Course {
         ))
     }
 
-    /// Paginated wiki pages (LIMIT first+1, ORDER BY id). Everyone who can
-    /// resolve the course sees its pages — parity with the star-pages REST
-    /// index.
     async fn pages_connection(
         &self,
         ctx: &Context<'_>,
@@ -540,8 +486,6 @@ impl Course {
         ))
     }
 
-    /// Paginated root folders (LIMIT first+1, ORDER BY id), like Canvas
-    /// `Course.foldersConnection` (course_type.rb:545).
     async fn folders_connection(
         &self,
         ctx: &Context<'_>,
@@ -554,8 +498,6 @@ impl Course {
         ))
     }
 
-    /// Paginated course groups (LIMIT first+1, ORDER BY id), like Canvas
-    /// `Course.groupsConnection` (course_type.rb:484).
     async fn groups_connection(
         &self,
         ctx: &Context<'_>,
@@ -568,8 +510,6 @@ impl Course {
         ))
     }
 
-    /// Paginated group sets / categories (LIMIT first+1, ORDER BY id),
-    /// like Canvas `Course.groupSetsConnection` (course_type.rb:528).
     async fn group_sets_connection(
         &self,
         ctx: &Context<'_>,
@@ -589,19 +529,19 @@ impl Course {
 /// `enrollmentsConnection`.
 #[derive(Debug, Clone)]
 pub struct User {
-    id: i64,
-    name: String,
-    email: String,
+    pub(crate) id: i64,
+    pub(crate) name: String,
+    pub(crate) email: String,
     /// Canvas `User.sisId`. star-lms has no SIS columns yet, so this is null
     /// for now; the field is kept for shape parity.
-    sis_user_id: Option<String>,
+    pub(crate) sis_user_id: Option<String>,
     /// Canvas `User.sortableName` (`users.sortable_name`, migration 0008);
     /// coalesced onto `name` by the root fetches, never null.
-    sortable_name: String,
+    pub(crate) sortable_name: String,
     /// Canvas `User.avatarUrl` — backed by `user_profiles.avatar_url`
     /// (migration 0051); users without a profile row resolve null.
-    avatar_url: Option<String>,
-    created_at: DateTime<Utc>,
+    pub(crate) avatar_url: Option<String>,
+    pub(crate) created_at: DateTime<Utc>,
 }
 
 #[Object]
@@ -614,11 +554,6 @@ impl User {
         &self.name
     }
 
-    /// Canvas gates `User.email` behind `read_email_addresses`; the
-    /// star-users REST handlers already return it to every authenticated
-    /// caller, so the GraphQL type does the same (documented deviation —
-    /// parity with the local REST surface wins until a permissions engine
-    /// lands).
     async fn email(&self) -> &str {
         &self.email
     }
@@ -629,12 +564,10 @@ impl User {
 
     // -- issue #28 additions: sortableName / avatarUrl -----------------------
 
-    /// Canvas `User.sortableName` — gradebook ordering name.
     async fn sortable_name(&self) -> &str {
         &self.sortable_name
     }
 
-    /// Canvas `User.avatarUrl` — the profile avatar (null without one).
     async fn avatar_url(&self) -> Option<&str> {
         self.avatar_url.as_deref()
     }
@@ -643,10 +576,6 @@ impl User {
         self.created_at
     }
 
-    /// Mirrors Canvas `user_type.rb#enrollments_connection`: self, admins
-    /// and users with read rights over the target's enrollments (star-lms
-    /// course teachers of a shared course) see the connection; everyone
-    /// else gets null instead of the connection.
     async fn enrollments_connection(
         &self,
         ctx: &Context<'_>,
@@ -667,10 +596,6 @@ impl User {
         ))
     }
 
-    /// Mirrors Canvas `user_type.rb#conversations_connection` (line 431):
-    /// only the user's own participation rows; admins also see only their
-    /// own — Canvas conversations are per-user scoped with no admin
-    /// override.
     async fn conversations_connection(
         &self,
         ctx: &Context<'_>,
@@ -692,9 +617,6 @@ impl User {
         ))
     }
 
-    /// The user's non-retired communication channels (Canvas
-    /// `user_type.rb` communicationChannels). Self-or-admin: anyone else
-    /// gets null (Canvas gates private channel data on self).
     async fn communication_channels(
         &self,
         ctx: &Context<'_>,
@@ -708,9 +630,6 @@ impl User {
         ))
     }
 
-    /// The user's non-deleted notifications, newest first (Canvas
-    /// `user_type.rb` notifications). Self-or-admin: anyone else gets
-    /// null.
     async fn notifications(
         &self,
         ctx: &Context<'_>,
@@ -724,9 +643,6 @@ impl User {
         ))
     }
 
-    /// The user's notification policies on non-retired channels (Canvas
-    /// `user_type.rb` notificationPreferences). Self-or-admin: anyone
-    /// else gets null.
     async fn notification_preferences(
         &self,
         ctx: &Context<'_>,
@@ -832,219 +748,6 @@ pub(crate) async fn fetch_user(
 // Query root
 // ---------------------------------------------------------------------------
 
-pub struct Query;
-
-#[Object]
-impl Query {
-    /// `course(id: ID!)` — visible to enrolled users (any role) and admins;
-    /// unknown or unauthorized ids resolve to null, like Canvas.
-    async fn course(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> Result<Option<Course>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let course_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid course id"))?;
-
-        let row: Option<CourseRow> = sqlx::query_as(
-            r#"
-            SELECT id, name, course_code, syllabus_body, workflow_state,
-                   start_at, end_at, account_id, created_at, updated_at
-            FROM courses
-            WHERE id = $1
-            "#,
-        )
-        .bind(course_id)
-        .fetch_optional(&gctx.pool)
-        .await
-        .map_err(db_err)?;
-        let Some(row) = row else {
-            return Ok(None);
-        };
-
-        if !gctx.is_admin()
-            && !user_enrolled_in_course(&gctx.pool, gctx.auth_user.id, course_id).await?
-        {
-            return Ok(None);
-        }
-
-        Ok(Some(Course {
-            id: row.id,
-            name: row.name,
-            course_code: row.course_code,
-            syllabus_body: row.syllabus_body,
-            workflow_state: row.workflow_state,
-            start_at: row.start_at,
-            end_at: row.end_at,
-            account_id: row.account_id,
-            created_at: row.created_at,
-            updated_at: row.updated_at,
-        }))
-    }
-
-    /// `user(id: ID!)` — any authenticated caller may read the basic profile
-    /// shape; `enrollmentsConnection` enforces self/admin/shared-teacher.
-    async fn user(&self, ctx: &Context<'_>, id: ID) -> Result<Option<User>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let user_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid user id"))?;
-
-        let row: Option<UserRow> = sqlx::query_as(
-            r#"
-            SELECT u.id, u.name, u.email,
-                   COALESCE(u.sortable_name, u.name) AS sortable_name,
-                   up.avatar_url,
-                   u.created_at
-            FROM users u
-            LEFT JOIN user_profiles up ON up.user_id = u.id
-            WHERE u.id = $1
-            "#,
-        )
-        .bind(user_id)
-        .fetch_optional(&gctx.pool)
-        .await
-        .map_err(db_err)?;
-
-        Ok(row.map(|row| User {
-            id: row.id,
-            name: row.name,
-            email: row.email,
-            sis_user_id: None,
-            sortable_name: row.sortable_name,
-            avatar_url: row.avatar_url,
-            created_at: row.created_at,
-        }))
-    }
-
-    /// `accountNotifications(accountId)` — an account's window-valid
-    /// announcements (start_at <= now < end_at), like Canvas's
-    /// account notification resolver. Global admins only: star-lms has
-    /// no account-role model, so the REST admin gate collapses to
-    /// global admin (documented deviation).
-    async fn account_notifications(
-        &self,
-        ctx: &Context<'_>,
-        account_id: ID,
-    ) -> Result<
-        Option<Vec<grading_standards_account_notifications::AccountNotification>>,
-        async_graphql::Error,
-    > {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        if !gctx.is_admin() {
-            return Ok(None);
-        }
-        let raw: i64 = account_id
-            .0
-            .parse()
-            .map_err(|_| async_graphql::Error::new(format!("invalid account: {}", account_id.0)))?;
-        Ok(Some(
-            grading_standards_account_notifications::fetch_account_notifications(&gctx.pool, raw)
-                .await?,
-        ))
-    }
-
-    /// `mediaObject(mediaId)` — a media object by its string id with
-    /// nested tracks (0098). Owner-scoped: null for missing/deleted
-    /// objects and for other users' media (self-or-admin, like the
-    /// user-scoped REST listing).
-    async fn media_object(
-        &self,
-        ctx: &Context<'_>,
-        media_id: String,
-    ) -> Result<Option<outcomes_media::MediaObject>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        outcomes_media::fetch_media_object_for_caller(&gctx.pool, gctx, &media_id).await
-    }
-
-    /// `enrollmentTerm(id: ID!)` — any authenticated caller may read the
-    /// basic term shape; unknown ids resolve to null, like Canvas.
-    async fn enrollment_term(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> Result<Option<EnrollmentTerm>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let term_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid term id"))?;
-
-        terms_sections::fetch_term(&gctx.pool, term_id).await
-    }
-
-    /// `courseSection(id: ID!)` — visible to enrolled users of the course
-    /// (any role), teachers of the course, and admins; everyone else gets
-    /// null, mirroring `course(id)` visibility.
-    async fn course_section(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> Result<Option<CourseSection>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let section_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid section id"))?;
-
-        terms_sections::fetch_section(&gctx.pool, gctx.auth_user.id, gctx.is_admin(), section_id)
-            .await
-    }
-
-    /// `moduleItem(id: ID!)` — Canvas `Query.moduleItem`
-    /// (query_type.rb:275). Visible to enrolled users of the item's course
-    /// (any role) and admins; everyone else gets null.
-    async fn module_item(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> Result<Option<modules::ModuleItem>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let item_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid module item id"))?;
-        modules::fetch_module_item(&gctx.pool, gctx.auth_user.id, gctx.is_admin(), item_id).await
-    }
-
-    /// `folder(id: ID!)` — Canvas `Query.folder` (query_type.rb:410).
-    /// The folder's context gates visibility: enrolled users of the
-    /// context course (any role) and admins; everyone else gets null.
-    async fn folder(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> Result<Option<files::Folder>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let folder_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid folder id"))?;
-        files::fetch_folder_authorized(&gctx.pool, gctx.auth_user.id, gctx.is_admin(), folder_id)
-            .await
-    }
-
-    /// `progress(id: ID!)` — star-lms exposure of the Canvas `Progress`
-    /// orphan type. Canvas reaches Progress only through mutation payloads
-    /// (canvas_schema.rb:137); the REST progress endpoints have no GraphQL
-    /// root in Canvas. star-lms exposes the read by id so the type is
-    /// reachable: the caller must own the progress row or be an admin,
-    /// mirroring the REST progress handler's ownership gate.
-    async fn progress(
-        &self,
-        ctx: &Context<'_>,
-        id: ID,
-    ) -> Result<Option<pages::Progress>, async_graphql::Error> {
-        let gctx = ctx.data::<GraphQLContext>()?;
-        let progress_id: i64 =
-            id.0.parse()
-                .map_err(|_| async_graphql::Error::new("invalid progress id"))?;
-        let progress = pages::fetch_progress(&gctx.pool, progress_id).await?;
-        match progress {
-            Some(p) if gctx.is_admin() || p.owner_is(gctx.auth_user.id) => Ok(Some(p)),
-            _ => Ok(None),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Mutation root (issue #29: Batch A — assignment create/update/delete)
 // ---------------------------------------------------------------------------
@@ -1058,6 +761,7 @@ impl Query {
 #[derive(MergedObject, Default)]
 pub struct Mutation(
     mutations::AssignmentMutations,
+    root_mutations::RootMutations,
     mutations_batch_b::BatchBMutations,
     mutations_batch_c::BatchCMutations,
     mutations_batch_g1::BatchG1Mutations,
@@ -1071,6 +775,7 @@ impl Mutation {
         // default_constructed_unit_structs rejects `::default()` under -D warnings.
         Mutation(
             mutations::AssignmentMutations,
+            root_mutations::RootMutations,
             mutations_batch_b::BatchBMutations,
             mutations_batch_c::BatchCMutations,
             mutations_batch_g1::BatchG1Mutations,
@@ -1084,7 +789,7 @@ impl Mutation {
 // Permission helpers (same DB checks as the star-enrollments REST handlers)
 // ---------------------------------------------------------------------------
 
-async fn user_enrolled_in_course(
+pub(crate) async fn user_enrolled_in_course(
     pool: &PgPool,
     user_id: i64,
     course_id: i64,
@@ -1123,12 +828,6 @@ pub(crate) async fn user_teaches_course(
 
 // -- issue #28: User.enrollmentsConnection visibility -------------------------
 
-/// Whether the caller may read the target user's enrollments in
-/// `User.enrollmentsConnection`: true when the caller teaches a course the
-/// target is (or was) enrolled in — the star-lms reading of Canvas's
-/// `grants_right?(current_user, :read)` on the target's enrollments, since
-/// teachers hold read rights over their students. Self and admin are
-/// handled by the resolver itself.
 async fn caller_reads_user_enrollments(
     pool: &PgPool,
     caller_id: i64,
@@ -1162,9 +861,6 @@ pub(crate) const DEFAULT_PAGE_SIZE: i32 = 10;
 /// Maximum accepted page size for connections.
 pub(crate) const MAX_PAGE_SIZE: i32 = 100;
 
-/// Fetch one page of enrollments: `LIMIT first+1` ordered by id ascending,
-/// optionally scoped to one course and/or one user, optionally resuming
-/// after a cursor. The extra row drives `hasNextPage`.
 async fn fetch_enrollment_page(
     pool: &PgPool,
     course_id: Option<i64>,
@@ -1233,13 +929,6 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/", get(graphql_handler).post(graphql_handler))
 }
 
-/// GET/POST `/api/graphql` — the Canvas GraphQL endpoint.
-///
-/// Authentication happens before execution via the shared `AuthUser`
-/// extractor: unauthenticated requests get HTTP 401 (never a GraphQL error),
-/// and database failures during auth surface with their real status. The
-/// schema itself is stateless, so it is built per request around the pool and
-/// the authenticated user.
 async fn graphql_handler(
     State(state): State<AppState>,
     auth: Result<AuthUser, ApiError>,
@@ -1259,4 +948,143 @@ async fn graphql_handler(
 
     let resp = schema.execute(req.into_inner()).await;
     GraphQLResponse::from(resp).into_response()
+}
+
+// ---------------------------------------------------------------------------
+// Row loaders shared by the query root and the node resolver
+// ---------------------------------------------------------------------------
+
+/// Load a course by id without a permission check.
+///
+/// The permission check lives in [`fetch_course_authorized`].
+/// Load a course by id and apply the Canvas `course(id)` visibility rule:
+/// enrolled users of the course (any role) and admins see it, everyone
+/// else gets null.
+/// Load courses by id without a permission check.
+/// Load an enrollment by id without a permission check.
+/// Whether the user teaches the course the assignment belongs to.
+///
+/// Canvas gates a submission on the caller's teacher rights over the
+/// assignment's course.
+pub(crate) async fn user_teaches_course_by_assignment(
+    pool: &PgPool,
+    user_id: i64,
+    assignment_id: i64,
+) -> Result<bool, async_graphql::Error> {
+    let course: Option<(i64,)> = sqlx::query_as("SELECT course_id FROM assignments WHERE id = $1")
+        .bind(assignment_id)
+        .fetch_optional(pool)
+        .await
+        .map_err(db_err)?;
+    let Some((course_id,)) = course else {
+        return Ok(false);
+    };
+    user_teaches_course(pool, user_id, course_id).await
+}
+
+/// The permission check lives in [`fetch_course_authorized`].
+pub(crate) async fn fetch_course(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<Course>, async_graphql::Error> {
+    let row: Option<CourseRow> = sqlx::query_as(
+        r#"
+        SELECT id, name, course_code, syllabus_body, workflow_state,
+               start_at, end_at, account_id, created_at, updated_at
+        FROM courses
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(|row| Course {
+        id: row.id,
+        name: row.name,
+        course_code: row.course_code,
+        syllabus_body: row.syllabus_body,
+        workflow_state: row.workflow_state,
+        start_at: row.start_at,
+        end_at: row.end_at,
+        account_id: row.account_id,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+    }))
+}
+
+/// else gets null.
+pub(crate) async fn fetch_course_authorized(
+    pool: &PgPool,
+    user_id: i64,
+    is_admin: bool,
+    id: i64,
+) -> Result<Option<Course>, async_graphql::Error> {
+    let Some(course) = fetch_course(pool, id).await? else {
+        return Ok(None);
+    };
+    if !is_admin && !user_enrolled_in_course(pool, user_id, id).await? {
+        return Ok(None);
+    }
+    Ok(Some(course))
+}
+
+/// Load courses by id without a permission check.
+pub(crate) async fn fetch_courses_by_ids(
+    pool: &PgPool,
+    ids: &[i64],
+) -> Result<Vec<Course>, async_graphql::Error> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows: Vec<CourseRow> = sqlx::query_as(
+        r#"
+        SELECT id, name, course_code, syllabus_body, workflow_state,
+               start_at, end_at, account_id, created_at, updated_at
+        FROM courses
+        WHERE id = ANY($1)
+        ORDER BY id
+        "#,
+    )
+    .bind(ids)
+    .fetch_all(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| Course {
+            id: row.id,
+            name: row.name,
+            course_code: row.course_code,
+            syllabus_body: row.syllabus_body,
+            workflow_state: row.workflow_state,
+            start_at: row.start_at,
+            end_at: row.end_at,
+            account_id: row.account_id,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+        .collect())
+}
+
+/// Load an enrollment by id without a permission check.
+pub(crate) async fn fetch_enrollment(
+    pool: &PgPool,
+    id: i64,
+) -> Result<Option<Enrollment>, async_graphql::Error> {
+    let row: Option<EnrollmentRow> = sqlx::query_as(
+        r#"
+        SELECT id, user_id, course_id, role, workflow_state, created_at, updated_at
+        FROM enrollments
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .map_err(db_err)?;
+
+    Ok(row.map(Enrollment::from))
 }

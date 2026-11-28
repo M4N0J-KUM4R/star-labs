@@ -20,4 +20,25 @@ instead of a gate that must be passed before shipping.
 - The front door to proxy anything the Rust side does not own.
 - A rollback that is one flag, not a redeploy.
 
-**Related.** [[oracle-first]], [[continue-the-port-not-restart]].
+**How it is built (2026-11-27).** `crates/star-proxy` is the front door, and
+`star-http` wires it in two places:
+
+```rust
+.fallback(star_proxy::fallback)                       // no route at all
+.method_not_allowed_fallback(star_proxy::fallback)    // the path, not the method
+.layer(Extension(origin))
+```
+
+The origin comes from `STAR_CANVAS_ORIGIN`. With it set, the service answers
+every Canvas route — the ones the port owns locally, the rest from Canvas.
+With it unset, the front door is the empty 404 axum would answer, so the
+parity replay measures the port and nothing else. The rollback is therefore
+one environment variable.
+
+The port's own router is the source of truth for what it owns: a route is
+delegated exactly when axum finds no handler for it. See
+[[traps/front-door-delegation]] for the forwarding rules that keep the
+delegated answer byte-identical to Canvas'.
+
+**Related.** [[oracle-first]], [[continue-the-port-not-restart]],
+[[traps/front-door-delegation]].

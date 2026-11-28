@@ -39,7 +39,7 @@
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post, put},
+    routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
@@ -2539,26 +2539,27 @@ pub fn router() -> Router<AppState> {
         // The questions of a quiz submission.
         .merge(quiz_submission_questions_api::router())
         // Course-level
-        .route("/courses/{courseId}/quizzes", get(list_course_quizzes))
-        .route("/courses/{courseId}/quizzes", post(create_quiz))
+        .route(
+            "/courses/{courseId}/quizzes",
+            get(list_course_quizzes).post(create_quiz),
+        )
         .route(
             "/courses/{courseId}/quizzes/{id}/submissions",
-            get(list_quiz_submissions),
+            get(list_quiz_submissions).post(start_course_quiz_submission),
         )
         // Quiz-level
-        .route("/quizzes/{id}", get(get_quiz))
-        .route("/quizzes/{id}", put(update_quiz))
-        .route("/quizzes/{id}", delete(delete_quiz))
+        .route(
+            "/quizzes/{id}",
+            get(get_quiz).put(update_quiz).delete(delete_quiz),
+        )
+        .route("/quizzes/{id}/start", post(start_quiz))
+        .route("/quizzes/{id}/submissions/me", get(get_my_submission))
         // Canvas nested aliases (delegate to the flat handlers)
-        .route("/courses/{courseId}/quizzes/{id}", get(get_course_quiz))
-        .route("/courses/{courseId}/quizzes/{id}", put(update_course_quiz))
         .route(
             "/courses/{courseId}/quizzes/{id}",
-            delete(delete_course_quiz),
-        )
-        .route(
-            "/courses/{courseId}/quizzes/{id}/submissions",
-            post(start_course_quiz_submission),
+            get(get_course_quiz)
+                .put(update_course_quiz)
+                .delete(delete_course_quiz),
         )
         .route(
             "/courses/{courseId}/quizzes/{id}/submission",
@@ -2567,28 +2568,16 @@ pub fn router() -> Router<AppState> {
         // Quiz submissions API (Canvas quiz_submissions_api show/update)
         .route(
             "/courses/{courseId}/quizzes/{quizId}/submissions/{submissionId}",
-            get(get_quiz_submission),
-        )
-        .route(
-            "/courses/{courseId}/quizzes/{quizId}/submissions/{submissionId}",
-            put(update_quiz_submission),
+            get(get_quiz_submission).put(update_quiz_submission),
         )
         // Quiz reports (Canvas quiz_reports index/create)
         .route(
             "/courses/{courseId}/quizzes/{quizId}/reports",
-            get(list_quiz_reports),
-        )
-        .route(
-            "/courses/{courseId}/quizzes/{quizId}/reports",
-            post(create_quiz_report),
+            get(list_quiz_reports).post(create_quiz_report),
         )
         .route(
             "/courses/{courseId}/quizzes/{quizId}/reports/{reportId}",
-            get(show_quiz_report),
-        )
-        .route(
-            "/courses/{courseId}/quizzes/{quizId}/reports/{reportId}",
-            delete(abort_quiz_report),
+            get(show_quiz_report).delete(abort_quiz_report),
         )
         // Slice G tail (#54): attempt completion + clock, group reorder
         .route(
@@ -2606,44 +2595,24 @@ pub fn router() -> Router<AppState> {
         // Quiz questions CRUD (Canvas quizzes/quiz_questions)
         .route(
             "/courses/{courseId}/quizzes/{quizId}/questions",
-            get(list_quiz_questions),
-        )
-        .route(
-            "/courses/{courseId}/quizzes/{quizId}/questions",
-            post(create_quiz_question),
+            get(list_quiz_questions).post(create_quiz_question),
         )
         .route(
             "/courses/{courseId}/quizzes/{quizId}/questions/{questionId}",
-            get(get_quiz_question),
-        )
-        .route(
-            "/courses/{courseId}/quizzes/{quizId}/questions/{questionId}",
-            put(update_quiz_question),
-        )
-        .route(
-            "/courses/{courseId}/quizzes/{quizId}/questions/{questionId}",
-            delete(delete_quiz_question),
+            get(get_quiz_question)
+                .put(update_quiz_question)
+                .delete(delete_quiz_question),
         )
         // Quiz question groups CRUD (Canvas quizzes/quiz_groups)
         .route(
             "/courses/{courseId}/quizzes/{quizId}/groups",
-            get(list_quiz_groups),
-        )
-        .route(
-            "/courses/{courseId}/quizzes/{quizId}/groups",
-            post(create_quiz_group),
+            get(list_quiz_groups).post(create_quiz_group),
         )
         .route(
             "/courses/{courseId}/quizzes/{quizId}/groups/{groupId}",
-            get(get_quiz_group),
-        )
-        .route(
-            "/courses/{courseId}/quizzes/{quizId}/groups/{groupId}",
-            put(update_quiz_group),
-        )
-        .route(
-            "/courses/{courseId}/quizzes/{quizId}/groups/{groupId}",
-            delete(delete_quiz_group),
+            get(get_quiz_group)
+                .put(update_quiz_group)
+                .delete(delete_quiz_group),
         )
         // Quiz reorder (Canvas quizzes_controller#reorder)
         .route(
