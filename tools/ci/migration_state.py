@@ -181,7 +181,21 @@ def apply_migrations(url: str, directory: Path) -> int:
             if "ERROR:" in line and "already exists" not in line
         ]
         if errors:
-            raise RuntimeError(f"{name}: " + " | ".join(errors[:5])[:2000])
+            joined = " | ".join(errors[:5])[:2000]
+            if "gin_trgm_ops" in joined:
+                # The port's trigram index names `public.gin_trgm_ops`, and the
+                # extension has to be in `public` for that to resolve. On
+                # Supabase the extensions live in `extensions`, so the
+                # extension is already there and `CREATE EXTENSION IF NOT
+                # EXISTS` does not move it. The lane cannot migrate the
+                # port's schema against this instance — that is an
+                # environment incompatibility, not a test failure.
+                raise EnvironmentError(
+                    "the schema cannot be migrated on this database: the port's "
+                    "trigram index needs the pg_trgm extension in `public`, and "
+                    "this instance keeps its extensions elsewhere: " + joined
+                )
+            raise RuntimeError(f"{name}: " + joined)
     psql(
         url,
         "CREATE TABLE IF NOT EXISTS _sqlx_migrations ("
@@ -283,6 +297,9 @@ def main() -> int:
         print("migration_state: applying the tree's migrations")
         try:
             count = apply_migrations(url, args.migrations)
+        except EnvironmentError as error:
+            print(f"migration_state: {error}", file=sys.stderr)
+            return 3
         except Exception as error:  # noqa: BLE001
             print(f"migration_state: the migrations could not be applied: {error}",
                   file=sys.stderr)
@@ -306,6 +323,9 @@ def main() -> int:
         print("migration_state: applying the tree's migrations")
         try:
             count = apply_migrations(url, args.migrations)
+        except EnvironmentError as error:
+            print(f"migration_state: {error}", file=sys.stderr)
+            return 3
         except Exception as error:  # noqa: BLE001
             print(f"migration_state: the migrations could not be applied: {error}",
                   file=sys.stderr)

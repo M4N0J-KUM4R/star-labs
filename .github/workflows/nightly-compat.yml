@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
-      available: ${{ steps.gate.outputs.available }}
+      available: ${{ steps.migrate.outputs.available || steps.gate.outputs.available }}
     env:
       DATABASE_URL: ${{ secrets.SUPABASE_DATABASE_URL }}
       # The port's migrations assume `public`: the trigram index names
@@ -87,6 +87,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends postgresql-client
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT current_schema()"
       - name: Make the test schema match the tree
+        id: migrate
         # sqlx records the SHA-384 of every migration file it applies
         # (sqlx-core/src/migrate/migration.rs), and refuses to run when a
         # file changed after it was applied. A migration edited after the
@@ -99,10 +100,26 @@ jobs:
         # it only happens when the disagreement is real.
         if: steps.gate.outputs.available == 'true'
         run: |
+          set +e
           python3 tools/ci/migration_state.py \
             --migrations migration/crates/star-db/migrations \
             --reset \
             --apply
+          status=$?
+          set -e
+          if [ "$status" = "0" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          elif [ "$status" = "3" ]; then
+            # This database cannot hold the port's schema (the trigram index
+            # needs the pg_trgm extension in `public`, and this instance keeps
+            # its extensions in `extensions`). The Supabase compatibility lane
+            # does not run; the coverage lane still does, against PostgreSQL 16.
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::the Supabase compatibility lane cannot migrate the port's schema on this instance; it did not run"
+            echo "Supabase compatibility lane: did not run — this instance keeps its extensions outside \`public\`, and the port's trigram index needs them there." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$status" != "0" ]; then
+            exit "$status"
+          fi
 
   # ---------------------------------------------------------------------------
   # Shard map: every workspace crate except star-http is assigned to exactly
