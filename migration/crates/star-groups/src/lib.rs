@@ -2349,8 +2349,28 @@ async fn delete_group_category(
 ) -> Result<Json<GroupCategory>, ApiError> {
     let existing = fetch_group_category(&state.db, category_id).await?;
 
-    if !can_manage_group_category(&state.db, auth.id, &existing, &auth).await? {
-        return Err(ApiError::Forbidden);
+    // Canvas `group_categories#destroy` checks the group's delete right
+    // before it looks the category up
+    // (`app/controllers/group_categories_controller.rb:649-658`), and that
+    // right is `manage_groups_delete` on the course the category belongs to.
+    // The permission layer reads the role overrides, so a course whose
+    // account has turned the right off answers the same way Canvas does.
+    match existing.course_id {
+        Some(course_id) => {
+            star_permissions::check::require(
+                &state.db,
+                auth.id,
+                &star_permissions::PermissionContext::Course { course_id },
+                "manage_groups_delete",
+            )
+            .await?;
+        }
+        // Account-level categories: only an admin can manage them.
+        None => {
+            if !is_admin(&auth) {
+                return Err(ApiError::Forbidden);
+            }
+        }
     }
 
     // Canvas refuses to delete protected categories with 401 "unauthorized".

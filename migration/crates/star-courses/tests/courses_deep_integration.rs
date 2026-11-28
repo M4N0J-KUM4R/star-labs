@@ -267,3 +267,54 @@ async fn ping_returns_success_and_activity_summary_is_empty_array() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// POST /courses/{courseId}/reset_content
+// ---------------------------------------------------------------------------
+
+/// Canvas `courses#reset_content` asks for `:reset_content`
+/// (`app/controllers/courses_controller.rb:3900`), which the Course policy
+/// grants to a content-admin enrollment that holds `manage_courses_reset`
+/// (`app/models/course.rb:2165-2171`). The registry grants that permission
+/// to the AccountAdmin role only
+/// (`config/initializers/permissions_registry.rb`), so a course teacher does
+/// not hold it.
+#[tokio::test]
+async fn reset_content_requires_the_manage_courses_reset_permission() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let account_id = seed_account(&pool, &prefix, "reset-acct").await;
+    let course_id = seed_course(&pool, &prefix, "reset-course", account_id).await;
+    let teacher = seed_user(&pool, &prefix, "reset-teacher", "teacher").await;
+    sqlx::query("INSERT INTO enrollments (user_id, course_id, role) VALUES ($1, $2, 'teacher')")
+        .bind(teacher)
+        .bind(course_id)
+        .execute(&pool)
+        .await
+        .expect("seed teacher enrollment");
+
+    // A course teacher does not hold `manage_courses_reset`.
+    let res = server
+        .post(&format!("/courses/{course_id}/reset_content"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(res.status_code(), 403, "body: {}", res.text());
+
+    // An admin of the course's account does hold it.
+    let admin = seed_user(&pool, &prefix, "reset-admin", "admin").await;
+    sqlx::query("INSERT INTO account_users (account_id, user_id, role) VALUES ($1, $2, 'admin')")
+        .bind(account_id)
+        .bind(admin)
+        .execute(&pool)
+        .await
+        .expect("seed account admin");
+    let res = server
+        .post(&format!("/courses/{course_id}/reset_content"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(admin, "admin"))
+        .await;
+    assert_eq!(res.status_code(), 200, "body: {}", res.text());
+
+    cleanup(&pool, &prefix).await;
+}

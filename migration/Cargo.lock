@@ -3001,6 +3001,7 @@ dependencies = [
  "star-common",
  "star-db",
  "star-gradebook",
+ "star-permissions",
  "tokio",
 ]
 
@@ -3189,6 +3190,7 @@ dependencies = [
  "star-auth",
  "star-common",
  "star-db",
+ "star-permissions",
  "tokio",
  "tower",
 ]

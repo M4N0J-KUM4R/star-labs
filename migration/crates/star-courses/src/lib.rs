@@ -2287,11 +2287,21 @@ async fn reset_course_content(
     if !course_exists(&state.db, course_id).await? {
         return Err(ApiError::NotFound);
     }
-    // Blueprint reset requires blueprint manage rights; check teacher/admin
-    // as a conservative fallback (full blueprint rights are on the template side).
-    if !check_teacher_or_admin(&state.db, auth.id, course_id, &auth).await? {
-        return Err(ApiError::Forbidden);
-    }
+    // Canvas `courses#reset_content` asks for `:reset_content`
+    // (`app/controllers/courses_controller.rb:3900`). The Course policy
+    // grants it to a content-admin enrollment that holds
+    // `manage_courses_reset` (`app/models/course.rb:2165-2171`) and to an
+    // account membership that holds it (`app/models/course.rb:2248-2251`).
+    // The registry grants `manage_courses_reset` to the AccountAdmin role
+    // only (`config/initializers/permissions_registry.rb`), so a course
+    // teacher does not hold it and the request is refused.
+    star_permissions::check::require(
+        &state.db,
+        auth.id,
+        &star_permissions::PermissionContext::Course { course_id },
+        "manage_courses_reset",
+    )
+    .await?;
     Ok(Json(serde_json::json!({ "success": true })))
 }
 

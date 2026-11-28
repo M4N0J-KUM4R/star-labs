@@ -9,6 +9,7 @@ db-tests = []
 [dependencies]
 star-common = { path = "../star-common" }
 star-auth = { path = "../star-auth" }
+star-permissions = { path = "../star-permissions" }
 axum = { workspace = true }
 sqlx = { workspace = true }
 serde = { workspace = true }

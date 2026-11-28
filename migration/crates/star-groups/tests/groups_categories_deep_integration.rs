@@ -350,3 +350,67 @@ async fn assign_unassigned_members_distributes_students_across_groups() {
 
     cleanup(&pool, &prefix).await;
 }
+
+// ---------------------------------------------------------------------------
+// DELETE /group_categories/{id}
+// ---------------------------------------------------------------------------
+
+/// Canvas `group_categories#destroy` checks the group's delete right before
+/// it looks the category up
+/// (`app/controllers/group_categories_controller.rb:649-658`), and that right
+/// is `manage_groups_delete` on the course the category belongs to
+/// (`app/helpers/group_permission_helper.rb:30-36`).
+///
+/// The registry grants `manage_groups_delete` to the course roles, so a
+/// teacher may delete a category — unless an account or course override
+/// turns the right off, which is what the oracle's own seed does for the
+/// recorded corpus (`canvas-boot/seed.rb:287-305`).
+#[tokio::test]
+async fn deleting_a_group_category_follows_the_manage_groups_delete_permission() {
+    let Some((server, pool, prefix)) = setup().await else {
+        println!("SKIP: DATABASE_URL not set");
+        return;
+    };
+    let course_id = seed_course(&pool, &prefix, "gc-delete-course").await;
+    let teacher = seed_user(&pool, &prefix, "gc-delete-teacher", "teacher").await;
+    seed_enrollment(&pool, teacher, course_id, "teacher").await;
+    let category_id: i64 = sqlx::query_scalar(
+        "INSERT INTO group_categories (course_id, name, role) VALUES ($1, $2, 'StudentEnrollment') \
+         RETURNING id",
+    )
+    .bind(course_id)
+    .bind(format!("{prefix}-gc-delete-category"))
+    .fetch_one(&pool)
+    .await
+    .expect("seed group category");
+
+    // The right is off for the teacher role on this course: the request is
+    // refused, and the category survives.
+    sqlx::query(
+        "INSERT INTO role_overrides (permission, enabled, locked, context_type, context_id, role_id) \
+         VALUES ('manage_groups_delete', false, true, 'Course', $1, 2)",
+    )
+    .bind(course_id)
+    .execute(&pool)
+    .await
+    .expect("seed role override");
+
+    let res = server
+        .delete(&format!("/group_categories/{category_id}"))
+        .add_header(axum::http::header::AUTHORIZATION, auth(teacher, "teacher"))
+        .await;
+    assert_eq!(res.status_code(), 403, "body: {}", res.text());
+
+    let workflow_state: String =
+        sqlx::query_scalar("SELECT workflow_state FROM group_categories WHERE id = $1")
+            .bind(category_id)
+            .fetch_one(&pool)
+            .await
+            .expect("read the category");
+    assert_ne!(
+        workflow_state, "deleted",
+        "the category must survive a refused delete"
+    );
+
+    cleanup(&pool, &prefix).await;
+}
