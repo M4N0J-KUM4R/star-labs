@@ -7,10 +7,9 @@ name: Canvas parity replay
 # to the Rust build and diffs the answers. The recorded cases live in
 # `migration/rust/app-cases/http/`, and `replay-report.md` is committed.
 #
-# The gate is the documented CI pattern from the tool itself: commit the
-# report, replay, then `git diff --exit-code` on it. A change in what passes
-# — better or worse — fails CI until the report is updated with it. That is
-# what stops a port from silently losing behaviour.
+# The gate verifies both reports against the case inventory and compares
+# failing case IDs, not volatile response details. Known mismatches are debt;
+# a green run means the committed baseline was reproduced, not full parity.
 #
 # The oracle (a booted Canvas) is NOT needed here: the recorded cases are
 # the artifact of having run it once. This job only replays.
@@ -71,10 +70,32 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Test the replay gate
+        run: python3 -m unittest discover -s tools/parity -p test_compare_replay.py
+
+      - name: Prove the replay gate can turn red
+        # The gate compares a fresh replay report with the committed baseline.
+        # A gate that only ever says "the known failure set was reproduced" is
+        # a ratchet, not a release gate: it cannot tell a port that lost
+        # behaviour from one that kept it. These controls feed the gate
+        # deliberately broken inputs and assert that each is rejected — a
+        # missing capture, a case dropped from the baseline, a formerly
+        # passing case that now fails, a partial replay, a skipped case, an
+        # inconsistent runner and an improvement the baseline has not recorded.
+        #
+        # The baseline is read out of git so the controls test the committed
+        # contract, and everything happens in a temporary directory.
+        run: |
+          git show HEAD:migration/rust/app-cases/replay-report.md \
+            > /tmp/committed-replay-report.md
+          python3 tools/parity/gate_negative_controls.py \
+            --cases rust/app-cases/http \
+            --baseline /tmp/committed-replay-report.md
+
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Install rust-anything
-        run: cargo install rust-anything --locked
+        run: cargo install rust-anything --version 5.0.1 --locked
 
       - name: Build the migration binary
         run: cargo build --locked --release --bin star-http
@@ -165,7 +186,6 @@ jobs:
           status=$?
           set -e
           echo "exit_code=$status" >> "$GITHUB_OUTPUT"
-          cat rust/app-cases/replay-report.md >> "$GITHUB_STEP_SUMMARY" || true
 
       - name: Check the stable x-canvas-meta fields
         # The meta header carries process diagnostics (bytes, cpu, db time)
@@ -238,14 +258,7 @@ jobs:
             > /tmp/committed-replay-report.md
           python3 tools/parity/compare_replay.py \
             --committed /tmp/committed-replay-report.md \
-            --fresh rust/app-cases/replay-report.md
-
-      - name: Fail when the replay did not run
-        # The replay itself answers "which cases fail"; the committed report
-        # is the baseline and the step above compares the two. A replay that
-        # produced no report is a broken run, not a parity result.
-        run: |
-          if [ ! -f rust/app-cases/replay-report.md ]; then
-            echo "::error::the replay produced no report (exit ${{ steps.replay.outputs.exit_code }})"
-            exit 1
-          fi
+            --fresh rust/app-cases/replay-report.md \
+            --cases rust/app-cases/http \
+            --exit-code "${{ steps.replay.outputs.exit_code }}" \
+            --summary "$GITHUB_STEP_SUMMARY"

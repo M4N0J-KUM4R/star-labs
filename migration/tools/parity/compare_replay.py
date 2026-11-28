@@ -15,40 +15,77 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+import tomllib
+from pathlib import Path
 
-PASSED = re.compile(r"^Passed:\s*(\d+)/(\d+)\s*$", re.MULTILINE)
-FAILING = re.compile(r"^###\s+([A-Za-z0-9_.-]+)\s*$", re.MULTILINE)
+PASSED = re.compile(r"^Passed: (\d+)/(\d+)$", re.MULTILINE)
+FAILING = re.compile(r"^### ([A-Za-z0-9_.-]+)$", re.MULTILINE)
 
 
-def read(path: str) -> tuple[set[str], int | None, int | None]:
-    try:
-        text = open(path, encoding="utf-8", errors="replace").read()
-    except FileNotFoundError:
-        return set(), None, None
-    m = PASSED.search(text)
-    passed = int(m.group(1)) if m else None
-    total = int(m.group(2)) if m else None
-    return set(FAILING.findall(text)), passed, total
+def read(path: Path, cases: set[str]) -> set[str]:
+    text = path.read_text(encoding="utf-8")
+    header, _, details = text.partition("## Failing cases\n")
+    counts = PASSED.findall(header)
+    if len(counts) != 1:
+        raise ValueError(f"{path}: expected one Passed: N/M line")
+    passed, total = map(int, counts[0])
+    if not cases or total != len(cases):
+        raise ValueError(f"{path}: report covers {total}, corpus contains {len(cases)}")
+    if re.search(r"^Skipped: [1-9]\d*$", header, re.MULTILINE):
+        raise ValueError(f"{path}: skipped cases are not parity evidence")
+    names = FAILING.findall(details)
+    failures = set(names)
+    if len(names) != len(failures) or passed + len(failures) != total:
+        raise ValueError(f"{path}: pass count and unique failure headings do not reconcile")
+    if failures - cases:
+        raise ValueError(f"{path}: unrecorded case(s): {', '.join(sorted(failures - cases))}")
+    if not failures and "Every case matches." not in header.splitlines():
+        raise ValueError(f"{path}: missing all-pass verdict")
+    return failures
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--committed", required=True)
-    parser.add_argument("--fresh", required=True)
+    parser.add_argument("--committed", type=Path, required=True)
+    parser.add_argument("--fresh", type=Path, required=True)
+    parser.add_argument("--cases", type=Path, help="default: http directory beside fresh report")
+    parser.add_argument("--exit-code", type=int, help="exit status of rust-anything app replay")
+    parser.add_argument("--summary", type=Path, help="append a GitHub Actions job summary")
     args = parser.parse_args()
-
-    committed, c_passed, c_total = read(args.committed)
-    fresh, f_passed, f_total = read(args.fresh)
-
-    if not fresh:
-        print("compare_replay: no fresh report to compare against", file=sys.stderr)
+    corpus = args.cases or args.fresh.parent / "http"
+    try:
+        cases = {p.stem for p in corpus.glob("*.toml")}
+        committed = read(args.committed, cases)
+        fresh = read(args.fresh, cases)
+        if args.exit_code is not None and args.exit_code != int(bool(fresh)):
+            raise ValueError(f"replay exit {args.exit_code} inconsistent with {len(fresh)} failures")
+    except (OSError, ValueError) as error:
+        print(f"compare_replay: {error}", file=sys.stderr)
         return 2
+
+    total = len(cases)
+    passed = total - len(fresh)
+    if args.summary:
+        with args.summary.open("a", encoding="utf-8") as summary:
+            successful = set()
+            for case in sorted(cases):
+                with (corpus / f"{case}.toml").open("rb") as fixture:
+                    if 200 <= tomllib.load(fixture)["response"]["status"] < 300:
+                        successful.add(case)
+            print(f"### Rails → Rust: recorded HTTP behaviour\n\n"
+                  f"**{passed}/{total} matched ({passed / total:.1%}); "
+                  f"{len(fresh)} mismatched.** Of cases where Rails returned 2xx, "
+                  f"**{len(successful - fresh)}/{len(successful)}** matched. "
+                  "This measures replay cases, not "
+                  "registered routes or overall migration completion. "
+                  "Green means the known failure set was reproduced. "
+                  "See the replay-report artifact for case details.", file=summary)
 
     newly_failing = sorted(fresh - committed)
     newly_passing = sorted(committed - fresh)
 
-    print(f"committed: {c_passed}/{c_total} passing, {len(committed)} failing")
-    print(f"fresh:     {f_passed}/{f_total} passing, {len(fresh)} failing")
+    print(f"committed: {total - len(committed)}/{total} passing, {len(committed)} failing")
+    print(f"fresh:     {passed}/{total} passing, {len(fresh)} failing")
     if newly_failing:
         print(f"\n{len(newly_failing)} case(s) that pass in the committed report fail now:")
         for name in newly_failing:
