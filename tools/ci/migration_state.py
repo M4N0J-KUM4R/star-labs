@@ -83,6 +83,36 @@ def applied_migrations(url: str) -> dict[int, str]:
     return out
 
 
+def port_tables(directory: Path) -> list[str]:
+    """The tables the tree's migrations create."""
+    names: set[str] = set()
+    create = re.compile(r"CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([a-z_][a-z0-9_]*)", re.I)
+    for path in sorted(directory.glob("*.sql")):
+        for match in create.finditer(path.read_text(encoding="utf-8", errors="ignore")):
+            names.add(match.group(1).lower())
+    return sorted(names)
+
+
+def occupied_schemas(url: str, directory: Path) -> list[str]:
+    """Every schema that holds one of the port's tables.
+
+    The tables were created over several runs, and the ones from a run
+    whose search_path resolved differently sit in another schema — so
+    clearing one schema is not enough.
+    """
+    tables = port_tables(directory)
+    if not tables:
+        return ["public"]
+    quoted = ",".join(f"'{name}'" for name in tables)
+    rows = psql(
+        url,
+        "SELECT DISTINCT table_schema FROM information_schema.tables "
+        f"WHERE table_name IN ({quoted}) ORDER BY table_schema",
+    )
+    schemas = [line.strip() for line in rows.splitlines() if line.strip()]
+    return schemas or ["public"]
+
+
 def tables_schema(url: str) -> str:
     """The schema the port's tables live in.
 
@@ -135,7 +165,7 @@ def apply_migrations(url: str, directory: Path) -> int:
             text=True,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"{path.name}: {result.stderr.strip()[:400]}")
+            raise RuntimeError(f"{path.name}: {result.stderr.strip()[:2000]}")
     psql(
         url,
         "CREATE TABLE IF NOT EXISTS _sqlx_migrations ("
@@ -158,19 +188,14 @@ def apply_migrations(url: str, directory: Path) -> int:
     return len(tree)
 
 
-def reset_schema(url: str) -> str:
+def reset_schema(url: str, directory: Path) -> str:
     """Drop and recreate the schema the port's tables live in.
 
     It is a test schema: the nightly runs the suite against it and every
     test seeds and tears down its own rows. Supabase's `auth` and `storage`
     schemas are left alone.
     """
-    schema = tables_schema(url)
-    # Both the schema that holds the migrations table and `public` are
-    # cleared: the tables were created over several runs, and the ones from
-    # a run whose search_path resolved differently sit in the other schema —
-    # the apply then fails with "relation users already exists".
-    schemas = [schema] if schema == "public" else [schema, "public"]
+    schemas = occupied_schemas(url, directory)
     for name in schemas:
         psql(url, f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
         psql(url, f'CREATE SCHEMA "{name}"')
@@ -233,7 +258,7 @@ def main() -> int:
             return 1
         print("migration_state: rebuilding the schema so the lane measures the tree")
         try:
-            schema = reset_schema(url)
+            schema = reset_schema(url, args.migrations)
         except Exception as error:  # noqa: BLE001
             print(f"migration_state: the schema could not be rebuilt: {error}", file=sys.stderr)
             return 2
