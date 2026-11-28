@@ -21,8 +21,8 @@ verdict, not a passing one.
 | Canvas capabilities (controllers with API routes) | 222 |
 | Capabilities with a recorded answer | 28 |
 | Capabilities with no recorded answer | 194 |
-| Recorded cases the port reproduces | 160 |
-| Recorded cases the port does not reproduce | 276 |
+| Recorded cases the port reproduces | 161 |
+| Recorded cases the port does not reproduce | 275 |
 | Recorded cases not attributed to a capability | 24 |
 
 ## Every capability
@@ -99,7 +99,7 @@ verdict, not a passing one.
 | epub_exports | app/controllers/epub_exports_controller.rb | star-content | 3 | 0 | 0 | 0 | not covered by the corpus |
 | errors | app/controllers/errors_controller.rb | star-accounts | 1 | 0 | 0 | 0 | not covered by the corpus |
 | external_feeds | app/controllers/external_feeds_controller.rb | star-announcements | 6 | 0 | 0 | 0 | not covered by the corpus |
-| external_tools | app/controllers/external_tools_controller.rb | star-lti | 25 | 25 | 5 | 20 | differs — header cache-control (missing key) ×10, header content-type (missing key) ×6 |
+| external_tools | app/controllers/external_tools_controller.rb | star-lti | 25 | 25 | 6 | 19 | differs — header cache-control (missing key) ×7, header content-type (missing key) ×6 |
 | favorites | app/controllers/favorites_controller.rb | star-dashboard, star-users | 8 | 0 | 0 | 0 | not covered by the corpus |
 | feature_flags | app/controllers/feature_flags_controller.rb | star-features | 17 | 0 | 0 | 0 | not covered by the corpus |
 | files | app/controllers/files_controller.rb | star-files, star-groups, star-ui, star-users | 26 | 26 | 8 | 18 | differs — header cache-control (missing key) ×7, body ×3 |
