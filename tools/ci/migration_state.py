@@ -263,7 +263,18 @@ def main() -> int:
               f"(first: {missing[0]})")
 
     if args.apply:
-        print("migration_state: applying the tree's migrations over the schema that is there")
+        # The migrations are one-shot (0015 renames a column that a later
+        # migration adds), so they cannot be replayed over a schema that has
+        # been migrated. The lane wants a known state anyway: the schema is
+        # rebuilt, and the migrations are applied to the empty schema.
+        print("migration_state: rebuilding the schema so the lane measures the tree")
+        try:
+            schema = reset_schema(url, args.migrations)
+        except Exception as error:  # noqa: BLE001
+            print(f"migration_state: the schema could not be rebuilt: {error}", file=sys.stderr)
+            return 2
+        print(f"migration_state: the schema {schema!r} was rebuilt")
+        print("migration_state: applying the tree's migrations")
         try:
             count = apply_migrations(url, args.migrations)
         except Exception as error:  # noqa: BLE001
