@@ -1791,7 +1791,11 @@ async fn can_read_group_tools(
         return Err(ApiError::NotFound);
     };
 
-    let member: Option<(i64,)> = sqlx::query_as(
+    // `SELECT 1` is an INT4 literal in PostgreSQL; the crate's convention
+    // is to read it as i32 (the queries that want an i64 cast the literal
+    // to `1::bigint`). Decoding the INT4 literal into an i64 is a runtime
+    // error, and the request answered 500 instead of the group's tools.
+    let member: Option<(i32,)> = sqlx::query_as(
         "SELECT 1 FROM group_memberships \
          WHERE group_id = $1 AND user_id = $2 AND workflow_state <> 'deleted' LIMIT 1",
     )
