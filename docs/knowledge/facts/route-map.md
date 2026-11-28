@@ -2905,7 +2905,7 @@ Canvas source: `app/controllers/users_controller.rb`  ·  routes: 39  ·  implem
 | GET | `/api/v1/users/self/activity_stream` | yes | `200` | pass |
 | GET | `/api/v1/users/self/activity_stream/summary` | yes | `200` | pass |
 | GET | `/api/v1/users/self/todo` | yes | `200` | **FAIL** |
-| GET | `/api/v1/users/self/todo_item_count` | yes | `200` | **FAIL** |
+| GET | `/api/v1/users/self/todo_item_count` | yes | `200` | pass |
 | GET | `/api/v1/users/self/upcoming_events` | yes | `200` | pass |
 | POST | `/api/v1/accounts/:account_id/self_registration` | yes | - | - |
 | POST | `/api/v1/accounts/:account_id/users` | yes | - | - |
