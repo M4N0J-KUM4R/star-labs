@@ -63,10 +63,17 @@ def psql(url: str, sql: str) -> str:
 
 def applied_migrations(url: str) -> dict[int, str]:
     """version -> checksum hex for the migrations the database has applied."""
-    rows = psql(
-        url,
-        "SELECT version, encode(checksum, 'hex') FROM _sqlx_migrations ORDER BY version",
-    )
+    try:
+        rows = psql(
+            url,
+            "SELECT version, encode(checksum, 'hex') FROM _sqlx_migrations ORDER BY version",
+        )
+    except RuntimeError as error:
+        # A database that has never been migrated has no table; that is an
+        # empty history, not a failure.
+        if "_sqlx_migrations" in str(error):
+            return {}
+        raise
     out: dict[int, str] = {}
     for line in rows.splitlines():
         if not line.strip():
@@ -103,6 +110,54 @@ def tables_schema(url: str) -> str:
     return schema or "public"
 
 
+def apply_migrations(url: str, directory: Path) -> int:
+    """Apply the tree's migrations and record them the way sqlx does.
+
+    The lane's four legs share one database, and the Supabase session
+    pooler refuses connections beyond its client ceiling (15). If every leg
+    migrated, four legs would hold a connection each while they wait for
+    sqlx's advisory lock — and the pooler drops them ("expected to read 5
+    bytes, got 0 bytes at EOF"). So the migration happens once, here, and
+    the legs find a ready schema.
+
+    The `_sqlx_migrations` rows are written with the checksum sqlx computes
+    (SHA-384 of the file), so the legs' `MIGRATOR.run()` validates them
+    and has nothing to do.
+    """
+    psql(url, "DROP TABLE IF EXISTS _sqlx_migrations")
+    for path in sorted(directory.glob("*.sql")):
+        number = path.name.split("_", 1)[0]
+        if not number.isdigit():
+            continue
+        result = subprocess.run(
+            ["psql", url, "-v", "ON_ERROR_STOP=1", "-q", "-f", str(path)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"{path.name}: {result.stderr.strip()[:400]}")
+    psql(
+        url,
+        "CREATE TABLE IF NOT EXISTS _sqlx_migrations ("
+        "version BIGINT PRIMARY KEY,"
+        "description TEXT NOT NULL,"
+        "installed_on TIMESTAMPTZ NOT NULL DEFAULT now(),"
+        "success BOOLEAN NOT NULL,"
+        "checksum BYTEA NOT NULL,"
+        "execution_time BIGINT NOT NULL)",
+    )
+    tree = tree_migrations(directory)
+    for version, (name, digest) in tree.items():
+        description = name.split("_", 1)[1].replace(".sql", "")
+        psql(
+            url,
+            "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) "
+            f"VALUES ({version}, '{description}', true, "
+            f"decode('{digest}', 'hex'), 0) ON CONFLICT (version) DO NOTHING",
+        )
+    return len(tree)
+
+
 def reset_schema(url: str) -> str:
     """Drop and recreate the schema the port's tables live in.
 
@@ -120,7 +175,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--migrations", type=Path, required=True)
     parser.add_argument("--reset", action="store_true",
-                        help="rebuild the public schema when the database disagrees")
+                        help="rebuild the schema when the database disagrees")
+    parser.add_argument("--apply", action="store_true",
+                        help="apply the tree's migrations and record them the way "
+                             "sqlx does, so the lane's legs find a ready schema "
+                             "instead of all migrating at once")
     args = parser.parse_args()
 
     url = os.environ.get("DATABASE_URL", "").strip()
@@ -174,6 +233,15 @@ def main() -> int:
             return 2
         print(f"migration_state: the schema {schema!r} was rebuilt; "
               "the migrations run from scratch")
+    if args.apply:
+        print("migration_state: applying the tree's migrations")
+        try:
+            count = apply_migrations(url, args.migrations)
+        except Exception as error:  # noqa: BLE001
+            print(f"migration_state: the migrations could not be applied: {error}",
+                  file=sys.stderr)
+            return 2
+        print(f"migration_state: {count} migration(s) applied and recorded")
     return 0
 
 
