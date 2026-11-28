@@ -54,6 +54,9 @@ jobs:
       - name: Regenerate the per-family briefs
         run: python3 tools/knowledge/gen_briefs.py
 
+      - name: Regenerate the capability ledger
+        run: python3 tools/knowledge/gen_capability_ledger.py
+
       - name: Gate the facts that describe committed artefacts
         # schema-truth is derived from the recorded corpus and the
         # migrations; route-map attributes every Canvas route to the crate
@@ -67,11 +70,13 @@ jobs:
         run: |
           if ! git diff --exit-code -- \
               docs/knowledge/facts/schema-truth.md \
-              docs/knowledge/facts/route-map.md; then
+              docs/knowledge/facts/route-map.md \
+              docs/knowledge/facts/capability-ledger.md; then
             echo "::error::the committed facts are stale. Run:"
             echo "  python3 tools/knowledge/gen_knowledge.py"
             echo "  python3 tools/knowledge/gen_gap_report.py"
             echo "  python3 tools/knowledge/gen_briefs.py"
+            echo "  python3 tools/knowledge/gen_capability_ledger.py"
             git diff --stat -- docs/knowledge/ | tail -20
             exit 1
           fi
@@ -103,6 +108,7 @@ jobs:
             echo "  python3 tools/knowledge/gen_knowledge.py"
             echo "  python3 tools/knowledge/gen_gap_report.py"
             echo "  python3 tools/knowledge/gen_briefs.py"
+            echo "  python3 tools/knowledge/gen_capability_ledger.py"
             git diff --stat -- docs/knowledge/ | tail -20
           fi
 
