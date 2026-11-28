@@ -3,8 +3,8 @@
   "free": [
     "0111"
   ],
-  "max_merged": "0272",
-  "next_available": "0273",
+  "max_merged": "0273",
+  "next_available": "0274",
   "reservations": {
     "0001": {
       "issue": null,
@@ -583,12 +583,12 @@
     },
     "0117": {
       "issue": 67,
-      "note": "feature flags tail (#67 merged via PR#152 WITHOUT migration; number never used — coordinator may release or reuse)",
+      "note": "feature flags tail (#67 merged via PR#152 WITHOUT migration; number never used \u2014 coordinator may release or reuse)",
       "status": "open"
     },
     "0118": {
       "issue": 55,
-      "note": "assignments tail (#55 merged via PR#139 without adding 0118; number never used — coordinator may release)",
+      "note": "assignments tail (#55 merged via PR#139 without adding 0118; number never used \u2014 coordinator may release)",
       "status": "merged"
     },
     "0119": {
@@ -638,12 +638,12 @@
     },
     "0128": {
       "issue": 91,
-      "note": "collaborations domain tail (guarded; snapshot 0223 owns the tables) — reserved at #91 dispatch",
+      "note": "collaborations domain tail (guarded; snapshot 0223 owns the tables) \u2014 reserved at #91 dispatch",
       "status": "merged"
     },
     "0131": {
       "issue": 91,
-      "note": "smart_search_indexes for the smartsearch routes — reserved at #91 dispatch",
+      "note": "smart_search_indexes for the smartsearch routes \u2014 reserved at #91 dispatch",
       "status": "merged"
     },
     "0141": {
@@ -753,12 +753,12 @@
     },
     "0230": {
       "issue": null,
-      "note": "GraphQL parity completion backing tables (peer_reviews, sub_assignments, audit_events, internal_settings, speed_grader_settings, checkpoints, gradebook_user_filters, widget_dashboards, user_inbox_labels, learner_dashboard_tab_selections, account_user_dismissals, submission_histories, discussion_entry_reports) — PR #228",
+      "note": "GraphQL parity completion backing tables (peer_reviews, sub_assignments, audit_events, internal_settings, speed_grader_settings, checkpoints, gradebook_user_filters, widget_dashboards, user_inbox_labels, learner_dashboard_tab_selections, account_user_dismissals, submission_histories, discussion_entry_reports) \u2014 PR #228",
       "status": "merged"
     },
     "0231": {
       "issue": null,
-      "note": "Canvas column parity for the authored cohort (0001-0222 tables PR #200 skipped): 447 ADD COLUMN IF NOT EXISTS across 33 tables — reference tools/parity/canvas_authored_tables_reference.json, backlog tools/parity/authored_column_backlog.py — PR #228",
+      "note": "Canvas column parity for the authored cohort (0001-0222 tables PR #200 skipped): 447 ADD COLUMN IF NOT EXISTS across 33 tables \u2014 reference tools/parity/canvas_authored_tables_reference.json, backlog tools/parity/authored_column_backlog.py \u2014 PR #228",
       "status": "merged"
     },
     "0232": {
@@ -898,7 +898,7 @@
     },
     "0263": {
       "issue": 86,
-      "note": "star-outcomes: outcome results/rollups runtime columns — learning_outcomes.data (rubric criterion), the learning_outcome_results Canvas columns (context_code, alignment link, hidden, possible/percent, mastery, workflow_state, timestamps) and users.uuid for /enqueue_outcome_rollup_calculation (additive only)",
+      "note": "star-outcomes: outcome results/rollups runtime columns \u2014 learning_outcomes.data (rubric criterion), the learning_outcome_results Canvas columns (context_code, alignment link, hidden, possible/percent, mastery, workflow_state, timestamps) and users.uuid for /enqueue_outcome_rollup_calculation (additive only)",
       "status": "merged"
     },
     "0264": {
@@ -944,6 +944,11 @@
     "0272": {
       "issue": null,
       "note": "the wave: courses + groups Canvas fields",
+      "status": "merged"
+    },
+    "0273": {
+      "issue": null,
+      "note": "the wave: the LTI children an account takes with it (Canvas dependent: :destroy)",
       "status": "merged"
     }
   }

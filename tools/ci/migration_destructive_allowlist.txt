@@ -27,3 +27,20 @@
 # ADD of the widened constraint ('completed', 'incomplete', 'read'); the
 # same constraint-replacement family as the 0228/0233/0234 entries above.
 0255_port_b_gaps.sql:21 DROP
+
+# 0273 lines 26, 32, 38, 44, 53, 59, 65, 71: the LTI tables' account
+# foreign keys are replaced with the delete rule Canvas' model layer
+# applies (`app/models/account.rb:92-95`: `has_many :lti_overlays,
+# dependent: :destroy`, and the same for the overlay versions, the notice
+# handlers and the context controls). The constraints are dropped and
+# re-added in the same file, with the rows unchanged; the previous rule
+# (no action) made an account with an LTI registration impossible to
+# remove, which the nightly's coverage lane failed on.
+0273_lti_account_children_cascade.sql:26 DROP
+0273_lti_account_children_cascade.sql:32 DROP
+0273_lti_account_children_cascade.sql:38 DROP
+0273_lti_account_children_cascade.sql:44 DROP
+0273_lti_account_children_cascade.sql:53 DROP
+0273_lti_account_children_cascade.sql:59 DROP
+0273_lti_account_children_cascade.sql:65 DROP
+0273_lti_account_children_cascade.sql:71 DROP
