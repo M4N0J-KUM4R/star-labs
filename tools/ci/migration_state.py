@@ -166,9 +166,15 @@ def reset_schema(url: str) -> str:
     schemas are left alone.
     """
     schema = tables_schema(url)
-    psql(url, f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
-    psql(url, f'CREATE SCHEMA "{schema}"')
-    return schema
+    # Both the schema that holds the migrations table and `public` are
+    # cleared: the tables were created over several runs, and the ones from
+    # a run whose search_path resolved differently sit in the other schema —
+    # the apply then fails with "relation users already exists".
+    schemas = [schema] if schema == "public" else [schema, "public"]
+    for name in schemas:
+        psql(url, f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
+        psql(url, f'CREATE SCHEMA "{name}"')
+    return ", ".join(schemas)
 
 
 def main() -> int:
