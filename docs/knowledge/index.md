@@ -82,6 +82,7 @@ cause, fix.
 | [[traps/replay-gate-reads-git]] | the replay overwrites the committed report; the gate must read the baseline out of git |
 | [[traps/role-model-vs-canvas-role-overrides]] | the port's role model is stricter than Canvas' role-override defaults (students, `read_roster`) |
 | [[traps/api-resources-draw-put-not-patch]] | Canvas' API `resources` draws PUT only — the port registers 9 API PATCH routes Canvas does not serve |
+| [[traps/account-gated-permissions]] | 45 permissions hang on an account feature flag the port never grants — always denied |
 
 ## Decisions — why things are the way they are
 
