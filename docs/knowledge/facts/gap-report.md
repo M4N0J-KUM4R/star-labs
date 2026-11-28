@@ -22,7 +22,7 @@ Canvas something.
 | GraphQL types | 621 | 251 | **428** |
 | GraphQL query fields | 28 | 32 | **0** |
 | GraphQL mutations | 100 | 103 | **0** |
-| Behavioural cases passing | 460 recorded | 162 pass / 298 fail | **298** |
+| Behavioural cases passing | 460 recorded | 163 pass / 297 fail | **297** |
 
 ## Routes Canvas mounts that the port does not
 

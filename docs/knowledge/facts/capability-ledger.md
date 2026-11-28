@@ -21,8 +21,8 @@ verdict, not a passing one.
 | Canvas capabilities (controllers with API routes) | 222 |
 | Capabilities with a recorded answer | 28 |
 | Capabilities with no recorded answer | 194 |
-| Recorded cases the port reproduces | 161 |
-| Recorded cases the port does not reproduce | 275 |
+| Recorded cases the port reproduces | 162 |
+| Recorded cases the port does not reproduce | 274 |
 | Recorded cases not attributed to a capability | 24 |
 
 ## Every capability
@@ -247,7 +247,7 @@ verdict, not a passing one.
 | tokens | app/controllers/tokens_controller.rb | star-auth | 5 | 0 | 0 | 0 | not covered by the corpus |
 | usage_rights | app/controllers/usage_rights_controller.rb | star-files | 9 | 0 | 0 | 0 | not covered by the corpus |
 | user_observees | app/controllers/user_observees_controller.rb | star-users | 7 | 0 | 0 | 0 | not covered by the corpus |
-| users | app/controllers/users_controller.rb | star-accounts, star-dashboard, star-files, star-users | 39 | 37 | 15 | 22 | differs — header cache-control (missing key) ×13, status (200→403) ×11 |
+| users | app/controllers/users_controller.rb | star-accounts, star-dashboard, star-files, star-users | 39 | 37 | 16 | 21 | differs — header cache-control (missing key) ×13, status (200→403) ×11 |
 | web_zip_exports | app/controllers/web_zip_exports_controller.rb | star-content | 2 | 0 | 0 | 0 | not covered by the corpus |
 | what_if_grades_api | app/controllers/what_if_grades_api_controller.rb | star-gradebook | 2 | 0 | 0 | 0 | not covered by the corpus |
 | wiki_pages_api | app/controllers/wiki_pages_api_controller.rb | star-pages | 29 | 12 | 0 | 12 | differs — header cache-control (missing key) ×5, status (200→404) ×4 |
