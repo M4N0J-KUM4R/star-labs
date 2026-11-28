@@ -22,6 +22,29 @@ PASSED = re.compile(r"^Passed: (\d+)/(\d+)$", re.MULTILINE)
 FAILING = re.compile(r"^### ([A-Za-z0-9_.-]+)$", re.MULTILINE)
 
 
+FLAKY_LIST = Path(__file__).resolve().parent / "replay_flaky_cases.txt"
+
+
+def flaky_cases(path: Path) -> set[str]:
+    """The cases whose answer depends on what the session mutated.
+
+    The corpus's cases share one database, so a case that renders a whole
+    table — the CSV exports — sees the rows the other cases created or
+    deleted, and its answer moves with the order they ran in. Those cases
+    cannot be compared exactly, so they are listed here and excluded from
+    the gate; they are still reported.
+    """
+    if not path.is_file():
+        return set()
+    out: set[str] = set()
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        out.add(line.split()[0])
+    return out
+
+
 def read(path: Path, cases: set[str]) -> set[str]:
     text = path.read_text(encoding="utf-8")
     header, _, details = text.partition("## Failing cases\n")
@@ -81,8 +104,10 @@ def main() -> int:
                   "Green means the known failure set was reproduced. "
                   "See the replay-report artifact for case details.", file=summary)
 
-    newly_failing = sorted(fresh - committed)
-    newly_passing = sorted(committed - fresh)
+    flaky = flaky_cases(FLAKY_LIST)
+    newly_failing = sorted((fresh - committed) - flaky)
+    newly_passing = sorted((committed - fresh) - flaky)
+    moved = sorted(((fresh - committed) | (committed - fresh)) & flaky)
 
     print(f"committed: {total - len(committed)}/{total} passing, {len(committed)} failing")
     print(f"fresh:     {passed}/{total} passing, {len(fresh)} failing")
@@ -98,6 +123,10 @@ def main() -> int:
     if newly_failing:
         print("\ncompare_replay: the fresh run regressed", file=sys.stderr)
         return 1
+    if moved:
+        print(f"\n{len(moved)} order-dependent case(s) moved (not gated):")
+        for name in moved:
+            print(f"  {name}")
     if newly_passing:
         # The committed report is the baseline: a case that passes now has to
         # be recorded as passing, or the next run compares against a stale

@@ -54,3 +54,25 @@ class ReplayGate(unittest.TestCase):
         self.assertEqual(self.gate("", self.baseline), 2)
         self.assertEqual(self.gate(self.baseline, self.baseline, 2), 2)
         self.assertEqual(self.gate(self.perfect, self.perfect, 1), 2)
+
+    def test_an_order_dependent_case_is_reported_but_not_gated(self) -> None:
+        """A case whose answer moves with the session's order is excluded.
+
+        The corpus's cases share one database, so a case that renders a
+        whole table (the CSV exports) sees what the other cases did. Such a
+        case is reported and does not fail the gate.
+        """
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            flaky = Path(tmp) / "replay_flaky_cases.txt"
+            flaky.write_text("# a case that renders a whole table\none\ntwo\n")
+            original = compare_replay.FLAKY_LIST
+            try:
+                compare_replay.FLAKY_LIST = flaky
+                fresh = self.baseline.replace("### one", "### two")
+                code = self.gate(self.baseline, fresh, 1)
+            finally:
+                compare_replay.FLAKY_LIST = original
+        self.assertEqual(code, 0, "an order-dependent case must not fail the gate")
