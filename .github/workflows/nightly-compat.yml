@@ -78,6 +78,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends postgresql-client
           psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -Atc "SELECT current_schema()"
+      - name: Make the test schema match the tree
+        # sqlx records the SHA-384 of every migration file it applies
+        # (sqlx-core/src/migrate/migration.rs), and refuses to run when a
+        # file changed after it was applied. A migration edited after the
+        # long-lived test schema applied it takes the whole lane down with
+        # `VersionMismatch` — which is how this lane has been failing.
+        #
+        # The test schema is a fixture, not data: every test seeds and tears
+        # down its own rows. So when the schema disagrees with the tree the
+        # lane rebuilds it and measures the tree. The rebuild is logged, and
+        # it only happens when the disagreement is real.
+        if: steps.gate.outputs.available == 'true'
+        run: |
+          python3 tools/ci/migration_state.py \
+            --migrations migration/crates/star-db/migrations \
+            --reset
 
   # ---------------------------------------------------------------------------
   # Shard map: every workspace crate except star-http is assigned to exactly

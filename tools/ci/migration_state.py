@@ -1,0 +1,150 @@
+#!/usr/bin/env python3
+"""Compare the tree's sqlx migrations with the migrations a database has applied.
+
+sqlx records `(version, checksum)` for every migration it applies, and the
+checksum is the SHA-384 of the migration file's bytes
+(`sqlx-core/src/migrate/migration.rs`). A migration whose file changed after
+it was applied is a `VersionMismatch` at the next `MIGRATOR.run()` — the
+port cannot start against that database at all.
+
+The nightly's Supabase lane runs the whole suite against one long-lived test
+schema, so a migration edited after that schema applied it takes the whole
+lane down. This tool says exactly which versions disagree, and can rebuild
+the schema so the lane measures the tree instead of a stale database.
+
+Usage:
+    DATABASE_URL=postgres://... python3 tools/ci/migration_state.py \
+        --migrations migration/crates/star-db/migrations
+
+    ... --reset      # drop and recreate the public schema (a test schema only)
+
+Exit codes:
+    0  the database agrees with the tree (or it was reset)
+    1  the database disagrees with the tree and --reset was not given
+    2  the check could not run
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+
+def checksum(path: Path) -> str:
+    """The checksum sqlx records for a file migration: SHA-384 of the bytes."""
+    return hashlib.sha384(path.read_bytes()).hexdigest()
+
+
+def tree_migrations(directory: Path) -> dict[int, tuple[str, str]]:
+    """version -> (filename, checksum) for every migration in the tree."""
+    out: dict[int, tuple[str, str]] = {}
+    for path in sorted(directory.glob("*.sql")):
+        number = path.name.split("_", 1)[0]
+        if not number.isdigit():
+            continue
+        out[int(number)] = (path.name, checksum(path))
+    return out
+
+
+def psql(url: str, sql: str) -> str:
+    result = subprocess.run(
+        ["psql", url, "-v", "ON_ERROR_STOP=1", "-At", "-c", sql],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or "psql failed")
+    return result.stdout.strip()
+
+
+def applied_migrations(url: str) -> dict[int, str]:
+    """version -> checksum hex for the migrations the database has applied."""
+    rows = psql(
+        url,
+        "SELECT version, encode(checksum, 'hex') FROM _sqlx_migrations ORDER BY version",
+    )
+    out: dict[int, str] = {}
+    for line in rows.splitlines():
+        if not line.strip():
+            continue
+        version, _, digest = line.partition("|")
+        out[int(version)] = digest.strip()
+    return out
+
+
+def reset_schema(url: str) -> None:
+    """Drop and recreate the public schema.
+
+    The port's migrations live in `public` and the port does not use
+    Supabase's `auth` or `storage` schemas, so this leaves the rest of the
+    database alone. It is a test schema: the nightly runs the suite against
+    it and every test seeds and tears down its own rows.
+    """
+    psql(url, "DROP SCHEMA IF EXISTS public CASCADE")
+    psql(url, "CREATE SCHEMA public")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--migrations", type=Path, required=True)
+    parser.add_argument("--reset", action="store_true",
+                        help="rebuild the public schema when the database disagrees")
+    args = parser.parse_args()
+
+    url = os.environ.get("DATABASE_URL", "").strip()
+    if not url:
+        print("migration_state: DATABASE_URL is not set", file=sys.stderr)
+        return 2
+    if not args.migrations.is_dir():
+        print(f"migration_state: {args.migrations} is not a directory", file=sys.stderr)
+        return 2
+
+    tree = tree_migrations(args.migrations)
+    if not tree:
+        print(f"migration_state: no migrations in {args.migrations}", file=sys.stderr)
+        return 2
+
+    try:
+        applied = applied_migrations(url)
+    except Exception as error:  # noqa: BLE001
+        print(f"migration_state: cannot read the applied migrations: {error}", file=sys.stderr)
+        return 2
+
+    mismatched = sorted(
+        version for version, digest in applied.items()
+        if version in tree and tree[version][1] != digest
+    )
+    missing = sorted(set(tree) - set(applied))
+    unknown = sorted(set(applied) - set(tree))
+
+    print(f"tree: {len(tree)} migration(s); database: {len(applied)} applied")
+    for version in mismatched:
+        name, digest = tree[version]
+        print(f"  MISMATCH {version} {name}: the file's checksum is {digest[:16]}…, "
+              f"the database recorded {applied[version][:16]}…")
+    for version in unknown:
+        print(f"  UNKNOWN {version}: applied in the database, absent from the tree")
+    if missing:
+        print(f"  pending: {len(missing)} migration(s) the database has not applied yet "
+              f"(first: {missing[0]})")
+
+    if mismatched or unknown:
+        if not args.reset:
+            print("migration_state: the database disagrees with the tree", file=sys.stderr)
+            return 1
+        print("migration_state: rebuilding the public schema so the lane measures the tree")
+        try:
+            reset_schema(url)
+        except Exception as error:  # noqa: BLE001
+            print(f"migration_state: the schema could not be rebuilt: {error}", file=sys.stderr)
+            return 2
+        print("migration_state: the schema was rebuilt; the migrations run from scratch")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
