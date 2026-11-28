@@ -107,7 +107,11 @@ def occupied_schemas(url: str, directory: Path) -> list[str]:
     `auth.users` would match, and the lane does not own that schema.
     """
     role = psql(url, "SELECT current_user").strip()
-    candidates = [name for name in (role, "public") if name]
+    # The schema that holds the migrations table is the one the port's
+    # tables are in — it is not always named after the connecting role
+    # (the lane's schema is `star_lms`, and the role that applies the
+    # migrations is not `star_lms`).
+    candidates = [name for name in (role, "public", tables_schema(url)) if name]
     quoted = ",".join(f"'{name}'" for name in candidates)
     rows = psql(
         url,
