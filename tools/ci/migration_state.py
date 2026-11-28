@@ -95,23 +95,25 @@ def port_tables(directory: Path) -> list[str]:
 
 
 def occupied_schemas(url: str, directory: Path) -> list[str]:
-    """Every schema that holds one of the port's tables.
+    """The schemas the port's tables can be in.
 
-    The tables were created over several runs, and the ones from a run
-    whose search_path resolved differently sit in another schema — so
-    clearing one schema is not enough.
+    sqlx resolves an unqualified `CREATE TABLE` against the connection's
+    search_path, and Postgres' default is `"$user", public` — so the
+    tables land in the schema named after the connecting role, or in
+    `public` when that schema does not exist. Those are the two schemas to
+    clear.
+
+    The tables themselves are not looked up by name: Supabase's own
+    `auth.users` would match, and the lane does not own that schema.
     """
-    tables = port_tables(directory)
-    if not tables:
-        return ["public"]
-    quoted = ",".join(f"'{name}'" for name in tables)
+    role = psql(url, "SELECT current_user").strip()
+    candidates = [name for name in (role, "public") if name]
+    quoted = ",".join(f"'{name}'" for name in candidates)
     rows = psql(
         url,
-        "SELECT DISTINCT table_schema FROM information_schema.tables "
-        f"WHERE table_name IN ({quoted}) ORDER BY table_schema",
+        f"SELECT nspname FROM pg_namespace WHERE nspname IN ({quoted}) ORDER BY nspname",
     )
-    schemas = [line.strip() for line in rows.splitlines() if line.strip()]
-    return schemas or ["public"]
+    return [line.strip() for line in rows.splitlines() if line.strip()] or ["public"]
 
 
 def tables_schema(url: str) -> str:
