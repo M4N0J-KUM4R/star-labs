@@ -81,6 +81,7 @@ cause, fix.
 | [[traps/front-door-original-path]] | `nest("/api/v1")` strips the prefix before the fallback runs — forward `OriginalUri`, not `parts.uri` |
 | [[traps/replay-gate-reads-git]] | the replay overwrites the committed report; the gate must read the baseline out of git |
 | [[traps/role-model-vs-canvas-role-overrides]] | the port's role model is stricter than Canvas' role-override defaults (students, `read_roster`) |
+| [[traps/api-resources-draw-put-not-patch]] | Canvas' API `resources` draws PUT only — the port registers 9 API PATCH routes Canvas does not serve |
 
 ## Decisions — why things are the way they are
 
