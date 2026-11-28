@@ -76,16 +76,44 @@ def applied_migrations(url: str) -> dict[int, str]:
     return out
 
 
-def reset_schema(url: str) -> None:
-    """Drop and recreate the public schema.
+def tables_schema(url: str) -> str:
+    """The schema the port's tables live in.
 
-    The port's migrations live in `public` and the port does not use
-    Supabase's `auth` or `storage` schemas, so this leaves the rest of the
-    database alone. It is a test schema: the nightly runs the suite against
-    it and every test seeds and tears down its own rows.
+    sqlx resolves an unqualified `CREATE TABLE` against the connection's
+    search_path, and Postgres' default search_path is `"$user", public` —
+    so the migrations table and the port's tables land in the schema named
+    after the connecting role when that schema exists, and in `public`
+    otherwise. Dropping `public` alone would leave them all in place, which
+    is why the first reset did not take.
     """
-    psql(url, "DROP SCHEMA IF EXISTS public CASCADE")
-    psql(url, "CREATE SCHEMA public")
+    schema = psql(
+        url,
+        "SELECT n.nspname FROM pg_class c "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE c.relname = '_sqlx_migrations' AND c.relkind = 'r' LIMIT 1",
+    )
+    if schema:
+        return schema
+    schema = psql(
+        url,
+        "SELECT n.nspname FROM pg_class c "
+        "JOIN pg_namespace n ON n.oid = c.relnamespace "
+        "WHERE c.relname = 'courses' AND c.relkind = 'r' LIMIT 1",
+    )
+    return schema or "public"
+
+
+def reset_schema(url: str) -> str:
+    """Drop and recreate the schema the port's tables live in.
+
+    It is a test schema: the nightly runs the suite against it and every
+    test seeds and tears down its own rows. Supabase's `auth` and `storage`
+    schemas are left alone.
+    """
+    schema = tables_schema(url)
+    psql(url, f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+    psql(url, f'CREATE SCHEMA "{schema}"')
+    return schema
 
 
 def main() -> int:
@@ -122,6 +150,8 @@ def main() -> int:
     unknown = sorted(set(applied) - set(tree))
 
     print(f"tree: {len(tree)} migration(s); database: {len(applied)} applied")
+    if applied:
+        print(f"  the database's tables live in the schema {tables_schema(url)!r}")
     for version in mismatched:
         name, digest = tree[version]
         print(f"  MISMATCH {version} {name}: the file's checksum is {digest[:16]}…, "
@@ -136,13 +166,14 @@ def main() -> int:
         if not args.reset:
             print("migration_state: the database disagrees with the tree", file=sys.stderr)
             return 1
-        print("migration_state: rebuilding the public schema so the lane measures the tree")
+        print("migration_state: rebuilding the schema so the lane measures the tree")
         try:
-            reset_schema(url)
+            schema = reset_schema(url)
         except Exception as error:  # noqa: BLE001
             print(f"migration_state: the schema could not be rebuilt: {error}", file=sys.stderr)
             return 2
-        print("migration_state: the schema was rebuilt; the migrations run from scratch")
+        print(f"migration_state: the schema {schema!r} was rebuilt; "
+              "the migrations run from scratch")
     return 0
 
 
