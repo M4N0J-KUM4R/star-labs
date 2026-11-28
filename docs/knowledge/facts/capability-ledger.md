@@ -21,8 +21,8 @@ verdict, not a passing one.
 | Canvas capabilities (controllers with API routes) | 222 |
 | Capabilities with a recorded answer | 28 |
 | Capabilities with no recorded answer | 194 |
-| Recorded cases the port reproduces | 115 |
-| Recorded cases the port does not reproduce | 321 |
+| Recorded cases the port reproduces | 160 |
+| Recorded cases the port does not reproduce | 276 |
 | Recorded cases not attributed to a capability | 24 |
 
 ## Every capability
@@ -34,7 +34,7 @@ verdict, not a passing one.
 | account_calendars_api | app/controllers/account_calendars_api_controller.rb | star-calendar | 6 | 0 | 0 | 0 | not covered by the corpus |
 | account_notifications | app/controllers/account_notifications_controller.rb | star-accounts | 8 | 0 | 0 | 0 | not covered by the corpus |
 | account_reports | app/controllers/account_reports_controller.rb | star-account-reports | 6 | 0 | 0 | 0 | not covered by the corpus |
-| accounts | app/controllers/accounts_controller.rb | star-accounts, star-courses, star-users | 22 | 26 | 6 | 20 | differs — header cache-control (missing key) ×10, status (200→403) ×9 |
+| accounts | app/controllers/accounts_controller.rb | star-accounts, star-courses, star-users | 22 | 26 | 6 | 20 | differs — header cache-control (missing key) ×7, header link (missing key) ×5 |
 | admins | app/controllers/admins_controller.rb | star-accounts | 4 | 0 | 0 | 0 | not covered by the corpus |
 | ai_conversations | app/controllers/ai_conversations_controller.rb | star-courses | 8 | 0 | 0 | 0 | not covered by the corpus |
 | ai_experiences | app/controllers/ai_experiences_controller.rb | star-courses | 9 | 0 | 0 | 0 | not covered by the corpus |
@@ -47,15 +47,15 @@ verdict, not a passing one.
 | assignment_groups | app/controllers/assignment_groups_controller.rb | star-assignment-groups | 1 | 0 | 0 | 0 | not covered by the corpus |
 | assignment_groups_api | app/controllers/assignment_groups_api_controller.rb | star-assignment-groups | 5 | 0 | 0 | 0 | not covered by the corpus |
 | assignment_overrides | app/controllers/assignment_overrides_controller.rb | star-assignments | 10 | 0 | 0 | 0 | not covered by the corpus |
-| assignments | app/controllers/assignments_controller.rb | star-assignments, star-ui | 1 | 1 | 0 | 1 | differs — status (403→204) ×1, header cache-control (missing key) ×1 |
-| assignments_api | app/controllers/assignments_api_controller.rb | star-assignment-groups, star-assignments, star-ui | 12 | 1 | 0 | 1 | differs — status (403→204) ×1, header cache-control (missing key) ×1 |
+| assignments | app/controllers/assignments_controller.rb | star-assignments, star-ui | 1 | 1 | 1 | 0 | matches the recorded answers |
+| assignments_api | app/controllers/assignments_api_controller.rb | star-assignment-groups, star-assignments, star-ui | 12 | 1 | 1 | 0 | matches the recorded answers |
 | authentication_audit_api | app/controllers/authentication_audit_api_controller.rb | star-audit | 3 | 0 | 0 | 0 | not covered by the corpus |
 | authentication_providers | app/controllers/authentication_providers_controller.rb | star-accounts, star-auth | 8 | 0 | 0 | 0 | not covered by the corpus |
 | blackout_dates | app/controllers/blackout_dates_controller.rb | star-grading-standards | 13 | 0 | 0 | 0 | not covered by the corpus |
 | block_editor_templates_api | app/controllers/block_editor_templates_api_controller.rb | star-content | 6 | 0 | 0 | 0 | not covered by the corpus |
 | bookmarks/bookmarks | app/controllers/bookmarks/bookmarks_controller.rb | star-users | 5 | 0 | 0 | 0 | not covered by the corpus |
 | brand_configs_api | app/controllers/brand_configs_api_controller.rb | star-accounts | 3 | 0 | 0 | 0 | not covered by the corpus |
-| calendar_events_api | app/controllers/calendar_events_api_controller.rb | star-calendar | 15 | 15 | 4 | 11 | differs — header cache-control (missing key) ×6, status (403→404) ×4 |
+| calendar_events_api | app/controllers/calendar_events_api_controller.rb | star-calendar | 15 | 15 | 4 | 11 | differs — header cache-control (missing key) ×5, header pragma (missing key) ×4 |
 | canvadoc_sessions | app/controllers/canvadoc_sessions_controller.rb | star-courses | 2 | 0 | 0 | 0 | not covered by the corpus |
 | canvas_career/user_experiences | app/controllers/canvas_career/user_experiences_controller.rb | star-accounts | 2 | 0 | 0 | 0 | not covered by the corpus |
 | career_experience | app/controllers/career_experience_controller.rb | star-accounts | 4 | 0 | 0 | 0 | not covered by the corpus |
@@ -81,7 +81,7 @@ verdict, not a passing one.
 | course_pacing/student_enrollment_paces_api | app/controllers/course_pacing/student_enrollment_paces_api_controller.rb | star-modules | 4 | 0 | 0 | 0 | not covered by the corpus |
 | course_reports | app/controllers/course_reports_controller.rb | star-account-reports | 3 | 0 | 0 | 0 | not covered by the corpus |
 | course_tag_conversion | app/controllers/course_tag_conversion_controller.rb | star-courses | 2 | 0 | 0 | 0 | not covered by the corpus |
-| courses | app/controllers/courses_controller.rb | star-accounts, star-courses, star-files, star-quizzes, star-ui | 38 | 38 | 6 | 32 | differs — header cache-control (missing key) ×14, status (200→415) ×5 |
+| courses | app/controllers/courses_controller.rb | star-accounts, star-courses, star-files, star-quizzes, star-ui | 38 | 38 | 7 | 31 | differs — header cache-control (missing key) ×13, status (200→415) ×5 |
 | csp_settings | app/controllers/csp_settings_controller.rb | star-features | 8 | 0 | 0 | 0 | not covered by the corpus |
 | custom_data | app/controllers/custom_data_controller.rb | star-users | 6 | 0 | 0 | 0 | not covered by the corpus |
 | custom_gradebook_column_data_api | app/controllers/custom_gradebook_column_data_api_controller.rb | star-gradebook | 3 | 0 | 0 | 0 | not covered by the corpus |
@@ -92,18 +92,18 @@ verdict, not a passing one.
 | discovery_pages_api | app/controllers/discovery_pages_api_controller.rb | star-accounts | 3 | 0 | 0 | 0 | not covered by the corpus |
 | discussion_entries | app/controllers/discussion_entries_controller.rb | star-discussions | 4 | 0 | 0 | 0 | not covered by the corpus |
 | discussion_topic_users | app/controllers/discussion_topic_users_controller.rb | star-discussions | 2 | 0 | 0 | 0 | not covered by the corpus |
-| discussion_topics | app/controllers/discussion_topics_controller.rb | star-discussions, star-ui | 10 | 2 | 1 | 1 | differs — status (200→404) ×1, header cache-control ×1 |
-| discussion_topics_api | app/controllers/discussion_topics_api_controller.rb | star-discussions, star-ui | 58 | 58 | 28 | 30 | differs — header cache-control (missing key) ×16, status (403→404) ×11 |
-| enrollments_api | app/controllers/enrollments_api_controller.rb | star-courses, star-enrollments | 14 | 14 | 1 | 13 | differs — header cache-control (missing key) ×4, status (200→404) ×2 |
+| discussion_topics | app/controllers/discussion_topics_controller.rb | star-discussions, star-ui | 10 | 2 | 1 | 1 | differs — body ×1 |
+| discussion_topics_api | app/controllers/discussion_topics_api_controller.rb | star-discussions, star-ui | 58 | 58 | 38 | 20 | differs — header cache-control (missing key) ×10, header pragma (missing key) ×9 |
+| enrollments_api | app/controllers/enrollments_api_controller.rb | star-courses, star-enrollments | 14 | 14 | 4 | 10 | differs — body ×2, status (200→404) ×1 |
 | eportfolios_api | app/controllers/eportfolios_api_controller.rb | star-eportfolios | 7 | 0 | 0 | 0 | not covered by the corpus |
 | epub_exports | app/controllers/epub_exports_controller.rb | star-content | 3 | 0 | 0 | 0 | not covered by the corpus |
 | errors | app/controllers/errors_controller.rb | star-accounts | 1 | 0 | 0 | 0 | not covered by the corpus |
 | external_feeds | app/controllers/external_feeds_controller.rb | star-announcements | 6 | 0 | 0 | 0 | not covered by the corpus |
-| external_tools | app/controllers/external_tools_controller.rb | star-lti | 25 | 25 | 4 | 21 | differs — header cache-control (missing key) ×11, header content-type (missing key) ×6 |
+| external_tools | app/controllers/external_tools_controller.rb | star-lti | 25 | 25 | 5 | 20 | differs — header cache-control (missing key) ×10, header content-type (missing key) ×6 |
 | favorites | app/controllers/favorites_controller.rb | star-dashboard, star-users | 8 | 0 | 0 | 0 | not covered by the corpus |
 | feature_flags | app/controllers/feature_flags_controller.rb | star-features | 17 | 0 | 0 | 0 | not covered by the corpus |
-| files | app/controllers/files_controller.rb | star-files, star-groups, star-ui, star-users | 26 | 26 | 8 | 18 | differs — header cache-control (missing key) ×7, status (200→404) ×4 |
-| folders | app/controllers/folders_controller.rb | star-files | 34 | 35 | 4 | 31 | differs — header cache-control ×11, body ×10 |
+| files | app/controllers/files_controller.rb | star-files, star-groups, star-ui, star-users | 26 | 26 | 8 | 18 | differs — header cache-control (missing key) ×7, body ×3 |
+| folders | app/controllers/folders_controller.rb | star-files | 34 | 35 | 5 | 30 | differs — header cache-control ×11, body ×10 |
 | grade_change_audit_api | app/controllers/grade_change_audit_api_controller.rb | star-audit | 12 | 0 | 0 | 0 | not covered by the corpus |
 | gradebook_filters_api | app/controllers/gradebook_filters_api_controller.rb | star-courses | 5 | 0 | 0 | 0 | not covered by the corpus |
 | gradebook_history_api | app/controllers/gradebook_history_api_controller.rb | star-audit | 4 | 0 | 0 | 0 | not covered by the corpus |
@@ -112,9 +112,9 @@ verdict, not a passing one.
 | grading_period_sets | app/controllers/grading_period_sets_controller.rb | star-grading-standards | 4 | 0 | 0 | 0 | not covered by the corpus |
 | grading_periods | app/controllers/grading_periods_controller.rb | star-grading-standards | 8 | 0 | 0 | 0 | not covered by the corpus |
 | grading_standards_api | app/controllers/grading_standards_api_controller.rb | star-grading-standards | 10 | 0 | 0 | 0 | not covered by the corpus |
-| group_categories | app/controllers/group_categories_controller.rb | star-groups | 16 | 17 | 1 | 16 | differs — header cache-control (missing key) ×10, status (200→404) ×7 |
+| group_categories | app/controllers/group_categories_controller.rb | star-groups | 16 | 17 | 3 | 14 | differs — header cache-control (missing key) ×5, status (401→200) ×3 |
 | group_memberships | app/controllers/group_memberships_controller.rb | star-groups | 11 | 1 | 0 | 1 | differs — status (200→404) ×1, header cache-control (missing key) ×1 |
-| groups | app/controllers/groups_controller.rb | star-groups | 17 | 19 | 4 | 15 | differs — header cache-control (missing key) ×7, status (200→404) ×6 |
+| groups | app/controllers/groups_controller.rb | star-groups | 17 | 19 | 5 | 14 | differs — header cache-control (missing key) ×7, body $ (type) ×5 |
 | history | app/controllers/history_controller.rb | star-courses | 1 | 0 | 0 | 0 | not covered by the corpus |
 | immersive_reader | app/controllers/immersive_reader_controller.rb | star-courses | 1 | 0 | 0 | 0 | not covered by the corpus |
 | inst_access_tokens | app/controllers/inst_access_tokens_controller.rb | star-auth | 1 | 0 | 0 | 0 | not covered by the corpus |
@@ -129,8 +129,8 @@ verdict, not a passing one.
 | live_assessments/results | app/controllers/live_assessments/results_controller.rb | star-courses | 2 | 0 | 0 | 0 | not covered by the corpus |
 | lmgb_user_details | app/controllers/lmgb_user_details_controller.rb | star-courses | 1 | 0 | 0 | 0 | not covered by the corpus |
 | login | app/controllers/login_controller.rb | star-courses | 1 | 0 | 0 | 0 | not covered by the corpus |
-| lti/account_external_tools | app/controllers/lti/account_external_tools_controller.rb | star-lti | 4 | 5 | 1 | 4 | differs — header set-cookie ×1, status (200→403) ×1 |
-| lti/account_lookup | app/controllers/lti/account_lookup_controller.rb | star-accounts | 1 | 2 | 0 | 2 | differs — header cache-control (missing key) ×2, body $.id (missing key) ×2 |
+| lti/account_external_tools | app/controllers/lti/account_external_tools_controller.rb | star-lti | 4 | 5 | 2 | 3 | differs — header set-cookie ×1, body $.errors (type) ×1 |
+| lti/account_lookup | app/controllers/lti/account_lookup_controller.rb | star-accounts | 1 | 2 | 0 | 2 | differs — body $.parent_account_id (type) ×1, status (200→415) ×1 |
 | lti/asset_processor | app/controllers/lti/asset_processor_controller.rb | star-lti | 2 | 0 | 0 | 0 | not covered by the corpus |
 | lti/asset_processor_tii_migrations_api | app/controllers/lti/asset_processor_tii_migrations_api_controller.rb | star-lti | 3 | 0 | 0 | 0 | not covered by the corpus |
 | lti/context_controls | app/controllers/lti/context_controls_controller.rb | star-lti | 6 | 0 | 0 | 0 | not covered by the corpus |
@@ -156,7 +156,7 @@ verdict, not a passing one.
 | lti/originality_reports_api | app/controllers/lti/originality_reports_api_controller.rb | star-lti | 5 | 0 | 0 | 0 | not covered by the corpus |
 | lti/plagiarism_assignments_api | app/controllers/lti/plagiarism_assignments_api_controller.rb | star-lti | 1 | 0 | 0 | 0 | not covered by the corpus |
 | lti/public_jwk | app/controllers/lti/public_jwk_controller.rb | star-lti | 1 | 0 | 0 | 0 | not covered by the corpus |
-| lti/registrations | app/controllers/lti/registrations_controller.rb | star-lti | 20 | 16 | 0 | 16 | differs — header cache-control (missing key) ×8, body $.errors[0].code (missing key) ×5 |
+| lti/registrations | app/controllers/lti/registrations_controller.rb | star-lti | 20 | 16 | 3 | 13 | differs — body $.errors[0].code (missing key) ×4, header cache-control (missing key) ×3 |
 | lti/resource_links | app/controllers/lti/resource_links_controller.rb | star-lti | 6 | 0 | 0 | 0 | not covered by the corpus |
 | lti/submissions_api | app/controllers/lti/submissions_api_controller.rb | star-lti | 3 | 0 | 0 | 0 | not covered by the corpus |
 | lti/subscriptions_api | app/controllers/lti/subscriptions_api_controller.rb | star-lti | 5 | 0 | 0 | 0 | not covered by the corpus |
@@ -177,7 +177,7 @@ verdict, not a passing one.
 | observer_alert_thresholds_api | app/controllers/observer_alert_thresholds_api_controller.rb | star-enrollments | 5 | 0 | 0 | 0 | not covered by the corpus |
 | observer_alerts_api | app/controllers/observer_alerts_api_controller.rb | star-users | 3 | 0 | 0 | 0 | not covered by the corpus |
 | observer_pairing_codes_api | app/controllers/observer_pairing_codes_api_controller.rb | star-users | 1 | 0 | 0 | 0 | not covered by the corpus |
-| outcome_groups_api | app/controllers/outcome_groups_api_controller.rb | star-outcomes | 40 | 40 | 10 | 30 | differs — header cache-control (missing key) ×9, header cache-control ×8 |
+| outcome_groups_api | app/controllers/outcome_groups_api_controller.rb | star-outcomes | 40 | 40 | 15 | 25 | differs — header cache-control (missing key) ×7, body ×5 |
 | outcome_imports_api | app/controllers/outcome_imports_api_controller.rb | star-outcomes | 8 | 0 | 0 | 0 | not covered by the corpus |
 | outcome_proficiency_api | app/controllers/outcome_proficiency_api_controller.rb | star-outcomes | 4 | 0 | 0 | 0 | not covered by the corpus |
 | outcome_results | app/controllers/outcome_results_controller.rb | star-outcomes | 6 | 0 | 0 | 0 | not covered by the corpus |
@@ -218,8 +218,8 @@ verdict, not a passing one.
 | role_overrides | app/controllers/role_overrides_controller.rb | star-permissions | 8 | 0 | 0 | 0 | not covered by the corpus |
 | rubric_assessments | app/controllers/rubric_assessments_controller.rb | star-rubrics | 3 | 0 | 0 | 0 | not covered by the corpus |
 | rubric_associations | app/controllers/rubric_associations_controller.rb | star-rubrics | 3 | 0 | 0 | 0 | not covered by the corpus |
-| rubrics | app/controllers/rubrics_controller.rb | star-rubrics | 3 | 2 | 0 | 2 | differs — status (200→404) ×1, header cache-control (missing key) ×1 |
-| rubrics_api | app/controllers/rubrics_api_controller.rb | star-rubrics | 15 | 15 | 3 | 12 | differs — header cache-control (missing key) ×8, body $.message (missing key) ×3 |
+| rubrics | app/controllers/rubrics_controller.rb | star-rubrics | 3 | 2 | 0 | 2 | differs — body $.context_id (missing key) ×1, body $[0].context_id (missing key) ×1 |
+| rubrics_api | app/controllers/rubrics_api_controller.rb | star-rubrics | 15 | 15 | 5 | 10 | differs — header cache-control (missing key) ×3, status (404→200) ×2 |
 | scopes_api | app/controllers/scopes_api_controller.rb | star-courses | 1 | 0 | 0 | 0 | not covered by the corpus |
 | search | app/controllers/search_controller.rb | star-search | 4 | 1 | 0 | 1 | differs — header set-cookie (length) ×1, body $ (length) ×1 |
 | sections | app/controllers/sections_controller.rb | star-courses | 9 | 0 | 0 | 0 | not covered by the corpus |
@@ -231,10 +231,10 @@ verdict, not a passing one.
 | sis_imports_api | app/controllers/sis_imports_api_controller.rb | star-sis | 7 | 0 | 0 | 0 | not covered by the corpus |
 | smart_search | app/controllers/smart_search_controller.rb | star-search | 3 | 0 | 0 | 0 | not covered by the corpus |
 | study_assist | app/controllers/study_assist_controller.rb | star-courses | 1 | 0 | 0 | 0 | not covered by the corpus |
-| sub_accounts | app/controllers/sub_accounts_controller.rb | star-accounts | 2 | 1 | 0 | 1 | differs — status (200→403) ×1, header cache-control (missing key) ×1 |
+| sub_accounts | app/controllers/sub_accounts_controller.rb | star-accounts | 2 | 1 | 0 | 1 | differs — header link (missing key) ×1, body $ (length) ×1 |
 | submission_comments_api | app/controllers/submission_comments_api_controller.rb | star-submission-comments | 4 | 0 | 0 | 0 | not covered by the corpus |
-| submissions | app/controllers/submissions_controller.rb | star-assignments, star-ui | 2 | 2 | 0 | 2 | differs — status (200→404) ×2, header cache-control (missing key) ×2 |
-| submissions_api | app/controllers/submissions_api_controller.rb | star-assignments, star-ui | 44 | 42 | 10 | 32 | differs — header cache-control (missing key) ×22, status (200→404) ×15 |
+| submissions | app/controllers/submissions_controller.rb | star-assignments, star-ui | 2 | 2 | 0 | 2 | differs — body $[0].url (missing key) ×1, status (200→403) ×1 |
+| submissions_api | app/controllers/submissions_api_controller.rb | star-assignments, star-ui | 44 | 42 | 26 | 16 | differs — header cache-control (missing key) ×5, body $.id (missing key) ×3 |
 | support_helpers/asset_processor | app/controllers/support_helpers/asset_processor_controller.rb | star-lti | 3 | 0 | 0 | 0 | not covered by the corpus |
 | support_helpers/plagiarism_platform | app/controllers/support_helpers/plagiarism_platform_controller.rb | star-lti | 2 | 0 | 0 | 0 | not covered by the corpus |
 | support_helpers/submission_lifecycle_manage | app/controllers/support_helpers/submission_lifecycle_manage_controller.rb | star-lti | 1 | 0 | 0 | 0 | not covered by the corpus |
